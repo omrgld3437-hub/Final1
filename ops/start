@@ -1,0 +1,3 @@
+#!/bin/bash
+# Linux kisa yol → ops/start.command
+exec "$(cd "$(dirname "$0")" && pwd)/start.command"

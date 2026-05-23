@@ -312,12 +312,16 @@ async def startup_event():
             logger.warning("ensure_first_admin failed: %s", e)
     await _ensure_first_admin()
 
-    # Start data hub background updates (REST: price 1–2s, 24h 5s, coin list 10min)
-    if not data_hub._running:
+    # Start data hub background updates (REST: price 1–2s, 24h 60s) — tek worker leader
+    from app.services.data_hub import try_acquire_datahub_rest_leader
+    rest_leader = try_acquire_datahub_rest_leader()
+    if rest_leader and not data_hub._running:
         data_hub._running = True
         loop = asyncio.get_running_loop()
         data_hub._background_task = loop.create_task(data_hub._background_update_loop())
-        logger.info("[DataHub] Background update service started (price + coin list)")
+        logger.info("[DataHub] Background update service started (REST leader pid=%s)", os.getpid())
+    elif not rest_leader:
+        logger.info("[DataHub] REST loop skipped — another worker is REST leader (pid=%s)", os.getpid())
     # Warmup: one price fetch so first snapshot request gets data (up to 5s)
     try:
         warmup_timeout = float(os.environ.get("DATAHUB_WARMUP_TIMEOUT_SEC", "5.0"))
@@ -326,6 +330,11 @@ async def startup_event():
         logger.debug("[DataHub] Warmup skipped or failed: %s", e)
     # WebSocket combined stream (fallback: REST remains active)
     data_hub.start_ws(testnet=False)
+    try:
+        from app.services.binance_rest_log import start_rest_log_flush_task
+        start_rest_log_flush_task()
+    except Exception as e:
+        logger.debug("REST log flush start skipped: %s", e)
 
     # Bot engine: worker ayrı proses (start.command ile worker_main.py). Web task yaratmaz.
 
@@ -692,7 +701,7 @@ def _lockdown_whitelist(path: str) -> bool:
     if p in ("/ui/admin.html", "/ui/dashboard.html"):
         return True
     # Giriş sayfası ve admin için statik dosyalar + js (maintenanceOverlay) + vendor (Lightweight Charts vb.)
-    if p.startswith("/ui/assets/") or p.startswith("/ui/js/") or p.startswith("/ui/vendor/"):
+    if p.startswith("/ui/assets/") or p.startswith("/ui/vendor/"):
         return True
     # Oturum doğrulama (boot_id) ve bakım ekranı retry (health)
     if p in ("/api/boot-id", "/api/health"):
@@ -994,7 +1003,7 @@ app.include_router(finance_reports.router, prefix="/api")  # YENİ - Finance Rep
 app.include_router(pricing_routes.router, prefix="/api/pricing")  # Üst ticker canlı fiyat
 app.include_router(routes.router, prefix="/api")
 _home_routes_loaded = False
-for _home_mod in ("app.api.routes.home", "app.api.subroutes.home"):
+for _home_mod in ("app.api.routes.home",):
     try:
         home_routes = __import__(_home_mod, fromlist=["router"])
         app.include_router(home_routes.router, prefix="/api")
@@ -1005,10 +1014,10 @@ for _home_mod in ("app.api.routes.home", "app.api.subroutes.home"):
     except Exception as e:
         logger.warning("Flash Home routes not loaded from %s: %s", _home_mod, e)
 if not _home_routes_loaded:
-    logger.warning("Flash Home routes not loaded (tried routes.home and subroutes.home). /api/home/fast and /api/home/wallet/refresh will use fallback.")
+    logger.warning("Flash Home routes not loaded. /api/home/fast and /api/home/wallet/refresh will use fallback.")
 
 try:
-    from app.api.subroutes import dashboard_bootstrap
+    from app.api.routes import dashboard_bootstrap
     app.include_router(dashboard_bootstrap.router, prefix="/api")
 except ImportError as e:
     logger.warning("Dashboard bootstrap not loaded: %s", e)
@@ -1022,7 +1031,7 @@ if not _home_routes_loaded:
         account_id: int = Query(..., description="Account ID"),
         current: dict = Depends(require_auth),
     ):
-        """Fallback when app.api.subroutes.home is not loaded. Returns minimal payload so dashboard does not 404."""
+        """Fallback when app.api.routes.home is not loaded. Returns minimal payload so dashboard does not 404."""
         require_account_access(current, account_id)
         return {
             "ok": True,
@@ -1035,7 +1044,7 @@ if not _home_routes_loaded:
         account_id: int = Query(..., description="Account ID"),
         current: dict = Depends(require_auth),
     ):
-        """Fallback when app.api.subroutes.home is not loaded."""
+        """Fallback when app.api.routes.home is not loaded."""
         require_account_access(current, account_id)
         return {"ok": True, "data": {"inflight": False, "wallet_live": None, "wallet_live_at": None}}
 
@@ -1044,7 +1053,7 @@ if not _home_routes_loaded:
         account_id: int = Query(..., description="Account ID"),
         current: dict = Depends(require_auth),
     ):
-        """Fallback when app.api.subroutes.home is not loaded."""
+        """Fallback when app.api.routes.home is not loaded."""
         require_account_access(current, account_id)
         return {"inflight": False, "last_live_at": None, "cooldown_until": None}
 
@@ -1419,7 +1428,26 @@ async def debug_metrics():
     out = get_metrics()
     out["binance"] = BinanceMetrics.to_dict()
     out["binance_cache"] = get_binance_cache_stats()
+    try:
+        from app.services.binance_weight import get_metrics as weight_metrics
+        from app.services.binance_rest_log import get_live_snapshot
+        out["binance_weight"] = weight_metrics()
+        out["binance_rest_window"] = get_live_snapshot()
+    except Exception:
+        pass
     return out
+
+
+@app.get("/api/debug/rest-load")
+async def debug_rest_load():
+    """Anlık REST pencere özeti + rest.log yolu. DEBUG_METRICS=1 veya dev."""
+    if os.getenv("ENV", "").lower() == "prod" and not os.getenv("DEBUG_METRICS"):
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=404, content={"detail": "Not found"})
+    from app.services.binance_rest_log import get_live_snapshot, REST_LOG_PATH, flush_rest_log
+    snap = get_live_snapshot()
+    snap["log_file"] = str(REST_LOG_PATH)
+    return snap
 
 
 @app.get("/api/health/ram")
@@ -1522,7 +1550,9 @@ async def serve_coin_logo(filename: str):
 
 
 app.mount("/ui/assets", StaticFiles(directory=os.path.join(ui_dir, "assets")), name="assets")
-app.mount("/ui/js", StaticFiles(directory=os.path.join(ui_dir, "js")), name="ui_js")
+_ui_js_dir = os.path.join(ui_dir, "assets", "js")
+if os.path.isdir(_ui_js_dir):
+    app.mount("/ui/js", StaticFiles(directory=_ui_js_dir), name="ui_js")
 app.mount("/ui/vendor", StaticFiles(directory=os.path.join(ui_dir, "vendor")), name="vendor")
 
 

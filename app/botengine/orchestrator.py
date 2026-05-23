@@ -46,7 +46,14 @@ from sqlalchemy import text
 
 from app.botengine.adapters.binance_adapter import BinanceAdapter
 from app.botengine.execution import run_actions
-from app.botengine.locks import release_symbol_lock, try_acquire_symbol_lock, renew_symbol_lock, lease_still_valid, HEARTBEAT_RENEWAL_INTERVAL_SEC
+from app.botengine.locks import (
+    release_symbol_lock,
+    try_acquire_symbol_lock,
+    renew_symbol_lock,
+    lease_still_valid,
+    trade_lock_symbol,
+    HEARTBEAT_RENEWAL_INTERVAL_SEC,
+)
 from app.botengine.models import (
     DcaGridTrailingConfig,
     TrdcaProConfig,
@@ -293,7 +300,7 @@ async def _bot_loop(bot_id: int) -> None:
             try:
                 row = db.query(Bot).filter(Bot.id == bot_id).first()
                 status_lower = (str(row.status or "").lower()) if row else ""
-                if not row or status_lower not in ("running", "paused_error"):
+                if not row or status_lower != "running":
                     break
                 raw = json.loads(row.config_json or "{}")
                 strategy_id_raw = (raw.get("strategy_id") or "").strip().lower()
@@ -369,8 +376,9 @@ async def _bot_loop(bot_id: int) -> None:
                 if not paper_mode and not is_trdca and symbol and symbol != "MULTI":
                     try:
                         from app.botengine.intent_ledger import reconcile_open_orders_for_bot
+                        from app.services.binance_spot import is_ip_banned
                         now_ts = time.time()
-                        if now_ts - _reconcile_last_ts.get(bot_id, 0) >= 60:
+                        if not is_ip_banned() and now_ts - _reconcile_last_ts.get(bot_id, 0) >= 60:
                             await reconcile_open_orders_for_bot(adapter, bot_id, account_id, db, symbol)
                             _reconcile_last_ts[bot_id] = now_ts
                     except Exception as recon_err:
@@ -414,16 +422,17 @@ async def _bot_loop(bot_id: int) -> None:
                                         "client_order_id": leg.get("client_order_id"),
                                         "reason": "trdca_batch",
                                     })
-                                lock_held = try_acquire_symbol_lock(db, account_id, "MULTI", bot_id)
+                                lock_sym = trade_lock_symbol(account_id, "MULTI")
+                                lock_held = try_acquire_symbol_lock(db, account_id, lock_sym, bot_id)
                                 if not lock_held:
-                                    append_event(db, bot_id, account_id, "LOCK_BUSY", "symbol lock busy skip trade", {"account_id": account_id, "symbol": "MULTI"})
-                                elif not lease_still_valid(db, account_id, "MULTI", bot_id):
+                                    append_event(db, bot_id, account_id, "LOCK_BUSY", "symbol lock busy skip trade", {"account_id": account_id, "symbol": lock_sym})
+                                elif not lease_still_valid(db, account_id, lock_sym, bot_id):
                                     try:
-                                        release_symbol_lock(db, account_id, "MULTI", bot_id)
+                                        release_symbol_lock(db, account_id, lock_sym, bot_id)
                                     except Exception:
                                         pass
-                                    append_event(db, bot_id, account_id, "LOCK_LEASE_EXPIRED", "lease not valid before submit skip trade", {"account_id": account_id, "symbol": "MULTI"})
-                                    logger.warning("BOT_TICK bot_id=%s lease_not_valid symbol=MULTI skip submit", bot_id)
+                                    append_event(db, bot_id, account_id, "LOCK_LEASE_EXPIRED", "lease not valid before submit skip trade", {"account_id": account_id, "symbol": lock_sym})
+                                    logger.warning("BOT_TICK bot_id=%s lease_not_valid symbol=%s skip submit", bot_id, lock_sym)
                                 else:
                                     run_result = await run_actions(bot_id, account_id, trdca_actions, state, cfg, adapter, db=db, loop_id=loop_instance_id)
                                     pending_fills = []
@@ -446,7 +455,7 @@ async def _bot_loop(bot_id: int) -> None:
                                         base_bal = dict(snapshot.get("balances_free") or {})
                                         state["virtual_balances"] = _apply_fills_to_virtual_balances(base_bal, pending_fills, quote_asset)
                                     try:
-                                        release_symbol_lock(db, account_id, "MULTI", bot_id)
+                                        release_symbol_lock(db, account_id, lock_sym, bot_id)
                                     except Exception as ex:
                                         logger.warning("bot_engine release_symbol_lock bot_id=%s err=%s", bot_id, ex)
                         # Paper mode: ilk tick veya NOOP sonrası virtual_balances yoksa adapter'dan başlat
@@ -533,17 +542,18 @@ async def _bot_loop(bot_id: int) -> None:
                     state["last_tick_at"] = datetime.utcnow()
                     lock_held = False
                     if actions:
-                        lock_held = try_acquire_symbol_lock(db, account_id, symbol, bot_id)
+                        lock_sym = trade_lock_symbol(account_id, symbol)
+                        lock_held = try_acquire_symbol_lock(db, account_id, lock_sym, bot_id)
                         if not lock_held:
-                            append_event(db, bot_id, account_id, "LOCK_BUSY", "symbol lock busy skip trade", {"account_id": account_id, "symbol": symbol})
-                            logger.info("BOT_TICK bot_id=%s LOCK_BUSY symbol=%s skip trade", bot_id, symbol)
-                        elif not lease_still_valid(db, account_id, symbol, bot_id):
+                            append_event(db, bot_id, account_id, "LOCK_BUSY", "symbol lock busy skip trade", {"account_id": account_id, "symbol": lock_sym})
+                            logger.info("BOT_TICK bot_id=%s LOCK_BUSY symbol=%s skip trade", bot_id, lock_sym)
+                        elif not lease_still_valid(db, account_id, lock_sym, bot_id):
                             try:
-                                release_symbol_lock(db, account_id, symbol, bot_id)
+                                release_symbol_lock(db, account_id, lock_sym, bot_id)
                             except Exception:
                                 pass
-                            append_event(db, bot_id, account_id, "LOCK_LEASE_EXPIRED", "lease not valid before submit skip trade", {"account_id": account_id, "symbol": symbol})
-                            logger.warning("BOT_TICK bot_id=%s lease_not_valid symbol=%s skip submit", bot_id, symbol)
+                            append_event(db, bot_id, account_id, "LOCK_LEASE_EXPIRED", "lease not valid before submit skip trade", {"account_id": account_id, "symbol": lock_sym})
+                            logger.warning("BOT_TICK bot_id=%s lease_not_valid symbol=%s skip submit", bot_id, lock_sym)
                         else:
                             for a in actions:
                                 ak = (a.get("reason") or "unknown") + "_" + str(a.get("grid_index", ""))
@@ -568,7 +578,7 @@ async def _bot_loop(bot_id: int) -> None:
                                             _db.close()
                                     except Exception:
                                         pass
-                            hb_task = asyncio.create_task(_heartbeat_renew(account_id, symbol, bot_id))
+                            hb_task = asyncio.create_task(_heartbeat_renew(account_id, lock_sym, bot_id))
                             try:
                                 run_result = await run_actions(bot_id, account_id, actions, state, cfg, adapter, db=db, loop_id=loop_instance_id)
                             finally:
@@ -591,7 +601,7 @@ async def _bot_loop(bot_id: int) -> None:
                                 except Exception:
                                     pass
                             try:
-                                release_symbol_lock(db, account_id, symbol, bot_id)
+                                release_symbol_lock(db, account_id, lock_sym, bot_id)
                             except Exception as ex:
                                 logger.warning("bot_engine release_symbol_lock bot_id=%s err=%s", bot_id, ex)
                             lock_held = False
@@ -607,7 +617,7 @@ async def _bot_loop(bot_id: int) -> None:
                     # Günlük K/Z referansı: gece 00:00 (Türkiye) geçişinde bot bakiyesini referans al
                     today_start = turkey_today_start_utc()
                     today_date = today_start.strftime("%Y-%m-%d")
-                    if state.get("daily_ref_date") != today_date:
+                    if state.get("initial_allocation_done") and state.get("daily_ref_date") != today_date:
                         equity = float(state.get("base_balance") or 0) * float(price or 0) + float(state.get("quote_balance") or 0)
                         state["daily_ref_usd"] = equity
                         state["daily_ref_date"] = today_date
@@ -721,6 +731,14 @@ async def start_bot(bot_id: int, db: Session) -> bool:
     return True
 
 
+def cancel_orchestrator_loop(bot_id: int) -> None:
+    """Stop asyncio _bot_loop task only (no DB status change). Used when v5 scheduler owns ticks."""
+    _stop_requested.add(bot_id)
+    task = _tasks.pop(bot_id, None)
+    if task and not task.done():
+        task.cancel()
+
+
 async def stop_bot(bot_id: int, db: Session) -> bool:
     from app.db.models import Bot
     _stop_requested.add(bot_id)
@@ -795,7 +813,7 @@ async def delete_bot_fully(bot_id: int, db: Session) -> None:
     if not bot:
         return
     try:
-        release_symbol_lock(db, bot.account_id, (bot.symbol or "").upper() or "BTCUSDT", bot_id)
+        release_symbol_lock(db, bot.account_id, trade_lock_symbol(bot.account_id), bot_id)
     except Exception:
         pass
     # Günlük KPI: Bot silinince bugünkü gerçekleşen PnL kaybolmasın diye cache'e yaz

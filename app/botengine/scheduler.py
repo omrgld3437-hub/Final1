@@ -70,6 +70,7 @@ class BotScheduler:
         self._max_duration_samples = 100
         self._run_callback: Optional[Callable[[int, str], Any]] = None  # async (bot_id, tick_id) -> next_run_at (float)
         self._stopped = False
+        self._latest_next_run: Dict[int, float] = {}  # bot_id -> monotonic; skip stale heap entries
 
     def register_run_callback(self, cb: Callable[[int, str], Any]) -> None:
         """Set callback(bot_id, tick_id) -> next_run_at (monotonic time). Callback is async."""
@@ -80,12 +81,13 @@ class BotScheduler:
         self._registered.add(bot_id)
         jitter_ms = random.uniform(JITTER_MIN_MS, JITTER_MAX_MS)
         at = next_run_at + (jitter_ms / 1000.0)
+        self._latest_next_run[bot_id] = at
         with self._heap_lock:
-            # Heap is min-heap by next_run_at; we don't dedupe bot_id in heap (same bot can be pushed again)
             heapq.heappush(self._heap, ScheduledBot(at, bot_id))
 
     def unregister_bot(self, bot_id: int) -> None:
         self._registered.discard(bot_id)
+        self._latest_next_run.pop(bot_id, None)
 
     def wake_bot(self, bot_id: int, reason: WakeReason, context: Optional[Dict[str, Any]] = None) -> None:
         """Queue bot for immediate wake (event-driven)."""
@@ -145,15 +147,18 @@ class BotScheduler:
         except asyncio.QueueEmpty:
             pass
         async with self._heap_lock:
-            if not self._heap:
-                return None
-            top = self._heap[0]
-            if top.next_run_at > now:
-                return None
-            heapq.heappop(self._heap)
-            if top.bot_id not in self._registered:
-                return await self.next_bot_to_run()
-            return (top.bot_id, WakeReason.SCHEDULED, {})
+            while self._heap:
+                top = self._heap[0]
+                if top.next_run_at > now:
+                    return None
+                heapq.heappop(self._heap)
+                if top.bot_id not in self._registered:
+                    continue
+                latest = self._latest_next_run.get(top.bot_id)
+                if latest is not None and abs(top.next_run_at - latest) > 0.05:
+                    continue
+                return (top.bot_id, WakeReason.SCHEDULED, {})
+            return None
 
     async def schedule_next(self, bot_id: int, next_run_at: float) -> None:
         """After a bot run, re-queue with next_run_at (monotonic)."""
@@ -161,6 +166,7 @@ class BotScheduler:
             return
         jitter_ms = random.uniform(JITTER_MIN_MS, JITTER_MAX_MS)
         at = next_run_at + (jitter_ms / 1000.0)
+        self._latest_next_run[bot_id] = at
         async with self._heap_lock:
             heapq.heappush(self._heap, ScheduledBot(at, bot_id))
 

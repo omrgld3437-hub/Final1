@@ -27,6 +27,7 @@ from app.botengine.intent_ledger import (
     update_intent_submitting,
 )
 from app.botengine.kill_switch import check_kill_switch
+from app.botengine.locks import lease_still_valid, trade_lock_symbol
 from app.botengine.state_store import append_event, load_state, save_state
 from app.botengine.virtual_wallet import check_virtual_budget, get_virtual_wallet, update_virtual_after_fill
 from app.botengine.cycle_ledger import (
@@ -567,6 +568,20 @@ async def run_actions(
                                 logger.warning("BOT_EXECUTION_BALANCE_CHECK_FAIL bot_id=%s SELL err=401 Unauthorized (tekrar 10 dk içinde loglanmayacak)", bot_id)
                         else:
                             logger.warning("BOT_EXECUTION_BALANCE_CHECK_FAIL bot_id=%s SELL err=%s (proceeding)", bot_id, bal_err)
+                if db is not None:
+                    lock_sym = trade_lock_symbol(account_id, symbol)
+                    if not lease_still_valid(db, account_id, lock_sym, bot_id):
+                        logger.warning(
+                            "BOT_EXECUTION_SKIP bot_id=%s reason=%s skip_reason=LOCK_LEASE_EXPIRED symbol=%s",
+                            bot_id, reason, lock_sym,
+                        )
+                        if intent_id:
+                            append_event(
+                                db, bot_id, account_id, "SKIP_REASON",
+                                "LOCK_LEASE_EXPIRED before submit",
+                                {"reason": reason, "skip_reason": "LOCK_LEASE_EXPIRED", "symbol": lock_sym},
+                            )
+                        continue
                 if db is not None and intent_id:
                     update_intent_submitting(db, intent_id)
                 try:

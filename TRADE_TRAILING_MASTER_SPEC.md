@@ -31,6 +31,7 @@ Trade Trailing (TraderTrailing) is a Binance Spot bot platform that:
 | S2 Same intent_id => same clientOrderId | client_order_id stored on first persist; reused | intent_ledger.py |
 | S3 Reconcile before new actions after timeout/crash | reconcile_account; get_order_by_client_order_id | reconcile.py, execution |
 | S4 No REST price per symbol for trading | DataHub (WS) only; adapter.get_price from DataHub | binance_adapter.get_price |
+| S4b Market data SSOT | **Ingest:** data_hub only (WS+REST leader). **Read:** market_data only. Worker syncs via /api/data/prices | market_data.py, data_hub.py |
 | S5 Bounded external calls; retry taxonomy | Weight governor; errors.py; no unbounded backoff | binance_weight, errors |
 | S6 Weight near limit => SAFE MODE | Deny new submits; allow reconcile | scheduler, execution |
 | S7 Locks released in finally; lease + heartbeat | symbol_lock_with_heartbeat; release in finally | locks.py |
@@ -153,7 +154,7 @@ export BOT_ENGINE_V5_SCHEDULER=1
 python -m app.botengine.worker_main
 ```
 
-When enabled: running bots are registered with scheduler; START command registers new bot; STOP unregisters; reconciler runs every 45s.
+When enabled: `ensure_running_bots` / per-bot `_bot_loop` tasks are **not** started; only `BotScheduler` + `run_one_bot_tick`. On worker start and START command, any legacy `_bot_loop` task for that bot is cancelled (`cancel_orchestrator_loop`). Stale `PROCESSING` commands (>120s) are reclaimed to `PENDING`. Scheduler heap skips outdated duplicate entries via `_latest_next_run`.
 
 **What can go wrong here?** With v5 disabled, legacy _bot_loop runs (one asyncio task per bot). With v5 enabled, single scheduler loop runs all bots; ensure only one worker process per shard to avoid double-trade.
 
@@ -289,9 +290,21 @@ SQLite: `PRAGMA journal_mode=WAL`; `PRAGMA synchronous=NORMAL` (app/db/base.py c
 | DEFAULT_LEASE_TTL_SEC | 10 | locks.py |
 | HEARTBEAT_RENEWAL_INTERVAL_SEC | 3 | locks.py |
 
+## Bot list / PnL before first fill
+
+- `initial_allocation_done == false`: `PnlService` uses `total_usd = 0` (not budget); daily K/Z = 0 until first fill. Dashboard `display_status = starting` when DB `running` but no allocation yet.
+- UI create flow: `createAndStartBot` only (no duplicate `createBot` listener). Trailing DCA payload includes `strategy_id: dca_grid_trailing`.
+- `bots_start` response includes `worker_alive` (checks `.run/worker.pid`).
+
+## Account trade lock (multi-bot, same Binance account)
+
+- Order submit lock key: `trade_lock_symbol(account_id)` → `ACCOUNT_TRADE_LOCK_SYMBOL` (`__ACCOUNT__`) from `app/core/constants.py`.
+- Same `account_id` shares one wallet; all bots on that account serialize submits. Different users/accounts are independent.
+- DCA (`BTCUSDT`) and TRDCA (`MULTI` display symbol) no longer use separate lock rows.
+
 ## Lifecycle
 
-1. **Acquire:** try_acquire_symbol_lock(db, account_id, symbol, bot_id, ttl_sec). UPDATE if lease_until < now OR owner_bot_id = bot_id; else INSERT if no row.
+1. **Acquire:** try_acquire_symbol_lock(db, account_id, trade_lock_symbol(account_id), bot_id, ttl_sec). UPDATE if lease_until < now OR owner_bot_id = bot_id; else INSERT if no row.
 2. **Hold:** While bot run executes, background task calls renew_symbol_lock every 3 s.
 3. **Release:** In finally block: release_symbol_lock(db, account_id, symbol, bot_id). Idempotent.
 
@@ -323,7 +336,20 @@ SQLite: `PRAGMA journal_mode=WAL`; `PRAGMA synchronous=NORMAL` (app/db/base.py c
 | /api/v3/account | 10 |
 | /api/v3/order (POST/DELETE) | 1 |
 | /api/v3/openOrders, /api/v3/allOrders | 10 |
+| /api/v3/ticker/price (bulk, no symbol) | 2 |
+| /api/v3/ticker/24hr (bulk, no symbol) | 40 |
+| /api/v3/ticker/24hr?symbol=X | 1 |
 | /api/v3/time | 1 |
+
+## REST load monitor (`rest.log`)
+
+- `app/services/binance_rest_log.py` — tüm `binance_spot` gateway çağrıları kaydedilir; **60 s** pencerede `rest.log` (proje kökü, `REST_LOG_PATH` ile değiştirilebilir).
+- Endpoint throttle: bulk `ticker/24hr` min **45 s**, bulk `ticker/price` min **8 s**, `openOrders` min **12 s**.
+- Soft limit: `REST_SOFT_WEIGHT_LIMIT` (varsayılan limit×0.85); ağır endpointler reddedilir.
+- Worker: DataHub **WS-only** (REST döngüsü web sürecinde); `DATAHUB_REST_IN_WORKER=1` ile worker REST açılır.
+- DataHub: `ticker/24hr` interval **60 s** (WS aktifken **120 s**); `update_coin_list` ayrı REST çağrısı yapmaz (24h cache reuse).
+- **Wallet pricing:** `app/services/wallet_pricing.py` — cüzdan USD için DataHub önce; bulk `ticker/24hr` (40 weight) yasak; eksik pair max 5× tek sembol (1 weight).
+- **Multi-worker:** DataHub REST döngüsü `.run/datahub_rest.lock` ile tek uvicorn worker'da; diğer worker'lar WS-only.
 
 ## SAFE MODE
 
@@ -1099,8 +1125,8 @@ Snapshot wallet is cache-only; "[snapshot] wallet timeout" no longer occurs. Liv
 | GET | /api/accounts | Yes | Yes | No | List accounts |
 | POST | /api/accounts/{id}/delete | Yes | Yes | No | Hesap sil (body: password). Şifre zorunlu; log/işlem geçmişi silinmez; aynı tel ile yeniden kayıt sıfırdan yeni hesap açar. |
 | GET | /api/accounts/{id}/bot-performance | Yes | Yes | No | Bot performans: günlük/haftalık/aylık/genel toplam PnL (silinen botlar dahil) |
-| GET | /api/leaderboard/structures/{structure_id}/top | Yes | Yes | No | Copy Trading: structure bazlı top 5 (profit_pct + params; username/bakiye yok) |
-| GET | /api/leaderboard/global/top | Yes | Yes | No | Global En İyi Bot: tek kayıt (structure_id, profit_pct, params) |
+| GET | /api/leaderboard/structures/{structure_id}/top | Yes | Yes | No | Copy Trading: structure bazlı top 5 (profit_pct + `params`; stale cache varsa `config_json`'dan re-sanitize; username/bakiye yok) |
+| GET | /api/leaderboard/global/top | Yes | Yes | No | Global En İyi Bot (limit varsayılan 5): çalışan botlar, `profit_pct_all >= 0`; `structure_id`, `profit_pct`, `total_pnl_usd` (mevcut−başlangıç, USD), `running_since_iso` (UTC Z), `reference_price`, `params` (grid/trail/allocation + `initial_capital_usdt` görüntüleme; stale cache → `config_json` re-sanitize); username/bot_id/bakiye yok. UI: K/Z 5s poll + süre 1s yerel tick; **Parametreleri görüntüle** → bot detay `#parametrelerModal` ile aynı modal/render; **Uygula** → oluştur modalı (bütçe boş, odak Bot Bakiyesi). |
 | GET | /api/bots-engine | Yes | Yes | No | List bots |
 | POST | /api/bots-engine | Yes | Yes | No | Create bot |
 | POST | /api/bots-engine/{id}/start | Yes | Yes | No | Insert START command |
@@ -1154,7 +1180,7 @@ Snapshot wallet is cache-only; "[snapshot] wallet timeout" no longer occurs. Liv
 | Refresh | 60s loop in web lifespan; `refresh_bot_public_metrics()` uses PnlService + DB only (no Binance) |
 | Multi-worker | `.run/leaderboard_refresh.lock` with 55s timeout; only one process runs refresh per cycle |
 | Logs | `LEADERBOARD_REFRESH_OK count=… duration_ms=…`, `LEADERBOARD_REFRESH_FAIL error_code=…` |
-| Privacy | Response: profit_pct + params only; bot_id, account_id, username, balance never exposed |
+| Privacy | Response: `profit_pct`, `total_pnl_usd`, `params` (grid/trail/allocation + `initial_capital_usdt` + `reference_price` for Parametreler modal), top-level `reference_price`; bot_id, account_id, username, live wallet balance never exposed |
 
 ## Call Graph (ASCII) — Snapshot Flow
 
@@ -2978,7 +3004,7 @@ Büyük JSON (snapshot 50–200 KB) sıkıştırılmadan gidiyor; proxy açıksa
 | Slow log throttle (aynı path) | 120s |
 | Dashboard summary response cache TTL | 20s (DASHBOARD_SUMMARY_CACHE_TTL); wallet refresh sonrası invalidate |
 | Günlük cüzdan değişimi (daily_wallet_pnl) | AssetSnapshot ile gün başı referansı: last_before_today (timestamp < turkey_today_start_utc) veya first_today; ref yoksa mevcut bakiye → değişim 0. routes.py dashboard/summary + snapshot. |
-| Mevcut Botlar listesi TOPLAM K/Z (current_usd, total_pnl_usd) | Tek sembol DCA: bot detay ile aynı kaynak; state (base_balance, quote_balance) + fiyat (price_hub/pnl_data). routes.py api_dashboard_summary + dashboard_snapshot.fetch_bots_and_account_kpis. Böylece liste ile state paneli aynı değeri gösterir; gecikme/tutarsızlık önlenir. |
+| Mevcut Botlar BOT BAKİYESİ + TOPLAM K/Z | Tek kaynak: bot detay `#stateBotBalanceValue` ile aynı — `GET /api/bots-engine/{id}/live` → `equity` (2.5s poll). İlk yüklemede snapshot `$20`/`tur` flicker yok: canlı metrikler `/live` gelene kadar `—`. Durdurulmuş botlarda snapshot `current_usd`. |
 | trades_normalized (finance) index | ix_trades_normalized_account_time (account_id, time) — schema_guard |
 | DB pool_size | 10 |
 | DB max_overflow | 20 |
@@ -3153,7 +3179,7 @@ fetch_bots_and_account_kpis ve fetch_finance_pnl async def olup içinde sync db.
 | GET /api/bots-engine/{id}/events | list_events limit=500; büyük JSON |
 | GET /api/bots-engine/{id}/performance | PnlService, Ledger, events, chart state; TRDCA breakdown |
 | GET /api/binance/wallet | Cache miss: get_wallet + ticker_24h_all; cache hit: anında |
-| POST /api/bots/... (create/start/stop) | DB + orchestrator + state; kısa süreli bloklama |
+| POST /api/bots/... (create/start/stop) | DB + orchestrator + state; kısa süreli bloklama. Start: canlı hesapta bütçe > kullanılabilir quote ise 400 INSUFFICIENT_BALANCE, bot running yapılmaz (PAUSED_ERROR önlenir). |
 
 ## Mevcut — Ledger ve Cycle Sorguları
 

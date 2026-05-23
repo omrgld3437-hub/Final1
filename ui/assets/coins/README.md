@@ -1,19 +1,70 @@
-# Coin logoları (Trust Wallet lokal)
+# ui/assets/coins — Coin logoları
 
-Bu klasörde coin logoları `{SYMBOL}.png` adıyla bulunur.
+**Konum:** `ui/assets/coins/`  
+**Güncelleme:** 2026-05-23 (otomatik: `python3 scripts/devops/generate_folder_readmes.py`)
 
-- Örnek: `BTC.png`, `ETH.png`, `USDT.png`, `XRP.png`
-- Kaynak: Trust Wallet assets – https://github.com/trustwallet/assets (MIT)
-- URL: `/ui/assets/coins/BTC.png` (static olarak sunulur).
+## Ne işe yarar?
 
-**Logoları toplu indirmek için (Binance’de listeli tüm USDT coinler):**
-```bash
-python3 scripts/fetch_binance_coin_logos.py
+USDT parite coin'lerinin PNG logo dosyaları (dashboard listelerinde).
+
+## Bu klasörde ne bulursunuz?
+
+Statik asset; `scripts/maintenance/fetch_binance_coin_logos.py` ile güncellenir.
+
+## Önemli dosyalar
+
+BTCUSDT.png · ETHUSDT.png · … (yüzlerce PNG)
+
+## İçerik özeti
+
 ```
-Binance exchangeInfo’dan sembolleri alır, Trust Wallet repo’dan eşleşen logoları indirir. Eşleşmeyen coinlerde UI initials fallback kullanır.
-
-**Sadece temel birkaç coin için:**
-```bash
-./scripts/fetch_coin_logos.sh
+1INCH.png
+AAVE.png
+ACA.png
+ADA.png
+ALGO.png
+ANKR.png
+API3.png
+APT.png
+ARB.png
+ARK.png
+ATOM.png
+AUDIO.png
+AVAX.png
+AXL.png
+AXS.png
+BAND.png
+BAT.png
+BB.png
+BCH.png
+BNB.png
+BONK.png
+BTC.png
+BUSD.png
+CELO.png
+CFX.png
+CHZ.png
+CKB.png
+COMP.png
+CRV.png
+DAI.png
+DASH.png
+DCR.png
+DENT.png
+DGB.png
+DOGE.png
+DOT.png
+DYDX.png
+EGLD.png
+ENJ.png
+ENS.png
+... (daha fazla dosya olabilir)
 ```
-Yeni coin eklemek için Python script’teki `NATIVE_CHAIN_PATHS` veya `TOKEN_PATHS` sözlüğüne `"SYMBOL": "blockchains/.../logo.png"` ekleyebilirsin.
+
+## İlgili dokümanlar
+
+app/main.py serve_coin_logo
+
+---
+
+Üst rehber: [docs/STRUCTURE.md](../docs/STRUCTURE.md)

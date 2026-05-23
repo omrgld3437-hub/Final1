@@ -140,6 +140,31 @@ def mark_command_processing(db, cmd_id: int) -> bool:
     return r.rowcount > 0
 
 
+def reset_stale_processing_commands(db, max_age_sec: int = 120) -> int:
+    """Worker crash recovery: reclaim commands stuck in PROCESSING."""
+    from sqlalchemy import text
+    try:
+        r = db.execute(
+            text("""
+                UPDATE bot_engine_commands
+                SET status = 'PENDING', processed_at = NULL, error_code = NULL, error_id = NULL
+                WHERE status = 'PROCESSING'
+                  AND processed_at IS NOT NULL
+                  AND processed_at < datetime('now', :offset)
+            """),
+            {"offset": f"-{int(max_age_sec)} seconds"},
+        )
+        db.commit()
+        n = r.rowcount or 0
+        if n:
+            logger.warning("WORKER_RECLAIM_STALE_COMMANDS count=%s max_age_sec=%s", n, max_age_sec)
+        return n
+    except Exception as e:
+        db.rollback()
+        logger.debug("reset_stale_processing_commands: %s", e)
+        return 0
+
+
 def mark_command_done(db, cmd_id: int, error_code: Optional[str] = None, error_id: Optional[str] = None):
     from sqlalchemy import text
     now = datetime.now(timezone.utc).isoformat()
@@ -183,6 +208,8 @@ async def process_command(cmd: Dict[str, Any], db, v5_scheduler=None) -> None:
     try:
         if command == "START":
             if v5_scheduler:
+                from app.botengine.orchestrator import cancel_orchestrator_loop
+                cancel_orchestrator_loop(bot_id)
                 bot = db.query(Bot).filter(Bot.id == bot_id).first()
                 if bot:
                     bot.status = "running"
@@ -253,9 +280,12 @@ async def _reconciler_background_task():
     from app.botengine.intent_ledger import get_non_final_intents_for_account
     from app.services.binance_assets import get_account_keys
     from app.botengine.adapters.binance_adapter import BinanceAdapter
+    from app.services.binance_spot import is_ip_banned
     interval = 45
     while True:
         await asyncio.sleep(interval)
+        if is_ip_banned():
+            continue
         try:
             db = _get_db()
             try:
@@ -269,10 +299,16 @@ async def _reconciler_background_task():
                         if not keys:
                             continue
                         adapter = BinanceAdapter(aid, keys, paper_mode=False)
+                        async def _get_all_orders(sym=None, limit=20, _adapter=adapter):
+                            s = (sym or "").strip().upper()
+                            if not s:
+                                return []
+                            return await _adapter.get_all_orders(s, limit)
+
                         await reconcile_account(
                             aid,
                             lambda sym=None: adapter.get_open_orders(sym),
-                            lambda sym=None, limit=20: adapter.get_all_orders(sym or "BTCUSDT", limit),
+                            _get_all_orders,
                             lambda sym, coid: adapter.get_order_by_client_order_id(sym, coid),
                             db,
                         )
@@ -284,29 +320,65 @@ async def _reconciler_background_task():
             logger.warning("reconciler_background err=%s", e)
 
 
+async def _market_sync_from_web_loop():
+    """Worker: web sürecindeki DataHub cache'ini kopyala — tek Binance WS/REST web'de."""
+    import httpx
+    from app.services.market_data import import_from_peer_snapshot
+    from app.services.data_hub import data_hub
+    base = os.getenv("WEB_INTERNAL_URL", "http://127.0.0.1:8000").rstrip("/")
+    interval = float(os.getenv("MARKET_SYNC_INTERVAL_SEC", "2"))
+    failures = 0
+    while True:
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as c:
+                r = await c.get(f"{base}/api/data/prices")
+            if r.status_code == 200:
+                import_from_peer_snapshot(r.json())
+                failures = 0
+            else:
+                failures += 1
+        except Exception:
+            failures += 1
+        if failures >= 5 and not getattr(data_hub, "_ws_started", False):
+            data_hub.start_ws(testnet=False)
+            logger.warning("WORKER_MARKET_SYNC web unreachable — WS fallback started")
+        await asyncio.sleep(interval)
+
+
 async def worker_loop():
-    from app.botengine.orchestrator import ensure_running_bots
+    from app.botengine.orchestrator import ensure_running_bots, cancel_orchestrator_loop
 
     _run_schema_guard()
     logger.info("WORKER_START pid=%s", os.getpid())
 
-    # Worker ayrı proses; DataHub fiyatları sadece web startup'ta dolduruluyordu. Burada da başlat ki BOT_TICK_PRICE_MISSING olmasın.
+    use_v5_scheduler = os.getenv("BOT_ENGINE_V5_SCHEDULER", "").strip() == "1"
+
+    # Worker: piyasa verisi web DataHub'dan (SSOT); REST/WS yalnızca web leader'da.
     try:
         from app.services.data_hub import data_hub
-        data_hub.start_background_updates()
-        await asyncio.sleep(2.0)
-        await data_hub.warmup(timeout_sec=8.0)
-        logger.info("WORKER_DATAHUB_WARMUP prices_count=%s", len(getattr(data_hub, "prices", {})))
+        from app.services.binance_rest_log import start_rest_log_flush_task
+        sync_from_web = os.getenv("MARKET_SYNC_FROM_WEB", "1").strip() == "1"
+        if sync_from_web:
+            asyncio.create_task(_market_sync_from_web_loop())
+            await asyncio.sleep(2.5)
+        elif os.getenv("DATAHUB_REST_IN_WORKER", "0").strip() == "1":
+            data_hub.start_background_updates()
+            data_hub.start_ws(testnet=False)
+            await asyncio.sleep(2.0)
+            await data_hub.warmup(timeout_sec=8.0)
+        else:
+            data_hub.start_ws(testnet=False)
+            await asyncio.sleep(3.0)
+        start_rest_log_flush_task()
+        logger.info(
+            "WORKER_MARKET prices_count=%s sync_from_web=%s ws=%s",
+            len(getattr(data_hub, "prices", {})),
+            sync_from_web,
+            getattr(data_hub, "ws_status", "?"),
+        )
     except Exception as e:
-        logger.warning("WORKER_DATAHUB_START failed (bot fiyatları gecikebilir): %s", e)
+        logger.warning("WORKER_MARKET_START failed: %s", e)
 
-    db = _get_db()
-    try:
-        await ensure_running_bots(db)
-    finally:
-        db.close()
-
-    use_v5_scheduler = os.getenv("BOT_ENGINE_V5_SCHEDULER", "").strip() == "1"
     v5_scheduler = None
     if use_v5_scheduler:
         from app.botengine.scheduler import BotScheduler
@@ -323,12 +395,19 @@ async def worker_loop():
         db2 = _get_db()
         try:
             for bid in _get_running_bot_ids(db2):
+                cancel_orchestrator_loop(bid)
                 v5_scheduler.register_bot(bid, time.monotonic())
         finally:
             db2.close()
         asyncio.create_task(_reconciler_background_task())
         asyncio.create_task(v5_scheduler.run_loop())
         logger.info("WORKER_V5_SCHEDULER_STARTED")
+    else:
+        db = _get_db()
+        try:
+            await ensure_running_bots(db)
+        finally:
+            db.close()
 
     heartbeat_interval = 60  # log WORKER_HEARTBEAT every 60s to avoid log spam
     command_poll_interval = 1.0
@@ -349,6 +428,7 @@ async def worker_loop():
         try:
             db = _get_db()
             try:
+                reset_stale_processing_commands(db)
                 pending = fetch_pending_commands(db, limit=50)
                 _ENGINE_LAST_PENDING_LEN = len(pending) if pending else 0
                 if pending:

@@ -27,7 +27,7 @@ if [ -f "$ENGINE_PID" ]; then
   rm -f "$ENGINE_PID"
 fi
 
-# omeraltinhtml (8080)
+# marketing / omeraltinhtml (8080)
 HTML_PIDFILE="$ROOT/.run/html.pid"
 if [ -f "$HTML_PIDFILE" ]; then
   HPID=$(cat "$HTML_PIDFILE" 2>/dev/null)

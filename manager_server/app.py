@@ -3,6 +3,8 @@ Manager Server v3 — FastAPI app: 127.0.0.1:7999, local-only, API + WS + /ui + 
 """
 import logging
 import os
+import socket
+import traceback
 from pathlib import Path
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
@@ -56,6 +58,18 @@ APP_DIR = Path(__file__).resolve().parent
 UI_DIR = APP_DIR / "ui"
 
 app = FastAPI(title="Manager Panel", version="3.0")
+_log = logging.getLogger(__name__)
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """Yakalanmamış tüm hataları logla ve 500 dön; ASGI 'Exception in ASGI application' zincirini kır."""
+    tb = traceback.format_exc()
+    _log.error("Unhandled exception: %s\n%s", exc, tb)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error", "type": type(exc).__name__},
+    )
 
 
 class _WebSocketCloseSuppressMiddleware:
@@ -75,6 +89,9 @@ class _WebSocketCloseSuppressMiddleware:
             cause = getattr(exc, "__cause__", None)
             if cause and type(cause).__name__ in ("IncompleteReadError", "ConnectionClosedError"):
                 return
+            # Diğer hataları logla ama ASGI'ye zincirleme; böylece "Exception in ASGI application" tek satırda kalır
+            tb = traceback.format_exc()
+            _log.error("WebSocket exception: %s\n%s", exc, tb)
             raise
 
 
@@ -91,6 +108,21 @@ async def local_only(request: Request, call_next):
     if client and client.host not in ("127.0.0.1", "::1"):
         return JSONResponse(status_code=403, content={"detail": "Forbidden"})
     return await call_next(request)
+
+
+# HTTP isteklerinde yakalanmamış exception'ları yakala; ASGI "Exception in ASGI application" zincirini kır
+@app.middleware("http")
+async def catch_http_exceptions(request: Request, call_next):
+    try:
+        response = await call_next(request)
+    except Exception as exc:
+        tb = traceback.format_exc()
+        _log.error("HTTP handler exception: %s\n%s", exc, tb)
+        return JSONResponse(
+            status_code=500,
+            content={"detail": "Internal server error", "type": type(exc).__name__},
+        )
+    return response
 
 
 # Sadece hata (4xx/5xx) istekleri logla; 200 OK loglanmaz. Düzeltilemeyen / bilinen 404'ler loglanmaz.
@@ -138,7 +170,12 @@ async def favicon():
 @app.get("/api/status")
 async def api_status():
     s = state.get_status()
-    return {k: {"running": v["running"], "pid": v["pid"], "locked": v.get("locked", False), "started_at": v.get("started_at"), "restart_count": v.get("restart_count", 0)} for k, v in s.items()}
+    out = {k: {"running": v["running"], "pid": v["pid"], "locked": v.get("locked", False), "started_at": v.get("started_at"), "restart_count": v.get("restart_count", 0)} for k, v in s.items()}
+    try:
+        out["host"] = socket.gethostname()
+    except Exception:
+        out["host"] = "—"
+    return out
 
 
 @app.post("/api/server/{key}/start")

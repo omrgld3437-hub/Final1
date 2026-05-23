@@ -17,7 +17,9 @@ body {
   background: #25282e;
   border-bottom: 1px solid #3a3d44;
 }
+.manager-header-title-block { display: flex; flex-direction: column; gap: 2px; }
 .manager-header h1 { margin: 0; font-size: 1.1rem; font-weight: 600; }
+.manager-controlled-host { margin: 0; font-size: 0.8rem; color: var(--muted, #888); }
 .manager-header-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .global-last-op { font-size: 0.85rem; margin-left: 8px; color: var(--muted, #888); max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .alert-badge { background: #dc2626; color: #fff; padding: 2px 8px; border-radius: 10px; font-size: 0.8rem; }

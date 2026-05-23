@@ -7,7 +7,16 @@ from app.botengine.locks import (
     DEFAULT_LEASE_TTL_SEC,
     HEARTBEAT_RENEWAL_INTERVAL_SEC,
     lease_still_valid,
+    trade_lock_symbol,
 )
+from app.core.constants import ACCOUNT_TRADE_LOCK_SYMBOL
+
+
+def test_trade_lock_symbol_per_account():
+    """Same account always maps to account-level lock key (row is account_id + symbol)."""
+    assert trade_lock_symbol(1, "BTCUSDT") == ACCOUNT_TRADE_LOCK_SYMBOL
+    assert trade_lock_symbol(1, "MULTI") == ACCOUNT_TRADE_LOCK_SYMBOL
+    assert trade_lock_symbol(2, "BTCUSDT") == ACCOUNT_TRADE_LOCK_SYMBOL
 
 
 def test_ttl_constant_consistency():

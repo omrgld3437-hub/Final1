@@ -1,3 +1,4 @@
+REM Windows batch: show-nginx-config.
 @echo off
 REM Sunucuda (Windows) Nginx yapisini gosterir. Ciktida mevcut nginx.conf ve include edilen dosyalar yer alir.
 REM Calistir: deploy\show-nginx-config.bat  (proje kokunden) veya cift tikla.

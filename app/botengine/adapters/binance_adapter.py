@@ -59,26 +59,26 @@ class BinanceAdapter:
         symbol = symbol.upper()
         if symbol in self._filters_cache:
             return self._filters_cache[symbol]
-        from app.services.binance_spot import fetch_exchange_info
-        info = await fetch_exchange_info(getattr(self.keys, "testnet", False), force_refresh=False)
-        step_size = 0.00001
-        min_qty = 0.00001
-        tick_size = 0.01
-        min_notional = 5.0
-        for s in info.get("symbols") or []:
-            if s.get("symbol") != symbol:
-                continue
-            for f in s.get("filters") or []:
-                t = f.get("filterType")
-                if t == "LOT_SIZE":
-                    step_size = float(f.get("stepSize") or 0.00001)
-                    min_qty = float(f.get("minQty") or 0.00001)
-                elif t == "PRICE_FILTER":
-                    tick_size = float(f.get("tickSize") or 0.01)
-                elif t in ("MIN_NOTIONAL", "NOTIONAL"):
-                    min_notional = float(f.get("minNotional") or f.get("notional") or 5)
-            break
-        out = {"step_size": step_size, "min_qty": min_qty, "tick_size": tick_size, "min_notional": min_notional}
+        try:
+            from app.services.market_data import get_symbol_filters
+            cached = get_symbol_filters(symbol)
+            if cached:
+                out = {
+                    "step_size": cached.get("step_size", 0.00001),
+                    "min_qty": cached.get("min_qty", 0.00001),
+                    "tick_size": cached.get("tick_size", 0.01),
+                    "min_notional": cached.get("min_notional", 5.0),
+                }
+                self._filters_cache[symbol] = out
+                return out
+        except Exception:
+            pass
+        out = {
+            "step_size": 0.00001,
+            "min_qty": 0.00001,
+            "tick_size": 0.01,
+            "min_notional": 5.0,
+        }
         self._filters_cache[symbol] = out
         return out
 

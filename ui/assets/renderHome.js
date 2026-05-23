@@ -28,63 +28,75 @@
         return date.toLocaleDateString();
     }
 
-    /** Map wallet_cached (minimal) to assetsState.wallet shape expected by BinanceAssetsPanel.
-     *  Uses normalizeAndApplyWallet when available (coerceNumber for string totals). */
+    /** Map wallet_cached / wallet_live to assetsState via normalizeAndApplyWallet.
+     *  Backend enriches bot_locked (virtual_wallet + state fallback); do not strip those fields. */
     function walletCachedToAssetsState(walletCached, walletCachedAt) {
         if (!walletCached || typeof walletCached !== 'object') return;
+        var ts = walletCachedAt ? (typeof walletCachedAt === 'string' ? new Date(walletCachedAt).getTime() : walletCachedAt) : Date.now();
         if (typeof window !== 'undefined' && window.normalizeAndApplyWallet) {
-            var coerceNum = window.coerceNumber || function(x) { return typeof x === 'number' && isFinite(x) ? x : null; };
-            var rawAssets = Array.isArray(walletCached.assets) ? walletCached.assets : [];
-            var assetsForPanel = rawAssets.map(function (a) {
-                var uv = coerceNum(a.usdt_value);
-                var free = coerceNum(a.free) || 0;
-                var locked = coerceNum(a.locked) || 0;
-                var total = free + locked;
-                return {
-                    asset: a.asset, free: free, locked: locked, total: total,
-                    value_usd: uv, total_usd: uv,
-                    free_usd: uv != null && total > 0 ? (free / total) * uv : (uv != null ? uv : null),
-                    locked_usd: uv != null && total > 0 ? (locked / total) * uv : (uv != null ? 0 : null),
-                    bot_locked: 0, bot_locked_usd: 0,
-                    available: free, available_usd: uv
-                };
+            var p = Object.assign({}, walletCached, {
+                ts: ts,
+                keys_configured: walletCached.keys_configured !== false,
+                data_status: walletCached.data_status || 'cached'
             });
-            var ts = walletCachedAt ? (typeof walletCachedAt === 'string' ? new Date(walletCachedAt).getTime() : walletCachedAt) : Date.now();
-            var p = { total_usd: coerceNum(walletCached.total_usd), free_usd: coerceNum(walletCached.total_usd), locked_usd: 0, assets: assetsForPanel, keys_configured: true, data_status: 'cached', ts: ts };
             window.normalizeAndApplyWallet(p, { source: 'home_fast_cached' });
             return;
         }
         var assets = Array.isArray(walletCached.assets) ? walletCached.assets : [];
         var coerceNum = (typeof window !== 'undefined' && window.coerceNumber) ? window.coerceNumber : function(x) { return typeof x === 'number' && isFinite(x) ? x : null; };
-        var ts = walletCachedAt ? (typeof walletCachedAt === 'string' ? new Date(walletCachedAt).getTime() : walletCachedAt) : Date.now();
         var totalUsd = coerceNum(walletCached.total_usd);
         var currentTotal = (typeof window !== 'undefined' && window.assetsState && window.assetsState.wallet && typeof window.assetsState.wallet.total_usd === 'number') ? window.assetsState.wallet.total_usd : null;
         if ((totalUsd == null || totalUsd === 0) && currentTotal != null && currentTotal > 0) totalUsd = currentTotal;
+        var freeUsdTot = coerceNum(walletCached.free_usd);
+        var lockedUsdTot = coerceNum(walletCached.locked_usd);
+        var botLockedUsdTot = coerceNum(walletCached.bot_locked_usd);
+        var availableUsdTot = coerceNum(walletCached.available_usd);
         var assetsForPanel = assets.map(function (a) {
+            var free = coerceNum(a.free) || 0;
+            var locked = coerceNum(a.locked) || 0;
+            var total = free + locked;
+            var uv = coerceNum(a.usdt_value) != null ? coerceNum(a.usdt_value) : coerceNum(a.total_usd);
+            var botLocked = coerceNum(a.bot_locked) || 0;
+            var botLockedUsd = coerceNum(a.bot_locked_usd);
+            var freeUsd = coerceNum(a.free_usd);
+            var lockedUsd = coerceNum(a.locked_usd);
+            if (freeUsd == null && uv != null && total > 0) freeUsd = (free / total) * uv;
+            if (lockedUsd == null && uv != null && total > 0) lockedUsd = (locked / total) * uv;
+            if (botLockedUsd == null && botLocked > 0 && uv != null && total > 0) botLockedUsd = botLocked * (uv / total);
+            var available = coerceNum(a.available);
+            if (available == null) available = Math.max(0, free - botLocked);
+            var availableUsd = coerceNum(a.available_usd);
+            if (availableUsd == null && freeUsd != null) availableUsd = Math.max(0, freeUsd - (botLockedUsd || 0));
             return {
                 asset: a.asset,
-                free: a.free,
-                locked: a.locked,
-                total: (a.free || 0) + (a.locked || 0),
-                value_usd: a.usdt_value,
-                total_usd: a.usdt_value,
-                free_usd: a.usdt_value != null ? (a.free || 0) * (a.usdt_value / ((a.free || 0) + (a.locked || 0) || 1)) : null,
-                locked_usd: a.usdt_value != null ? (a.locked || 0) * (a.usdt_value / ((a.free || 0) + (a.locked || 0) || 1)) : null,
-                bot_locked: 0,
-                bot_locked_usd: 0,
-                available: a.free || 0,
-                available_usd: a.usdt_value
+                free: free,
+                locked: locked,
+                total: total,
+                value_usd: uv,
+                total_usd: uv,
+                free_usd: freeUsd,
+                locked_usd: lockedUsd,
+                bot_locked: botLocked,
+                bot_locked_usd: botLockedUsd != null ? botLockedUsd : 0,
+                available: available,
+                available_usd: availableUsd
             };
         });
+        if (botLockedUsdTot == null) {
+            botLockedUsdTot = assetsForPanel.reduce(function (s, x) { return s + (Number(x.bot_locked_usd) || 0); }, 0);
+        }
+        if (availableUsdTot == null && freeUsdTot != null) {
+            availableUsdTot = Math.max(0, freeUsdTot - (botLockedUsdTot || 0));
+        }
         if (typeof window !== 'undefined' && window.assetsState && window.assetsState.wallet) {
             window.assetsState.wallet.status = 'ready';
             window.assetsState.wallet.ts = ts;
             window.assetsState.wallet.assets = assetsForPanel;
             window.assetsState.wallet.total_usd = totalUsd;
-            window.assetsState.wallet.free_usd = totalUsd;
-            window.assetsState.wallet.locked_usd = 0;
-            window.assetsState.wallet.bot_locked_usd = 0;
-            window.assetsState.wallet.available_usd = totalUsd;
+            window.assetsState.wallet.free_usd = freeUsdTot != null ? freeUsdTot : totalUsd;
+            window.assetsState.wallet.locked_usd = lockedUsdTot || 0;
+            window.assetsState.wallet.bot_locked_usd = botLockedUsdTot || 0;
+            window.assetsState.wallet.available_usd = availableUsdTot != null ? availableUsdTot : totalUsd;
             window.assetsState.wallet.error = null;
             window.assetsState.wallet.data_status = 'cached';
         }

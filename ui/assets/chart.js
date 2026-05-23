@@ -403,12 +403,25 @@
             return;
         }
         fetch(url)
-            .then(function (r) { return r.json(); })
+            .then(function (r) {
+                if (!r.ok) {
+                    var err = new Error('HTTP ' + r.status);
+                    err.status = r.status;
+                    throw err;
+                }
+                return r.json();
+            })
             .then(function (data) {
-                if (Array.isArray(data)) frontendCache[cacheKey] = data;
+                if (!Array.isArray(data)) data = [];
+                if (data.length) frontendCache[cacheKey] = data;
                 if (cb) cb(data);
             })
             .catch(function (e) {
+                var msg = 'Grafik verisi alınamadı.';
+                if (e && (e.status === 418 || e.status === 429)) {
+                    msg = 'Binance istek limiti aktif (IP geçici ban). Birkaç dakika bekleyip tekrar deneyin.';
+                }
+                showError(msg);
                 if (cb) cb([]);
             });
     }
@@ -471,7 +484,9 @@
         fetchKlines(interval, limit, endTimeMs || null, function (data) {
             showLoading(false);
             if (!Array.isArray(data) || data.length === 0) {
-                showError('Veri yok.');
+                if (!document.getElementById('chartError') || document.getElementById('chartError').textContent === '') {
+                    showError('Mum verisi yok. Binance geçici limit uyguluyor olabilir; birkaç dakika sonra yenileyin.');
+                }
                 if (cb) cb();
                 return;
             }

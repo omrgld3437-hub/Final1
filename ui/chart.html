@@ -1,3 +1,4 @@
+<!-- chart (ui/). -->
 <!DOCTYPE html>
 <html lang="tr">
 <head>
@@ -150,7 +151,26 @@
             .chart-year-stats { font-size: 0.7rem; }
             #chartContainer { height: calc(100dvh - 120px); min-height: 200px; flex: none; }
         }
+        /* Bot detay modal iframe (embed=1): grafik alanı tam yükseklik */
+        html.chart-embed, html.chart-embed body { height: 100%; min-height: 100%; }
+        html.chart-embed .chart-page {
+            padding: 0.5rem 0.75rem;
+            min-height: 100%;
+            height: 100%;
+            box-sizing: border-box;
+            display: flex;
+            flex-direction: column;
+        }
+        html.chart-embed .chart-header { margin-bottom: 0.35rem; flex-shrink: 0; }
+        html.chart-embed .chart-toolbar { margin-bottom: 0.35rem; flex-shrink: 0; }
+        html.chart-embed #chartContainer {
+            flex: 1 1 auto;
+            min-height: 240px;
+            height: auto;
+        }
+        html.chart-embed #chartCandleTooltip { flex-shrink: 0; margin-top: 0.35rem; }
     </style>
+    <script>(function(){ if (new URLSearchParams(location.search).get('embed') === '1') document.documentElement.classList.add('chart-embed'); })();</script>
 </head>
 <body>
     <div class="chart-page">
@@ -197,6 +217,6 @@
     <script src="/ui/assets/core/apiClient.js"></script>
     <script src="/ui/assets/utils/trTime.js?v=1"></script>
     <script src="/ui/assets/utils/coinLogo.js"></script>
-    <script src="/ui/assets/chart.js?v=5"></script>
+    <script src="/ui/assets/chart.js?v=6"></script>
 </body>
 </html>

@@ -192,44 +192,32 @@ class SpotEngine:
                 logger.warning(f"Price fetch error for {symbol}: {e}")
                 price = 0.0
         
-        # 2. Get filters (cached, 1 hour)
+        # 2. Get filters (cached, 1 hour) — market_data önce
         filters = spot_cache.get_filters(symbol)
         if filters is None:
             try:
-                from app.services.binance_spot import fetch_exchange_info
-                exchange_info = await fetch_exchange_info(self.keys.testnet, force_refresh=False)
-                for s in exchange_info.get("symbols", []):
-                    if s.get("symbol") == symbol:
-                        filters = {}
-                        for f in s.get("filters", []):
-                            if f.get("filterType") == "PRICE_FILTER":
-                                filters["tickSize"] = f.get("tickSize", "0.01")
-                            elif f.get("filterType") == "LOT_SIZE":
-                                filters["stepSize"] = f.get("stepSize", "0.00001")
-                            elif f.get("filterType") == "MIN_NOTIONAL":
-                                filters["minNotional"] = f.get("minNotional", "5")
-                        filters["baseAsset"] = s.get("baseAsset")
-                        filters["quoteAsset"] = s.get("quoteAsset")
-                        spot_cache.set_filters(symbol, filters)
-                        break
-                if not filters:
-                    # Default filters
+                from app.services.market_data import get_symbol_filters
+                cached = get_symbol_filters(symbol)
+                if cached:
                     filters = {
-                        "tickSize": "0.01",
-                        "stepSize": "0.00001",
-                        "minNotional": "5",
-                        "baseAsset": symbol.replace("USDT", ""),
-                        "quoteAsset": "USDT"
+                        "tickSize": str(cached.get("tick_size", "0.01")),
+                        "stepSize": str(cached.get("step_size", "0.00001")),
+                        "minNotional": str(cached.get("min_notional", "5")),
+                        "baseAsset": cached.get("baseAsset") or symbol.replace("USDT", ""),
+                        "quoteAsset": cached.get("quoteAsset") or "USDT",
                     }
-            except Exception as e:
-                logger.warning(f"Filters fetch error for {symbol}: {e}")
-                filters = {
-                    "tickSize": "0.01",
-                    "stepSize": "0.00001",
-                    "minNotional": "5",
-                    "baseAsset": symbol.replace("USDT", ""),
-                    "quoteAsset": "USDT"
-                }
+                    spot_cache.set_filters(symbol, filters)
+            except Exception:
+                pass
+        if filters is None:
+            filters = {
+                "tickSize": "0.01",
+                "stepSize": "0.00001",
+                "minNotional": "5",
+                "baseAsset": symbol.replace("USDT", ""),
+                "quoteAsset": "USDT",
+            }
+            spot_cache.set_filters(symbol, filters)
         
         # 3. Get balance (signed, cached)
         balance_data = spot_cache.get_balance(account_id)
@@ -262,18 +250,14 @@ class SpotEngine:
                 logger.warning(f"Balance fetch error for account {account_id}: {e}")
                 balance_data = {"base": 0.0, "quote": 0.0}
         
-        # 4. Get 24h ticker (for price change %); skip if 400 cooldown
+        # 4. 24h change: market_data cache only
         price_change_24h = 0.0
-        if not _is_symbol_in_400_cooldown(symbol):
-            try:
-                data = await _public_get(self.client, "/api/v3/ticker/24hr", {"symbol": symbol}, self.keys.testnet)
-                price_change_24h = float(data.get("priceChangePercent", 0))
-            except httpx.HTTPStatusError as e:
-                if e.response.status_code == 400:
-                    _record_binance_400(symbol)
-                logger.debug(f"24h ticker fetch error for {symbol}: {e}")
-            except Exception as e:
-                logger.debug(f"24h ticker fetch error for {symbol}: {e}")
+        try:
+            from app.services.market_data import get_ticker_24h
+            t = get_ticker_24h(symbol)
+            price_change_24h = float(t.get("priceChangePercent") or 0)
+        except Exception as e:
+            logger.debug(f"24h ticker cache miss for {symbol}: {e}")
         
         elapsed = (time.time() - start_time) * 1000
         logger.debug("[SPOT_ENGINE] quick_data: symbol=%s, t=%.1fms", symbol, elapsed)
@@ -350,20 +334,17 @@ class SpotEngine:
                 "tick_size": filters.get("tickSize") or "0.01",
             }
         try:
-            from app.services.binance_spot import fetch_exchange_info
-            exchange_info = await fetch_exchange_info(self.keys.testnet, force_refresh=False)
-            for s in exchange_info.get("symbols", []):
-                if s.get("symbol") == symbol:
-                    out = {"step_size": "0.00001", "tick_size": "0.01"}
-                    for f in s.get("filters", []):
-                        if f.get("filterType") == "LOT_SIZE":
-                            out["step_size"] = f.get("stepSize", "0.00001")
-                        elif f.get("filterType") == "PRICE_FILTER":
-                            out["tick_size"] = f.get("tickSize", "0.01")
-                    spot_cache.set_filters(symbol, out)
-                    return out
+            from app.services.market_data import get_symbol_filters
+            cached = get_symbol_filters(symbol)
+            if cached:
+                out = {
+                    "step_size": str(cached.get("step_size", "0.00001")),
+                    "tick_size": str(cached.get("tick_size", "0.01")),
+                }
+                spot_cache.set_filters(symbol, out)
+                return out
         except Exception as e:
-            logger.warning("Exchange info fetch for place_order: %s", e)
+            logger.debug("Symbol filters cache for %s: %s", symbol, e)
         return {"step_size": "0.00001", "tick_size": "0.01"}
 
     async def place_order(

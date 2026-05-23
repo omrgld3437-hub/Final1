@@ -1,3 +1,4 @@
+REM Windows batch: deploy.
 @echo off
 REM Deploy script (Windows) - Sadece DEGISKEN dosyalari sunucuya kopyalanir
 REM SABIT dosyalar (.env, *.db, logs, vb.) atlanir

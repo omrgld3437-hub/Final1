@@ -16,6 +16,32 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
+_DATAHUB_REST_LOCK_TIMEOUT = 55.0
+
+
+def try_acquire_datahub_rest_leader() -> bool:
+    """Çoklu uvicorn worker: REST döngüsünü tek proses çalıştırır (rest.log çift yük önleme)."""
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    lock_path = os.path.join(root, ".run", "datahub_rest.lock")
+    try:
+        os.makedirs(os.path.dirname(lock_path), exist_ok=True)
+    except Exception:
+        pass
+    now = time.time()
+    if os.path.isfile(lock_path):
+        try:
+            if now - os.path.getmtime(lock_path) < _DATAHUB_REST_LOCK_TIMEOUT:
+                return False
+            os.unlink(lock_path)
+        except Exception:
+            return False
+    try:
+        with open(lock_path, "w", encoding="utf-8") as f:
+            f.write(str(os.getpid()))
+        return True
+    except Exception:
+        return False
+
 # ============================================================
 # GLOBAL DATA HUB - Merkezi Veri Yönetimi
 # ============================================================
@@ -35,7 +61,7 @@ class DataHub:
         
         # Update intervals - REST loop: price 1-2s, 24h 5s, exchangeInfo/symbols 10 min
         self.PRICE_UPDATE_INTERVAL = 1.5
-        self.TICKER_24H_UPDATE_INTERVAL = 5.0
+        self.TICKER_24H_UPDATE_INTERVAL = 60.0
         self.COIN_LIST_UPDATE_INTERVAL = 600.0
         self.BALANCE_UPDATE_INTERVAL = 10.0
 
@@ -68,6 +94,10 @@ class DataHub:
         self._running = False
         self._warmup_done = False
         self._warmup_lock = asyncio.Lock()
+        self._last_24h_rows: List[Dict] = []
+        self._last_24h_ts: float = 0.0
+        self._exchange_info_raw: Optional[Dict] = None
+        self._exchange_info_ts: float = 0.0
 
         # WebSocket: live prices when connected
         self.ws_status: str = "disabled"  # "connected" | "reconnecting" | "disabled" | "rest"
@@ -76,9 +106,10 @@ class DataHub:
         self._mini_ws: Dict[str, Dict] = {}  # symbol -> {last, open, changePct, volume, quoteVolume}
         self._ws_started = False
         self.WS_STALE_SEC = 60.0  # consider WS stale after 60s no message
-        self.REST_PRICE_INTERVAL_WHEN_WS = 10.0  # when WS active, relax REST price interval
+        self.REST_PRICE_INTERVAL_WHEN_WS = 30.0  # WS aktifken REST price seyrek
         self.BULK_REFRESH_MIN_INTERVAL = 10.0  # max 1 Binance ticker/price call per 10s
         self._last_bulk_refresh_ts: float = 0.0
+        self._skip_rest_during_ban = True
 
         # RAM cap: Binance 2000+ sembol tutmak CPU/RAM tüketimine yol açar; sınırla
         self._MAX_PRICES = 600
@@ -106,6 +137,8 @@ class DataHub:
             "price": data.get("price", 0.0),
             "change24h": data.get("change24h"),
             "volume24h": data.get("volume24h"),
+            "low24h": data.get("low24h"),
+            "high24h": data.get("high24h"),
             "ts": ts,
             "is_stale": is_stale,
         }
@@ -141,6 +174,8 @@ class DataHub:
                 "price": data.get("price", 0.0),
                 "change24h": data.get("change24h"),
                 "volume24h": data.get("volume24h"),
+                "low24h": data.get("low24h"),
+                "high24h": data.get("high24h"),
                 "ts": ts,
                 "is_stale": is_stale,
             }
@@ -172,17 +207,31 @@ class DataHub:
         
         return data.get("data")
     
+    def _ws_fresh(self) -> bool:
+        return self._ws_started and (time.time() - self.last_ws_update_ts) < self.WS_STALE_SEC
+
     async def refresh_all_prices_bulk(self) -> None:
         """
         Single bulk call: GET /api/v3/ticker/price (no symbol = all). Updates DataHub cache.
-        Rate limited: max once every BULK_REFRESH_MIN_INTERVAL (10s). No per-symbol REST calls.
+        Rate limited: max once every BULK_REFRESH_MIN_INTERVAL (10s). WS fresh ise atlanır.
         """
+        if self._ws_fresh():
+            return
         now = time.time()
         if now - self._last_bulk_refresh_ts < self.BULK_REFRESH_MIN_INTERVAL:
             return
+        if self._skip_rest_during_ban:
+            try:
+                from app.services.binance_spot import is_ip_banned
+                if is_ip_banned():
+                    return
+            except Exception:
+                pass
         try:
+            from app.services.binance_rest_log import rest_source
             from app.services.binance_spot import ticker_price_all
-            rows = await ticker_price_all(testnet=False)
+            with rest_source("data_hub.bulk_price"):
+                rows = await ticker_price_all(testnet=False)
             self._last_bulk_refresh_ts = time.time()
             for r in (rows or []):
                 sym = r.get("symbol")
@@ -205,10 +254,21 @@ class DataHub:
 
     async def update_ticker_24h(self):
         """Fetch /api/v3/ticker/24hr (all) and merge change24h/volume into self.prices."""
+        if self._skip_rest_during_ban:
+            try:
+                from app.services.binance_spot import is_ip_banned
+                if is_ip_banned():
+                    return
+            except Exception:
+                pass
         try:
+            from app.services.binance_rest_log import rest_source
             from app.services.binance_spot import ticker_24h_all
-            data = await ticker_24h_all(testnet=False)
+            with rest_source("data_hub.ticker_24h"):
+                data = await ticker_24h_all(testnet=False)
             rows = data if isinstance(data, list) else [data] if data else []
+            self._last_24h_rows = rows
+            self._last_24h_ts = time.time()
             now = time.time()
             for r in rows:
                 sym = r.get("symbol")
@@ -222,6 +282,8 @@ class DataHub:
                     self.prices[sym] = {"price": 0.0, "change24h": 0.0, "volume24h": 0.0, "ts": 0}
                 self.prices[sym]["change24h"] = change24h
                 self.prices[sym]["volume24h"] = volume24h
+                self.prices[sym]["low24h"] = float(r.get("lowPrice", 0) or 0)
+                self.prices[sym]["high24h"] = float(r.get("highPrice", 0) or 0)
                 if price > 0:
                     self.prices[sym]["price"] = price
                 self.prices[sym]["ts"] = now
@@ -232,9 +294,10 @@ class DataHub:
     async def update_coin_list(self):
         """Build coin_list from current prices + 24h data (top by quoteVolume)."""
         try:
-            from app.services.binance_spot import ticker_24h_all
-            data = await ticker_24h_all(testnet=False)
-            rows = data if isinstance(data, list) else [data] if data else []
+            rows = self._last_24h_rows
+            if not rows or (time.time() - self._last_24h_ts) > self.TICKER_24H_UPDATE_INTERVAL * 2:
+                await self.update_ticker_24h()
+                rows = self._last_24h_rows
             coins = []
             for r in rows:
                 sym = r.get("symbol", "")
@@ -265,8 +328,12 @@ class DataHub:
     async def update_all_symbols(self):
         """Fetch /api/v3/exchangeInfo and set all_symbols (all TRADING pairs)."""
         try:
+            from app.services.binance_rest_log import rest_source
             from app.services.binance_spot import fetch_exchange_info
-            info = await fetch_exchange_info(testnet=False, force_refresh=False)
+            with rest_source("data_hub.exchange_info"):
+                info = await fetch_exchange_info(testnet=False, force_refresh=False)
+            self._exchange_info_raw = info
+            self._exchange_info_ts = time.time()
             symbols = [
                 s.get("symbol", "")
                 for s in info.get("symbols", [])
@@ -287,6 +354,61 @@ class DataHub:
         if (scope or "").lower() == "all":
             return self.all_symbols.copy()
         return [s for s in self.all_symbols if s.endswith("USDT")]
+
+    def get_symbol_filters_cached(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """exchangeInfo RAM cache — REST yok."""
+        sym = (symbol or "").upper().strip()
+        if not sym or not self._exchange_info_raw:
+            return None
+        for s in self._exchange_info_raw.get("symbols") or []:
+            if s.get("symbol") != sym:
+                continue
+            out: Dict[str, Any] = {
+                "step_size": 0.00001,
+                "min_qty": 0.00001,
+                "tick_size": 0.01,
+                "min_notional": 5.0,
+                "baseAsset": s.get("baseAsset"),
+                "quoteAsset": s.get("quoteAsset"),
+            }
+            for f in s.get("filters") or []:
+                t = f.get("filterType")
+                if t == "LOT_SIZE":
+                    out["step_size"] = float(f.get("stepSize") or 0.00001)
+                    out["min_qty"] = float(f.get("minQty") or 0.00001)
+                elif t == "PRICE_FILTER":
+                    out["tick_size"] = float(f.get("tickSize") or 0.01)
+                elif t in ("MIN_NOTIONAL", "NOTIONAL"):
+                    out["min_notional"] = float(f.get("minNotional") or f.get("notional") or 5)
+            return out
+        return None
+
+    def import_prices_snapshot(self, prices: Dict[str, Any]) -> int:
+        """Başka süreçten (web API) fiyat snapshot'ı — worker SSOT senkronu."""
+        if not prices or not isinstance(prices, dict):
+            return 0
+        now = time.time()
+        n = 0
+        for sym, d in prices.items():
+            if not sym or not isinstance(d, dict):
+                continue
+            s = sym.upper()
+            p = d.get("price")
+            if p is None or float(p) <= 0:
+                continue
+            prev = self.prices.get(s) or {}
+            self.prices[s] = {
+                "price": float(p),
+                "change24h": d.get("change24h", prev.get("change24h", 0.0)),
+                "volume24h": d.get("volume24h", prev.get("volume24h", 0.0)),
+                "low24h": d.get("low24h", prev.get("low24h", 0.0)),
+                "high24h": d.get("high24h", prev.get("high24h", 0.0)),
+                "ts": now,
+            }
+            n += 1
+        if n:
+            self._trim_prices()
+        return n
 
     def _trim_prices(self) -> None:
         """RAM: Binance 2000+ sembol tutmayı önle; öncelik: top_100 + coin_list, sonra en güncel."""
@@ -367,10 +489,11 @@ class DataHub:
                 now = time.time()
                 ws_stale = self._ws_started and (now - self.last_ws_update_ts) >= self.WS_STALE_SEC
                 price_interval = self.REST_PRICE_INTERVAL_WHEN_WS if not ws_stale else self.PRICE_UPDATE_INTERVAL
-                if now - last_price_update >= price_interval:
+                if not self._ws_fresh() and now - last_price_update >= price_interval:
                     await self.refresh_all_prices_bulk()
                     last_price_update = now
-                if now - last_24h_update >= self.TICKER_24H_UPDATE_INTERVAL:
+                ticker_iv = self.TICKER_24H_UPDATE_INTERVAL if not self._ws_fresh() else max(120.0, self.TICKER_24H_UPDATE_INTERVAL)
+                if now - last_24h_update >= ticker_iv:
                     await self.update_ticker_24h()
                     last_24h_update = now
                 if now - last_coin_list_update >= self.COIN_LIST_UPDATE_INTERVAL:
@@ -395,20 +518,22 @@ class DataHub:
                 logger.error("[DataHub] Background update error: %s", e)
                 await asyncio.sleep(5)
     
-    def start_background_updates(self):
-        """Start background update service"""
+    def start_background_updates(self, rest_leader: bool = True):
+        """Start background update service. rest_leader=False: sadece WS (çoklu uvicorn worker)."""
         if self._running:
             return
-        
+        if not rest_leader:
+            logger.info("[DataHub] REST background loop skipped (not REST leader)")
+            return
+
         self._running = True
-        
+
         # Start background task (will be called from FastAPI startup)
         try:
             loop = asyncio.get_running_loop()
             self._background_task = loop.create_task(self._background_update_loop())
-            logger.info("[DataHub] Background update service started")
+            logger.info("[DataHub] Background update service started (REST leader pid=%s)", os.getpid())
         except RuntimeError:
-            # No running loop, will be started by FastAPI startup event
             logger.warning("[DataHub] No event loop found, will start on startup event")
     
     def stop_background_updates(self):

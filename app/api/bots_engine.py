@@ -6,9 +6,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import random
 import threading
 import uuid
+from pathlib import Path
 from collections import OrderedDict
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -141,6 +143,20 @@ def _request_id(request: Request) -> str:
     return str(getattr(request.state, "request_id", None) or uuid.uuid4())[:16]
 
 
+def _worker_process_alive() -> bool:
+    """True if engine worker PID file exists and process responds to signal 0."""
+    try:
+        root = Path(__file__).resolve().parents[2]
+        pid_path = root / ".run" / "worker.pid"
+        if not pid_path.is_file():
+            return False
+        pid = int(pid_path.read_text(encoding="utf-8").strip())
+        os.kill(pid, 0)
+        return True
+    except (OSError, ValueError, ProcessLookupError):
+        return False
+
+
 def _detail_err(code: str, message: str, request_id: str) -> dict:
     return {"error_code": code, "message": message, "request_id": request_id}
 
@@ -160,12 +176,19 @@ async def bots_list(
     for r in rows:
         raw = json.loads(r.config_json or "{}")
         state = load_state(db, r.id)
+        ia_done = bool(state and state.get("initial_allocation_done"))
+        st = (r.status or "stopped").lower()
+        display_status = st
+        if st == "running" and not ia_done:
+            display_status = "starting"
         out.append({
             "bot_id": r.id,
             "bot_code": getattr(r, "bot_code", None) or str(r.id),
             "account_id": r.account_id,
             "symbol": r.symbol,
-            "status": (r.status or "stopped").lower(),
+            "status": st,
+            "display_status": display_status,
+            "initial_allocation_done": ia_done,
             "config": raw,
             "last_tick_at": state.get("last_tick_at") if state else None,
             "created_at": r.started_at.isoformat() + "Z" if getattr(r, "started_at", None) else None,
@@ -294,20 +317,14 @@ async def bots_detail(
         if not sym or sym == "MULTI":
             return out
         try:
-            import httpx
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                r = await client.get(
-                    f"{BINANCE_PUBLIC}/api/v3/ticker/24hr",
-                    params={"symbol": sym},
-                )
-                if r.status_code == 200:
-                    data = r.json()
-                    pct = data.get("priceChangePercent")
-                    if pct is not None and pct != "":
-                        out["pct"] = round(float(pct), 2)
-                    last_p = data.get("lastPrice") or data.get("weightedAvgPrice")
-                    if last_p is not None and last_p != "":
-                        out["price"] = float(last_p)
+            from app.services.market_data import get_ticker_24h
+            t = get_ticker_24h(sym)
+            pct = t.get("priceChangePercent")
+            if pct is not None:
+                out["pct"] = round(float(pct), 2)
+            last_p = t.get("lastPrice")
+            if last_p is not None and float(last_p) > 0:
+                out["price"] = float(last_p)
         except Exception as e:
             logger.debug("bots_detail 24h ticker failed symbol=%s: %s", sym, e)
         return out
@@ -601,12 +618,17 @@ async def bots_detail(
             daily_usd = equity_from_state - daily_ref_usd
             daily_pnl_pct = (daily_usd / daily_ref_usd) * 100.0
 
+    _ia_done = bool(state and state.get("initial_allocation_done"))
+    _st = (bot.status or "stopped").lower()
+    _display_status = "starting" if _st == "running" and not _ia_done and (current_usd or 0) <= 0.01 else _st
     result = {
         "bot_id": bot.id,
         "bot_code": getattr(bot, "bot_code", None) or str(bot.id),
         "account_id": bot.account_id,
         "symbol": bot.symbol,
-        "status": (bot.status or "stopped").lower(),
+        "status": _st,
+        "display_status": _display_status,
+        "initial_allocation_done": _ia_done,
         "config": raw,
         "state": state,
         "grid_points": grid_points,
@@ -1313,6 +1335,40 @@ async def bots_start(
             state.pop("initial_alloc_price", None)
             save_state(db, bot.id, bot.account_id, state)
     ensure_state_row(db, bot.id, bot.account_id, (bot.symbol or "").upper() or "BTCUSDT")
+
+    # Live modda bakiye kontrolü: yetersizse başlatma, PAUSED_ERROR önlenir
+    is_test = is_test_account(bot.account_id, db)
+    if not is_test and (getattr(bot, "mode", None) or "").lower() == "live":
+        try:
+            raw = json.loads(bot.config_json or "{}")
+            budget = float(raw.get("initial_capital_usdt") or raw.get("budget_usd") or raw.get("bot_budget_usdt") or 0)
+            sym = (bot.symbol or "").upper().strip()
+            quote_asset = (raw.get("quote_asset") or "USDT").strip().upper() if sym in ("MULTI",) else (sym[-4:] if len(sym) >= 4 and sym.endswith("USDT") else "USDT")
+            if not quote_asset:
+                quote_asset = "USDT"
+            if budget > 0:
+                from app.services.binance_assets import get_account_keys
+                from app.botengine.adapters.binance_adapter import BinanceAdapter
+                keys = await get_account_keys(bot.account_id, db)
+                adapter = BinanceAdapter(bot.account_id, keys, paper_mode=False)
+                balances = await adapter.get_account_balances()
+                free = float((balances.get(quote_asset) or {}).get("free") or 0)
+                if budget > free:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=_detail_err(
+                            "INSUFFICIENT_BALANCE",
+                            "Yetersiz bakiye. Bot bütçesi: %.2f %s, kullanılabilir: %.2f %s. Bütçeyi düşürün veya cüzdana bakiye ekleyin."
+                            % (budget, quote_asset, free, quote_asset),
+                            rid,
+                        ),
+                    )
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.warning("bots_start balance check failed bot_id=%s: %s", bot.id, e)
+            # API/network hatasında başlatmayı engellemeyebiliriz; yine de dene
+
     bot.status = "running"
     bot.started_at = datetime.now(timezone.utc)
     db.commit()
@@ -1330,6 +1386,10 @@ async def bots_start(
         request_id=rid,
         meta={"bot_id": bot.id, "account_id": bot.account_id, "symbol": (bot.symbol or "") or ""},
     )
+    worker_alive = _worker_process_alive()
+    msg = "Command queued; worker will start the bot."
+    if not worker_alive:
+        msg = "Komut kuyruğa alındı ancak Bot Engine worker çalışmıyor. start.command veya worker.log kontrol edin."
     return {
         "ok": True,
         "bot_id": bot.id,
@@ -1337,7 +1397,8 @@ async def bots_start(
         "request_id": rid,
         "command_id": command_id,
         "bot_status": "running",
-        "message": "Command queued; worker will start the bot.",
+        "worker_alive": worker_alive,
+        "message": msg,
     }
 
 
@@ -1465,15 +1526,8 @@ async def bots_delete(
                                 min_notional = float(filters.get("min_notional") or 5.0)
                                 price = adapter.get_price(sym_pair) or 0.0
                                 if not price or price <= 0:
-                                    try:
-                                        from app.services.binance_spot import ticker_24h_all
-                                        t = await ticker_24h_all(testnet=False, symbol=sym_pair)
-                                        if t and isinstance(t, dict):
-                                            p = t.get("lastPrice") or t.get("weightedAvgPrice")
-                                            if p is not None:
-                                                price = float(p)
-                                    except Exception:
-                                        pass
+                                    from app.services.market_data import get_price
+                                    price = get_price(sym_pair) or 0.0
                                 notional = base_free * price if price else 0
                                 if notional >= min_notional:
                                     client_order_id = "convert_delete_" + str(bot.id) + "_" + base_asset
@@ -1504,15 +1558,8 @@ async def bots_delete(
                         min_notional = float(filters.get("min_notional") or 5.0)
                         price = adapter.get_price(symbol) or 0.0
                         if not price or price <= 0:
-                            try:
-                                from app.services.binance_spot import ticker_24h_all
-                                t = await ticker_24h_all(testnet=False, symbol=symbol)
-                                if t and isinstance(t, dict):
-                                    p = t.get("lastPrice") or t.get("weightedAvgPrice")
-                                    if p is not None:
-                                        price = float(p)
-                            except Exception:
-                                pass
+                            from app.services.market_data import get_price
+                            price = get_price(symbol) or 0.0
                         notional = base_free * price if price else 0
                         if notional >= min_notional:
                             client_order_id = "convert_delete_" + str(bot.id)

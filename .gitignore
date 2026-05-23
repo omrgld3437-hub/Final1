@@ -1,11 +1,17 @@
 .env
+shared/.env
+marketing/.git/
+marketing/**/.git/
 logs/
 data/
 .run/
 *.db
+*.db-shm
+*.db-wal
 __pycache__/
 *.pyc
 *.log
 .venv/
 venv/
 .DS_Store
+.pytest_cache/

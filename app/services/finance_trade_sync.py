@@ -135,23 +135,17 @@ class TradeSyncService:
         """Fetch trades from Binance myTrades. Hesap bot sembollerini önce çek (bot işlemleri İşlemler panelinde görünsün)."""
         try:
             import httpx
-            from app.services.binance_spot import fetch_exchange_info, _signed_request
+            from app.services.binance_spot import _signed_request
+            from app.services.market_data import get_symbols
 
             # Bu hesabın bot sembollerini mutlaka dahil et (bot alım/satım İşlemler’de görünsün)
             bot_raw = [(b.symbol or "").upper().strip() for b in self.db.query(Bot).filter(Bot.account_id == account_id).all()]
             bot_symbols = list(dict.fromkeys(s for s in bot_raw if s and s.endswith("USDT")))
 
-            # Exchange info is public (no keys needed)
-            exchange_info = await fetch_exchange_info(testnet=getattr(keys, "testnet", False), force_refresh=False)
-
-            if not exchange_info or "symbols" not in exchange_info:
-                logger.warning("[TradeSync] Could not get exchange info, using common + bot symbols")
+            common_symbols = get_symbols("usdt")
+            if not common_symbols:
+                logger.warning("[TradeSync] Symbol cache empty, using common + bot symbols")
                 common_symbols = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "ADAUSDT", "XRPUSDT"]
-            else:
-                common_symbols = [
-                    s["symbol"] for s in exchange_info["symbols"]
-                    if s.get("status") == "TRADING" and s["symbol"].endswith("USDT")
-                ]
 
             # Rate limit: max 40 symbols (myTrades = 10 weight each = 400 weight per sync; 6000/min limit)
             max_symbols = 40

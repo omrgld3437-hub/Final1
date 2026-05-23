@@ -41,25 +41,13 @@ async def _get_spot_balance_for_account(account_id: int, db: Session) -> tuple:
         if is_test_account(account_id, db):
             return (float(TEST_PAPER_BALANCE_USDT), "ok")
         from app.services.binance_assets import get_account_keys, KEY_ERROR_CODES, ACCOUNT_NOT_FOUND
-        from app.services.binance_spot import get_wallet, ticker_24h_all, build_price_map_from_24h
+        from app.services.binance_spot import get_wallet
+        from app.services.wallet_pricing import build_wallet_price_map
         from app.api.routes import _wallet_response
         keys = await get_account_keys(account_id, db)
-        wallet_data = await get_wallet(keys)
+        wallet_data = await get_wallet(keys, tag="admin_spot_balance")
         balances = wallet_data.get("balances") or []
-        price_map = {}
-        try:
-            data_24h = await ticker_24h_all(testnet=keys.testnet)
-            rows = data_24h if isinstance(data_24h, list) else [data_24h] if data_24h else []
-            price_map = build_price_map_from_24h(rows)
-        except Exception:
-            pass
-        if not price_map:
-            try:
-                from app.services.data_hub import data_hub
-                prices = data_hub.get_all_prices()
-                price_map = {sym: float(d.get("price") or 0) for sym, d in (prices or {}).items()}
-            except Exception:
-                pass
+        price_map = await build_wallet_price_map(balances, testnet=keys.testnet)
         resp = _wallet_response(account_id, balances, price_map)
         return (float(resp.get("total_usd") or 0.0), "ok")
     except ValueError as e:
@@ -961,16 +949,23 @@ async def server_restart(current: dict = Depends(_require_admin)) -> Dict:
             start_new_session=True,
         )
     else:
+        # Başlatma scripti sırasıyla: run.sh (kök), scripts/run.sh, start.command, start
         run_sh = os.path.join(project_root, "run.sh")
         if not os.path.isfile(run_sh):
             run_sh = os.path.join(project_root, "scripts", "run.sh")
+        if not os.path.isfile(run_sh):
+            run_sh = os.path.join(project_root, "ops", "start.command")
+        if not os.path.isfile(run_sh):
+            run_sh = os.path.join(project_root, "start.command")
+        if not os.path.isfile(run_sh):
+            run_sh = os.path.join(project_root, "start")
         restart_script = os.path.join(project_root, "scripts", "restart_server.py")
         if not os.path.isfile(restart_script):
             logger.error("Restart script bulunamadı: %s", restart_script)
             raise HTTPException(status_code=500, detail="Restart script bulunamadı (scripts/restart_server.py).")
         if not os.path.isfile(run_sh):
-            logger.error("run.sh bulunamadı (kökte ve scripts/ içinde): %s", run_sh)
-            raise HTTPException(status_code=500, detail="run.sh bulunamadı. Proje köküne veya scripts/ içine run.sh ekleyin.")
+            logger.error("Başlatma scripti bulunamadı (run.sh, start.command, start): %s", run_sh)
+            raise HTTPException(status_code=500, detail="run.sh veya start.command/start bulunamadı. Proje köküne run.sh ekleyin veya start.command kullanın.")
         run_dir = os.path.join(project_root, ".run")
         os.makedirs(run_dir, exist_ok=True)
         log_path = os.path.join(run_dir, "restart_helper.log")
@@ -993,8 +988,6 @@ async def server_restart(current: dict = Depends(_require_admin)) -> Dict:
         raise HTTPException(status_code=500, detail="Restart yardımcısı başlatılamadı.")
 
     msg = "Sunucu 5 saniye içinde kapatılıp yeniden başlatılacak."
-    if not is_windows:
-        msg = "Sunucu 5 saniye içinde kapatılıp run.sh ile yeniden başlatılacak."
     logger.warning("Server restart scheduled by admin - helper PID %s, exit in 5 seconds", proc.pid)
     return {"success": True, "message": msg}
 

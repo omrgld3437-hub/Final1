@@ -43,7 +43,7 @@ _RUN_DIR = _PROJECT_ROOT / ".run"
 _LOGS_DIR = _PROJECT_ROOT / "logs"
 _LOCKS_FILE = _RUN_DIR / "locks.json"
 _DIAGNOSIS_FILE = _RUN_DIR / "diagnosis.json"
-_HELPER = _PROJECT_ROOT / "scripts" / "local_web_worker_helper.py"
+_HELPER = _PROJECT_ROOT / "scripts" / "runtime" / "local_web_worker_helper.py"
 _WEB_METRICS_FILE = _RUN_DIR / "web.metrics.json"
 _ENGINE_METRICS_FILE = _RUN_DIR / "engine.metrics.json"
 _MANAGER_PID_FILE = _RUN_DIR / "manager.pid"
@@ -58,9 +58,11 @@ _HTML_PID = _RUN_DIR / "html.pid"
 _HTML_LOG = _LOGS_DIR / "html.log"
 _WEB_PORT = int(os.environ.get("WEB_PORT", "8000"))
 _HTML_PORT = int(os.environ.get("OMERALTINHTML_PORT", "8080"))
-# omeraltinhtml: env > proje/omeraltinhtml (tercih) > Omeraltinhtml > parent
+# marketing sitesi: env > marketing/ > eski klasor adlari > parent
 if os.environ.get("OMERALTINHTML_PATH"):
     _OMERALTINHTML_PATH = Path(os.environ["OMERALTINHTML_PATH"])
+elif (_PROJECT_ROOT / "marketing").is_dir():
+    _OMERALTINHTML_PATH = _PROJECT_ROOT / "marketing"
 elif (_PROJECT_ROOT / "omeraltinhtml").is_dir():
     _OMERALTINHTML_PATH = _PROJECT_ROOT / "omeraltinhtml"
 elif (_PROJECT_ROOT / "Omeraltinhtml").is_dir():

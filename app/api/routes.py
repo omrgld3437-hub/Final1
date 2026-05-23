@@ -395,7 +395,11 @@ async def update_account_settings(
         if "BINANCE_MASTER_KEY" in msg or "environment" in msg.lower():
             raise HTTPException(
                 status_code=503,
-                detail={"error_code": "ENCRYPTION_NOT_CONFIGURED", "message": "Şifreleme anahtarı (BINANCE_MASTER_KEY) .env dosyasında tanımlı değil. API anahtarı kaydedilemiyor."},
+                detail={
+                    "error_code": "ENCRYPTION_NOT_CONFIGURED",
+                    "message": "Şifreleme anahtarı (BINANCE_MASTER_KEY) .env dosyasında tanımlı değil. API anahtarı kaydedilemiyor.",
+                    "fix": "Proje kökünde .env dosyası oluşturun veya açın; BINANCE_MASTER_KEY= ile en az 32 karakterlik bir anahtar ekleyin. Anahtar üretmek için: python -c \"import secrets; print(secrets.token_urlsafe(24))\"  Çalıştırdıktan sonra web/manager servisini yeniden başlatın.",
+                },
             )
         raise HTTPException(status_code=400, detail={"error_code": "ENCRYPTION_ERROR", "message": msg})
     if body.name is not None and body.name.strip():
@@ -733,27 +737,24 @@ LOGIN_CRYPTO_SYMBOLS = ["BTC", "ETH", "SOL", "AVAX", "LTC", "XRP"]
 
 @router.get("/login-crypto")
 async def get_login_crypto():
-    """Login sayfasindaki kripto listesi icin 24h ticker. Auth yok; backend Binance'e istek atar (CORS yok)."""
+    """Login sayfasindaki kripto listesi — DataHub cache (Binance REST bypass)."""
     try:
-        async with httpx.AsyncClient(timeout=8.0) as client:
-            r = await client.get("https://api.binance.com/api/v3/ticker/24hr")
-            if r.status_code != 200:
-                return _login_crypto_fallback()
-            arr = r.json()
+        from app.services.data_hub import data_hub
+        data = {}
+        for sym in LOGIN_CRYPTO_SYMBOLS:
+            pair = sym + "USDT"
+            meta = data_hub.get_price_with_meta(pair)
+            if not meta:
+                continue
+            data[sym] = {
+                "price": str(meta.get("price") or "0"),
+                "priceChangePercent": float(meta.get("change24h") or 0),
+            }
+        if data:
+            return data
     except Exception:
-        return _login_crypto_fallback()
-    data = {}
-    for t in arr or []:
-        sym = (t.get("symbol") or "").replace("USDT", "")
-        if sym in LOGIN_CRYPTO_SYMBOLS:
-            try:
-                data[sym] = {
-                    "price": str(t.get("lastPrice") or "0"),
-                    "priceChangePercent": float(t.get("priceChangePercent") or 0),
-                }
-            except (TypeError, ValueError):
-                pass
-    return data
+        pass
+    return _login_crypto_fallback()
 
 
 def _login_crypto_fallback():
@@ -1066,6 +1067,12 @@ async def create_bot_with_config(
             symbol = (config_data.get("symbol") or "").upper().strip() or "BTCUSDT"
         if not symbol:
             raise HTTPException(status_code=400, detail="symbol required in config_json")
+        from app.botengine.models import config_from_ui_payload
+        cfg = config_from_ui_payload(config_data)
+        stored = cfg.to_dict()
+        stored["strategy_id"] = "dca_grid_trailing"
+        config_json = json.dumps(stored, ensure_ascii=False)
+        config_data = stored
     
     bot = Bot(
         account_id=account_id,
@@ -1934,13 +1941,13 @@ def _is_binance_invalid_key(exc: Exception) -> bool:
 # Wallet full response: 2s TTL + in-flight dedupe; 429/upstream hata → serve stale
 _wallet_response_cache: Dict[int, tuple] = {}  # account_id -> (response_dict, ts)
 _wallet_cache_lock = asyncio.Lock()
-WALLET_RESPONSE_CACHE_TTL = 15.0
+WALLET_RESPONSE_CACHE_TTL = 30.0
 _wallet_inflight: Dict[int, asyncio.Task] = {}  # account_id -> task (in-flight dedupe)
 
 # Open-orders: TTL + in-flight dedupe; 429/418 → serve stale (weight tasarrufu, IP ban riski azaltma)
 _open_orders_cache: Dict[tuple, tuple] = {}  # (account_id, symbol or "") -> (response_dict, ts)
 _open_orders_cache_lock = asyncio.Lock()
-OPEN_ORDERS_CACHE_TTL = 15.0
+OPEN_ORDERS_CACHE_TTL = 30.0
 _OPEN_ORDERS_CACHE_MAX_KEYS = 100
 _open_orders_inflight: Dict[tuple, asyncio.Task] = {}  # (account_id, sym) -> task
 
@@ -2024,7 +2031,7 @@ async def api_dashboard_bootstrap(
     """Initial load: prices (cached), kpis, wallet_cached, wallet_status. Subroute varsa ona delege et."""
     require_account_access(current, account_id)
     try:
-        from app.api.subroutes import dashboard_bootstrap as db_mod
+        from app.api.routes import dashboard_bootstrap as db_mod
         return await db_mod.dashboard_bootstrap(request, account_id=account_id, db=db, current=current)
     except Exception as e:
         logger.warning("Dashboard bootstrap delegate failed, returning minimal: %s", e)
@@ -2039,7 +2046,7 @@ async def api_dashboard_bootstrap(
         pass
     wallet_cached, wallet_cached_at = None, None
     try:
-        from app.api.subroutes.home import _get_last_wallet_snapshot_with_new_session
+        from app.api.routes.home import _get_last_wallet_snapshot_with_new_session
         wallet_cached, wallet_cached_at = await asyncio.get_running_loop().run_in_executor(
             None, lambda: _get_last_wallet_snapshot_with_new_session(account_id, 20)
         )
@@ -2047,7 +2054,7 @@ async def api_dashboard_bootstrap(
         pass
     kpis = {}
     try:
-        from app.api.subroutes.home import _get_kpis_minimal
+        from app.api.routes.home import _get_kpis_minimal
         kpis = await _get_kpis_minimal(account_id, db)
     except Exception:
         pass
@@ -2103,29 +2110,12 @@ async def api_dashboard_summary(
     if binance_equity == 0.0 and not is_test:
         try:
             from app.services.binance_assets import get_account_keys
-            from app.services.binance_spot import get_wallet, ticker_24h_all, build_price_map_from_24h
-            from app.services.data_hub import data_hub
+            from app.services.binance_spot import get_wallet
+            from app.services.wallet_pricing import build_wallet_price_map
             keys = await get_account_keys(account_id, db)
-            wallet_data = await asyncio.wait_for(get_wallet(keys), timeout=6.0)
+            wallet_data = await asyncio.wait_for(get_wallet(keys, tag="dashboard_summary"), timeout=6.0)
             balances = wallet_data.get("balances") or []
-            price_map = {}
-            try:
-                data_24h = await ticker_24h_all(testnet=keys.testnet)
-                rows = data_24h if isinstance(data_24h, list) else [data_24h] if data_24h else []
-                price_map = build_price_map_from_24h(rows)
-            except Exception:
-                pass
-            if not price_map:
-                prices = data_hub.get_all_prices()
-                price_map = {sym: float(d.get("price") or 0) for sym, d in prices.items()}
-            if not price_map and balances:
-                try:
-                    from app.services.binance_spot import ticker_price_all
-                    for r in (await ticker_price_all(testnet=keys.testnet)) or []:
-                        if r.get("symbol"):
-                            price_map[r["symbol"]] = float(r.get("price") or 0)
-                except Exception:
-                    pass
+            price_map = await build_wallet_price_map(balances, testnet=keys.testnet)
             resp = _wallet_response(account_id, balances, price_map)
             binance_equity = resp["total_usd"]
             _wallet_total_cache[account_id] = (binance_equity, time.time())
@@ -2154,27 +2144,32 @@ async def api_dashboard_summary(
             initial_usd = float(cfg.get("budget_usd") or cfg.get("bot_budget_quote") or cfg.get("initial_capital_usdt") or 0)
         except Exception:
             pass
-        current_usd = pnl_data.get("total_usd", initial_usd) if not pnl_data.get("error") else initial_usd
+        current_usd = pnl_data.get("total_usd", 0.0) if not pnl_data.get("error") else 0.0
         daily_bot = pnl_data.get("daily", 0.0) if not pnl_data.get("error") else 0.0
-        daily_pnl_pct = (daily_bot / initial_usd * 100) if initial_usd > 0 else 0.0
-        # Tek sembol DCA: list K/Z = bot detay ile aynı (state + fiyat); veri gecikmesi ve tutarsızlık önlenir
+        daily_pnl_pct = float(pnl_data.get("daily_pnl_pct") or 0.0) if not pnl_data.get("error") else 0.0
         _sym = (bot.symbol or "").strip().upper()
         _strategy_id = (_json.loads(bot.config_json or "{}").get("strategy_id") or "").strip().lower()
+        _state = load_state(db, bot.id) or {}
+        _ia_done = bool(_state.get("initial_allocation_done"))
+        from app.services.bot_equity import compute_bot_equity_usd
         if _sym and _sym != "MULTI" and _strategy_id not in ("trdca_pro", "multi_asset_rebalance"):
             try:
-                _state = load_state(db, bot.id) or {}
-                _base = float(_state.get("base_balance") or 0)
-                _quote = float(_state.get("quote_balance") or 0)
-                _price = float(pnl_data.get("current_price") or 0) if pnl_data else 0
-                if _price <= 0:
-                    _price = float(price_hub.get_price(bot.symbol) or 0)
-                if _price > 0 and (_base != 0 or _quote != 0):
-                    current_usd = _base * _price + _quote
+                current_usd = compute_bot_equity_usd(db, bot, _state, pnl_data, initial_usd=initial_usd)
+                if _ia_done:
                     _ref_date = _state.get("daily_ref_date")
                     _ref_usd = float(_state.get("daily_ref_usd") or 0)
                     if _ref_date == _today_date and _ref_usd > 0:
                         daily_bot = current_usd - _ref_usd
                         daily_pnl_pct = (daily_bot / _ref_usd) * 100.0
+                elif (bot.status or "").lower() == "running":
+                    current_usd = 0.0
+                    daily_bot = 0.0
+                    daily_pnl_pct = 0.0
+            except Exception:
+                pass
+        elif _sym == "MULTI" or _strategy_id in ("trdca_pro", "multi_asset_rebalance"):
+            try:
+                current_usd = compute_bot_equity_usd(db, bot, _state, pnl_data, initial_usd=initial_usd)
             except Exception:
                 pass
         daily_pnl_usd_acc += daily_bot
@@ -2196,6 +2191,9 @@ async def api_dashboard_summary(
             bot_config = _json.loads(bot.config_json or "{}")
         except Exception:
             bot_config = {}
+        _display_status = (bot.status or "stopped")
+        if (_display_status or "").lower() == "running" and not _ia_done and current_usd <= 0.01:
+            _display_status = "starting"
         bots_array.append({
             "bot_id": bot.id,
             "id": bot.id,
@@ -2203,6 +2201,10 @@ async def api_dashboard_summary(
             "symbol": bot.symbol,
             "config": bot_config,
             "status": bot.status or "stopped",
+            "display_status": _display_status,
+            "initial_allocation_done": _ia_done,
+            "base_balance": round(float(_state.get("base_balance") or 0), 8),
+            "quote_balance": round(float(_state.get("quote_balance") or 0), 8),
             "budget_usd": round(initial_usd, 2),
             "initial_usd": round(initial_usd, 2),
             "current_usd": round(current_usd, 2),
@@ -2213,6 +2215,7 @@ async def api_dashboard_summary(
             "account_id": account_id,
             "last_trade_at": last_trade_at,
             "total_cycles_completed": total_cycles_completed,
+            "cycle_id": int(_state.get("cycle_id") or total_cycles_completed or 1),
         })
 
     user_name = None
@@ -2929,36 +2932,12 @@ async def _fetch_wallet_uncached(account_id: int, db: Session):
         out["keys_configured"] = True
         return out
     from app.services.binance_assets import get_account_keys
-    from app.services.binance_spot import get_wallet, ticker_24h_all, build_price_map_from_24h
+    from app.services.binance_spot import get_wallet
+    from app.services.wallet_pricing import build_wallet_price_map
     keys = await get_account_keys(account_id, db)
-    wallet_data = await get_wallet(keys)
+    wallet_data = await get_wallet(keys, tag="wallet_snapshot")
     balances = wallet_data.get("balances") or []
-    price_map = {}
-    try:
-        data_24h = await ticker_24h_all(testnet=keys.testnet)
-        rows = data_24h if isinstance(data_24h, list) else [data_24h] if data_24h else []
-        price_map = build_price_map_from_24h(rows)
-    except Exception:
-        pass
-    if not price_map:
-        prices = data_hub.get_all_prices()
-        price_map = {sym: float(d.get("price") or 0) for sym, d in prices.items()}
-    if not price_map or any(
-        (b.get("asset") or "").strip() not in ("USDT", "BUSD", "USDC", "FDUSD", "TUSD", "DAI")
-        and (float(b.get("free") or 0) + float(b.get("locked") or 0)) > 0
-        and not any(price_map.get(f"{(b.get('asset') or '').strip()}{q}") for q in ("USDT", "BUSD", "FDUSD", "USDC"))
-        and not price_map.get(f"USDT{(b.get('asset') or '').strip()}")
-        for b in balances
-    ):
-        try:
-            from app.services.binance_spot import ticker_price_all
-            extra = await ticker_price_all(testnet=keys.testnet)
-            for r in (extra or []):
-                sym = r.get("symbol")
-                if sym and (sym not in price_map or not price_map[sym]):
-                    price_map[sym] = float(r.get("price") or 0)
-        except Exception:
-            pass
+    price_map = await build_wallet_price_map(balances, testnet=keys.testnet)
     from app.botengine.virtual_wallet import get_bot_locked_balances_for_account
     bot_locked = get_bot_locked_balances_for_account(db, account_id)
     out = _wallet_response(account_id, balances, price_map, bot_locked=bot_locked)

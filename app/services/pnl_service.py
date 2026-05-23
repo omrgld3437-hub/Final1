@@ -180,9 +180,16 @@ class PnlService:
                 fallback = _compute_multi_total_usd_from_state(db, bot_id, account_id, raw)
                 if fallback > 0:
                     total_usd = fallback
-        elif not state.get("initial_allocation_done") and initial_capital > 0 and not is_multi:
-            total_usd = initial_capital
-            pnl_mode_used = "initial_capital_override"
+        elif not state.get("initial_allocation_done") and not is_multi:
+            _base_s = float(state.get("base_balance") or 0)
+            _quote_s = float(state.get("quote_balance") or 0)
+            _px = float(current_price or 0) if price_valid else 0.0
+            if _base_s > 0 or _quote_s > 0:
+                total_usd = _base_s * _px + _quote_s
+                pnl_mode_used = "state_balances"
+            else:
+                total_usd = 0.0
+                pnl_mode_used = "pending_initial_allocation"
         elif is_multi:
             total_usd = _compute_multi_total_usd_from_state(db, bot_id, account_id, raw)
             if total_usd <= 0 and initial_capital > 0:
@@ -263,15 +270,17 @@ class PnlService:
             }
             _apply_stale_return(db, bot_id, account_id, state, out, initial_capital)
             return out
-        if state.get("daily_ref_date") != today_date:
-            # Yeni gün: referans = gece 00:00’a en yakın bakiye (son snapshot bugünden önce) veya bugünün ilki / güncel
-            state["daily_ref_usd"] = total_usd
-            state["daily_ref_date"] = today_date
-            save_state(db, bot_id, account_id, state)
-
-        daily_ref_usd = float(state.get("daily_ref_usd") or 0)
-        daily = total_usd - daily_ref_usd
-        daily_pnl_pct = (daily / daily_ref_usd * 100.0) if daily_ref_usd > 0 else 0.0
+        if state.get("initial_allocation_done"):
+            if state.get("daily_ref_date") != today_date:
+                state["daily_ref_usd"] = total_usd
+                state["daily_ref_date"] = today_date
+                save_state(db, bot_id, account_id, state)
+            daily_ref_usd = float(state.get("daily_ref_usd") or 0)
+            daily = total_usd - daily_ref_usd
+            daily_pnl_pct = (daily / daily_ref_usd * 100.0) if daily_ref_usd > 0 else 0.0
+        else:
+            daily = 0.0
+            daily_pnl_pct = 0.0
 
         monthly = total_usd - monthly_snap.total_usd if monthly_snap else total_usd - initial_capital
 

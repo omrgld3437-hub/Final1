@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.botengine.adapters.binance_adapter import BinanceAdapter
-from app.botengine.locks import symbol_lock_with_heartbeat
+from app.botengine.locks import lease_still_valid, symbol_lock_with_heartbeat, trade_lock_symbol
 from app.botengine.state_store import load_state, save_state, ensure_state_row
 from app.botengine.strategies.registry import get_strategy_safe
 from app.botengine.models import (
@@ -57,7 +57,7 @@ async def run_one_bot_tick(bot_id: int, tick_id: str) -> float:
         account_id = bot.account_id
         symbol = (bot.symbol or "").upper()
         status_lower = (str(bot.status or "").lower())
-        if status_lower not in ("running", "paused_error"):
+        if status_lower != "running":
             return time.monotonic() + 60.0
         ensure_state_row(db, bot_id, account_id, symbol or "BTCUSDT")
         state = load_state(db, bot_id)
@@ -113,7 +113,7 @@ async def run_one_bot_tick(bot_id: int, tick_id: str) -> float:
             "BOT_MODE_CHECK bot_id=%s account_id=%s bot.mode=%s paper_mode=%s has_keys=%s is_worker_role=%s",
             bot_id, account_id, bot_mode, paper_mode, has_keys, is_worker_role(),
         )
-        lock_symbol = symbol if symbol else "BTCUSDT"
+        lock_symbol = trade_lock_symbol(account_id, symbol)
         next_wake = time.monotonic() + (getattr(cfg, "tick_interval_ms", 5000) / 1000.0)
         if is_trdca:
             from app.botengine.orchestrator import _build_trdca_snapshot
@@ -141,8 +141,9 @@ async def run_one_bot_tick(bot_id: int, tick_id: str) -> float:
                             "quantity": qty, "quote_qty": (qty * price) if side == "BUY" and price else None,
                             "client_order_id": leg.get("client_order_id"), "reason": "trdca_batch",
                         })
-                    async with symbol_lock_with_heartbeat(account_id, lock_symbol, bot_id, get_db=_get_db):
-                        await run_actions(bot_id, account_id, actions, state, cfg, adapter, db=db, loop_id=tick_id)
+                    async with symbol_lock_with_heartbeat(account_id, lock_symbol, bot_id, get_db=_get_db) as acquired:
+                        if acquired and lease_still_valid(db, account_id, lock_symbol, bot_id):
+                            await run_actions(bot_id, account_id, actions, state, cfg, adapter, db=db, loop_id=tick_id)
             save_state(db, bot_id, account_id, state)
             return next_wake
         price = adapter.get_price(symbol) if symbol and symbol != "MULTI" else None
@@ -164,8 +165,9 @@ async def run_one_bot_tick(bot_id: int, tick_id: str) -> float:
         interval_sec = getattr(cfg, "interval_sec", 3600) if is_multi else (getattr(cfg, "tick_interval_ms", 5000) / 1000.0)
         next_wake = time.monotonic() + max(0.5, next_wake_sec if next_wake_sec is not None else interval_sec)
         if actions:
-            async with symbol_lock_with_heartbeat(account_id, lock_symbol, bot_id, get_db=_get_db):
-                await run_actions(bot_id, account_id, actions, state, cfg, adapter, db=db, loop_id=tick_id)
+            async with symbol_lock_with_heartbeat(account_id, lock_symbol, bot_id, get_db=_get_db) as acquired:
+                if acquired and lease_still_valid(db, account_id, lock_symbol, bot_id):
+                    await run_actions(bot_id, account_id, actions, state, cfg, adapter, db=db, loop_id=tick_id)
         save_state(db, bot_id, account_id, state)
         return next_wake
     except Exception as e:

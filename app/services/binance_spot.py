@@ -68,6 +68,14 @@ class BinanceIPBannedError(Exception):
 _binance_ip_ban_state: dict = {"until_ts": 0.0}
 
 
+def is_ip_banned() -> bool:
+    return time.time() < _binance_ip_ban_state["until_ts"]
+
+
+def ip_ban_remaining_sec() -> float:
+    return max(0.0, _binance_ip_ban_state["until_ts"] - time.time())
+
+
 def _parse_418_banned_until(text: str) -> Optional[float]:
     """Parse 'IP banned until 1770997257749' from Binance 418 body. Returns time.time() when retry OK (+60s buffer)."""
     import re
@@ -231,12 +239,6 @@ async def _signed_json_impl(
                 BinanceMetrics.record(path, elapsed_ms, retry_count)
             except Exception:
                 pass
-            try:
-                from app.services.binance_weight import record_weight_used
-                w = _path_weight(path, method)
-                record_weight_used(None, getattr(keys, "api_key", None), w, elapsed_ms)
-            except Exception:
-                pass
             logger.debug(
                 "binance_spot signed method=%s path=%s latency_ms=%.0f attempt=%s request_id=%s",
                 method, path, elapsed_ms, attempt + 1, request_id or "-"
@@ -294,11 +296,13 @@ async def _public_get(
 ) -> Dict[str, Any]:
     """Public GET with optional retry/backoff on 429/418."""
     _guard_no_per_symbol_ticker_price(path, params)
+    params = params or {}
+    weight = await _rest_precheck("GET", path, params)
     base = _base_url(testnet)
     url = f"{base}{path}"
-    params = params or {}
     last_exc = None
     backoff = INITIAL_BACKOFF
+    t0 = time.perf_counter()
     for attempt in range(MAX_RETRIES + 1):
         try:
             if client is None:
@@ -308,12 +312,25 @@ async def _public_get(
                 r = await client.get(url, params=params)
             if r.status_code in (429, 418):
                 last_exc = RuntimeError(f"Binance rate limit: {r.status_code}")
+                if r.status_code == 418:
+                    until = _parse_418_banned_until(getattr(r, "text", "") or "")
+                    if until is not None:
+                        _binance_ip_ban_state["until_ts"] = until
                 if attempt < MAX_RETRIES:
                     await _asyncio_sleep(backoff)
                     backoff *= BACKOFF_MULTIPLIER
                     continue
                 r.raise_for_status()
             r.raise_for_status()
+            elapsed_ms = (time.perf_counter() - t0) * 1000
+            try:
+                from app.services.binance_rest_log import record_rest
+                from app.services.binance_weight import record_weight_used
+                record_rest("GET", path, params=params, weight=weight, status=r.status_code,
+                            latency_ms=elapsed_ms, outcome="ok")
+                record_weight_used(None, None, weight, elapsed_ms)
+            except Exception:
+                pass
             return r.json()
         except httpx.HTTPStatusError as e:
             last_exc = e
@@ -321,6 +338,14 @@ async def _public_get(
                 await _asyncio_sleep(backoff)
                 backoff *= BACKOFF_MULTIPLIER
                 continue
+            try:
+                from app.services.binance_rest_log import record_rest
+                record_rest("GET", path, params=params, weight=weight,
+                            status=getattr(e.response, "status_code", None),
+                            latency_ms=(time.perf_counter() - t0) * 1000,
+                            outcome="error", detail=str(e)[:120])
+            except Exception:
+                pass
             raise
         except Exception as e:
             last_exc = e
@@ -328,6 +353,13 @@ async def _public_get(
                 await _asyncio_sleep(backoff)
                 backoff *= BACKOFF_MULTIPLIER
                 continue
+            try:
+                from app.services.binance_rest_log import record_rest
+                record_rest("GET", path, params=params, weight=weight,
+                            latency_ms=(time.perf_counter() - t0) * 1000,
+                            outcome="error", detail=str(e)[:120])
+            except Exception:
+                pass
             raise
     if last_exc:
         raise last_exc
@@ -350,14 +382,27 @@ async def _get_binance_timestamp(client: Optional[httpx.AsyncClient], testnet: b
         server_ms, local_ts = cached
         if now_local - local_ts < _BINANCE_TIME_CACHE_TTL:
             return int(server_ms + (now_local - local_ts) * 1000)
-        # Cache expired but use extrapolation if drift is small (avoid wrong local clock)
         drift_s = now_local - local_ts
         if abs(drift_s) < 120:
             return int(server_ms + drift_s * 1000)
+    if is_ip_banned():
+        if cached:
+            server_ms, local_ts = cached
+            return int(server_ms + (now_local - local_ts) * 1000)
+        return int(time.time() * 1000)
     base = _base_url(testnet)
     url = f"{base}/api/v3/time"
     for _ in range(2):
         try:
+            allowed, reason, _w = None, None, 1
+            try:
+                from app.services.binance_rest_log import should_allow_rest, record_rest
+                allowed, reason, _w = should_allow_rest("GET", "/api/v3/time", {})
+                if not allowed:
+                    record_rest("GET", "/api/v3/time", weight=_w, outcome="skipped", detail=reason)
+                    break
+            except Exception:
+                pass
             if client is not None:
                 r = await client.get(url)
             else:
@@ -367,6 +412,13 @@ async def _get_binance_timestamp(client: Optional[httpx.AsyncClient], testnet: b
             data = r.json()
             server_ms = int(data.get("serverTime", 0) or (time.time() * 1000))
             _binance_time_cache[testnet] = (server_ms, time.time())
+            try:
+                from app.services.binance_rest_log import record_rest
+                from app.services.binance_weight import record_weight_used
+                record_rest("GET", "/api/v3/time", weight=1, status=r.status_code, outcome="ok")
+                record_weight_used(None, None, 1)
+            except Exception:
+                pass
             return server_ms
         except Exception:
             await _asyncio_sleep(0.3)
@@ -378,8 +430,13 @@ async def _get_binance_timestamp(client: Optional[httpx.AsyncClient], testnet: b
     return local_ms
 
 
-def _path_weight(path: str, method: str) -> int:
-    """Binance endpoint weight. Returns weight for request budget check."""
+def _path_weight(path: str, method: str, params: Optional[Dict[str, Any]] = None) -> int:
+    """Binance endpoint weight (bulk ticker/24hr = 40)."""
+    try:
+        from app.services.binance_rest_log import compute_weight
+        return compute_weight(path, method, params)
+    except Exception:
+        pass
     if "/api/v3/account" in path:
         return 10
     if "/api/v3/order" in path and method.upper() in ("POST", "DELETE"):
@@ -393,8 +450,30 @@ def _path_weight(path: str, method: str) -> int:
     if "/api/v3/ticker/price" in path:
         return 2
     if "/api/v3/ticker/24hr" in path:
-        return 1
+        return 40
     return 5
+
+
+async def _rest_precheck(method: str, path: str, params: Optional[Dict[str, Any]] = None) -> int:
+    """REST guard: ban/throttle/budget. Returns weight or raises."""
+    from app.services.binance_rest_log import should_allow_rest, record_rest
+    allowed, reason, weight = should_allow_rest(method, path, params)
+    if not allowed:
+        record_rest(method, path, params=params, weight=weight, outcome="skipped", detail=reason)
+        if reason == "ip_banned":
+            raise BinanceIPBannedError(_binance_ip_ban_state["until_ts"])
+        raise DependencyFailure(f"REST blocked: {reason}")
+    try:
+        from app.services.binance_weight import request_weight_tokens
+        ok = await request_weight_tokens(None, None, weight)
+        if not ok:
+            record_rest(method, path, params=params, weight=weight, outcome="denied", detail="weight_budget")
+            raise DependencyFailure("Binance weight limit exceeded - call denied")
+    except DependencyFailure:
+        raise
+    except Exception:
+        pass
+    return weight
 
 
 async def _signed_request_impl(
@@ -410,19 +489,11 @@ async def _signed_request_impl(
     Timestamp = Binance server time (cached) to avoid -1021 recvWindow.
     Weight budget: deny call if insufficient tokens (sliding 60s).
     """
-    try:
-        from app.services.binance_weight import request_weight_tokens
-        weight = _path_weight(path, method)
-        allowed = await request_weight_tokens(None, getattr(keys, "api_key", None), weight)
-        if not allowed:
-            raise DependencyFailure("Binance weight limit exceeded - call denied")
-    except DependencyFailure:
-        raise
-    except Exception:
-        pass  # weight module optional
+    params = dict(params or {})
+    weight = await _rest_precheck(method, path, params)
     if time.time() < _binance_ip_ban_state["until_ts"]:
         raise BinanceIPBannedError(_binance_ip_ban_state["until_ts"])
-    params = dict(params or {})
+    t0_req = time.perf_counter()
     params["timestamp"] = await _get_binance_timestamp(client, getattr(keys, "testnet", False))
     params["recvWindow"] = 60000  # 60s tolerance (max allowed by Binance)
     params_str = {k: str(v) for k, v in params.items()}
@@ -476,6 +547,15 @@ async def _signed_request_impl(
                 r.raise_for_status()
             r.raise_for_status()
             data = r.json()
+            elapsed_ms = (time.perf_counter() - t0_req) * 1000
+            try:
+                from app.services.binance_rest_log import record_rest
+                from app.services.binance_weight import record_weight_used
+                record_rest(method, path, params={k: v for k, v in params.items() if k != "signature"},
+                            weight=weight, status=r.status_code, latency_ms=elapsed_ms, outcome="ok")
+                record_weight_used(None, getattr(keys, "api_key", None), weight, elapsed_ms)
+            except Exception:
+                pass
             # Binance bazen 200 OK ile {"code": -1022, "msg": "..."} gibi hata döner
             code = data.get("code", 0) if isinstance(data, dict) else 0
             if code not in (0, None):
@@ -595,16 +675,18 @@ async def _signed_request(
 # ---------------------------------------------------------------------------
 # /api/v3/account – tek nokta: TTL cache + inflight dedupe (hangi route çağırırsa çağırsın)
 # ---------------------------------------------------------------------------
-_ACCOUNT_CACHE_TTL = 30.0
+_ACCOUNT_CACHE_TTL = 45.0
 _account_cache: Dict[tuple, tuple] = {}  # (testnet, api_key) -> (data, ts)
 _account_inflight: Dict[tuple, asyncio.Task] = {}
 _account_lock = asyncio.Lock()
 
 
-async def _fetch_account_upstream(keys: Any) -> Dict[str, Any]:
+async def _fetch_account_upstream(keys: Any, tag: str = "wallet") -> Dict[str, Any]:
     """Tek upstream çağrı – sadece cache miss veya TTL dolunca."""
+    from app.services.binance_rest_log import rest_source
     client = getattr(keys, "_client", None)
-    return await _signed_request(client, "GET", "/api/v3/account", keys, {})
+    with rest_source(f"wallet.{tag}"):
+        return await _signed_request(client, "GET", "/api/v3/account", keys, {})
 
 
 def _account_cache_key(keys: Any) -> tuple:
@@ -636,7 +718,7 @@ async def get_wallet(keys: Any, tag: str = "wallet") -> Dict[str, Any]:
             task = _account_inflight[cache_key]
             logger.info("ACCOUNT_CALL tag=%s cache_hit=false in_flight_reuse", tag)
         else:
-            task = asyncio.create_task(_fetch_account_upstream(keys))
+            task = asyncio.create_task(_fetch_account_upstream(keys, tag))
             _account_inflight[cache_key] = task
             is_creator = True
             logger.info("ACCOUNT_CALL tag=%s cache_hit=false upstream_call=true", tag)
@@ -664,19 +746,23 @@ async def get_wallet(keys: Any, tag: str = "wallet") -> Dict[str, Any]:
 
 async def get_open_orders(keys: Any, symbol: Optional[str] = None) -> List[Dict]:
     """GET /api/v3/openOrders. If symbol given, pass it."""
+    from app.services.binance_rest_log import rest_source
     params = {}
     if symbol:
         params["symbol"] = symbol.upper()
     client = getattr(keys, "_client", None)
-    data = await _signed_request(client, "GET", "/api/v3/openOrders", keys, params)
+    with rest_source("bot.open_orders"):
+        data = await _signed_request(client, "GET", "/api/v3/openOrders", keys, params)
     return data if isinstance(data, list) else (data.get("orders") or data.get("data") or [])
 
 
 async def get_all_orders(keys: Any, symbol: str, limit: int = 20) -> List[Dict]:
     """GET /api/v3/allOrders. Recent orders for reconciliation (bounded)."""
+    from app.services.binance_rest_log import rest_source
     params = {"symbol": symbol.upper(), "limit": min(limit, 100)}
     client = getattr(keys, "_client", None)
-    data = await _signed_request(client, "GET", "/api/v3/allOrders", keys, params)
+    with rest_source("bot.all_orders"):
+        data = await _signed_request(client, "GET", "/api/v3/allOrders", keys, params)
     return data if isinstance(data, list) else (data.get("orders") or data.get("data") or [])
 
 
@@ -792,38 +878,85 @@ async def cancel_order(keys: Any, symbol: str, order_id: int) -> Dict[str, Any]:
 
 
 _exchange_info_cache: Dict[str, tuple] = {}  # key -> (data, ts)
+_exchange_info_inflight: Dict[str, asyncio.Task] = {}
+_exchange_info_lock = asyncio.Lock()
 EXCHANGE_INFO_TTL = 3600.0
 
 
 async def fetch_exchange_info(testnet: bool = False, force_refresh: bool = False) -> Dict[str, Any]:
-    """GET /api/v3/exchangeInfo. Cache 1 hour."""
+    """GET /api/v3/exchangeInfo. Cache 1 hour + inflight dedupe."""
+    from app.services.binance_rest_log import rest_source
     key = "testnet" if testnet else "live"
     now = time.time()
     if not force_refresh and key in _exchange_info_cache:
         data, ts = _exchange_info_cache[key]
         if now - ts < EXCHANGE_INFO_TTL:
             return data
-    async with httpx.AsyncClient(timeout=BINANCE_HTTP_TIMEOUT) as c:
-        data = await _public_get(c, "/api/v3/exchangeInfo", None, testnet)
-    _exchange_info_cache[key] = (data, now)
+    task = None
+    is_creator = False
+    async with _exchange_info_lock:
+        if not force_refresh and key in _exchange_info_cache:
+            data, ts = _exchange_info_cache[key]
+            if now - ts < EXCHANGE_INFO_TTL:
+                return data
+        if key in _exchange_info_inflight:
+            task = _exchange_info_inflight[key]
+        else:
+            async def _fetch():
+                async with httpx.AsyncClient(timeout=BINANCE_HTTP_TIMEOUT) as c:
+                    with rest_source("binance.exchange_info"):
+                        return await _public_get(c, "/api/v3/exchangeInfo", None, testnet)
+            task = asyncio.create_task(_fetch())
+            _exchange_info_inflight[key] = task
+            is_creator = True
+    try:
+        data = await task
+    finally:
+        if is_creator:
+            async with _exchange_info_lock:
+                if _exchange_info_inflight.get(key) is task:
+                    del _exchange_info_inflight[key]
+    _exchange_info_cache[key] = (data, time.time())
     return data
 
 
 async def ticker_price_all(testnet: bool = False) -> List[Dict]:
-    """GET /api/v3/ticker/price (no symbol = all)."""
+    """GET /api/v3/ticker/price (no symbol = all). Yalnızca data_hub ingest."""
+    _assert_market_ingest_caller()
+    from app.services.binance_rest_log import rest_source
     async with httpx.AsyncClient(timeout=BINANCE_HTTP_TIMEOUT) as c:
-        data = await _public_get(c, "/api/v3/ticker/price", None, testnet)
+        with rest_source("binance.ticker_price_all"):
+            data = await _public_get(c, "/api/v3/ticker/price", None, testnet)
     return data if isinstance(data, list) else [data]
 
 
 async def ticker_24h_all(testnet: bool = False, symbol: Optional[str] = None) -> Any:
-    """GET /api/v3/ticker/24hr. If symbol given, single object else list."""
+    """GET /api/v3/ticker/24hr. Yalnızca data_hub ingest (+ tek sembol acil durum)."""
+    _assert_market_ingest_caller(allow_single=bool(symbol))
+    from app.services.binance_rest_log import rest_source
     params = {}
+    src = "binance.ticker_24h_single" if symbol else "binance.ticker_24h_bulk"
     if symbol:
         params["symbol"] = symbol.upper()
     async with httpx.AsyncClient(timeout=BINANCE_HTTP_TIMEOUT) as c:
-        data = await _public_get(c, "/api/v3/ticker/24hr", params or None, testnet)
+        with rest_source(src):
+            data = await _public_get(c, "/api/v3/ticker/24hr", params or None, testnet)
     return data
+
+
+def _assert_market_ingest_caller(allow_single: bool = False) -> None:
+    """Public ticker REST yalnızca data_hub (ingest) veya acil tek sembol."""
+    import inspect
+    for frame in inspect.stack()[2:8]:
+        fn = (frame.filename or "").replace("\\", "/")
+        if "/services/data_hub.py" in fn:
+            return
+        if allow_single and "/services/binance_spot.py" in fn:
+            return
+    raise RuntimeError(
+        "Binance public ticker REST yalnızca data_hub ingest içindir. "
+        "Okuma için app.services.market_data kullanın."
+    )
 
 
 def build_price_map_from_24h(ticker_24h_list: List[Dict]) -> Dict[str, float]:

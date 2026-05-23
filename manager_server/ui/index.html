@@ -1,3 +1,4 @@
+<!-- index (ui/). -->
 <!DOCTYPE html>
 <html lang="tr">
 <head>
@@ -8,7 +9,10 @@
 </head>
 <body class="theme-dark">
   <header class="manager-header">
-    <h1>Server Admin Paneli</h1>
+    <div class="manager-header-title-block">
+      <h1>Server Admin Paneli</h1>
+      <p id="manager-controlled-host" class="manager-controlled-host" title="Bu panel hangi makinedeki servisleri kontrol ediyor. SSH tünel ile açtıysanız sunucu adı görünür.">Kontrol edilen sunucu: —</p>
+    </div>
     <div class="manager-header-actions">
       <button type="button" id="btnGlobalStart" class="btn btn-primary">Tümünü Başlat</button>
       <button type="button" id="btnGlobalStop" class="btn btn-danger">Tümünü Durdur</button>

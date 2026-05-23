@@ -63,12 +63,10 @@ async def get_account_keys(account_id: int, db) -> BinanceKeys:
 
 
 async def fetch_prices_map(testnet: bool = False):
-    """
-    Legacy helper for finance_snapshot: return flat symbol -> price map from ticker/price.
-    """
-    from app.services.binance_spot import ticker_price_all
-    rows = await ticker_price_all(testnet=testnet)
-    return {r.get("symbol", ""): float(r.get("price", 0) or 0) for r in (rows or []) if r.get("symbol")}
+    """finance_snapshot: DataHub cache (REST yok)."""
+    _ = testnet
+    from app.services.market_data import get_price_map_flat
+    return get_price_map_flat()
 
 
 def _convert_to_usd(asset: str, amount: float, prices: dict) -> float:

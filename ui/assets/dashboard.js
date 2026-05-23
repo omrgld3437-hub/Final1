@@ -12,6 +12,7 @@ const State = {
     accountMeta: null,
     summary: null,
     bots: [],
+    botLiveEquity: {},
     loading: false,
     inFlight: false,
     lastSummaryHash: "",
@@ -775,7 +776,7 @@ async function loadSummary(accountId) {
         const data = await window.apiClient.get(url, { timeout: 15000 });
         const hash = computeHash(data);
         State.summary = data;
-        State.bots = Array.isArray(data.bots) ? data.bots : [];
+        State.bots = hydrateBotsWithMetricsCache(Array.isArray(data.bots) ? data.bots : []);
         State.isTestAccount = !!(data.is_test_account);
         renderBotsList(State.bots);
         if (hash === State.lastSummaryHash && State.summary) {
@@ -874,26 +875,236 @@ async function loadBotPerformance(period) {
 }
 window.loadBotPerformance = loadBotPerformance;
 
-function formatRunningDuration(runningSinceIso) {
-    if (!runningSinceIso || typeof runningSinceIso !== 'string') return '—';
+function normalizeRunningSinceIso(iso) {
+    if (!iso || typeof iso !== 'string') return '';
+    var s = iso.trim();
+    if (!s) return '';
+    if (s.indexOf('T') < 0 && s.indexOf(' ') > 0) s = s.replace(' ', 'T');
+    if (!/Z$/i.test(s) && !/[+-]\d{2}:?\d{2}$/.test(s.slice(-6))) s += 'Z';
+    return s;
+}
+
+/** Bot detay stateHeroMetaDur ile aynı format ve UTC kaynak. */
+function formatLeaderboardRunningDuration(runningSinceIso) {
+    var norm = normalizeRunningSinceIso(runningSinceIso);
+    if (!norm) return '—';
     try {
-        var start = new Date(runningSinceIso);
-        if (isNaN(start.getTime())) return '—';
-        var now = new Date();
-        var sec = Math.floor((now - start) / 1000);
-        if (sec < 60) return sec + ' sn';
-        if (sec < 3600) return Math.floor(sec / 60) + ' dk';
-        if (sec < 86400) return Math.floor(sec / 3600) + ' sa';
-        var days = Math.floor(sec / 86400);
-        if (days < 30) return days + ' gün';
-        var months = Math.floor(days / 30);
-        if (months < 12) return months + ' ay';
-        return Math.floor(months / 12) + ' yıl';
+        var d = new Date(norm);
+        if (isNaN(d.getTime())) return '—';
+        var sec = Math.max(0, Math.floor((Date.now() - d.getTime()) / 1000));
+        var h = Math.floor(sec / 3600);
+        var m = Math.floor((sec % 3600) / 60);
+        var s = sec % 60;
+        if (h > 0) return h + 's ' + m + 'dk';
+        if (m > 0) return m + 'dk ' + s + 'sn';
+        return s + 'sn';
     } catch (e) { return '—'; }
 }
 
+function formatLeaderboardTotalPnl(item) {
+    var pnl = item && item.total_pnl_usd != null ? Number(item.total_pnl_usd) : null;
+    if (pnl == null || !Number.isFinite(pnl)) {
+        var pct = item && item.profit_pct != null ? Number(item.profit_pct) : 0;
+        pnl = 0;
+        if (!Number.isFinite(pct)) pct = 0;
+    }
+    return {
+        text: typeof fmtSignedUsd === 'function' ? fmtSignedUsd(pnl) : ((pnl >= 0 ? '+' : '') + '$' + Math.abs(pnl).toFixed(2)),
+        color: pnl >= 0 ? '#0ecb81' : '#f6465d'
+    };
+}
+
+function normalizeLeaderboardParamsToFormConfig(params) {
+    if (!params || typeof params !== 'object') return {};
+    var p = Object.assign({}, params);
+    if ((p.sell_grids || p.buy_grids) && !p.up) {
+        p.up = {
+            trail_pct: p.sell_trigger_trailing_pct,
+            grids: (p.sell_grids || []).map(function (g) {
+                return {
+                    trigger_pct: g.sell_grid_pct != null ? g.sell_grid_pct : g.trigger_pct,
+                    qty_pct: g.sell_qty_pct_of_base != null ? g.sell_qty_pct_of_base : g.qty_pct
+                };
+            })
+        };
+    }
+    if (p.buy_grids && !p.down) {
+        p.down = {
+            trail_pct: p.buy_trigger_trailing_pct,
+            grids: (p.buy_grids || []).map(function (g) {
+                return {
+                    trigger_pct: g.buy_grid_pct != null ? g.buy_grid_pct : g.trigger_pct,
+                    qty_pct: g.buy_qty_pct_of_quote != null ? g.buy_qty_pct_of_quote : g.qty_pct
+                };
+            })
+        };
+    }
+    if (p.up && !p.sell_grids && p.up.grids) {
+        p.sell_grids = p.up.grids.map(function (g) {
+            return { sell_grid_pct: g.trigger_pct, sell_qty_pct_of_base: g.qty_pct };
+        });
+        if (p.up.trail_pct != null) p.sell_trigger_trailing_pct = p.up.trail_pct;
+    }
+    if (p.down && !p.buy_grids && p.down.grids) {
+        p.buy_grids = p.down.grids.map(function (g) {
+            return { buy_grid_pct: g.trigger_pct, buy_qty_pct_of_quote: g.qty_pct };
+        });
+        if (p.down.trail_pct != null) p.buy_trigger_trailing_pct = p.down.trail_pct;
+    }
+    if ((p.profit_reentry_drop_pct != null || p.profit_exit_rise_pct != null) && !p.profit) {
+        p.profit = {
+            rebuy_trigger_pct: p.profit_reentry_drop_pct,
+            rebuy_trail_pct: p.profit_reentry_rise_pct,
+            resell_trigger_pct: p.profit_exit_rise_pct,
+            resell_trail_pct: p.profit_exit_drop_pct
+        };
+    }
+    if (p.base_alloc_pct != null && !p.allocation) {
+        p.allocation = { base_pct: p.base_alloc_pct, quote_pct: p.quote_alloc_pct };
+    }
+    return p;
+}
+
+function resolveLeaderboardItemParams(params, itemIndex) {
+    var idx = itemIndex != null && itemIndex !== '' ? parseInt(itemIndex, 10) : NaN;
+    if (Number.isFinite(idx) && State.leaderboardItems && State.leaderboardItems[idx]) {
+        var item = State.leaderboardItems[idx];
+        var itemParams = normalizeLeaderboardParamsToFormConfig(item.params || {});
+        if (item.symbol && !itemParams.symbol) itemParams.symbol = item.symbol;
+        if (Object.keys(itemParams).length) return itemParams;
+    }
+    return normalizeLeaderboardParamsToFormConfig(params || {});
+}
+
+function renderBotParamsConfig(cfg, symbol, referencePrice, hideBudget) {
+    cfg = cfg || {};
+    var alloc = cfg.allocation || {};
+    var up = cfg.up || {};
+    var down = cfg.down || {};
+    var sellGrids = cfg.sell_grids || up.grids || [];
+    var buyGrids = cfg.buy_grids || down.grids || [];
+    var budget = hideBudget ? null : (cfg.initial_capital_usdt != null ? cfg.initial_capital_usdt : (cfg.budget_usd != null ? cfg.budget_usd : null));
+    var basePct = cfg.base_alloc_pct != null ? cfg.base_alloc_pct : (alloc.base_pct != null ? alloc.base_pct : null);
+    var quotePct = cfg.quote_alloc_pct != null ? cfg.quote_alloc_pct : (alloc.quote_pct != null ? alloc.quote_pct : null);
+    var sellTrail = cfg.sell_trigger_trailing_pct != null ? cfg.sell_trigger_trailing_pct : (up.trail_pct != null ? up.trail_pct : null);
+    var buyTrail = cfg.buy_trigger_trailing_pct != null ? cfg.buy_trigger_trailing_pct : (down.trail_pct != null ? down.trail_pct : null);
+    var refPriceVal = referencePrice != null && !isNaN(referencePrice)
+        ? referencePrice
+        : (cfg.reference_price != null && !isNaN(cfg.reference_price) ? Number(cfg.reference_price) : null);
+    refPriceVal = refPriceVal != null && !isNaN(refPriceVal) ? fmtNum(refPriceVal, 4) : '—';
+    var pr = cfg.profit || {};
+    var reTr = cfg.profit_reentry_drop_pct != null ? cfg.profit_reentry_drop_pct : pr.rebuy_trigger_pct;
+    var reTrl = cfg.profit_reentry_rise_pct != null ? cfg.profit_reentry_rise_pct : pr.rebuy_trail_pct;
+    var exTr = cfg.profit_exit_rise_pct != null ? cfg.profit_exit_rise_pct : pr.resell_trigger_pct;
+    var exTrl = cfg.profit_exit_drop_pct != null ? cfg.profit_exit_drop_pct : pr.resell_trail_pct;
+    function row(l, v, cls) {
+        var val = v !== undefined && v !== '' ? v : '—';
+        if (typeof escapeHtml === 'function') val = escapeHtml(String(val));
+        var lab = typeof escapeHtml === 'function' ? escapeHtml(l) : l;
+        return '<div class="param-row' + (cls ? ' ' + cls : '') + '"><span class="param-label">' + lab + '</span><span class="param-value">' + val + '</span></div>';
+    }
+    var html = '';
+    html += '<div class="param-block"><div class="param-block-title">Genel</div>';
+    html += row('Sembol', symbol || cfg.symbol || '—');
+    html += row('Bütçe (USDT)', hideBudget ? '—' : fmtUsd(budget));
+    html += row('Başlangıç fiyatı (referans)', refPriceVal);
+    html += row('Base dağılım (%)', basePct != null ? basePct + '%' : '—');
+    html += row('Quote dağılım (%)', quotePct != null ? quotePct + '%' : '—');
+    html += '</div>';
+    html += '<div class="param-block"><div class="param-block-title">Satış gridleri</div>';
+    html += row('Grid sayısı', sellGrids.length || cfg.sell_grids_count || 0, 'param-sell');
+    html += row('Trailing % (tetik sonrası gerçekleşme)', sellTrail != null ? sellTrail + '%' : '—', 'param-sell');
+    if (sellGrids.length) {
+        html += '<table class="param-table"><thead><tr><th>Seviye</th><th class="num">Tetik %</th><th class="num">Miktar (base %)</th></tr></thead><tbody>';
+        sellGrids.forEach(function (g, i) {
+            var pct = g.sell_grid_pct != null ? g.sell_grid_pct : g.trigger_pct;
+            var qty = g.sell_qty_pct_of_base != null ? g.sell_qty_pct_of_base : g.qty_pct;
+            html += '<tr><td>#' + (i + 1) + '</td><td class="num">+' + (pct != null ? pct : '—') + '%</td><td class="num">' + (qty != null ? qty : '—') + '%</td></tr>';
+        });
+        html += '</tbody></table>';
+    } else {
+        html += '<p class="param-hint">Tanımlı değil.</p>';
+    }
+    html += '</div>';
+    html += '<div class="param-block"><div class="param-block-title">Alım gridleri</div>';
+    html += row('Grid sayısı', buyGrids.length || cfg.buy_grids_count || 0, 'param-buy');
+    html += row('Trailing % (tetik sonrası gerçekleşme)', buyTrail != null ? buyTrail + '%' : '—', 'param-buy');
+    if (buyGrids.length) {
+        html += '<table class="param-table"><thead><tr><th>Seviye</th><th class="num">Tetik %</th><th class="num">Miktar (quote %)</th></tr></thead><tbody>';
+        buyGrids.forEach(function (g, i) {
+            var pct = g.buy_grid_pct != null ? g.buy_grid_pct : g.trigger_pct;
+            var qty = g.buy_qty_pct_of_quote != null ? g.buy_qty_pct_of_quote : g.qty_pct;
+            html += '<tr><td>#' + (i + 1) + '</td><td class="num">-' + (pct != null ? pct : '—') + '%</td><td class="num">' + (qty != null ? qty : '—') + '%</td></tr>';
+        });
+        html += '</tbody></table>';
+    } else {
+        html += '<p class="param-hint">Tanımlı değil.</p>';
+    }
+    html += '</div>';
+    html += '<div class="param-block"><div class="param-block-title">Kar alım / kar satış</div>';
+    html += row('Kar alım tetik %', reTr != null ? reTr + '%' : '—');
+    html += row('Kar alım trailing %', reTrl != null ? reTrl + '%' : '—');
+    html += row('Kar satış tetik %', exTr != null ? exTr + '%' : '—');
+    html += row('Kar satış trailing %', exTrl != null ? exTrl + '%' : '—');
+    html += '<p class="param-hint">Kar alım: fiyat düşünce tekrar alım. Kar satış: fiyat yükselince kar realizasyonu satışı.</p>';
+    html += '</div>';
+    return html;
+}
+
+function applyTrailingDcaConfigToForm(p, opts) {
+    opts = opts || {};
+    if (!p || typeof p !== 'object') return;
+    p = normalizeLeaderboardParamsToFormConfig(p);
+    var symEl = document.getElementById('fSymbol');
+    var budgetEl = document.getElementById('fBudget');
+    var basePctEl = document.getElementById('fBasePct');
+    var quotePctEl = document.getElementById('fQuotePct');
+    if (symEl && p.symbol) {
+        symEl.value = p.symbol;
+        symEl.readOnly = !!opts.symbolReadOnly;
+    }
+    if (budgetEl) budgetEl.value = opts.clearBudget ? '' : (p.budget_usd != null ? p.budget_usd : (p.initial_capital_usdt != null ? p.initial_capital_usdt : budgetEl.value));
+    var alloc = p.allocation || {};
+    if (basePctEl && (alloc.base_pct != null || alloc.base_pct === 0)) basePctEl.value = alloc.base_pct;
+    if (quotePctEl && (alloc.quote_pct != null || alloc.quote_pct === 0)) quotePctEl.value = alloc.quote_pct;
+    var up = p.up || {};
+    var down = p.down || {};
+    var profit = p.profit || {};
+    var upGrids = up.grids || [];
+    var downGrids = down.grids || [];
+    var upCountEl = document.getElementById('fUpCount');
+    var downCountEl = document.getElementById('fDownCount');
+    if (upCountEl && upGrids.length > 0) { upCountEl.value = upGrids.length; buildGridRows('upGridRows', upGrids.length, 'up'); }
+    if (downCountEl && downGrids.length > 0) { downCountEl.value = downGrids.length; buildGridRows('downGridRows', downGrids.length, 'down'); }
+    var upTrailEl = document.getElementById('fUpTrail');
+    var downTrailEl = document.getElementById('fDownTrail');
+    if (upTrailEl && (up.trail_pct != null || up.trail_pct === 0)) upTrailEl.value = up.trail_pct;
+    if (downTrailEl && (down.trail_pct != null || down.trail_pct === 0)) downTrailEl.value = down.trail_pct;
+    for (var i = 0; i < upGrids.length; i++) {
+        var tEl = document.getElementById('upGrid_' + i + '_trigger');
+        var qEl = document.getElementById('upGrid_' + i + '_qty');
+        if (tEl && upGrids[i].trigger_pct != null) tEl.value = upGrids[i].trigger_pct;
+        if (qEl && upGrids[i].qty_pct != null) qEl.value = upGrids[i].qty_pct;
+    }
+    for (var j = 0; j < downGrids.length; j++) {
+        var t2 = document.getElementById('downGrid_' + j + '_trigger');
+        var q2 = document.getElementById('downGrid_' + j + '_qty');
+        if (t2 && downGrids[j].trigger_pct != null) t2.value = downGrids[j].trigger_pct;
+        if (q2 && downGrids[j].qty_pct != null) q2.value = downGrids[j].qty_pct;
+    }
+    var rebuyT = document.getElementById('fRebuyTrigger');
+    var rebuyTrail = document.getElementById('fRebuyTrail');
+    var resellT = document.getElementById('fResellTrigger');
+    var resellTrail = document.getElementById('fResellTrail');
+    if (rebuyT && (profit.rebuy_trigger_pct != null || profit.rebuy_trigger_pct === 0)) rebuyT.value = profit.rebuy_trigger_pct;
+    if (rebuyTrail && profit.rebuy_trail_pct != null) rebuyTrail.value = profit.rebuy_trail_pct;
+    if (resellT && (profit.resell_trigger_pct != null || profit.resell_trigger_pct === 0)) resellT.value = profit.resell_trigger_pct;
+    if (resellTrail && profit.resell_trail_pct != null) resellTrail.value = profit.resell_trail_pct;
+    if (p.symbol && typeof updateCreateBotModalPairStrip === 'function') updateCreateBotModalPairStrip(p.symbol);
+}
+
 /** En İyi 5 Bot: tek kaynak state – flicker yok. Sadece içerik gerçekten değişince DOM güncellenir. */
-var LEADERBOARD_EMPTY_HTML = '<div style="text-align: center; color: var(--ds-text-secondary); font-size: 0.9rem; padding: 1rem;">Henüz kullanıcı botları mevcut değil.</div>';
+var LEADERBOARD_EMPTY_HTML = '<div style="text-align: center; color: var(--ds-text-secondary); font-size: 0.9rem; padding: 1rem;">Henüz listelenecek aktif bot yok. Bu sıralama yalnızca çalışan ve toplam K/Z\'si sıfır veya pozitif olan botları gösterir.</div>';
 var LEADERBOARD_LOADING_HTML = '<div style="text-align: center; color: var(--ds-text-secondary); padding: 1rem;">Yükleniyor…</div>';
 
 var LEADERBOARD_PARAM_LABELS = {
@@ -949,47 +1160,232 @@ function formatLeaderboardParamsForDisplay(params) {
     return parts.length ? parts.join('') : '<p class="muted">Parametre yok.</p>';
 }
 
-function openLeaderboardParamsModal(rank, structureName, params, createdAtIso) {
-    var modal = document.getElementById('leaderboardParamsModal');
-    var titleEl = document.getElementById('leaderboardParamsModalTitle');
-    var bodyEl = document.getElementById('leaderboardParamsModalBody');
-    var closeBtn = document.getElementById('leaderboardParamsModalClose');
+function leaderboardParamsHasDetail(params) {
+    if (!params || typeof params !== 'object') return false;
+    if (Array.isArray(params.sell_grids) && params.sell_grids.length) return true;
+    if (Array.isArray(params.buy_grids) && params.buy_grids.length) return true;
+    var up = params.up && typeof params.up === 'object' ? params.up : {};
+    var down = params.down && typeof params.down === 'object' ? params.down : {};
+    return (Array.isArray(up.grids) && up.grids.length) || (Array.isArray(down.grids) && down.grids.length);
+}
+
+async function resolveLeaderboardItemForModal(itemIndex) {
+    var idx = itemIndex != null && itemIndex !== '' ? parseInt(itemIndex, 10) : NaN;
+    var item = Number.isFinite(idx) && State.leaderboardItems ? State.leaderboardItems[idx] : null;
+    if (item && leaderboardParamsHasDetail(item.params || {})) return item;
+    if (window.apiClient) {
+        try {
+            var res = await window.apiClient.get('/api/leaderboard/global/top?limit=5');
+            var items = (res && Array.isArray(res.items)) ? res.items
+                : (res && res.data && Array.isArray(res.data.items)) ? res.data.items
+                : [];
+            if (items.length) {
+                State.leaderboardItems = items;
+                if (Number.isFinite(idx) && items[idx]) return items[idx];
+            }
+        } catch (e) {}
+    }
+    return item;
+}
+
+function closeParametrelerModal() {
+    var modal = document.getElementById('parametrelerModal');
+    if (modal) modal.style.display = 'none';
+    document.body.style.overflow = '';
+}
+
+function initParametrelerModalHandlers() {
+    if (initParametrelerModalHandlers._done) return;
+    initParametrelerModalHandlers._done = true;
+    var modal = document.getElementById('parametrelerModal');
+    var closeBtn = document.getElementById('parametrelerModalClose');
+    var kapatBtn = document.getElementById('parametrelerModalKapat');
+    if (closeBtn) closeBtn.onclick = closeParametrelerModal;
+    if (kapatBtn) kapatBtn.onclick = closeParametrelerModal;
+    if (modal) {
+        modal.onclick = function (e) {
+            if (e.target === modal) closeParametrelerModal();
+        };
+    }
+}
+
+async function openLeaderboardParamsModal(rank, structureName, params, createdAtIso, referencePrice, itemIndex) {
+    initParametrelerModalHandlers();
+    var modal = document.getElementById('parametrelerModal');
+    var bodyEl = document.getElementById('configGrid');
     if (!modal || !bodyEl) return;
-    if (titleEl) titleEl.textContent = (rank ? rank + '. ' : '') + (structureName || 'Bot') + ' — Parametreler';
-    var createdHtml = '';
-    if (createdAtIso) {
-        var createdStr = typeof window.trTime !== 'undefined' && window.trTime.trFormatDateTime
-            ? window.trTime.trFormatDateTime(createdAtIso)
-            : (function () {
-                try {
-                    var d = new Date(createdAtIso.replace('Z', '+00:00'));
-                    return isNaN(d.getTime()) ? createdAtIso : d.toLocaleString('tr-TR', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Europe/Istanbul' });
-                } catch (e) { return createdAtIso; }
-            })();
-        createdStr = (typeof escapeHtml === 'function' ? escapeHtml(createdStr) : createdStr);
-        createdHtml = '<div class="leaderboard-param-row leaderboard-param-created"><span class="leaderboard-param-label">Oluşturma tarihi</span><span class="leaderboard-param-value">' + createdStr + '</span></div>';
-    }
-    bodyEl.innerHTML = createdHtml + formatLeaderboardParamsForDisplay(params);
+    bodyEl.innerHTML = '<p class="param-hint">Yükleniyor…</p>';
     modal.style.display = 'flex';
-    modal.classList.add('leaderboard-params-modal-open');
     document.body.style.overflow = 'hidden';
-    function closeModal() {
-        modal.style.display = 'none';
-        modal.classList.remove('leaderboard-params-modal-open');
-        document.body.style.overflow = '';
+
+    var item = await resolveLeaderboardItemForModal(itemIndex);
+    var resolved = item
+        ? normalizeLeaderboardParamsToFormConfig(item.params || {})
+        : normalizeLeaderboardParamsToFormConfig(resolveLeaderboardItemParams(params, itemIndex));
+    if (item && item.symbol && !resolved.symbol) resolved.symbol = item.symbol;
+    var symbol = (item && item.symbol) || resolved.symbol || (params && params.symbol) || '';
+    var ref = referencePrice != null && !isNaN(referencePrice) ? referencePrice
+        : (item && item.reference_price != null && !isNaN(Number(item.reference_price)) ? Number(item.reference_price) : null);
+    if (ref == null && resolved.reference_price != null && !isNaN(Number(resolved.reference_price))) {
+        ref = Number(resolved.reference_price);
     }
-    if (closeBtn) closeBtn.onclick = closeModal;
-    modal.onclick = function (e) {
-        if (e.target === modal) closeModal();
-    };
+
+    bodyEl.innerHTML = renderBotParamsConfig(resolved, symbol, ref, false);
 }
 
 window.openLeaderboardParamsModal = openLeaderboardParamsModal;
+window.closeParametrelerModal = closeParametrelerModal;
 
-async function loadGlobalLeaderboard() {
+function buildGlobalLeaderboardStructureSignature(items) {
+    if (!Array.isArray(items)) return '';
+    return items.map(function (item, index) {
+        var params = normalizeLeaderboardParamsToFormConfig(item.params || {});
+        return index + ':' + (item.structure_id || '') + ':' + (item.symbol || '') + ':' + JSON.stringify(params);
+    }).join('|');
+}
+
+function buildGlobalLeaderboardItemHtml(item, index) {
+    var structureId = (item.structure_id || 'trailing_dca').toLowerCase();
+    var structure = typeof BOT_STRUCTURES !== 'undefined' ? BOT_STRUCTURES.find(function (s) { return s.id === structureId; }) : null;
+    var structureName = structure ? structure.name : structureId;
+    var pnlMeta = formatLeaderboardTotalPnl(item);
+    var params = normalizeLeaderboardParamsToFormConfig(item.params || {});
+    if (item.reference_price != null && params.reference_price == null) {
+        params.reference_price = item.reference_price;
+    }
+    var symbolRaw = item.symbol || params.symbol || '';
+    var symbolStr = (typeof symbolRaw === 'string' ? symbolRaw : '').trim() || '—';
+    var logoUrl = (typeof getCoinLogoUrl === 'function' ? getCoinLogoUrl(symbolStr) : null);
+    var symbolLogoHtml = logoUrl
+        ? '<img src="' + (typeof escapeHtml === 'function' ? escapeHtml(logoUrl) : logoUrl) + '" alt="" class="global-leaderboard-symbol-logo" />'
+        : '<span class="global-leaderboard-symbol-initials">' + (symbolStr.length >= 2 ? (typeof escapeHtml === 'function' ? escapeHtml(symbolStr.substring(0, 2)) : symbolStr.substring(0, 2)) : '—') + '</span>';
+    var runningSinceNorm = normalizeRunningSinceIso(item.running_since_iso || '');
+    var runningStr = formatLeaderboardRunningDuration(runningSinceNorm);
+    var paramsJsonAttr = JSON.stringify(params).replace(/"/g, '&quot;');
+    var refPrice = item.reference_price != null ? String(item.reference_price) : '';
+    var structureNameAttr = (typeof escapeHtml === 'function' ? escapeHtml(structureName) : structureName).replace(/"/g, '&quot;');
+    var applyBtnHtml = structure ? '<button type="button" class="btn btn-sm global-leaderboard-apply-btn" data-structure-id="' + (typeof escapeHtml === 'function' ? escapeHtml(structureId) : structureId) + '" data-params="' + paramsJsonAttr + '">Uygula</button>' : '';
+    var viewParamsBtnHtml = '<button type="button" class="btn btn-sm global-leaderboard-view-params-btn" data-params="' + paramsJsonAttr + '" data-structure-name="' + structureNameAttr + '" data-rank="' + (index + 1) + '" data-reference-price="' + refPrice.replace(/"/g, '&quot;') + '">Parametreleri görüntüle</button>';
+    return '<div class="global-leaderboard-item" data-item-index="' + index + '" data-running-since="' + runningSinceNorm.replace(/"/g, '&quot;') + '">' +
+        '<div class="global-leaderboard-item-main">' +
+        '<div class="global-leaderboard-item-head">' +
+        '<div class="global-leaderboard-symbol-wrap">' + symbolLogoHtml + '<span class="global-leaderboard-symbol-name">' + (typeof escapeHtml === 'function' ? escapeHtml(symbolStr) : symbolStr) + '</span></div>' +
+        '<span class="global-leaderboard-rank-name">' + (index + 1) + '. ' + (typeof escapeHtml === 'function' ? escapeHtml(structureName) : structureName) + '</span>' +
+        '<span class="global-leaderboard-pct" style="color:' + pnlMeta.color + '">' + pnlMeta.text + '</span>' +
+        '</div>' +
+        '<div class="global-leaderboard-item-duration">Çalışma süresi: ' + runningStr + '</div>' +
+        '</div>' +
+        '<div class="global-leaderboard-item-actions">' + viewParamsBtnHtml + applyBtnHtml + '</div>' +
+        '</div>';
+}
+
+function parseLeaderboardParamsFromAttr(raw) {
+    if (!raw) return null;
+    try {
+        return JSON.parse(raw);
+    } catch (e1) {
+        try {
+            return JSON.parse(raw.replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/&lt;/g, '<'));
+        } catch (e2) {
+            return null;
+        }
+    }
+}
+
+function bindGlobalLeaderboardItemActions(listEl) {
+    if (!listEl || listEl.dataset.leaderboardActionsBound === '1') return;
+    listEl.dataset.leaderboardActionsBound = '1';
+    listEl.addEventListener('click', function (e) {
+        var applyBtn = e.target.closest('.global-leaderboard-apply-btn');
+        if (applyBtn && listEl.contains(applyBtn)) {
+            e.preventDefault();
+            var sid = applyBtn.getAttribute('data-structure-id');
+            var paramsJson = applyBtn.getAttribute('data-params');
+            if (!sid || !paramsJson) return;
+            var params = parseLeaderboardParamsFromAttr(paramsJson);
+            if (!params) return;
+            var structure = typeof BOT_STRUCTURES !== 'undefined' ? BOT_STRUCTURES.find(function (s) { return s.id === sid; }) : null;
+            var itemRow = applyBtn.closest('.global-leaderboard-item');
+            var itemIdx = itemRow ? itemRow.getAttribute('data-item-index') : null;
+            if (structure && typeof applyLeaderboardParams === 'function') applyLeaderboardParams(structure, params, itemIdx);
+            return;
+        }
+        var viewBtn = e.target.closest('.global-leaderboard-view-params-btn');
+        if (!viewBtn || !listEl.contains(viewBtn)) return;
+        e.preventDefault();
+        var paramsJson = viewBtn.getAttribute('data-params');
+        var structureName = viewBtn.getAttribute('data-structure-name') || 'Bot';
+        var rank = viewBtn.getAttribute('data-rank') || '';
+        var refRaw = viewBtn.getAttribute('data-reference-price');
+        var refPrice = refRaw !== '' && refRaw != null ? Number(refRaw) : null;
+        if (!paramsJson) return;
+        var params = parseLeaderboardParamsFromAttr(paramsJson);
+        if (!params) return;
+        var itemRow = viewBtn.closest('.global-leaderboard-item');
+        var itemIdx = itemRow ? itemRow.getAttribute('data-item-index') : null;
+        params = resolveLeaderboardItemParams(params, itemIdx);
+        var lbItem = (itemIdx != null && itemIdx !== '' && State.leaderboardItems)
+            ? State.leaderboardItems[parseInt(itemIdx, 10)]
+            : null;
+        if (refPrice == null && lbItem && lbItem.reference_price != null) refPrice = Number(lbItem.reference_price);
+        if (refPrice == null && params.reference_price != null) refPrice = Number(params.reference_price);
+        if (typeof openLeaderboardParamsModal === 'function') {
+            openLeaderboardParamsModal(rank, structureName, params, null, refPrice, itemIdx);
+        }
+    });
+}
+
+function patchGlobalLeaderboardMetrics(items) {
+    var listEl = document.getElementById('globalLeaderboardList');
+    if (!listEl || !Array.isArray(items) || !items.length) return;
+    State.leaderboardItems = items;
+    items.forEach(function (item, index) {
+        var row = listEl.querySelector('.global-leaderboard-item[data-item-index="' + index + '"]');
+        if (!row) return;
+        var pnlEl = row.querySelector('.global-leaderboard-pct');
+        var durEl = row.querySelector('.global-leaderboard-item-duration');
+        var pnlMeta = formatLeaderboardTotalPnl(item);
+        if (pnlEl) {
+            pnlEl.textContent = pnlMeta.text;
+            pnlEl.style.color = pnlMeta.color;
+        }
+        if (durEl) {
+            var isoNorm = normalizeRunningSinceIso(item.running_since_iso || row.getAttribute('data-running-since'));
+            durEl.textContent = 'Çalışma süresi: ' + formatLeaderboardRunningDuration(isoNorm);
+        }
+        if (item.running_since_iso) row.setAttribute('data-running-since', normalizeRunningSinceIso(item.running_since_iso));
+        var params = normalizeLeaderboardParamsToFormConfig(item.params || {});
+        if (item.symbol && !params.symbol) params.symbol = item.symbol;
+        var paramsJson = JSON.stringify(params);
+        row.querySelectorAll('.global-leaderboard-apply-btn, .global-leaderboard-view-params-btn').forEach(function (btn) {
+            btn.setAttribute('data-params', paramsJson);
+        });
+    });
+}
+
+function startGlobalLeaderboardPoll() {
+    if (!window.intervalRegistry) return;
+    window.intervalRegistry.stop('dashboard.leaderboard');
+    window.intervalRegistry.stop('dashboard.leaderboard.duration');
+    window.intervalRegistry.start('dashboard.leaderboard', function () {
+        if (State.accountId && typeof loadGlobalLeaderboard === 'function') loadGlobalLeaderboard(true);
+    }, 5000, 'dashboard');
+    window.intervalRegistry.start('dashboard.leaderboard.duration', function () {
+        var listEl = document.getElementById('globalLeaderboardList');
+        if (!listEl || State.leaderboardLastState !== 'items') return;
+        listEl.querySelectorAll('.global-leaderboard-item').forEach(function (row) {
+            var durEl = row.querySelector('.global-leaderboard-item-duration');
+            var iso = normalizeRunningSinceIso(row.getAttribute('data-running-since'));
+            if (durEl && iso) durEl.textContent = 'Çalışma süresi: ' + formatLeaderboardRunningDuration(iso);
+        });
+    }, 1000, 'dashboard');
+}
+
+async function loadGlobalLeaderboard(patchOnly) {
     var panel = document.getElementById('globalLeaderboardPanel');
     var listEl = document.getElementById('globalLeaderboardList');
     if (!listEl || !window.apiClient) return;
+    bindGlobalLeaderboardItemActions(listEl);
     if (panel) panel.style.display = 'block';
     var lastState = State.leaderboardLastState || 'idle';
     if (lastState !== 'empty' && lastState !== 'error' && lastState !== 'items') {
@@ -1000,98 +1396,54 @@ async function loadGlobalLeaderboard() {
     }
     try {
         var res = await window.apiClient.get('/api/leaderboard/global/top?limit=5');
-        var items = (res && res.items) ? res.items : [];
+        var items = (res && Array.isArray(res.items)) ? res.items
+            : (res && res.data && Array.isArray(res.data.items)) ? res.data.items
+            : [];
         if (!items.length) {
-            if (State.leaderboardLastState !== 'empty' || listEl.innerHTML !== LEADERBOARD_EMPTY_HTML) {
-                State.leaderboardLastState = 'empty';
-                State.leaderboardLastHtml = null;
-                listEl.innerHTML = LEADERBOARD_EMPTY_HTML;
+            if (!patchOnly) {
+                if (State.leaderboardLastState !== 'empty' || listEl.innerHTML !== LEADERBOARD_EMPTY_HTML) {
+                    State.leaderboardLastState = 'empty';
+                    State.leaderboardLastHtml = null;
+                    State.leaderboardItems = [];
+                    listEl.innerHTML = LEADERBOARD_EMPTY_HTML;
+                }
             }
+            if (window.intervalRegistry) window.intervalRegistry.stop('dashboard.leaderboard');
             return;
+        }
+        State.leaderboardItems = items;
+        var structureSig = buildGlobalLeaderboardStructureSignature(items);
+        if (patchOnly && State.leaderboardLastState === 'items') {
+            if (State.leaderboardStructureSig && State.leaderboardStructureSig !== structureSig) {
+                patchOnly = false;
+            } else {
+                patchGlobalLeaderboardMetrics(items);
+                return;
+            }
         }
         var html = '';
         items.forEach(function (item, index) {
-            var structureId = (item.structure_id || 'trailing_dca').toLowerCase();
-            var structure = typeof BOT_STRUCTURES !== 'undefined' ? BOT_STRUCTURES.find(function (s) { return s.id === structureId; }) : null;
-            var structureName = structure ? structure.name : structureId;
-            var pct = item.profit_pct != null ? Number(item.profit_pct) : 0;
-            var pctStr = (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%';
-            var pctColor = pct >= 0 ? '#0ecb81' : '#f6465d';
-            var params = item.params || {};
-            var symbolRaw = item.symbol || params.symbol || '';
-            var symbolStr = (typeof symbolRaw === 'string' ? symbolRaw : '').trim() || '—';
-            var logoUrl = (typeof getCoinLogoUrl === 'function' ? getCoinLogoUrl(symbolStr) : null);
-            var symbolLogoHtml = logoUrl
-                ? '<img src="' + (typeof escapeHtml === 'function' ? escapeHtml(logoUrl) : logoUrl) + '" alt="" class="global-leaderboard-symbol-logo" />'
-                : '<span class="global-leaderboard-symbol-initials">' + (symbolStr.length >= 2 ? (typeof escapeHtml === 'function' ? escapeHtml(symbolStr.substring(0, 2)) : symbolStr.substring(0, 2)) : '—') + '</span>';
-            var runningStr = formatRunningDuration(item.running_since_iso);
-            var paramsJsonAttr = JSON.stringify(params).replace(/"/g, '&quot;');
-            var structureNameAttr = (typeof escapeHtml === 'function' ? escapeHtml(structureName) : structureName).replace(/"/g, '&quot;');
-            var createdAtAttr = (item.running_since_iso || item.created_at_iso || '');
-            if (createdAtAttr) createdAtAttr = String(createdAtAttr).replace(/"/g, '&quot;');
-            var applyBtnHtml = structure ? '<button type="button" class="btn btn-sm global-leaderboard-apply-btn" data-structure-id="' + (typeof escapeHtml === 'function' ? escapeHtml(structureId) : structureId) + '" data-params="' + paramsJsonAttr + '">Uygula</button>' : '';
-            var viewParamsBtnHtml = '<button type="button" class="btn btn-sm global-leaderboard-view-params-btn" data-params="' + paramsJsonAttr + '" data-structure-name="' + structureNameAttr + '" data-rank="' + (index + 1) + '" data-created-at="' + createdAtAttr + '">Parametreleri görüntüle</button>';
-            var cyclesCount = item.cycles_count != null ? Number(item.cycles_count) : null;
-            var dailyPct = item.profit_pct_daily != null ? Number(item.profit_pct_daily) : null;
-            var dailyUsd = item.daily_pnl_usd != null ? Number(item.daily_pnl_usd) : null;
-            var anlikStr = (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%';
-            var gunlukStr = dailyPct != null ? ((dailyPct >= 0 ? '+' : '') + dailyPct.toFixed(2) + '%') : (dailyUsd != null ? (typeof fmtUsd === 'function' ? fmtUsd(dailyUsd) : '$' + dailyUsd.toFixed(2)) : '—');
-            var gunlukColor = dailyPct != null ? (dailyPct >= 0 ? '#0ecb81' : '#f6465d') : 'inherit';
-            var turStr = cyclesCount != null ? String(cyclesCount) : '—';
-            var statsHtml = '<div class="global-leaderboard-item-stats">' +
-                '<span class="global-leaderboard-stat"><span class="global-leaderboard-stat-label">Anlık K/Z</span> <span class="global-leaderboard-stat-value" style="color:' + pctColor + '">' + anlikStr + '</span></span>' +
-                '<span class="global-leaderboard-stat"><span class="global-leaderboard-stat-label">Günlük K/Z</span> <span class="global-leaderboard-stat-value" style="color:' + gunlukColor + '">' + gunlukStr + '</span></span>' +
-                '<span class="global-leaderboard-stat"><span class="global-leaderboard-stat-label">Tur</span> <span class="global-leaderboard-stat-value">' + turStr + '</span></span>' +
-                '</div>';
-            html += '<div class="global-leaderboard-item">' +
-                '<div class="global-leaderboard-item-main">' +
-                '<div class="global-leaderboard-item-head">' +
-                '<div class="global-leaderboard-symbol-wrap">' + symbolLogoHtml + '<span class="global-leaderboard-symbol-name">' + (typeof escapeHtml === 'function' ? escapeHtml(symbolStr) : symbolStr) + '</span></div>' +
-                '<span class="global-leaderboard-rank-name">' + (index + 1) + '. ' + (typeof escapeHtml === 'function' ? escapeHtml(structureName) : structureName) + '</span>' +
-                '<span class="global-leaderboard-pct" style="color:' + pctColor + '">' + pctStr + '</span>' +
-                '</div>' +
-                statsHtml +
-                '<div class="global-leaderboard-item-duration">Çalışma süresi: ' + runningStr + '</div>' +
-                '</div>' +
-                '<div class="global-leaderboard-item-actions">' + viewParamsBtnHtml + applyBtnHtml + '</div>' +
-                '</div>';
+            html += buildGlobalLeaderboardItemHtml(item, index);
         });
-        if (!State.leaderboardLastHtml || State.leaderboardLastHtml !== html) {
+        if (!State.leaderboardStructureSig || State.leaderboardStructureSig !== structureSig) {
             State.leaderboardLastState = 'items';
             State.leaderboardLastHtml = html;
+            State.leaderboardStructureSig = structureSig;
             listEl.innerHTML = html;
-            listEl.querySelectorAll('.global-leaderboard-apply-btn').forEach(function (btn) {
-                btn.onclick = function () {
-                    var sid = btn.getAttribute('data-structure-id');
-                    var paramsJson = btn.getAttribute('data-params');
-                    if (!sid || !paramsJson) return;
-                    var structure = typeof BOT_STRUCTURES !== 'undefined' ? BOT_STRUCTURES.find(function (s) { return s.id === sid; }) : null;
-                    try {
-                        var params = JSON.parse(paramsJson);
-                        if (structure && typeof applyLeaderboardParams === 'function') applyLeaderboardParams(structure, params);
-                    } catch (e) {}
-                };
-            });
-            listEl.querySelectorAll('.global-leaderboard-view-params-btn').forEach(function (btn) {
-                btn.onclick = function () {
-                    var paramsJson = btn.getAttribute('data-params');
-                    var structureName = btn.getAttribute('data-structure-name') || 'Bot';
-                    var rank = btn.getAttribute('data-rank') || '';
-                    var createdAtIso = btn.getAttribute('data-created-at') || '';
-                    if (!paramsJson) return;
-                    try {
-                        var params = JSON.parse(paramsJson);
-                        if (typeof openLeaderboardParamsModal === 'function') openLeaderboardParamsModal(rank, structureName, params, createdAtIso);
-                    } catch (e) {}
-                };
-            });
+            bindGlobalLeaderboardItemActions(listEl);
+        } else {
+            patchGlobalLeaderboardMetrics(items);
         }
+        startGlobalLeaderboardPoll();
     } catch (e) {
         if (window.errorReporter) window.errorReporter.report(e, { tab: 'dashboard', action: 'loadGlobalLeaderboard' });
-        if (State.leaderboardLastState !== 'error' || listEl.innerHTML !== LEADERBOARD_EMPTY_HTML) {
-            State.leaderboardLastState = 'error';
-            State.leaderboardLastHtml = null;
-            listEl.innerHTML = LEADERBOARD_EMPTY_HTML;
+        if (!patchOnly) {
+            if (State.leaderboardLastState !== 'error' || listEl.innerHTML !== LEADERBOARD_EMPTY_HTML) {
+                State.leaderboardLastState = 'error';
+                State.leaderboardLastHtml = null;
+                State.leaderboardItems = [];
+                listEl.innerHTML = LEADERBOARD_EMPTY_HTML;
+            }
         }
     }
 }
@@ -1252,17 +1604,33 @@ function applySnapshotToUI(data) {
     }
     if (data.pnl && typeof data.pnl === 'object' && !data.pnl._error) {
         var spotUsd = (data.wallet && typeof data.wallet.total_usd === 'number' && data.wallet.total_usd >= 0) ? data.wallet.total_usd : (State.summary && State.summary.account && typeof State.summary.account.spot_balance_usd === 'number' ? State.summary.account.spot_balance_usd : (typeof (assetsState && assetsState.wallet && assetsState.wallet.total_usd) === 'number' ? assetsState.wallet.total_usd : 0));
-        const merged = { ...data.pnl, binance_balance_usd: spotUsd, spot_balance_usd: spotUsd, free_usd: data.wallet?.free_usd ?? 0, locked_usd: data.wallet?.locked_usd ?? 0, available_usd: data.wallet?.available_usd ?? 0, bot_locked_usd: data.wallet?.bot_locked_usd ?? 0, account: data.account || {}, bots: data.bots, bot_summary: data.pnl.bot_summary || [] };
+        if (data.bots && Array.isArray(data.bots)) {
+            State.bots = hydrateBotsWithMetricsCache(data.bots);
+            resetFinanceBotsLiveCache(State.bots);
+        }
+        const merged = { ...data.pnl, binance_balance_usd: spotUsd, spot_balance_usd: spotUsd, free_usd: data.wallet?.free_usd ?? 0, locked_usd: data.wallet?.locked_usd ?? 0, available_usd: data.wallet?.available_usd ?? 0, bot_locked_usd: data.wallet?.bot_locked_usd ?? 0, account: data.account || {}, bots: data.bots || State.bots, bot_summary: data.pnl.bot_summary || [] };
         if (typeof updateFinanceKPIs === 'function') updateFinanceKPIs(merged);
-        if (data.bots && Array.isArray(data.bots) && typeof renderFinanceBots === 'function') renderFinanceBots(data.bots);
     }
     if (data.bots && Array.isArray(data.bots) && data.account) {
-        State.bots = data.bots;
+        State.bots = hydrateBotsWithMetricsCache(data.bots);
+        resetFinanceBotsLiveCache(State.bots);
         State.isTestAccount = !!(data.account.is_test_account);
-        const summaryShape = { account: data.account, bots: data.bots, account_name: data.account.name, total_bots: data.account.total_bots, active_bots: data.account.active_bots, daily_bot_pnl_usd: data.account.daily_bot_pnl_usd, daily_wallet_pnl_usd: data.account.daily_wallet_pnl_usd, total_pnl_usd: data.account.total_pnl_usd, is_test_account: State.isTestAccount };
+        const summaryShape = {
+            account: data.account,
+            bots: State.bots,
+            account_name: data.account.name,
+            user_name: data.account.user_name,
+            user_surname: data.account.user_surname,
+            total_bots: data.account.total_bots,
+            active_bots: data.account.active_bots,
+            daily_bot_pnl_usd: data.account.daily_bot_pnl_usd,
+            daily_wallet_pnl_usd: data.account.daily_wallet_pnl_usd,
+            total_pnl_usd: data.account.total_pnl_usd,
+            is_test_account: State.isTestAccount
+        };
         State.summary = summaryShape;
         State.lastSummaryHash = computeHash(summaryShape);
-        if (typeof renderBotsList === 'function') renderBotsList(data.bots);
+        if (typeof renderBotsList === 'function') renderBotsList(State.bots);
         if (typeof updateKPIs === 'function') updateKPIs(summaryShape);
         if (typeof updateAccountName === 'function') updateAccountName(data.account.name || "Hesap Dashboard");
         if (typeof setAppbarAccountHolderName === 'function') setAppbarAccountHolderName(summaryShape);
@@ -1441,6 +1809,7 @@ function isBotsTabActive() {
 /** Hızlı bot listesi: /api/bots-engine ile hemen listeyi doldurur; summary gelene kadar "Yükleniyor" kalmaz. */
 function loadBotsListFast(accountId) {
     if (!accountId || !window.apiClient) return;
+    if (State.bots && State.bots.length && document.querySelector('#financeBotsList .mevcut-botlar-table')) return;
     window.apiClient.get('/api/bots-engine?account_id=' + accountId, { timeout: 8000 })
         .then(function(res) {
             // Summary zaten geldiyse (current_usd dahil) onu ezme; sadece henüz veri yoksa doldur
@@ -1449,12 +1818,16 @@ function loadBotsListFast(accountId) {
             var mapped = list.map(function(r) {
                 var cfg = r.config || {};
                 var budget = Number(cfg.initial_capital_usdt || cfg.budget_usd || cfg.bot_budget_usdt) || 0;
-                return {
+                var existing = (State.bots || []).find(function(b) { return (b.bot_id || b.id) === r.bot_id; });
+                var base = {
                     bot_id: r.bot_id,
                     id: r.bot_id,
                     symbol: r.symbol || 'N/A',
                     status: (r.status || 'stopped').toLowerCase(),
+                    display_status: r.display_status || r.status || 'stopped',
+                    initial_allocation_done: r.initial_allocation_done === true,
                     account_id: r.account_id,
+                    config: cfg,
                     budget_usd: budget,
                     initial_usd: budget,
                     total_pnl_usd: 0,
@@ -1462,10 +1835,18 @@ function loadBotsListFast(accountId) {
                     daily_pnl_usd: 0,
                     last_trade_at: r.last_tick_at || r.created_at || null
                 };
+                if (!existing) return base;
+                return Object.assign({}, base, {
+                    current_usd: existing.current_usd,
+                    total_pnl_usd: existing.total_pnl_usd != null ? existing.total_pnl_usd : base.total_pnl_usd,
+                    total_pnl_pct: existing.total_pnl_pct != null ? existing.total_pnl_pct : base.total_pnl_pct,
+                    total_cycles_completed: existing.total_cycles_completed,
+                    cycle_id: existing.cycle_id,
+                    daily_pnl_usd: existing.daily_pnl_usd != null ? existing.daily_pnl_usd : base.daily_pnl_usd
+                });
             });
-            State.bots = mapped;
+            State.bots = hydrateBotsWithMetricsCache(mapped);
             renderBotsList(State.bots);
-            renderFinanceBots(State.bots);
         })
         .catch(function() {
             State.bots = [];
@@ -1484,26 +1865,169 @@ function updateAccountName(name) {
     /* reserved */
 }
 
-function setAppbarAccountHolderName(data) {
-    const el = document.getElementById('appbarUserName');
-    if (el) {
-        var accountId = State.accountId ?? data.account_id ?? (data.account && data.account.id);
-        if (State.appbarNameAccountId === accountId && el.textContent && el.textContent !== '—') return;
-        const fn = [data.user_name, data.user_surname].filter(Boolean).map(function(s) { return String(s).trim(); }).join(' ').trim();
-        const an = ((data.account && data.account.name) || data.account_name || '').trim();
-        var displayName = fn || an || '—';
-        el.textContent = displayName;
-        State.appbarNameAccountId = accountId;
-        try { if (accountId != null && displayName && displayName !== '—') sessionStorage.setItem('appbarUserName_' + accountId, displayName); } catch (e) {}
-    }
-    const idEl = document.getElementById('appbarAccountId');
-    if (idEl) {
-        const code = State.accountCode || (data.account_code ?? (data.account && data.account.account_code));
-        const aid = code != null && code !== '' ? code : (State.accountId ?? data.account_id ?? (data.account && data.account.id));
-        idEl.textContent = aid != null && aid !== '' ? 'ID: ' + aid : 'ID: —';
-        idEl.style.display = 'block';
+function appbarDisplayNameStorageKey(accountId) {
+    return 'appbarDisplayName_' + (accountId || '');
+}
+
+function lockAppbarDisplayName(accountId, displayName) {
+    if (accountId == null || accountId === '' || !displayName || displayName === '—') return;
+    try {
+        localStorage.setItem(appbarDisplayNameStorageKey(accountId), String(displayName).trim());
+    } catch (e) {}
+}
+
+function getLockedAppbarDisplayName(accountId) {
+    if (accountId == null || accountId === '') return '';
+    try {
+        var locked = localStorage.getItem(appbarDisplayNameStorageKey(accountId));
+        if (locked && locked !== '—') return locked;
+    } catch (e) {}
+    return '';
+}
+
+function getAppbarDisplayNameFromStoredUser(accountId) {
+    try {
+        var userStr = sessionStorage.getItem('user') || localStorage.getItem('user');
+        if (!userStr) return '';
+        var user = JSON.parse(userStr);
+        if (accountId != null && user.account_id != null && String(user.account_id) !== String(accountId)) return '';
+        return [user.name, user.surname].filter(Boolean).map(function (s) { return String(s).trim(); }).join(' ').trim();
+    } catch (e) {
+        return '';
     }
 }
+
+function ensureAppbarDisplayNameLocked(accountId) {
+    var locked = getLockedAppbarDisplayName(accountId);
+    if (locked) return locked;
+    var fromUser = getAppbarDisplayNameFromStoredUser(accountId);
+    if (fromUser) {
+        lockAppbarDisplayName(accountId, fromUser);
+        return fromUser;
+    }
+    return '';
+}
+
+function getAppbarCachedDisplayName(accountId) {
+    var locked = getLockedAppbarDisplayName(accountId);
+    if (locked) return locked;
+    if (accountId == null || accountId === '') return '';
+    try {
+        var raw = sessionStorage.getItem('dashboardAppbar_' + accountId);
+        if (raw) {
+            var cached = JSON.parse(raw);
+            if (cached && cached.displayName && cached.displayName !== '—') return cached.displayName;
+        }
+        var legacy = sessionStorage.getItem('appbarUserName_' + accountId);
+        if (legacy && legacy !== '—') return legacy;
+    } catch (e) {}
+    return '';
+}
+
+function resolveAppbarDisplayName(data, accountId) {
+    var locked = ensureAppbarDisplayNameLocked(accountId);
+    if (locked) return locked;
+    data = data || {};
+    var acc = data.account || {};
+    var first = data.user_name || acc.user_name || '';
+    var last = data.user_surname || acc.user_surname || '';
+    var fn = [first, last].filter(Boolean).map(function (s) { return String(s).trim(); }).join(' ').trim();
+    if (fn) {
+        lockAppbarDisplayName(accountId, fn);
+        return fn;
+    }
+    var fromUser = getAppbarDisplayNameFromStoredUser(accountId);
+    if (fromUser) {
+        lockAppbarDisplayName(accountId, fromUser);
+        return fromUser;
+    }
+    var el = document.getElementById('appbarUserName');
+    if (el && el.textContent && el.textContent !== '—') return el.textContent.trim();
+    var an = (acc.name || data.account_name || '').trim();
+    if (an) return an;
+    return '—';
+}
+
+function paintAppbarDisplayName(accountId) {
+    var nameEl = document.getElementById('appbarUserName');
+    if (!nameEl) return '';
+    var displayName = ensureAppbarDisplayNameLocked(accountId) || getAppbarCachedDisplayName(accountId);
+    if (displayName) setTextIfChanged(nameEl, displayName);
+    if (displayName) State.appbarNameAccountId = accountId;
+    return displayName || '';
+}
+
+function setAppbarAccountHolderName(data) {
+    var accountId = State.accountId ?? data.account_id ?? (data.account && data.account.id);
+    var accountCode = State.accountCode || (data.account_code ?? (data.account && data.account.account_code));
+    var locked = getLockedAppbarDisplayName(accountId);
+    var displayName = locked || resolveAppbarDisplayName(data, accountId);
+    if (!locked && displayName && displayName !== '—') lockAppbarDisplayName(accountId, displayName);
+    paintAppbarDisplayName(accountId);
+    const idEl = document.getElementById('appbarAccountId');
+    if (idEl) {
+        const aid = accountCode != null && accountCode !== '' ? accountCode : (State.accountId ?? data.account_id ?? (data.account && data.account.id));
+        var idLabel = aid != null && aid !== '' ? 'ID: ' + aid : 'ID: —';
+        setTextIfChanged(idEl, idLabel);
+        if (idEl.style.display !== 'block') idEl.style.display = 'block';
+    }
+    if (displayName && displayName !== '—') persistAppbarSessionCache(accountId, displayName, accountCode);
+}
+
+function persistAppbarSessionCache(accountId, displayName, accountCode) {
+    if (accountId == null || accountId === '') return;
+    try {
+        var code = accountCode != null && accountCode !== '' ? String(accountCode) : '';
+        var idLabel = code ? ('ID: ' + code) : ('ID: ' + accountId);
+        sessionStorage.setItem('dashboardAppbar_' + accountId, JSON.stringify({
+            ts: Date.now(),
+            displayName: displayName || '',
+            accountCode: code,
+            idLabel: idLabel
+        }));
+        if (displayName && displayName !== '—') {
+            sessionStorage.setItem('appbarUserName_' + accountId, displayName);
+        }
+    } catch (e) {}
+}
+
+function restoreAppbarFromSessionCache(accountId, accountCode) {
+    if (accountId == null || accountId === '') return false;
+    var idEl = document.getElementById('appbarAccountId');
+    var restored = false;
+    paintAppbarDisplayName(accountId);
+    if (getLockedAppbarDisplayName(accountId)) restored = true;
+    try {
+        var raw = sessionStorage.getItem('dashboardAppbar_' + accountId);
+        var cached = raw ? JSON.parse(raw) : null;
+        if (idEl) {
+            var idLabel = (accountCode != null && accountCode !== '')
+                ? ('ID: ' + accountCode)
+                : ((cached && cached.idLabel) || ('ID: ' + accountId));
+            if (setTextIfChanged(idEl, idLabel)) restored = true;
+            if (idEl.style.display !== 'block') idEl.style.display = 'block';
+        }
+    } catch (e) {}
+    return restored;
+}
+
+function shouldShowAdminNav(user) {
+    var fromAdminUrl = new URLSearchParams(window.location.search).get('from_admin') === '1';
+    if (fromAdminUrl) {
+        try { sessionStorage.setItem('dashboard_from_admin', '1'); } catch (e) {}
+    }
+    var fromAdminStored = false;
+    try { fromAdminStored = sessionStorage.getItem('dashboard_from_admin') === '1'; } catch (e) {}
+    return !!(user && user.is_admin) && (fromAdminUrl || fromAdminStored);
+}
+
+function patchAdminLinkVisibility(show) {
+    var adminLink = document.getElementById('adminLink');
+    if (!adminLink) return;
+    var target = show ? 'inline-flex' : 'none';
+    if (adminLink.style.display !== target) adminLink.style.display = target;
+}
+window.restoreAppbarFromSessionCache = restoreAppbarFromSessionCache;
 
 /** Değer değişmediyse DOM'a dokunma; flicker önler. Returns true if updated. */
 function setTextIfChanged(el, newText) {
@@ -1858,7 +2382,9 @@ function renderCopyTradingDrawer(drawer, structure, items) {
         if (!item) return;
         btn.onclick = function (e) {
             e.stopPropagation();
-            applyLeaderboardParams(structure, item.params || {});
+            var p = normalizeLeaderboardParamsToFormConfig(item.params || {});
+            if (item.symbol && !p.symbol) p.symbol = item.symbol;
+            applyLeaderboardParams(structure, p);
         };
     });
 }
@@ -1870,13 +2396,19 @@ function escapeHtml(s) {
     return div.innerHTML;
 }
 
-function applyLeaderboardParams(structure, params) {
+function applyLeaderboardParams(structure, params, itemIndex) {
     closeBotStructureModal();
-    if (!structure || !params) return;
-    var synthetic = { id: structure.id, name: structure.name || structure.id, defaultConfig: params, fromLeaderboardApply: true };
+    if (!structure) return;
+    var normalized = normalizeLeaderboardParamsToFormConfig(resolveLeaderboardItemParams(params, itemIndex));
+    var synthetic = { id: structure.id, name: structure.name || structure.id, defaultConfig: normalized, fromLeaderboardApply: true };
     currentSelectedTemplate = structure;
     fillModalWithTemplate(synthetic);
-    openCreateBotModal();
+    openCreateBotModal(null, null, true, 'fBudget');
+    setTimeout(function () {
+        applyTrailingDcaConfigToForm(normalized, { clearBudget: true, symbolReadOnly: false });
+        var focusEl = document.getElementById('fBudget');
+        if (focusEl) focusEl.focus();
+    }, 130);
 }
 
 /**
@@ -2080,13 +2612,7 @@ function updateMultiBudgetPlaceholder() {
     if (!modal || modal.style.display === "none" || !wizardMulti || wizardMulti.style.display !== "block") return;
     var fMultiBudget = document.getElementById("fMultiBudget");
     if (!fMultiBudget) return;
-    var freeUsdt = null;
-    (assetsState.wallet.assets || []).forEach(function (a) {
-        if ((a.asset || "").toUpperCase() === "USDT") freeUsdt = parseFloat(a.free);
-    });
-    fMultiBudget.placeholder = freeUsdt != null && Number.isFinite(freeUsdt)
-        ? "Kullanılabilir: " + fmtNum(freeUsdt, 2) + " USDT"
-        : "Kullanılabilir: —";
+    fMultiBudget.placeholder = formatAvailableQuotePlaceholder("USDT", getAvailableQuoteInWallet("USDT"));
 }
 
 function updateMultiRebalanceModeVisibility() {
@@ -2244,13 +2770,8 @@ function updateTrdcaBalancePlaceholder() {
     var wizard = document.getElementById("dmWizardTrdca");
     if (!wizard || wizard.style.display !== "block") return;
     var quote = (document.getElementById("fTrdcaQuoteAsset") && document.getElementById("fTrdcaQuoteAsset").value) || "USDT";
-    var assets = (typeof assetsState !== "undefined" && assetsState.wallet && assetsState.wallet.assets) ? assetsState.wallet.assets : [];
-    var free = null;
-    for (var i = 0; i < assets.length; i++) {
-        if ((assets[i].asset || "").toUpperCase() === quote) { free = parseFloat(assets[i].free); break; }
-    }
     var el = document.getElementById("fTrdcaBotBalance");
-    if (el) el.placeholder = free != null && Number.isFinite(free) ? "Kullanılabilir: " + (typeof fmtNum === "function" ? fmtNum(free, 2) : free.toFixed(2)) + " " + quote : "Kullanılabilir: —";
+    if (el) el.placeholder = formatAvailableQuotePlaceholder(quote, getAvailableQuoteInWallet(quote));
 }
 
 function updateTrdcaQuoteName() {
@@ -2343,9 +2864,14 @@ function fillModalWithTemplate(template) {
         return;
     }
 
-    // Budget: leaderboard Uygula ile açıldıysa bakiye boş; yoksa config'den
+    if (fromLeaderboard) {
+        applyTrailingDcaConfigToForm(normalizeLeaderboardParamsToFormConfig(config), { clearBudget: true, symbolReadOnly: false });
+        return;
+    }
+
+    // Budget: normal şablon açılışı
     const budgetEl = document.getElementById("fBudget");
-    if (budgetEl) budgetEl.value = fromLeaderboard ? '' : ((config.budget_usd !== undefined && config.budget_usd !== null && config.budget_usd !== '') ? config.budget_usd : '');
+    if (budgetEl) budgetEl.value = (config.budget_usd !== undefined && config.budget_usd !== null && config.budget_usd !== '') ? config.budget_usd : '';
     
     // Allocation
     const basePctEl = document.getElementById("fBasePct");
@@ -2421,7 +2947,39 @@ async function createAndStartBot(template) {
     }
     
     const displayName = payload.symbol || "Bot";
-    
+
+    var requestedBudget = 0;
+    var quoteAsset = "USDT";
+    if (payload.strategy_id === "trdca_pro") {
+        requestedBudget = Number(payload.initial_capital_usdt || payload.bot_budget_usdt) || 0;
+        quoteAsset = (payload.quote_asset || "USDT").toString().trim().toUpperCase() || "USDT";
+    } else {
+        requestedBudget = Number(payload.budget_usd) || 0;
+        try {
+            var pq = parseBaseQuote(payload.symbol || "");
+            quoteAsset = (pq && pq.quote) ? pq.quote : "USDT";
+        } catch (e) { quoteAsset = "USDT"; }
+    }
+    if (requestedBudget > 0) {
+        var availableQuote = getAvailableQuoteInWallet(quoteAsset);
+        if (availableQuote == null || availableQuote === undefined) {
+            if (errorEl) {
+                errorEl.textContent = "Bakiye bilgisi yüklenemedi. Lütfen sayfayı yenileyin veya kısa süre sonra tekrar deneyin.";
+                errorEl.style.display = "block";
+            }
+            return;
+        }
+        if (!Number.isFinite(availableQuote)) availableQuote = 0;
+        if (requestedBudget > availableQuote) {
+            var fmt = (quoteAsset === "USDT" || quoteAsset === "BUSD" || quoteAsset === "FDUSD") && typeof fmtNum === "function" ? fmtNum(availableQuote, 2) : (availableQuote.toFixed(2));
+            if (errorEl) {
+                errorEl.textContent = "Bakiye yetersiz. Bot bütçesi: " + requestedBudget + " " + quoteAsset + ", kullanılabilir: " + fmt + " " + quoteAsset + ". Bütçeyi düşürün veya cüzdana bakiye ekleyin.";
+                errorEl.style.display = "block";
+            }
+            return;
+        }
+    }
+
     try {
         // Create bot
         const body = {
@@ -2444,11 +3002,15 @@ async function createAndStartBot(template) {
         
         // Start bot immediately (bots-engine inserts command for worker)
         try {
-            await window.apiClient.post(`/api/bots-engine/${botId}/start?account_id=${State.accountId}`);
+            const startResp = await window.apiClient.post(`/api/bots-engine/${botId}/start?account_id=${State.accountId}`);
             
             var startLabel = (payload.strategy_id === 'trdca_pro') ? 'TRDCA Pro' : createLabel;
             if (window.Toast) {
-                window.Toast.success('Bot ' + startLabel + ' başlatıldı, ilk alım piyasada işleme alındı.');
+                if (startResp && startResp.worker_alive === false) {
+                    window.Toast.warning('Bot oluşturuldu ancak Engine worker çalışmıyor. Proje kökünden ./start.command çalıştırın.');
+                } else {
+                    window.Toast.success('Bot ' + startLabel + ' başlatıldı; ilk alım worker tarafından işlenecek.');
+                }
             }
         } catch (startError) {
             console.error("[dashboard] Error starting bot:", startError);
@@ -3548,17 +4110,11 @@ function bindMustChangePasswordModal() {
             statusEl.style.color = 'var(--ds-text-secondary)';
         }
         try {
-            const res = await fetch('/api/auth/change-password', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    account_id: State.accountId,
-                    new_password: newPassword,
-                    new_password_confirm: newPasswordConfirm
-                })
+            await window.apiClient.post('/api/auth/change-password', {
+                account_id: State.accountId,
+                new_password: newPassword,
+                new_password_confirm: newPasswordConfirm
             });
-            const data = await res.json().catch(() => ({}));
-            if (!res.ok) throw new Error(data.detail || data.message || 'Şifre değiştirilemedi');
 
             const u = JSON.parse(localStorage.getItem('user') || '{}');
             u.must_change_password = false;
@@ -3696,7 +4252,7 @@ function applyLastCreateParamsToForm() {
     } catch (e) { console.debug("applyLastCreateParamsToForm", e); }
 }
 
-function openCreateBotModal(botId = null, accountId = null) {
+function openCreateBotModal(botId = null, accountId = null, skipLastCreateParams = false, focusFieldId = null) {
     const modal = document.getElementById("dmModal");
     const backdrop = document.getElementById("dmBackdrop");
     if (!modal || !backdrop) return;
@@ -3704,11 +4260,16 @@ function openCreateBotModal(botId = null, accountId = null) {
         var templateId = (currentSelectedTemplate && currentSelectedTemplate.id) ? currentSelectedTemplate.id : "trailing_dca";
         sessionStorage.setItem("createBotParamScreen", templateId);
     } catch (e) {}
-    // Strip ve tahmin: sembol seçilene kadar gizli
+    // Strip ve tahmin: sembol seçilene kadar gizli (leaderboard Uygula ile sembol doluysa göster)
     const strip = document.getElementById("dmSelectedPairStrip");
     const tahminStrip = document.getElementById("dmTahminStrip");
-    if (strip) strip.style.display = "none";
-    if (tahminStrip) tahminStrip.style.display = "none";
+    var prefillSymbol = (document.getElementById("fSymbol") || {}).value || "";
+    if (skipLastCreateParams && prefillSymbol.trim() && typeof updateCreateBotModalPairStrip === "function") {
+        updateCreateBotModalPairStrip(prefillSymbol.trim());
+    } else {
+        if (strip) strip.style.display = "none";
+        if (tahminStrip) tahminStrip.style.display = "none";
+    }
     hideCreateModalSymbolDropdown();
     var fBudgetReset = document.getElementById("fBudget");
     if (fBudgetReset) fBudgetReset.placeholder = "Kullanılabilir: —";
@@ -3749,9 +4310,16 @@ function openCreateBotModal(botId = null, accountId = null) {
         titleEl.textContent = currentSelectedTemplate ? `Bot Oluştur - ${currentSelectedTemplate.name}` : "Bot Oluştur";
     }
     
-    const firstInput = modal.querySelector("input, select, textarea");
-    if (firstInput) setTimeout(() => firstInput.focus(), 100);
-    if (!botId && typeof applyLastCreateParamsToForm === "function") setTimeout(applyLastCreateParamsToForm, 80);
+    if (focusFieldId) {
+        setTimeout(function () {
+            var focusEl = document.getElementById(focusFieldId);
+            if (focusEl) focusEl.focus();
+        }, 120);
+    } else {
+        const firstInput = modal.querySelector("input, select, textarea");
+        if (firstInput) setTimeout(() => firstInput.focus(), 100);
+    }
+    if (!botId && !skipLastCreateParams && typeof applyLastCreateParamsToForm === "function") setTimeout(applyLastCreateParamsToForm, 80);
 }
 
 function closeCreateBotModal() {
@@ -4222,8 +4790,7 @@ function bindCreateBotModal() {
         });
     }
     
-    // Submit
-    document.getElementById("dmSubmitBtn")?.addEventListener("click", createBot);
+    // Submit: openCreateBotModal sets dmSubmitBtn.onclick → createAndStartBot (do not add createBot listener — it skips engine start)
 }
 
 function buildGridRows(containerId, count, mode) {
@@ -4308,13 +4875,7 @@ function updateCreateBotModalPairStrip(symbol) {
     if (quoteNameEl) quoteNameEl.textContent = quote || 'USDT';
     var fBudget = document.getElementById('fBudget');
     if (fBudget) {
-        var freeQuote = null;
-        (assetsState.wallet.assets || []).forEach(function (a) {
-            if ((a.asset || '').toUpperCase() === (quote || '').toUpperCase()) freeQuote = parseFloat(a.free);
-        });
-        fBudget.placeholder = freeQuote != null && Number.isFinite(freeQuote)
-            ? 'Kullanılabilir: ' + (quote === 'USDT' || quote === 'BUSD' || quote === 'FDUSD' ? fmtNum(freeQuote, 2) : fmtNum(freeQuote, 8)) + ' ' + quote
-            : 'Kullanılabilir: —';
+        fBudget.placeholder = formatAvailableQuotePlaceholder(quote || 'USDT', getAvailableQuoteInWallet(quote || 'USDT'));
     }
     if (baseEl) baseEl.textContent = base || '—';
     if (pairEl) pairEl.textContent = sym;
@@ -4772,7 +5333,9 @@ function collectForm() {
     return {
         account_id: State.accountId,
         symbol: symbol,
+        strategy_id: "dca_grid_trailing",
         budget_usd: budget,
+        initial_capital_usdt: budget,
         allocation: { base_pct: basePct, quote_pct: quotePct },
         up: { trail_pct: upTrail, grids: upGrids },
         down: { trail_pct: downTrail, grids: downGrids },
@@ -4781,9 +5344,20 @@ function collectForm() {
             rebuy_trail_pct: rebuyTrail,
             resell_trigger_pct: resellTrigger,
             resell_trail_pct: resellTrail
-        },
-        mode: "paper"
+        }
     };
+}
+
+/** Cüzdan satırında bot/emir kilidi düşülmüş kullanılabilir miktar (varlıklar tablosu ile aynı). */
+function getWalletAssetAvailableQty(assetRow) {
+    if (!assetRow || typeof assetRow !== 'object') return null;
+    var free = parseFloat(assetRow.free);
+    if (!Number.isFinite(free)) return null;
+    if (assetRow.available != null && Number.isFinite(Number(assetRow.available))) {
+        return Number(assetRow.available);
+    }
+    var botLocked = Number(assetRow.bot_locked) || 0;
+    return Math.max(0, free - botLocked);
 }
 
 /** Modal için cüzdandaki kullanılabilir quote (USDT vb.) miktarı. Veri yoksa null. */
@@ -4793,11 +5367,34 @@ function getAvailableQuoteInWallet(quoteAsset) {
     var assets = (typeof assetsState !== "undefined" && assetsState.wallet && assetsState.wallet.assets) ? assetsState.wallet.assets : [];
     for (var i = 0; i < assets.length; i++) {
         if ((assets[i].asset || "").toUpperCase() === quote) {
-            var free = parseFloat(assets[i].free);
-            return Number.isFinite(free) ? free : null;
+            return getWalletAssetAvailableQty(assets[i]);
         }
     }
     return null;
+}
+
+function formatAvailableQuotePlaceholder(quoteAsset, availableQty) {
+    var quote = (quoteAsset || "USDT").toString().trim().toUpperCase() || "USDT";
+    if (availableQty == null || !Number.isFinite(availableQty)) return "Kullanılabilir: —";
+    var dec = (quote === "USDT" || quote === "BUSD" || quote === "FDUSD") ? 2 : 8;
+    return "Kullanılabilir: " + fmtNum(availableQty, dec) + " " + quote;
+}
+
+function updateDcaBudgetPlaceholder() {
+    var modal = document.getElementById("dmModal");
+    var wizard = document.getElementById("dmWizardDca");
+    if (!modal || modal.style.display === "none" || !wizard || wizard.style.display === "none") return;
+    var fBudget = document.getElementById("fBudget");
+    if (!fBudget) return;
+    var sym = ((document.getElementById("fSymbol") || {}).value || "").trim();
+    var quote = "USDT";
+    if (sym) {
+        try { quote = parseBaseQuote(normalizeSymbol(sym)).quote || "USDT"; } catch (e) {}
+    } else {
+        var qEl = document.getElementById("dmQuoteAssetName");
+        if (qEl && qEl.textContent) quote = qEl.textContent.trim() || "USDT";
+    }
+    fBudget.placeholder = formatAvailableQuotePlaceholder(quote, getAvailableQuoteInWallet(quote));
 }
 
 function validateForm(payload) {
@@ -4859,10 +5456,18 @@ async function createBot() {
     }
     if (requestedBudget > 0) {
         var availableQuote = getAvailableQuoteInWallet(quoteAsset);
-        if (availableQuote != null && Number.isFinite(availableQuote) && requestedBudget > availableQuote) {
+        if (availableQuote == null || availableQuote === undefined) {
+            if (errorEl) {
+                errorEl.textContent = "Bakiye bilgisi yüklenemedi. Lütfen sayfayı yenileyin veya kısa süre sonra tekrar deneyin.";
+                errorEl.style.display = "block";
+            }
+            return;
+        }
+        if (!Number.isFinite(availableQuote)) availableQuote = 0;
+        if (requestedBudget > availableQuote) {
             var fmt = (quoteAsset === "USDT" || quoteAsset === "BUSD" || quoteAsset === "FDUSD") && typeof fmtNum === "function" ? fmtNum(availableQuote, 2) : (availableQuote.toFixed(2));
             if (errorEl) {
-                errorEl.textContent = "Bakiye yetersiz. Bot bakiye: " + requestedBudget + " " + quoteAsset + ", kullanılabilir: " + fmt + " " + quoteAsset + ".";
+                errorEl.textContent = "Bakiye yetersiz. Bot bütçesi: " + requestedBudget + " " + quoteAsset + ", kullanılabilir: " + fmt + " " + quoteAsset + ". Bütçeyi düşürün veya cüzdana bakiye ekleyin.";
                 errorEl.style.display = "block";
             }
             return;
@@ -5045,6 +5650,9 @@ function normalizeAndApplyWallet(payload, meta) {
     pushWalletEvent({ source: source, status: status, total_usd: totalUsd, asset_count: assets.length, request_id: meta.request_id, note: meta.note });
     if (window.BinanceAssetsPanel?.render) window.BinanceAssetsPanel.render();
     if (typeof renderVarliklarList === 'function') renderVarliklarList();
+    if (typeof updateDcaBudgetPlaceholder === 'function') updateDcaBudgetPlaceholder();
+    if (typeof updateMultiBudgetPlaceholder === 'function') updateMultiBudgetPlaceholder();
+    if (typeof updateTrdcaBalancePlaceholder === 'function') updateTrdcaBalancePlaceholder();
     if (typeof window.renderWalletDebugOverlay === 'function') window.renderWalletDebugOverlay();
 }
 window.coerceNumber = coerceNumber;
@@ -5197,6 +5805,7 @@ async function pollWallet(isManualRefresh = false) {
         }
         if (typeof updateMultiBudgetPlaceholder === 'function') updateMultiBudgetPlaceholder();
         if (typeof updateTrdcaBalancePlaceholder === 'function') updateTrdcaBalancePlaceholder();
+        if (typeof updateDcaBudgetPlaceholder === 'function') updateDcaBudgetPlaceholder();
     } catch (error) {
         pushWalletEvent({ source: 'binance_wallet', status: 'error', note: 'pollWallet catch', request_id: error?.request_id });
         if (window.errorReporter) window.errorReporter.report(error, { tab: 'binance', account_id: State.accountId, action: 'pollWallet' });
@@ -9307,6 +9916,8 @@ async function initDashboard() {
     window.__dashboardInited = true;
     if (typeof window.__DEBUG_DASH__ !== 'undefined' && window.__DEBUG_DASH__) console.log("[dashboard] initDashboard: START");
     
+    initParametrelerModalHandlers();
+
     var tok = localStorage.getItem('token');
     var usr = localStorage.getItem('user');
     if (!tok || !usr) {
@@ -9454,16 +10065,9 @@ async function initDashboard() {
     const isFirstLogin = urlParams.get('first_login') === 'true' || (user && user.is_first_login);
     
     // Admin sekmesi + Admin'e dön: sadece admin kullanıcı VE admin panelinden hesaba girildiyse (from_admin=1)
-    // URL'de from_admin kaybolsa bile sessionStorage ile koruyoruz; yetki her zaman session'daki is_admin ile backend'de doğrulanır
-    const fromAdminUrl = urlParams.get('from_admin') === '1';
-    if (fromAdminUrl) {
-        try { sessionStorage.setItem('dashboard_from_admin', '1'); } catch (e) {}
-    }
-    const fromAdminStored = (function () { try { return sessionStorage.getItem('dashboard_from_admin') === '1'; } catch (e) { return false; } })();
-    const isAdminUser = !!(user && user.is_admin);
-    const showAdminNav = isAdminUser && (!!fromAdminUrl || !!fromAdminStored);
+    const showAdminNav = shouldShowAdminNav(user);
+    patchAdminLinkVisibility(showAdminNav);
     if (adminLink) {
-        adminLink.style.display = showAdminNav ? 'inline-flex' : 'none';
         adminLink.addEventListener('click', function () {
             try { sessionStorage.removeItem('dashboard_from_admin'); } catch (e) {}
         }, { once: true });
@@ -9522,7 +10126,9 @@ async function initDashboard() {
     }
     const mainContainer = document.getElementById('dashboardMainContainer');
     if (mainContainer) mainContainer.style.visibility = 'visible';
-    
+    bindTabs();
+    initMobileBottomNav(savedTab);
+
     let accountId; let accountCode;
     try {
         const resolved = await resolveAccountFromUrl();
@@ -9549,19 +10155,8 @@ async function initDashboard() {
     State.accountId = accountId;
     State.accountCode = accountCode;
     window.__ACTIVE_ACCOUNT_ID = accountId;
-    var idEl = document.getElementById('appbarAccountId');
-    if (idEl) {
-        idEl.textContent = (accountCode != null && accountCode !== '') ? 'ID: ' + accountCode : (accountId != null && accountId !== '' ? 'ID: ' + accountId : 'ID: —');
-        idEl.style.display = 'block';
-    }
-    // Appbar kullanıcı adı: önbellekten anında göster (yenilemede geç yüklenmesin)
-    var nameEl = document.getElementById('appbarUserName');
-    if (nameEl && accountId != null) {
-        try {
-            var cached = sessionStorage.getItem('appbarUserName_' + accountId);
-            if (cached && cached !== '—') { nameEl.textContent = cached; State.appbarNameAccountId = accountId; }
-        } catch (e) {}
-    }
+    restoreFinanceBotsFromSessionCache(accountId);
+    restoreAppbarFromSessionCache(accountId, accountCode);
     // En İyi 5 Bot: hesap hazır olur olmaz yükle (snapshot beklemeden); snapshot geldiğinde de yenilenecek
     if (typeof loadGlobalLeaderboard === 'function') loadGlobalLeaderboard();
     await loadSpotFavoritesFromStorage();
@@ -9664,9 +10259,7 @@ async function initDashboard() {
     
     if (feeRatesCache && feeRatesCache.accountId !== accountId) feeRatesCache = null;
     ensureFeeRates(accountId).catch(() => {});
-    
-    bindTabs();
-    initMobileBottomNav(savedTab);
+
     bindMustChangePasswordModal();
     bindCreateBotModal();
     bindRefresh();
@@ -9872,6 +10465,9 @@ async function initDashboard() {
     window.intervalRegistry.start('datahub.ws-status', updateDatahubWsIndicator, 5000, 'dashboard');
     updateDatahubWsIndicator();
     window.intervalRegistry.start('finance.bots.prices', updateFinanceBotsLivePrices, 1500, 'dashboard');
+    window.intervalRegistry.start('finance.bots.live', function () {
+        if (typeof pollFinanceBotsLiveEquity === 'function') pollFinanceBotsLiveEquity();
+    }, 2500, 'dashboard');
     
     // Auth ping: update activity, handle admin kick → redirect to login
     (function setupAuthPing() {
@@ -10712,9 +11308,15 @@ function initSettingsTab() {
                 if (window.Toast) window.Toast.success("API key güncellendi.");
                 updateBinanceConnectionNotice();
             } catch (e) {
-                if (apiKeyStatus) { apiKeyStatus.textContent = "Hata."; apiKeyStatus.style.color = "var(--ds-text-error, #f6465d)"; }
-                const msg = (e && (e.message || (e.detail && (typeof e.detail === 'string' ? e.detail : e.detail.message)))) || "API key güncellenemedi.";
+                var detail = e && e.detail;
+                var isEncryption = detail && detail.error_code === "ENCRYPTION_NOT_CONFIGURED";
+                if (apiKeyStatus) {
+                    apiKeyStatus.style.color = "var(--ds-text-error, #f6465d)";
+                    apiKeyStatus.textContent = isEncryption ? "BINANCE_MASTER_KEY .env'de yok. Aşağıdaki çözüme bakın." : "Hata.";
+                }
+                const msg = (e && (e.message || (detail && (typeof detail === 'string' ? detail : detail.message)))) || "API key güncellenemedi.";
                 if (window.Toast) window.Toast.error(msg);
+                if (isEncryption && detail.fix && window.Toast) window.Toast.warning(detail.fix, { duration: 15000 });
             } finally {
                 apiKeyBtn.disabled = false;
             }
@@ -10738,9 +11340,15 @@ function initSettingsTab() {
                 if (window.Toast) window.Toast.success("API secret güncellendi.");
                 updateBinanceConnectionNotice();
             } catch (e) {
-                if (apiSecretStatus) { apiSecretStatus.textContent = "Hata."; apiSecretStatus.style.color = "var(--ds-text-error, #f6465d)"; }
-                const msg = (e && (e.message || (e.detail && (typeof e.detail === 'string' ? e.detail : e.detail.message)))) || "API secret güncellenemedi.";
+                var detail = e && e.detail;
+                var isEncryption = detail && detail.error_code === "ENCRYPTION_NOT_CONFIGURED";
+                if (apiSecretStatus) {
+                    apiSecretStatus.style.color = "var(--ds-text-error, #f6465d)";
+                    apiSecretStatus.textContent = isEncryption ? "BINANCE_MASTER_KEY .env'de yok. Aşağıdaki çözüme bakın." : "Hata.";
+                }
+                const msg = (e && (e.message || (detail && (typeof detail === 'string' ? detail : detail.message)))) || "API secret güncellenemedi.";
                 if (window.Toast) window.Toast.error(msg);
+                if (isEncryption && detail.fix && window.Toast) window.Toast.warning(detail.fix, { duration: 15000 });
             } finally {
                 apiSecretBtn.disabled = false;
             }
@@ -10862,27 +11470,11 @@ function initSettingsTab() {
             }
             
             try {
-                const res = await fetch('/api/auth/change-password', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({
-                        account_id: State.accountId,
-                        new_password: newPassword,
-                        new_password_confirm: newPasswordConfirm
-                    })
+                await window.apiClient.post('/api/auth/change-password', {
+                    account_id: State.accountId,
+                    new_password: newPassword,
+                    new_password_confirm: newPasswordConfirm
                 });
-                
-                let data;
-                try {
-                    data = await res.json();
-                } catch (jsonError) {
-                    throw new Error('Sunucu yanıtı alınamadı');
-                }
-                
-                if (!res.ok) {
-                    const errorMsg = data.detail || data.message || 'Şifre değiştirilemedi';
-                    throw new Error(errorMsg);
-                }
                 
                 if (passwordStatus) { 
                     passwordStatus.textContent = "Şifre başarıyla değiştirildi."; 
@@ -11230,16 +11822,332 @@ function updateFinanceKPIs(data) {
     // Binance varlık strip tek kaynak: assetsState.wallet -> renderAssetsSummary (flicker önleme). Burada DOM güncellemesi yapılmaz.
 }
 
+function fmtSignedUsdOrDash(v) {
+    if (v == null || !Number.isFinite(Number(v))) return '—';
+    return fmtSignedUsd(v);
+}
+
+function getFinanceBotStatusMeta(bot) {
+    var stRaw = (bot.status || 'STOPPED').toUpperCase();
+    var ds = (bot.display_status || '').toLowerCase();
+    var text = ds === 'starting' ? 'BAŞLATILIYOR' : stRaw;
+    var key = ds === 'starting' ? 'waiting' : stRaw.toLowerCase();
+    if (key === 'running') return { text: text, className: 'mevcut-botlar-status--running' };
+    if (key === 'paused' || key === 'paused_insufficient_balance' || key === 'waiting' || key === 'starting') {
+        return { text: text, className: 'mevcut-botlar-status--waiting' };
+    }
+    return { text: text, className: 'mevcut-botlar-status--stopped' };
+}
+
 // Anasayfa + Botlar sekmesi Mevcut Botlar: aynı tablo; financeBotsList (Anasayfa) ve financeBotsListBots (Botlar) birlikte güncellenir
-var _financeBotsLastSignature = null;
+var _financeBotsStructureSignature = null;
+var _financeBotsLiveHydrated = false;
+var _financeBotsLivePollPromise = null;
+var _financeBotsLiveSig = '';
+var _financeBotsMetricsCache = {};
+
+function financeBotsSessionCacheKey(accountId) {
+    return 'financeBotsTable_' + (accountId || '');
+}
+
+function loadFinanceBotsMetricsCache(accountId) {
+    try {
+        var raw = sessionStorage.getItem(financeBotsSessionCacheKey(accountId));
+        if (!raw) return {};
+        var data = JSON.parse(raw);
+        return (data && data.metrics && typeof data.metrics === 'object') ? data.metrics : {};
+    } catch (e) {
+        return {};
+    }
+}
+
+function getFinanceBotCachedMetric(bot) {
+    var id = String((bot && (bot.bot_id || bot.id)) || '');
+    if (!id) return null;
+    if (!_financeBotsMetricsCache[id] && State.accountId) {
+        _financeBotsMetricsCache = loadFinanceBotsMetricsCache(State.accountId);
+    }
+    return _financeBotsMetricsCache[id] || null;
+}
+
+function hydrateBotsWithMetricsCache(bots) {
+    if (!Array.isArray(bots) || !bots.length) return bots || [];
+    if (!Object.keys(_financeBotsMetricsCache).length && State.accountId) {
+        _financeBotsMetricsCache = loadFinanceBotsMetricsCache(State.accountId);
+    }
+    return bots.map(function (bot) {
+        var id = String(bot.bot_id || bot.id || '');
+        var cached = id ? _financeBotsMetricsCache[id] : null;
+        if (!cached) return bot;
+        var out = Object.assign({}, bot);
+        if ((out.current_usd == null || !Number.isFinite(out.current_usd)) && cached.current_usd != null) {
+            out.current_usd = cached.current_usd;
+        }
+        if ((out.total_pnl_usd == null || !Number.isFinite(out.total_pnl_usd)) && cached.total_pnl_usd != null) {
+            out.total_pnl_usd = cached.total_pnl_usd;
+        }
+        if ((out.total_cycles_completed == null || !Number.isFinite(out.total_cycles_completed)) && cached.cycles != null) {
+            out.total_cycles_completed = cached.cycles;
+        }
+        return out;
+    });
+}
+
+function persistFinanceBotsSessionCache(bots) {
+    if (!State.accountId || !Array.isArray(bots) || !bots.length) return;
+    try {
+        var metrics = {};
+        bots.forEach(function (bot) {
+            var id = String(bot.bot_id || bot.id || '');
+            if (!id) return;
+            var currentUsd = resolveBotCurrentUsd(bot);
+            if (currentUsd == null && bot.current_usd != null && Number.isFinite(bot.current_usd)) currentUsd = bot.current_usd;
+            if (currentUsd == null) return;
+            var budget = Number(bot.budget_usd || bot.initial_usd) || 0;
+            metrics[id] = {
+                current_usd: currentUsd,
+                total_pnl_usd: budget > 0 ? currentUsd - budget : (bot.total_pnl_usd != null ? Number(bot.total_pnl_usd) : 0),
+                cycles: resolveBotCycles(bot)
+            };
+        });
+        _financeBotsMetricsCache = metrics;
+        var slim = bots.map(function (b) {
+            return {
+                bot_id: b.bot_id || b.id,
+                id: b.bot_id || b.id,
+                symbol: b.symbol,
+                status: b.status,
+                display_status: b.display_status,
+                initial_allocation_done: b.initial_allocation_done,
+                budget_usd: b.budget_usd || b.initial_usd,
+                initial_usd: b.initial_usd || b.budget_usd,
+                current_usd: b.current_usd,
+                total_pnl_usd: b.total_pnl_usd,
+                total_pnl_pct: b.total_pnl_pct,
+                total_cycles_completed: b.total_cycles_completed,
+                cycle_id: b.cycle_id,
+                config: b.config,
+                config_json: b.config_json
+            };
+        });
+        sessionStorage.setItem(financeBotsSessionCacheKey(State.accountId), JSON.stringify({
+            ts: Date.now(),
+            bots: slim,
+            metrics: metrics
+        }));
+    } catch (e) {}
+}
+
+function restoreFinanceBotsFromSessionCache(accountId) {
+    if (!accountId) return false;
+    try {
+        var raw = sessionStorage.getItem(financeBotsSessionCacheKey(accountId));
+        if (!raw) return false;
+        var data = JSON.parse(raw);
+        if (!data || !Array.isArray(data.bots) || !data.bots.length) return false;
+        if (data.ts && Date.now() - data.ts > 86400000) return false;
+        _financeBotsMetricsCache = (data.metrics && typeof data.metrics === 'object') ? data.metrics : {};
+        State.bots = hydrateBotsWithMetricsCache(data.bots);
+        _financeBotsStructureSignature = null;
+        renderFinanceBots(State.bots);
+        return true;
+    } catch (e) {
+        return false;
+    }
+}
+
+function resetFinanceBotsLiveCache(bots) {
+    var sig = (bots || []).map(function (b) { return String(b.bot_id || b.id || ''); }).join(',');
+    if (sig === _financeBotsLiveSig && _financeBotsLiveHydrated) return;
+    _financeBotsLiveSig = sig;
+    State.botLiveEquity = {};
+    _financeBotsLiveHydrated = false;
+    _financeBotsLivePollPromise = null;
+}
+
+function resolveBotLivePrice(sym) {
+    if (!sym) return null;
+    var s = (sym || '').toUpperCase();
+    var mini = window.marketStore && window.marketStore.getMini(s);
+    var p = (mini && mini.last != null) ? mini.last : (window.marketStore && window.marketStore.getPrice && window.marketStore.getPrice(s));
+    return (p != null && Number.isFinite(p) && p > 0) ? p : null;
+}
+
+function botNeedsLiveEquity(bot) {
+    if (!bot) return false;
+    var st = (bot.status || '').toLowerCase();
+    var ds = (bot.display_status || '').toLowerCase();
+    if (st === 'running' || st === 'paused' || st === 'paused_insufficient_balance') return true;
+    if (ds === 'starting' || ds === 'running') return true;
+    return false;
+}
+
+function resolveBotLiveEquity(bot) {
+    if (!bot || !State.botLiveEquity) return null;
+    var botId = String(bot.bot_id || bot.id || '');
+    if (!botId) return null;
+    var row = State.botLiveEquity[botId];
+    if (!row || row.equity == null || !Number.isFinite(row.equity) || row.equity_unavailable) return null;
+    return row.equity;
+}
+
+function resolveBotCurrentUsd(bot) {
+    if (botNeedsLiveEquity(bot)) {
+        if (_financeBotsLiveHydrated) {
+            var live = resolveBotLiveEquity(bot);
+            if (live != null) return live;
+        }
+        if (bot.current_usd != null && Number.isFinite(bot.current_usd)) return bot.current_usd;
+        var cached = getFinanceBotCachedMetric(bot);
+        if (cached && cached.current_usd != null && Number.isFinite(cached.current_usd)) return cached.current_usd;
+        return null;
+    }
+    if (bot.current_usd != null && Number.isFinite(bot.current_usd)) return bot.current_usd;
+    return 0;
+}
+
+function resolveBotRowPnl(bot, currentUsd) {
+    var budget = Number(bot.budget_usd || bot.initial_usd) || 0;
+    if (currentUsd != null && budget > 0) return currentUsd - budget;
+    if (bot.total_pnl_usd != null && Number.isFinite(bot.total_pnl_usd)) return Number(bot.total_pnl_usd);
+    var cached = getFinanceBotCachedMetric(bot);
+    if (cached && cached.total_pnl_usd != null && Number.isFinite(cached.total_pnl_usd)) return cached.total_pnl_usd;
+    if (botNeedsLiveEquity(bot) && !_financeBotsLiveHydrated) return null;
+    return Number(bot.total_pnl_usd) || 0;
+}
+
+function resolveBotCyclesDisplay(bot) {
+    var cycles = resolveBotCycles(bot);
+    if (cycles != null && cycles !== '' && Number(cycles) > 0) return String(cycles);
+    var cached = getFinanceBotCachedMetric(bot);
+    if (cached && cached.cycles != null && cached.cycles !== '') return String(cached.cycles);
+    if (botNeedsLiveEquity(bot) && !_financeBotsLiveHydrated) return '—';
+    return cycles != null && cycles !== '' ? String(cycles) : '—';
+}
+
+function applyFinanceBotsLiveEquityToDom() {
+    if (!State.bots || !State.bots.length) return;
+    State.bots.forEach(function (bot) {
+        var botId = String(bot.bot_id || bot.id || '');
+        if (!botId) return;
+        var currentUsd = resolveBotCurrentUsd(bot);
+        var pnl = resolveBotRowPnl(bot, currentUsd);
+        var sc = pnl != null && pnl >= 0 ? '#0ecb81' : (pnl != null ? '#f6465d' : 'var(--ds-text-secondary)');
+        var balanceTxt = currentUsd != null ? fmtUsd(currentUsd) : '—';
+        var cyclesTxt = resolveBotCyclesDisplay(bot);
+        document.querySelectorAll('.finance-bot-balance[data-bot-id="' + botId + '"]').forEach(function (cell) {
+            if (setTextIfChanged(cell, balanceTxt)) { /* patched */ }
+            cell.setAttribute('data-balance', currentUsd != null ? String(currentUsd) : '');
+            cell.classList.toggle('finance-bot-metric-pending', balanceTxt === '—');
+        });
+        document.querySelectorAll('tr[data-bot-id="' + botId + '"]').forEach(function (row) {
+            var tds = row.querySelectorAll('td');
+            if (tds.length >= 7) {
+                setTextIfChanged(tds[5], fmtSignedUsdOrDash(pnl));
+                if (tds[5].style.color !== sc) tds[5].style.color = sc;
+                setTextIfChanged(tds[6], cyclesTxt);
+            }
+        });
+        document.querySelectorAll('.mevcut-botlar-mobile-card[data-bot-id="' + botId + '"] .mevcut-botlar-mobile-stat-value').forEach(function (el) {
+            var label = el.parentElement && el.parentElement.querySelector('.mevcut-botlar-mobile-stat-label');
+            if (!label) return;
+            if ((label.textContent || '') === 'Bakiye') setTextIfChanged(el, balanceTxt);
+            if ((label.textContent || '') === 'K/Z') {
+                setTextIfChanged(el, fmtSignedUsdOrDash(pnl));
+                if (el.style.color !== sc) el.style.color = sc;
+            }
+            if ((label.textContent || '') === 'Tur') setTextIfChanged(el, cyclesTxt);
+        });
+    });
+}
+
+async function pollFinanceBotsLiveEquity() {
+    if (document.hidden || !State.accountId || !window.apiClient || !State.bots || !State.bots.length) {
+        _financeBotsLiveHydrated = true;
+        return;
+    }
+    var q = State.accountCode
+        ? '?account_code=' + encodeURIComponent(State.accountCode)
+        : '?account_id=' + encodeURIComponent(State.accountId);
+    if (!State.botLiveEquity) State.botLiveEquity = {};
+    var jobs = [];
+    State.bots.forEach(function (bot) {
+        if (!botNeedsLiveEquity(bot)) return;
+        var botId = bot.bot_id || bot.id;
+        if (!botId) return;
+        jobs.push(
+            window.apiClient.get('/api/bots-engine/' + botId + '/live' + q)
+                .then(function (live) {
+                    if (!live || typeof live !== 'object') return;
+                    if (live.equity == null || isNaN(live.equity)) return;
+                    State.botLiveEquity[String(botId)] = {
+                        equity: Number(live.equity),
+                        equity_unavailable: !!live.equity_unavailable,
+                        ts: Date.now()
+                    };
+                })
+                .catch(function () {})
+        );
+    });
+    if (!jobs.length) {
+        _financeBotsLiveHydrated = true;
+        return;
+    }
+    await Promise.all(jobs);
+    _financeBotsLiveHydrated = true;
+    applyFinanceBotsLiveEquityToDom();
+    persistFinanceBotsSessionCache(State.bots);
+}
+
+function ensureFinanceBotsLiveEquity() {
+    if (_financeBotsLiveHydrated) return Promise.resolve();
+    if (_financeBotsLivePollPromise) return _financeBotsLivePollPromise;
+    _financeBotsLivePollPromise = pollFinanceBotsLiveEquity().finally(function () {
+        _financeBotsLivePollPromise = null;
+    });
+    return _financeBotsLivePollPromise;
+}
+
+function resolveBotCycles(bot) {
+    var tc = bot.total_cycles_completed;
+    if (tc != null && Number.isFinite(tc) && tc > 0) return tc;
+    var cid = bot.cycle_id;
+    if (cid != null && Number.isFinite(Number(cid))) return Number(cid);
+    return 0;
+}
+
+function financeBotsStructureSignature(bots, sortBy) {
+    return (bots || []).map(function (b) {
+        return [
+            b.bot_id || b.id,
+            (b.status || '').toLowerCase(),
+            b.display_status || '',
+            (b.symbol || '').toUpperCase(),
+            b.initial_allocation_done ? 1 : 0
+        ].join(':');
+    }).join('|') + '|' + (sortBy || 'pct');
+}
+
+function patchFinanceBotsMetrics(bots) {
+    if (!bots || !bots.length) return;
+    State.bots = hydrateBotsWithMetricsCache(bots);
+    applyFinanceBotsLiveEquityToDom();
+    persistFinanceBotsSessionCache(State.bots);
+}
+
 function renderFinanceBots(bots) {
+    bots = hydrateBotsWithMetricsCache(Array.isArray(bots) ? bots : []);
     const containerAnasayfa = document.getElementById('financeBotsList');
     const containerBotsTab = document.getElementById('financeBotsListBots');
     if (!containerAnasayfa && !containerBotsTab) return;
 
+    resetFinanceBotsLiveCache(bots);
+    var anyNeedsLive = Array.isArray(bots) && bots.some(botNeedsLiveEquity);
+    if (!anyNeedsLive) _financeBotsLiveHydrated = true;
+
     var emptyHtml = '<div style="color: var(--ds-text-secondary); padding: 2rem; text-align: center;">Bot bulunamadı</div>';
     if (!bots || bots.length === 0) {
-        _financeBotsLastSignature = null;
+        _financeBotsStructureSignature = null;
         if (containerAnasayfa) containerAnasayfa.innerHTML = emptyHtml;
         if (containerBotsTab) containerBotsTab.innerHTML = emptyHtml;
         _bindFinanceBotsSortButtons();
@@ -11247,13 +12155,14 @@ function renderFinanceBots(bots) {
     }
 
     var sortBy = (typeof financeBotsSortBy !== 'undefined' ? financeBotsSortBy : 'pct');
-    var ids = bots.map(function (b) { return (b.bot_id || b.id) + ''; }).join(',');
-    var signature = ids + '|' + sortBy;
-    if (_financeBotsLastSignature === signature) {
+    var structureSig = financeBotsStructureSignature(bots, sortBy);
+    if (_financeBotsStructureSignature === structureSig) {
         updateFinanceBotsLivePrices();
+        patchFinanceBotsMetrics(bots);
+        if (!_financeBotsLiveHydrated) ensureFinanceBotsLiveEquity();
         return;
     }
-    _financeBotsLastSignature = signature;
+    _financeBotsStructureSignature = structureSig;
 
     const normalized = bots.map(bot => {
         const budget = bot.budget_usd || bot.initial_usd || 0;
@@ -11278,7 +12187,7 @@ function renderFinanceBots(bots) {
         var initials = (base || '').substring(0, 2).toUpperCase();
         var wrapStyle = 'position:relative;width:' + sz + 'px;height:' + sz + 'px;border-radius:50%;background:var(--ds-bg-tertiary);display:inline-flex;align-items:center;justify-content:center;overflow:hidden;flex-shrink:0;';
         return url
-            ? '<span class="mevcut-bot-logo-wrap" style="' + wrapStyle + '"><img decoding="async" src="' + url + '" alt="' + (base || '') + '" class="mevcut-bot-logo" style="width:100%;height:100%;object-fit:cover;" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'inline-flex\'" /><span class="mevcut-bot-logo-initials" style="display:none;position:absolute;width:' + sz + 'px;height:' + sz + 'px;border-radius:50%;align-items:center;justify-content:center;font-size:0.8rem;font-weight:600;background:var(--ds-bg-tertiary);color:var(--ds-text-secondary);">' + initials + '</span></span>'
+            ? '<span class="mevcut-bot-logo-wrap" style="' + wrapStyle + '"><img decoding="async" loading="lazy" fetchpriority="low" src="' + url + '" alt="' + (base || '') + '" class="mevcut-bot-logo" style="width:100%;height:100%;object-fit:cover;" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'inline-flex\'" /><span class="mevcut-bot-logo-initials" style="display:none;position:absolute;width:' + sz + 'px;height:' + sz + 'px;border-radius:50%;align-items:center;justify-content:center;font-size:0.8rem;font-weight:600;background:var(--ds-bg-tertiary);color:var(--ds-text-secondary);">' + initials + '</span></span>'
             : '<span class="mevcut-bot-logo-initials" style="width:' + sz + 'px;height:' + sz + 'px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:0.8rem;font-weight:600;background:var(--ds-bg-tertiary);color:var(--ds-text-secondary);">' + initials + '</span>';
     };
     var getBotConfig = function (bot) {
@@ -11359,10 +12268,13 @@ function renderFinanceBots(bots) {
         const logoHtml = isMulti && multiCoins.length > 0 ? getMultiLogoHtml(multiCoins) : getLogoHtml(base);
         const q = State.accountCode ? 'account_code=' + encodeURIComponent(State.accountCode) : 'account_id=' + (State.accountId || '');
         const href = detailPage + '?bot_id=' + botId + '&' + q;
-        const sc = (bot.total_pnl_usd || 0) >= 0 ? '#0ecb81' : '#f6465d';
-        const st = (bot.status || 'STOPPED').toUpperCase();
-        const currentUsd = bot.current_usd != null && Number.isFinite(bot.current_usd) ? bot.current_usd : ((bot.budget_usd || 0) + (bot.total_pnl_usd || 0));
-        const cycles = bot.total_cycles_completed != null && Number.isFinite(bot.total_cycles_completed) ? bot.total_cycles_completed : 0;
+        const statusMeta = getFinanceBotStatusMeta(bot);
+        const currentUsd = resolveBotCurrentUsd(bot);
+        const balanceDisplay = currentUsd != null ? fmtUsd(currentUsd) : '—';
+        const cyclesDisplay = resolveBotCyclesDisplay(bot);
+        const budgetUsd = Number(bot.budget_usd || bot.initial_usd) || 0;
+        const rowPnl = resolveBotRowPnl(bot, currentUsd);
+        const sc = rowPnl != null && rowPnl >= 0 ? '#0ecb81' : (rowPnl != null ? '#f6465d' : 'var(--ds-text-secondary)');
         var symbolCell = isMulti && multiCoins.length > 0
             ? '<a href="' + href + '" style="color:inherit;text-decoration:none;display:inline-flex;align-items:center;gap:6px">' + getMultiLogoHtml(multiCoins) + '</a>'
             : '<a href="' + href + '" style="color:inherit;text-decoration:none;display:inline-flex;align-items:center;gap:6px">' + logoHtml + (bot.symbol || 'N/A') + '</a>';
@@ -11373,11 +12285,11 @@ function renderFinanceBots(bots) {
         return '<tr style="cursor:pointer" data-bot-id="' + botId + '" data-symbol="' + sym + '" data-detail-page="' + detailPage + '">' +
             '<td style="font-weight:600">' + symbolCell + '</td>' +
             '<td class="mevcut-botlar-price-cell" style="text-align:right">' + priceCell + '</td>' +
-            '<td style="text-align:center">' + st + '</td>' +
+            '<td style="text-align:center"><span class="mevcut-botlar-status ' + statusMeta.className + '">' + statusMeta.text + '</span></td>' +
             '<td style="text-align:right">' + fmtUsd(bot.budget_usd || 0) + '</td>' +
-            '<td class="mevcut-botlar-balance-cell finance-bot-balance" style="text-align:right" data-bot-id="' + botId + '" data-balance="' + currentUsd + '" title="Bot bakiyesi (state panel ile aynı)">' + fmtUsd(currentUsd) + '</td>' +
-            '<td style="text-align:right;color:' + sc + '">' + fmtSignedUsd(bot.total_pnl_usd || 0) + '</td>' +
-            '<td style="text-align:center">' + cycles + '</td>' +
+            '<td class="mevcut-botlar-balance-cell finance-bot-balance' + (balanceDisplay === '—' ? ' finance-bot-metric-pending' : '') + '" style="text-align:right" data-bot-id="' + botId + '" data-balance="' + (currentUsd != null ? currentUsd : '') + '" title="Bot bakiyesi (bot detay /live equity ile aynı)">' + balanceDisplay + '</td>' +
+            '<td style="text-align:right;color:' + sc + '">' + fmtSignedUsdOrDash(rowPnl) + '</td>' +
+            '<td style="text-align:center">' + cyclesDisplay + '</td>' +
             '<td style="text-align:center"><a href="' + href + '" class="mevcut-botlar-detay-btn">Detay</a></td></tr>';
     }).join('');
     var tableHtml = '<div class="mevcut-botlar-table-wrap" style="overflow-x: auto; width: 100%;"><table class="binance-assets-table mevcut-botlar-table" style="width: 100%;">' + thead + '<tbody>' + rows + '</tbody></table></div>';
@@ -11393,16 +12305,18 @@ function renderFinanceBots(bots) {
         const logoHtml = isMulti && multiCoins.length > 0 ? getMultiLogoHtml(multiCoins) : getLogoHtml(base);
         const q = State.accountCode ? 'account_code=' + encodeURIComponent(State.accountCode) : 'account_id=' + (State.accountId || '');
         const href = detailPage + '?bot_id=' + botId + '&' + q;
-        const sc = (bot.total_pnl_usd || 0) >= 0 ? '#0ecb81' : '#f6465d';
-        const st = (bot.status || 'STOPPED').toUpperCase();
-        const currentUsd = bot.current_usd != null && Number.isFinite(bot.current_usd) ? bot.current_usd : ((bot.budget_usd || 0) + (bot.total_pnl_usd || 0));
-        const cycles = bot.total_cycles_completed != null && Number.isFinite(bot.total_cycles_completed) ? bot.total_cycles_completed : 0;
+        const statusMeta = getFinanceBotStatusMeta(bot);
+        const currentUsd = resolveBotCurrentUsd(bot);
+        const balanceDisplay = currentUsd != null ? fmtUsd(currentUsd) : '—';
+        const cyclesDisplay = resolveBotCyclesDisplay(bot);
+        const budgetUsd = Number(bot.budget_usd || bot.initial_usd) || 0;
+        const rowPnl = resolveBotRowPnl(bot, currentUsd);
+        const sc = rowPnl != null && rowPnl >= 0 ? '#0ecb81' : (rowPnl != null ? '#f6465d' : 'var(--ds-text-secondary)');
         // Mobil: tek sembolde FİYAT = canlı sembol fiyatı; çoklu botta —
         var mobilePriceDisplay = isMulti ? '—' : (getLivePrice(sym) != null ? fmtUsd(getLivePrice(sym)) : '—');
         var mobilePriceSpan = isMulti
             ? '<span class="mevcut-botlar-mobile-price" title="Çoklu sembol">—</span>'
             : '<span class="finance-bot-live-price mevcut-botlar-mobile-price" data-symbol="' + sym + '" data-bot-id="' + botId + '" title="Sembol canlı fiyatı">' + mobilePriceDisplay + '</span>';
-        var statusClass = (st === 'RUNNING' ? 'mevcut-botlar-mobile-status--running' : (st === 'PAUSED' || st === 'PAUSED_INSUFFICIENT_BALANCE' ? 'mevcut-botlar-mobile-status--paused' : 'mevcut-botlar-mobile-status--stopped'));
         return '<div class="mevcut-botlar-mobile-card" data-bot-id="' + botId + '" data-symbol="' + sym + '" data-detail-page="' + detailPage + '">' +
             '<div class="mevcut-botlar-mobile-top">' +
             logoHtml +
@@ -11410,11 +12324,11 @@ function renderFinanceBots(bots) {
             mobilePriceSpan +
             '</div>' +
             '<div class="mevcut-botlar-mobile-stats">' +
-            '<div class="mevcut-botlar-mobile-stat"><span class="mevcut-botlar-mobile-stat-label">Durum</span><span class="mevcut-botlar-mobile-status ' + statusClass + '">' + st + '</span></div>' +
+            '<div class="mevcut-botlar-mobile-stat"><span class="mevcut-botlar-mobile-stat-label">Durum</span><span class="mevcut-botlar-status ' + statusMeta.className + '">' + statusMeta.text + '</span></div>' +
             '<div class="mevcut-botlar-mobile-stat"><span class="mevcut-botlar-mobile-stat-label">Bütçe</span><span class="mevcut-botlar-mobile-stat-value">' + fmtUsd(bot.budget_usd || 0) + '</span></div>' +
-            '<div class="mevcut-botlar-mobile-stat"><span class="mevcut-botlar-mobile-stat-label">Bakiye</span><span class="mevcut-botlar-mobile-stat-value">' + fmtUsd(currentUsd) + '</span></div>' +
-            '<div class="mevcut-botlar-mobile-stat"><span class="mevcut-botlar-mobile-stat-label">K/Z</span><span class="mevcut-botlar-mobile-stat-value mevcut-botlar-mobile-pnl" style="color:' + sc + '">' + fmtSignedUsd(bot.total_pnl_usd || 0) + '</span></div>' +
-            '<div class="mevcut-botlar-mobile-stat"><span class="mevcut-botlar-mobile-stat-label">Tur</span><span class="mevcut-botlar-mobile-stat-value">' + cycles + '</span></div>' +
+            '<div class="mevcut-botlar-mobile-stat"><span class="mevcut-botlar-mobile-stat-label">Bakiye</span><span class="mevcut-botlar-mobile-stat-value">' + balanceDisplay + '</span></div>' +
+            '<div class="mevcut-botlar-mobile-stat"><span class="mevcut-botlar-mobile-stat-label">K/Z</span><span class="mevcut-botlar-mobile-stat-value mevcut-botlar-mobile-pnl" style="color:' + sc + '">' + fmtSignedUsdOrDash(rowPnl) + '</span></div>' +
+            '<div class="mevcut-botlar-mobile-stat"><span class="mevcut-botlar-mobile-stat-label">Tur</span><span class="mevcut-botlar-mobile-stat-value">' + cyclesDisplay + '</span></div>' +
             '</div>' +
             '<a href="' + href + '" class="mevcut-botlar-detay-btn mevcut-botlar-mobile-detay">Detay</a>' +
             '</div>';
@@ -11455,6 +12369,8 @@ function renderFinanceBots(bots) {
     if (containerBotsTab) { containerBotsTab.innerHTML = fullHtml; bindRowClicks(containerBotsTab); }
     _bindFinanceBotsSortButtons();
     updateFinanceBotsLivePrices();
+    ensureFinanceBotsLiveEquity();
+    persistFinanceBotsSessionCache(sorted);
 }
 
 var financeBotLastPrices = {};
@@ -11463,9 +12379,8 @@ function updateFinanceBotsLivePrices() {
         var sym = span.getAttribute('data-symbol');
         var botId = span.getAttribute('data-bot-id');
         if (!sym || !botId) return;
-        var mini = window.marketStore && window.marketStore.getMini(sym);
-        var price = (mini && mini.last != null) ? mini.last : (window.marketStore && window.marketStore.getPrice && window.marketStore.getPrice(sym));
-        if (price == null || !Number.isFinite(price)) return;
+        var price = resolveBotLivePrice(sym);
+        if (price == null) return;
         var newText = fmtUsd(price);
         var prev = financeBotLastPrices[botId];
         if (span.textContent !== newText) {

@@ -46,7 +46,7 @@ async def fetch_bots_and_account_kpis(account_id: int, db: Session) -> Dict[str,
         from app.services.pnl_service import PnlService
         from app.bot.ledger import Ledger
         from app.botengine.state_store import load_state
-        from app.services.price_hub import price_hub
+        from app.services.bot_equity import compute_bot_equity_usd
         from zoneinfo import ZoneInfo
         from app.utils.tz_utils import turkey_today_start_utc
 
@@ -99,21 +99,25 @@ async def fetch_bots_and_account_kpis(account_id: int, db: Session) -> Dict[str,
             # Tek sembol DCA: list K/Z = bot detay ile aynı (state + fiyat)
             sym_ = (bot.symbol or "").strip().upper()
             strategy_id_ = (json.loads(bot.config_json or "{}").get("strategy_id") or "").strip().lower()
+            state_ = load_state(db, bot.id) or {}
+            ia_done_ = bool(state_.get("initial_allocation_done"))
+            cycle_id_ = int(state_.get("cycle_id") or 1)
+            display_status_ = (bot.status or "stopped")
+            if (display_status_ or "").lower() == "running" and not ia_done_:
+                display_status_ = "starting"
             if sym_ and sym_ != "MULTI" and strategy_id_ not in ("trdca_pro", "multi_asset_rebalance"):
                 try:
-                    state_ = load_state(db, bot.id) or {}
-                    base_ = float(state_.get("base_balance") or 0)
-                    quote_ = float(state_.get("quote_balance") or 0)
-                    price_ = float(pnl_data.get("current_price") or 0) if pnl_data else 0
-                    if price_ <= 0:
-                        price_ = float(price_hub.get_price(bot.symbol) or 0)
-                    if price_ > 0 and (base_ != 0 or quote_ != 0):
-                        current_usd = base_ * price_ + quote_
-                        ref_date_ = state_.get("daily_ref_date")
-                        ref_usd_ = float(state_.get("daily_ref_usd") or 0)
-                        if ref_date_ == today_date_loop and ref_usd_ > 0:
-                            daily_bot = current_usd - ref_usd_
-                            daily_pnl_pct = (daily_bot / ref_usd_) * 100.0
+                    current_usd = compute_bot_equity_usd(db, bot, state_, pnl_data, initial_usd=initial_usd)
+                    ref_date_ = state_.get("daily_ref_date")
+                    ref_usd_ = float(state_.get("daily_ref_usd") or 0)
+                    if ref_date_ == today_date_loop and ref_usd_ > 0:
+                        daily_bot = current_usd - ref_usd_
+                        daily_pnl_pct = (daily_bot / ref_usd_) * 100.0
+                except Exception:
+                    pass
+            elif sym_ == "MULTI" or strategy_id_ in ("trdca_pro", "multi_asset_rebalance"):
+                try:
+                    current_usd = compute_bot_equity_usd(db, bot, state_, pnl_data, initial_usd=initial_usd)
                 except Exception:
                     pass
             daily_pnl_usd_acc += daily_bot
@@ -145,6 +149,11 @@ async def fetch_bots_and_account_kpis(account_id: int, db: Session) -> Dict[str,
                 "symbol": bot.symbol,
                 "config": bot_config,
                 "status": bot.status or "stopped",
+                "display_status": display_status_,
+                "initial_allocation_done": ia_done_,
+                "cycle_id": cycle_id_,
+                "base_balance": round(float(state_.get("base_balance") or 0), 8),
+                "quote_balance": round(float(state_.get("quote_balance") or 0), 8),
                 "budget_usd": round(initial_usd, 2),
                 "initial_usd": round(initial_usd, 2),
                 "current_usd": round(current_usd, 2),

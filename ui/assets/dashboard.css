@@ -105,6 +105,41 @@ h1, h2, h3, h4 {
     display: table-row;
     width: 100%;
 }
+.page-dashboard .mevcut-botlar-status {
+    display: inline-block;
+    padding: 0.2rem 0.55rem;
+    border-radius: 6px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    white-space: nowrap;
+}
+.page-dashboard .mevcut-botlar-status--running {
+    background: rgba(14, 203, 129, 0.15);
+    color: #0ecb81;
+}
+.page-dashboard .mevcut-botlar-status--waiting {
+    background: rgba(240, 185, 11, 0.12);
+    color: var(--ds-accent, #f0b90b);
+}
+.page-dashboard .mevcut-botlar-status--stopped {
+    background: rgba(246, 70, 93, 0.12);
+    color: #f6465d;
+}
+.finance-bot-metric-pending {
+    color: var(--ds-text-secondary);
+    font-variant-numeric: tabular-nums;
+}
+
+.page-dashboard .mevcut-bot-logo-wrap {
+    contain: layout style paint;
+    flex-shrink: 0;
+}
+.page-dashboard .mevcut-bot-logo {
+    display: block;
+    background: var(--ds-bg-tertiary, #2b3139);
+}
 
 /* Fiyat hücresi – blink animasyonu; satır kayması önlenir (sabit genişlik + box-sizing) */
 .page-dashboard .mevcut-botlar-price-cell {
@@ -2055,30 +2090,6 @@ h1, h2, h3, h4 {
     margin-top: 0.35rem;
 }
 
-.global-leaderboard-item-stats {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 1rem 1.25rem;
-    margin-top: 0.5rem;
-    font-size: 0.85rem;
-}
-
-.global-leaderboard-stat {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.35rem;
-}
-
-.global-leaderboard-stat-label {
-    color: var(--ds-text-tertiary);
-}
-
-.global-leaderboard-stat-value {
-    font-weight: 600;
-    color: var(--ds-text-primary);
-}
-
 .global-leaderboard-item-duration {
     font-size: 0.75rem;
     color: var(--ds-text-tertiary);
@@ -2090,16 +2101,93 @@ h1, h2, h3, h4 {
     align-items: center;
     gap: 0.5rem;
     flex-shrink: 0;
+    position: relative;
+    z-index: 1;
 }
 
 .global-leaderboard-view-params-btn,
 .global-leaderboard-apply-btn {
     white-space: nowrap;
+    touch-action: manipulation;
+    cursor: pointer;
 }
 
 .global-leaderboard-apply-btn {
     background: var(--ds-accent, #f0b90b) !important;
     color: #000 !important;
+}
+
+/* Parametreler modal — bot detay #parametrelerModal ile aynı */
+#parametrelerModal.modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.6);
+    z-index: 9998;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 1.5rem;
+    overflow-y: auto;
+}
+#parametrelerModal.modal-overlay[style*="flex"] {
+    display: flex !important;
+}
+.modal-panel {
+    background: var(--ds-bg-secondary, #1e2329);
+    border-radius: 12px;
+    padding: 1.5rem 1.75rem;
+    max-width: 440px;
+    width: 100%;
+    border: 1px solid var(--ds-border, #2b3139);
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
+}
+.modal-title {
+    margin: 0;
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: var(--ds-text-primary);
+}
+.modal-panel-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--ds-border, #2b3139);
+}
+.parametreler-modal-panel { max-width: 520px; max-height: 85vh; overflow: hidden; display: flex; flex-direction: column; }
+.parametreler-modal-panel .parametreler-body { overflow-y: auto; flex: 1; min-height: 0; font-size: 0.85rem; }
+.parametreler-modal-close { background: none; border: none; color: var(--ds-text-secondary); font-size: 1.5rem; line-height: 1; cursor: pointer; padding: 0 0.25rem; }
+.parametreler-modal-close:hover { color: var(--ds-text-primary); }
+.param-block { margin-bottom: 1.25rem; }
+.param-block-title { font-size: 0.75rem; font-weight: 600; color: var(--ds-text-secondary); text-transform: uppercase; letter-spacing: 0.02em; margin-bottom: 0.5rem; }
+.param-row { display: flex; justify-content: space-between; align-items: center; padding: 0.4rem 0; border-bottom: 1px solid var(--ds-border, #2b3139); gap: 0.75rem; }
+.param-row .param-label { color: var(--ds-text-secondary); }
+.param-row .param-value { font-weight: 600; color: var(--ds-text-primary); text-align: right; }
+.param-row.param-sell .param-value { color: #f6465d; }
+.param-row.param-buy .param-value { color: #0ecb81; }
+.param-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; margin-top: 0.35rem; }
+.param-table th, .param-table td { padding: 0.4rem 0.5rem; text-align: left; border-bottom: 1px solid var(--ds-border, #2b3139); }
+.param-table th { color: var(--ds-text-secondary); font-weight: 500; }
+.param-table .num { text-align: right; }
+.param-hint { font-size: 0.78rem; color: var(--ds-text-secondary); margin-top: 0.5rem; line-height: 1.4; }
+
+@media (max-width: 768px) {
+    #parametrelerModal.modal-overlay {
+        padding: 1rem;
+        align-items: flex-end;
+    }
+    #parametrelerModal .parametreler-modal-panel {
+        max-width: 100%;
+        width: 100%;
+        margin: 0;
+        border-radius: 16px 16px 0 0;
+        padding: 1.25rem 1rem;
+        max-height: 90vh;
+    }
+    #parametrelerModal .parametreler-modal-panel .parametreler-body {
+        padding-bottom: 2rem;
+    }
 }
 
 /* Leaderboard parametre modal: panelin altında / görünür alanda, sadece modal içi scroll */
@@ -3907,27 +3995,9 @@ body.tab-bots-active #transactionHistoryPanel {
     .page-dashboard .mevcut-botlar-mobile-pnl {
         font-weight: 700;
     }
-    .page-dashboard .mevcut-botlar-mobile-status {
-        display: inline-block;
-        padding: 0.2rem 0.5rem;
-        border-radius: 6px;
+    .page-dashboard .mevcut-botlar-status {
         font-size: 0.7rem;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.03em;
         width: fit-content;
-    }
-    .page-dashboard .mevcut-botlar-mobile-status--running {
-        background: rgba(14, 203, 129, 0.15);
-        color: #0ecb81;
-    }
-    .page-dashboard .mevcut-botlar-mobile-status--paused {
-        background: rgba(240, 185, 11, 0.12);
-        color: var(--ds-accent, #f0b90b);
-    }
-    .page-dashboard .mevcut-botlar-mobile-status--stopped {
-        background: rgba(132, 142, 156, 0.2);
-        color: var(--ds-text-tertiary, #848e9c);
     }
     .page-dashboard .mevcut-botlar-mobile-detay {
         display: block;

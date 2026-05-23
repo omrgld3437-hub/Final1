@@ -1,0 +1,27 @@
+---
+description: Modül _meta/MODULE.md güncelleme kuralı
+alwaysApply: true
+---
+
+# Modül meta dokümantasyonu
+
+Her ana modülde `_meta/MODULE.md` vardır: `app/`, `app/botengine/`, `app/api/`, `app/services/`, `manager_server/`, `ui/`, `scripts/`, `tests/`, `deploy/`.
+
+## Zorunluluk
+
+Önemli değişiklikte (yeni dosya, taşıma, yeni endpoint, davranış değişikliği):
+
+1. İlgili `_meta/MODULE.md` tablolarını/bölümlerini güncelle.
+2. `docs/CODE_TREE.md` ağacını güncelle (yapısal ise).
+3. Spec kararı varsa `TRADE_TRAILING_MASTER_SPEC.md`.
+4. Envanter için: `python scripts/sync_module_meta.py`
+5. Ana başlık dosya listesi: `python scripts/sync_ana_basliklar.py`
+6. Kaynak üst yorumları: `python scripts/annotate_file_headers.py`
+
+## Tek kaynak ağaç
+
+Proje dosya hiyerarşisi: `docs/CODE_TREE.md` · ana başlıklar: `docs/ANA_BASLIKLAR.md` · calistirma: `ops/_meta/MODULE.md` · doküman listesi: `docs/INDEX.md`
+
+## Arşiv
+
+Eski incident/patch `.md` → `docs/archive/`; silme yerine arşivle (spec hariç).

@@ -1,3 +1,6 @@
+"""
+reason engine modulu (manager_server/).
+"""
 # -*- coding: utf-8 -*-
 """
 Reason Engine: servis durumuna göre kök neden teşhisi (Türkçe).

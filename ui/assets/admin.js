@@ -117,6 +117,10 @@ function adminAuthHeaders() {
     var tok = sessionStorage.getItem('token');
     var h = { 'Content-Type': 'application/json' };
     if (tok) h['Authorization'] = 'Bearer ' + tok;
+    if (typeof document !== 'undefined' && document.cookie) {
+        var csrfMatch = document.cookie.match(/\bcsrf_token=([^;]+)/);
+        if (csrfMatch && csrfMatch[1]) h['X-CSRF-Token'] = csrfMatch[1].trim();
+    }
     return h;
 }
 
@@ -2316,7 +2320,8 @@ async function approveRegistration(regId, approve) {
     try {
         const res = await fetch('/api/admin/approve-registration', {
             method: 'POST',
-            headers: {'Content-Type': 'application/json'},
+            headers: adminAuthHeaders(),
+            credentials: 'same-origin',
             body: JSON.stringify({registration_id: regId, approve})
         });
         const data = await res.json();
@@ -2384,7 +2389,8 @@ async function changeAdminPassword() {
     try {
         const res = await fetch('/api/admin/change-password', {
             method: 'POST',
-            headers: {'Content-Type': 'application/json'},
+            headers: adminAuthHeaders(),
+            credentials: 'same-origin',
             body: JSON.stringify({
                 old_password: oldPassword,
                 new_password: newPassword,
@@ -2456,7 +2462,8 @@ async function changeAdminUsername() {
     try {
         const res = await fetch('/api/admin/change-username', {
             method: 'POST',
-            headers: {'Content-Type': 'application/json'},
+            headers: adminAuthHeaders(),
+            credentials: 'same-origin',
             body: JSON.stringify({new_username: newUsername})
         });
         
@@ -2508,7 +2515,7 @@ async function changeAdminUsername() {
 
 async function loadBannedIPs() {
     try {
-        const res = await fetch('/api/admin/banned-ips');
+        const res = await fetch('/api/admin/banned-ips', { headers: adminAuthHeaders(), credentials: 'same-origin' });
         const data = await res.json();
         
         const container = document.getElementById('bannedIpsContainer');
@@ -2546,7 +2553,8 @@ async function unbanIP(ipAddress) {
     try {
         const res = await fetch('/api/admin/unban-ip', {
             method: 'POST',
-            headers: {'Content-Type': 'application/json'},
+            headers: adminAuthHeaders(),
+            credentials: 'same-origin',
             body: JSON.stringify({ip_address: ipAddress})
         });
         const data = await res.json();
@@ -2577,7 +2585,8 @@ async function banContactIP(ipAddress, messageId) {
         // Ban the IP using contact-reply endpoint with empty reply
         const banRes = await fetch('/api/admin/contact-reply', {
             method: 'POST',
-            headers: {'Content-Type': 'application/json'},
+            headers: adminAuthHeaders(),
+            credentials: 'same-origin',
             body: JSON.stringify({message_id: messageId, reply: '', ban_ip: true})
         });
         
@@ -2738,7 +2747,8 @@ async function confirmReply() {
     try {
         const res = await fetch('/api/admin/contact-reply', {
             method: 'POST',
-            headers: {'Content-Type': 'application/json'},
+            headers: adminAuthHeaders(),
+            credentials: 'same-origin',
             body: JSON.stringify({
                 message_id: currentReplyMessageId,
                 reply: replyText,
@@ -2795,10 +2805,8 @@ async function handleSuspendUser(button, suspend) {
     try {
         const response = await fetch('/api/admin/suspend-user', {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Accept': 'application/json'
-            },
+            headers: Object.assign({ 'Accept': 'application/json' }, adminAuthHeaders()),
+            credentials: 'same-origin',
             body: JSON.stringify({
                 user_id: parseInt(userId),
                 suspend: suspend

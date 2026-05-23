@@ -1,3 +1,6 @@
+"""
+routes Python paketi.
+"""
 # app.api.routes is a package; the main router and helpers live in the sibling module routes.py.
 # Load that module explicitly (it is shadowed by this package) and re-export for "from app.api.routes import ...".
 import importlib.util

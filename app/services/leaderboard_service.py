@@ -5,7 +5,7 @@ import json
 import logging
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -30,10 +30,11 @@ def get_top_by_structure(db: Session, structure_id: str, limit: int = 5) -> List
     try:
         rows = db.execute(
             text("""
-                SELECT profit_pct_all, params_sanitized_json
-                FROM bot_public_metrics
-                WHERE structure_id = :sid AND profit_pct_all >= 0
-                ORDER BY profit_pct_all DESC
+                SELECT bpm.profit_pct_all, bpm.params_sanitized_json, b.symbol, b.id, b.account_id, b.config_json
+                FROM bot_public_metrics bpm
+                INNER JOIN bots b ON b.id = bpm.bot_id
+                WHERE bpm.structure_id = :sid AND bpm.profit_pct_all >= 0
+                ORDER BY bpm.profit_pct_all DESC
                 LIMIT :lim
             """),
             {"sid": structure_id, "lim": limit},
@@ -45,36 +46,243 @@ def get_top_by_structure(db: Session, structure_id: str, limit: int = 5) -> List
                 params = json.loads(row[1] or "{}")
             except Exception:
                 params = {}
-            out.append({"profit_pct": round(pct, 2), "params": params})
+            symbol = (row[2] or "").strip() if len(row) > 2 else None
+            bot_id = int(row[3]) if len(row) > 3 and row[3] is not None else None
+            account_id = int(row[4]) if len(row) > 4 and row[4] is not None else None
+            config_json_raw = row[5] if len(row) > 5 else None
+            ref_price = _reference_price_from_state(db, bot_id, account_id)
+            params = _resolve_leaderboard_params(
+                db, params, config_json_raw, bot_id, account_id, symbol, ref_price
+            )
+            out.append({"profit_pct": round(pct, 2), "params": params, "symbol": symbol})
         return out
     except Exception as e:
         logger.warning("leaderboard get_top_by_structure failed: %s", e)
         return []
 
 
+def _running_since_iso(started_at) -> Optional[str]:
+    """Normalize bot started_at to UTC ISO string (JS Date parses correctly with Z suffix)."""
+    if started_at is None:
+        return None
+    if hasattr(started_at, "isoformat"):
+        iso = started_at.isoformat()
+        if iso and not iso.endswith("Z") and "+" not in iso[-7:]:
+            iso += "Z"
+        return iso
+    s = str(started_at).strip()
+    if not s:
+        return None
+    if "T" not in s and " " in s:
+        s = s.replace(" ", "T", 1)
+    if not s.endswith("Z") and "+" not in s[-7:]:
+        s += "Z"
+    return s
+
+
+def _initial_capital_from_config(config_json_raw: Optional[str]) -> float:
+    try:
+        cfg = json.loads(config_json_raw or "{}")
+        return float(cfg.get("initial_capital_usdt") or cfg.get("budget_usd") or cfg.get("bot_budget_quote") or 0)
+    except Exception:
+        return 0.0
+
+
+def _params_missing_strategy_detail(params: Dict[str, Any]) -> bool:
+    if not params:
+        return True
+    if params.get("sell_grids") or params.get("buy_grids"):
+        return False
+    up = params.get("up") if isinstance(params.get("up"), dict) else {}
+    down = params.get("down") if isinstance(params.get("down"), dict) else {}
+    if up.get("grids") or down.get("grids"):
+        return False
+    return len(params) <= 3
+
+
+def _resolve_leaderboard_params(
+    db: Session,
+    params: Dict[str, Any],
+    config_json_raw: Optional[str],
+    bot_id: Optional[int],
+    account_id: Optional[int],
+    symbol: Optional[str],
+    reference_price: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Full strategy params for Parametreleri görüntüle modal; re-sanitize if DB cache is stale."""
+    from app.db.models import Bot
+    from app.services.copytrading_sanitize import sanitize_bot_params
+
+    out = dict(params or {})
+    if _params_missing_strategy_detail(out) and config_json_raw:
+        bot = db.query(Bot).filter(Bot.id == bot_id).first() if bot_id is not None else None
+        out = sanitize_bot_params(bot, None, config_json_raw)
+    ref = reference_price
+    if ref is None and bot_id is not None:
+        ref = _reference_price_from_state(db, bot_id, account_id)
+    if ref is not None and float(ref) > 0:
+        out["reference_price"] = round(float(ref), 8)
+    if symbol and "symbol" not in out:
+        out["symbol"] = symbol
+    return out
+
+
+def _reference_price_from_state(db: Session, bot_id: Optional[int], account_id: Optional[int]) -> Optional[float]:
+    if bot_id is None:
+        return None
+    try:
+        from app.botengine.state_store import load_state
+
+        state = load_state(db, bot_id) or {}
+        ref = state.get("reference_price")
+        if ref is not None and float(ref) > 0:
+            return round(float(ref), 8)
+    except Exception:
+        pass
+    return None
+
+
+def _live_pnl_fields(
+    db: Session,
+    bot_id: Optional[int],
+    account_id: Optional[int],
+    config_json_raw: Optional[str],
+    stored_profit_pct: Optional[float] = None,
+) -> Dict[str, Any]:
+    from app.services.pnl_service import PnlService
+
+    initial = _initial_capital_from_config(config_json_raw)
+    profit_pct = stored_profit_pct
+    total_pnl_usd = None
+    if bot_id is not None and account_id is not None and initial > 0:
+        try:
+            pnl_data = PnlService.calculate_bot_pnl(db, bot_id, account_id)
+            if not pnl_data.get("error"):
+                total_usd = float(pnl_data.get("total_usd") or 0)
+                total_pnl_usd = round(total_usd - initial, 2)
+                profit_pct = round((total_usd - initial) / initial * 100.0, 2)
+        except Exception:
+            pass
+    return {
+        "total_pnl_usd": total_pnl_usd,
+        "profit_pct": profit_pct,
+    }
+
+
+def _leaderboard_item_extras(
+    db: Session,
+    bot_id: Optional[int],
+    account_id: Optional[int],
+    config_json_raw: Optional[str],
+) -> Dict[str, Any]:
+    from app.bot.ledger import Ledger
+    from app.services.pnl_service import PnlService
+
+    cycles_count = 0
+    profit_pct_daily = None
+    daily_pnl_usd = None
+    if bot_id is not None and account_id is not None:
+        try:
+            cycle_ids = Ledger.get_cycle_ids(db, bot_id, account_id)
+            cycles_count = len(cycle_ids) if cycle_ids else 0
+        except Exception:
+            pass
+        try:
+            daily_pnl_usd = round(float(PnlService._daily_realized_for_bot_trades(db, bot_id, account_id)), 2)
+            initial = 0.0
+            if config_json_raw:
+                try:
+                    cfg = json.loads(config_json_raw or "{}")
+                    initial = float(cfg.get("initial_capital_usdt") or cfg.get("budget_usd") or cfg.get("bot_budget_quote") or 0)
+                except Exception:
+                    pass
+            if initial > 0 and daily_pnl_usd is not None:
+                profit_pct_daily = round((daily_pnl_usd / initial) * 100.0, 2)
+        except Exception:
+            pass
+    return {
+        "cycles_count": cycles_count,
+        "profit_pct_daily": profit_pct_daily,
+        "daily_pnl_usd": daily_pnl_usd,
+    }
+
+
+def _global_top_from_running_bots(db: Session, limit: int) -> List[Dict[str, Any]]:
+    """Live fallback: running bots with profit_pct >= 0 when metrics cache is empty/stale."""
+    from app.db.models import Bot
+    from app.services.pnl_service import PnlService
+    from app.services.copytrading_sanitize import sanitize_bot_params
+
+    candidates: List[tuple] = []
+    bots = db.query(Bot).filter(Bot.status == "running").all()
+    for bot in bots:
+        try:
+            pnl_data = PnlService.calculate_bot_pnl(db, bot.id, bot.account_id)
+            if pnl_data.get("error"):
+                continue
+            cfg = json.loads(bot.config_json or "{}")
+            initial = float(cfg.get("initial_capital_usdt") or cfg.get("budget_usd") or cfg.get("bot_budget_quote") or 0)
+            if initial <= 0:
+                continue
+            total_usd = float(pnl_data.get("total_usd") or 0)
+            profit_pct = (total_usd - initial) / initial * 100.0
+            if profit_pct < 0:
+                continue
+            strategy_id = (cfg.get("strategy_id") or "").strip().lower() or "dca_grid_trailing"
+            structure_id = _strategy_to_structure_id(strategy_id)
+            params = sanitize_bot_params(bot, None, bot.config_json or "{}")
+            symbol = (bot.symbol or "").strip() or None
+            if symbol and "symbol" not in params:
+                params = dict(params)
+                params["symbol"] = symbol
+            candidates.append((profit_pct, structure_id, params, symbol, bot))
+        except Exception:
+            continue
+    candidates.sort(key=lambda x: -x[0])
+    out: List[Dict[str, Any]] = []
+    for profit_pct, structure_id, params, symbol, bot in candidates[:limit]:
+        extras = _leaderboard_item_extras(db, bot.id, bot.account_id, bot.config_json)
+        live = _live_pnl_fields(db, bot.id, bot.account_id, bot.config_json, profit_pct)
+        ref_price = _reference_price_from_state(db, bot.id, bot.account_id)
+        params = _resolve_leaderboard_params(
+            db, params, bot.config_json, bot.id, bot.account_id, symbol, ref_price
+        )
+        out.append({
+            "structure_id": structure_id,
+            "profit_pct": live["profit_pct"] if live["profit_pct"] is not None else round(profit_pct, 2),
+            "total_pnl_usd": live["total_pnl_usd"],
+            "profit_pct_daily": extras["profit_pct_daily"],
+            "daily_pnl_usd": extras["daily_pnl_usd"],
+            "cycles_count": extras["cycles_count"],
+            "params": params,
+            "running_since_iso": _running_since_iso(getattr(bot, "started_at", None)),
+            "symbol": symbol,
+            "reference_price": ref_price,
+        })
+    return out
+
+
 def get_global_top(db: Session, limit: int = 1) -> List[Dict[str, Any]]:
-    """Global top bots by profit_pct_all. Only positive profit and only running bots that still exist.
+    """Global top bots by profit_pct_all. Running bots with profit_pct_all >= 0 (break-even or profit).
     INNER JOIN bots ensures we never return metrics for deleted bots.
-    Returns list of { structure_id, profit_pct, profit_pct_daily, daily_pnl_usd, cycles_count, params, running_since_iso }
+    Falls back to live PnL when metrics cache returns no rows.
+    Returns list of { structure_id, profit_pct, total_pnl_usd, profit_pct_daily, daily_pnl_usd, cycles_count, params, running_since_iso, reference_price }
     (no bot_id/account/balance)."""
     limit = max(1, min(20, limit))
     try:
-        from app.bot.ledger import Ledger
-        from app.services.pnl_service import PnlService
-
         rows = db.execute(
             text("""
                 SELECT bpm.structure_id, bpm.profit_pct_all, bpm.params_sanitized_json, b.started_at, b.symbol, b.id, b.account_id, b.config_json
                 FROM bot_public_metrics bpm
                 INNER JOIN bots b ON b.id = bpm.bot_id
-                WHERE bpm.profit_pct_all > 0
+                WHERE bpm.profit_pct_all >= 0
                   AND LOWER(TRIM(COALESCE(b.status, ''))) = 'running'
                 ORDER BY bpm.profit_pct_all DESC
                 LIMIT :lim
             """),
             {"lim": limit},
         ).fetchall()
-        out = []
+        out: List[Dict[str, Any]] = []
         for row in rows:
             sid = (row[0] or "").strip() or "trailing_dca"
             pct = float(row[1]) if row[1] is not None else 0.0
@@ -87,55 +295,34 @@ def get_global_top(db: Session, limit: int = 1) -> List[Dict[str, Any]]:
             bot_id = int(row[5]) if row[5] is not None else None
             account_id = int(row[6]) if row[6] is not None else None
             config_json_raw = row[7] if len(row) > 7 else None
-            if started_at is None:
-                running_since_iso = None
-            elif hasattr(started_at, "isoformat"):
-                running_since_iso = started_at.isoformat()
-                if running_since_iso and not running_since_iso.endswith("Z"):
-                    running_since_iso += "Z"
-            else:
-                running_since_iso = str(started_at)
-            if symbol and "symbol" not in params:
-                params = dict(params)
-                params["symbol"] = symbol
-
-            cycles_count = 0
-            profit_pct_daily = None
-            daily_pnl_usd = None
-            if bot_id is not None and account_id is not None:
-                try:
-                    cycle_ids = Ledger.get_cycle_ids(db, bot_id, account_id)
-                    cycles_count = len(cycle_ids) if cycle_ids else 0
-                except Exception:
-                    pass
-                try:
-                    daily_pnl_usd = round(float(PnlService._daily_realized_for_bot_trades(db, bot_id, account_id)), 2)
-                    initial = 0.0
-                    if config_json_raw:
-                        try:
-                            cfg = json.loads(config_json_raw or "{}")
-                            initial = float(cfg.get("initial_capital_usdt") or cfg.get("budget_usd") or cfg.get("bot_budget_quote") or 0)
-                        except Exception:
-                            pass
-                    if initial > 0 and daily_pnl_usd is not None:
-                        profit_pct_daily = round((daily_pnl_usd / initial) * 100.0, 2)
-                except Exception:
-                    pass
-
+            running_since_iso = _running_since_iso(started_at)
+            ref_price = _reference_price_from_state(db, bot_id, account_id)
+            params = _resolve_leaderboard_params(
+                db, params, config_json_raw, bot_id, account_id, symbol, ref_price
+            )
+            extras = _leaderboard_item_extras(db, bot_id, account_id, config_json_raw)
+            live = _live_pnl_fields(db, bot_id, account_id, config_json_raw, pct)
             out.append({
                 "structure_id": sid,
-                "profit_pct": round(pct, 2),
-                "profit_pct_daily": profit_pct_daily,
-                "daily_pnl_usd": daily_pnl_usd,
-                "cycles_count": cycles_count,
+                "profit_pct": live["profit_pct"] if live["profit_pct"] is not None else round(pct, 2),
+                "total_pnl_usd": live["total_pnl_usd"],
+                "profit_pct_daily": extras["profit_pct_daily"],
+                "daily_pnl_usd": extras["daily_pnl_usd"],
+                "cycles_count": extras["cycles_count"],
                 "params": params,
                 "running_since_iso": running_since_iso,
                 "symbol": symbol,
+                "reference_price": ref_price,
             })
+        if not out:
+            out = _global_top_from_running_bots(db, limit)
         return out
     except Exception as e:
         logger.warning("leaderboard get_global_top failed: %s", e)
-        return []
+        try:
+            return _global_top_from_running_bots(db, limit)
+        except Exception:
+            return []
 
 
 def refresh_bot_public_metrics(db: Session, batch_size: int = 200) -> int:

@@ -71,16 +71,15 @@ async def _get_valid_spot_symbols_async() -> Set[str]:
     if _VALID_SPOT_SYMBOLS is not None and (now - _VALID_SPOT_SYMBOLS_TS) < _VALID_SPOT_SYMBOLS_TTL:
         return _VALID_SPOT_SYMBOLS
     try:
-        from app.services.binance_spot import fetch_exchange_info
-        info = await fetch_exchange_info(False, force_refresh=False)
+        from app.services.market_data import get_symbols
+        symbols = set(get_symbols("all"))
+        if symbols:
+            _VALID_SPOT_SYMBOLS = symbols
+            _VALID_SPOT_SYMBOLS_TS = now
+            return _VALID_SPOT_SYMBOLS
     except Exception:
-        info = {}
-    symbols = set()
-    for s in info.get("symbols", []):
-        sym = s.get("symbol")
-        if sym and s.get("status") == "TRADING":
-            symbols.add(sym)
-    _VALID_SPOT_SYMBOLS = symbols or set()
+        pass
+    _VALID_SPOT_SYMBOLS = _VALID_SPOT_SYMBOLS or set()
     _VALID_SPOT_SYMBOLS_TS = now
     return _VALID_SPOT_SYMBOLS
 
@@ -353,6 +352,23 @@ KLINES_INFLIGHT: dict = {}  # (symbol, interval, limit) -> asyncio.Task
 def _klines_cache_ttl(interval: str) -> float:
     return float(KLINES_TTL_BY_INTERVAL.get(interval.lower(), 60))
 
+
+def _klines_stale_fallback(symbol: str, interval: str) -> list:
+    """Binance 418/429 veya ağ hatasında son bilinen mumları döndür (grafik boş kalmasın)."""
+    best = None
+    best_ts = 0.0
+    sym = (symbol or "").upper()
+    iv = (interval or "").lower()
+    for key, (data, ts) in KLINES_CACHE.items():
+        if not data or not isinstance(key, tuple) or len(key) < 2:
+            continue
+        if key[0] == sym and key[1] == iv:
+            if ts > best_ts:
+                best_ts = ts
+                best = data
+    return best if isinstance(best, list) else []
+
+
 @router.get("/spot/klines")
 async def get_spot_klines(
     symbol: str = Query(..., description="Trading pair (e.g. BTCUSDT)"),
@@ -382,23 +398,29 @@ async def get_spot_klines(
         KLINES_INFLIGHT.pop(cache_key, None)
 
     async def _fetch():
+        stale = _klines_stale_fallback(symbol, interval)
         try:
             params = {"symbol": symbol, "interval": interval, "limit": limit}
             if end_time is not None:
                 params["endTime"] = end_time
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                r = await client.get(
-                    f"{BINANCE_PUBLIC}/api/v3/klines",
-                    params=params
-                )
-                if r.status_code != 200:
-                    return []
-                data = r.json()
-                out = [{"t": c[0], "o": float(c[1]), "h": float(c[2]), "l": float(c[3]), "c": float(c[4]), "v": float(c[5])} for c in data]
-                KLINES_CACHE[cache_key] = (out, time.time())
-                return out
+            from app.services.binance_rest_log import rest_source
+            from app.services.binance_spot import public_get_json, BinanceIPBannedError, DependencyFailure
+            with rest_source("spot_routes.klines"):
+                data = await public_get_json("/api/v3/klines", params, testnet=False)
+            if not isinstance(data, list):
+                return stale or []
+            out = [{"t": c[0], "o": float(c[1]), "h": float(c[2]), "l": float(c[3]), "c": float(c[4]), "v": float(c[5])} for c in data]
+            KLINES_CACHE[cache_key] = (out, time.time())
+            return out
+        except (BinanceIPBannedError, DependencyFailure):
+            if stale:
+                logger.warning("Klines blocked symbol=%s interval=%s — serving stale cache", symbol, interval)
+                return stale
+            return []
         except Exception as e:
             logger.warning("Klines error: %s", e)
+            if stale:
+                return stale
             return []
         finally:
             KLINES_INFLIGHT.pop(cache_key, None)
@@ -417,23 +439,11 @@ async def get_spot_ticker_24h(
     if _is_invalid_spot_symbol(sym):
         return {"lowPrice": 0, "highPrice": 0, "priceChangePercent": 0, "lastPrice": 0}
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            r = await client.get(
-                f"{BINANCE_PUBLIC}/api/v3/ticker/24hr",
-                params={"symbol": sym}
-            )
-            if r.status_code != 200:
-                return {"lowPrice": 0, "highPrice": 0, "priceChangePercent": 0, "lastPrice": 0}
-            data = r.json()
-            return {
-                "lowPrice": float(data.get("lowPrice", 0)),
-                "highPrice": float(data.get("highPrice", 0)),
-                "priceChangePercent": float(data.get("priceChangePercent", 0)),
-                "lastPrice": float(data.get("lastPrice", 0)),
-            }
-    except Exception as e:
-        logger.warning("ticker_24h error: %s", e)
-        return {"lowPrice": 0, "highPrice": 0, "priceChangePercent": 0, "lastPrice": 0}
+        from app.services.market_data import get_ticker_24h
+        return get_ticker_24h(sym)
+    except Exception:
+        pass
+    return {"lowPrice": 0, "highPrice": 0, "priceChangePercent": 0, "lastPrice": 0}
 
 
 # Commission (tradeFee) cache: account_id -> (rates_dict, ts). TTL 30 min.

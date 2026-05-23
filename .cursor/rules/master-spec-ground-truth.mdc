@@ -1,0 +1,27 @@
+---
+description: TRADE_TRAILING_MASTER_SPEC.md tek kaynak; tüm önemli kararlar ve değişiklikler oraya işlenir
+alwaysApply: true
+---
+
+# Master Spec — Tek Kaynak (Kilitli Kural)
+
+Bu projede **TRADE_TRAILING_MASTER_SPEC.md** tüm sohbetlerde **yer değiştirilemez tek referans**tır.
+
+## Zorunluluklar
+
+1. **Karar ve davranış:** Mimari, limitler, sabitler, API sözleşmeleri ve “nasıl çalışır” konularında spec’te yazılanlar **geçerlidir**. Kod veya başka doküman spec ile çelişiyorsa, spec’e göre düzelt.
+
+2. **Değişiklikleri spec’e yansıt:**  
+   Önemli değişiklik yapıldığında (yeni endpoint, TTL/değer güncellemesi, davranış değişikliği, perf/ hardening kararları vb.) **TRADE_TRAILING_MASTER_SPEC.md** ilgili bölümü güncellenmelidir. Böylece spec her zaman güncel kalır.
+
+3. **Tüm sohbetlerde geçerli:** Bu kural sadece tek bir sohbet için değil, **projedeki her sohbet** için geçerlidir. Yeni konuşmalarda da spec tek kaynak olarak kullanılır ve değişiklikler oraya kaydedilir.
+
+## Örnek
+
+- Kodda `DEFAULT_LEASE_TTL_SEC = 10` ama spec tablosunda 60 yazıyorsa → spec’i 10’a güncelle.
+- Yeni bir endpoint veya cache TTL eklendiyse → spec’te ilgili bölüme (endpoint listesi, constants tablosu vb.) ekle veya güncelle.
+- Perf hardening / runbook gibi kararlar alındıysa → spec’te ilgili bölüm veya “System limits / Constants” güncellenir; gerekirse `docs/` ile çapraz referans verilir.
+
+## Özet
+
+**“Master spec’e uygula ve kilitle”** = Spec’i tek doğru kaynak kabul et, yapılan değişiklikleri oraya işle ve tüm sohbetlerde bu kurala uy.

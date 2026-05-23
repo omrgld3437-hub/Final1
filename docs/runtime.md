@@ -1,29 +1,46 @@
 # Runtime — Başlatma ve portlar
 
-Windows deploy scripti (`deploy.ps1`) ve manuel çalıştırma için tek referans.
+Tek operasyon referansı. Scriptler: `ops/` (kökteki `start.command` vb. wrapper).
+
+---
+
+## Hızlı başlat
+
+```bash
+./start.command          # veya ops/start.command
+./stop.command
+./restart.command
+./deploy.sh              # sunucu: pull + restart
+./run.sh                 # dev: yalnizca Web + Worker
+```
+
+Windows: `start.bat` → `ops/start.bat` (Manager + Web + Worker + marketing)
 
 ---
 
 ## Web (FastAPI)
 
 ```bash
-python -m app.main
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-- **Port:** 8000 (uvicorn `host="0.0.0.0"`, `port=8000`)
-- **Log:** `logs/app.log` (rotating), konsol
+- **Port:** 8000 (`WEB_HOST=0.0.0.0` ile dis erisim)
+- **Log:** `logs/web.log`, `logs/app.log`
+- **PID:** `.run/web.pid`
 
 ---
 
-## Worker (Engine)
+## Worker (Bot Engine)
 
 ```bash
 python -m app.botengine.worker_main
 ```
 
-- **Port:** yok (süreç; Manager tarafından başlatılır)
-- **Log:** Manager `logs/worker.log` tail ile gösterir
-- **PID / sayaç:** `.run/worker.pid`, `.run/worker_loop_count`
+- **Port:** yok
+- **Log:** `logs/worker.log`
+- **PID:** `.run/worker.pid`
+
+Bot tick icin worker **zorunlu**. Calismiyorsa `./start.command` veya Manager uzerinden baslatin.
 
 ---
 
@@ -33,44 +50,48 @@ python -m app.botengine.worker_main
 python -m manager_server
 ```
 
-- **Port:** 7999 (127.0.0.1 only)
+- **Port:** 7999 (127.0.0.1)
 - **Log:** `logs/manager.log`
 - **PID:** `.run/manager.pid`
+- **SSH tuneli:** `ssh -L 7999:127.0.0.1:7999 user@host` → http://127.0.0.1:7999/ui/
 
 ---
 
-## Opsiyonel: HTML (omeraltinhtml)
+## Opsiyonel: marketing sitesi (:8080)
 
-- **Port:** 8080 (env: `OMERALTINHTML_PORT`, default 8080)
-- **Path:** `OMERALTINHTML_PATH` ile verilir veya proje içi `omeraltinhtml/` / `Omeraltinhtml/` (Linux’ta klasör adı büyük O ile olabilir; `start.command` ikisini de dener)
-- **Linux:** `./start` veya `./start.command` ile tüm servisler (HTML dahil) başlar. Site adresi: **http://127.0.0.1:8080** (yerelde) veya **http://SUNUCU_IP:8080** (uzaktan). Domain (omeraltin.com) için nginx reverse proxy tanımlanmalıdır.
-- **Açılmazsa:** `logs/html.log` dosyasına bakın; port 8080 başka süreçte kullanılıyor olabilir.
+- **Klasor:** `marketing/` (birincil); eski adlar `omeraltinhtml/`, `Omeraltinhtml/` desteklenir
+- **Env:** `OMERALTINHTML_PATH`, `OMERALTINHTML_PORT` (default 8080)
+- **Log:** `logs/html.log`
+- **Dis erisim:** nginx reverse proxy veya `WEB_HOST=0.0.0.0` (Web icin)
 
 ---
 
-## Port özeti
+## Port ozeti
 
-| Servis  | Port |
-|---------|------|
-| Web     | 8000 |
+| Servis | Port |
+|--------|------|
+| Web | 8000 |
 | Manager | 7999 |
-| HTML    | 8080 |
-| Engine  | —    |
+| Marketing | 8080 |
+| Worker | — |
+
+---
+
+## Veritabani
+
+Varsayilan: `~/.trader/dca.db` (`.env` → `DATABASE_URL`)
 
 ---
 
 ## .run ve logs
 
-- **.run/**  
-  `web.pid`, `worker.pid`, `manager.pid`, `web.metrics.json`, `worker_loop_count`, `audit.json`  
-  Manager ve metrikler bu dosyaları kullanır.
-
-- **logs/**  
-  `app.log`, `web.log`, `worker.log`, `manager.log`, `ram_snapshots.log` (RAM_PROBE=1)
+| Dizin | Icerik |
+|-------|--------|
+| `.run/` | `web.pid`, `worker.pid`, `manager.pid`, `html.pid`, metrik JSON |
+| `logs/` | `web.log`, `worker.log`, `manager.log`, `html.log` |
 
 ---
 
 ## .env
 
-- Uygulama proje **kökteki** `.env` dosyasını okur (`load_dotenv()`).
-- Windows’ta `shared/.env` kullanılacaksa kökteki `.env` junction/symlink ile `shared/.env`’e bağlanabilir.
+Proje kokundeki `.env` okunur (`load_dotenv()`).

@@ -39,30 +39,93 @@ TRDCA_TRB_SAFE = frozenset({
 })
 
 
+def _grid_list(items: Any, trigger_key: str, qty_key: str) -> list:
+    rows = []
+    for g in items or []:
+        if not isinstance(g, dict):
+            continue
+        rows.append({
+            "trigger_pct": g.get(trigger_key) if g.get(trigger_key) is not None else g.get("trigger_pct"),
+            "qty_pct": g.get(qty_key) if g.get(qty_key) is not None else g.get("qty_pct"),
+        })
+    return rows
+
+
 def _sanitize_trailing_dca(cfg: Dict[str, Any]) -> Dict[str, Any]:
     out: Dict[str, Any] = {}
-    if cfg.get("allocation"):
-        out["allocation"] = {
-            "base_pct": cfg["allocation"].get("base_pct"),
-            "quote_pct": cfg["allocation"].get("quote_pct"),
+    alloc = cfg.get("allocation") if isinstance(cfg.get("allocation"), dict) else {}
+    base_pct = alloc.get("base_pct") if alloc else cfg.get("base_alloc_pct")
+    quote_pct = alloc.get("quote_pct") if alloc else cfg.get("quote_alloc_pct")
+    if base_pct is not None or quote_pct is not None:
+        out["allocation"] = {"base_pct": base_pct, "quote_pct": quote_pct}
+    if base_pct is not None:
+        out["base_alloc_pct"] = base_pct
+    if quote_pct is not None:
+        out["quote_alloc_pct"] = quote_pct
+
+    up = cfg.get("up") if isinstance(cfg.get("up"), dict) else {}
+    down = cfg.get("down") if isinstance(cfg.get("down"), dict) else {}
+    sell_grids = cfg.get("sell_grids") if isinstance(cfg.get("sell_grids"), list) else None
+    buy_grids = cfg.get("buy_grids") if isinstance(cfg.get("buy_grids"), list) else None
+    if up:
+        out["up"] = {"trail_pct": up.get("trail_pct"), "grids": up.get("grids") or []}
+    elif sell_grids:
+        out["up"] = {
+            "trail_pct": cfg.get("sell_trigger_trailing_pct"),
+            "grids": _grid_list(sell_grids, "sell_grid_pct", "sell_qty_pct_of_base"),
         }
-    if cfg.get("up"):
-        u = cfg["up"]
-        out["up"] = {"trail_pct": u.get("trail_pct"), "grids": u.get("grids") or []}
-    if cfg.get("down"):
-        d = cfg["down"]
-        out["down"] = {"trail_pct": d.get("trail_pct"), "grids": d.get("grids") or []}
-    if cfg.get("profit"):
-        p = cfg["profit"]
+    if down:
+        out["down"] = {"trail_pct": down.get("trail_pct"), "grids": down.get("grids") or []}
+    elif buy_grids:
+        out["down"] = {
+            "trail_pct": cfg.get("buy_trigger_trailing_pct"),
+            "grids": _grid_list(buy_grids, "buy_grid_pct", "buy_qty_pct_of_quote"),
+        }
+    if sell_grids:
+        out["sell_grids"] = sell_grids
+        if cfg.get("sell_trigger_trailing_pct") is not None:
+            out["sell_trigger_trailing_pct"] = cfg.get("sell_trigger_trailing_pct")
+    if buy_grids:
+        out["buy_grids"] = buy_grids
+        if cfg.get("buy_trigger_trailing_pct") is not None:
+            out["buy_trigger_trailing_pct"] = cfg.get("buy_trigger_trailing_pct")
+
+    profit = cfg.get("profit") if isinstance(cfg.get("profit"), dict) else {}
+    rebuy_trigger = profit.get("rebuy_trigger_pct") if profit else cfg.get("profit_reentry_drop_pct")
+    rebuy_trail = profit.get("rebuy_trail_pct") if profit else cfg.get("profit_reentry_rise_pct")
+    resell_trigger = profit.get("resell_trigger_pct") if profit else cfg.get("profit_exit_rise_pct")
+    resell_trail = profit.get("resell_trail_pct") if profit else cfg.get("profit_exit_drop_pct")
+    if any(v is not None for v in (rebuy_trigger, rebuy_trail, resell_trigger, resell_trail)):
         out["profit"] = {
-            "rebuy_trigger_pct": p.get("rebuy_trigger_pct"),
-            "rebuy_trail_pct": p.get("rebuy_trail_pct"),
-            "resell_trigger_pct": p.get("resell_trigger_pct"),
-            "resell_trail_pct": p.get("resell_trail_pct"),
+            "rebuy_trigger_pct": rebuy_trigger,
+            "rebuy_trail_pct": rebuy_trail,
+            "resell_trigger_pct": resell_trigger,
+            "resell_trail_pct": resell_trail,
         }
+        if cfg.get("profit_reentry_drop_pct") is not None:
+            out["profit_reentry_drop_pct"] = cfg.get("profit_reentry_drop_pct")
+        if cfg.get("profit_reentry_rise_pct") is not None:
+            out["profit_reentry_rise_pct"] = cfg.get("profit_reentry_rise_pct")
+        if cfg.get("profit_exit_rise_pct") is not None:
+            out["profit_exit_rise_pct"] = cfg.get("profit_exit_rise_pct")
+        if cfg.get("profit_exit_drop_pct") is not None:
+            out["profit_exit_drop_pct"] = cfg.get("profit_exit_drop_pct")
+
     for k in ("symbol", "strategy_id"):
         if k in cfg and cfg[k] is not None:
             out[k] = cfg[k]
+    budget = cfg.get("initial_capital_usdt")
+    if budget is None:
+        budget = cfg.get("budget_usd")
+    if budget is None:
+        budget = cfg.get("bot_budget_quote")
+    if budget is not None:
+        try:
+            b = float(budget)
+            if b > 0:
+                out["initial_capital_usdt"] = b
+        except (TypeError, ValueError):
+            pass
     return out
 
 

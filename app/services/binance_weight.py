@@ -31,13 +31,16 @@ WEIGHT_TIME = 1
 
 
 def _key(account_id: Optional[int], api_key: Optional[str]) -> str:
-    return f"acc_{account_id or 0}_key_{(api_key or 'none')[:8]}"
+    """Tek IP limiti: public + signed çağrılar aynı pencerede toplanır."""
+    if api_key:
+        return f"acc_{account_id or 0}_key_{api_key[:8]}"
+    return "ip_global"
 
 
 async def request_weight_tokens(account_id: Optional[int], api_key: Optional[str], weight: int) -> bool:
     """
-    Request weight tokens. Returns True if allowed, False if denied (insufficient budget).
-    If denied: weight_denied_count incremented; caller should return stale/_error, do NOT hammer Binance.
+    Weight budget kontrolü (rezervasyon yapmaz — kayıt başarılı HTTP sonrası record_weight_used ile).
+    False ise çağrı yapma; stale/cache dön.
     """
     key = _key(account_id, api_key)
     async with _weight_lock:
@@ -52,7 +55,6 @@ async def request_weight_tokens(account_id: Optional[int], api_key: Optional[str
             _weight_denied_count[key] = _weight_denied_count.get(key, 0) + 1
             logger.warning("BINANCE_WEIGHT_DENIED key=%s used=%s requested=%s limit=%s", key, used, weight, BINANCE_WEIGHT_LIMIT_PER_MIN)
             return False
-        q.append((now, weight))
         return True
 
 
@@ -93,9 +95,15 @@ def get_weight_wait_ms(account_id: Optional[int] = None, api_key: Optional[str] 
 
 def get_metrics() -> Dict:
     """Export for debug/metrics endpoint."""
-    total_used = sum(sum(w for ts, w in q if time.time() - ts <= WINDOW_SEC) for q in _weight_window.values())
+    now = time.time()
+    total_used = sum(
+        sum(w for ts, w in q if now - ts <= WINDOW_SEC)
+        for q in _weight_window.values()
+    )
+    global_used = get_weight_used_last_60s(None, None)
     return {
-        "weight_used_last_60s": total_used,
+        "weight_used_last_60s": global_used,
+        "weight_used_all_keys": total_used,
         "weight_denied_count": sum(_weight_denied_count.values()),
         "weight_wait_ms": sum(_weight_wait_ms.values()) / max(1, len(_weight_wait_ms)),
         "limit_per_min": BINANCE_WEIGHT_LIMIT_PER_MIN,

@@ -1,3 +1,4 @@
+// manager (assets/).
 (function () {
   const API = "";
   const keys = ["web", "engine", "manager", "html"];
@@ -351,6 +352,8 @@
         updateMetricsUI(metrics);
       }
       keys.forEach(k => setStatus(k, status[k]));
+      var hostEl = qs("#manager-controlled-host");
+      if (hostEl) hostEl.textContent = "Kontrol edilen sunucu: " + (status.host || "—");
       const [issues, audit] = await Promise.all([
         fetch(API + "/api/issues?status=OPEN").then(r => r.ok ? r.json() : []).catch(() => []),
         fetch(API + "/api/audit?limit=200").then(r => r.ok ? r.json() : []).catch(() => [])
@@ -572,6 +575,8 @@
     try {
       const s = await api("GET", "/api/status");
       keys.forEach(k => setStatus(k, s[k]));
+      var hostEl = qs("#manager-controlled-host");
+      if (hostEl) hostEl.textContent = "Kontrol edilen sunucu: " + (s.host || "—");
       if (s.html) {
         setStatus("html", s.html);
         var chip = qs("#overview-html-status");

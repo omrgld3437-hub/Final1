@@ -348,6 +348,10 @@ async def reconcile_open_orders_for_bot(adapter: Any, bot_id: int, account_id: i
                 log.info("RECONCILE_OPEN_ORDER bot_id=%s client_order_id=%s intent=%s", bot_id, coid, row[1])
         return updated
     except Exception as e:
-        log.warning("reconcile_open_orders_for_bot bot_id=%s err=%s", bot_id, e)
+        from app.services.binance_spot import BinanceIPBannedError
+        if isinstance(e, BinanceIPBannedError):
+            log.debug("reconcile_open_orders_for_bot bot_id=%s skipped (IP ban until %.0f)", bot_id, e.banned_until_ts)
+        else:
+            log.warning("reconcile_open_orders_for_bot bot_id=%s err=%s", bot_id, e)
         db.rollback()
         return 0

@@ -11,12 +11,29 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, AsyncGenerator, Callable, Optional
 
+# Re-export for callers
+__all__ = [
+    "trade_lock_symbol",
+    "try_acquire_symbol_lock",
+    "release_symbol_lock",
+    "renew_symbol_lock",
+    "lease_still_valid",
+    "symbol_lock_with_heartbeat",
+    "HEARTBEAT_RENEWAL_INTERVAL_SEC",
+]
+
 from sqlalchemy import text
 
 from app.core.constants import (
+    ACCOUNT_TRADE_LOCK_SYMBOL,
     DEFAULT_LEASE_TTL_SEC,
     LOCK_HEARTBEAT_SEC,
 )
+
+
+def trade_lock_symbol(account_id: int, trading_symbol: Optional[str] = None) -> str:
+    """Per-account order lock key. Same account_id => same lock (independent users use different accounts)."""
+    return ACCOUNT_TRADE_LOCK_SYMBOL
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session

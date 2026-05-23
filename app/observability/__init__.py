@@ -1,3 +1,6 @@
+"""
+observability Python paketi.
+"""
 # RAM root cause analysis: measurement only, no optimization.
 #
 # Aktif etmek: RAM_PROBE_ENABLED=1

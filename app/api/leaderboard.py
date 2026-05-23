@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.api.auth import require_auth
 from app.db.session import get_db
-from app.services.leaderboard_service import get_global_top, get_top_by_structure
+from app.services.leaderboard_service import get_global_top, get_top_by_structure, refresh_bot_public_metrics
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +40,10 @@ async def leaderboard_global_top(
     current: dict = Depends(require_auth),
 ) -> Dict[str, Any]:
     """Global top bots by profit %. Response: structure_id, profit_pct, params only."""
+    try:
+        refresh_bot_public_metrics(db, batch_size=200)
+    except Exception as e:
+        logger.debug("leaderboard refresh before global/top: %s", e)
     items = get_global_top(db, limit)
     return {
         "items": items,

@@ -1,3 +1,4 @@
+<!-- bot multi (ui/). -->
 <!DOCTYPE html>
 <html lang="tr">
 <head>
@@ -154,7 +155,7 @@
         .perf-chart-modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.65); z-index: 9999; display: none; align-items: center; justify-content: center; padding: 1.5rem; }
         .perf-chart-modal-overlay.is-open { display: flex; }
         .perf-chart-modal { background: var(--ds-bg-secondary, #1e2329); border-radius: 16px; max-width: 90vw; width: 640px; max-height: 90vh; overflow: hidden; border: 1px solid var(--ds-border, #2b3139); box-shadow: 0 24px 48px rgba(0,0,0,0.4); display: flex; flex-direction: column; }
-        .perf-chart-modal.symbol-chart-full { width: 95vw; max-width: 1200px; height: 90vh; max-height: 720px; }
+        .perf-chart-modal.symbol-chart-full { width: 95vw; max-width: 1200px; height: 90vh; max-height: 720px; min-height: 0; }
         .perf-chart-modal .perf-chart-modal-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.5rem; padding: 1rem 1.25rem; border-bottom: 1px solid var(--ds-border, #2b3139); }
         .perf-chart-modal .perf-chart-modal-title { font-size: 1rem; font-weight: 600; color: var(--ds-text-primary); }
         .perf-chart-modal .perf-chart-modal-close { background: none; border: none; color: var(--ds-text-secondary); font-size: 1.5rem; line-height: 1; cursor: pointer; padding: 0 0.25rem; }
@@ -164,8 +165,8 @@
         .perf-chart-range-btn:hover { color: var(--ds-text-primary); }
         .perf-chart-range-btn.active { background: var(--ds-accent, #f0b90b); color: #000; border-color: var(--ds-accent); }
         .perf-chart-modal .perf-chart-modal-body { padding: 1.25rem; flex: 1; min-height: 280px; }
-        .perf-chart-modal .perf-chart-modal-body.symbol-chart-iframe-wrap { padding: 0; flex: 1; min-height: 400px; display: flex; }
-        .perf-chart-modal .perf-chart-modal-body.symbol-chart-iframe-wrap iframe { flex: 1; width: 100%; height: 100%; min-height: 500px; border: none; border-radius: 0 0 16px 16px; }
+        .perf-chart-modal .perf-chart-modal-body.symbol-chart-iframe-wrap { padding: 0; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+        .perf-chart-modal .perf-chart-modal-body.symbol-chart-iframe-wrap iframe { flex: 1 1 auto; width: 100%; height: 100%; min-height: 400px; border: none; border-radius: 0 0 16px 16px; display: block; }
         .perf-chart-modal .perf-chart-svg-wrap { height: 320px; }
         .perf-chart-modal.perf-chart-modal-large { width: 92vw; max-width: 1000px; height: 85vh; max-height: 720px; }
         .perf-chart-modal.perf-chart-modal-large .perf-chart-modal-body-chart { flex: 1; min-height: 400px; display: flex; flex-direction: column; position: relative; }
