@@ -223,7 +223,7 @@ function getRequestKey(endpoint, method, body) {
  * Structured error object matching backend standard
  */
 class APIError extends Error {
-    constructor({ status, error_code, error_id, request_id, message, url, method, retry_after, ban_until }) {
+    constructor({ status, error_code, error_id, request_id, message, url, method, retry_after, ban_until, data, binance_code }) {
         super(message || `HTTP ${status}`);
         this.name = 'APIError';
         this.type = 'API_ERROR';
@@ -235,6 +235,8 @@ class APIError extends Error {
         this.method = method;
         this.retry_after = retry_after;
         this.ban_until = ban_until;
+        this.data = data || null;
+        this.binance_code = binance_code != null ? binance_code : null;
     }
 }
 
@@ -405,8 +407,12 @@ async function apiClient(endpoint, options = {}) {
             }
             
             var errObj = (data?.error && typeof data.error === 'object') ? data.error : (data?.detail && typeof data.detail === 'object' ? data.detail : null);
-            var errMsg = (errObj && errObj.message) || data?.message || (typeof data?.detail === 'string' ? data.detail : null) || (typeof data === 'string' ? data : 'HTTP ' + response.status);
-            var errCode = (errObj && errObj.error_code) || data?.error_code || 'HTTP_' + response.status;
+            var errMsg = (errObj && errObj.message)
+                || (errObj && typeof errObj.detail === 'string' ? errObj.detail : null)
+                || data?.message
+                || (typeof data?.detail === 'string' ? data.detail : null)
+                || (typeof data === 'string' ? data : 'HTTP ' + response.status);
+            var errCode = (errObj && (errObj.error_code || errObj.error)) || data?.error_code || 'HTTP_' + response.status;
             var errorData = {
                 status: response.status,
                 error_code: errCode,
@@ -414,7 +420,9 @@ async function apiClient(endpoint, options = {}) {
                 request_id: requestId || (errObj && errObj.request_id) || (data?.detail && data.detail.request_id) || null,
                 message: errMsg,
                 url: url,
-                method: method
+                method: method,
+                data: data || null,
+                binance_code: (errObj && errObj.code != null) ? errObj.code : null,
             };
 
             // Include data_status if present

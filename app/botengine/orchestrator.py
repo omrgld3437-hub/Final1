@@ -63,7 +63,7 @@ from app.botengine.models import (
     build_trdca_pro_state_skeleton,
     MultiAssetRebalanceConfig,
 )
-from app.botengine.state_store import append_event, ensure_state_row, get_events_diagnostic_summary, load_state, save_state
+from app.botengine.state_store import append_event, ensure_state_row, get_events_diagnostic_summary, load_state, save_state, flush_queued_events
 from app.botengine.strategies.registry import get_strategy_safe
 from app.botengine.strategies.trdca_pro import strategy_tick as trdca_strategy_tick
 from app.botengine.virtual_wallet import ensure_virtual_wallet, get_virtual_wallet, sync_virtual_wallet_from_state
@@ -449,6 +449,8 @@ async def _bot_loop(bot_id: int) -> None:
                                         })
                                     state["_pending_fills"] = pending_fills
                                     for r in run_result:
+                                        if r.get("event_logged"):
+                                            continue
                                         append_event(db, bot_id, account_id, "ORDER_FILLED", f"{r.get('side')} {r.get('fill_qty')} @ {r.get('fill_price')}", r)
                                     # Paper mode: güncel sanal bakiyeyi state'e yaz (bots_detail gösterebilsin)
                                     if paper_mode:
@@ -495,8 +497,7 @@ async def _bot_loop(bot_id: int) -> None:
                             bot_id, loop_instance_id, tick_count, symbol, price, next_wake,
                         )
                         now_ts = time.time()
-                        if db is not None and (now_ts - _last_stale_event_ts.get(bot_id, 0)) >= _STALE_EVENT_THROTTLE_SEC:
-                            append_event(db, bot_id, account_id, "SKIP_REASON", "PRICE_STALE_OR_MISSING", {"reason": "tick", "skip_reason": "PRICE_STALE_OR_MISSING", "symbol": symbol})
+                        if (now_ts - _last_stale_event_ts.get(bot_id, 0)) >= _STALE_EVENT_THROTTLE_SEC:
                             _last_stale_event_ts[bot_id] = now_ts
                         await asyncio.sleep(max(0.5, next_wake))
                         continue
@@ -526,6 +527,7 @@ async def _bot_loop(bot_id: int) -> None:
                     strategy = get_strategy_safe(raw)
                     t0 = time.perf_counter()
                     actions, next_wake = strategy.tick(state, cfg, price, base_balance, quote_balance)
+                    flush_queued_events(db, bot_id, account_id, state)
                     elapsed_ms = (time.perf_counter() - t0) * 1000
 
                     logger.info(
@@ -589,6 +591,8 @@ async def _bot_loop(bot_id: int) -> None:
                                 except asyncio.CancelledError:
                                     pass
                             for r in run_result:
+                                if r.get("event_logged"):
+                                    continue
                                 append_event(
                                     db, bot_id, account_id, "ORDER_FILLED",
                                     f"{r['side']} {r['fill_qty']} @ {r['fill_price']}",

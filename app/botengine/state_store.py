@@ -140,9 +140,39 @@ def save_state(db: Session, bot_id: int, account_id: int, state: Dict[str, Any])
 
 # Event types we log to DB (skip noisy routine events)
 _LOGGED_EVENT_TYPES = frozenset({
-    "ERROR", "SKIP_REASON", "ORDER_FILLED", "SLIPPAGE_WARN", "LOCK_BUSY",
-    "INFO", "BOT_ACTION", "CYCLE_END",  # CYCLE_END = tur bitiminde kesinleşen kar (PNL kartı için)
+    "ERROR", "SKIP_REASON", "ORDER_FILLED", "ORDER_ATTEMPT", "SLIPPAGE_WARN", "LOCK_BUSY",
+    "INFO", "BOT_ACTION", "CYCLE_END", "CYCLE_START", "HEALTH_WARN", "HEALTH_CRITICAL",
 })
+
+# SKIP_REASON values that are routine/expected — log file only, not bot UI event stream
+_SILENT_SKIP_REASONS = frozenset({
+    "PRICE_STALE_OR_MISSING",
+    "IDEMPOTENT_LOCK",
+})
+
+
+def queue_engine_event(
+    state: Dict[str, Any],
+    event_type: str,
+    message: str = "",
+    meta: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Queue event from strategy tick (no db); flushed by orchestrator after tick."""
+    q = state.setdefault("_pending_engine_events", [])
+    if len(q) >= 24:
+        return
+    q.append({"type": (event_type or "").strip(), "message": message or "", "meta": meta or {}})
+
+
+def flush_queued_events(
+    db: Session,
+    bot_id: int,
+    account_id: int,
+    state: Dict[str, Any],
+) -> None:
+    pending = state.pop("_pending_engine_events", None) or []
+    for ev in pending:
+        append_event(db, bot_id, account_id, ev.get("type") or "INFO", ev.get("message") or "", ev.get("meta"))
 
 
 def append_event(
@@ -158,8 +188,10 @@ def append_event(
     ty = (event_type or "").strip()
     if ty == "TICK" or ty not in _LOGGED_EVENT_TYPES:
         return
-    if ty == "SKIP_REASON" and "IDEMPOTENT_LOCK" in (message or ""):
-        return
+    if ty == "SKIP_REASON":
+        skip_code = str((meta or {}).get("skip_reason") or "").strip()
+        if skip_code in _SILENT_SKIP_REASONS or "IDEMPOTENT_LOCK" in (message or ""):
+            return
     if os.getenv("RAM_PROBE_ENABLED") == "1" and ty == "ORDER_FILLED":
         try:
             from app.observability.ram_probe import probe_event_store

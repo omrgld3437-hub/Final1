@@ -9,7 +9,7 @@ FastAPI router’ları — web süreci emir göndermez (worker-only).
 | Dosya | Alan |
 |-------|------|
 | `routes.py` | Dashboard, wallet, summary, bots/create |
-| `bots_engine.py` | `/api/bots-engine` — start/stop/detail |
+| `bots_engine.py` | `/api/bots-engine` — start/stop/detail, `/grid-points` (canlı tepe/dip) |
 | `auth.py` | Login, session, CSRF |
 | `admin.py` | Admin panel |
 | `finance.py` | Finans API |

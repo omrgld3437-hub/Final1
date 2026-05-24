@@ -1069,6 +1069,10 @@ async def create_bot_with_config(
             raise HTTPException(status_code=400, detail="symbol required in config_json")
         from app.botengine.models import config_from_ui_payload
         cfg = config_from_ui_payload(config_data)
+        from app.botengine.config_validate import validate_dca_grid_notionals
+        ok_grid, grid_err, _, _ = validate_dca_grid_notionals(cfg)
+        if not ok_grid:
+            raise HTTPException(status_code=400, detail=grid_err)
         stored = cfg.to_dict()
         stored["strategy_id"] = "dca_grid_trailing"
         config_json = json.dumps(stored, ensure_ascii=False)
@@ -2187,6 +2191,9 @@ async def api_dashboard_summary(
         total_pnl_pct_bot = (total_pnl_usd_bot / initial_usd * 100) if initial_usd > 0 else 0.0
         cycles = Ledger.get_cycle_ids(db, bot.id, account_id)
         total_cycles_completed = max(cycles) if cycles else 0
+        _state_cycle_id = int(_state.get("cycle_id") or 0)
+        if _state_cycle_id > total_cycles_completed:
+            total_cycles_completed = _state_cycle_id
         try:
             bot_config = _json.loads(bot.config_json or "{}")
         except Exception:

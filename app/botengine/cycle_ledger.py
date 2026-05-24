@@ -249,16 +249,89 @@ def cycle_ledger_trigger_price(
     min_net_profit_rate: float = 0.001,
     buy_fee_rate: float = 0.001,
     sell_fee_rate: float = 0.001,
+    profit_rise_pct: Optional[float] = None,
 ) -> Optional[float]:
     """
-    Minimum price to allow profit-exit SELL so that net PnL is positive.
-    trigger_price = breakeven_price * (1 + min_net_profit_rate).
+    Minimum price to arm profit-exit trailing SELL.
+    trigger_price = breakeven_price * (1 + max(min_net_profit_rate, profit_rise_pct/100)).
+    profit_rise_pct maps to UI "Kar satış tetik %" (profit_exit_rise_pct).
     """
     be = cycle_ledger_breakeven_price(ledger, buy_fee_rate, sell_fee_rate)
     if be is None or be <= 0:
         return None
     min_net = max(0.0, _num(min_net_profit_rate))
-    return round(be * (1.0 + min_net), 6)
+    rise = max(0.0, _num(profit_rise_pct) / 100.0) if profit_rise_pct is not None else 0.0
+    effective_rate = max(min_net, rise)
+    return round(be * (1.0 + effective_rate), 6)
+
+
+def cycle_ledger_avg_sell_price(ledger: Dict[str, Any]) -> Optional[float]:
+    """Weighted average sell price from cycle ledger (trail_sell_grid fills)."""
+    sell_qty = _num(ledger.get("sell_qty_total"))
+    sell_quote = _num(ledger.get("sell_quote_total"))
+    if sell_qty <= 0:
+        return None
+    return sell_quote / sell_qty
+
+
+def cycle_ledger_reentry_arm_price(
+    ledger: Dict[str, Any],
+    drop_pct: float,
+) -> Optional[float]:
+    """
+    Price at or below which reentry trailing BUY may arm.
+    arm_price = avg_sell * (1 - profit_reentry_drop_pct/100).
+    """
+    avg = cycle_ledger_avg_sell_price(ledger)
+    if avg is None or avg <= 0:
+        return None
+    drop = max(0.0, _num(drop_pct) / 100.0)
+    return round(avg * (1.0 - drop), 6)
+
+
+def cycle_ledger_reentry_max_buy_price(
+    ledger: Dict[str, Any],
+    buy_fee_rate: float = 0.001,
+    sell_fee_rate: float = 0.001,
+) -> Optional[float]:
+    """
+    Fee-aware ceiling for reentry BUY: do not pay above avg_sell adjusted for round-trip fees.
+    max_buy = avg_sell * (1 - sell_fee_rate) / (1 + buy_fee_rate).
+    """
+    avg = cycle_ledger_avg_sell_price(ledger)
+    if avg is None or avg <= 0:
+        return None
+    sf = max(0.0, min(1.0, _num(sell_fee_rate)))
+    bf = max(0.0, min(1.0, _num(buy_fee_rate)))
+    return round(avg * (1.0 - sf) / (1.0 + bf), 6)
+
+
+def cycle_ledger_with_basis(
+    state: Dict[str, Any],
+    ledger: Dict[str, Any],
+    basis_mode: str = "grid_only",
+) -> Dict[str, Any]:
+    """
+    Profit-exit cost basis: grid-only uses cycle ledger buys; total merges initial_allocation.
+    Returns a shallow copy with recomputed avg_cost_quote_per_base (fills unchanged).
+    """
+    mode = (basis_mode or "grid_only").strip().lower()
+    if mode != "total":
+        return ledger
+    init_q = _num(state.get("initial_alloc_base_qty"))
+    init_p = _num(state.get("initial_alloc_price"))
+    if init_q <= 0 or init_p <= 0 or not state.get("initial_allocation_done"):
+        return ledger
+    buy_qty = _num(ledger.get("buy_qty_total")) + init_q
+    buy_quote = _num(ledger.get("buy_quote_total")) + init_q * init_p
+    buy_fee = _num(ledger.get("buy_fee_total_quote"))
+    if buy_qty <= 0:
+        return ledger
+    out = dict(ledger)
+    out["buy_qty_total"] = buy_qty
+    out["buy_quote_total"] = buy_quote
+    out["avg_cost_quote_per_base"] = (buy_quote + buy_fee) / buy_qty
+    return out
 
 
 def cycle_ledger_from_state(state: Dict[str, Any], symbol: str) -> Dict[str, Any]:

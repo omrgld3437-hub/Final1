@@ -138,6 +138,8 @@ async def fetch_bots_and_account_kpis(account_id: int, db: Session) -> Dict[str,
             total_pnl_pct_bot = (total_pnl_usd_bot / initial_usd * 100) if initial_usd > 0 else 0.0
             cycles = Ledger.get_cycle_ids(db, bot.id, account_id)
             total_cycles_completed = max(cycles) if cycles else 0
+            if cycle_id_ > total_cycles_completed:
+                total_cycles_completed = cycle_id_
             try:
                 bot_config = json.loads(bot.config_json or "{}")
             except Exception:

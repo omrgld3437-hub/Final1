@@ -281,6 +281,11 @@ function translateErrorToTurkish(errorMsg) {
         return "Geçersiz API anahtarı veya imza. Lütfen API bilgilerinizi kontrol edin.";
     }
     
+    // LOT_SIZE / step size
+    if (errorLower.includes('lot_size') || errorLower.includes('filter failure: lot_size')) {
+        return "Miktar Binance lot kurallarına uymuyor. Miktarı adım boyutuna göre düşürün veya %100 yerine biraz daha az satmayı deneyin.";
+    }
+
     // Min notional
     if (errorLower.includes("min notional") || errorLower.includes("minimum işlem")) {
         return "Minimum işlem tutarı yetersiz. Daha yüksek bir miktar giriniz.";
@@ -1809,7 +1814,6 @@ function isBotsTabActive() {
 /** Hızlı bot listesi: /api/bots-engine ile hemen listeyi doldurur; summary gelene kadar "Yükleniyor" kalmaz. */
 function loadBotsListFast(accountId) {
     if (!accountId || !window.apiClient) return;
-    if (State.bots && State.bots.length && document.querySelector('#financeBotsList .mevcut-botlar-table')) return;
     window.apiClient.get('/api/bots-engine?account_id=' + accountId, { timeout: 8000 })
         .then(function(res) {
             // Summary zaten geldiyse (current_usd dahil) onu ezme; sadece henüz veri yoksa doldur
@@ -2939,13 +2943,10 @@ async function createAndStartBot(template) {
     const error = validateForm(payload);
     
     if (error) {
-        if (errorEl) {
-            errorEl.textContent = error;
-            errorEl.style.display = "block";
-        }
+        showCreateBotFormError(errorEl, error);
         return;
     }
-    
+
     const displayName = payload.symbol || "Bot";
 
     var requestedBudget = 0;
@@ -3041,10 +3042,7 @@ async function createAndStartBot(template) {
             window.errorReporter.show(error, { tab: 'create', account_id: State.accountId });
         } else {
             const msg = error.message || "Bilinmeyen hata";
-            if (errorEl) {
-                errorEl.textContent = `Bot oluşturulamadı: ${msg}`;
-                errorEl.style.display = "block";
-            }
+            showCreateBotFormError(errorEl, "Bot oluşturulamadı: " + msg);
         }
     }
 }
@@ -5423,7 +5421,69 @@ function validateForm(payload) {
     if (payload.allocation.base_pct + payload.allocation.quote_pct !== 100) {
         return "Base ve Quote toplamı 100 olmalı";
     }
+    var gridErr = validateDcaGridNotionals(payload);
+    if (gridErr) return gridErr;
     return null;
+}
+
+function showCreateBotFormError(errorEl, message) {
+    if (!errorEl) return;
+    errorEl.textContent = message || "";
+    errorEl.style.display = message ? "block" : "none";
+    if (message) {
+        try { errorEl.scrollIntoView({ behavior: "smooth", block: "nearest" }); } catch (e) {}
+    }
+}
+
+/** Tahmini grid emir tutarı (USDT) — backend config_validate ile uyumlu */
+function validateDcaGridNotionals(payload) {
+    var MIN = 10;
+    var buffer = 0.995;
+    var budget = Number(payload.budget_usd || payload.initial_capital_usdt) || 0;
+    if (budget <= 0) return null;
+    var basePct = Number(payload.allocation && payload.allocation.base_pct) || 50;
+    var quotePct = Number(payload.allocation && payload.allocation.quote_pct) || 50;
+    var baseUsd = budget * basePct / 100 * buffer;
+    var quoteUsd = budget * quotePct / 100 * buffer;
+    var bad = [];
+    var minBudgetCandidates = [];
+    var upGrids = (payload.up && payload.up.grids) || [];
+    var downGrids = (payload.down && payload.down.grids) || [];
+
+    function legMinBudget(sidePct, qtyPct) {
+        var denom = (sidePct / 100) * (qtyPct / 100) * buffer;
+        if (denom <= 0) return null;
+        return Math.ceil((MIN + 0.001) / denom * 100) / 100;
+    }
+
+    upGrids.forEach(function (g, i) {
+        var qtyPct = Number(g.qty_pct);
+        if (!Number.isFinite(qtyPct) || qtyPct <= 0) return;
+        var n = baseUsd * qtyPct / 100;
+        var legMin = legMinBudget(basePct, qtyPct);
+        if (legMin != null) minBudgetCandidates.push(legMin);
+        if (n <= MIN) bad.push({ side: "Satış", idx: i + 1, n: n, pct: qtyPct });
+    });
+    downGrids.forEach(function (g, i) {
+        var qtyPct = Number(g.qty_pct);
+        if (!Number.isFinite(qtyPct) || qtyPct <= 0) return;
+        var n = quoteUsd * qtyPct / 100;
+        var legMin = legMinBudget(quotePct, qtyPct);
+        if (legMin != null) minBudgetCandidates.push(legMin);
+        if (n <= MIN) bad.push({ side: "Alım", idx: i + 1, n: n, pct: qtyPct });
+    });
+    if (!bad.length) return null;
+    var minBudget = minBudgetCandidates.length ? Math.max.apply(null, minBudgetCandidates) : null;
+    var parts = ["Bot oluşturulamaz: en az bir grid emri 10 USDT altında kalıyor (Binance limiti)."];
+    bad.forEach(function (b) {
+        parts.push(b.side + " grid #" + b.idx + ": tahmini " + b.n.toFixed(2) + " USDT (grid başına en az " + MIN + " USDT gerekir, miktar %" + b.pct + ").");
+    });
+    if (minBudget != null && minBudget > 0) {
+        parts.push("Bu parametrelerle bot için minimum bütçe: " + minBudget.toFixed(2) + " USDT (girdiğiniz: " + budget.toFixed(2) + " USDT).");
+    } else {
+        parts.push("Bütçeyi artırın, grid sayısını azaltın veya grid miktar yüzdelerini yükseltin.");
+    }
+    return parts.join(" ");
 }
 
 async function createBot() {
@@ -5435,10 +5495,7 @@ async function createBot() {
     const error = validateForm(payload);
     
     if (error) {
-        if (errorEl) {
-            errorEl.textContent = error;
-            errorEl.style.display = "block";
-        }
+        showCreateBotFormError(errorEl, error);
         return;
     }
 
@@ -6903,6 +6960,8 @@ let spotTradeState = {
     baseAsset: null,
     limitPriceEdited: false,  // Flag to track if user has manually edited limit price
     stepSize: 0.00000001,     // Quantity precision (default: 8 decimals)
+    stepSizeStr: '0.00000001',
+    minQty: 0.00000001,
     tickSize: 0.01,           // Price precision (default: 2 decimals)
     minNotional: 10.0         // Minimum order value
 };
@@ -7139,7 +7198,9 @@ function handleSpotEngineData(data) {
     
     // Update filters
     if (data.filters) {
-        spotTradeState.stepSize = parseFloat(data.filters.stepSize || 0.00000001);
+        spotTradeState.stepSizeStr = String(data.filters.stepSize || '0.00000001');
+        spotTradeState.stepSize = parseFloat(spotTradeState.stepSizeStr) || 0.00000001;
+        spotTradeState.minQty = parseFloat(data.filters.minQty || data.filters.stepSize || 0.00000001);
         spotTradeState.tickSize = parseFloat(data.filters.tickSize || 0.01);
         spotTradeState.minNotional = parseFloat(data.filters.minNotional || 5);
     }
@@ -7181,6 +7242,7 @@ async function fetchBootstrapDataFallback(symbol, signal) {
         const filters = {
             tickSize: "0.01",
             stepSize: "0.00001",
+            minQty: "0.00001",
             minNotional: "5",
             baseAsset: base,
             quoteAsset: "USDT"
@@ -7197,7 +7259,7 @@ async function fetchBootstrapDataFallback(symbol, signal) {
         return {
             symbol,
             price: 0,
-            filters: { tickSize: "0.01", stepSize: "0.00001", minNotional: "5", baseAsset: symbol.replace("USDT", ""), quoteAsset: "USDT" },
+            filters: { tickSize: "0.01", stepSize: "0.00001", minQty: "0.00001", minNotional: "5", baseAsset: symbol.replace("USDT", ""), quoteAsset: "USDT" },
             balances: { baseFree: 0, quoteFree: 0, base: symbol.replace("USDT", ""), quote: "USDT" },
             ts: Date.now() / 1000
         };
@@ -7220,7 +7282,9 @@ function handleBootstrapData(data) {
     // Update filters
     if (data.filters) {
         SpotCache.setFilters(data.symbol, data.filters);
-        spotTradeState.stepSize = parseFloat(data.filters.stepSize || 0.00000001);
+        spotTradeState.stepSizeStr = String(data.filters.stepSize || '0.00000001');
+        spotTradeState.stepSize = parseFloat(spotTradeState.stepSizeStr) || 0.00000001;
+        spotTradeState.minQty = parseFloat(data.filters.minQty || data.filters.stepSize || 0.00000001);
         spotTradeState.tickSize = parseFloat(data.filters.tickSize || 0.01);
         spotTradeState.minNotional = parseFloat(data.filters.minNotional || 5);
         if (data.filters.baseAsset) spotTradeState.baseAsset = data.filters.baseAsset;
@@ -7343,15 +7407,31 @@ function setTradePercent(percent) {
         updateTradeQuantity();
     } else {
         // For SELL, use base asset
-        const amount = (available * percent) / 100;
-        const quantizedAmount = quantizeQuantity(amount);
-        const decimals = getDecimalPlaces(spotTradeState.stepSize);
+        const amount = percent >= 100 ? getMaxSellQuantity() : quantizeQuantity((available * percent) / 100);
+        const decimals = getStepDecimals(spotTradeState.stepSizeStr || spotTradeState.stepSize);
         const qtyInput = document.getElementById("bnTradeQuantity");
         if (qtyInput) {
-            qtyInput.value = quantizedAmount.toFixed(decimals);
+            qtyInput.value = amount.toFixed(decimals);
         }
         updateTradeTotal();
     }
+}
+
+function getStepDecimals(step) {
+    var s = String(step != null ? step : '');
+    if (/e/i.test(s)) {
+        var m = s.match(/e-(\d+)/i);
+        return m ? parseInt(m[1], 10) : 8;
+    }
+    if (s.indexOf('.') === -1) return 0;
+    var frac = s.split('.')[1];
+    return (frac.replace(/0+$/, '') || frac).length;
+}
+
+function getMaxSellQuantity() {
+    var avail = Number(spotTradeState.baseAvailable != null ? spotTradeState.baseAvailable : (spotTradeState.availableBalance || 0));
+    if (!avail || avail <= 0) return 0;
+    return quantizeQuantity(avail);
 }
 
 // Quantize quantity to step size (using proper rounding to avoid floating point errors)
@@ -7360,12 +7440,9 @@ function quantizeQuantity(qty) {
         return qty;
     }
     const step = spotTradeState.stepSize;
-    // Use proper rounding to avoid floating point precision issues
-    // Round down to nearest step (like Binance backend does)
     const steps = Math.floor(qty / step);
     const quantized = steps * step;
-    // Round to avoid floating point errors (e.g., 0.1 + 0.2 = 0.30000000000000004)
-    const decimals = getDecimalPlaces(step);
+    const decimals = getStepDecimals(spotTradeState.stepSizeStr || step);
     return parseFloat(quantized.toFixed(decimals));
 }
 
@@ -7436,7 +7513,7 @@ function updateTradeTotal() {
     const qty = quantizeQuantity(rawQty);
     if (qty !== rawQty && rawQty > 0) {
         // Update input with quantized value
-        const decimals = getDecimalPlaces(spotTradeState.stepSize);
+        const decimals = getStepDecimals(spotTradeState.stepSizeStr || spotTradeState.stepSize);
         qtyInput.value = qty.toFixed(decimals);
     }
     
@@ -7693,7 +7770,7 @@ function updateSpotTradeModal() {
     // Update step attribute for quantity input
     const qtyInput = document.getElementById("bnTradeQuantity");
     if (qtyInput) {
-        qtyInput.step = spotTradeState.stepSize || 0.00000001;
+        qtyInput.step = spotTradeState.stepSizeStr || spotTradeState.stepSize || 0.00000001;
     }
     
     // Update step attribute for limit price input
@@ -7736,7 +7813,7 @@ function updateSpotTradeModal() {
     if (availableBaseWrap && availableBaseEl) {
         if (spotTradeState.side === 'SELL') {
             availableBaseWrap.style.display = "";
-            availableBaseEl.textContent = fmtNum(spotTradeState.baseAvailable ?? spotTradeState.baseBalance ?? 0, getDecimalPlaces(spotTradeState.stepSize));
+            availableBaseEl.textContent = fmtNum(spotTradeState.baseAvailable ?? spotTradeState.baseBalance ?? 0, getStepDecimals(spotTradeState.stepSizeStr || spotTradeState.stepSize));
         } else {
             availableBaseWrap.style.display = "none";
         }
@@ -8139,7 +8216,7 @@ async function submitSpotTrade() {
     // Quantize quantity to step size
     if (quantity > 0) {
         quantity = quantizeQuantity(quantity);
-        const decimals = getDecimalPlaces(spotTradeState.stepSize);
+        const decimals = getStepDecimals(spotTradeState.stepSizeStr || spotTradeState.stepSize);
         // Ensure quantity is properly formatted as string to avoid floating point issues
         quantity = parseFloat(quantity.toFixed(decimals));
         qtyInput.value = quantity.toFixed(decimals);
@@ -8154,13 +8231,33 @@ async function submitSpotTrade() {
         limitPriceInput.value = price.toFixed(decimals);
     }
     
-    // Validate minimum quantity (if stepSize is available)
-    if (quantity > 0 && spotTradeState.stepSize > 0) {
-        const minQty = spotTradeState.stepSize;
-        if (quantity < minQty) {
+    // Validate minimum quantity
+    if (quantity > 0) {
+        const minQty = spotTradeState.minQty || spotTradeState.stepSize || 0;
+        if (minQty > 0 && quantity < minQty) {
             if (errorEl) {
                 errorEl.textContent = `Minimum miktar: ${minQty}`;
                 errorEl.style.display = "block";
+            }
+            if (submitBtn) submitBtn.disabled = false;
+            return;
+        }
+    }
+
+    // SELL: kullanılabilir bakiyeyi aşma (LOT_SIZE önleme)
+    if (spotTradeState.side === 'SELL' && quantity > 0) {
+        var maxSell = getMaxSellQuantity();
+        if (maxSell > 0) {
+            quantity = Math.min(quantity, maxSell);
+            quantity = quantizeQuantity(quantity);
+            var decSell = getStepDecimals(spotTradeState.stepSizeStr || spotTradeState.stepSize);
+            quantity = parseFloat(quantity.toFixed(decSell));
+            if (qtyInput) qtyInput.value = quantity.toFixed(decSell);
+        }
+        if (quantity <= 0) {
+            if (errorEl) {
+                errorEl.textContent = 'Satılabilir miktar lot adımına uymuyor veya bakiye yetersiz.';
+                errorEl.style.display = 'block';
             }
             if (submitBtn) submitBtn.disabled = false;
             return;
@@ -8355,13 +8452,12 @@ async function submitSpotTrade() {
             console.error("[SPOT_ENGINE] Order error:", error);
             let errorMsg = error.message || "Bilinmeyen hata";
             
-            // Handle error data from Spot Engine (detail/error can be string or object)
-            if (error.data) {
-                const errorData = error.data;
-                if (errorData.detail != null) {
-                    errorMsg = typeof errorData.detail === "string" ? errorData.detail : (errorData.detail?.detail || errorData.detail?.message || JSON.stringify(errorData.detail));
-                } else if (errorData.error != null) {
-                    errorMsg = typeof errorData.error === "string" ? errorData.error : String(errorData.error);
+            if (error.data && typeof error.data === 'object') {
+                const d = error.data.detail;
+                if (d && typeof d === 'object' && typeof d.detail === 'string') {
+                    errorMsg = d.detail;
+                } else if (typeof d === 'string') {
+                    errorMsg = d;
                 }
             }
             errorMsg = String(errorMsg);
@@ -8371,12 +8467,11 @@ async function submitSpotTrade() {
                 errorMsg = "Bağlantı hatası. Lütfen internet bağlantınızı kontrol edin ve tekrar deneyin.";
             } else if (errorMsg.includes("timeout") || errorMsg.includes("zaman aşımı")) {
                 errorMsg = "İstek zaman aşımına uğradı. Lütfen tekrar deneyin.";
-            } else if (error.status === 400) {
-                errorMsg = "Geçersiz emir parametreleri. Lütfen kontrol edin.";
             } else if (error.status === 502) {
                 errorMsg = "Binance API hatası. Lütfen tekrar deneyin.";
+            } else if (errorMsg.startsWith("HTTP ") && error.status === 400) {
+                errorMsg = "Geçersiz emir parametreleri. Lütfen kontrol edin.";
             } else {
-                // Translate common error messages to Turkish
                 errorMsg = translateErrorToTurkish(errorMsg);
             }
             
@@ -10341,6 +10436,7 @@ async function initDashboard() {
         window.intervalRegistry.start('dashboard_snapshot', dashboardDataRefresh, SNAPSHOT_POLL_MS, 'dashboard');
         if (window.FLASH_HOME_ENABLED && window.homeFlash && typeof window.homeFlash.init === 'function') {
             window.homeFlash.init();
+            fetchSnapshot();
         } else {
             fetchSnapshot();
         }
@@ -11734,14 +11830,15 @@ async function loadFinanceSummary() {
             data.account.bots_balance_usd = State.summary.account.bots_balance_usd;
             data.bots_balance_usd = State.summary.account.bots_balance_usd;
         }
-        if ((!data.bots || data.bots.length === 0) && State.bots && State.bots.length > 0) {
-            data.bots = State.bots;
-        }
         // Update KPI cards
         updateFinanceKPIs(data);
         
-        // Mevcut Botlar: dashboard summary botları varsa onları kullan (total_pnl_pct ile); yoksa finance bot_summary
-        if (State.bots && State.bots.length > 0) {
+        // Mevcut Botlar: snapshot/API bot listesi öncelikli (session cache hayalet satır üretmesin)
+        if (State.summary && Array.isArray(State.summary.bots)) {
+            renderFinanceBots(State.summary.bots);
+        } else if (data.bots && Array.isArray(data.bots) && data.bots.length) {
+            renderFinanceBots(data.bots);
+        } else if (State.bots && State.bots.length) {
             renderFinanceBots(State.bots);
         } else {
             renderFinanceBots(data.bot_summary || []);
@@ -11944,17 +12041,25 @@ function restoreFinanceBotsFromSessionCache(accountId) {
         var raw = sessionStorage.getItem(financeBotsSessionCacheKey(accountId));
         if (!raw) return false;
         var data = JSON.parse(raw);
-        if (!data || !Array.isArray(data.bots) || !data.bots.length) return false;
+        if (!data || !data.metrics || typeof data.metrics !== 'object') return false;
         if (data.ts && Date.now() - data.ts > 86400000) return false;
-        _financeBotsMetricsCache = (data.metrics && typeof data.metrics === 'object') ? data.metrics : {};
-        State.bots = hydrateBotsWithMetricsCache(data.bots);
-        _financeBotsStructureSignature = null;
-        renderFinanceBots(State.bots);
+        // Yalnızca metrik cache (flicker önleme); bot listesi API'den gelene kadar gösterilmez — silinen bot hayalet satır olmasın
+        _financeBotsMetricsCache = data.metrics;
         return true;
     } catch (e) {
         return false;
     }
 }
+
+function clearFinanceBotsSessionCache(accountId) {
+    if (!accountId) return;
+    try {
+        sessionStorage.removeItem(financeBotsSessionCacheKey(accountId));
+    } catch (e) {}
+    _financeBotsMetricsCache = {};
+    _financeBotsStructureSignature = null;
+}
+window.clearFinanceBotsSessionCache = clearFinanceBotsSessionCache;
 
 function resetFinanceBotsLiveCache(bots) {
     var sig = (bots || []).map(function (b) { return String(b.bot_id || b.id || ''); }).join(',');
@@ -12109,10 +12214,10 @@ function ensureFinanceBotsLiveEquity() {
 }
 
 function resolveBotCycles(bot) {
+    var cid = bot.cycle_id;
+    if (cid != null && Number.isFinite(Number(cid)) && Number(cid) > 0) return Number(cid);
     var tc = bot.total_cycles_completed;
     if (tc != null && Number.isFinite(tc) && tc > 0) return tc;
-    var cid = bot.cycle_id;
-    if (cid != null && Number.isFinite(Number(cid))) return Number(cid);
     return 0;
 }
 

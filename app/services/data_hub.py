@@ -365,8 +365,11 @@ class DataHub:
                 continue
             out: Dict[str, Any] = {
                 "step_size": 0.00001,
+                "step_size_str": "0.00001",
                 "min_qty": 0.00001,
+                "min_qty_str": "0.00001",
                 "tick_size": 0.01,
+                "tick_size_str": "0.01",
                 "min_notional": 5.0,
                 "baseAsset": s.get("baseAsset"),
                 "quoteAsset": s.get("quoteAsset"),
@@ -374,10 +377,16 @@ class DataHub:
             for f in s.get("filters") or []:
                 t = f.get("filterType")
                 if t == "LOT_SIZE":
-                    out["step_size"] = float(f.get("stepSize") or 0.00001)
-                    out["min_qty"] = float(f.get("minQty") or 0.00001)
+                    step_raw = str(f.get("stepSize") or "0.00001")
+                    min_raw = str(f.get("minQty") or step_raw)
+                    out["step_size_str"] = step_raw
+                    out["min_qty_str"] = min_raw
+                    out["step_size"] = float(step_raw)
+                    out["min_qty"] = float(min_raw)
                 elif t == "PRICE_FILTER":
-                    out["tick_size"] = float(f.get("tickSize") or 0.01)
+                    tick_raw = str(f.get("tickSize") or "0.01")
+                    out["tick_size_str"] = tick_raw
+                    out["tick_size"] = float(tick_raw)
                 elif t in ("MIN_NOTIONAL", "NOTIONAL"):
                     out["min_notional"] = float(f.get("minNotional") or f.get("notional") or 5)
             return out

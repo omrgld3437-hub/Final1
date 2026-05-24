@@ -137,7 +137,8 @@ def compute_grid_profit_view(
             trigger_price = round(ref * (1 + pct / 100.0), 4) if ref_available else None
         anchor: Optional[float] = None
         execution_price: Optional[float] = None
-        if fired or (mode == "TRAIL_SELL_GRID" and trail_sell_idx == i):
+        triggered_trailing = (not fired) and (th_num is not None)
+        if fired or triggered_trailing:
             if fired:
                 # Tamamlanan grid: sadece state'teki saklı değerler, canlı price/trail_anchor kullanılmaz
                 if i < len(sell_fill_price) and sell_fill_price[i] is not None:
@@ -150,7 +151,8 @@ def compute_grid_profit_view(
                     anchor = th_num
                     execution_price = anchor * (1 - sell_trail / 100.0)
             else:
-                anchor = trail_anchor if trail_anchor > 0 else (th_num or _f(price))
+                peak_val = _f(sell_peak[i]) if i < len(sell_peak) and sell_peak[i] is not None else th_num
+                anchor = peak_val if peak_val > 0 else _f(price)
                 anchor = max(anchor, _f(price))
                 execution_price = anchor * (1 - sell_trail / 100.0)
         grid_points.append({
@@ -179,7 +181,8 @@ def compute_grid_profit_view(
             trigger_price = round(ref * (1 - pct / 100.0), 4) if ref_available else None
         anchor = None
         execution_price = None
-        if fired or (mode == "TRAIL_BUY_GRID" and trail_buy_idx == j):
+        triggered_trailing = (not fired) and (th_num is not None)
+        if fired or triggered_trailing:
             if fired:
                 # Tamamlanan grid: sadece state'teki saklı değerler, canlı price/trail_anchor kullanılmaz
                 if j < len(buy_fill_price) and buy_fill_price[j] is not None:
@@ -192,7 +195,8 @@ def compute_grid_profit_view(
                     anchor = th_num
                     execution_price = anchor * (1 + buy_trail / 100.0)
             else:
-                anchor = trail_anchor if trail_anchor > 0 else (th_num or _f(price))
+                trough_val = _f(buy_trough[j]) if j < len(buy_trough) and buy_trough[j] is not None else th_num
+                anchor = trough_val if trough_val > 0 else _f(price)
                 anchor = min(anchor, _f(price))
                 execution_price = anchor * (1 + buy_trail / 100.0)
         grid_points.append({

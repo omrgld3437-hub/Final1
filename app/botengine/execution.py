@@ -74,6 +74,29 @@ def _should_log_exec_401(bot_id: int) -> bool:
     _exec_401_log_throttle[key] = now
     return True
 
+
+def _append_skip(
+    db: Optional[SQLASession],
+    bot_id: int,
+    account_id: int,
+    skip_reason: str,
+    message: str,
+    meta: Optional[Dict[str, Any]] = None,
+) -> None:
+    if db is None:
+        return
+    payload = dict(meta or {})
+    payload["skip_reason"] = skip_reason
+    append_event(db, bot_id, account_id, "SKIP_REASON", message, payload)
+
+
+def _cycle_meta(state: Dict[str, Any], symbol: Optional[str] = None, **extra: Any) -> Dict[str, Any]:
+    meta = {"cycle_id": int(state.get("cycle_id") or 1)}
+    if symbol:
+        meta["symbol"] = symbol
+    meta.update(extra)
+    return meta
+
 # Transaction event hooks for debugging (only register once)
 _events_registered = False
 if not _events_registered:
@@ -370,7 +393,7 @@ async def run_actions(
                                                 pass
                                             append_event(db, bot_id, account_id, "ORDER_FILLED", f"repaired=true orderId={order_id_ex} trades_match={trades_match_count}", {"repaired": True, "orderId": order_id_ex, "trades_match_count": trades_match_count})
                                     logger.info("INITIAL_ALLOC_VERIFY result=OK orderId=%s trades_match_count=%s", order_id_ex, trades_match_count)
-                                    results.append({"order_id": order_id_ex, "client_order_id": client_order_id, "side": side, "fill_qty": exec_qty, "fill_price": fill_price, "fee": fee, "reason": reason})
+                                    results.append({"order_id": order_id_ex, "client_order_id": client_order_id, "side": side, "fill_qty": exec_qty, "fill_price": fill_price, "fee": fee, "reason": reason, "event_logged": True})
                                     continue
                             if existing_order and status in ("NEW", "PARTIALLY_FILLED"):
                                 logger.info("BOT_EXECUTION_SKIP bot_id=%s reason=%s skip_reason=ORDER_ALREADY_SENT intent_id=%s status=%s", bot_id, reason, intent_id, status)
@@ -383,9 +406,20 @@ async def run_actions(
                 notional = (quote_qty if side == "BUY" else qty * price) if price else 0
                 min_notional = getattr(config, "min_notional_guard", 10.0)
                 if not guard_min_notional(notional, min_notional):
-                    logger.warning("BOT_EXECUTION_SKIP bot_id=%s reason=%s skip_reason=MIN_NOTIONAL notional=%.2f min=%.2f", bot_id, reason, notional, min_notional)
-                    if db is not None:
-                        append_event(db, bot_id, account_id, "SKIP_REASON", f"MIN_NOTIONAL notional={notional:.2f} min={min_notional:.2f}", {"reason": reason, "skip_reason": "MIN_NOTIONAL", "notional": notional, "min_notional": min_notional})
+                    logger.info(
+                        "BOT_EXECUTION_SKIP bot_id=%s reason=%s skip_reason=MIN_NOTIONAL notional=%.2f min=%.2f",
+                        bot_id, reason, notional, min_notional,
+                    )
+                    _append_skip(
+                        db, bot_id, account_id, "MIN_NOTIONAL",
+                        f"MIN_NOTIONAL notional={notional:.2f} min={min_notional:.2f}",
+                        _cycle_meta(
+                            state, symbol,
+                            reason=reason, side=side,
+                            notional=round(float(notional), 4), min_notional=float(min_notional),
+                            grid_index=a.get("grid_index"),
+                        ),
+                    )
                     continue
                 if reason == "initial_allocation":
                     fee_buffer_pct = float(getattr(config, "initial_fee_buffer_pct", 0.002) or 0.002)
@@ -473,8 +507,20 @@ async def run_actions(
                             append_event(db, bot_id, account_id, "INFO", f"quote_qty_capped {old_qty:.2f} -> {quote_qty:.2f} (virtual available)", {"reason": reason, "old_qty": old_qty, "quote_qty": quote_qty, "virtual_quote": _vq, "free_quote": free_quote})
                             notional_capped = quote_qty if price and price > 0 else quote_qty
                             if not guard_min_notional(notional_capped, config.min_notional_guard):
-                                logger.warning("BOT_EXECUTION_SKIP bot_id=%s reason=%s skip_reason=MIN_NOTIONAL_AFTER_CAP quote_qty=%.2f min=%.2f", bot_id, reason, quote_qty, config.min_notional_guard)
-                                append_event(db, bot_id, account_id, "SKIP_REASON", f"MIN_NOTIONAL_AFTER_CAP quote_qty={quote_qty:.2f} min={config.min_notional_guard:.2f}", {"reason": reason, "skip_reason": "MIN_NOTIONAL_AFTER_CAP", "quote_qty": quote_qty})
+                                logger.info(
+                                    "BOT_EXECUTION_SKIP bot_id=%s reason=%s skip_reason=MIN_NOTIONAL_AFTER_CAP quote_qty=%.2f min=%.2f",
+                                    bot_id, reason, quote_qty, config.min_notional_guard,
+                                )
+                                _append_skip(
+                                    db, bot_id, account_id, "MIN_NOTIONAL_AFTER_CAP",
+                                    f"MIN_NOTIONAL_AFTER_CAP quote_qty={quote_qty:.2f} min={config.min_notional_guard:.2f}",
+                                    {
+                                        "reason": reason, "side": side, "symbol": symbol,
+                                        "quote_qty": round(float(quote_qty), 4),
+                                        "min_notional": float(config.min_notional_guard),
+                                        "grid_index": a.get("grid_index"),
+                                    },
+                                )
                                 continue
                     if not skip_virtual_check:
                         ok, budget_reason, required, available = check_virtual_budget(
@@ -488,11 +534,13 @@ async def run_actions(
                         ok = True
                     if not ok:
                         payload = {
+                            "skip_reason": "VIRTUAL_BUDGET_INSUFFICIENT",
                             "error_code": "VIRTUAL_BUDGET_INSUFFICIENT",
                             "required": required,
                             "available": available,
                             "side": side,
                             "symbol": symbol,
+                            "reason": reason,
                             "action_key": key,
                             "bot_id": bot_id,
                             "account_id": account_id,
@@ -531,7 +579,15 @@ async def run_actions(
                                 bot_id, quote_qty, free_usdt, fee_buffer_usdt,
                             )
                             if db is not None:
-                                append_event(db, bot_id, account_id, "SKIP_REASON", f"BINANCE_FREE_QUOTE_INSUFFICIENT quote_qty={quote_qty:.2f} free_usdt={free_usdt:.2f}", {"error_code": "BINANCE_FREE_QUOTE_INSUFFICIENT", "quote_qty": quote_qty, "free_usdt": free_usdt})
+                                append_event(db, bot_id, account_id, "SKIP_REASON", f"BINANCE_FREE_QUOTE_INSUFFICIENT quote_qty={quote_qty:.2f} free_usdt={free_usdt:.2f}", {
+                                    "skip_reason": "BINANCE_FREE_QUOTE_INSUFFICIENT",
+                                    "error_code": "BINANCE_FREE_QUOTE_INSUFFICIENT",
+                                    "quote_qty": quote_qty,
+                                    "free_usdt": free_usdt,
+                                    "reason": reason,
+                                    "side": side,
+                                    "grid_index": a.get("grid_index"),
+                                })
                             continue
                     except Exception as bal_err:
                         if _is_401_unauthorized(bal_err):
@@ -557,7 +613,16 @@ async def run_actions(
                                 append_event(
                                     db, bot_id, account_id, "SKIP_REASON",
                                     f"BINANCE_FREE_BASE_INSUFFICIENT qty={qty:.6f} free_base={free_base:.6f} (virtual balance > real)",
-                                    {"error_code": "BINANCE_FREE_BASE_INSUFFICIENT", "qty": qty, "free_base": free_base, "base_asset": base_asset, "reason": reason, "action_key": key},
+                                    {
+                                        "skip_reason": "BINANCE_FREE_BASE_INSUFFICIENT",
+                                        "error_code": "BINANCE_FREE_BASE_INSUFFICIENT",
+                                        "qty": qty,
+                                        "free_base": free_base,
+                                        "base_asset": base_asset,
+                                        "reason": reason,
+                                        "side": side,
+                                        "grid_index": a.get("grid_index"),
+                                    },
                                 )
                             continue
                     except Exception as bal_err:
@@ -592,6 +657,11 @@ async def run_actions(
                         if not allowed:
                             if db is not None and intent_id:
                                 update_intent_unknown(db, intent_id, error_code="WEIGHT_DENIED", error_id=str(uuid.uuid4()))
+                            _append_skip(
+                                db, bot_id, account_id, "WEIGHT_DENIED",
+                                "WEIGHT_DENIED rate limit",
+                                {"reason": reason, "symbol": symbol, "side": side, "grid_index": a.get("grid_index")},
+                            )
                             logger.warning("run_actions WEIGHT_DENIED bot_id=%s account_id=%s", bot_id, account_id)
                             continue
                     try:
@@ -600,6 +670,21 @@ async def run_actions(
                             "EXEC_ORDER_ATTEMPT bot_id=%s run_id=%s intent_id=%s coid=%s symbol=%s side=%s quote_qty=%s qty=%s paper=%s",
                             bot_id, run_id, intent_id or "", (client_order_id or "")[:36], symbol, side, quote_qty, qty, adapter.paper_mode,
                         )
+                        if db is not None:
+                            append_event(
+                                db, bot_id, account_id, "ORDER_ATTEMPT",
+                                f"{side} attempt {symbol}",
+                                _cycle_meta(
+                                    state, symbol,
+                                    side=side,
+                                    quote_qty=round(float(quote_qty), 4) if quote_qty else None,
+                                    qty=round(float(qty), 8) if qty else None,
+                                    reason=reason,
+                                    grid_index=a.get("grid_index"),
+                                    client_order_id=client_order_id,
+                                    paper=adapter.paper_mode,
+                                ),
+                            )
                         if side == "BUY":
                             res = await asyncio.wait_for(adapter.place_market_buy(symbol, quote_qty, client_order_id), timeout=3.0)
                         else:
@@ -607,6 +692,11 @@ async def run_actions(
                     except asyncio.TimeoutError:
                         if db is not None and intent_id:
                             update_intent_unknown(db, intent_id, error_code="TIMEOUT", error_id=str(uuid.uuid4()))
+                        _append_skip(
+                            db, bot_id, account_id, "ORDER_TIMEOUT",
+                            f"ORDER_TIMEOUT symbol={symbol} side={side}",
+                            {"reason": reason, "symbol": symbol, "side": side, "client_order_id": client_order_id, "grid_index": a.get("grid_index")},
+                        )
                         logger.warning("run_actions TIMEOUT bot_id=%s intent_id=%s (reconcile will resolve)", bot_id, intent_id)
                         continue
                     if db is not None and intent_id:
@@ -783,8 +873,6 @@ async def run_actions(
                         state["grid_reference_quote"] = state["quote_balance"]
                         state["cycle_start_equity"] = round(state["quote_balance"] + state["base_balance"] * fill_price, 2)
                         _initial_alloc_skip_count.pop((bot_id, key), None)
-                        if db is not None:
-                            save_state(db, bot_id, account_id, state)
                 if reason == "trail_sell_grid":
                     idx = a.get("grid_index", 0)
                     state.setdefault("sell_grid_fired", [])
@@ -819,17 +907,30 @@ async def run_actions(
                     while len(state["buy_grid_fill_price"]) <= idx:
                         state["buy_grid_fill_price"].append(None)
                     state["buy_grid_fill_price"][idx] = fill_price
-                results.append({
-                    "order_id": res.get("orderId"),
+                cycle_id_for_trade = int(state.get("cycle_id") or 1)
+                fill_evt = {
+                    "order_id": str(res.get("orderId")) if res.get("orderId") is not None else None,
                     "client_order_id": client_order_id,
                     "side": side,
                     "fill_qty": exec_qty,
                     "fill_price": fill_price,
                     "fee": fee,
                     "reason": reason,
-                })
+                    "grid_index": a.get("grid_index"),
+                    "symbol": symbol,
+                    "cycle_id": cycle_id_for_trade,
+                }
+                if db is not None:
+                    append_event(
+                        db, bot_id, account_id, "ORDER_FILLED",
+                        f"{side} {exec_qty} @ {fill_price}",
+                        fill_evt,
+                    )
+                fill_evt["event_logged"] = True
+                results.append(fill_evt)
+                if reason == "initial_allocation" and exec_qty > 0 and db is not None:
+                    save_state(db, bot_id, account_id, state)
                 # Cycle reset MUST run before any load_state: in-memory state has _cycle_complete and updated balances.
-                cycle_id_for_trade = int(state.get("cycle_id") or 1)
                 ref_price_for_ledger = state.get("reference_price")  # referansı reset'ten önce al (gerçekleşme % doğru kalsın)
                 if state.get("_cycle_complete") or reason in ("trail_reentry_buy", "trail_profit_sell"):
                     pnl_mode = getattr(config, "pnl_mode", "cycle_only_fee_aware_v1") or "cycle_only_fee_aware_v1"
@@ -894,6 +995,7 @@ async def run_actions(
                     if pnl_mode == "cycle_only_fee_aware_v1" and ledger:
                         meta = {
                             "cycle_id": cycle_id_for_trade,
+                            "symbol": symbol,
                             "profit_usdt": round(float(ledger.get("cash_pnl_usdt") or 0), 2),
                             "pnl_usdt_net": round(float(ledger.get("realized_pnl_quote") or 0), 4),
                             "realized_pnl_cycle_net": round(float(ledger.get("realized_pnl_quote") or 0), 4),
@@ -916,6 +1018,7 @@ async def run_actions(
                     else:
                         meta = {
                             "cycle_id": cycle_id_for_trade,
+                            "symbol": symbol,
                             "profit_usdt": round(float(pnl), 2),
                             "pnl_usdt_net": pnl,
                             "pnl_mode": pnl_mode,
@@ -954,6 +1057,24 @@ async def run_actions(
                     n = len(config.sell_grids)
                     m = len(config.buy_grids)
                     cycle_reset_after_fill(state, fill_price, n, m, symbol=symbol)
+                    if db is not None:
+                        append_event(db, bot_id, account_id, "CYCLE_END", "Tur bitti", meta)
+                        logger.info(
+                            "BOT_CYCLE_END bot_id=%s cycle_id=%s pnl_usdt_net=%.4f cycle_type=%s base_delta=%s matched_qty=%s fees_usdt=%.4f pnl_mode=%s",
+                            bot_id, cycle_id_for_trade, pnl, cycle_type, base_delta, matched_qty, fees, pnl_mode,
+                        )
+                        new_cid = int(state.get("cycle_id") or 1)
+                        append_event(db, bot_id, account_id, "CYCLE_START", "Tur başladı", {
+                            "cycle_id": new_cid,
+                            "reference_price": round(float(fill_price), 10),
+                            "base_qty": round(float(state.get("base_balance") or 0), 10),
+                            "base_balance": round(float(state.get("base_balance") or 0), 10),
+                            "quote_balance": round(float(state.get("quote_balance") or 0), 2),
+                            "equity_usdt": round(float(state.get("cycle_start_equity") or 0), 2),
+                            "symbol": symbol,
+                            "carry_over": True,
+                            "prev_close_reason": close_reason,
+                        })
                     # Reinvest policy: target budgets from equity (order sizing reference only; no rebalance order)
                     quote_bal = _num(state.get("quote_balance"))
                     base_bal = _num(state.get("base_balance"))
@@ -972,12 +1093,6 @@ async def run_actions(
                         "BOT_TARGET_BUDGETS_UPDATED bot_id=%s equity_usdt=%.2f target_quote=%.2f target_base=%.2f base_bal=%.6f quote_bal=%.2f price=%.4f",
                         bot_id, equity_usdt, target_quote_usdt, target_base_usdt, base_bal, quote_bal, fill_price,
                     )
-                    if db is not None:
-                        append_event(db, bot_id, account_id, "CYCLE_END", "Tur bitti", meta)
-                        logger.info(
-                            "BOT_CYCLE_END bot_id=%s cycle_id=%s pnl_usdt_net=%.4f cycle_type=%s base_delta=%s matched_qty=%s fees_usdt=%.4f pnl_mode=%s",
-                            bot_id, cycle_id_for_trade, pnl, cycle_type, base_delta, matched_qty, fees, pnl_mode,
-                        )
                 # Patch-1: persist fill to trades table (idempotent by order_id)
                 if db is not None:
                     try:

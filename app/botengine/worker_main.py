@@ -30,6 +30,9 @@ except Exception:
     pass
 logger = logging.getLogger("app.botengine.worker")
 logger.setLevel(logging.DEBUG)
+# httpx her GET'i INFO ile yazmasın (market sync 2 sn'de bir worker.log'u doldurur)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 # stdout dosyaya yönlendirildiğinde (worker.log) her satır hemen diske yazılsın; log sayfası Toplam istek sayacı güncel kalsın
 for _h in logging.root.handlers:
     if getattr(_h, "stream", None) is sys.stdout:
@@ -182,9 +185,58 @@ def mark_command_done(db, cmd_id: int, error_code: Optional[str] = None, error_i
 
 async def process_command(cmd: Dict[str, Any], db, v5_scheduler=None) -> None:
     """Process one command: assert account, then start_bot or stop_bot (or v5: register/unregister with scheduler)."""
-    from app.botengine.state_store import append_event
+    from app.botengine.state_store import append_event, load_state
     from app.botengine.orchestrator import start_bot, stop_bot
     from app.db.models import Bot
+
+    def _command_event_meta(bot_id: int) -> Dict[str, Any]:
+        state = load_state(db, bot_id) or {}
+        bot = db.query(Bot).filter(Bot.id == bot_id).first()
+        meta: Dict[str, Any] = {
+            "command_id": cmd_id,
+            "command": command,
+            "cycle_id": int(state.get("cycle_id") or 1),
+        }
+        if not bot:
+            return meta
+        symbol = (bot.symbol or state.get("symbol") or "").strip().upper()
+        base_b = float(state.get("base_balance") or 0)
+        quote_b = float(state.get("quote_balance") or 0)
+        meta["symbol"] = symbol or None
+        meta["base_balance"] = round(base_b, 10)
+        meta["quote_balance"] = round(quote_b, 2)
+        meta["initial_allocation_done"] = bool(state.get("initial_allocation_done"))
+        cse = float(state.get("cycle_start_equity") or 0)
+        if cse > 0:
+            meta["cycle_start_equity"] = round(cse, 2)
+        try:
+            import json
+
+            raw_cfg = json.loads(getattr(bot, "config_json", None) or "{}")
+            ic = float(
+                raw_cfg.get("initial_capital_usdt")
+                or raw_cfg.get("budget_usd")
+                or raw_cfg.get("bot_budget_usdt")
+                or 0
+            )
+            if ic > 0:
+                meta["initial_capital_usdt"] = round(ic, 2)
+        except Exception:
+            pass
+        try:
+            from app.services.bot_equity import compute_bot_equity_usd, get_bot_last_price
+
+            eq = compute_bot_equity_usd(db, bot, state)
+            meta["equity_usd"] = round(float(eq), 2)
+            lp = get_bot_last_price(symbol, state)
+            if lp is not None and lp > 0:
+                meta["last_price"] = round(float(lp), 4)
+        except Exception:
+            if base_b > 0 or quote_b > 0:
+                ref = float(state.get("reference_price") or 0)
+                if ref > 0:
+                    meta["equity_usd"] = round(base_b * ref + quote_b, 2)
+        return meta
 
     cmd_id = cmd["id"]
     account_id = int(cmd["account_id"])
@@ -219,7 +271,7 @@ async def process_command(cmd: Dict[str, Any], db, v5_scheduler=None) -> None:
                 mark_command_done(db, cmd_id)
                 logger.info("WORKER_COMMAND_EXECUTED command_id=%s bot_id=%s command=START (v5 registered)", cmd_id, bot_id)
                 try:
-                    append_event(db, bot_id, account_id, "INFO", f"COMMAND_EXECUTED command_id={cmd_id} START", {"command_id": cmd_id, "command": "START"})
+                    append_event(db, bot_id, account_id, "INFO", f"COMMAND_EXECUTED command_id={cmd_id} START", _command_event_meta(bot_id))
                 except Exception:
                     pass
                 # İlk alımı hemen yap: ilk tick'i komut işlerken çalıştır (kullanıcı "Oluştur" deyince anında market alım)
@@ -234,7 +286,7 @@ async def process_command(cmd: Dict[str, Any], db, v5_scheduler=None) -> None:
                 mark_command_done(db, cmd_id)
                 logger.info("WORKER_COMMAND_EXECUTED command_id=%s bot_id=%s command=START", cmd_id, bot_id)
                 try:
-                    append_event(db, bot_id, account_id, "INFO", f"COMMAND_EXECUTED command_id={cmd_id} START", {"command_id": cmd_id, "command": "START"})
+                    append_event(db, bot_id, account_id, "INFO", f"COMMAND_EXECUTED command_id={cmd_id} START", _command_event_meta(bot_id))
                 except Exception:
                     pass
                 # İlk alımı hemen yap: ilk tick'i komut işlerken çalıştır
@@ -251,7 +303,7 @@ async def process_command(cmd: Dict[str, Any], db, v5_scheduler=None) -> None:
             mark_command_done(db, cmd_id)
             logger.info("WORKER_COMMAND_EXECUTED command_id=%s bot_id=%s command=STOP", cmd_id, bot_id)
             try:
-                append_event(db, bot_id, account_id, "INFO", f"COMMAND_EXECUTED command_id={cmd_id} STOP", {"command_id": cmd_id, "command": "STOP"})
+                append_event(db, bot_id, account_id, "INFO", f"COMMAND_EXECUTED command_id={cmd_id} STOP", _command_event_meta(bot_id))
             except Exception:
                 pass
         else:
@@ -484,6 +536,15 @@ async def worker_loop():
                             _db.close()
                     except Exception as e:
                         logger.debug("worker perf_chart_sample: %s", e)
+                    try:
+                        from app.botengine.health_watch import run_all_bot_health_checks
+                        _db_h = _get_db()
+                        try:
+                            run_all_bot_health_checks(_db_h)
+                        finally:
+                            _db_h.close()
+                    except Exception as e:
+                        logger.debug("worker health_watch: %s", e)
             finally:
                 db.close()
         except Exception as e:

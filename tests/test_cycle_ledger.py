@@ -61,15 +61,176 @@ def test_breakeven_price():
     assert be < 101.0
 
 
-def test_trigger_price_above_breakeven():
-    """trigger_price = breakeven_price * (1 + min_net_profit_rate)."""
+def test_trigger_price_uses_profit_rise_pct():
+    """UI Kar satış tetik % must dominate min_net_profit_rate when higher."""
     led = build_cycle_ledger_empty(1, "BTCUSDT")
     cycle_ledger_add_fill(led, "2026-02-01T12:00:00Z", "oid1", "cid1", "BUY", 1.0, 100.0, 0.0, "USDT", "trail_buy_grid")
     be = cycle_ledger_breakeven_price(led, 0.001, 0.001)
-    trigger = cycle_ledger_trigger_price(led, min_net_profit_rate=0.001, buy_fee_rate=0.001, sell_fee_rate=0.001)
-    assert trigger is not None
-    assert trigger >= be
-    assert trigger <= be * 1.01
+    trigger_low = cycle_ledger_trigger_price(led, min_net_profit_rate=0.001, profit_rise_pct=0.0)
+    trigger_1pct = cycle_ledger_trigger_price(led, min_net_profit_rate=0.001, profit_rise_pct=1.0)
+    assert trigger_1pct is not None and trigger_low is not None
+    assert trigger_1pct > trigger_low
+    assert abs(trigger_1pct - be * 1.01) < 0.01
+
+
+def test_cycle_ledger_with_total_basis_includes_initial():
+    """basis_mode=total merges initial_allocation into profit-exit cost basis."""
+    from app.botengine.cycle_ledger import cycle_ledger_with_basis
+
+    led = build_cycle_ledger_empty(1, "ETHUSDT")
+    cycle_ledger_add_fill(led, "2026-02-01T12:00:00Z", "o1", "c1", "BUY", 0.0039, 2039.69, 0.0, "USDT", "trail_buy_grid")
+    state = {
+        "initial_allocation_done": True,
+        "initial_alloc_base_qty": 0.0048,
+        "initial_alloc_price": 2067.63,
+    }
+    merged = cycle_ledger_with_basis(state, led, "total")
+    expected_avg = (0.0039 * 2039.69 + 0.0048 * 2067.63) / (0.0039 + 0.0048)
+    assert abs(merged["avg_cost_quote_per_base"] - expected_avg) < 0.01
+    grid_only = cycle_ledger_with_basis(state, led, "grid_only")
+    assert abs(grid_only["avg_cost_quote_per_base"] - 2039.69) < 0.01
+
+
+def test_reentry_arm_and_max_buy_price():
+    """Reentry arms at avg_sell*(1-drop); max buy is fee-aware below avg sell."""
+    from app.botengine.cycle_ledger import (
+        cycle_ledger_reentry_arm_price,
+        cycle_ledger_reentry_max_buy_price,
+    )
+
+    led = build_cycle_ledger_empty(1, "ETHUSDT")
+    cycle_ledger_add_fill(led, "2026-02-01T12:00:00Z", "o1", "c1", "SELL", 0.004, 2050.0, 0.0, "USDT", "trail_sell_grid")
+    arm = cycle_ledger_reentry_arm_price(led, drop_pct=1.0)
+    max_buy = cycle_ledger_reentry_max_buy_price(led, 0.001, 0.001)
+    assert arm is not None and abs(arm - 2050.0 * 0.99) < 0.01
+    assert max_buy is not None and max_buy < 2050.0
+
+
+def test_reentry_does_not_buy_above_sell_basis():
+    """After dip, rally above avg sell must not execute trail_reentry_buy."""
+    from app.botengine.models import DcaGridTrailingConfig
+    from app.botengine.strategies.dca_grid_trailing import tick_dca_grid_trailing
+
+    cfg = DcaGridTrailingConfig({
+        "symbol": "ETHUSDT",
+        "profit_reentry_drop_pct": 1.0,
+        "profit_reentry_rise_pct": 0.3,
+        "pnl_mode": "cycle_only_fee_aware_v1",
+    })
+    state = {
+        "bot_id": 1,
+        "cycle_id": 1,
+        "mode": "IDLE",
+        "initial_allocation_done": True,
+        "reference_price": 2050.0,
+        "sell_history": [{"qty": 0.004, "price": 2050.0, "execution_price": 2050.0, "grid_index": 0}],
+        "buy_history": [],
+        "cycle_ledger_current": {
+            "cycle_id": 1,
+            "symbol": "ETHUSDT",
+            "fills": [{"side": "SELL", "qty": 0.004, "price": 2050.0, "fee": 0, "reason": "trail_sell_grid"}],
+            "buy_qty_total": 0.0,
+            "buy_quote_total": 0.0,
+            "sell_qty_total": 0.004,
+            "sell_quote_total": 0.004 * 2050.0,
+        },
+    }
+    # Arm on dip
+    actions_arm, _ = tick_dca_grid_trailing(state, cfg, 2029.0, 0.0, 8.2)
+    assert state.get("mode") == "TRAIL_REENTRY_BUY"
+    assert not actions_arm
+    # Rally above avg sell — must not buy
+    actions_buy, _ = tick_dca_grid_trailing(state, cfg, 2060.0, 0.0, 8.2)
+    assert not any(a.get("reason") == "trail_reentry_buy" for a in actions_buy)
+
+
+def test_profit_exit_does_not_sell_below_breakeven_after_trail():
+    """Reproduce bot-1 cycle: grid buy then crash must not trail-sell at a loss."""
+    from app.botengine.models import DcaGridTrailingConfig
+    from app.botengine.strategies.dca_grid_trailing import tick_dca_grid_trailing
+
+    cfg = DcaGridTrailingConfig({
+        "symbol": "ETHUSDT",
+        "initial_capital_usdt": 20.0,
+        "base_alloc_pct": 50.0,
+        "quote_alloc_pct": 50.0,
+        "sell_grids": [],
+        "buy_grids": [{"buy_grid_pct": 1.0, "buy_qty_pct_of_quote": 40.0}],
+        "profit_exit_rise_pct": 1.0,
+        "profit_exit_drop_pct": 0.3,
+        "pnl_mode": "cycle_only_fee_aware_v1",
+        "basis_mode": "grid_only",
+    })
+    state = {
+        "bot_id": 1,
+        "cycle_id": 1,
+        "mode": "IDLE",
+        "initial_allocation_done": True,
+        "initial_alloc_base_qty": 0.0048,
+        "initial_alloc_price": 2067.63,
+        "reference_price": 2039.45,
+        "grid_reference_base": 0.0048,
+        "grid_reference_quote": 10.0,
+        "buy_history": [{"qty": 0.0039, "price": 2039.69}],
+        "sell_history": [],
+        "buy_grid_fired": [True],
+        "sell_grid_fired": [],
+        "cycle_ledger_current": {
+            "cycle_id": 1,
+            "symbol": "ETHUSDT",
+            "fills": [{"side": "BUY", "qty": 0.0039, "price": 2039.69, "fee": 0, "reason": "trail_buy_grid"}],
+            "buy_qty_total": 0.0039,
+            "buy_quote_total": 0.0039 * 2039.69,
+            "buy_fee_total_quote": 0.0,
+            "sell_qty_total": 0.0,
+            "sell_quote_total": 0.0,
+            "sell_fee_total_quote": 0.0,
+            "avg_cost_quote_per_base": 2039.69,
+        },
+    }
+    # Brief spike arms trailing (~2065) then crash to 2039 — must not sell at loss
+    actions_arm, _ = tick_dca_grid_trailing(state, cfg, 2065.0, 0.0087, 5.0)
+    assert state.get("mode") == "TRAIL_PROFIT_SELL"
+    assert not actions_arm
+    actions_sell, _ = tick_dca_grid_trailing(state, cfg, 2039.45, 0.0087, 5.0)
+    assert not any(a.get("reason") == "trail_profit_sell" for a in actions_sell)
+
+
+def test_parallel_sell_grids_trigger_independently():
+    """Grid #2 must arm while grid #1 is still trailing (not fired)."""
+    from app.botengine.models import DcaGridTrailingConfig
+    from app.botengine.strategies.dca_grid_trailing import tick_dca_grid_trailing
+
+    ref = 2059.84
+    cfg = DcaGridTrailingConfig({
+        "symbol": "ETHUSDT",
+        "sell_grids": [
+            {"sell_grid_pct": 1.0, "sell_qty_pct_of_base": 40.0},
+            {"sell_grid_pct": 2.0, "sell_qty_pct_of_base": 60.0},
+        ],
+        "buy_grids": [],
+        "sell_trigger_trailing_pct": 0.3,
+    })
+    state = {
+        "bot_id": 1,
+        "cycle_id": 2,
+        "mode": "TRAIL_SELL_GRID",
+        "initial_allocation_done": True,
+        "reference_price": ref,
+        "grid_reference_base": 0.0048,
+        "sell_grid_fired": [False, False],
+        "sell_grid_trigger_price": [2059.8445, None],
+        "sell_grid_peak_price": [2121.84, None],
+        "buy_grid_fired": [],
+        "buy_grid_trigger_price": [],
+        "buy_grid_trough_price": [],
+    }
+    price = 2119.37
+    actions, _ = tick_dca_grid_trailing(state, cfg, price, 0.0048, 10.0)
+    assert state["sell_grid_trigger_price"][1] is not None, "grid 2 should trigger"
+    assert state["sell_grid_peak_price"][1] == price
+    assert not any(a.get("grid_index") == 1 for a in actions), "grid 2 should trail first, not sell immediately"
+    assert state["sell_grid_peak_price"][0] >= price
 
 
 def test_cycle_fill_reasons():

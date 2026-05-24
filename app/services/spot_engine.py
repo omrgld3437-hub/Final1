@@ -79,6 +79,10 @@ class SpotCache:
         """Cache filters"""
         self.filters[symbol] = (data, time.time())
 
+    def invalidate_filters(self, symbol: str) -> None:
+        """LOT_SIZE vb. hatalarda eski/yanlış filtre cache'ini temizle."""
+        self.filters.pop((symbol or "").upper(), None)
+
 # Global cache instance
 spot_cache = SpotCache()
 
@@ -122,6 +126,7 @@ class SpotData:
     quote_balance: float
     tick_size: str
     step_size: str
+    min_qty: str
     min_notional: str
     timestamp: float
 
@@ -155,6 +160,7 @@ class SpotEngine:
             quote_balance=0.0,
             tick_size="0.01",
             step_size="0.00001",
+            min_qty="0.00001",
             min_notional="5",
             timestamp=time.time()
         )
@@ -192,32 +198,18 @@ class SpotEngine:
                 logger.warning(f"Price fetch error for {symbol}: {e}")
                 price = 0.0
         
-        # 2. Get filters (cached, 1 hour) — market_data önce
-        filters = spot_cache.get_filters(symbol)
-        if filters is None:
-            try:
-                from app.services.market_data import get_symbol_filters
-                cached = get_symbol_filters(symbol)
-                if cached:
-                    filters = {
-                        "tickSize": str(cached.get("tick_size", "0.01")),
-                        "stepSize": str(cached.get("step_size", "0.00001")),
-                        "minNotional": str(cached.get("min_notional", "5")),
-                        "baseAsset": cached.get("baseAsset") or symbol.replace("USDT", ""),
-                        "quoteAsset": cached.get("quoteAsset") or "USDT",
-                    }
-                    spot_cache.set_filters(symbol, filters)
-            except Exception:
-                pass
-        if filters is None:
-            filters = {
-                "tickSize": "0.01",
-                "stepSize": "0.00001",
-                "minNotional": "5",
-                "baseAsset": symbol.replace("USDT", ""),
-                "quoteAsset": "USDT",
-            }
-            spot_cache.set_filters(symbol, filters)
+        # 2. Sembol filtreleri — exchangeInfo (Binance REST cache) öncelikli; varsayılan step cache'lenmez
+        sym = symbol.upper()
+        flt = await self._get_symbol_filters(sym)
+        filters = {
+            "tickSize": flt["tick_size"],
+            "stepSize": flt["step_size"],
+            "minQty": flt["min_qty"],
+            "minNotional": flt.get("min_notional", "5"),
+            "baseAsset": flt.get("base_asset") or sym.replace("USDT", ""),
+            "quoteAsset": flt.get("quote_asset") or "USDT",
+        }
+        spot_cache.set_filters(sym, filters)
         
         # 3. Get balance (signed, cached)
         balance_data = spot_cache.get_balance(account_id)
@@ -272,35 +264,48 @@ class SpotEngine:
             quote_balance=balance_data.get("quote", 0.0),
             tick_size=filters.get("tickSize", "0.01"),
             step_size=filters.get("stepSize", "0.00001"),
+            min_qty=filters.get("minQty", filters.get("stepSize", "0.00001")),
             min_notional=filters.get("minNotional", "5"),
             timestamp=time.time()
         )
     
     def _step_decimals(self, step_str: str) -> int:
-        """stepSize string'tan ondalık basamak sayısı (örn. '0.001' -> 3)."""
+        """stepSize string'tan Binance LOT_SIZE ondalık basamak sayısı."""
         if not step_str:
             return 8
-        s = step_str.strip().rstrip("0").rstrip(".")
-        if "." in s:
-            return len(s.split(".")[-1])
-        if int(float(step_str)) >= 1:
+        try:
+            d = Decimal(str(step_str).strip())
+            exp = d.as_tuple().exponent
+            return max(0, -exp) if isinstance(exp, int) else 8
+        except Exception:
+            s = str(step_str).strip()
+            if "." in s:
+                frac = s.split(".")[-1]
+                return len(frac.rstrip("0") or frac)
             return 0
-        return 8
 
     def _quantize_to_step(self, value: float, step_str: str) -> str:
-        """Binance LOT_SIZE uyumu: quantity'yi step_size'a yuvarlar, gereksiz hassasiyet kaldırılır."""
+        """Binance LOT_SIZE uyumu: quantity'yi step_size'a aşağı yuvarlar; fazla hassasiyet gönderilmez."""
         if value <= 0:
             return "0"
-        step = float(step_str) if step_str else 0.00001
-        if step <= 0:
-            step = 0.00001
-        decimals = self._step_decimals(step_str or "0.00001")
-        q = math.floor(value / step) * step
-        q = round(q, decimals)
-        if q <= 0:
-            return "0"
-        fmt = f"%.{decimals}f" % q
-        return fmt.rstrip("0").rstrip(".") or "0"
+        try:
+            from decimal import ROUND_DOWN
+            step_d = Decimal(str(step_str).strip() or "0.00001")
+            if step_d <= 0:
+                step_d = Decimal("0.00001")
+            value_d = Decimal(str(value))
+            q = (value_d / step_d).to_integral_value(rounding=ROUND_DOWN) * step_d
+            if q <= 0:
+                return "0"
+            decimals = self._step_decimals(step_str or "0.00001")
+            return format(q, f".{decimals}f")
+        except Exception:
+            step = float(step_str) if step_str else 0.00001
+            if step <= 0:
+                step = 0.00001
+            decimals = self._step_decimals(step_str or "0.00001")
+            q = math.floor(value / step) * step
+            return format(Decimal(str(round(q, decimals))), f".{decimals}f")
 
     def _quantize_price(self, value: float, tick_str: str) -> str:
         """Fiyatı tick_size hassasiyetine yuvarlar. Binance PRICE_FILTER uyumu (fazla hassasiyet hatası önlenir)."""
@@ -324,28 +329,112 @@ class SpotEngine:
             p = round(round(value / tick) * tick, decimals)
             return (f"%.{decimals}f" % p).rstrip("0").rstrip(".") or "0"
 
+    async def _fetch_symbol_filters_from_binance(self, symbol: str) -> Optional[Dict[str, str]]:
+        """exchangeInfo REST — data_hub cache boşsa sembol filtrelerini doğrudan al."""
+        try:
+            from app.services.binance_spot import fetch_exchange_info
+            info = await fetch_exchange_info(testnet=getattr(self.keys, "testnet", False))
+            sym = symbol.upper()
+            for s in info.get("symbols") or []:
+                if s.get("symbol") != sym:
+                    continue
+                step, tick, min_q, min_notional = "0.00001", "0.01", "0.00001", "5"
+                for f in s.get("filters") or []:
+                    t = f.get("filterType")
+                    if t == "LOT_SIZE":
+                        step = str(f.get("stepSize") or step)
+                        min_q = str(f.get("minQty") or step)
+                    elif t == "PRICE_FILTER":
+                        tick = str(f.get("tickSize") or tick)
+                    elif t in ("MIN_NOTIONAL", "NOTIONAL"):
+                        min_notional = str(f.get("minNotional") or f.get("notional") or min_notional)
+                out = {
+                    "step_size": step,
+                    "tick_size": tick,
+                    "min_qty": min_q,
+                    "min_notional": min_notional,
+                    "base_asset": s.get("baseAsset") or sym.replace("USDT", ""),
+                    "quote_asset": s.get("quoteAsset") or "USDT",
+                }
+                spot_cache.set_filters(sym, {
+                    "stepSize": step,
+                    "tickSize": tick,
+                    "minQty": min_q,
+                    "minNotional": min_notional,
+                    "baseAsset": out["base_asset"],
+                    "quoteAsset": out["quote_asset"],
+                })
+                return out
+        except Exception as e:
+            logger.warning("fetch_symbol_filters_from_binance %s: %s", symbol, e)
+        return None
+
+    def _filters_dict_to_out(self, symbol: str, step: str, tick: str, min_q: str,
+                             min_notional: str = "5", base_asset: str = "", quote_asset: str = "USDT") -> Dict[str, str]:
+        sym = symbol.upper()
+        return {
+            "step_size": step,
+            "tick_size": tick,
+            "min_qty": min_q,
+            "min_notional": min_notional,
+            "base_asset": base_asset or sym.replace("USDT", ""),
+            "quote_asset": quote_asset or "USDT",
+        }
+
     async def _get_symbol_filters(self, symbol: str) -> Dict[str, str]:
-        """Sembol için step_size, tick_size (cache veya exchange info)."""
+        """Sembol için step_size, tick_size, min_qty — exchangeInfo (Binance) öncelikli."""
         symbol = symbol.upper()
-        filters = spot_cache.get_filters(symbol)
-        if filters:
-            return {
-                "step_size": filters.get("stepSize") or "0.00001",
-                "tick_size": filters.get("tickSize") or "0.01",
-            }
+        fetched = await self._fetch_symbol_filters_from_binance(symbol)
+        if fetched:
+            return fetched
         try:
             from app.services.market_data import get_symbol_filters
             cached = get_symbol_filters(symbol)
             if cached:
-                out = {
-                    "step_size": str(cached.get("step_size", "0.00001")),
-                    "tick_size": str(cached.get("tick_size", "0.01")),
-                }
-                spot_cache.set_filters(symbol, out)
+                step = cached.get("step_size_str") or cached.get("stepSize")
+                if step is None and cached.get("step_size") is not None:
+                    step = format(Decimal(str(cached.get("step_size"))), "f")
+                tick = cached.get("tick_size_str") or cached.get("tickSize")
+                if tick is None and cached.get("tick_size") is not None:
+                    tick = format(Decimal(str(cached.get("tick_size"))), "f")
+                min_q = cached.get("min_qty_str") or cached.get("minQty")
+                if min_q is None:
+                    min_q = step or cached.get("min_qty")
+                if min_q is not None and not isinstance(min_q, str):
+                    min_q = format(Decimal(str(min_q)), "f")
+                out = self._filters_dict_to_out(
+                    symbol,
+                    str(step or "0.00001"),
+                    str(tick or "0.01"),
+                    str(min_q or step or "0.00001"),
+                    str(cached.get("min_notional", "5")),
+                    str(cached.get("baseAsset") or symbol.replace("USDT", "")),
+                    str(cached.get("quoteAsset") or "USDT"),
+                )
+                spot_cache.set_filters(symbol, {
+                    "stepSize": out["step_size"],
+                    "tickSize": out["tick_size"],
+                    "minQty": out["min_qty"],
+                    "minNotional": out["min_notional"],
+                    "baseAsset": out["base_asset"],
+                    "quoteAsset": out["quote_asset"],
+                })
                 return out
         except Exception as e:
-            logger.debug("Symbol filters cache for %s: %s", symbol, e)
-        return {"step_size": "0.00001", "tick_size": "0.01"}
+            logger.debug("Symbol filters data_hub for %s: %s", symbol, e)
+        filters = spot_cache.get_filters(symbol)
+        if filters and filters.get("stepSize"):
+            return self._filters_dict_to_out(
+                symbol,
+                filters.get("stepSize") or "0.00001",
+                filters.get("tickSize") or "0.01",
+                filters.get("minQty") or filters.get("stepSize") or "0.00001",
+                str(filters.get("minNotional") or "5"),
+                str(filters.get("baseAsset") or symbol.replace("USDT", "")),
+                str(filters.get("quoteAsset") or "USDT"),
+            )
+        logger.warning("symbol_filters_fallback_defaults symbol=%s", symbol)
+        return self._filters_dict_to_out(symbol, "0.00001", "0.01", "0.00001")
 
     async def place_order(
         self,
@@ -375,6 +464,14 @@ class SpotEngine:
         filters = await self._get_symbol_filters(symbol)
         step_size = filters.get("step_size") or "0.00001"
         tick_size = filters.get("tick_size") or "0.01"
+        min_qty = float(filters.get("min_qty") or step_size or 0.00001)
+
+        def _check_qty(qty_str: str) -> None:
+            qf = float(qty_str or 0)
+            if qf <= 0:
+                raise ValueError("Miktar sıfır veya geçersiz")
+            if qf < min_qty:
+                raise ValueError(f"Miktar minimum lot altında: {qf} < {min_qty}")
 
         def _fmt_num(x: float) -> str:
             """Binance uyumlu: bilimsel gösterim yok."""
@@ -402,6 +499,7 @@ class SpotEngine:
                 raise ValueError("LIMIT orders require price and quantity")
             params["price"] = self._quantize_price(float(price), tick_size)
             params["quantity"] = self._quantize_to_step(float(quantity), step_size)
+            _check_qty(params["quantity"])
             params["timeInForce"] = "GTC"
         elif order_type.upper() == "MARKET":
             if side.upper() == "BUY":
@@ -412,7 +510,14 @@ class SpotEngine:
                 if not quantity:
                     raise ValueError("MARKET SELL requires quantity")
                 params["quantity"] = self._quantize_to_step(float(quantity), step_size)
-        
+                _check_qty(params["quantity"])
+
+        if allow_web:
+            logger.info(
+                "SPOT_ORDER symbol=%s side=%s type=%s qty=%s step=%s",
+                symbol, side, order_type, params.get("quantity") or params.get("quoteOrderQty"), step_size,
+            )
+
         result = await _signed_request(self.client, "POST", "/api/v3/order", self.keys, params)
         
         # Invalidate balance cache after order (clear all for safety)

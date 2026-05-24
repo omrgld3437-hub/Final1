@@ -901,8 +901,8 @@ DataHub:
 | Mode | Description | Next Modes |
 |------|-------------|------------|
 | IDLE | No active trail | TRAIL_SELL_GRID, TRAIL_BUY_GRID |
-| TRAIL_SELL_GRID | Selling up grid | TRAIL_REENTRY_BUY, TRAIL_PROFIT_SELL |
-| TRAIL_BUY_GRID | Buying down grid | TRAIL_SELL_GRID |
+| TRAIL_SELL_GRID | Selling up grid (legacy mode flag; multiple sell grids may trail in parallel via per-grid peak arrays) | TRAIL_REENTRY_BUY, TRAIL_PROFIT_SELL |
+| TRAIL_BUY_GRID | Buying down grid (legacy mode flag; multiple buy grids may trail in parallel via per-grid trough arrays) | TRAIL_SELL_GRID |
 | TRAIL_REENTRY_BUY | Re-entry after profit | TRAIL_SELL_GRID |
 | TRAIL_PROFIT_SELL | Profit exit | TRAIL_REENTRY_BUY |
 
@@ -3363,7 +3363,7 @@ run_actions sıralı; her action için lock, idempotency, adapter çağrı, stat
 | build_cycle_ledger_empty | cycle_id, symbol, fills=[], buy/sell totals, realized_pnl_quote |
 | cycle_ledger_add_fill | fill append; buy/sell totals; _cycle_ledger_recompute → matched_qty, realized_pnl_quote; _recompute_dual_pnl → inventory_coin_adv_qty, cash_pnl_usdt |
 | cycle_ledger_breakeven_price | avg_cost * (1+buy_fee_rate)/(1-sell_fee_rate) |
-| cycle_ledger_trigger_price | breakeven * (1+min_net_profit_rate) |
+| cycle_ledger_trigger_price | breakeven * (1 + max(min_net_profit_rate, profit_exit_rise_pct/100)) |
 | cycle_ledger_from_state | state.cycle_ledger_current veya build_cycle_ledger_empty |
 | get_cycle_type_and_base_delta | close_reason trail_profit_sell → LONG_SCALP; trail_reentry_buy → INVENTORY_REBALANCE, base_delta |
 
@@ -3598,6 +3598,7 @@ API GET /bots-engine/{id} response'a grid alanı ekler; frontend tabloda göster
 | tick_interval_ms | 2000 | Tick aralığı (ms) |
 | max_orders_per_minute | 12 | Dakikada max emir |
 | min_notional_guard | 5.0 | Min notional (USDT) |
+| grid_preflight_min_usdt | 10.0 | Bot create/start: her grid tahmini emir >10 USDT; `compute_min_budget_usdt` ile min bütçe hesaplanır; form/API 400 + TR mesaj |
 | initial_fee_buffer_pct, available_quote_buffer_pct | 0.002, 0.005 | Bakiye buffer |
 
 ## Mevcut — TRDCA Snapshot İçeriği
@@ -4265,12 +4266,12 @@ register(strategy_cls): decorator; _strategy_classes[sid] = cls; _strategies[sid
 | Mod | Açıklama |
 |-----|----------|
 | IDLE | Tetik bekleniyor; sell grid, buy grid, reentry veya profit exit tetiklenebilir |
-| TRAIL_SELL_GRID | Yukarı grid seviyesi (idx) için fiyat >= tetik; anchor güncellenir; fiyat <= anchor*(1 - sell_trigger_trailing_pct/100) olunca SELL action |
-| TRAIL_BUY_GRID | Aşağı grid seviyesi (idx); fiyat <= tetik; anchor min; fiyat >= anchor*(1 + buy_trigger_trailing_pct/100) olunca BUY action |
+| TRAIL_SELL_GRID | Yukarı grid seviyesi (idx): her grid bağımsız; `sell_grid_peak_price[i]` canlı tepe; fiyat <= peak*(1 - sell_trigger_trailing_pct/100) olunca SELL. Grid #2+ tetik, #1 trail açıkken de çalışır. |
+| TRAIL_BUY_GRID | Aşağı grid seviyesi (idx): her grid bağımsız; `buy_grid_trough_price[j]` canlı dip; fiyat >= trough*(1 + buy_trigger_trailing_pct/100) olunca BUY. |
 | TRAIL_REENTRY_BUY | Satış sonrası reentry; avg_sell_price*(1 - profit_reentry_drop_pct/100) altına düşünce TRAIL_REENTRY_BUY; basket >= trough*(1 + profit_reentry_rise_pct/100) olunca BUY |
 | TRAIL_PROFIT_SELL | Alım sonrası kar çıkış; cycle_only_fee_aware_v1 ise cycle_ledger breakeven/trigger_price; değilse avg_buy*(1 + profit_exit_rise_pct/100); fiyat >= trigger olunca SELL |
 
-Sıra: Önce mevcut modda action üret (TRAIL_*); yoksa IDLE'da (A) sell grid tetik, (B) buy grid tetik, (C) reentry tetik, (D) profit exit tetik kontrolü.
+Sıra: Önce TRAIL_REENTRY_BUY / TRAIL_PROFIT_SELL (tur düzeyi, tek aktif). Sonra tüm açık sell/buy grid trail'leri paralel işlenir; ardından yeni grid tetikleri (return etmeden, paralel). Ortalama maliyet yalnızca kapanmış (fired) grid fill'lerinden (`sell_history` / `buy_history`). Reentry/profit exit arming en sonda.
 
 ## Mevcut — DCA Grid: İlk Tahsis (Initial Allocation)
 
@@ -4286,7 +4287,7 @@ Sıra: Önce mevcut modda action üret (TRAIL_*); yoksa IDLE'da (A) sell grid te
 |------|--------|--------|
 | Sell grid i | ref * (1 + sell_grid_pct/100) <= P ise TRAIL_SELL_GRID; anchor = P | _sell_qty_for_grid: ref_base * sell_qty_pct_of_base; target_budgets varsa cap; min(ref_base*pct, base_balance) |
 | Buy grid j | ref * (1 - buy_grid_pct/100) >= P ise TRAIL_BUY_GRID | _buy_qty_for_grid: ref_quote * buy_qty_pct_of_quote; target_budgets ile cap; min(ref*pct, quote_balance) |
-| Reentry | avg_sell * (1 - profit_reentry_drop_pct/100) >= P | _reentry_buy_qty: **sum(sell qty*price)** (sell_history); cap = min(quote_balance, total). Not: Fee/slip sell tarafında kesildiği için gerçek eline geçen quote biraz daha düşük olabilir; reentry miktarı bu “brüt” toplama göre. |
+| Reentry | cycle_ledger avg_sell * (1 - profit_reentry_drop_pct/100) veya legacy avg_sell aynı formül | _reentry_buy_qty: **sum(sell qty*price)** (sell_history); TRAIL_REENTRY_BUY **max_buy = avg_sell fee-aware breakeven** üstünde alım yapmaz (hold). |
 | Profit exit | cycle_ledger trigger_price (fee-aware) veya avg_buy * (1 + profit_exit_rise_pct/100) | _profit_exit_sell_qty: **sum(buy_history qty)**; min(base_balance, total_q). **initial_allocation buy_history’ye yazılmaz** (reason==initial_allocation ise append yok); dolayısıyla “cycle close” = yalnız grid buy’ları sat (tasarım niyeti). |
 
 _ensure_sell_buy_lists: sell_grid_fired, sell_grid_trigger_price, sell_grid_peak_price, buy_grid_fired, buy_grid_trigger_price, buy_grid_trough_price listeleri config grid sayısına göre state'te tutulur.
@@ -4316,7 +4317,7 @@ get_cycle_type_and_base_delta(close_reason, ledger) → (cycle_type, base_delta)
 |------------|---------------------------|
 | grid_only | _avg_buy_price_for_trigger (sadece buy_history; execution_price tercih) |
 | total | _avg_buy_price_total (initial_alloc_base_qty*initial_alloc_price + grid buy_history) |
-| **basis_mode / pnl_mode** | **pnl_mode=cycle_only_fee_aware_v1** ise profit-exit tetik fiyatı **cycle_ledger** breakeven/trigger ile hesaplanır (öncelikli). **basis_mode** (grid_only vs total) bu modda alternatif tetik yolunda veya raporlama için kullanılır. Kontrat: fee-aware açıkken “tetik fiyatı” tek kaynak cycle_ledger; basis_mode yalnız total maliyet/raporlama veya legacy tetik için. |
+| **basis_mode / pnl_mode** | **pnl_mode=cycle_only_fee_aware_v1** ise profit-exit tetik fiyatı **cycle_ledger** breakeven/trigger ile hesaplanır; **basis_mode=total** ise `cycle_ledger_with_basis` initial_allocation maliyetini birleştirir (grid_only yalnız trail_buy_grid). Tetik oranı: **max(min_net_profit_rate, profit_exit_rise_pct/100)**. TRAIL_PROFIT_SELL trailing satış **breakeven altına inmez** (hold). |
 
 pnl_mode == cycle_only_fee_aware_v1 ise cycle_ledger_breakeven_price ve cycle_ledger_trigger_price kullanılır; basis_mode yok sayılmaz ama fee-aware path öncelikli.
 

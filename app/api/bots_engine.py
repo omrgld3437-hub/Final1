@@ -161,6 +161,96 @@ def _detail_err(code: str, message: str, request_id: str) -> dict:
     return {"error_code": code, "message": message, "request_id": request_id}
 
 
+def _merge_synthetic_cycle_start_events(events: List[Dict[str, Any]], state: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Backfill CYCLE_START from state when DB has no row (legacy bots / pre-logging)."""
+    if not state:
+        return events
+    logged: set = set()
+    for ev in events:
+        if (ev.get("type") or "") != "CYCLE_START":
+            continue
+        meta = ev.get("meta") or {}
+        cid = meta.get("cycle_id")
+        if cid is not None:
+            try:
+                logged.add(int(cid))
+            except (TypeError, ValueError):
+                pass
+    synthetic: List[Dict[str, Any]] = []
+    symbol = state.get("symbol")
+    for row in state.get("cycle_open_trades") or []:
+        try:
+            cid = int(row.get("cycle_id") or 0)
+        except (TypeError, ValueError):
+            continue
+        if cid < 2 or cid in logged:
+            continue
+        synthetic.append({
+            "id": None,
+            "ts": row.get("ts") or state.get("last_tick_at"),
+            "type": "CYCLE_START",
+            "message": "Tur başladı",
+            "meta": {
+                "cycle_id": cid,
+                "reference_price": row.get("reference_price") or row.get("price"),
+                "base_qty": row.get("qty"),
+                "equity_usdt": state.get("cycle_start_equity") if int(state.get("cycle_id") or 0) == cid else None,
+                "symbol": symbol,
+                "carry_over": True,
+                "synthetic": True,
+            },
+        })
+        logged.add(cid)
+    if not synthetic:
+        return events
+    merged = list(events) + synthetic
+    merged.sort(key=lambda e: str(e.get("ts") or ""), reverse=True)
+    return merged
+
+
+def _enrich_command_start_events(
+    events: List[Dict[str, Any]],
+    bot: Any,
+    state: Optional[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Ensure COMMAND_EXECUTED START rows carry budget fields for UI Bakiye display."""
+    state = state or {}
+    try:
+        raw_cfg = json.loads(getattr(bot, "config_json", None) or "{}")
+    except Exception:
+        raw_cfg = {}
+    initial_capital = float(
+        raw_cfg.get("initial_capital_usdt")
+        or raw_cfg.get("budget_usd")
+        or raw_cfg.get("bot_budget_usdt")
+        or 0
+    )
+    for ev in events:
+        if (ev.get("type") or "") != "INFO":
+            continue
+        msg = ev.get("message") or ""
+        if "COMMAND_EXECUTED" not in msg or "START" not in msg:
+            continue
+        meta = dict(ev.get("meta") or {})
+        if initial_capital > 0 and meta.get("initial_capital_usdt") is None:
+            meta["initial_capital_usdt"] = round(initial_capital, 2)
+        pre_alloc = (
+            float(meta.get("base_balance") or 0) == 0
+            and float(meta.get("quote_balance") or 0) == 0
+            and float(meta.get("equity_usd") or 0) == 0
+        )
+        if pre_alloc:
+            meta["initial_allocation_done"] = False
+        elif meta.get("initial_allocation_done") is None:
+            meta["initial_allocation_done"] = bool(state.get("initial_allocation_done"))
+        if not pre_alloc and meta.get("cycle_start_equity") is None:
+            cse = float(state.get("cycle_start_equity") or 0)
+            if cse > 0:
+                meta["cycle_start_equity"] = round(cse, 2)
+        ev["meta"] = meta
+    return events
+
+
 @router.get("")
 async def bots_list(
     request: Request,
@@ -736,6 +826,147 @@ def _resolve_account_id(account_id: Optional[int], account_code: Optional[str], 
     return None
 
 
+def _merge_bot_cycle_ids(db: Session, bot_id: int, account_id: int) -> List[int]:
+    """Tur numaraları: trades tablosu + bot state (açık/kapanmış turlar). En yeni önce."""
+    from app.bot.ledger import Ledger
+
+    ids: set[int] = set(Ledger.get_cycle_ids(db, bot_id, account_id))
+    state = load_state(db, bot_id)
+    if state:
+        cur = int(state.get("cycle_id") or 0)
+        if cur > 0:
+            ids.add(cur)
+        for entry in state.get("cycle_pnls") or []:
+            cid = entry.get("cycle_id")
+            if cid is not None:
+                ids.add(int(cid))
+        for entry in state.get("completed_cycle_dual_pnls") or []:
+            cid = entry.get("cycle_id")
+            if cid is not None:
+                ids.add(int(cid))
+    if not ids:
+        return [1]
+    return sorted(ids, reverse=True)
+
+
+def _ledger_fills_to_trade_dicts(
+    fills: List[Dict[str, Any]],
+    symbol: str,
+    cycle_id: int,
+) -> List[Dict[str, Any]]:
+    """cycle_ledger_current fills → trades API format (açık tur, henüz DB'ye yazılmamış işlemler)."""
+    out: List[Dict[str, Any]] = []
+    sym = (symbol or "").upper()
+    for i, f in enumerate(fills or []):
+        if not isinstance(f, dict):
+            continue
+        out.append({
+            "id": f"ledger_{cycle_id}_{i}",
+            "ts": f.get("ts"),
+            "side": f.get("side"),
+            "qty": f.get("qty"),
+            "price": f.get("price"),
+            "fee": f.get("fee"),
+            "fee_asset": f.get("fee_asset"),
+            "client_order_id": f.get("client_order_id"),
+            "symbol": sym,
+            "cycle_id": cycle_id,
+        })
+    return out
+
+
+def _trade_dedupe_key(t: Dict[str, Any]) -> str:
+    oid = t.get("order_id")
+    if oid:
+        return f"oid:{oid}"
+    cid = t.get("client_order_id")
+    if cid:
+        return f"cid:{cid}"
+    tid = t.get("id")
+    if tid is not None:
+        return f"id:{tid}"
+    return f"row:{t.get('ts')}:{t.get('side')}:{t.get('qty')}:{t.get('price')}"
+
+
+def _merge_cycle_trades(*groups: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Birleştir; order_id/client_order_id ile yinelenenleri at. ts artan."""
+    merged: Dict[str, Dict[str, Any]] = {}
+    order: List[str] = []
+    for group in groups:
+        for t in group or []:
+            if not isinstance(t, dict):
+                continue
+            key = _trade_dedupe_key(t)
+            if key not in merged:
+                order.append(key)
+            merged[key] = t
+    out = [merged[k] for k in order]
+    out.sort(key=lambda x: str(x.get("ts") or ""))
+    return out
+
+
+def _cycle_open_to_trade_dicts(
+    state: Optional[Dict[str, Any]],
+    cycle_id: int,
+    symbol: str,
+) -> List[Dict[str, Any]]:
+    """Tur 2+ açılış base pozisyonu (önceki tur devri). Tur 1 initial_allocation DB kaydıyla gelir."""
+    if not state or int(cycle_id) < 2:
+        return []
+    sym = (symbol or "").upper()
+    out: List[Dict[str, Any]] = []
+    for row in state.get("cycle_open_trades") or []:
+        if not isinstance(row, dict) or int(row.get("cycle_id") or 0) != int(cycle_id):
+            continue
+        qty = float(row.get("qty") or 0)
+        price = float(row.get("price") or 0)
+        if qty <= 0 or price <= 0:
+            continue
+        cid = f"cycle_open_{cycle_id}"
+        out.append({
+            "id": cid,
+            "ts": row.get("ts"),
+            "side": (row.get("side") or "BUY").upper(),
+            "qty": qty,
+            "price": price,
+            "fee": float(row.get("fee") or 0),
+            "fee_asset": "USDT",
+            "client_order_id": cid,
+            "symbol": sym,
+            "cycle_id": int(cycle_id),
+            "reference_price": row.get("reference_price") or price,
+        })
+    if out:
+        return out
+    if int(state.get("cycle_id") or 1) != int(cycle_id):
+        return []
+    base_bal = float(state.get("grid_reference_base") or state.get("base_balance") or 0)
+    ref = float(state.get("reference_price") or 0)
+    if base_bal <= 0 or ref <= 0:
+        return []
+    ledger = state.get("cycle_ledger_current") or {}
+    ts = ledger.get("started_at") if isinstance(ledger, dict) else None
+    completed = state.get("completed_cycle_dual_pnls") or []
+    if not ts and completed:
+        prev = [c for c in completed if int(c.get("cycle_id") or 0) == int(cycle_id) - 1]
+        if prev:
+            ts = prev[-1].get("completed_at")
+    cid = f"cycle_open_{cycle_id}"
+    return [{
+        "id": cid,
+        "ts": ts,
+        "side": "BUY",
+        "qty": round(base_bal, 10),
+        "price": round(ref, 10),
+        "fee": 0.0,
+        "fee_asset": "USDT",
+        "client_order_id": cid,
+        "symbol": sym,
+        "cycle_id": int(cycle_id),
+        "reference_price": round(ref, 10),
+    }]
+
+
 def _build_live_snapshot_from_state(bot: Bot, state: Optional[Dict[str, Any]], db: Session) -> dict:
     """Build live snapshot from bot_engine_state + Bot only. No historical DB. Response < 15ms CPU."""
     status = (bot.status or "stopped").lower()
@@ -843,6 +1074,101 @@ def _build_live_snapshot_from_state(bot: Bot, state: Optional[Dict[str, Any]], d
     if equity_unavailable:
         out["equity_unavailable"] = True
     return out
+
+
+@router.get("/{bot_id}/grid-points")
+async def bots_grid_points(
+    request: Request,
+    bot_id: int,
+    account_id: Optional[int] = Query(None),
+    account_code: Optional[str] = Query(None),
+    current: dict = Depends(require_auth),
+    db: Session = Depends(get_db),
+):
+    """Lightweight grid/profit view for live tepe-dip updates. State + price only; no trades/PnL DB."""
+    rid = _request_id(request)
+    resolved_account_id = _resolve_account_id(account_id, account_code, db)
+    bot = _resolve_bot(bot_id, resolved_account_id, current, db)
+    if not bot:
+        raise HTTPException(status_code=404, detail=_detail_err("NOT_FOUND", "Bot not found", rid))
+
+    state = load_state(db, bot.id) or {}
+    raw = json.loads(bot.config_json or "{}")
+    strategy_id = (raw.get("strategy_id") or "").strip().lower()
+    sym = (bot.symbol or "").strip().upper()
+    is_trdca = strategy_id == "trdca_pro" or sym == "MULTI"
+
+    live_price = 0.0
+    try:
+        hub_p = price_hub.get_price(bot.symbol or "")
+        if hub_p is not None and float(hub_p) > 0:
+            live_price = float(hub_p)
+    except Exception:
+        pass
+    if live_price <= 0 and sym:
+        hub_p = _get_price_from_datahub(sym)
+        if hub_p is not None and float(hub_p) > 0:
+            live_price = float(hub_p)
+
+    config_for_grid = _config_for_grid_view(raw)
+    grid_points: List[Dict[str, Any]] = []
+    profit_points: List[Dict[str, Any]] = []
+    meta: Dict[str, Any] = {}
+    reference_display: Optional[float] = None
+
+    if is_trdca:
+        quote_asset = (raw.get("quote_asset") or "USDT").strip().upper()
+        coin_weights = (raw.get("dca") or {}).get("coin_weights") or {}
+        basket_price = 0.0
+        current_usd = 0.0
+        if coin_weights:
+            try:
+                prices_map = await _fetch_prices_parallel(list(coin_weights.keys()), quote_asset)
+                for asset, w in coin_weights.items():
+                    if str(asset).upper() == quote_asset:
+                        basket_price += float(w)
+                    else:
+                        basket_price += float(w) * float(prices_map.get(asset) or 0)
+            except Exception as e:
+                logger.debug("bots_grid_points trdca basket failed bot_id=%s: %s", bot.id, e)
+        if basket_price <= 0:
+            base_b = float(state.get("base_balance") or 0)
+            quote_b = float(state.get("quote_balance") or 0)
+            basket_price = quote_b
+            current_usd = quote_b
+        else:
+            current_usd = basket_price
+        try:
+            grid_points, profit_points, meta = compute_trdca_grid_view(
+                state, raw, basket_price, current_usd
+            )
+            reference_display = meta.get("ref_display")
+        except Exception as e:
+            logger.warning("bots_grid_points trdca failed bot_id=%s: %s", bot.id, e)
+    else:
+        view_price = live_price if live_price > 0 else float(state.get("reference_price") or 0)
+        try:
+            grid_points, profit_points, meta = compute_grid_profit_view(state, config_for_grid, view_price)
+            reference_display = meta.get("ref_display")
+        except Exception as e:
+            logger.warning("bots_grid_points failed bot_id=%s: %s", bot.id, e)
+
+    return {
+        "grid_points": grid_points,
+        "profit_points": profit_points,
+        "reference_display": reference_display,
+        "symbol": bot.symbol,
+        "current_price": round(live_price, 8) if live_price > 0 else None,
+        "state": {
+            "base_balance": state.get("base_balance"),
+            "quote_balance": state.get("quote_balance"),
+            "sell_history": state.get("sell_history"),
+            "buy_history": state.get("buy_history"),
+            "mode": state.get("mode"),
+        },
+        "config": config_for_grid,
+        "request_id": rid,
+    }
 
 
 @router.get("/{bot_id}/live")
@@ -1336,6 +1662,26 @@ async def bots_start(
             save_state(db, bot.id, bot.account_id, state)
     ensure_state_row(db, bot.id, bot.account_id, (bot.symbol or "").upper() or "BTCUSDT")
 
+    strategy_id = ""
+    try:
+        raw_cfg = json.loads(bot.config_json or "{}")
+        strategy_id = (raw_cfg.get("strategy_id") or "").strip().lower()
+    except Exception:
+        raw_cfg = {}
+    if strategy_id not in ("trdca_pro", "multi_asset_rebalance") and (bot.symbol or "").upper() != "MULTI":
+        from app.botengine.config_validate import validate_dca_payload
+        from app.botengine.state_store import append_event
+        ok_grid, grid_err, grid_viol, min_budget = validate_dca_payload(raw_cfg)
+        if not ok_grid:
+            append_event(
+                db, bot.id, bot.account_id, "ERROR", grid_err,
+                {"error_code": "GRID_NOTIONAL_TOO_LOW", "violations": grid_viol, "min_budget_usdt": min_budget},
+            )
+            raise HTTPException(
+                status_code=400,
+                detail=_detail_err("GRID_NOTIONAL_TOO_LOW", grid_err, rid),
+            )
+
     # Live modda bakiye kontrolü: yetersizse başlatma, PAUSED_ERROR önlenir
     is_test = is_test_account(bot.account_id, db)
     if not is_test and (getattr(bot, "mode", None) or "").lower() == "live":
@@ -1599,6 +1945,41 @@ async def bots_update_config(
     return {"ok": True, "bot_id": bot.id, "request_id": rid}
 
 
+@router.get("/{bot_id}/health")
+async def bots_health(
+    request: Request,
+    bot_id: int,
+    account_id: Optional[int] = Query(None),
+    account_code: Optional[str] = Query(None),
+    current: dict = Depends(require_auth),
+    db: Session = Depends(get_db),
+):
+    """Per-bot health snapshot for UI alerts (tick stale, errors, order failures). Does not stop bot."""
+    rid = _request_id(request)
+    resolved_account_id = _resolve_account_id(account_id, account_code, db)
+    bot = _resolve_bot(bot_id, resolved_account_id, current, db)
+    if not bot:
+        raise HTTPException(status_code=404, detail=_detail_err("NOT_FOUND", "Bot not found", rid))
+    from app.botengine.health_watch import evaluate_bot_health, _expected_tick_interval_sec, _parse_last_tick_ts
+    state = load_state(db, bot.id) or {}
+    alerts = evaluate_bot_health(bot, state, db)
+    now_ts = int(datetime.now(timezone.utc).timestamp())
+    last_tick = _parse_last_tick_ts(state)
+    tick_age = (now_ts - last_tick) if last_tick is not None else None
+    interval_s = _expected_tick_interval_sec(bot)
+    return {
+        "ok": True,
+        "bot_id": bot.id,
+        "status": (bot.status or "stopped").lower(),
+        "alerts": alerts,
+        "last_tick_at": last_tick,
+        "tick_age_s": round(tick_age, 1) if tick_age is not None else None,
+        "tick_interval_s": interval_s,
+        "last_error_code": state.get("last_error_code"),
+        "request_id": rid,
+    }
+
+
 @router.get("/{bot_id}/events")
 async def bots_events(
     request: Request,
@@ -1617,6 +1998,9 @@ async def bots_events(
     if not bot:
         raise HTTPException(status_code=404, detail=_detail_err("NOT_FOUND", "Bot not found", rid))
     events = list_events(db, bot.id, limit=limit, after_id=after_id)
+    state = load_state(db, bot.id)
+    events = _enrich_command_start_events(events, bot, state)
+    events = _merge_synthetic_cycle_start_events(events, state)[:limit]
     return {"events": events, "request_id": rid}
 
 
@@ -1635,13 +2019,10 @@ async def bots_cycles(
     bot = _resolve_bot(bot_id, resolved_account_id, current, db)
     if not bot:
         raise HTTPException(status_code=404, detail=_detail_err("NOT_FOUND", "Bot not found", rid))
-    from app.bot.ledger import Ledger
     raw = json.loads(bot.config_json or "{}")
     strategy_id = (raw.get("strategy_id") or "").strip().lower()
     is_trdca = strategy_id == "trdca_pro" or (bot.symbol or "").upper() == "MULTI"
-    dca_cycles = Ledger.get_cycle_ids(db, bot.id, bot.account_id)
-    if not dca_cycles:
-        dca_cycles = [1]
+    dca_cycles = _merge_bot_cycle_ids(db, bot.id, bot.account_id)
     if not is_trdca:
         return {"cycles": dca_cycles, "dca_cycles": dca_cycles, "trb_cycles": [], "request_id": rid}
     state = load_state(db, bot.id)
@@ -1676,9 +2057,21 @@ async def bots_trades(
     else:
         trades = Ledger.get_trades_dict(db, bot.id, bot.account_id, limit=limit, cycle_id=cycle_id)
     cycle_summary: Optional[Dict[str, Any]] = None
+    state = load_state(db, bot.id) if cycle_id is not None else None
+    sym = (bot.symbol or "").upper()
+    extra: List[Dict[str, Any]] = []
+    if cycle_id is not None and ct != "trb" and state:
+        extra.extend(_cycle_open_to_trade_dicts(state, int(cycle_id), sym))
+        cur_cid = int(state.get("cycle_id") or 1)
+        if cur_cid == int(cycle_id):
+            ledger = state.get("cycle_ledger_current") or {}
+            if isinstance(ledger, dict) and (not ledger.get("symbol") or ledger.get("symbol") == sym):
+                extra.extend(_ledger_fills_to_trade_dicts(ledger.get("fills") or [], sym, int(cycle_id)))
+    if cycle_id is not None and ct != "trb":
+        trades = _merge_cycle_trades(trades, extra)
     if cycle_id is not None and ct == "trb":
         cycle_summary = {"cycle_type": "trb", "trade_count": 0, "note": "Rebalancing tur işlemleri ayrı kaydedilmiyor."}
-    elif cycle_id is not None and trades:
+    elif cycle_id is not None:
         ts_list = []
         for t in trades:
             ts_str = t.get("ts")
@@ -1690,7 +2083,15 @@ async def bots_trades(
         duration_sec = 0.0
         if len(ts_list) >= 2:
             duration_sec = (max(ts_list) - min(ts_list)).total_seconds()
-        state = load_state(db, bot.id)
+        elif state and int(state.get("cycle_id") or 1) == int(cycle_id):
+            ledger = state.get("cycle_ledger_current") or {}
+            started_at = ledger.get("started_at") if isinstance(ledger, dict) else None
+            if started_at:
+                try:
+                    start_dt = datetime.fromisoformat(str(started_at).replace("Z", "+00:00"))
+                    duration_sec = (datetime.now(timezone.utc) - start_dt).total_seconds()
+                except Exception:
+                    pass
         pnl_usdt = None
         cycle_entry = None
         if state and state.get("cycle_pnls"):
@@ -1699,19 +2100,28 @@ async def bots_trades(
                     pnl_usdt = c.get("pnl_usdt")
                     cycle_entry = c
                     break
+        is_open_cycle = state is not None and int(state.get("cycle_id") or 1) == int(cycle_id)
         cycle_summary = {
-            "cycle_type": "dca",
-            "duration_sec": round(duration_sec, 1),
+            "cycle_type": "Açık tur" if is_open_cycle and cycle_entry is None else "dca",
+            "duration_sec": round(duration_sec, 1) if duration_sec else None,
             "trade_count": len(trades),
             "pnl_usdt": round(float(pnl_usdt), 2) if pnl_usdt is not None else None,
         }
         if cycle_entry is not None:
+            cycle_summary["cycle_type"] = cycle_entry.get("cycle_type") or "dca"
             cycle_summary["pnl_primary_mode"] = cycle_entry.get("pnl_primary_mode")
             cycle_summary["inventory_coin_adv_qty"] = cycle_entry.get("inventory_coin_adv_qty")
             cycle_summary["inventory_fees_usdt"] = cycle_entry.get("inventory_fees_usdt")
             cycle_summary["cash_pnl_usdt"] = cycle_entry.get("cash_pnl_usdt")
             cycle_summary["cash_fees_usdt"] = cycle_entry.get("cash_fees_usdt")
             cycle_summary["close_reason"] = cycle_entry.get("close_reason")
+        elif is_open_cycle:
+            ledger = state.get("cycle_ledger_current") or {}
+            if isinstance(ledger, dict):
+                cycle_summary["cash_pnl_usdt"] = ledger.get("cash_fifo_pnl_usdt") if ledger.get("cash_fifo_pnl_usdt") is not None else ledger.get("cash_pnl_usdt")
+                cycle_summary["cash_fees_usdt"] = ledger.get("cash_fifo_fees_usdt") if ledger.get("cash_fifo_fees_usdt") is not None else ledger.get("cash_fees_usdt")
+                cycle_summary["inventory_coin_adv_qty"] = ledger.get("inventory_coin_adv_qty")
+                cycle_summary["inventory_fees_usdt"] = ledger.get("inventory_fees_usdt")
     return {"trades": trades, "cycle_summary": cycle_summary, "cycle_type": ct, "request_id": rid}
 
 

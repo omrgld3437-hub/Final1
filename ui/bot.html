@@ -36,6 +36,208 @@
         .status-running { background: rgba(14, 203, 129, 0.15); color: #0ecb81; }
         .status-stopped { background: rgba(108, 117, 125, 0.2); color: #6c757d; }
         .status-error { background: rgba(246, 70, 93, 0.15); color: #f6465d; }
+        .health-alert-badge { display: none; align-items: center; padding: 0 10px; min-height: 36px; border-radius: 6px; font-size: 0.78rem; font-weight: 700; box-sizing: border-box; cursor: default; }
+        .health-alert-warn { background: rgba(240, 185, 11, 0.2); color: #f0b90b; border: 1px solid rgba(240, 185, 11, 0.45); animation: health-warn-blink 2.2s ease-in-out infinite; }
+        .health-alert-critical { background: rgba(246, 70, 93, 0.22); color: #f6465d; border: 1px solid rgba(246, 70, 93, 0.5); animation: health-crit-blink 0.65s ease-in-out infinite; }
+        @keyframes health-warn-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+        @keyframes health-crit-blink { 0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(246,70,93,0.4); } 50% { opacity: 0.55; box-shadow: 0 0 8px 2px rgba(246,70,93,0.35); } }
+        .panel-health-critical { animation: panel-crit-border 0.65s ease-in-out infinite; }
+        @keyframes panel-crit-border {
+            0%, 100% { border-color: rgba(246, 70, 93, 0.85); box-shadow: 0 0 0 1px rgba(246, 70, 93, 0.35); }
+            50% { border-color: rgba(246, 70, 93, 0.25); box-shadow: 0 0 12px 2px rgba(246, 70, 93, 0.2); }
+        }
+        #headerPanel.panel-health-critical, #engineLogPanel.panel-health-critical { border: 2px solid rgba(246, 70, 93, 0.7); border-radius: 8px; }
+        @keyframes page-crit-frame {
+            0%, 100% {
+                border-color: rgba(246, 70, 93, 0.95);
+                box-shadow: inset 0 0 32px rgba(246, 70, 93, 0.2), 0 0 24px rgba(246, 70, 93, 0.12);
+            }
+            50% {
+                border-color: rgba(246, 70, 93, 0.28);
+                box-shadow: inset 0 0 12px rgba(246, 70, 93, 0.06), 0 0 10px rgba(246, 70, 93, 0.05);
+            }
+        }
+        .health-alert-shell {
+            position: fixed;
+            inset: 0;
+            z-index: 10000;
+            pointer-events: none;
+            box-sizing: border-box;
+        }
+        .health-alert-shell:not(.is-active) {
+            visibility: hidden;
+        }
+        .health-crit-page-frame {
+            position: absolute;
+            inset: 0;
+            z-index: 2;
+            pointer-events: none;
+            box-sizing: border-box;
+            border: 4px solid rgba(246, 70, 93, 0.9);
+            opacity: 0;
+            transition: opacity 0.25s ease;
+            animation: page-crit-frame 0.65s ease-in-out infinite;
+        }
+        .health-crit-page-frame.is-visible {
+            opacity: 1;
+        }
+        .health-alert-banner {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            z-index: 1;
+            transform: translateY(-110%);
+            transition: transform 0.42s cubic-bezier(0.22, 1, 0.36, 1);
+            pointer-events: none;
+            box-sizing: border-box;
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+        }
+        .health-alert-banner.is-visible {
+            transform: translateY(0);
+            pointer-events: auto;
+        }
+        .health-alert-banner--critical {
+            background: linear-gradient(180deg, rgba(58, 8, 14, 0.97) 0%, rgba(28, 4, 8, 0.98) 100%);
+            border-bottom: 1px solid rgba(246, 70, 93, 0.55);
+            box-shadow: 0 8px 32px rgba(246, 70, 93, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+        }
+        .health-alert-banner--warn {
+            background: linear-gradient(180deg, rgba(48, 36, 6, 0.97) 0%, rgba(26, 18, 2, 0.98) 100%);
+            border-bottom: 1px solid rgba(240, 185, 11, 0.5);
+            box-shadow: 0 6px 24px rgba(240, 185, 11, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+        }
+        @keyframes health-banner-icon-pulse {
+            0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(246, 70, 93, 0.35); }
+            50% { transform: scale(1.04); box-shadow: 0 0 0 6px rgba(246, 70, 93, 0); }
+        }
+        @keyframes health-banner-warn-pulse {
+            0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(240, 185, 11, 0.3); }
+            50% { transform: scale(1.04); box-shadow: 0 0 0 6px rgba(240, 185, 11, 0); }
+        }
+        .health-alert-banner-inner {
+            max-width: 720px;
+            margin: 0 auto;
+            padding: 1rem 1.5rem 1.15rem;
+            box-sizing: border-box;
+        }
+        .health-alert-banner-body {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            text-align: center;
+            gap: 0.45rem;
+        }
+        .health-alert-banner-icon {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 800;
+            font-size: 1.15rem;
+            line-height: 1;
+            margin-bottom: 0.15rem;
+        }
+        .health-alert-banner--critical .health-alert-banner-icon {
+            background: rgba(246, 70, 93, 0.22);
+            color: #ff8a98;
+            border: 1px solid rgba(246, 70, 93, 0.45);
+            animation: health-banner-icon-pulse 1.8s ease-in-out infinite;
+        }
+        .health-alert-banner--warn .health-alert-banner-icon {
+            background: rgba(240, 185, 11, 0.18);
+            color: #ffd666;
+            border: 1px solid rgba(240, 185, 11, 0.4);
+            animation: health-banner-warn-pulse 2.2s ease-in-out infinite;
+        }
+        .health-alert-banner-label {
+            font-weight: 800;
+            font-size: 0.68rem;
+            text-transform: uppercase;
+            letter-spacing: 0.14em;
+            padding: 0.28rem 0.75rem;
+            border-radius: 999px;
+        }
+        .health-alert-banner--critical .health-alert-banner-label {
+            background: rgba(246, 70, 93, 0.2);
+            color: #ffb3bd;
+            border: 1px solid rgba(246, 70, 93, 0.35);
+        }
+        .health-alert-banner--warn .health-alert-banner-label {
+            background: rgba(240, 185, 11, 0.16);
+            color: #ffe08a;
+            border: 1px solid rgba(240, 185, 11, 0.32);
+        }
+        .health-alert-banner-msg {
+            font-weight: 700;
+            font-size: 0.95rem;
+            line-height: 1.45;
+            color: #fff;
+            max-width: 580px;
+        }
+        .health-alert-banner-cause {
+            font-size: 0.8rem;
+            line-height: 1.4;
+            color: rgba(255, 255, 255, 0.72);
+            max-width: 560px;
+        }
+        .health-alert-banner-sub {
+            margin-top: 0.25rem;
+            padding: 0.45rem 0.85rem;
+            border-radius: 8px;
+            font-size: 0.8rem;
+            line-height: 1.4;
+            color: #ffe08a;
+            background: rgba(240, 185, 11, 0.1);
+            border: 1px solid rgba(240, 185, 11, 0.22);
+            max-width: 560px;
+        }
+        .health-alert-banner-sub-tag {
+            display: inline-block;
+            font-size: 0.62rem;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            padding: 0.12rem 0.4rem;
+            border-radius: 4px;
+            background: rgba(240, 185, 11, 0.22);
+            margin-right: 0.35rem;
+            vertical-align: middle;
+        }
+        .health-alert-banner-reset-btn {
+            margin-top: 0.55rem;
+            padding: 0.5rem 1.35rem;
+            min-height: 36px;
+            border-radius: 8px;
+            font-weight: 700;
+            font-size: 0.82rem;
+            cursor: pointer;
+            color: #fff;
+            transition: background 0.15s ease, border-color 0.15s ease, transform 0.12s ease;
+        }
+        .health-alert-banner--critical .health-alert-banner-reset-btn {
+            background: rgba(246, 70, 93, 0.28);
+            border: 1px solid rgba(246, 70, 93, 0.55);
+        }
+        .health-alert-banner--critical .health-alert-banner-reset-btn:hover {
+            background: rgba(246, 70, 93, 0.45);
+            border-color: rgba(246, 70, 93, 0.75);
+            transform: translateY(-1px);
+        }
+        .health-alert-banner--warn .health-alert-banner-reset-btn {
+            background: rgba(240, 185, 11, 0.2);
+            border: 1px solid rgba(240, 185, 11, 0.45);
+            color: #fff8e7;
+        }
+        .health-alert-banner--warn .health-alert-banner-reset-btn:hover {
+            background: rgba(240, 185, 11, 0.32);
+            border-color: rgba(240, 185, 11, 0.65);
+            transform: translateY(-1px);
+        }
+        body.has-health-alert-banner { transition: padding-top 0.35s ease; }
         .btn-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 1rem; }
         .bot-top-strip .strip-right .btn-row { margin-top: 0; align-items: center; }
         .btn { padding: 8px 16px; min-height: 36px; border-radius: 6px; font-weight: 600; cursor: pointer; border: none; font-size: 0.9rem; box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center; }
@@ -60,12 +262,29 @@
         .cycle-pnls-list { max-height: 320px; overflow-y: auto; }
         .cycle-pnl-item { padding: 10px 12px; border-bottom: 1px solid var(--ds-border, #2b3139); display: flex; justify-content: space-between; align-items: center; }
         #engineLogList .engine-log-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
-        #engineLogList .engine-log-table th, #engineLogList .engine-log-table td { padding: 0.35rem 0.5rem; border-bottom: 1px solid var(--ds-border, #2b3139); text-align: left; vertical-align: top; word-break: break-word; }
+        #engineLogList .engine-log-table col.log-col-time { width: 11rem; }
+        #engineLogList .engine-log-table col.log-col-type { width: 4.5rem; }
+        #engineLogList .engine-log-table col.log-col-msg { width: auto; }
+        #engineLogList .engine-log-table th, #engineLogList .engine-log-table td { padding: 0.35rem 0.45rem; border-bottom: 1px solid var(--ds-border, #2b3139); text-align: left; vertical-align: top; word-break: break-word; }
         #engineLogList .engine-log-table th { color: var(--ds-text-secondary); font-weight: 500; }
-        #engineLogList .engine-log-table td:first-child { white-space: nowrap; }
-        #engineLogList .engine-log-table td:last-child { white-space: nowrap; }
-        #engineLogList { overflow-x: auto; }
+        #engineLogList .engine-log-table th:nth-child(1),
+        #engineLogList .engine-log-table td:nth-child(1) { width: 11rem; max-width: 11rem; white-space: nowrap; font-size: 0.72rem; padding-right: 2ch; }
+        #engineLogList .engine-log-table th:nth-child(2),
+        #engineLogList .engine-log-table td:nth-child(2) { width: 4.5rem; max-width: 4.5rem; white-space: nowrap; padding-left: 0; padding-right: 2ch; }
+        #engineLogList .engine-log-table th:nth-child(3),
+        #engineLogList .engine-log-table td:nth-child(3) { width: auto; white-space: normal; word-break: break-word; padding-left: 3ch; }
+        #engineLogList { overflow-x: auto; width: 100%; box-sizing: border-box; }
         #engineLogList .log-row-warn { color: var(--ds-text-warning, #f0b90b); }
+        #engineLogList .log-row-error { color: #f6465d; font-weight: 700; }
+        #engineLogList .log-row-info { color: var(--ds-text-primary, #eaecef); }
+        @keyframes hero-alert-blink {
+            0%, 100% { color: #0ecb81; }
+            50% { color: #f6465d; }
+        }
+        #stateHeroTitle.hero-alert-blink {
+            animation: hero-alert-blink 1s ease-in-out infinite;
+            font-weight: 700;
+        }
         #engineLogList .log-repeat-badge { font-size: 0.65rem; color: var(--ds-text-tertiary); font-weight: 600; white-space: nowrap; }
         .trade-side-buy { color: #0ecb81; }
         .trade-side-sell { color: #f6465d; }
@@ -260,16 +479,17 @@
             /* Loglar: mesaj sütunu taşmasın, iç içe girmesin; mesajlar alt alta; sadece masaüstü */
             #engineLogPanel { overflow: hidden; max-width: 100%; }
             #engineLogPanel .btn, #engineLogPanel .btn-secondary { min-height: 48px; height: 48px; padding: 0 1.25rem; border-radius: 10px; }
-            #engineLogPanel #btnEngineLogRefresh { min-height: 28px; height: 28px; padding: 0 0.5rem; font-size: 0.72rem; border-radius: 6px; }
+            #engineLogPanel #btnEngineLogReset { min-height: 28px; height: 28px; padding: 0 0.5rem; font-size: 0.72rem; border-radius: 6px; }
             @media (max-width: 768px) {
                 #engineLogPanel { display: none !important; }
             }
             #engineLogList { max-height: 360px; overflow: auto; -webkit-overflow-scrolling: touch; border-radius: 10px; padding: 0.75rem; font-family: ui-monospace, monospace; font-size: 0.72rem; line-height: 1.5; border: 1px solid var(--ds-border, #2b3139); box-sizing: border-box; width: 100%; max-width: 100%; }
             #engineLogList table { width: 100%; border-collapse: collapse; table-layout: fixed; }
             #engineLogList th, #engineLogList td { padding: 0.5rem 0.4rem; border-bottom: 1px solid var(--ds-border, #2b3139); vertical-align: top; box-sizing: border-box; word-break: break-word; overflow-wrap: break-word; }
-            #engineLogList th:nth-child(1), #engineLogList td:nth-child(1) { width: 22%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 0.68rem; }
-            #engineLogList th:nth-child(2), #engineLogList td:nth-child(2) { width: 14%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 0.68rem; }
-            #engineLogList th:nth-child(3), #engineLogList td:nth-child(3) { width: 64%; font-size: 0.7rem; min-width: 0; }
+            #engineLogList th:nth-child(1), #engineLogList td:nth-child(1) { width: 11rem; max-width: 11rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 0.68rem; padding-right: 2ch; }
+            #engineLogList th:nth-child(2), #engineLogList td:nth-child(2) { width: 4.5rem; max-width: 4.5rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 0.68rem; padding-right: 2ch; }
+            #engineLogList th:nth-child(3), #engineLogList td:nth-child(3) { padding-left: 3ch; }
+            #engineLogList th:nth-child(3), #engineLogList td:nth-child(3) { width: auto; font-size: 0.7rem; min-width: 0; }
             #engineLogList th { color: var(--ds-text-secondary); font-weight: 600; }
 
             /* Modaller: aksiyon butonları eşit 50-50 */
@@ -374,6 +594,8 @@
                 </div>
                 <div class="strip-right">
                     <span id="statusBadge" class="status-badge status-stopped">—</span>
+                    <span id="healthWarnBadge" class="health-alert-badge health-alert-warn" style="display: none;" title="">Uyarı</span>
+                    <span id="healthCriticalBadge" class="health-alert-badge health-alert-critical" style="display: none;" title="">Kritik</span>
                     <button id="btnParametreler" class="btn btn-ghost" type="button">Parametreler</button>
                     <button id="btnStopAndDelete" class="btn btn-danger">Sonlandır ve Sil</button>
                 </div>
@@ -471,9 +693,9 @@
 
         <div class="panel" id="engineLogPanel" style="display: none;">
             <h2>Bot Logları</h2>
-            <p class="muted poll-note" style="font-size: 0.85rem; margin-bottom: 0.75rem;">Bot açıldığından beri kaydedilen eventler (tick, aksiyon, skip, hata). En son 500 kayıt; yenile ile güncelleyebilirsiniz.</p>
+            <p class="muted poll-note" style="font-size: 0.85rem; margin-bottom: 0.75rem;">En son 500 kayıt listelenir. Bütün hareketler gösterilir. Uyarı alarmlarını kapatmak için Resetle butonuna basın.</p>
             <div style="display: flex; justify-content: flex-end; margin-bottom: 0.5rem;">
-                <button type="button" class="btn btn-sm btn-secondary" id="btnEngineLogRefresh">Yenile</button>
+                <button type="button" class="btn btn-sm btn-secondary" id="btnEngineLogReset" title="Uyarı alarmlarını sıfırla (loglar kalır)">Resetle</button>
             </div>
             <div id="engineLogList" style="max-height: 420px; overflow: auto; font-family: monospace; font-size: 0.8rem; border: 1px solid var(--ds-border, #2b3139); border-radius: 8px; padding: 0.5rem;"></div>
         </div>
@@ -535,6 +757,9 @@
     </div>
     <script src="/ui/assets/utils/coinLogo.js?v=1"></script>
     <script src="/ui/assets/core/apiClient.js?v=refactor1"></script>
+    <script src="/ui/assets/utils/engineLogFormat.js?v=23"></script>
+    <script src="/ui/assets/utils/botHealthAlerts.js?v=8"></script>
+    <script src="/ui/assets/utils/engineLogLive.js?v=4"></script>
     <script src="/ui/assets/core/intervalRegistry.js?v=1"></script>
     <script src="/ui/vendor/lightweight-charts.standalone.production.js"></script>
     <script src="/ui/assets/perf_chart_tv.js?v=1"></script>
@@ -643,6 +868,27 @@
             var s = sec % 60;
             var dur = h > 0 ? (h + 's ' + m + 'dk') : (m > 0 ? (m + 'dk ' + s + 'sn') : (s + 'sn'));
             return 'Süre: ' + dur;
+        }
+        function getStateHeroDurationValue() {
+            var heroEl = document.getElementById('stateHeroMetaDur');
+            if (heroEl && heroEl.textContent) {
+                var v = heroEl.textContent.replace(/^Süre:\s*/i, '').trim();
+                if (v) return v;
+            }
+            if (lastBotStartedAt) {
+                var t = formatStartMetaDurationOnly(lastBotStartedAt);
+                return t ? t.replace(/^Süre:\s*/i, '').trim() : '';
+            }
+            return '';
+        }
+        function updateCycleReportDurationLive() {
+            var durEl = document.getElementById('cycleReportDuration');
+            if (!durEl) return;
+            var sel = window._botDetailSelectedCycleId;
+            var cur = (lastBotDetail && lastBotDetail.currentCycleId != null) ? lastBotDetail.currentCycleId : lastKnownCycleId;
+            if (sel == null || cur == null || Number(sel) !== Number(cur)) return;
+            var v = getStateHeroDurationValue();
+            if (v) durEl.textContent = v;
         }
         function setStateHeroMetaHtml(metaEl, startedAtIso, status) {
             if (!metaEl) return;
@@ -794,49 +1040,77 @@
             return (sym || '').replace(/USDT$|FDUSD$|BUSD$/i, '') || (sym || '').substring(0, 4) || '—';
         }
 
-        function loadEngineEvents(bid) {
-            if (!engineLogList || !bid || !window.apiClient) return;
-            engineLogList.innerHTML = '<div class="muted" style="padding: 0.75rem;">Yükleniyor…</div>';
-            window.apiClient.get('/api/bots-engine/' + bid + '/events?limit=500')
-                .then(function(res) {
-                    var events = (res && res.events) ? res.events : [];
-                    if (!events.length) {
-                        engineLogList.innerHTML = '<div class="muted" style="padding: 0.75rem;">Henüz event yok.</div>';
-                        return;
-                    }
-                    /* Ardışık aynı type+message event'leri tek satırda birleştir (benzer hatalar şişmesin) */
-                    var collapsed = [];
-                    var prev = null;
-                    events.forEach(function(ev) {
-                        var ty = (ev.type || '—').trim();
-                        var msg = (ev.message || '').trim();
-                        if (ev.meta && typeof ev.meta === 'object' && Object.keys(ev.meta).length) {
-                            try { msg += ' ' + JSON.stringify(ev.meta); } catch (e) {}
-                        }
-                        var key = ty + '\0' + msg;
-                        if (prev && prev.key === key) {
-                            prev.count++;
-                            prev.lastTs = ev.ts;
-                        } else {
-                            collapsed.push({ type: ty, message: msg, ts: ev.ts, key: key, count: 1, lastTs: ev.ts });
-                            prev = collapsed[collapsed.length - 1];
-                        }
-                    });
-                    var html = '<table class="engine-log-table" style="width:100%; border-collapse: collapse;"><thead><tr><th>Zaman</th><th>Tür</th><th>Mesaj</th></tr></thead><tbody>';
-                    collapsed.forEach(function(item) {
-                        var ts = item.ts ? (function() { var d = new Date(item.ts); return d.toLocaleString('tr-TR', { timeZone: 'Europe/Istanbul' }); })() : '—';
-                        if (item.count > 1) ts += ' <span class="log-repeat-badge" title="Aynı kayıttan ' + item.count + ' adet">(' + item.count + 'x)</span>';
-                        var ty = (item.type || '—').replace(/</g, '&lt;');
-                        var msg = (item.message || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-                        var rowCl = (item.type || '').indexOf('ERROR') >= 0 || (item.type || '').indexOf('SKIP') >= 0 ? ' class="log-row-warn"' : '';
-                        html += '<tr' + rowCl + '><td>' + ts + '</td><td>' + ty + '</td><td>' + msg + '</td></tr>';
-                    });
-                    html += '</tbody></table>';
-                    engineLogList.innerHTML = html;
-                })
-                .catch(function() {
-                    engineLogList.innerHTML = '<div class="muted" style="padding: 0.75rem;">Loglar yüklenemedi.</div>';
-                });
+        window._lastEngineEvents = [];
+        window._lastHealthData = null;
+        window._lastSeenHealthEventId = 0;
+
+        function isBotRunning() {
+            var st = (lastBotDetail && (lastBotDetail.display_status || lastBotDetail.status)) ? String(lastBotDetail.display_status || lastBotDetail.status).toLowerCase() : '';
+            return st === 'running' || st === 'starting';
+        }
+
+        function syncHealthFromState() {
+            if (!window.BotHealthAlerts) return;
+            window.BotHealthAlerts.applyHealth(
+                botId,
+                window._lastHealthData || { alerts: [] },
+                isBotRunning(),
+                window._lastEngineEvents || []
+            );
+        }
+
+        function fetchBotHealth() {
+            if (!botId || !window.apiClient || document.hidden) return;
+            var q = accountCode ? '?account_code=' + encodeURIComponent(accountCode) : '?account_id=' + (accountId || '');
+            window.apiClient.get('/api/bots-engine/' + botId + '/health' + q).then(function(res) {
+                window._lastHealthData = res || { alerts: [] };
+                syncHealthFromState();
+            }).catch(function() {});
+        }
+
+        function onEngineEventsForHealth(events) {
+            window._lastEngineEvents = events || [];
+            if (window.BotHealthAlerts) {
+                var healthMax = window.BotHealthAlerts.maxHealthEventId(events);
+                if (healthMax > window._lastSeenHealthEventId) {
+                    if (window._lastSeenHealthEventId > 0) fetchBotHealth();
+                    window._lastSeenHealthEventId = healthMax;
+                }
+            }
+            syncHealthFromState();
+        }
+
+        function syncEngineAlertBlink(hasCritical) { syncHealthFromState(); }
+
+        var _engineLogLiveOpts = {
+            botId: botId,
+            accountId: accountId,
+            accountCode: accountCode,
+            container: engineLogList,
+            apiClient: window.apiClient,
+            state: { events: [], lastId: 0 },
+            onAfterRender: onEngineEventsForHealth
+        };
+
+        function loadEngineEvents(bid, incremental) {
+            if (!bid || !window.EngineLogLive) return;
+            _engineLogLiveOpts.botId = bid;
+            _engineLogLiveOpts.container = engineLogList;
+            return window.EngineLogLive.fetchAndRender(_engineLogLiveOpts, !!incremental);
+        }
+
+        function startEngineLogLive() {
+            if (!window.EngineLogLive || !botId) return;
+            loadEngineEvents(botId, false).then(function (events) {
+                if (window.BotHealthAlerts) {
+                    window._lastSeenHealthEventId = window.BotHealthAlerts.maxHealthEventId(events || window._lastEngineEvents);
+                }
+                window.EngineLogLive.startPolling(_engineLogLiveOpts);
+            });
+        }
+
+        function stopEngineLogLive() {
+            if (window.EngineLogLive) window.EngineLogLive.stopPolling(_engineLogLiveOpts);
         }
 
         /** Grid alım/satım noktaları tablolarını günceller (tepe/dip, gerçekleşme fiyatı anlık). */
@@ -964,6 +1238,86 @@
             }
         }
 
+        var gridPointsPollMs = 5000;
+        var _gridPointsPollInFlight = false;
+
+        /** Tepe/dip veya kar trail aktifken grid panelleri canlı güncellenir. */
+        function botDetailGridTrailActive(data) {
+            if (!data) return false;
+            var st = data.state || {};
+            var mode = (st.mode || '').toUpperCase();
+            if (mode.indexOf('TRAIL_') === 0) return true;
+            var gps = data.grid_points || [];
+            for (var gi = 0; gi < gps.length; gi++) {
+                var gp = gps[gi];
+                if (!gp.fired && (gp.anchor != null || gp.trigger_hit_price != null)) return true;
+            }
+            var pps = data.profit_points || [];
+            for (var pi = 0; pi < pps.length; pi++) {
+                if ((pps[pi].status || '').toLowerCase() === 'tetiklendi') return true;
+            }
+            return false;
+        }
+
+        function mergeGridPointsPayload(base, res) {
+            var st = Object.assign({}, (base && base.state) || {}, res.state || {});
+            return Object.assign({}, base || {}, {
+                grid_points: res.grid_points || [],
+                profit_points: res.profit_points || [],
+                reference_display: res.reference_display != null ? res.reference_display : (base && base.reference_display),
+                symbol: res.symbol || (base && base.symbol),
+                state: st,
+                config: res.config || (base && base.config) || {}
+            });
+        }
+
+        function fetchGridPointsLive() {
+            if (document.hidden || !botId || !window.apiClient || _gridPointsPollInFlight) return;
+            if (!botDetailGridTrailActive(lastBotDetail)) {
+                syncGridPointsPoll();
+                return;
+            }
+            _gridPointsPollInFlight = true;
+            window.apiClient.get('/api/bots-engine/' + botId + '/grid-points?account_id=' + (accountId || ''))
+                .then(function (res) {
+                    var merged = mergeGridPointsPayload(lastBotDetail, res);
+                    lastBotDetail.grid_points = merged.grid_points;
+                    lastBotDetail.profit_points = merged.profit_points;
+                    lastBotDetail.state = merged.state;
+                    renderGridPointsPanel(merged);
+                    renderProfitPointsPanel(merged);
+                    if (!botDetailGridTrailActive(merged)) syncGridPointsPoll();
+                })
+                .catch(function () {})
+                .finally(function () { _gridPointsPollInFlight = false; });
+        }
+
+        function syncGridPointsPoll() {
+            if (!window.intervalRegistry) return;
+            if (botDetailGridTrailActive(lastBotDetail)) {
+                window.intervalRegistry.start('bot-detail-grid-points', fetchGridPointsLive, gridPointsPollMs, 'bot-detail');
+            } else {
+                window.intervalRegistry.stop('bot-detail-grid-points');
+            }
+        }
+
+        var tradesPanelPollMs = 5000;
+        function refreshTradesPanelPoll() {
+            if (document.hidden || !botId || !window.apiClient) return;
+            var sel = window._botDetailSelectedCycleId;
+            if (typeof window._botDetailLoadCycleTrades !== 'function' || sel == null) return;
+            window._botDetailLoadCycleTrades(Number(sel));
+        }
+        function syncTradesPanelPoll() {
+            if (!window.intervalRegistry) return;
+            var running = ((lastBotDetail.status || '').toLowerCase() === 'running');
+            if (running && tradesPanel && tradesPanel.style.display !== 'none') {
+                window.intervalRegistry.start('bot-detail-trades', refreshTradesPanelPoll, tradesPanelPollMs, 'bot-detail');
+            } else {
+                window.intervalRegistry.stop('bot-detail-trades');
+            }
+        }
+
         function showDetail(data) {
             loadingEl.style.display = 'none';
             setError(null);
@@ -1088,6 +1442,7 @@
                 '<div class="state-hero-item" title="Başlangıç sermayesine göre toplam kar/zarar"><span class="state-label">Toplam K/Z</span><span class="state-value" id="stateTotalKzValue" style="color:' + totalKzCl + '">' + totalKzStr + '</span></div>';
             var stateHeroTitleEl = document.getElementById('stateHeroTitle');
             if (stateHeroTitleEl) stateHeroTitleEl.textContent = status === 'starting' ? 'Durum · Başlatılıyor' : status === 'running' ? (showAsError ? 'Durum · Hata' : waitingFirstBuy ? 'Durum · İlk alım bekleniyor' : 'Durum · Canlı') : 'Durum · ' + statusText;
+            syncEngineAlertBlink(window._engineLogHasCritical && status === 'running');
             lastBotStartedAt = data.started_at || null;
             if (stateHeroMetaInterval) { clearInterval(stateHeroMetaInterval); stateHeroMetaInterval = null; }
             if (window.intervalRegistry) window.intervalRegistry.stop('bot-detail-duration');
@@ -1098,6 +1453,7 @@
                     window.intervalRegistry.start('bot-detail-duration', function () {
                         var durEl = document.getElementById('stateHeroMetaDur');
                         if (durEl) durEl.textContent = formatStartMetaDurationOnly(lastBotStartedAt);
+                        updateCycleReportDurationLive();
                     }, 1000, 'bot-detail');
                 }
             }
@@ -1107,6 +1463,14 @@
 
             renderGridPointsPanel(data);
             renderProfitPointsPanel(data);
+            lastBotDetail.state = st;
+            lastBotDetail.config = data.config || {};
+            lastBotDetail.grid_points = data.grid_points || [];
+            lastBotDetail.profit_points = data.profit_points || [];
+            lastBotDetail.reference_display = data.reference_display;
+            lastBotDetail.status = data.status || '';
+            syncGridPointsPoll();
+            syncTradesPanelPoll();
 
             tradesPanel.style.display = 'block';
             lastKnownCycleId = st.cycle_id != null ? st.cycle_id : 1;
@@ -1120,10 +1484,15 @@
                     cycleTradesList.innerHTML = '<div class="cycle-pnl-item muted">Tur ' + (cycleNum || selectedCycleId) + ' için henüz işlem yok.</div>';
                     return;
                 }
+                function isInitialAllocationTrade(t) {
+                    var cid = (t.client_order_id || '').toLowerCase();
+                    return cid.indexOf('init_') === 0 || /c0i/i.test(cid);
+                }
                 function tradeReason(t) {
                     var cid = (t.client_order_id || '').toLowerCase();
                     var slot = t.slot_id;
-                    if (cid.indexOf('init_') === 0) return 'Base';
+                    if (cid.indexOf('cycle_open_') === 0) return 'Tur başlangıç (Base)';
+                    if (isInitialAllocationTrade(t)) return 'İlk base alımı';
                     if (cid.indexOf('reentry') >= 0) return 'Kar alımı';
                     if (cid.indexOf('profit_exit') >= 0 || cid.indexOf('profit') >= 0) return 'Kar satışı';
                     if (slot != null && slot >= 0) return 'Grid #' + (slot + 1);
@@ -1147,7 +1516,8 @@
                     var refP = t.reference_price != null && !isNaN(Number(t.reference_price)) ? Number(t.reference_price) : null;
                     var priceNum = t.price != null && !isNaN(Number(t.price)) ? Number(t.price) : null;
                     var realizedPctStr = '';
-                    if (refP != null && refP > 0 && priceNum != null) {
+                    var skipRealizedPct = (reason === 'Tur başlangıç (Base)' || reason === 'İlk base alımı' || isInitialAllocationTrade(t));
+                    if (!skipRealizedPct && refP != null && refP > 0 && priceNum != null) {
                         var pct = (side === 'SELL') ? ((priceNum - refP) / refP * 100) : ((refP - priceNum) / refP * 100);
                         realizedPctStr = ' · Gerçekleşme ' + (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%';
                     }
@@ -1175,14 +1545,19 @@
                     cycleReportEl.style.display = 'none';
                     return;
                 }
-                var dur = formatDurationSec(summary && summary.duration_sec != null ? summary.duration_sec : null);
+                var dur = '—';
+                if (isOpenCycle) {
+                    dur = getStateHeroDurationValue() || '—';
+                } else {
+                    dur = formatDurationSec(summary && summary.duration_sec != null ? summary.duration_sec : null);
+                }
                 var count = summary && summary.trade_count != null ? summary.trade_count : '—';
                 var baseAsset = (typeof baseFromSymbol === 'function' ? baseFromSymbol((lastBotDetail && lastBotDetail.symbol) || '') : '') || 'BASE';
                 var cycleTypeRaw = summary && summary.cycle_type ? summary.cycle_type : (isOpenCycle ? 'Açık tur' : '—');
                 var cycleTypeLabel = cycleTypeRaw === 'LONG_SCALP' ? 'CASH' : cycleTypeRaw === 'INVENTORY_REBALANCE' ? 'INVENTORY' : cycleTypeRaw;
                 var parts = [
                     '<div class="cycle-report-item cycle-report-type"><span class="cycle-report-label">Tur tipi</span><span class="cycle-report-value">' + cycleTypeLabel + '</span></div>',
-                    '<div class="cycle-report-item"><span class="cycle-report-label">Tur süresi</span><span class="cycle-report-value">' + dur + '</span></div>',
+                    '<div class="cycle-report-item"><span class="cycle-report-label">Tur süresi</span><span class="cycle-report-value" id="cycleReportDuration">' + dur + '</span></div>',
                     '<div class="cycle-report-item"><span class="cycle-report-label">İşlem sayısı</span><span class="cycle-report-value">' + count + '</span></div>'
                 ];
                 var cashUsdt = summary && summary.cash_pnl_usdt != null ? Number(summary.cash_pnl_usdt) : 0;
@@ -1200,9 +1575,12 @@
                 }
                 cycleReportEl.innerHTML = parts.join('');
                 cycleReportEl.style.display = 'flex';
+                if (isOpenCycle) updateCycleReportDurationLive();
             }
             function loadCycleTrades(cycleId) {
                 selectedCycleId = cycleId;
+                window._botDetailSelectedCycleId = cycleId;
+                window._botDetailLoadCycleTrades = loadCycleTrades;
                 cycleTradesTurButtons.querySelectorAll('button[data-cycle]').forEach(function(btn) {
                     btn.classList.toggle('active', Number(btn.getAttribute('data-cycle')) === cycleId);
                 });
@@ -1212,20 +1590,19 @@
                 var q = 'account_id=' + (accountId || '') + '&limit=100&cycle_id=' + cycleId;
                 window.apiClient.get('/api/bots-engine/' + botId + '/trades?' + q)
                     .then(function(res) {
-                        renderCycleTradesList(res.trades || [], cycleId);
-                        var summary = res.cycle_summary;
+                        var tradesList = res.trades || [];
+                        renderCycleTradesList(tradesList, cycleId);
+                        var summary = res.cycle_summary ? Object.assign({}, res.cycle_summary) : {};
+                        summary.trade_count = tradesList.length;
                         if (cycleId === currentCycleFromState && lastBotDetail.dual_pnl && lastBotDetail.dual_pnl.current_cycle) {
                             var cur = lastBotDetail.dual_pnl.current_cycle;
-                            summary = {
-                                cycle_type: 'Açık tur',
-                                cash_pnl_usdt: cur.cash_pnl_usdt,
-                                cash_fees_usdt: cur.cash_fees_usdt,
-                                inventory_coin_adv_qty: cur.inventory_coin_adv_qty,
-                                inventory_fees_usdt: cur.inventory_fees_usdt,
-                                trade_count: cur.fills_count,
-                                duration_sec: null,
-                                pnl_primary_mode: (cur.cash_pnl_usdt != null && cur.cash_pnl_usdt !== 0) ? 'CASH_USDT_V1' : 'INVENTORY_QTY_V1'
-                            };
+                            summary.cycle_type = 'Açık tur';
+                            summary.cash_pnl_usdt = cur.cash_pnl_usdt;
+                            summary.cash_fees_usdt = cur.cash_fees_usdt;
+                            summary.inventory_coin_adv_qty = cur.inventory_coin_adv_qty;
+                            summary.inventory_fees_usdt = cur.inventory_fees_usdt;
+                            summary.duration_sec = summary.duration_sec != null ? summary.duration_sec : null;
+                            summary.pnl_primary_mode = (cur.cash_pnl_usdt != null && cur.cash_pnl_usdt !== 0) ? 'CASH_USDT_V1' : 'INVENTORY_QTY_V1';
                         }
                         renderCycleReport(summary, cycleId);
                     })
@@ -1239,7 +1616,8 @@
                 .then(function(cyRes) {
                     var cycles = cyRes.cycles || [1];
                     if (!cycles.length) cycles = [1];
-                    var sel = cycles.indexOf(selectedCycleId) >= 0 ? selectedCycleId : cycles[0];
+                    cycles = cycles.slice().sort(function(a, b) { return Number(a) - Number(b); });
+                    var sel = cycles.indexOf(selectedCycleId) >= 0 ? selectedCycleId : (cycles[cycles.length - 1] || 1);
                     selectedCycleId = sel;
                     cycles.forEach(function(c) {
                         var btn = document.createElement('button');
@@ -1266,6 +1644,7 @@
                     .then(function(cyRes) {
                         var cycles = cyRes.cycles || [1];
                         if (!cycles.length) cycles = [1];
+                        cycles = cycles.slice().sort(function(a, b) { return Number(a) - Number(b); });
                         var sel = cycles.indexOf(selectedCycleId) >= 0 ? selectedCycleId : (cycles[cycles.length - 1] || 1);
                         selectedCycleId = sel;
                         cycles.forEach(function(c) {
@@ -1351,7 +1730,15 @@
             }
             perfPanel.style.display = 'block';
             if (window.innerWidth > 768) { engineLogPanel.style.display = 'block'; } else { engineLogPanel.style.display = 'none'; }
-            loadEngineEvents(botId);
+            if (window.EngineLogFormat && window.EngineLogFormat.setLogContext) {
+                window.EngineLogFormat.setLogContext({
+                    initialCapital: initialCapital,
+                    cycleStartEquity: st.cycle_start_equity != null ? Number(st.cycle_start_equity) : null
+                });
+            }
+            _engineLogLiveOpts.initialCapital = initialCapital;
+            _engineLogLiveOpts.cycleStartEquity = st.cycle_start_equity != null ? Number(st.cycle_start_equity) : null;
+            startEngineLogLive();
             loadPerfMetrics();
         }
 
@@ -1642,7 +2029,11 @@
                 .then(function (res) {
                     showDetail(res);
                     fetchLive();
-                    if (window.intervalRegistry) window.intervalRegistry.start('bot-detail-live', fetchLive, 2500, 'bot-detail');
+                    fetchBotHealth();
+                    if (window.intervalRegistry) {
+                        window.intervalRegistry.start('bot-detail-live', fetchLive, 2500, 'bot-detail');
+                        window.intervalRegistry.start('bot-detail-health', fetchBotHealth, 15000, 'bot-detail');
+                    }
                     if (lastBotDetail.symbol && lastBotDetail.symbol !== 'MULTI' && accountId && window.intervalRegistry) {
                         window.intervalRegistry.start('bot-detail-strip-price', fetchStripPrice, 1500, 'bot-detail');
                     }
@@ -1694,6 +2085,7 @@
             if (stateHeroTitleEl) {
                 var titleText = pollStatus === 'running' ? 'Durum · Canlı' : 'Durum · ' + pollStatusText;
                 if (stateHeroTitleEl.textContent !== titleText) stateHeroTitleEl.textContent = titleText;
+                syncEngineAlertBlink(window._engineLogHasCritical && pollStatus === 'running');
             }
             if (stateHeroMetaInterval) { clearInterval(stateHeroMetaInterval); stateHeroMetaInterval = null; }
             if (window.intervalRegistry) window.intervalRegistry.stop('bot-detail-duration');
@@ -1704,6 +2096,7 @@
                     window.intervalRegistry.start('bot-detail-duration', function() {
                         var durEl = document.getElementById('stateHeroMetaDur');
                         if (durEl) durEl.textContent = formatStartMetaDurationOnly(lastBotStartedAt);
+                        updateCycleReportDurationLive();
                     }, 1000, 'bot-detail');
                 }
             }
@@ -1783,8 +2176,17 @@
                 .catch(function () {});
         }
 
-        var btnEngineLogRefresh = document.getElementById('btnEngineLogRefresh');
-        if (btnEngineLogRefresh) btnEngineLogRefresh.addEventListener('click', function() { if (botId) loadEngineEvents(botId); });
+        function resetHealthAlerts() {
+            if (!window.BotHealthAlerts || !botId) return;
+            window.BotHealthAlerts.resetUi(
+                botId,
+                (window._lastHealthData && window._lastHealthData.alerts) || []
+            );
+        }
+
+        var btnEngineLogReset = document.getElementById('btnEngineLogReset');
+        if (btnEngineLogReset) btnEngineLogReset.addEventListener('click', resetHealthAlerts);
+        document.addEventListener('bot-health-reset', resetHealthAlerts);
         /* Başlat butonu kaldırıldı; bot oluşturulunca otomatik başlar */
 
         function openStopAndDeleteModal() {
@@ -1834,6 +2236,9 @@
                 var body = { convert_base_to_quote: !!convert };
                 window.apiClient.post(url, body)
                     .then(function () {
+                        try {
+                            sessionStorage.removeItem('financeBotsTable_' + (accountId || ''));
+                        } catch (e) {}
                         if (window.Toast) window.Toast.success('Bot sonlandırıldı ve silindi');
                         window.location.href = backLink.href;
                     })
@@ -1882,7 +2287,11 @@
             }, stripKlinesRefreshMs);
         }
         window.addEventListener('visibilitychange', function () {
-            if (!document.hidden && botId) refreshAll();
+            if (!document.hidden && botId) {
+                refreshAll();
+                if (botDetailGridTrailActive(lastBotDetail)) fetchGridPointsLive();
+                refreshTradesPanelPoll();
+            }
         });
     })();
     </script>

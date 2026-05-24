@@ -102,6 +102,7 @@ def _default_quick_data_response(symbol: str):
         "filters": {
             "tickSize": "0.01",
             "stepSize": "0.00001",
+            "minQty": "0.00001",
             "minNotional": "5"
         },
         "ts": time.time()
@@ -163,6 +164,7 @@ async def get_spot_quick_data(
                     "filters": {
                         "tickSize": spot_data.tick_size,
                         "stepSize": spot_data.step_size,
+                        "minQty": spot_data.min_qty,
                         "minNotional": spot_data.min_notional
                     },
                     "ts": spot_data.timestamp
@@ -232,6 +234,7 @@ async def place_spot_order(
             base_available = max(0.0, spot_data.base_balance - float(bot_locked.get(spot_data.base_asset, 0) or 0))
             quote_available = max(0.0, spot_data.quote_balance - float(bot_locked.get(spot_data.quote_asset, 0) or 0))
             side = (request_body.side or "").upper()
+            order_qty = request_body.quantity
             if side == "BUY":
                 if request_body.quote_order_qty is not None and request_body.quote_order_qty > 0:
                     if quote_available < request_body.quote_order_qty:
@@ -256,22 +259,43 @@ async def place_spot_order(
                                 "required_quote": round(required_quote, 2),
                             },
                         )
-            elif side == "SELL" and request_body.quantity is not None and request_body.quantity > 0:
-                if base_available < request_body.quantity:
+            elif side == "SELL" and order_qty is not None and order_qty > 0:
+                from decimal import Decimal
+                sym_filters = await engine._get_symbol_filters(request_body.symbol)
+                qty_str = engine._quantize_to_step(float(order_qty), sym_filters["step_size"])
+                avail_str = engine._quantize_to_step(base_available, sym_filters["step_size"]) if base_available > 0 else "0"
+                qty_d = Decimal(qty_str)
+                avail_d = Decimal(avail_str)
+                if avail_d > 0 and qty_d > avail_d:
+                    qty_str = avail_str
+                    qty_d = avail_d
+                if qty_d <= 0:
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "error": "LOT_SIZE",
+                            "detail": f"Miktar lot adımına uymuyor (step={sym_filters['step_size']}, min={sym_filters['min_qty']}).",
+                            "step_size": sym_filters["step_size"],
+                            "min_qty": sym_filters["min_qty"],
+                            "available_base": round(base_available, 8),
+                        },
+                    )
+                order_qty = float(qty_d)
+                if base_available < order_qty:
                     raise HTTPException(
                         status_code=400,
                         detail={
                             "error": "INSUFFICIENT_AVAILABLE_BALANCE",
                             "detail": "Bot bakiyesi kilitli; kullanılabilir base bakiyesi yetersiz.",
                             "available_base": round(base_available, 8),
-                            "required": request_body.quantity,
+                            "required": order_qty,
                         },
                     )
             result = await engine.place_order(
                 symbol=request_body.symbol,
                 side=request_body.side,
                 order_type=request_body.type,
-                quantity=request_body.quantity,
+                quantity=order_qty,
                 quote_order_qty=request_body.quote_order_qty,
                 price=request_body.price,
                 allow_web=True,
@@ -285,7 +309,7 @@ async def place_spot_order(
                 "side": request_body.side,
                 "type": request_body.type,
                 "order_id": order_id,
-                "quantity": request_body.quantity,
+                "quantity": order_qty,
                 "price": request_body.price or price_val,
                 "quote_order_qty": request_body.quote_order_qty,
                 "executed_qty": executed_qty,
@@ -320,6 +344,9 @@ async def place_spot_order(
         error_data = e.response.json() if e.response.headers.get("content-type", "").startswith("application/json") else {}
         error_msg = error_data.get("msg", e.response.text) if error_data else e.response.text
         logger.error(f"Spot order Binance API error: {status} - {error_msg}")
+        if error_data.get("code") == -1013 or "LOT_SIZE" in (error_msg or ""):
+            from app.services.spot_engine import spot_cache
+            spot_cache.invalidate_filters((request_body.symbol or "").upper())
         # Binance 4xx (parametre/hassasiyet vb.) -> 400; 5xx/ağ -> 502
         status_code = 400 if 400 <= status < 500 else 502
         raise HTTPException(
