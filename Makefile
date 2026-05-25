@@ -1,6 +1,6 @@
 # TraderTrailing — Makefile
 
-.PHONY: start stop restart deploy run dev setup meta test
+.PHONY: start stop restart deploy run dev setup meta test hooks git-log
 
 start:
 	./ops/start.command
@@ -26,6 +26,12 @@ meta:
 	python3 scripts/devops/generate_folder_readmes.py
 	python3 scripts/devops/sync_module_meta.py
 	python3 scripts/devops/sync_ana_basliklar.py
+
+hooks:
+	bash scripts/devops/install_git_hooks.sh
+
+git-log:
+	python3 scripts/devops/sync_git_log.py
 
 test:
 	.venv/bin/pytest tests/ -q

@@ -335,13 +335,13 @@ async def get_account_settings(
         u = db.query(User).filter(User.id == account.user_id).first()
         if u:
             user_phone = u.phone
-    has_binance_keys = bool(
-        getattr(account, "api_key_enc", None) and (account.api_key_enc or "").strip()
-        and getattr(account, "api_secret_enc", None) and (account.api_secret_enc or "").strip()
-    )
-    from app.services.test_account import is_test_account
+    from app.services.test_account import is_test_account, account_has_binance_keys, clear_first_login_if_keys_configured
     if is_test_account(account_id, db):
         has_binance_keys = True  # Test hesabında Binance uyarısı gösterme; paper 10k USDT
+    else:
+        has_binance_keys = account_has_binance_keys(account)
+    if has_binance_keys:
+        clear_first_login_if_keys_configured(account, db)
     spot_favorites = []
     raw = getattr(account, "spot_favorites_json", None)
     if raw:
@@ -411,6 +411,9 @@ async def update_account_settings(
     if body.isolate_from_admin is not None:
         val = bool(body.isolate_from_admin)
         db.execute(update(Account).where(Account.id == account_id).values(isolate_from_admin=val))
+    from app.services.test_account import account_has_binance_keys
+    if account_has_binance_keys(account):
+        account.is_first_login = False
     try:
         db.commit()
         if body.isolate_from_admin is not None:

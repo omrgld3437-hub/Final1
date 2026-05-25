@@ -38,6 +38,31 @@ def is_test_account(account_id: Optional[int], db: "Session") -> bool:
     return bool(user and is_test_account_username(getattr(user, "username", None)))
 
 
+def account_has_binance_keys(account) -> bool:
+    """True if account has both encrypted API key and secret stored."""
+    if not account:
+        return False
+    key = (getattr(account, "api_key_enc", None) or "").strip()
+    secret = (getattr(account, "api_secret_enc", None) or "").strip()
+    return bool(key and secret)
+
+
+def clear_first_login_if_keys_configured(account, db: "Session") -> bool:
+    """If Binance keys exist, clear is_first_login. Returns True if flag was cleared."""
+    if not account or not account_has_binance_keys(account):
+        return False
+    if not getattr(account, "is_first_login", False):
+        return False
+    account.is_first_login = False
+    try:
+        db.commit()
+        db.refresh(account)
+    except Exception:
+        db.rollback()
+        return False
+    return True
+
+
 def is_localhost(client_host: Optional[str]) -> bool:
     if not client_host:
         return False

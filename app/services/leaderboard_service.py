@@ -100,6 +100,16 @@ def _params_missing_strategy_detail(params: Dict[str, Any]) -> bool:
     return len(params) <= 3
 
 
+_BUDGET_PARAM_KEYS = ("initial_capital_usdt", "budget_usd", "bot_budget_quote")
+
+
+def _strip_budget_from_public_params(params: Dict[str, Any]) -> Dict[str, Any]:
+    out = dict(params or {})
+    for k in _BUDGET_PARAM_KEYS:
+        out.pop(k, None)
+    return out
+
+
 def _resolve_leaderboard_params(
     db: Session,
     params: Dict[str, Any],
@@ -124,7 +134,7 @@ def _resolve_leaderboard_params(
         out["reference_price"] = round(float(ref), 8)
     if symbol and "symbol" not in out:
         out["symbol"] = symbol
-    return out
+    return _strip_budget_from_public_params(out)
 
 
 def _reference_price_from_state(db: Session, bot_id: Optional[int], account_id: Optional[int]) -> Optional[float]:

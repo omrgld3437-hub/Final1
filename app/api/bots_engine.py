@@ -442,6 +442,7 @@ async def bots_detail(
         try:
             grid_points, profit_points, meta = compute_grid_profit_view(state or {}, config_for_grid, view_price)
             reference_display = meta.get("ref_display")
+            grid_meta = meta
         except Exception as e:
             logger.warning("bots_detail grid_view failed bot_id=%s: %s", bot.id, e)
 
@@ -849,6 +850,22 @@ def _merge_bot_cycle_ids(db: Session, bot_id: int, account_id: int) -> List[int]
     return sorted(ids, reverse=True)
 
 
+def _parse_ts_utc(ts: Any) -> Optional[datetime]:
+    """Trade/ledger ts → UTC aware datetime (naive DB ts assumed UTC)."""
+    if ts is None:
+        return None
+    if isinstance(ts, datetime):
+        dt = ts
+    else:
+        try:
+            dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+        except Exception:
+            return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
 def _ledger_fills_to_trade_dicts(
     fills: List[Dict[str, Any]],
     symbol: str,
@@ -868,6 +885,7 @@ def _ledger_fills_to_trade_dicts(
             "price": f.get("price"),
             "fee": f.get("fee"),
             "fee_asset": f.get("fee_asset"),
+            "order_id": f.get("order_id"),
             "client_order_id": f.get("client_order_id"),
             "symbol": sym,
             "cycle_id": cycle_id,
@@ -888,18 +906,61 @@ def _trade_dedupe_key(t: Dict[str, Any]) -> str:
     return f"row:{t.get('ts')}:{t.get('side')}:{t.get('qty')}:{t.get('price')}"
 
 
+def _trade_richness(t: Dict[str, Any]) -> int:
+    """DB kaydı (slot_id, reference_price) ledger kopyasından zenginse onu tercih et."""
+    score = 0
+    if t.get("slot_id") is not None:
+        score += 4
+    if t.get("reference_price") is not None:
+        score += 2
+    if t.get("order_id"):
+        score += 1
+    return score
+
+
+def _trade_alias_keys(t: Dict[str, Any]) -> List[str]:
+    keys: List[str] = []
+    oid = t.get("order_id")
+    if oid is not None and str(oid).strip():
+        keys.append(f"oid:{oid}")
+    cid = t.get("client_order_id")
+    if cid:
+        keys.append(f"cid:{str(cid)}")
+    side = (t.get("side") or "").upper()
+    qty, price = t.get("qty"), t.get("price")
+    if side and qty is not None and price is not None:
+        try:
+            keys.append(f"row:{side}:{float(qty):.8f}:{float(price):.4f}")
+        except (TypeError, ValueError):
+            pass
+    return keys
+
+
 def _merge_cycle_trades(*groups: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Birleştir; order_id/client_order_id ile yinelenenleri at. ts artan."""
+    """Birleştir; aynı işlem (order_id / client_order_id / side+qty+price) tek satır."""
     merged: Dict[str, Dict[str, Any]] = {}
     order: List[str] = []
+    alias_to_primary: Dict[str, str] = {}
+
+    def _primary_for(t: Dict[str, Any]) -> str:
+        for a in _trade_alias_keys(t):
+            if a in alias_to_primary:
+                return alias_to_primary[a]
+        return _trade_dedupe_key(t)
+
     for group in groups:
         for t in group or []:
             if not isinstance(t, dict):
                 continue
-            key = _trade_dedupe_key(t)
-            if key not in merged:
-                order.append(key)
-            merged[key] = t
+            pk = _primary_for(t)
+            if pk in merged:
+                if _trade_richness(t) > _trade_richness(merged[pk]):
+                    merged[pk] = t
+            else:
+                merged[pk] = t
+                order.append(pk)
+            for a in _trade_alias_keys(t):
+                alias_to_primary[a] = pk
     out = [merged[k] for k in order]
     out.sort(key=lambda x: str(x.get("ts") or ""))
     return out
@@ -1051,6 +1112,7 @@ def _build_live_snapshot_from_state(bot: Bot, state: Optional[Dict[str, Any]], d
             stale = True
 
     base_balance = float(state.get("base_balance") or 0) if state else 0
+    cycle_id = int(state.get("cycle_id") or 1) if state else 1
     initial_allocation_done = state.get("initial_allocation_done") is True if state else False
     first_buy_pending = status == "running" and not initial_allocation_done and base_balance <= 0
     if first_buy_pending and pnl_pct is not None:
@@ -1068,6 +1130,7 @@ def _build_live_snapshot_from_state(bot: Bot, state: Optional[Dict[str, Any]], d
         "daily_pnl_pct": round(daily_pnl_pct, 2) if daily_pnl_pct is not None else None,
         "base_balance": base_balance,
         "first_buy_pending": first_buy_pending,
+        "cycle_id": cycle_id,
     }
     if stale:
         out["stale"] = True
@@ -1157,6 +1220,7 @@ async def bots_grid_points(
         "grid_points": grid_points,
         "profit_points": profit_points,
         "reference_display": reference_display,
+        "meta": meta,
         "symbol": bot.symbol,
         "current_price": round(live_price, 8) if live_price > 0 else None,
         "state": {
@@ -1797,6 +1861,38 @@ def _is_worker_only_order_error(e: Exception) -> bool:
     return "only allowed on worker" in s or "web/api cannot place" in s
 
 
+async def _sell_symbol_base_on_delete(db: Session, account_id: int, bot_id: int, symbol: str) -> None:
+    """Bot silinmeden önce Binance serbest base → quote (SpotEngine allow_web; worker gerekmez)."""
+    from app.services.binance_assets import get_account_keys
+    from app.services.spot_engine import SpotEngine
+
+    sym = (symbol or "").upper().strip()
+    if not sym:
+        return
+    keys = await get_account_keys(account_id, db)
+    if not keys:
+        raise ValueError("API anahtarı bulunamadı")
+    async with SpotEngine(keys) as engine:
+        spot = await engine.get_quick_data(sym, account_id)
+        base_qty = float(spot.base_balance or 0)
+        if base_qty <= 0:
+            return
+        min_notional = float(spot.min_notional or 5)
+        price = float(spot.price or 0)
+        if price <= 0:
+            from app.services.market_data import get_price
+            price = float(get_price(sym) or 0)
+        notional = base_qty * price if price else 0
+        if notional < min_notional:
+            logger.info(
+                "bots_delete convert skip bot_id=%s symbol=%s notional=%.2f min=%.2f",
+                bot_id, sym, notional, min_notional,
+            )
+            return
+        await engine.place_order(sym, "SELL", "MARKET", quantity=base_qty, allow_web=True)
+        logger.info("bots_delete convert_base_to_quote bot_id=%s symbol=%s base_qty=%.8f", bot_id, sym, base_qty)
+
+
 @router.post("/{bot_id}/delete")
 async def bots_delete(
     request: Request,
@@ -1855,70 +1951,23 @@ async def bots_delete(
                     if n:
                         assets.add(n)
             try:
-                from app.services.binance_assets import get_account_keys
-                from app.botengine.adapters.binance_adapter import BinanceAdapter
-                keys = await get_account_keys(bot.account_id, db)
-                if keys:
-                    adapter = BinanceAdapter(bot.account_id, keys, paper_mode=False)
-                    balances = await adapter.get_account_balances()
-                    for base_asset in assets:
-                        if base_asset == quote_asset:
-                            continue
-                        sym_pair = f"{base_asset}{quote_asset}"
-                        base_free = float((balances.get(base_asset) or {}).get("free", 0) or 0)
-                        if base_free > 0:
-                            try:
-                                filters = await adapter.get_symbol_filters(sym_pair)
-                                min_notional = float(filters.get("min_notional") or 5.0)
-                                price = adapter.get_price(sym_pair) or 0.0
-                                if not price or price <= 0:
-                                    from app.services.market_data import get_price
-                                    price = get_price(sym_pair) or 0.0
-                                notional = base_free * price if price else 0
-                                if notional >= min_notional:
-                                    client_order_id = "convert_delete_" + str(bot.id) + "_" + base_asset
-                                    await adapter.place_market_sell(sym_pair, base_free, client_order_id)
-                                    logger.info("bots_delete convert_base_to_quote MULTI bot_id=%s %s qty=%.8f", bot.id, sym_pair, base_free)
-                                else:
-                                    logger.info("bots_delete convert_base_to_quote skip MULTI bot_id=%s %s notional=%.2f < min=%.2f", bot.id, sym_pair, notional, min_notional)
-                            except Exception as e:
-                                logger.warning("bots_delete convert_base_to_quote MULTI %s failed bot_id=%s: %s", sym_pair, bot.id, e)
-                else:
-                    logger.warning("bots_delete convert_base_to_quote MULTI no keys bot_id=%s account_id=%s", bot.id, bot.account_id)
+                for base_asset in assets:
+                    if base_asset == quote_asset:
+                        continue
+                    sym_pair = f"{base_asset}{quote_asset}"
+                    try:
+                        await _sell_symbol_base_on_delete(db, bot.account_id, bot.id, sym_pair)
+                    except Exception as e:
+                        logger.warning("bots_delete convert_base_to_quote MULTI %s failed bot_id=%s: %s", sym_pair, bot.id, e)
             except Exception as e:
                 logger.warning("bots_delete convert_base_to_quote MULTI failed bot_id=%s: %s", bot.id, e)
-                if not _is_worker_only_order_error(e):
-                    raise HTTPException(status_code=400, detail=_detail_err("CONVERT_FAILED", str(e), rid))
+                raise HTTPException(status_code=400, detail=_detail_err("CONVERT_FAILED", str(e), rid))
         elif symbol and len(symbol) > 4 and symbol.endswith(("USDT", "FDUSD", "BUSD")):
-            base_asset = symbol[:-5] if symbol.endswith("FDUSD") else symbol[:-4]
             try:
-                from app.services.binance_assets import get_account_keys
-                from app.botengine.adapters.binance_adapter import BinanceAdapter
-                keys = await get_account_keys(bot.account_id, db)
-                if keys:
-                    adapter = BinanceAdapter(bot.account_id, keys, paper_mode=False)
-                    balances = await adapter.get_account_balances()
-                    base_free = float((balances.get(base_asset) or {}).get("free", 0) or 0)
-                    if base_free > 0:
-                        filters = await adapter.get_symbol_filters(symbol)
-                        min_notional = float(filters.get("min_notional") or 5.0)
-                        price = adapter.get_price(symbol) or 0.0
-                        if not price or price <= 0:
-                            from app.services.market_data import get_price
-                            price = get_price(symbol) or 0.0
-                        notional = base_free * price if price else 0
-                        if notional >= min_notional:
-                            client_order_id = "convert_delete_" + str(bot.id)
-                            await adapter.place_market_sell(symbol, base_free, client_order_id)
-                            logger.info("bots_delete convert_base_to_quote bot_id=%s symbol=%s base_qty=%.8f", bot.id, symbol, base_free)
-                        else:
-                            logger.info("bots_delete convert_base_to_quote skip bot_id=%s notional=%.2f < min=%.2f", bot.id, notional, min_notional)
-                else:
-                    logger.warning("bots_delete convert_base_to_quote no keys bot_id=%s account_id=%s", bot.id, bot.account_id)
+                await _sell_symbol_base_on_delete(db, bot.account_id, bot.id, symbol)
             except Exception as e:
                 logger.warning("bots_delete convert_base_to_quote failed bot_id=%s err=%s", bot.id, e)
-                if not _is_worker_only_order_error(e):
-                    raise HTTPException(status_code=400, detail=_detail_err("CONVERT_FAILED", str(e), rid))
+                raise HTTPException(status_code=400, detail=_detail_err("CONVERT_FAILED", str(e), rid))
     _insert_engine_command(db, bot.account_id, bot.id, "STOP", request_id=rid)
     await delete_bot_fully(bot.id, db)
     return {"ok": True, "bot_id": bot_id, "request_id": rid}
@@ -2032,6 +2081,163 @@ async def bots_cycles(
     return {"cycles": dca_cycles, "dca_cycles": dca_cycles, "trb_cycles": trb_cycles, "request_id": rid}
 
 
+def _grid_qty_pct_display(raw: Any) -> Optional[float]:
+    try:
+        v = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if 0 < v <= 1:
+        return round(v * 100.0, 2)
+    return round(v, 2)
+
+
+def _grid_pct_from_config(g: Dict[str, Any], side: str) -> Optional[float]:
+    if side == "SELL":
+        v = g.get("sell_grid_pct") or g.get("trigger_pct")
+    else:
+        v = g.get("buy_grid_pct") or g.get("trigger_pct")
+    try:
+        return round(float(v), 4) if v is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _is_grid_trade_row(t: Dict[str, Any]) -> bool:
+    slot = t.get("slot_id")
+    if slot is not None:
+        try:
+            if int(slot) >= 0:
+                return True
+        except (TypeError, ValueError):
+            pass
+    cid = (t.get("client_order_id") or "").lower()
+    if "grid" in cid and "init_" not in cid and "cycle_open" not in cid:
+        return True
+    return False
+
+
+def _archive_lookup(state: Optional[Dict[str, Any]], cycle_id: int, grid_index: int, side: str) -> Optional[Dict[str, Any]]:
+    if not state:
+        return None
+    side_u = (side or "").upper()
+    for row in state.get("cycle_grid_fills_archive") or []:
+        if not isinstance(row, dict):
+            continue
+        if int(row.get("cycle_id") or 0) == int(cycle_id) and int(row.get("grid_index") or -1) == int(grid_index) and (row.get("side") or "").upper() == side_u:
+            return row
+    return None
+
+
+def _state_grid_arrays(state: Dict[str, Any], side: str, idx: int) -> Tuple[Optional[float], Optional[float], Optional[float]]:
+    if side == "SELL":
+        trigs = state.get("sell_grid_trigger_price") or []
+        exts = state.get("sell_grid_peak_price") or []
+        fills = state.get("sell_grid_fill_price") or []
+    else:
+        trigs = state.get("buy_grid_trigger_price") or []
+        exts = state.get("buy_grid_trough_price") or []
+        fills = state.get("buy_grid_fill_price") or []
+    trig = trigs[idx] if idx < len(trigs) else None
+    ext = exts[idx] if idx < len(exts) else None
+    exec_p = fills[idx] if idx < len(fills) else None
+    def _sf(v: Any) -> Optional[float]:
+        if v is None:
+            return None
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+    return _sf(trig), _sf(ext), _sf(exec_p)
+
+
+def _enrich_trades_grid_detail(
+    trades: List[Dict[str, Any]],
+    config_raw: Dict[str, Any],
+    state: Optional[Dict[str, Any]],
+    cycle_id: int,
+) -> None:
+    """Tur işlemleri listesine grid modal alanları ekle (mutates trades in place)."""
+    cfg = _config_for_grid_view(config_raw)
+    sell_grids = cfg.get("sell_grids") or (cfg.get("up") or {}).get("grids") or []
+    buy_grids = cfg.get("buy_grids") or (cfg.get("down") or {}).get("grids") or []
+    cur_cid = int(state.get("cycle_id") or 1) if state else None
+    cycle_ref: Optional[float] = None
+    for t in trades:
+        if not _is_grid_trade_row(t):
+            continue
+        side = (t.get("side") or "").upper()
+        try:
+            idx = int(t.get("slot_id")) if t.get("slot_id") is not None else -1
+        except (TypeError, ValueError):
+            idx = -1
+        if idx < 0:
+            continue
+        grids = sell_grids if side == "SELL" else buy_grids
+        gcfg = grids[idx] if idx < len(grids) and isinstance(grids[idx], dict) else {}
+        grid_pct = _grid_pct_from_config(gcfg, side)
+        if side == "SELL":
+            qty_pct = _grid_qty_pct_display(gcfg.get("sell_qty_pct_of_base") or gcfg.get("qty_pct"))
+        else:
+            qty_pct = _grid_qty_pct_display(gcfg.get("buy_qty_pct_of_quote") or gcfg.get("qty_pct"))
+        trig: Optional[float] = None
+        extreme: Optional[float] = None
+        exec_p: Optional[float] = None
+        archived = _archive_lookup(state, cycle_id, idx, side)
+        if archived:
+            trig = archived.get("trigger_price")
+            extreme = archived.get("extreme_price")
+            exec_p = archived.get("execution_price")
+        if state and cur_cid == int(cycle_id):
+            fired_list = state.get("sell_grid_fired") if side == "SELL" else state.get("buy_grid_fired")
+            if isinstance(fired_list, list) and idx < len(fired_list) and fired_list[idx]:
+                t_trig, t_ext, t_exec = _state_grid_arrays(state, side, idx)
+                trig = trig if trig is not None else t_trig
+                extreme = extreme if extreme is not None else t_ext
+                exec_p = exec_p if exec_p is not None else t_exec
+            hist_key = "sell_history" if side == "SELL" else "buy_history"
+            for h in reversed(state.get(hist_key) or []):
+                if not isinstance(h, dict) or int(h.get("grid_index") or -1) != idx:
+                    continue
+                try:
+                    if abs(float(h.get("qty") or 0) - float(t.get("qty") or 0)) > 1e-6:
+                        continue
+                except (TypeError, ValueError):
+                    pass
+                if h.get("execution_price") is not None and exec_p is None:
+                    try:
+                        exec_p = float(h["execution_price"])
+                    except (TypeError, ValueError):
+                        pass
+                break
+        if cycle_ref is None:
+            try:
+                cycle_ref = float(t.get("reference_price") or 0) or None
+            except (TypeError, ValueError):
+                cycle_ref = None
+        if trig is None and grid_pct is not None and cycle_ref and cycle_ref > 0:
+            trig = cycle_ref * (1 + grid_pct / 100.0) if side == "SELL" else cycle_ref * (1 - grid_pct / 100.0)
+        fill_p = t.get("price")
+        try:
+            fill_f = float(fill_p) if fill_p is not None else None
+        except (TypeError, ValueError):
+            fill_f = None
+        if exec_p is None and fill_f is not None:
+            exec_p = fill_f
+        t["grid_detail"] = {
+            "grid_index": idx,
+            "grid_label": f"Grid #{idx + 1}",
+            "grid_type": "Satış gridi" if side == "SELL" else "Alış gridi",
+            "side": side,
+            "grid_pct": grid_pct,
+            "qty_pct": qty_pct,
+            "trigger_price": round(trig, 8) if trig is not None else None,
+            "extreme_price": round(extreme, 8) if extreme is not None else None,
+            "execution_price": round(exec_p, 8) if exec_p is not None else None,
+            "fill_price": round(fill_f, 8) if fill_f is not None else None,
+            "extreme_label": "Tepe fiyat" if side == "SELL" else "Dip fiyat",
+        }
+
+
 @router.get("/{bot_id}/trades")
 async def bots_trades(
     request: Request,
@@ -2072,40 +2278,49 @@ async def bots_trades(
     if cycle_id is not None and ct == "trb":
         cycle_summary = {"cycle_type": "trb", "trade_count": 0, "note": "Rebalancing tur işlemleri ayrı kaydedilmiyor."}
     elif cycle_id is not None:
-        ts_list = []
+        ts_list: List[datetime] = []
         for t in trades:
-            ts_str = t.get("ts")
-            if ts_str:
-                try:
-                    ts_list.append(datetime.fromisoformat(ts_str.replace("Z", "+00:00")))
-                except Exception:
-                    pass
+            dt = _parse_ts_utc(t.get("ts"))
+            if dt is not None:
+                ts_list.append(dt)
         duration_sec = 0.0
         if len(ts_list) >= 2:
-            duration_sec = (max(ts_list) - min(ts_list)).total_seconds()
+            try:
+                duration_sec = (max(ts_list) - min(ts_list)).total_seconds()
+            except Exception as e:
+                logger.warning("bots_trades duration_sec failed bot_id=%s cycle_id=%s: %s", bot.id, cycle_id, e)
         elif state and int(state.get("cycle_id") or 1) == int(cycle_id):
             ledger = state.get("cycle_ledger_current") or {}
             started_at = ledger.get("started_at") if isinstance(ledger, dict) else None
-            if started_at:
-                try:
-                    start_dt = datetime.fromisoformat(str(started_at).replace("Z", "+00:00"))
-                    duration_sec = (datetime.now(timezone.utc) - start_dt).total_seconds()
-                except Exception:
-                    pass
+            start_dt = _parse_ts_utc(started_at)
+            if start_dt is not None:
+                duration_sec = max(0.0, (datetime.now(timezone.utc) - start_dt).total_seconds())
         pnl_usdt = None
         cycle_entry = None
-        if state and state.get("cycle_pnls"):
+        if state and isinstance(state.get("cycle_pnls"), list):
             for c in state["cycle_pnls"]:
+                if not isinstance(c, dict):
+                    continue
                 if c.get("cycle_id") == cycle_id:
                     pnl_usdt = c.get("pnl_usdt")
                     cycle_entry = c
                     break
         is_open_cycle = state is not None and int(state.get("cycle_id") or 1) == int(cycle_id)
+
+        def _safe_float(v: Any) -> Optional[float]:
+            if v is None:
+                return None
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                return None
+
+        pnl_f = _safe_float(pnl_usdt)
         cycle_summary = {
             "cycle_type": "Açık tur" if is_open_cycle and cycle_entry is None else "dca",
             "duration_sec": round(duration_sec, 1) if duration_sec else None,
             "trade_count": len(trades),
-            "pnl_usdt": round(float(pnl_usdt), 2) if pnl_usdt is not None else None,
+            "pnl_usdt": round(pnl_f, 2) if pnl_f is not None else None,
         }
         if cycle_entry is not None:
             cycle_summary["cycle_type"] = cycle_entry.get("cycle_type") or "dca"
@@ -2122,6 +2337,9 @@ async def bots_trades(
                 cycle_summary["cash_fees_usdt"] = ledger.get("cash_fifo_fees_usdt") if ledger.get("cash_fifo_fees_usdt") is not None else ledger.get("cash_fees_usdt")
                 cycle_summary["inventory_coin_adv_qty"] = ledger.get("inventory_coin_adv_qty")
                 cycle_summary["inventory_fees_usdt"] = ledger.get("inventory_fees_usdt")
+    if cycle_id is not None and ct != "trb" and trades:
+        cfg_raw = json.loads(bot.config_json or "{}")
+        _enrich_trades_grid_detail(trades, cfg_raw, state, int(cycle_id))
     return {"trades": trades, "cycle_summary": cycle_summary, "cycle_type": ct, "request_id": rid}
 
 
@@ -2236,10 +2454,9 @@ async def bots_performance(
     pnl_pct = (pnl_usd / initial_for_pnl * 100.0) if initial_for_pnl > 0 else 0.0
     real_performance_pct = pnl_pct
 
-    # Cycles (tur) count for this bot
-    from app.bot.ledger import Ledger
-    cycles = Ledger.get_cycle_ids(db, bot.id, bot.account_id)
-    cycles_count = max(cycles) if cycles else 0
+    # Aktif tur: state + ledger birleşimi (/cycles ile aynı kaynak)
+    merged_cycles = _merge_bot_cycle_ids(db, bot.id, bot.account_id)
+    cycles_count = max(merged_cycles) if merged_cycles else 0
 
     # Chart: always from bot start; two series as % from start (balance % and parite %)
     chart_series: List[Dict[str, Any]] = []
@@ -2454,6 +2671,8 @@ async def bots_performance(
         if isinstance(tb, dict) and any(k in tb for k in ("equity_usdt", "target_quote_usdt", "target_base_usdt")):
             target_budgets = {k: round(float(v), 2) if isinstance(v, (int, float)) else v for k, v in tb.items() if k in ("equity_usdt", "target_quote_usdt", "target_base_usdt", "ts")}
 
+    current_cycle_id = int(state_for_pnl.get("cycle_id") or 1) if state_for_pnl else (cycles_count or 1)
+
     result = {
         "request_id": rid,
         "bot_id": bot.id,
@@ -2463,6 +2682,7 @@ async def bots_performance(
         "real_performance_pct": round(real_performance_pct, 2),
         "trades_count": trades_count,
         "cycles_count": cycles_count,
+        "current_cycle_id": current_cycle_id,
         "fees_usd": round(fees_usd, 2),
         "realized": round(realized, 2),
         "total_usd": round(total_usd, 2),

@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# Her commit sonrası GIT.md güncelle; değiştiyse otomatik commit et.
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+
+# Sync commit'in kendisi sonsuz döngüye girmesin
+if [ "${GITMD_AUTO_SYNC:-}" = "1" ]; then
+  exit 0
+fi
+
+LAST_MSG="$(git log -1 --pretty=%s 2>/dev/null || true)"
+if [[ "$LAST_MSG" == docs:\ sync\ GIT.md* ]]; then
+  exit 0
+fi
+
+python3 scripts/devops/sync_git_log.py
+
+if git diff --quiet -- GIT.md 2>/dev/null; then
+  exit 0
+fi
+
+git add GIT.md
+GITMD_AUTO_SYNC=1 git commit --no-verify -m "docs: sync GIT.md (git log)"

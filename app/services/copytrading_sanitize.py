@@ -114,18 +114,6 @@ def _sanitize_trailing_dca(cfg: Dict[str, Any]) -> Dict[str, Any]:
     for k in ("symbol", "strategy_id"):
         if k in cfg and cfg[k] is not None:
             out[k] = cfg[k]
-    budget = cfg.get("initial_capital_usdt")
-    if budget is None:
-        budget = cfg.get("budget_usd")
-    if budget is None:
-        budget = cfg.get("bot_budget_quote")
-    if budget is not None:
-        try:
-            b = float(budget)
-            if b > 0:
-                out["initial_capital_usdt"] = b
-        except (TypeError, ValueError):
-            pass
     return out
 
 

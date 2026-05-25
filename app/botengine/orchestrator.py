@@ -814,22 +814,22 @@ async def delete_bot_fully(bot_id: int, db: Session) -> None:
     from app.services.pnl_service import PnlService
     await stop_bot(bot_id, db)
     bot = db.query(Bot).filter(Bot.id == bot_id).first()
-    if not bot:
-        return
-    try:
-        release_symbol_lock(db, bot.account_id, trade_lock_symbol(bot.account_id), bot_id)
-    except Exception:
-        pass
-    # Günlük KPI: Bot silinince bugünkü gerçekleşen PnL kaybolmasın diye cache'e yaz
-    today_str = turkey_today_start_utc().strftime("%Y-%m-%d")
-    bot_today_realized = PnlService._daily_realized_for_bot_trades(db, bot_id, bot.account_id)
-    if bot_today_realized != 0:
-        PnlService.add_to_account_daily_realized_cache(db, bot.account_id, today_str, bot_today_realized)
+    if bot:
+        try:
+            release_symbol_lock(db, bot.account_id, trade_lock_symbol(bot.account_id), bot_id)
+        except Exception:
+            pass
+        # Günlük KPI: Bot silinince bugünkü gerçekleşen PnL kaybolmasın diye cache'e yaz
+        today_str = turkey_today_start_utc().strftime("%Y-%m-%d")
+        bot_today_realized = PnlService._daily_realized_for_bot_trades(db, bot_id, bot.account_id)
+        if bot_today_realized != 0:
+            PnlService.add_to_account_daily_realized_cache(db, bot.account_id, today_str, bot_today_realized)
     db.execute(text("DELETE FROM bot_virtual_wallet WHERE bot_id = :bid"), {"bid": bot_id})
     db.execute(text("DELETE FROM bot_engine_events WHERE bot_id = :bid"), {"bid": bot_id})
     db.execute(text("DELETE FROM bot_engine_state WHERE bot_id = :bid"), {"bid": bot_id})
     db.query(Trade).filter(Trade.bot_id == bot_id).delete(synchronize_session=False)
     db.query(PnlSnapshot).filter(PnlSnapshot.bot_id == bot_id).delete(synchronize_session=False)
-    db.query(Bot).filter(Bot.id == bot_id).delete(synchronize_session=False)
+    if bot:
+        db.query(Bot).filter(Bot.id == bot_id).delete(synchronize_session=False)
     db.commit()
     logger.info("bot_engine delete_bot_fully bot_id=%s", bot_id)

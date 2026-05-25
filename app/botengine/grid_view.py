@@ -120,6 +120,24 @@ def compute_grid_profit_view(
         buy_fired = []
     active = bool(sell_hist or buy_hist or any(sell_fired) or any(buy_fired))
 
+    cfg_obj = None
+    quote_bal = _f(state.get("quote_balance"))
+    base_bal = _f(state.get("base_balance"))
+    try:
+        from app.botengine.models import DcaGridTrailingConfig
+        from app.botengine.strategies.dca_grid_trailing import (
+            _buy_qty_for_grid,
+            _quote_ref_for_buy_grid,
+            _sell_qty_for_grid,
+        )
+        cfg_obj = DcaGridTrailingConfig(config)
+        quote_pool = _quote_ref_for_buy_grid(state, cfg_obj, quote_bal)
+        if quote_pool > 0:
+            meta["quote_pool_usd"] = round(quote_pool, 2)
+    except Exception:
+        cfg_obj = None
+        quote_pool = 0.0
+
     def _pct(g: Dict, key: str, alt: str) -> float:
         return _f(g.get(key) or g.get(alt))
 
@@ -155,6 +173,9 @@ def compute_grid_profit_view(
                 anchor = peak_val if peak_val > 0 else _f(price)
                 anchor = max(anchor, _f(price))
                 execution_price = anchor * (1 - sell_trail / 100.0)
+        planned_base_qty = None
+        if cfg_obj is not None:
+            planned_base_qty = _sell_qty_for_grid(state, cfg_obj, i, base_bal, price)
         grid_points.append({
             "type": "sell",
             "i": i,
@@ -165,6 +186,7 @@ def compute_grid_profit_view(
             "execution_price": round(execution_price, 4) if execution_price is not None else None,
             "active": active,
             "qty_pct": round(qty_pct, 1) if qty_pct else None,
+            "planned_base_qty": round(planned_base_qty, 8) if planned_base_qty else None,
         })
 
     for j, g in enumerate(buy_grids):
@@ -199,6 +221,9 @@ def compute_grid_profit_view(
                 anchor = trough_val if trough_val > 0 else _f(price)
                 anchor = min(anchor, _f(price))
                 execution_price = anchor * (1 + buy_trail / 100.0)
+        planned_usd = None
+        if cfg_obj is not None:
+            planned_usd = _buy_qty_for_grid(state, cfg_obj, j, quote_bal, price)
         grid_points.append({
             "type": "buy",
             "i": j,
@@ -209,6 +234,7 @@ def compute_grid_profit_view(
             "execution_price": round(execution_price, 4) if execution_price is not None else None,
             "active": active,
             "qty_pct": round(qty_pct, 1) if qty_pct else None,
+            "planned_usd": round(planned_usd, 2) if planned_usd else None,
         })
 
     avg_sell = _avg_sell_price(state)

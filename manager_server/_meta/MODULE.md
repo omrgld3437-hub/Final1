@@ -19,7 +19,7 @@ python -m manager_server
 | `app.py` | FastAPI, API, WS |
 | `state.py` | PID, log ring, helper spawn |
 | `reason_engine.py` | Durum açıklama |
-| `ui/` | manager.js, index.html |
+| `ui/` | manager.js, logHumanize.js, index.html |
 
 ## Güvenlik
 

@@ -70,17 +70,21 @@ elif (_PROJECT_ROOT / "Omeraltinhtml").is_dir():
 else:
     _OMERALTINHTML_PATH = _PROJECT_ROOT.parent / "omeraltinhtml"
 
+# --- RAM budget: sabit üst sınırlar, sınırsız büyüme yok ---
+LOG_LINE_MAX = 400
+RING_LINES = 300
+RING_ERRORS = 30
+RING_WARNS = 30
+WS_BATCH_MAX = 40
+TAIL_READ_BYTES = 256_000
+ARCHIVE_QUERY_SCAN = 2500
+JSONL_COUNT_CACHE_TTL = 60.0
+ISSUE_PERSIST_DELAY_SEC = 20.0
+
 # Metrics list caps (no unbounded growth)
-_METRICS_TOP_PATHS = 50
-_METRICS_TOP_IPS = 50
-_METRICS_LOGIN_FAILS = 50
-
-_IS_WINDOWS = platform.system() == "Windows"
-
-# Ring buffers: maxlen fixed to avoid RAM growth
-RING_LINES = 1000
-RING_ERRORS = 50
-RING_WARNS = 50
+_METRICS_TOP_PATHS = 30
+_METRICS_TOP_IPS = 30
+_METRICS_LOGIN_FAILS = 30
 
 # Parsing
 _ERROR_RE = re.compile(r"\b(ERROR|Traceback|Exception|CRITICAL)\b", re.I)
@@ -100,6 +104,124 @@ _ACCESS_200_RE = re.compile(
     r'"\s*(?:GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\s+[^"]*HTTP/1\.\d"\s+200\b',
     re.I,
 )
+
+_IS_WINDOWS = platform.system() == "Windows"
+_jsonl_count_cache: dict[str, tuple[int, float]] = {}
+
+
+def _truncate_line(line: str, max_len: int = LOG_LINE_MAX) -> str:
+    line = (line or "").rstrip("\r\n")
+    if len(line) <= max_len:
+        return line
+    return line[: max_len - 1] + "…"
+
+
+def _read_file_tail_text(path: Path, max_bytes: int = TAIL_READ_BYTES) -> str:
+    if not path.exists():
+        return ""
+    try:
+        size = path.stat().st_size
+        if size <= 0:
+            return ""
+        with open(path, "rb") as f:
+            read_size = min(size, max_bytes)
+            f.seek(-read_size, 2)
+            return f.read().decode("utf-8", errors="replace")
+    except Exception:
+        return ""
+
+
+def _read_file_tail_lines(path: Path, n: int, max_bytes: int = TAIL_READ_BYTES) -> list[str]:
+    text = _read_file_tail_text(path, max_bytes)
+    if not text:
+        return []
+    lines = text.splitlines()
+    return [_truncate_line(ln) for ln in lines[-n:] if ln.strip()]
+
+
+def _count_jsonl_lines(path: Path) -> int:
+    if not path.exists():
+        return 0
+    try:
+        n = 0
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                if line.strip():
+                    n += 1
+        return n
+    except Exception:
+        return 0
+
+
+def _count_jsonl_lines_cached(path: Path) -> int:
+    key = str(path)
+    now = time.time()
+    cached = _jsonl_count_cache.get(key)
+    if cached and (now - cached[1]) < JSONL_COUNT_CACHE_TTL:
+        return cached[0]
+    n = _count_jsonl_lines(path)
+    _jsonl_count_cache[key] = (n, now)
+    return n
+
+
+def _invalidate_jsonl_count_cache(path: Path) -> None:
+    _jsonl_count_cache.pop(str(path), None)
+
+
+def _trim_jsonl_file(path: Path, max_lines: int) -> None:
+    if not path.exists():
+        return
+    try:
+        total = _count_jsonl_lines(path)
+        if total <= max_lines:
+            return
+        skip = total - max_lines
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        kept = 0
+        with open(path, "r", encoding="utf-8", errors="replace") as src, open(tmp, "w", encoding="utf-8") as dst:
+            for line in src:
+                if not line.strip():
+                    continue
+                if skip > 0:
+                    skip -= 1
+                    continue
+                dst.write(line if line.endswith("\n") else line + "\n")
+                kept += 1
+        tmp.replace(path)
+        _jsonl_count_cache[str(path)] = (kept, time.time())
+    except Exception:
+        try:
+            tmp = path.with_suffix(path.suffix + ".tmp")
+            if tmp.exists():
+                tmp.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
+def _query_jsonl_archive(
+    path: Path,
+    limit: int,
+    offset: int,
+    match_fn,
+    max_scan: int = ARCHIVE_QUERY_SCAN,
+) -> tuple[list, int]:
+    if not path.exists():
+        return [], 0
+    text = _read_file_tail_text(path, TAIL_READ_BYTES * 4)
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    if len(lines) > max_scan:
+        lines = lines[-max_scan:]
+    matched: list = []
+    for line in reversed(lines):
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if match_fn(rec):
+            matched.append(rec)
+    total = len(matched)
+    return matched[offset: offset + limit], total
+
 
 try:
     import psutil
@@ -126,21 +248,30 @@ _metrics_thread: Optional[threading.Thread] = None
 _metrics_stop = threading.Event()
 
 # Issues (Sentry-style, bounded): fingerprint -> issue dict. LRU evict when > MAX_ISSUES
-MAX_ISSUES = 200
-MAX_ISSUE_SAMPLES = 5
+MAX_ISSUES = 300
+MAX_ISSUE_SAMPLES = 3
+ISSUE_COMMENT_MAX = 15
+ISSUE_STATUS_HIST_MAX = 15
+MAX_ISSUES_ARCHIVE = 10000
+_ISSUES_ACTIVE_FILE = _RUN_DIR / "issues_active.json"
+_ISSUES_ARCHIVE_FILE = _RUN_DIR / "issues_archive.jsonl"
 ISSUE_ID_COUNTER = [0]  # list to allow mutability in nested fn
 _issues: dict = {}  # fingerprint -> { id, fingerprint, severity, status, first_seen, last_seen, count, samples, tags }
 _issues_lock = threading.Lock()
-_issues_order: deque = deque(maxlen=MAX_ISSUES)  # fingerprints in insertion order for LRU
+_issues_order: deque = deque()  # insertion order; evicted manually at MAX_ISSUES
+_issues_persist_timer: Optional[threading.Timer] = None
+_issues_persist_lock = threading.Lock()
 
 # Audit events (bounded, persisted to .run/audit.json)
-MAX_AUDIT = 200
+MAX_AUDIT = 300
+MAX_AUDIT_ARCHIVE = 10000
 _AUDIT_FILE = _RUN_DIR / "audit.json"
-_audit_events: deque = deque(maxlen=MAX_AUDIT)
+_AUDIT_ARCHIVE_FILE = _RUN_DIR / "audit_archive.jsonl"
+_audit_events: deque = deque()
 _audit_lock = threading.Lock()
 
 # Alerts (bounded max 200, for toast/WS)
-MAX_ALERTS = 200
+MAX_ALERTS = 50
 _ALERT_ID_COUNTER = [0]
 _alerts: deque = deque(maxlen=MAX_ALERTS)
 _alerts_lock = threading.Lock()
@@ -154,7 +285,7 @@ _LOGIN_SPIKE_THRESHOLD: int = 10
 _RESTART_LOOP_COUNT: int = 5
 
 # Metrics history for export (bounded ~900, downsampled)
-MAX_METRICS_HISTORY = 900
+MAX_METRICS_HISTORY = 180
 _metrics_history: deque = deque(maxlen=MAX_METRICS_HISTORY)
 _metrics_history_lock = threading.Lock()
 
@@ -262,6 +393,15 @@ def _collect_metrics() -> None:
     manager_proc = _process_metrics(manager_pid, manager_started)
     web_proc = _process_metrics(web_pid, web_started)
     engine_proc = _process_metrics(engine_pid, engine_started)
+    html_running = _is_port_in_use(_HTML_PORT)
+    html_pid = _pid_on_port(_HTML_PORT) if html_running else _read_pid(_HTML_PID)
+    html_started = None
+    if (_RUN_DIR / "html.started_at").exists():
+        try:
+            html_started = float((_RUN_DIR / "html.started_at").read_text().strip())
+        except Exception:
+            pass
+    html_proc = _process_metrics(html_pid, html_started)
     web_app = _read_json_capped(_WEB_METRICS_FILE)
     engine_app = _read_json_capped(_ENGINE_METRICS_FILE)
     with _metrics_lock:
@@ -272,6 +412,7 @@ def _collect_metrics() -> None:
             "manager": manager_proc,
             "web": web_proc,
             "engine": engine_proc,
+            "html": html_proc,
             "web_app": web_app,
             "engine_app": engine_app,
         })
@@ -335,7 +476,17 @@ def _metrics_loop() -> None:
 def get_metrics() -> dict:
     """Return a copy of current metrics_cache for API."""
     with _metrics_lock:
-        return json.loads(json.dumps(metrics_cache, default=str))
+        out = json.loads(json.dumps(metrics_cache, default=str))
+    # Cache boş kaldıysa dosyadan taze oku (web/engine app metrikleri)
+    if not out.get("web_app"):
+        wa = _read_json_capped(_WEB_METRICS_FILE)
+        if wa:
+            out["web_app"] = wa
+    if not out.get("engine_app"):
+        ea = _read_json_capped(_ENGINE_METRICS_FILE)
+        if ea:
+            out["engine_app"] = ea
+    return out
 
 
 def start_metrics_thread() -> None:
@@ -440,6 +591,7 @@ def save_locks(l: dict) -> None:
 def init_state() -> None:
     global status, logs_ring, errors_ring, warns_ring, locks
     _load_audit()
+    _load_active_issues()
     _load_diagnosis()
     locks = load_locks()
     for key in ("web", "engine"):
@@ -540,6 +692,9 @@ def _is_noise_line(line: str, level: str) -> bool:
         # SLOW_REQUEST: yavaş istek uyarıları panelde listelenmesin (log dosyasında kalsın)
         if "SLOW_REQUEST" in s:
             return True
+        # Manager kendi /api/issues/summary 404 probe satırları — panel gürültüsü
+        if "/api/issues/summary" in s and "404" in s:
+            return True
     return False
 
 
@@ -597,8 +752,186 @@ def _fingerprint_line(line: str) -> str:
     return hashlib.sha256(norm.encode()).hexdigest()[:20]
 
 
+def _issue_from_disk(raw: dict) -> dict:
+    i = dict(raw)
+    if not isinstance(i.get("comments"), deque):
+        i["comments"] = deque(i.get("comments") or [], maxlen=ISSUE_COMMENT_MAX)
+    if not isinstance(i.get("status_history"), deque):
+        i["status_history"] = deque(i.get("status_history") or [], maxlen=ISSUE_STATUS_HIST_MAX)
+    i.setdefault("assignee", None)
+    i.setdefault("labels", [])
+    i.setdefault("sla_note", None)
+    return i
+
+
+def _parse_issue_id_num(issue_id: Optional[str]) -> int:
+    if not issue_id or not str(issue_id).startswith("ISS-"):
+        return 0
+    try:
+        return int(str(issue_id)[4:])
+    except ValueError:
+        return 0
+
+
+def _sync_issue_counter_from_records(records: list) -> None:
+    max_id = ISSUE_ID_COUNTER[0]
+    for rec in records:
+        max_id = max(max_id, _parse_issue_id_num(rec.get("id")))
+    ISSUE_ID_COUNTER[0] = max_id
+
+
+def _append_issue_archive(issue: dict, reason: str = "capacity") -> None:
+    """Evicted issues → local jsonl backup under .run/issues_archive.jsonl."""
+    try:
+        _RUN_DIR.mkdir(parents=True, exist_ok=True)
+        record = _issue_to_dict(issue)
+        record["_backup_reason"] = reason
+        record["_backup_at"] = _now_tr_iso()
+        with open(_ISSUES_ARCHIVE_FILE, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
+        _invalidate_jsonl_count_cache(_ISSUES_ARCHIVE_FILE)
+        _trim_jsonl_file(_ISSUES_ARCHIVE_FILE, MAX_ISSUES_ARCHIVE)
+    except Exception:
+        pass
+
+
+def _trim_issues_archive_file() -> None:
+    _trim_jsonl_file(_ISSUES_ARCHIVE_FILE, MAX_ISSUES_ARCHIVE)
+
+
+def _pick_eviction_fingerprint() -> Optional[str]:
+    """Evict archived/resolved before open; oldest last_seen within tier."""
+    if not _issues:
+        return None
+    rank = {"ARCHIVED": 0, "RESOLVED": 1, "ACK": 2, "OPEN": 3}
+    candidates: list[tuple] = []
+    for fp in list(_issues_order):
+        i = _issues.get(fp)
+        if not i:
+            continue
+        st = (i.get("status") or "OPEN").upper()
+        candidates.append((rank.get(st, 9), i.get("last_seen") or "", fp))
+    if not candidates:
+        return None
+    candidates.sort()
+    return candidates[0][2]
+
+
+def _evict_issue_for_capacity() -> None:
+    fp = _pick_eviction_fingerprint()
+    if not fp:
+        return
+    try:
+        _issues_order.remove(fp)
+    except ValueError:
+        pass
+    old = _issues.pop(fp, None)
+    if old:
+        _append_issue_archive(old, "capacity")
+
+
+def _persist_active_issues() -> None:
+    with _issues_lock:
+        payload = {
+            "counter": ISSUE_ID_COUNTER[0],
+            "order": list(_issues_order),
+            "issues": {fp: _issue_to_dict(i) for fp, i in _issues.items()},
+            "saved_at": _now_tr_iso(),
+        }
+    try:
+        _RUN_DIR.mkdir(parents=True, exist_ok=True)
+        tmp = _ISSUES_ACTIVE_FILE.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+        tmp.replace(_ISSUES_ACTIVE_FILE)
+    except Exception:
+        pass
+
+
+def _schedule_persist_active_issues(delay_sec: float = ISSUE_PERSIST_DELAY_SEC) -> None:
+    global _issues_persist_timer
+    with _issues_persist_lock:
+
+        def _run() -> None:
+            _persist_active_issues()
+
+        if _issues_persist_timer is not None:
+            _issues_persist_timer.cancel()
+        _issues_persist_timer = threading.Timer(delay_sec, _run)
+        _issues_persist_timer.daemon = True
+        _issues_persist_timer.start()
+
+
+def _load_active_issues() -> None:
+    global _issues, _issues_order
+    if _ISSUES_ACTIVE_FILE.exists():
+        try:
+            data = json.loads(_ISSUES_ACTIVE_FILE.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                ISSUE_ID_COUNTER[0] = int(data.get("counter") or 0)
+                order = data.get("order") or []
+                raw_issues = data.get("issues") or {}
+                if isinstance(raw_issues, dict):
+                    _issues.clear()
+                    _issues_order.clear()
+                    for fp in order:
+                        if fp in raw_issues:
+                            _issues[fp] = _issue_from_disk(raw_issues[fp])
+                            _issues_order.append(fp)
+                    for fp, raw in raw_issues.items():
+                        if fp not in _issues:
+                            _issues[fp] = _issue_from_disk(raw)
+                            _issues_order.append(fp)
+        except Exception:
+            pass
+    max_id = ISSUE_ID_COUNTER[0]
+    for i in _issues.values():
+        max_id = max(max_id, _parse_issue_id_num(i.get("id")))
+    for line in _read_file_tail_lines(_ISSUES_ARCHIVE_FILE, 32):
+        try:
+            rec = json.loads(line)
+            max_id = max(max_id, _parse_issue_id_num(rec.get("id")))
+        except json.JSONDecodeError:
+            continue
+    ISSUE_ID_COUNTER[0] = max_id
+
+
+def _count_issues_archive() -> int:
+    return _count_jsonl_lines_cached(_ISSUES_ARCHIVE_FILE)
+
+
+def get_issues_archive(limit: int = 100, q: Optional[str] = None, offset: int = 0, service: Optional[str] = None) -> dict:
+    """Read backed-up issues from local jsonl tail (bounded RAM)."""
+    limit = max(1, min(500, limit))
+    offset = max(0, offset)
+    needle = (q or "").strip().lower()
+
+    def _match(rec: dict) -> bool:
+        if service and (rec.get("tags") or {}).get("service") != service:
+            return False
+        if needle:
+            hay = " ".join([
+                str(rec.get("id") or ""),
+                str(rec.get("status") or ""),
+                str(rec.get("severity") or ""),
+                str((rec.get("tags") or {}).get("service") or ""),
+                " ".join(str(s) for s in (rec.get("samples") or [])[:2]),
+            ]).lower()
+            if needle not in hay:
+                return False
+        return True
+
+    items, scanned_total = _query_jsonl_archive(_ISSUES_ARCHIVE_FILE, limit, offset, _match)
+    return {
+        "items": items,
+        "total": _count_jsonl_lines_cached(_ISSUES_ARCHIVE_FILE) if not needle and not service else scanned_total,
+        "limit": limit,
+        "offset": offset,
+        "path": str(_ISSUES_ARCHIVE_FILE),
+    }
+
+
 def _ingest_issue(key: str, line: str, level: str) -> None:
-    """Register or update an issue from a log line. Bounded: LRU 200, samples max 5."""
+    """Register or update an issue from a log line. Bounded: max 300 active; overflow → local jsonl."""
     fp = _fingerprint_line(line)
     now_iso = _now_tr_iso()
     with _issues_lock:
@@ -606,15 +939,17 @@ def _ingest_issue(key: str, line: str, level: str) -> None:
             i = _issues[fp]
             i["last_seen"] = now_iso
             i["count"] = i.get("count", 0) + 1
+            if i.get("status") == "ARCHIVED":
+                i["status"] = "OPEN"
+                i.pop("archived_at", None)
+                _push_status_history(i, "REOPENED")
             samples = i.get("samples", [])
             if line not in samples[-MAX_ISSUE_SAMPLES:]:
-                samples.append(line[:500])
+                samples.append(_truncate_line(line, LOG_LINE_MAX))
                 i["samples"] = samples[-MAX_ISSUE_SAMPLES:]
         else:
-            # Evict oldest if at capacity
-            while len(_issues) >= MAX_ISSUES and _issues_order:
-                old_fp = _issues_order.popleft()
-                _issues.pop(old_fp, None)
+            while len(_issues) >= MAX_ISSUES:
+                _evict_issue_for_capacity()
             ISSUE_ID_COUNTER[0] += 1
             iid = "ISS-%06d" % ISSUE_ID_COUNTER[0]
             _issues_order.append(fp)
@@ -626,17 +961,18 @@ def _ingest_issue(key: str, line: str, level: str) -> None:
                 "first_seen": now_iso,
                 "last_seen": now_iso,
                 "count": 1,
-                "samples": [line[:500]],
+                "samples": [_truncate_line(line, LOG_LINE_MAX)],
                 "tags": {"service": key},
                 "assignee": None,
                 "labels": [],
                 "sla_note": None,
-                "comments": deque(maxlen=100),
-                "status_history": deque(maxlen=50),
+                "comments": deque(maxlen=ISSUE_COMMENT_MAX),
+                "status_history": deque(maxlen=ISSUE_STATUS_HIST_MAX),
             }
             _issues[fp]["status_history"].append({"ts": now_iso, "status": "OPEN"})
             if level == "ERROR":
-                add_alert("CRIT", "error_issue", line[:200], {"issue_id": iid, "service": key})
+                add_alert("CRIT", "error_issue", _truncate_line(line, 200), {"issue_id": iid, "service": key})
+            _schedule_persist_active_issues()
 
 
 def _issue_to_dict(i: dict) -> dict:
@@ -658,16 +994,64 @@ def _issue_to_dict(i: dict) -> dict:
     return out
 
 
-def get_issues(service: Optional[str] = None, status_filter: Optional[str] = None, limit: int = 50) -> list:
+def get_issue_stats() -> dict:
+    """Counts by status for incidents dashboard."""
+    counts = {"open": 0, "ack": 0, "resolved": 0, "archived": 0, "total": 0}
+    with _issues_lock:
+        for i in _issues.values():
+            counts["total"] += 1
+            st = (i.get("status") or "OPEN").upper()
+            if st == "OPEN":
+                counts["open"] += 1
+            elif st == "ACK":
+                counts["ack"] += 1
+            elif st == "RESOLVED":
+                counts["resolved"] += 1
+            elif st == "ARCHIVED":
+                counts["archived"] += 1
+    counts["active"] = counts["open"] + counts["ack"] + counts["resolved"]
+    counts["backup"] = _count_issues_archive()
+    counts["max_active"] = MAX_ISSUES
+    return counts
+
+
+def get_issues(
+    service: Optional[str] = None,
+    status_filter: Optional[str] = None,
+    limit: int = 50,
+    q: Optional[str] = None,
+) -> list:
     """Return list of issues (open first, then by last_seen). Capped by limit (max 200)."""
     limit = max(1, min(200, limit))
     with _issues_lock:
         out = [_issue_to_dict(i) for i in _issues.values()]
     if service:
         out = [i for i in out if i.get("tags", {}).get("service") == service]
-    if status_filter:
-        out = [i for i in out if i.get("status") == status_filter]
-    out.sort(key=lambda x: (0 if x.get("status") == "OPEN" else 1, x.get("last_seen", "")), reverse=True)
+    sf = (status_filter or "").strip().upper()
+    if sf == "ACTIVE":
+        out = [i for i in out if (i.get("status") or "OPEN").upper() != "ARCHIVED"]
+    elif sf:
+        out = [i for i in out if (i.get("status") or "").upper() == sf]
+    if q:
+        needle = q.strip().lower()
+        if needle:
+
+            def _match(issue: dict) -> bool:
+                parts = [
+                    str(issue.get("id") or ""),
+                    str(issue.get("status") or ""),
+                    str(issue.get("severity") or ""),
+                    str(issue.get("assignee") or ""),
+                    " ".join(issue.get("labels") or []),
+                    str((issue.get("tags") or {}).get("service") or ""),
+                ]
+                parts.extend(str(s) for s in (issue.get("samples") or [])[:3])
+                return needle in " ".join(parts).lower()
+
+            out = [i for i in out if _match(i)]
+    status_rank = {"OPEN": 0, "ACK": 1, "RESOLVED": 2, "ARCHIVED": 3}
+    out.sort(key=lambda x: x.get("last_seen") or "", reverse=True)
+    out.sort(key=lambda x: status_rank.get((x.get("status") or "OPEN").upper(), 9))
     return out[:limit]
 
 
@@ -683,7 +1067,7 @@ def get_issue_by_id(issue_id: str) -> Optional[dict]:
 def _push_status_history(issue: dict, new_status: str) -> None:
     hist = issue.get("status_history")
     if not isinstance(hist, deque):
-        issue["status_history"] = deque(maxlen=50)
+        issue["status_history"] = deque(maxlen=ISSUE_STATUS_HIST_MAX)
         hist = issue["status_history"]
     hist.append({"ts": _now_tr_iso(), "status": new_status})
 
@@ -700,6 +1084,7 @@ def issue_ack(issue_id: str) -> Optional[dict]:
             out = None
     if out:
         audit_event("issue_ack", {"issue_id": issue_id})
+        _schedule_persist_active_issues()
     return out
 
 
@@ -715,6 +1100,41 @@ def issue_resolve(issue_id: str) -> Optional[dict]:
             out = None
     if out:
         audit_event("issue_resolve", {"issue_id": issue_id})
+        _schedule_persist_active_issues()
+    return out
+
+
+def issue_archive(issue_id: str) -> Optional[dict]:
+    with _issues_lock:
+        for i in _issues.values():
+            if i.get("id") == issue_id:
+                i["status"] = "ARCHIVED"
+                i["archived_at"] = _now_tr_iso()
+                _push_status_history(i, "ARCHIVED")
+                out = _issue_to_dict(i)
+                break
+        else:
+            out = None
+    if out:
+        audit_event("issue_archive", {"issue_id": issue_id})
+        _schedule_persist_active_issues()
+    return out
+
+
+def issue_reopen(issue_id: str) -> Optional[dict]:
+    with _issues_lock:
+        for i in _issues.values():
+            if i.get("id") == issue_id:
+                i["status"] = "OPEN"
+                i.pop("archived_at", None)
+                _push_status_history(i, "REOPENED")
+                out = _issue_to_dict(i)
+                break
+        else:
+            out = None
+    if out:
+        audit_event("issue_reopen", {"issue_id": issue_id})
+        _schedule_persist_active_issues()
     return out
 
 
@@ -729,6 +1149,7 @@ def issue_assign(issue_id: str, assignee: Optional[str]) -> Optional[dict]:
             out = None
     if out:
         audit_event("issue_assign", {"issue_id": issue_id, "assignee": assignee})
+        _schedule_persist_active_issues()
     return out
 
 
@@ -744,6 +1165,7 @@ def issue_labels(issue_id: str, labels: list) -> Optional[dict]:
             out = None
     if out:
         audit_event("issue_labels", {"issue_id": issue_id, "labels": labels})
+        _schedule_persist_active_issues()
     return out
 
 
@@ -758,7 +1180,7 @@ def issue_comment(issue_id: str, text: str, author: str = "local") -> Optional[d
             if i.get("id") == issue_id:
                 comm = i.get("comments")
                 if not isinstance(comm, deque):
-                    i["comments"] = deque(maxlen=100)
+                    i["comments"] = deque(maxlen=ISSUE_COMMENT_MAX)
                     comm = i["comments"]
                 comm.append(entry)
                 out = _issue_to_dict(i)
@@ -767,6 +1189,7 @@ def issue_comment(issue_id: str, text: str, author: str = "local") -> Optional[d
             out = None
     if out:
         audit_event("issue_comment", {"issue_id": issue_id})
+        _schedule_persist_active_issues()
     return out
 
 
@@ -781,12 +1204,15 @@ def issue_sla(issue_id: str, sla_note: Optional[str]) -> Optional[dict]:
             out = None
     if out:
         audit_event("issue_sla", {"issue_id": issue_id})
+        _schedule_persist_active_issues()
     return out
 
 
 def audit_event(action: str, detail: Optional[dict] = None) -> None:
     now_iso = _now_tr_iso()
     with _audit_lock:
+        while len(_audit_events) >= MAX_AUDIT:
+            _append_audit_archive(_audit_events.popleft())
         _audit_events.append({
             "ts": now_iso,
             "action": action,
@@ -796,15 +1222,213 @@ def audit_event(action: str, detail: Optional[dict] = None) -> None:
 
 
 def get_audit_events(limit: int = 100) -> list:
+    limit = max(1, min(MAX_AUDIT, limit))
     with _audit_lock:
         return list(_audit_events)[-limit:]
+
+
+def _append_audit_archive(event: dict) -> None:
+    try:
+        _RUN_DIR.mkdir(parents=True, exist_ok=True)
+        record = dict(event)
+        record["_backup_at"] = _now_tr_iso()
+        with open(_AUDIT_ARCHIVE_FILE, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
+        _invalidate_jsonl_count_cache(_AUDIT_ARCHIVE_FILE)
+        _trim_jsonl_file(_AUDIT_ARCHIVE_FILE, MAX_AUDIT_ARCHIVE)
+    except Exception:
+        pass
+
+
+def _trim_audit_archive_file() -> None:
+    _trim_jsonl_file(_AUDIT_ARCHIVE_FILE, MAX_AUDIT_ARCHIVE)
+
+
+def _count_audit_archive() -> int:
+    return _count_jsonl_lines_cached(_AUDIT_ARCHIVE_FILE)
+
+
+def get_audit_stats() -> dict:
+    with _audit_lock:
+        active = len(_audit_events)
+    return {
+        "active": active,
+        "backup": _count_audit_archive(),
+        "max_active": MAX_AUDIT,
+    }
+
+
+def get_audit_archive(limit: int = 100, q: Optional[str] = None, offset: int = 0, service: Optional[str] = None) -> dict:
+    limit = max(1, min(500, limit))
+    offset = max(0, offset)
+    needle = (q or "").strip().lower()
+
+    def _match(rec: dict) -> bool:
+        action = rec.get("action") or ""
+        detail = rec.get("detail") or {}
+        if service and audit_event_service(action, detail) != service:
+            return False
+        if needle:
+            hay = " ".join([
+                str(rec.get("ts") or ""),
+                action,
+                audit_action_label(action),
+                audit_describe(action, detail),
+                audit_service_label(audit_event_service(action, detail)),
+            ]).lower()
+            if needle not in hay:
+                return False
+        return True
+
+    items, scanned_total = _query_jsonl_archive(_AUDIT_ARCHIVE_FILE, limit, offset, _match)
+    return {
+        "items": items,
+        "total": _count_jsonl_lines_cached(_AUDIT_ARCHIVE_FILE) if not needle and not service else scanned_total,
+        "limit": limit,
+        "offset": offset,
+        "path": str(_AUDIT_ARCHIVE_FILE),
+    }
+
+
+_AUDIT_ACTION_TR = {
+    "start": "Servis başlatıldı",
+    "stop": "Servis durduruldu",
+    "restart": "Servis yeniden başlatıldı",
+    "reset": "Metrikler sıfırlandı",
+    "lock": "Servis kilidi değiştirildi",
+    "alert_ack": "Uyarı onaylandı",
+    "export_action": "Dışa aktarma yapıldı",
+    "issue_ack": "Olay onaylandı",
+    "issue_resolve": "Olay çözüldü",
+    "issue_archive": "Olay arşivlendi",
+    "issue_reopen": "Olay geri alındı",
+    "issue_assign": "Olay atandı",
+    "issue_labels": "Olay etiketleri güncellendi",
+    "issue_comment": "Olaya yorum eklendi",
+    "issue_sla": "Olay SLA notu güncellendi",
+}
+
+_AUDIT_CAT_TR = {
+    "servis": "Servis",
+    "olay": "Olay",
+    "uyari": "Uyarı",
+    "export": "Dışa aktarma",
+    "diger": "Diğer",
+}
+
+_SERVICE_TR = {
+    "web": "Web",
+    "engine": "Motor",
+    "manager": "Yönetici",
+    "html": "HTML",
+    "all": "Tümü",
+}
+
+_EXPORT_TYPE_TR = {
+    "logs": "Log",
+    "issues": "Olay listesi",
+    "metrics": "Metrik",
+    "audit": "Denetim günlüğü",
+    "security": "Güvenlik",
+    "alerts": "Uyarı listesi",
+    "diagnosis": "Teşhis",
+}
+
+
+def audit_category(action: str) -> str:
+    a = action or ""
+    if a in ("start", "stop", "restart", "reset", "lock"):
+        return "servis"
+    if a.startswith("issue_"):
+        return "olay"
+    if a == "alert_ack":
+        return "uyari"
+    if a == "export_action":
+        return "export"
+    return "diger"
+
+
+def audit_category_label(cat: str) -> str:
+    return _AUDIT_CAT_TR.get(cat, cat)
+
+
+def audit_action_label(action: str) -> str:
+    return _AUDIT_ACTION_TR.get(action or "", action or "")
+
+
+def audit_service_label(key: Optional[str]) -> str:
+    if not key:
+        return "—"
+    return _SERVICE_TR.get(key, key)
+
+
+def audit_event_service(action: str, detail: Optional[dict]) -> str:
+    detail = detail or {}
+    if detail.get("service"):
+        return str(detail["service"])
+    if detail.get("key") and detail.get("key") != "all":
+        return str(detail["key"])
+    if action == "export_action" and detail.get("service"):
+        return str(detail["service"])
+    if action == "lock":
+        if detail.get("web") and not detail.get("engine"):
+            return "web"
+        if detail.get("engine") and not detail.get("web"):
+            return "engine"
+    return ""
+
+
+def audit_describe(action: str, detail: Optional[dict]) -> str:
+    detail = detail or {}
+    if action in ("start", "stop", "restart"):
+        svc = audit_service_label(detail.get("service"))
+        verb = {"start": "başlatıldı", "stop": "durduruldu", "restart": "yeniden başlatıldı"}[action]
+        return f"{svc} servisi {verb}"
+    if action == "reset":
+        if detail.get("key") == "all":
+            return "Tüm servislerin sayaç ve metrikleri sıfırlandı"
+        return f"{audit_service_label(detail.get('key'))} servis metrikleri sıfırlandı"
+    if action == "lock":
+        parts = []
+        if "web" in detail:
+            parts.append("Web: " + ("kilitli" if detail["web"] else "serbest"))
+        if "engine" in detail:
+            parts.append("Motor: " + ("kilitli" if detail["engine"] else "serbest"))
+        return " · ".join(parts) if parts else "Kilit ayarı güncellendi"
+    if action == "alert_ack":
+        return f"Uyarı {detail.get('alert_id', '—')} onaylandı"
+    if action == "export_action":
+        label = _EXPORT_TYPE_TR.get(detail.get("type"), detail.get("type") or "Veri")
+        fmt = (detail.get("format") or "csv").upper()
+        extra = f" · {audit_service_label(detail.get('service'))}" if detail.get("service") else ""
+        if detail.get("range"):
+            extra += f" · {detail['range']}"
+        return f"{label} {fmt} olarak indirildi{extra}"
+    if action == "issue_ack":
+        return f"Olay {detail.get('issue_id', '—')} onaylandı"
+    if action == "issue_resolve":
+        return f"Olay {detail.get('issue_id', '—')} çözüldü"
+    if action == "issue_archive":
+        return f"Olay {detail.get('issue_id', '—')} arşivlendi"
+    if action == "issue_reopen":
+        return f"Olay {detail.get('issue_id', '—')} geri alındı"
+    if action == "issue_assign":
+        return f"Olay {detail.get('issue_id', '—')} → {detail.get('assignee') or 'atanmadı'}"
+    if action == "issue_labels":
+        labels = detail.get("labels") or []
+        return f"Olay {detail.get('issue_id', '—')} · etiketler: {', '.join(labels) or '—'}"
+    if action == "issue_comment":
+        return f"Olay {detail.get('issue_id', '—')} · yorum eklendi"
+    if action == "issue_sla":
+        return f"Olay {detail.get('issue_id', '—')} · SLA notu güncellendi"
+    return json.dumps(detail, ensure_ascii=False)
 
 
 def _persist_audit() -> None:
     try:
         _RUN_DIR.mkdir(parents=True, exist_ok=True)
         events = list(_audit_events)
-        _AUDIT_FILE.write_text(json.dumps(events, indent=2), encoding="utf-8")
+        _AUDIT_FILE.write_text(json.dumps(events, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     except Exception:
         pass
 
@@ -815,9 +1439,13 @@ def _load_audit() -> None:
     try:
         data = json.loads(_AUDIT_FILE.read_text(encoding="utf-8"))
         if isinstance(data, list):
+            if len(data) > MAX_AUDIT:
+                for e in data[:-MAX_AUDIT]:
+                    _append_audit_archive(e)
+                data = data[-MAX_AUDIT:]
             with _audit_lock:
                 _audit_events.clear()
-                for e in data[-MAX_AUDIT:]:
+                for e in data:
                     _audit_events.append(e)
     except Exception:
         pass
@@ -942,12 +1570,8 @@ def _tail_loop(key: str) -> None:
         return
     try:
         with open(log_path, "r", encoding="utf-8", errors="replace") as f:
-            # Backfill last RING_LINES
-            lines_buf = f.readlines()
-            for line in lines_buf[-RING_LINES:] if len(lines_buf) > RING_LINES else lines_buf:
-                line = line.rstrip("\n\r")
-                if not line:
-                    continue
+            for line in _read_file_tail_lines(log_path, RING_LINES):
+                line = _truncate_line(line)
                 if key == "web" and _is_web_access_200_line(line):
                     continue
                 if key == "html" and _should_skip_html_stats_duplicate(key, line):
@@ -968,7 +1592,7 @@ def _tail_loop(key: str) -> None:
                 if not line:
                     time.sleep(0.2)
                     continue
-                line = line.rstrip("\n\r")
+                line = _truncate_line(line.rstrip("\n\r"))
                 if key == "web" and _is_web_access_200_line(line):
                     continue
                 if key == "html" and _should_skip_html_stats_duplicate(key, line):
@@ -985,7 +1609,10 @@ def _tail_loop(key: str) -> None:
                         _ingest_issue(key, line, "WARN")
                 ts = _now_tr_time()
                 with _batch_lock:
-                    _ws_batch[key].append({"ts": ts, "level": level, "text": line})
+                    batch = _ws_batch[key]
+                    batch.append({"ts": ts, "level": level, "text": line})
+                    if len(batch) > WS_BATCH_MAX * 3:
+                        del batch[:-WS_BATCH_MAX]
     except Exception:
         pass
 
@@ -1034,8 +1661,9 @@ def get_status() -> dict:
     }
     # HTML (omeraltinhtml): calistir.bat / stop.bat ile; çalışıyor = port açık
     html_running = _is_port_in_use(_HTML_PORT)
+    html_pid = _pid_on_port(_HTML_PORT) if html_running else None
     status["html"]["running"] = html_running
-    status["html"]["pid"] = None
+    status["html"]["pid"] = html_pid
     if (_RUN_DIR / "html.started_at").exists():
         try:
             status["html"]["started_at"] = float((_RUN_DIR / "html.started_at").read_text().strip())
@@ -1043,7 +1671,7 @@ def get_status() -> dict:
             pass
     out["html"] = {
         "running": html_running,
-        "pid": None,
+        "pid": html_pid,
         "locked": False,
         "started_at": status["html"].get("started_at"),
         "restart_count": status["html"].get("restart_count", 0),
@@ -1090,6 +1718,51 @@ def _is_port_in_use(port: int) -> bool:
         return True
     except (OSError, socket.error):
         return False
+
+
+def _pid_on_port(port: int) -> Optional[int]:
+    """Return PID listening on port, or None."""
+    if _IS_WINDOWS:
+        try:
+            r = subprocess.run(
+                ["netstat", "-ano"],
+                capture_output=True,
+                text=True,
+                timeout=3,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            for line in (r.stdout or "").splitlines():
+                if "LISTENING" not in line or ":%s" % port not in line:
+                    continue
+                parts = line.split()
+                if len(parts) < 2:
+                    continue
+                try:
+                    pid = int(parts[-1])
+                    if pid > 0:
+                        return pid
+                except (ValueError, IndexError):
+                    pass
+        except Exception:
+            pass
+    else:
+        try:
+            r = subprocess.run(
+                ["lsof", "-ti", ":%s" % port],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            for pid_str in (r.stdout or "").strip().split():
+                try:
+                    pid = int(pid_str)
+                    if pid > 0:
+                        return pid
+                except ValueError:
+                    pass
+        except Exception:
+            pass
+    return None
 
 
 def _kill_port(port: int) -> None:
@@ -1396,20 +2069,21 @@ def reset_logs(key: str) -> None:
 def get_logs(key: str, tail: int = 300) -> dict:
     if key not in ("web", "engine", "manager", "html"):
         return {"lines": [], "errors": [], "warns": []}
-    tail = max(1, min(1000, tail))
-    ring = list(logs_ring[key])
+    tail = max(1, min(RING_LINES, tail))
+    ring = logs_ring[key]
     if key == "web":
-        ring = [l for l in ring if not _is_web_access_200_line(l)]
-    err = list(errors_ring[key])
-    wrn = list(warns_ring[key])
+        lines = [l for l in ring if not _is_web_access_200_line(l)]
+    else:
+        lines = list(ring)
     return {
-        "lines": ring[-tail:] if len(ring) > tail else ring,
-        "errors": err,
-        "warns": wrn,
+        "lines": lines[-tail:] if len(lines) > tail else lines,
+        "errors": list(errors_ring[key]),
+        "warns": list(warns_ring[key]),
     }
 
 
-def pop_ws_batch(key: str, max_lines: int = 200) -> list:
+def pop_ws_batch(key: str, max_lines: int = WS_BATCH_MAX) -> list:
+    max_lines = max(1, min(WS_BATCH_MAX, max_lines))
     with _batch_lock:
         buf = _ws_batch.get(key, [])
         out = buf[-max_lines:] if len(buf) > max_lines else buf

@@ -182,6 +182,21 @@
             return joinParts(iaParts);
         }
 
+        if (reason === 'trail_sell_grid' || reason === 'trail_buy_grid') {
+            var gi = meta.grid_index;
+            var gridNum = (gi != null && gi !== '' && !isNaN(Number(gi))) ? (Number(gi) + 1) : null;
+            var coinGrid = coinFromSymbol(meta.symbol);
+            var gridParts = [meta.repaired ? 'Kayıt onarıldı' : null];
+            gridParts.push((gridNum != null ? 'Grid ' + gridNum + ' - ' : '') + sideTr(side) + ' gerçekleşti');
+            if (qty != null && price != null) {
+                gridParts.push((coinGrid ? coinGrid + ' ' : '') + fmtQty(qty) + ' @ $' + price.toFixed(2));
+                gridParts.push('tutar ' + fmtUsd(qty * price, false));
+            }
+            var gridFee = num(meta.fee);
+            if (gridFee != null && gridFee > 0) gridParts.push('komisyon ' + fmtUsd(gridFee, false));
+            return joinParts(gridParts);
+        }
+
         var used = { side: 1, fill_qty: 1, fill_price: 1, fee: 1, reason: 1, grid_index: 1, symbol: 1, cycle_id: 1, order_id: 1, client_order_id: 1, status: 1 };
         var fee = num(meta.fee);
         var parts = [meta.repaired ? 'Kayıt onarıldı' : null, sideTr(side) + ' gerçekleşti'];

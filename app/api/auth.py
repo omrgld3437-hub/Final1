@@ -999,6 +999,9 @@ async def login(
             ip=ip, device_id=None, request_id=getattr(request.state, "request_id", None),
             meta={"user_agent": (request.headers.get("user-agent") or "")[:200]},
         )
+        if account:
+            from app.services.test_account import clear_first_login_if_keys_configured
+            clear_first_login_if_keys_configured(account, db)
     except Exception as e:
         logger.warning("Login post-auth step failed (DB/audit), using in-memory session: %s", e)
         try:
@@ -1021,7 +1024,7 @@ async def login(
             "name": user.name,
             "surname": user.surname,
             "is_admin": user.is_admin,
-            "is_first_login": account.is_first_login if account else False,
+            "is_first_login": bool(getattr(account, "is_first_login", False)) if account else False,
             "account_id": user.account_id,
             "account_code": account.account_code if account and getattr(account, "account_code", None) else None,
             "must_change_password": bool(getattr(user, "must_change_password", False))

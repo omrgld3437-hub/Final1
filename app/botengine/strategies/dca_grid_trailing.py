@@ -261,14 +261,18 @@ def tick_dca_grid_trailing(
         ref = P
         logger.info("BOT_STATE_HEALED bot_id=%s ref was None/0, set to price=%.2f", state.get("bot_id", 0), P)
     if initial_done and ((_f(state.get("grid_reference_quote") or 0) <= 0)):
-        current_eq = quote_balance + base_balance * (P or 0)
-        if current_eq > 0:
-            state["grid_reference_quote"] = current_eq
+        if quote_balance > 0:
+            state["grid_reference_quote"] = quote_balance
             if (_f(state.get("grid_reference_base") or 0) <= 0 and base_balance > 0):
                 state["grid_reference_base"] = base_balance
             if (_f(state.get("cycle_start_equity") or 0) <= 0):
+                current_eq = quote_balance + base_balance * (P or 0)
                 state["cycle_start_equity"] = current_eq
-            logger.info("BOT_STATE_HEALED bot_id=%s grid_reference_quote=%.2f (equity), cycle_start_equity=%.2f", state.get("bot_id", 0), current_eq, state.get("cycle_start_equity"))
+            logger.info(
+                "BOT_STATE_HEALED bot_id=%s grid_reference_quote=%.2f (quote_balance)",
+                state.get("bot_id", 0),
+                quote_balance,
+            )
 
     sell_trail_pct = config.sell_trigger_trailing_pct
     buy_trail_pct = config.buy_trigger_trailing_pct
@@ -556,6 +560,30 @@ def _sell_qty_for_grid(
     return _f(min(ref_base * pct, base_balance)) or 0.0
 
 
+def _quote_ref_for_buy_grid(
+    state: Dict,
+    config: DcaGridTrailingConfig,
+    quote_balance: float,
+) -> float:
+    """Alım grid referansı: target_quote_usdt > quote_alloc*equity > grid_reference_quote > quote_balance."""
+    buffer = _float(getattr(config, "available_quote_buffer_pct", 0.005), 0.005)
+    tb = state.get("target_budgets")
+    if isinstance(tb, dict):
+        target_quote = _float(tb.get("target_quote_usdt"), 0)
+        if target_quote > 0:
+            return target_quote * (1.0 - buffer)
+    eq = _f(state.get("cycle_start_equity") or 0) or 0.0
+    if eq > 0:
+        quote_alloc = _float(getattr(config, "quote_alloc_pct", 50), 50) / 100.0
+        derived = eq * quote_alloc * (1.0 - buffer)
+        if derived > 0:
+            return derived
+    ref = _f(state.get("grid_reference_quote") or 0) or 0.0
+    if ref <= 0:
+        return quote_balance
+    return min(ref, quote_balance) if quote_balance > 0 else ref
+
+
 def _buy_qty_for_grid(
     state: Dict,
     config: DcaGridTrailingConfig,
@@ -563,19 +591,10 @@ def _buy_qty_for_grid(
     quote_balance: float,
     price: Optional[float] = None,
 ) -> float:
-    """Alım miktarı = referans quote * grid yüzdesi. target_budgets varsa referans target_quote_usdt ile sınırlanır (bileşik büyüme)."""
+    """Alım miktarı = referans quote * grid yüzdesi (her grid kendi payı kadar)."""
     g = config.buy_grids[idx] if idx < len(config.buy_grids) else {}
     pct = _float(g.get("buy_qty_pct_of_quote") or g.get("qty_pct"), 10.0) / 100.0
-    ref = _f(state.get("grid_reference_quote") or 0) or 0.0
-    if ref <= 0:
-        ref = quote_balance
-    tb = state.get("target_budgets")
-    buffer = _float(getattr(config, "available_quote_buffer_pct", 0.005), 0.005)
-    if isinstance(tb, dict):
-        target_quote = _float(tb.get("target_quote_usdt"), 0)
-        if target_quote > 0:
-            cap_quote = target_quote * (1.0 - buffer)
-            ref = min(ref, cap_quote)
+    ref = _quote_ref_for_buy_grid(state, config, quote_balance)
     return _f(min(ref * pct, quote_balance)) or 0.0
 
 
@@ -729,10 +748,64 @@ class DcaGridTrailingStrategy(Strategy):
         )
 
 
+def _archive_cycle_grid_fills(state: Dict[str, Any], cycle_id: int) -> None:
+    """Tur kapanmadan önce grid tetik/tepe-dip/gerçekleşme fiyatlarını arşivle (UI tur işlemleri modalı)."""
+    archive = state.setdefault("cycle_grid_fills_archive", [])
+    seen = {
+        (int(e.get("cycle_id") or 0), int(e.get("grid_index") or -1), (e.get("side") or "").upper())
+        for e in archive if isinstance(e, dict)
+    }
+
+    def _append(side: str, idx: int, fired: bool, trig_arr: list, ext_arr: list, fill_arr: list) -> None:
+        if not fired:
+            return
+        key = (cycle_id, idx, side)
+        if key in seen:
+            return
+        trig = trig_arr[idx] if idx < len(trig_arr) else None
+        ext = ext_arr[idx] if idx < len(ext_arr) else None
+        exec_p = fill_arr[idx] if idx < len(fill_arr) else None
+        hist_key = "sell_history" if side == "SELL" else "buy_history"
+        hist = [h for h in (state.get(hist_key) or []) if isinstance(h, dict) and int(h.get("grid_index") or -1) == idx]
+        hist_row = hist[-1] if hist else {}
+        archive.append({
+            "cycle_id": cycle_id,
+            "grid_index": idx,
+            "side": side,
+            "trigger_price": _f(trig) if trig is not None else None,
+            "extreme_price": _f(ext) if ext is not None else None,
+            "execution_price": _f(exec_p) if exec_p is not None else (_f(hist_row.get("execution_price")) if hist_row.get("execution_price") is not None else None),
+            "fill_price": _f(hist_row.get("price")) if hist_row.get("price") is not None else None,
+            "qty": _f(hist_row.get("qty")) if hist_row.get("qty") is not None else None,
+        })
+        seen.add(key)
+
+    sell_fired = state.get("sell_grid_fired") or []
+    buy_fired = state.get("buy_grid_fired") or []
+    for i, fired in enumerate(sell_fired):
+        _append(
+            "SELL", i, bool(fired),
+            state.get("sell_grid_trigger_price") or [],
+            state.get("sell_grid_peak_price") or [],
+            state.get("sell_grid_fill_price") or [],
+        )
+    for j, fired in enumerate(buy_fired):
+        _append(
+            "BUY", j, bool(fired),
+            state.get("buy_grid_trigger_price") or [],
+            state.get("buy_grid_trough_price") or [],
+            state.get("buy_grid_fill_price") or [],
+        )
+    if len(archive) > 500:
+        state["cycle_grid_fills_archive"] = archive[-500:]
+
+
 def cycle_reset_after_fill(
     state: Dict[str, Any], new_reference_price: float, n: int, m: int, symbol: Optional[str] = None
 ) -> None:
     """After re-entry or profit-exit fill: tur karı hesaplanır, cycle_id++, reference_price, grid referansları bileşik bakiyeye güncellenir."""
+    old_cycle_id = int(state.get("cycle_id") or 1)
+    _archive_cycle_grid_fills(state, old_cycle_id)
     quote_bal = _f(state.get("quote_balance") or 0) or 0.0
     base_bal = _f(state.get("base_balance") or 0) or 0.0
     price = _f(new_reference_price) or new_reference_price
@@ -753,7 +826,7 @@ def cycle_reset_after_fill(
     state["sell_history"] = []
     state["buy_history"] = []
     state["cycle_start_equity"] = current_equity
-    state["grid_reference_quote"] = current_equity
+    state["grid_reference_quote"] = quote_bal
     state["grid_reference_base"] = base_bal
     state.pop("_reentry_done", None)
     state.pop("_profit_exit_done", None)

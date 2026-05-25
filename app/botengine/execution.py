@@ -871,7 +871,16 @@ async def run_actions(
                         state["quote_balance"] = round(max(0.0, C - cum_quote - fee), 10)
                         state["base_balance"] = round(float(exec_qty), 10)
                         state["grid_reference_quote"] = state["quote_balance"]
-                        state["cycle_start_equity"] = round(state["quote_balance"] + state["base_balance"] * fill_price, 2)
+                        equity_usdt = round(state["quote_balance"] + state["base_balance"] * fill_price, 2)
+                        state["cycle_start_equity"] = equity_usdt
+                        quote_alloc = _num(getattr(config, "quote_alloc_pct", 50)) / 100.0
+                        base_alloc = _num(getattr(config, "base_alloc_pct", 50)) / 100.0
+                        state["target_budgets"] = {
+                            "equity_usdt": equity_usdt,
+                            "target_quote_usdt": round(equity_usdt * quote_alloc, 2),
+                            "target_base_usdt": round(equity_usdt * base_alloc, 2),
+                            "ts": datetime.now(timezone.utc).isoformat(),
+                        }
                         _initial_alloc_skip_count.pop((bot_id, key), None)
                 if reason == "trail_sell_grid":
                     idx = a.get("grid_index", 0)

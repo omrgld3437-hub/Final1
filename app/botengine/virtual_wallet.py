@@ -31,6 +31,31 @@ def _symbol_to_base_quote(symbol: str) -> Tuple[str, str]:
     return (s, "USDT")
 
 
+def _purge_orphan_virtual_wallets(db: "Session", account_id: Optional[int] = None) -> None:
+    """Silinmiş botlara ait virtual_wallet satırlarını temizle (UI bot kilitli hayalet)."""
+    try:
+        if account_id is not None:
+            db.execute(
+                text("""
+                    DELETE FROM bot_virtual_wallet
+                    WHERE account_id = :aid
+                      AND bot_id NOT IN (SELECT id FROM bots)
+                """),
+                {"aid": account_id},
+            )
+        else:
+            db.execute(
+                text("DELETE FROM bot_virtual_wallet WHERE bot_id NOT IN (SELECT id FROM bots)"),
+            )
+        db.commit()
+    except Exception as e:
+        logger.warning("purge_orphan_virtual_wallets failed account_id=%s: %s", account_id, e)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+
 def get_bot_locked_balances_for_account(db: "Session", account_id: int) -> Dict[str, float]:
     """
     Return total bot-locked balance per asset for this account (bileşik dahil).
@@ -39,13 +64,15 @@ def get_bot_locked_balances_for_account(db: "Session", account_id: int) -> Dict[
     Returns e.g. {"BTC": 0.5, "USDT": 1000.0}.
     Tablo boş veya senkron değilse bot_engine_state'ten fallback (çalışan botların base/quote bakiyesi).
     """
+    _purge_orphan_virtual_wallets(db, account_id)
     out: Dict[str, float] = {}
     try:
         rows = db.execute(
             text("""
-                SELECT symbol, virtual_base, virtual_quote
-                FROM bot_virtual_wallet
-                WHERE account_id = :aid
+                SELECT w.symbol, w.virtual_base, w.virtual_quote
+                FROM bot_virtual_wallet w
+                INNER JOIN bots b ON b.id = w.bot_id
+                WHERE w.account_id = :aid AND LOWER(COALESCE(b.status, '')) = 'running'
             """),
             {"aid": account_id},
         ).fetchall()

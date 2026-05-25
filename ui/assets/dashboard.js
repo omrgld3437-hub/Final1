@@ -1011,7 +1011,7 @@ function renderBotParamsConfig(cfg, symbol, referencePrice, hideBudget) {
     var html = '';
     html += '<div class="param-block"><div class="param-block-title">Genel</div>';
     html += row('Sembol', symbol || cfg.symbol || '—');
-    html += row('Bütçe (USDT)', hideBudget ? '—' : fmtUsd(budget));
+    if (!hideBudget) html += row('Bütçe (USDT)', fmtUsd(budget));
     html += row('Başlangıç fiyatı (referans)', refPriceVal);
     html += row('Base dağılım (%)', basePct != null ? basePct + '%' : '—');
     html += row('Quote dağılım (%)', quotePct != null ? quotePct + '%' : '—');
@@ -1125,6 +1125,15 @@ var LEADERBOARD_PARAM_LABELS = {
 };
 var LEADERBOARD_PARAM_SKIP_KEYS = { budget_usd: 1, bot_budget_quote: 1, initial_capital_usdt: 1 };
 
+function stripLeaderboardBudgetFromParams(params) {
+    if (!params || typeof params !== 'object') return params;
+    var p = Object.assign({}, params);
+    delete p.initial_capital_usdt;
+    delete p.budget_usd;
+    delete p.bot_budget_quote;
+    return p;
+}
+
 function formatLeaderboardParamsForDisplay(params) {
     if (!params || typeof params !== 'object') return '<p class="muted">Parametre yok.</p>';
     var parts = [];
@@ -1224,9 +1233,9 @@ async function openLeaderboardParamsModal(rank, structureName, params, createdAt
     document.body.style.overflow = 'hidden';
 
     var item = await resolveLeaderboardItemForModal(itemIndex);
-    var resolved = item
+    var resolved = stripLeaderboardBudgetFromParams(item
         ? normalizeLeaderboardParamsToFormConfig(item.params || {})
-        : normalizeLeaderboardParamsToFormConfig(resolveLeaderboardItemParams(params, itemIndex));
+        : normalizeLeaderboardParamsToFormConfig(resolveLeaderboardItemParams(params, itemIndex)));
     if (item && item.symbol && !resolved.symbol) resolved.symbol = item.symbol;
     var symbol = (item && item.symbol) || resolved.symbol || (params && params.symbol) || '';
     var ref = referencePrice != null && !isNaN(referencePrice) ? referencePrice
@@ -1235,7 +1244,7 @@ async function openLeaderboardParamsModal(rank, structureName, params, createdAt
         ref = Number(resolved.reference_price);
     }
 
-    bodyEl.innerHTML = renderBotParamsConfig(resolved, symbol, ref, false);
+    bodyEl.innerHTML = renderBotParamsConfig(resolved, symbol, ref, true);
 }
 
 window.openLeaderboardParamsModal = openLeaderboardParamsModal;
@@ -1254,7 +1263,7 @@ function buildGlobalLeaderboardItemHtml(item, index) {
     var structure = typeof BOT_STRUCTURES !== 'undefined' ? BOT_STRUCTURES.find(function (s) { return s.id === structureId; }) : null;
     var structureName = structure ? structure.name : structureId;
     var pnlMeta = formatLeaderboardTotalPnl(item);
-    var params = normalizeLeaderboardParamsToFormConfig(item.params || {});
+    var params = stripLeaderboardBudgetFromParams(normalizeLeaderboardParamsToFormConfig(item.params || {}));
     if (item.reference_price != null && params.reference_price == null) {
         params.reference_price = item.reference_price;
     }
@@ -1359,7 +1368,7 @@ function patchGlobalLeaderboardMetrics(items) {
             durEl.textContent = 'Çalışma süresi: ' + formatLeaderboardRunningDuration(isoNorm);
         }
         if (item.running_since_iso) row.setAttribute('data-running-since', normalizeRunningSinceIso(item.running_since_iso));
-        var params = normalizeLeaderboardParamsToFormConfig(item.params || {});
+        var params = stripLeaderboardBudgetFromParams(normalizeLeaderboardParamsToFormConfig(item.params || {}));
         if (item.symbol && !params.symbol) params.symbol = item.symbol;
         var paramsJson = JSON.stringify(params);
         row.querySelectorAll('.global-leaderboard-apply-btn, .global-leaderboard-view-params-btn').forEach(function (btn) {
@@ -3029,11 +3038,11 @@ async function createAndStartBot(template) {
         // Refresh bot list in Bots tab
         await loadSummary(State.accountId);
         
-        // Switch to Bots tab to show the new bot
-        const botsTab = document.querySelector('[data-tab="bots"]');
-        if (botsTab) {
-            botsTab.click();
-        }
+        // Yeni bot detayına git (eski bot ekranı / bfcache karışıklığını önler)
+        var navQ = State.accountCode ? 'account_code=' + encodeURIComponent(State.accountCode) : 'account_id=' + (State.accountId || '');
+        var detailPage = (payload.strategy_id === 'trdca_pro' || payload.strategy_id === 'multi_asset_rebalance') ? '/ui/bot_multi.html' : '/ui/bot.html';
+        window.location.assign(detailPage + '?bot_id=' + botId + '&' + navQ);
+        return;
         
     } catch (error) {
         console.error("[dashboard] Error creating bot:", error);
@@ -3988,9 +3997,9 @@ function bindTabs() {
                     if (typeof initBinanceCoinList === 'function') initBinanceCoinList();
                     if (typeof updateActiveOrdersPanelPosition === 'function') updateActiveOrdersPanelPosition();
                     if (typeof startBinanceTabPolling === 'function') startBinanceTabPolling();
-                    // Bot alımı sonrası cüzdan varlıklarının anında yansıması: Anasayfa'ya geçince hemen canlı cüzdan çek
-                    if (State.accountId && window.apiClient && typeof window.apiClient.post === 'function') {
-                        triggerWalletRefreshForVarliklar(State.accountId);
+                    // Bot alımı / dönüş sonrası cüzdan tablosu hemen güncellensin
+                    if (State.accountId) {
+                        triggerWalletRefreshForVarliklar(State.accountId, { force: true });
                     }
                     startVarliklarPeriodicRefresh();
                     // İşlemler paneli Binance sekmesinde; veri sadece Reports açıldığında yükleniyordu – Binance açıldığında da yükle
@@ -5788,7 +5797,7 @@ function hashWalletAssets(assets) {
     if (!Array.isArray(assets)) return '';
     // Round to 8 decimals to avoid re-render flicker from float noise in API responses
     const round8 = (v) => (v != null && Number.isFinite(Number(v))) ? Number(Number(v).toFixed(8)) : v;
-    const rows = assets.map(a => [a.asset, round8(a.free), round8(a.locked)]).sort((a, b) => (a[0] || '').localeCompare(b[0] || ''));
+    const rows = assets.map(a => [a.asset, round8(a.free), round8(a.locked), round8(a.bot_locked), round8(a.available)]).sort((a, b) => (a[0] || '').localeCompare(b[0] || ''));
     return JSON.stringify(rows);
 }
 
@@ -6150,7 +6159,11 @@ const BinanceAssetsPanel = {
     tickPrices() { tickAssetsPrices(); },
     refresh() {
         walletBackoffMs = WALLET_BACKOFF_MIN;
-        pollWallet(true);
+        if (State.accountId && typeof triggerWalletRefreshForVarliklar === 'function') {
+            triggerWalletRefreshForVarliklar(State.accountId, { force: true });
+        } else {
+            pollWallet(true);
+        }
     },
     pollWallet,
     tickPricesUI
@@ -6475,36 +6488,47 @@ function tickVarliklarPrices() {
     });
 }
 
-/** Bot alımı sonrası cüzdan varlıklarının anında yansıması: canlı Binance cüzdan çek, DB snapshot güncellenir, tabloyu yenile */
-function triggerWalletRefreshForVarliklar(accountId) {
-    if (!accountId || !window.apiClient || typeof window.apiClient.post !== 'function') return;
-    if (window.FLASH_HOME_ENABLED && window.homeFlash && typeof window.homeFlash.triggerRefresh === 'function') {
-        window.homeFlash.triggerRefresh(accountId, false);
-        return;
-    }
-    window.apiClient.post('/api/home/wallet/refresh?account_id=' + accountId, null, { timeout: 15000 })
+/** Cüzdan varlıkları tablosu: POST /api/home/wallet/refresh (backend TTL/inflight dedupe; homeFlash debounce atlanır). */
+var _varliklarWalletRefreshInflight = false;
+var _varliklarWalletRefreshLastAt = 0;
+var VARLIKLAR_WALLET_REFRESH_MS = 12000;
+var VARLIKLAR_WALLET_MIN_GAP_MS = 4000;
+
+function triggerWalletRefreshForVarliklar(accountId, opts) {
+    opts = opts || {};
+    var force = opts.force === true;
+    if (!accountId || !window.apiClient || typeof window.apiClient.post !== 'function') return Promise.resolve();
+    var now = Date.now();
+    if (!force && (now - _varliklarWalletRefreshLastAt < VARLIKLAR_WALLET_MIN_GAP_MS)) return Promise.resolve();
+    if (_varliklarWalletRefreshInflight) return Promise.resolve();
+    _varliklarWalletRefreshInflight = true;
+    var url = '/api/home/wallet/refresh?account_id=' + accountId + (force ? '&force=1' : '');
+    return window.apiClient.post(url, null, { timeout: 15000 })
         .then(function (res) {
+            _varliklarWalletRefreshLastAt = Date.now();
             if (res && res.ok && res.data && res.data.wallet_live && assetsState && assetsState.wallet) {
-                normalizeAndApplyWallet(res.data.wallet_live, { source: 'wallet_refresh_varliklar' });
-                if (typeof renderVarliklarList === 'function') renderVarliklarList();
-                if (window.BinanceAssetsPanel && typeof window.BinanceAssetsPanel.render === 'function') window.BinanceAssetsPanel.render();
+                normalizeAndApplyWallet(res.data.wallet_live, {
+                    source: force ? 'wallet_refresh_varliklar_force' : 'wallet_refresh_varliklar',
+                });
             }
             if (window.__walletDebugMeta) {
                 window.__walletDebugMeta.last_refresh_at = (res && res.data && res.data.wallet_live_at) ? res.data.wallet_live_at : new Date().toISOString();
             }
         })
-        .catch(function () {});
+        .catch(function () {})
+        .finally(function () { _varliklarWalletRefreshInflight = false; });
 }
+window.triggerWalletRefreshForVarliklar = triggerWalletRefreshForVarliklar;
 
-/** Anasayfa açıkken periyodik cüzdan yenileme (bot alımı kısa sürede tabloya yansısın) */
-var VARLIKLAR_WALLET_REFRESH_MS = 15000;
+/** Anasayfa açıkken periyodik cüzdan yenileme (backend TTL ile hafif; sekme gizliyken çalışmaz) */
 function startVarliklarPeriodicRefresh() {
     window.intervalRegistry.stopByOwner('tab.varliklar.wallet_refresh');
     if (!State.accountId) return;
     function doRefresh() {
+        if (document.hidden) return;
         var activeTab = document.querySelector('.dm-tab.is-active');
         if (!activeTab || activeTab.getAttribute('data-tab') !== 'binance') return;
-        triggerWalletRefreshForVarliklar(State.accountId);
+        triggerWalletRefreshForVarliklar(State.accountId, { force: false });
     }
     window.intervalRegistry.start('tab.varliklar.wallet_refresh', doRefresh, VARLIKLAR_WALLET_REFRESH_MS, 'tab.varliklar.wallet_refresh');
 }
@@ -8445,8 +8469,14 @@ async function submitSpotTrade() {
             // Close modal
             closeSpotTradeModal();
             
-            // Refresh wallet (BinanceAssetsPanel)
-            if (State.accountId && window.BinanceAssetsPanel) BinanceAssetsPanel.refresh();
+            // Refresh wallet table (TTL-aware; force after trade)
+            if (State.accountId && typeof triggerWalletRefreshForVarliklar === 'function') {
+                setTimeout(function () {
+                    triggerWalletRefreshForVarliklar(State.accountId, { force: true });
+                }, spotTradeState.type === 'LIMIT' ? 1200 : 600);
+            } else if (State.accountId && window.BinanceAssetsPanel) {
+                BinanceAssetsPanel.refresh();
+            }
             
         } catch (error) {
             console.error("[SPOT_ENGINE] Order error:", error);
@@ -10250,6 +10280,10 @@ async function initDashboard() {
     State.accountId = accountId;
     State.accountCode = accountCode;
     window.__ACTIVE_ACCOUNT_ID = accountId;
+    var showFirstLoginModal = isFirstLogin;
+    if (isFirstLogin && accountId) {
+        showFirstLoginModal = await shouldShowFirstLoginModal(accountId, true);
+    }
     restoreFinanceBotsFromSessionCache(accountId);
     restoreAppbarFromSessionCache(accountId, accountCode);
     // En İyi 5 Bot: hesap hazır olur olmaz yükle (snapshot beklemeden); snapshot geldiğinde de yenilenecek
@@ -10298,7 +10332,8 @@ async function initDashboard() {
             q.delete("account_code");
         }
         q.set("tab", savedTab);
-        if (isFirstLogin) q.set("first_login", "true");
+        if (showFirstLoginModal) q.set("first_login", "true");
+        else q.delete("first_login");
         if (showAdminNav) q.set("from_admin", "1");
         const newSearch = "?" + q.toString();
         if (window.location.search !== newSearch) {
@@ -10344,8 +10379,8 @@ async function initDashboard() {
     // İlk giriş: önce admin first_login popup (varsa), kapatılınca API key modalı gösterilir
     // Admin pop-up: önce göster (ilk girişte API key uyarısından önce)
     setTimeout(function () {
-        fetchAndShowUserPopup(isFirstLogin).then(function (shown) {
-            if (isFirstLogin && !mustChangePassword && !shown) {
+        fetchAndShowUserPopup(showFirstLoginModal).then(function (shown) {
+            if (showFirstLoginModal && !mustChangePassword && !shown) {
                 var modal = document.getElementById('firstLoginModal');
                 if (modal) modal.style.display = 'flex';
             }
@@ -10371,6 +10406,11 @@ async function initDashboard() {
                 // Trigger tab-specific handlers
                 if (savedTab === "binance") {
                     showActiveOrdersPanel();
+                    initVarliklarTab();
+                    if (typeof initBinanceCoinList === 'function') initBinanceCoinList();
+                    if (typeof startBinanceTabPolling === 'function') startBinanceTabPolling();
+                    if (State.accountId) triggerWalletRefreshForVarliklar(State.accountId, { force: true });
+                    startVarliklarPeriodicRefresh();
                     if (State.accountId && typeof loadFinanceTrades === 'function') loadFinanceTrades();
                     if (State.accountId && window.BinanceUI && typeof window.BinanceUI.mount === 'function') {
                         window.BinanceUI.mount({ accountId: State.accountId });
@@ -10443,23 +10483,21 @@ async function initDashboard() {
         // One-time wallet refresh on dashboard load (cache-only snapshot needs one live refresh to populate cache)
         if (accountId && !window.__dashboardWalletRefreshDone) {
             window.__dashboardWalletRefreshDone = true;
-            if (window.FLASH_HOME_ENABLED && window.homeFlash && typeof window.homeFlash.triggerRefresh === 'function') {
-                window.homeFlash.triggerRefresh(accountId, false);
-            } else if (!window.FLASH_HOME_ENABLED && window.apiClient && typeof window.apiClient.post === 'function') {
-                setTimeout(function () {
-                    window.apiClient.post('/api/home/wallet/refresh?account_id=' + accountId, null, { timeout: 15000 })
+            setTimeout(function () {
+                if (typeof triggerWalletRefreshForVarliklar === 'function') {
+                    triggerWalletRefreshForVarliklar(accountId, { force: true });
+                } else if (window.FLASH_HOME_ENABLED && window.homeFlash && typeof window.homeFlash.triggerRefresh === 'function') {
+                    window.homeFlash.triggerRefresh(accountId, true);
+                } else if (window.apiClient && typeof window.apiClient.post === 'function') {
+                    window.apiClient.post('/api/home/wallet/refresh?account_id=' + accountId + '&force=1', null, { timeout: 15000 })
                         .then(function (res) {
                             if (res && res.ok && res.data && res.data.wallet_live && assetsState && assetsState.wallet) {
                                 normalizeAndApplyWallet(res.data.wallet_live, { source: 'wallet_refresh_init' });
                             }
-                            if (window.__walletDebugMeta) {
-                                window.__walletDebugMeta.last_refresh_at = (res && res.data && res.data.wallet_live_at) ? res.data.wallet_live_at : new Date().toISOString();
-                                if (res && res.data && res.data.last_error_code) window.__walletDebugMeta.last_error_code = res.data.last_error_code;
-                            }
                         })
                         .catch(function () {});
-                }, 500);
-            }
+                }
+            }, 500);
         }
         // 10s timeout guard: wallet stuck in idle/loading => set error (eliminates indefinite loading flicker)
         setTimeout(function () {
@@ -10629,6 +10667,9 @@ async function initDashboard() {
     var visibilityThrottledRefresh = throttle(function () {
         if (!State.accountId || isSpotModalOpen()) return;
         loadSummary(State.accountId);
+        if (isBinanceTabActive() && typeof triggerWalletRefreshForVarliklar === 'function') {
+            triggerWalletRefreshForVarliklar(State.accountId, { force: true });
+        }
     }, 800);
     document.addEventListener("visibilitychange", function () {
         if (document.hidden) {
@@ -10650,6 +10691,9 @@ async function initDashboard() {
     window.addEventListener("focus", () => {
         if (!State.accountId || isSpotModalOpen()) return;
         loadSummary(State.accountId);
+        if (isBinanceTabActive() && typeof triggerWalletRefreshForVarliklar === 'function') {
+            triggerWalletRefreshForVarliklar(State.accountId, { force: true });
+        }
     });
     
     window.addEventListener("beforeunload", function () {
@@ -10678,24 +10722,52 @@ async function initDashboard() {
 
 function closeFirstLoginModal() {
     const modal = document.getElementById('firstLoginModal');
-    if (modal) {
-        modal.style.display = 'none';
-        // Mark first login as completed
-        const userStr = localStorage.getItem('user');
-        if (userStr) {
-            try {
-                const user = JSON.parse(userStr);
-                user.is_first_login = false;
-                localStorage.setItem('user', JSON.stringify(user));
-                // Update on server
-                fetch(`/api/accounts/${State.accountId}/settings`, {
-                    method: 'PATCH',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({is_first_login: false})
-                }).catch(() => {});
-            } catch (e) {}
+    if (modal) modal.style.display = 'none';
+    markFirstLoginComplete();
+}
+
+async function markFirstLoginComplete() {
+    const userStr = localStorage.getItem('user');
+    if (userStr) {
+        try {
+            const user = JSON.parse(userStr);
+            user.is_first_login = false;
+            localStorage.setItem('user', JSON.stringify(user));
+        } catch (e) {}
+    }
+    try {
+        const su = sessionStorage.getItem('user');
+        if (su) {
+            const u2 = JSON.parse(su);
+            u2.is_first_login = false;
+            sessionStorage.setItem('user', JSON.stringify(u2));
+        }
+    } catch (_) {}
+    if (State.accountId && window.apiClient) {
+        try {
+            await window.apiClient(`/api/accounts/${State.accountId}/settings`, { method: 'PATCH', body: { is_first_login: false } });
+        } catch (_) {}
+    }
+    if (history.replaceState) {
+        const q = new URLSearchParams(window.location.search);
+        if (q.has('first_login')) {
+            q.delete('first_login');
+            const qs = q.toString();
+            history.replaceState(null, '', window.location.pathname + (qs ? '?' + qs : '') + (window.location.hash || ''));
         }
     }
+}
+
+async function shouldShowFirstLoginModal(accountId, isFirstLogin) {
+    if (!isFirstLogin || !accountId) return false;
+    try {
+        const data = await window.apiClient.get(`/api/accounts/${accountId}/settings`);
+        if (data && data.has_binance_keys) {
+            await markFirstLoginComplete();
+            return false;
+        }
+    } catch (_) {}
+    return true;
 }
 
 window.closeFirstLoginModal = closeFirstLoginModal;
@@ -11924,11 +11996,41 @@ function fmtSignedUsdOrDash(v) {
     return fmtSignedUsd(v);
 }
 
+function isBotWaitingFirstBuy(bot) {
+    if (!bot) return false;
+    var st = (bot.status || '').toLowerCase();
+    if (st !== 'running') return false;
+    var ds = (bot.display_status || '').toLowerCase();
+    if (ds === 'starting') return true;
+    var botId = String(bot.bot_id || bot.id || '');
+    var liveRow = botId && State.botLiveEquity && State.botLiveEquity[botId];
+    if (liveRow && liveRow.first_buy_pending === true) return true;
+    if (liveRow && liveRow.first_buy_pending === false) return false;
+    if (liveRow && liveRow.base_balance != null && Number(liveRow.base_balance) > 0) return false;
+    if (bot.first_buy_pending === true) return true;
+    if (bot.initial_allocation_done === true) return false;
+    var base = Number(bot.base_balance);
+    if (Number.isFinite(base) && base > 0) return false;
+    return true;
+}
+
 function getFinanceBotStatusMeta(bot) {
+    if (isBotWaitingFirstBuy(bot)) {
+        return { text: 'ALIM BEKLİYOR', className: 'mevcut-botlar-status--waiting' };
+    }
     var stRaw = (bot.status || 'STOPPED').toUpperCase();
     var ds = (bot.display_status || '').toLowerCase();
-    var text = ds === 'starting' ? 'BAŞLATILIYOR' : stRaw;
-    var key = ds === 'starting' ? 'waiting' : stRaw.toLowerCase();
+    var key = ds === 'starting' ? 'starting' : stRaw.toLowerCase();
+    var labels = {
+        running: 'ÇALIŞIYOR',
+        stopped: 'DURDURULDU',
+        paused: 'DURAKLATILDI',
+        paused_insufficient_balance: 'Yetersiz bakiye',
+        waiting: 'BEKLİYOR',
+        starting: 'BAŞLATILIYOR',
+        error: 'HATA'
+    };
+    var text = labels[key] || stRaw;
     if (key === 'running') return { text: text, className: 'mevcut-botlar-status--running' };
     if (key === 'paused' || key === 'paused_insufficient_balance' || key === 'waiting' || key === 'starting') {
         return { text: text, className: 'mevcut-botlar-status--waiting' };
@@ -12145,8 +12247,17 @@ function applyFinanceBotsLiveEquityToDom() {
             cell.setAttribute('data-balance', currentUsd != null ? String(currentUsd) : '');
             cell.classList.toggle('finance-bot-metric-pending', balanceTxt === '—');
         });
+        var statusMeta = getFinanceBotStatusMeta(bot);
         document.querySelectorAll('tr[data-bot-id="' + botId + '"]').forEach(function (row) {
             var tds = row.querySelectorAll('td');
+            if (tds.length >= 3) {
+                var statusEl = tds[2].querySelector('.mevcut-botlar-status');
+                if (statusEl) {
+                    setTextIfChanged(statusEl, statusMeta.text);
+                    var statusCls = 'mevcut-botlar-status ' + statusMeta.className;
+                    if (statusEl.className !== statusCls) statusEl.className = statusCls;
+                }
+            }
             if (tds.length >= 7) {
                 setTextIfChanged(tds[5], fmtSignedUsdOrDash(pnl));
                 if (tds[5].style.color !== sc) tds[5].style.color = sc;
@@ -12162,6 +12273,11 @@ function applyFinanceBotsLiveEquityToDom() {
                 if (el.style.color !== sc) el.style.color = sc;
             }
             if ((label.textContent || '') === 'Tur') setTextIfChanged(el, cyclesTxt);
+        });
+        document.querySelectorAll('.mevcut-botlar-mobile-card[data-bot-id="' + botId + '"] .mevcut-botlar-status').forEach(function (el) {
+            setTextIfChanged(el, statusMeta.text);
+            var statusCls = 'mevcut-botlar-status ' + statusMeta.className;
+            if (el.className !== statusCls) el.className = statusCls;
         });
     });
 }
@@ -12188,6 +12304,8 @@ async function pollFinanceBotsLiveEquity() {
                     State.botLiveEquity[String(botId)] = {
                         equity: Number(live.equity),
                         equity_unavailable: !!live.equity_unavailable,
+                        first_buy_pending: live.first_buy_pending === true,
+                        base_balance: live.base_balance != null ? Number(live.base_balance) : null,
                         ts: Date.now()
                     };
                 })
@@ -13300,8 +13418,12 @@ function dismissUserPopup() {
     }).catch(function () {});
     if (wasFirstLogin) {
         setTimeout(function () {
-            var modal = document.getElementById("firstLoginModal");
-            if (modal) modal.style.display = "flex";
+            shouldShowFirstLoginModal(State.accountId, true).then(function (show) {
+                if (show) {
+                    var modal = document.getElementById("firstLoginModal");
+                    if (modal) modal.style.display = "flex";
+                }
+            });
         }, 200);
     }
 }

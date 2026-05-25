@@ -5,7 +5,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Yönetici Paneli v3.5 (127.0.0.1:7999)</title>
-  <link rel="stylesheet" href="/ui/assets/manager.css" />
+  <link rel="stylesheet" href="/ui/assets/manager.css?v=3" />
 </head>
 <body class="theme-dark">
   <header class="manager-header">
@@ -25,10 +25,10 @@
   <div class="layout">
     <nav class="sidebar">
       <a href="#" class="nav-item active" data-tab="overview">Özet</a>
-      <a href="#" class="nav-item" data-tab="web">TraderTrailing.com <span id="nav-err-web" class="nav-err-count hidden">0</span></a>
-      <a href="#" class="nav-item" data-tab="engine">TraderTrailing Bot Server <span id="nav-err-engine" class="nav-err-count hidden">0</span></a>
-      <a href="#" class="nav-item" data-tab="manager">Manager Server <span id="nav-err-manager" class="nav-err-count hidden">0</span></a>
-      <a href="#" class="nav-item" data-tab="html">omeraltin.com <span id="nav-err-html" class="nav-err-count hidden">0</span></a>
+      <a href="#" class="nav-item" data-tab="web">TraderTrailing.com <span id="nav-err-web" class="nav-alert-badge hidden">0</span></a>
+      <a href="#" class="nav-item" data-tab="engine">TraderTrailing Bot Server <span id="nav-err-engine" class="nav-alert-badge hidden">0</span></a>
+      <a href="#" class="nav-item" data-tab="manager">Manager Server <span id="nav-err-manager" class="nav-alert-badge hidden">0</span></a>
+      <a href="#" class="nav-item" data-tab="html">omeraltin.com <span id="nav-err-html" class="nav-alert-badge hidden">0</span></a>
       <a href="#" class="nav-item" data-tab="security">Güvenlik</a>
       <a href="#" class="nav-item" data-tab="incidents">Olaylar</a>
       <a href="#" class="nav-item" data-tab="audit">Denetim</a>
@@ -38,121 +38,166 @@
     <main class="manager-main">
       <!-- OVERVIEW -->
       <section id="panel-overview" class="tab-panel active">
-        <div class="overview-toolbar">
-          <span id="overview-last-update" class="overview-meta">Son güncelleme: —</span>
-          <span id="overview-health-badge" class="overview-health-badge">—</span>
-          <button type="button" class="btn btn-sm btn-export" data-export="metrics">Metrik dışa aktar</button>
-        </div>
-        <div class="overview-grid">
-          <div class="overview-section overview-system">
-            <h2 class="overview-section-title">Sistem</h2>
-            <div class="progress-row">
-              <div class="progress-item">
-                <span class="metric-label">CPU</span>
-                <div class="progress-wrap"><div id="progress-cpu" class="progress-fill" style="width:0%"></div></div>
-                <span id="overview-cpu" class="metric-value">—</span>
-              </div>
-              <div class="progress-item">
-                <span class="metric-label">RAM</span>
-                <div class="progress-wrap"><div id="progress-ram" class="progress-fill" style="width:0%"></div></div>
-                <span id="overview-ram" class="metric-value">—</span>
-              </div>
-              <div class="progress-item">
-                <span class="metric-label">Disk</span>
-                <div class="progress-wrap"><div id="progress-disk" class="progress-fill" style="width:0%"></div></div>
-                <span id="overview-disk" class="metric-value">—</span>
-              </div>
+        <div class="overview-page">
+          <div class="overview-header">
+            <div>
+              <h2 class="overview-title">Kontrol Merkezi</h2>
+              <p class="overview-subtitle">Sistem kaynakları, servis durumu, olaylar ve son uyarılar — tek ekranda.</p>
             </div>
-            <div class="overview-metric-row">
-              <span class="metric-label">Yük (load avg)</span>
-              <span id="overview-load" class="metric-value">—</span>
+            <div class="overview-header-actions">
+              <span class="overview-live-badge">CANLI</span>
+              <span id="overview-last-update" class="overview-meta">Son güncelleme: —</span>
+              <span id="overview-health-badge" class="overview-health-badge">—</span>
+              <button type="button" class="btn btn-sm btn-export" data-export="metrics">Metrik dışa aktar</button>
             </div>
           </div>
-          <div class="overview-section overview-services">
-            <h2 class="overview-section-title">Servisler</h2>
+
+          <div class="overview-stats-row">
+            <div class="ov-stat-card ov-stat-cpu">
+              <span class="ov-stat-label">CPU</span>
+              <span id="overview-cpu" class="ov-stat-value">—</span>
+              <div class="ov-progress-wrap"><div id="progress-cpu" class="ov-progress-fill" style="width:0%"></div></div>
+            </div>
+            <div class="ov-stat-card ov-stat-ram">
+              <span class="ov-stat-label">RAM</span>
+              <span id="overview-ram" class="ov-stat-value">—</span>
+              <div class="ov-progress-wrap"><div id="progress-ram" class="ov-progress-fill" style="width:0%"></div></div>
+            </div>
+            <div class="ov-stat-card ov-stat-disk">
+              <span class="ov-stat-label">Disk</span>
+              <span id="overview-disk" class="ov-stat-value">—</span>
+              <div class="ov-progress-wrap"><div id="progress-disk" class="ov-progress-fill" style="width:0%"></div></div>
+            </div>
+            <div class="ov-stat-card ov-stat-load">
+              <span class="ov-stat-label">Sistem yükü</span>
+              <span id="overview-load" class="ov-stat-value">—</span>
+              <span class="ov-stat-hint">load avg</span>
+            </div>
+            <div class="ov-stat-card ov-stat-slo">
+              <span class="ov-stat-label">Erişilebilirlik</span>
+              <div class="ov-slo-inline">
+                <div class="ov-progress-wrap ov-slo-bar-wrap"><div id="slo-bar" class="ov-progress-fill slo-bar" style="width:100%"></div></div>
+              </div>
+              <p id="slo-text" class="ov-stat-hint slo-text">—</p>
+            </div>
+            <div class="ov-stat-card ov-stat-issues" data-tab-link="incidents">
+              <span class="ov-stat-label">Aktif olay</span>
+              <span id="overview-issue-count" class="ov-stat-value issue-count">0</span>
+              <span class="ov-stat-hint">Olay Merkezi →</span>
+            </div>
+          </div>
+
+          <div class="overview-block">
+            <div class="overview-block-head">
+              <h3 class="overview-block-title">Servisler</h3>
+              <span class="overview-block-meta">Durum · metrik · teşhis</span>
+            </div>
             <div class="overview-service-cards">
-              <div class="overview-service-card" data-service="manager">
-                <div class="service-card-head">
-                  <span class="service-name">Yönetici</span>
-                  <span class="status-chip" id="overview-manager-status">—</span>
-                  <a href="#" class="link-tab" data-tab="manager">Log →</a>
-                </div>
+              <article class="overview-service-card svc-manager" data-service="manager">
+                <header class="service-card-header">
+                  <div class="service-card-brand">
+                    <span class="service-icon svc-icon-manager" aria-hidden="true"></span>
+                    <span class="service-name">Yönetici</span>
+                  </div>
+                  <span class="status-chip service-status" id="overview-manager-status">—</span>
+                </header>
                 <dl class="service-metrics">
                   <dt>Port</dt><dd id="overview-manager-port">7999</dd>
                   <dt>PID</dt><dd id="overview-manager-pid">—</dd>
-                  <dt>Çalışma süresi</dt><dd id="overview-manager-uptime">—</dd>
+                  <dt>Çalışma</dt><dd id="overview-manager-uptime">—</dd>
                   <dt>Kaynak</dt><dd id="overview-manager-resource">—</dd>
+                  <dt>Hata / Uyarı</dt><dd id="overview-manager-err-wrn">—</dd>
                 </dl>
-                <p id="overview-manager-diagnosis" class="overview-diagnosis">—</p>
-              </div>
-              <div class="overview-service-card" data-service="web">
-                <div class="service-card-head">
-                  <span class="service-name">Web</span>
-                  <span class="status-chip" id="overview-web-status">—</span>
-                  <a href="#" class="link-tab" data-tab="web">Log →</a>
-                </div>
+                <p id="overview-manager-diagnosis" class="overview-diagnosis diagnosis-empty">—</p>
+                <div class="service-card-toolbar" aria-hidden="true"></div>
+                <footer class="service-card-foot">
+                  <a href="#" class="link-tab service-link" data-tab="manager">Logları aç →</a>
+                </footer>
+              </article>
+              <article class="overview-service-card svc-web" data-service="web">
+                <header class="service-card-header">
+                  <div class="service-card-brand">
+                    <span class="service-icon svc-icon-web" aria-hidden="true"></span>
+                    <span class="service-name">TraderTrailing</span>
+                  </div>
+                  <span class="status-chip service-status" id="overview-web-status">—</span>
+                </header>
                 <dl class="service-metrics">
                   <dt>Port</dt><dd id="overview-web-port">8000</dd>
                   <dt>İstek/dk</dt><dd id="overview-web-reqmin">—</dd>
                   <dt>Hata oranı</dt><dd id="overview-web-error-rate">—</dd>
-                  <dt>P95 gecikme</dt><dd id="overview-web-p95">—</dd>
+                  <dt>P95</dt><dd id="overview-web-p95">—</dd>
                   <dt>Hata / Uyarı</dt><dd id="overview-web-err-wrn">—</dd>
                 </dl>
-                <p id="overview-web-diagnosis" class="overview-diagnosis">—</p>
-              </div>
-              <div class="overview-service-card" data-service="engine">
-                <div class="service-card-head">
-                  <span class="service-name">Motor</span>
-                  <span class="status-chip" id="overview-engine-status">—</span>
-                  <a href="#" class="link-tab" data-tab="engine">Log →</a>
-                </div>
+                <p id="overview-web-diagnosis" class="overview-diagnosis diagnosis-empty">—</p>
+                <div class="service-card-toolbar" aria-hidden="true"></div>
+                <footer class="service-card-foot">
+                  <a href="#" class="link-tab service-link" data-tab="web">Logları aç →</a>
+                </footer>
+              </article>
+              <article class="overview-service-card svc-engine" data-service="engine">
+                <header class="service-card-header">
+                  <div class="service-card-brand">
+                    <span class="service-icon svc-icon-engine" aria-hidden="true"></span>
+                    <span class="service-name">Bot Engine</span>
+                  </div>
+                  <span class="status-chip service-status" id="overview-engine-status">—</span>
+                </header>
                 <dl class="service-metrics">
-                  <dt>Port</dt><dd id="overview-engine-port">—</dd>
+                  <dt>PID</dt><dd id="overview-engine-pid">—</dd>
                   <dt>Aktif bot</dt><dd id="overview-engine-bots">—</dd>
-                  <dt>Tick/10 sn</dt><dd id="overview-engine-tick">—</dd>
+                  <dt>Tick/10sn</dt><dd id="overview-engine-tick">—</dd>
                   <dt>Tick yaşı</dt><dd id="overview-engine-tick-age">—</dd>
                   <dt>Hata / Uyarı</dt><dd id="overview-engine-err-wrn">—</dd>
                 </dl>
-                <p id="overview-engine-diagnosis" class="overview-diagnosis">—</p>
-              </div>
-              <div class="overview-service-card" data-service="html">
-                <div class="service-card-head">
-                  <span class="service-name">omeraltin.com</span>
-                  <span class="status-chip" id="overview-html-status">—</span>
-                  <a href="#" class="link-tab" data-tab="html">Yönet →</a>
-                  <a href="http://127.0.0.1:8080" target="_blank" rel="noopener" class="link-tab" style="margin-left:6px">Aç ↗</a>
-                </div>
+                <p id="overview-engine-diagnosis" class="overview-diagnosis diagnosis-empty">—</p>
+                <div class="service-card-toolbar" aria-hidden="true"></div>
+                <footer class="service-card-foot">
+                  <a href="#" class="link-tab service-link" data-tab="engine">Logları aç →</a>
+                </footer>
+              </article>
+              <article class="overview-service-card svc-html" data-service="html">
+                <header class="service-card-header">
+                  <div class="service-card-brand">
+                    <span class="service-icon svc-icon-html" aria-hidden="true"></span>
+                    <span class="service-name">omeraltin.com</span>
+                  </div>
+                  <span class="status-chip service-status" id="overview-html-status">—</span>
+                </header>
                 <dl class="service-metrics">
                   <dt>Port</dt><dd id="overview-html-port">8080</dd>
                   <dt>PID</dt><dd id="overview-html-pid">—</dd>
-                  <dt>Çalışma süresi</dt><dd id="overview-html-uptime">—</dd>
+                  <dt>Çalışma</dt><dd id="overview-html-uptime">—</dd>
+                  <dt>Kaynak</dt><dd id="overview-html-resource">—</dd>
+                  <dt>Hata / Uyarı</dt><dd id="overview-html-err-wrn">—</dd>
                 </dl>
-                <div class="service-card-actions">
-                  <button type="button" class="btn btn-sm btn-start" id="btn-html-start" title="HTML sunucuyu başlat">Başlat</button>
-                  <button type="button" class="btn btn-sm btn-stop" id="btn-html-stop" title="HTML sunucuyu durdur">Durdur</button>
+                <p id="overview-html-diagnosis" class="overview-diagnosis diagnosis-empty">—</p>
+                <div class="service-card-toolbar">
+                  <button type="button" class="btn btn-sm btn-start" id="btn-html-start">Başlat</button>
+                  <button type="button" class="btn btn-sm btn-stop" id="btn-html-stop">Durdur</button>
                 </div>
-              </div>
+                <footer class="service-card-foot service-card-foot-split">
+                  <a href="#" class="link-tab service-link" data-tab="html">Yönet →</a>
+                  <a href="http://127.0.0.1:8080" target="_blank" rel="noopener" class="service-link-ext">Siteyi aç ↗</a>
+                </footer>
+              </article>
             </div>
           </div>
-          <div class="overview-section overview-slo">
-            <h2 class="overview-section-title">Erişilebilirlik (SLO)</h2>
-            <div class="slo-bar-wrap"><div id="slo-bar" class="slo-bar" style="width:100%"></div></div>
-            <p id="slo-text" class="slo-text">—</p>
-          </div>
-          <div class="overview-section overview-quick-stats">
-            <h2 class="overview-section-title">Hızlı özet</h2>
-            <table class="overview-stats-table">
-              <tbody>
-                <tr><td>Hatalar (son 50)</td><td id="overview-errors-summary">—</td></tr>
-                <tr><td>Başarısız giriş</td><td id="overview-login-fail">—</td></tr>
-                <tr><td>Yeniden başlatma (son 10)</td><td id="overview-restarts-10">—</td></tr>
-                <tr><td>Açık olay</td><td><span id="overview-issue-count" class="issue-count">0</span></td></tr>
-              </tbody>
-            </table>
-          </div>
-          <div class="overview-section overview-alerts">
-            <h2 class="overview-section-title">Son hata ve uyarılar</h2>
-            <pre id="overview-alerts" class="log-content alerts-pre"></pre>
+
+          <div class="overview-bottom">
+            <div class="overview-panel overview-quick-stats">
+              <h3 class="overview-block-title">Hızlı özet</h3>
+              <ul class="overview-kv-list">
+                <li><span class="ov-kv-label">Hatalar (son 50)</span><span id="overview-errors-summary" class="ov-kv-value">—</span></li>
+                <li><span class="ov-kv-label">Başarısız giriş</span><span id="overview-login-fail" class="ov-kv-value">—</span></li>
+                <li><span class="ov-kv-label">Son işlemler</span><span id="overview-restarts-10" class="ov-kv-value ov-kv-multiline">—</span></li>
+              </ul>
+            </div>
+            <div class="overview-panel overview-alerts-panel">
+              <h3 class="overview-block-title">Son hata ve uyarılar</h3>
+              <div id="overview-alerts-list" class="overview-alerts-list"></div>
+              <pre id="overview-alerts" class="hidden" aria-hidden="true"></pre>
+            </div>
           </div>
         </div>
       </section>
@@ -320,14 +365,43 @@
       <!-- INCIDENTS -->
       <section id="panel-incidents" class="tab-panel">
         <div class="incidents-page">
-          <div class="incidents-toolbar">
-            <h2 class="incidents-title">Olaylar</h2>
-            <label class="incidents-filter">
-              <input type="checkbox" id="incidents-filter-open" checked />
-              <span>Sadece açık</span>
-            </label>
-            <button type="button" class="btn btn-sm btn-export" data-export="issues">Dışa aktar</button>
+          <div class="incidents-header">
+            <div>
+              <h2 class="incidents-title">Olay Merkezi</h2>
+              <p class="incidents-subtitle">Canlı hata takibi · arşiv · müdahale</p>
+            </div>
+            <div class="incidents-header-actions">
+              <span id="incidents-live-badge" class="incidents-live-badge">CANLI</span>
+              <button type="button" id="incidents-refresh-btn" class="btn btn-sm">Yenile</button>
+              <button type="button" class="btn btn-sm btn-export" data-export="issues">CSV dışa aktar</button>
+            </div>
           </div>
+
+          <div class="incidents-stats" id="incidents-stats">
+            <div class="inc-stat-card inc-stat-open" data-inc-view="OPEN"><span class="inc-stat-label">Açık</span><span class="inc-stat-value" id="inc-stat-open">0</span></div>
+            <div class="inc-stat-card inc-stat-ack" data-inc-view="ACK"><span class="inc-stat-label">Onaylı</span><span class="inc-stat-value" id="inc-stat-ack">0</span></div>
+            <div class="inc-stat-card inc-stat-resolved" data-inc-view="RESOLVED"><span class="inc-stat-label">Çözüldü</span><span class="inc-stat-value" id="inc-stat-resolved">0</span></div>
+            <div class="inc-stat-card inc-stat-archived" data-inc-view="ARCHIVED"><span class="inc-stat-label">Arşiv</span><span class="inc-stat-value" id="inc-stat-archived">0</span></div>
+            <div class="inc-stat-card inc-stat-backup" data-inc-view="BACKUP"><span class="inc-stat-label">Yerel yedek</span><span class="inc-stat-value" id="inc-stat-backup">0</span></div>
+          </div>
+
+          <div class="incidents-toolbar">
+            <div class="incidents-view-tabs" role="tablist">
+              <button type="button" class="inc-view-tab active" data-inc-view="ACTIVE">Aktif</button>
+              <button type="button" class="inc-view-tab" data-inc-view="ARCHIVED">Arşiv</button>
+              <button type="button" class="inc-view-tab" data-inc-view="BACKUP">Yerel yedek</button>
+              <button type="button" class="inc-view-tab" data-inc-view="">Tümü</button>
+            </div>
+            <select id="incidents-filter-service" class="incidents-select" aria-label="Servis filtresi">
+              <option value="">Tüm servisler</option>
+              <option value="web">WEB</option>
+              <option value="engine">MOTOR</option>
+              <option value="manager">YÖNETİCİ</option>
+              <option value="html">HTML</option>
+            </select>
+            <input type="search" id="incidents-search" class="incidents-search" placeholder="ID, servis, örnek metin ara…" />
+          </div>
+
           <div class="incidents-table-wrap">
             <table class="incidents-table">
               <thead>
@@ -335,171 +409,320 @@
                   <th>ID</th>
                   <th>Önem</th>
                   <th>Servis</th>
+                  <th>Özet</th>
                   <th>Adet</th>
                   <th>Son görülme</th>
                   <th>Durum</th>
+                  <th class="inc-col-actions">İşlemler</th>
                 </tr>
               </thead>
               <tbody id="incidents-list"></tbody>
             </table>
           </div>
-          <p id="incidents-empty" class="incidents-empty hidden">Kayıtlı olay yok. Sadece açık filtresini kapatarak tümünü görebilirsiniz.</p>
+          <p id="incidents-empty" class="incidents-empty hidden">Bu filtrede olay yok.</p>
+          <p id="incidents-footnote" class="incidents-footnote">En fazla 300 aktif olay bellekte tutulur · taşan kayıtlar <code>.run/issues_archive.jsonl</code> dosyasına yedeklenir</p>
         </div>
-        <div id="incident-drawer" class="drawer hidden">
+
+        <div id="incident-drawer" class="drawer drawer-side hidden">
           <div class="drawer-head">
-            <h3 id="drawer-title">Olay</h3>
+            <div>
+              <h3 id="drawer-title">Olay</h3>
+              <p id="drawer-subtitle" class="drawer-subtitle"></p>
+            </div>
             <button type="button" id="drawer-close" class="btn btn-sm">Kapat</button>
           </div>
           <div class="drawer-body">
-            <p id="drawer-meta"></p>
-            <p id="drawer-status"></p>
-            <div class="drawer-row">
-              <label>Atanan</label>
-              <input type="text" id="drawer-assignee" class="drawer-input" placeholder="Atanan kişi" />
-              <button type="button" id="drawer-assign-btn" class="btn btn-sm">Kaydet</button>
+            <div class="drawer-meta-grid">
+              <div><span class="drawer-meta-label">Durum</span><span id="drawer-status" class="drawer-meta-value">—</span></div>
+              <div><span class="drawer-meta-label">İlk</span><span id="drawer-first-seen" class="drawer-meta-value">—</span></div>
+              <div><span class="drawer-meta-label">Son</span><span id="drawer-last-seen" class="drawer-meta-value">—</span></div>
+              <div><span class="drawer-meta-label">Adet</span><span id="drawer-count" class="drawer-meta-value">—</span></div>
+            </div>
+            <div class="drawer-actions drawer-actions-top">
+              <button type="button" id="drawer-ack" class="btn btn-sm btn-warning">Onayla</button>
+              <button type="button" id="drawer-resolve" class="btn btn-sm btn-primary">Çözüldü</button>
+              <button type="button" id="drawer-archive" class="btn btn-sm">Arşivle</button>
+              <button type="button" id="drawer-reopen" class="btn btn-sm hidden">Geri al</button>
             </div>
             <div class="drawer-row">
-              <label>Etiketler (virgülle, max 10)</label>
-              <input type="text" id="drawer-labels" class="drawer-input" placeholder="bug, acil" />
-              <button type="button" id="drawer-labels-btn" class="btn btn-sm">Kaydet</button>
+              <label>Atanan</label>
+              <input type="text" id="drawer-assignee" class="drawer-input" placeholder="Atanan · Enter → sonraki alan" />
+            </div>
+            <div class="drawer-row">
+              <label>Etiketler</label>
+              <input type="text" id="drawer-labels" class="drawer-input" placeholder="bug, acil · Enter → sonraki alan" />
             </div>
             <div class="drawer-row">
               <label>SLA notu</label>
-              <input type="text" id="drawer-sla" class="drawer-input" placeholder="SLA notu" />
-              <button type="button" id="drawer-sla-btn" class="btn btn-sm">Kaydet</button>
-            </div>
-            <div class="drawer-actions">
-              <button type="button" id="drawer-ack" class="btn btn-sm btn-warning">Onayla</button>
-              <button type="button" id="drawer-resolve" class="btn btn-sm btn-primary">Çözüldü</button>
+              <input type="text" id="drawer-sla" class="drawer-input" placeholder="SLA · Enter → yorum alanı" />
             </div>
             <h4>Durum geçmişi</h4>
             <pre id="drawer-status-history" class="log-content small"></pre>
             <h4>Yorumlar</h4>
             <div id="drawer-comments" class="drawer-comments"></div>
             <div class="drawer-row">
-              <input type="text" id="drawer-comment-text" class="drawer-input" placeholder="Yorum ekle..." />
-              <button type="button" id="drawer-comment-btn" class="btn btn-sm">Ekle</button>
+              <input type="text" id="drawer-comment-text" class="drawer-input" placeholder="Yorum · Enter ile ekle" />
             </div>
             <h4>Örnek kayıtlar</h4>
             <pre id="drawer-samples" class="log-content"></pre>
           </div>
         </div>
+        <div id="incident-drawer-backdrop" class="drawer-backdrop hidden"></div>
       </section>
 
       <!-- AUDIT -->
       <section id="panel-audit" class="tab-panel">
-        <div class="audit-toolbar">
-          <h3>Denetim (son 200 işlem)</h3>
-          <button type="button" class="btn btn-sm btn-export" data-export="audit">Dışa aktar</button>
+        <div class="audit-page">
+          <div class="audit-header">
+            <div>
+              <h2 class="audit-title">Denetim Günlüğü</h2>
+              <p class="audit-subtitle">Panelde yapılan tüm işlemler: servis başlat/durdur, olay müdahaleleri, uyarı onayları ve dışa aktarmalar.</p>
+            </div>
+            <div class="audit-header-actions">
+              <button type="button" id="audit-refresh-btn" class="btn btn-sm">Yenile</button>
+              <button type="button" class="btn btn-sm btn-export" data-export="audit">CSV dışa aktar</button>
+            </div>
+          </div>
+
+          <div class="audit-stats" id="audit-stats">
+            <div class="audit-stat-card audit-stat-service" data-audit-cat="servis">
+              <span class="audit-stat-label">Servis işlemleri</span>
+              <span class="audit-stat-value" id="audit-stat-service">0</span>
+            </div>
+            <div class="audit-stat-card audit-stat-issue" data-audit-cat="olay">
+              <span class="audit-stat-label">Olay müdahaleleri</span>
+              <span class="audit-stat-value" id="audit-stat-issue">0</span>
+            </div>
+            <div class="audit-stat-card audit-stat-alert" data-audit-cat="uyari">
+              <span class="audit-stat-label">Uyarı onayları</span>
+              <span class="audit-stat-value" id="audit-stat-alert">0</span>
+            </div>
+            <div class="audit-stat-card audit-stat-export" data-audit-cat="export">
+              <span class="audit-stat-label">Dışa aktarma</span>
+              <span class="audit-stat-value" id="audit-stat-export">0</span>
+            </div>
+          </div>
+
+          <div class="audit-toolbar">
+            <div class="audit-view-tabs" role="tablist">
+              <button type="button" class="audit-view-tab active" data-audit-view="">Tümü</button>
+              <button type="button" class="audit-view-tab" data-audit-view="servis">Servis</button>
+              <button type="button" class="audit-view-tab" data-audit-view="olay">Olay</button>
+              <button type="button" class="audit-view-tab" data-audit-view="uyari">Uyarı</button>
+              <button type="button" class="audit-view-tab" data-audit-view="export">Dışa aktarma</button>
+              <button type="button" class="audit-view-tab" data-audit-view="BACKUP">Yerel yedek</button>
+            </div>
+            <select id="audit-filter-service" class="audit-select" aria-label="Servis filtresi">
+              <option value="">Tüm servisler</option>
+              <option value="web">Web (TraderTrailing)</option>
+              <option value="engine">Motor (Bot)</option>
+              <option value="manager">Yönetici</option>
+              <option value="html">HTML (omeraltin)</option>
+            </select>
+            <input type="search" id="audit-search" class="audit-search" placeholder="İşlem veya açıklama ara…" />
+          </div>
+
+          <div class="audit-table-wrap">
+            <table class="audit-table">
+              <thead>
+                <tr>
+                  <th>Zaman</th>
+                  <th>Kategori</th>
+                  <th>İşlem</th>
+                  <th>Açıklama</th>
+                  <th>Servis</th>
+                </tr>
+              </thead>
+              <tbody id="audit-list"></tbody>
+            </table>
+          </div>
+          <p id="audit-empty" class="audit-empty hidden">Bu filtrede denetim kaydı yok.</p>
+          <p id="audit-footnote" class="audit-footnote">En fazla 300 kayıt bellekte tutulur · taşan kayıtlar <code>.run/audit_archive.jsonl</code> dosyasına yedeklenir</p>
         </div>
-        <div class="audit-list" id="audit-list"></div>
       </section>
 
       <!-- SETTINGS -->
       <section id="panel-settings" class="tab-panel">
         <div class="settings-page">
-          <div class="settings-toolbar">
-            <h2 class="settings-title">Ayarlar</h2>
-            <button type="button" id="setting-reset-defaults" class="btn btn-sm btn-reset">Varsayılanları yükle</button>
+          <div class="settings-header">
+            <div>
+              <h2 class="settings-title">Ayarlar</h2>
+              <p class="settings-subtitle">Bildirimler, uyarı eşikleri, yenileme, görünüm ve bağlantı — tarayıcıda otomatik kaydedilir.</p>
+            </div>
+            <div class="settings-header-actions">
+              <span id="settings-save-status" class="settings-save-badge">Kaydedildi</span>
+              <button type="button" id="setting-reset-defaults" class="btn btn-sm btn-reset">Varsayılanları yükle</button>
+            </div>
           </div>
+
           <div class="settings-grid">
-            <section class="settings-section">
-              <h3 class="settings-section-title">Bildirimler</h3>
-              <p class="settings-desc">Kritik olaylar ve teşhis bildirimleri.</p>
-              <div class="settings-row">
-                <label class="settings-label">
-                  <input type="checkbox" id="setting-toast" checked />
-                  <span>Toast bildirimleri</span>
-                </label>
-                <span class="settings-hint">Ekranda kısa süreli uyarı göster</span>
+            <article class="settings-card settings-card-notify">
+              <header class="settings-card-head">
+                <span class="settings-card-icon settings-icon-notify" aria-hidden="true"></span>
+                <div>
+                  <h3 class="settings-card-title">Bildirimler</h3>
+                  <p class="settings-card-desc">Kritik olaylarda ses uyarısı (varsayılan kapalı).</p>
+                </div>
+              </header>
+              <div class="settings-fields">
+                <div class="settings-field">
+                  <div class="settings-field-text">
+                    <span class="settings-field-label">Ses uyarıları</span>
+                    <span class="settings-field-hint">Kritik durumda kısa ses çalar</span>
+                  </div>
+                  <label class="settings-toggle" for="setting-sound">
+                    <input type="checkbox" id="setting-sound" />
+                    <span class="settings-toggle-track" aria-hidden="true"></span>
+                  </label>
+                </div>
               </div>
-              <div class="settings-row">
-                <label class="settings-label">
-                  <input type="checkbox" id="setting-sound" />
-                  <span>Ses uyarıları</span>
-                </label>
-                <span class="settings-hint">Kritik durumda ses çal (varsayılan kapalı)</span>
+            </article>
+
+            <article class="settings-card settings-card-threshold">
+              <header class="settings-card-head">
+                <span class="settings-card-icon settings-icon-threshold" aria-hidden="true"></span>
+                <div>
+                  <h3 class="settings-card-title">Uyarı eşikleri</h3>
+                  <p class="settings-card-desc">Bu sınırlar aşıldığında panel uyarı üretebilir.</p>
+                </div>
+              </header>
+              <div class="settings-fields">
+                <div class="settings-field">
+                  <label class="settings-field-label" for="setting-thresh-5xx">TraderTrailing 5xx oranı</label>
+                  <div class="settings-field-control">
+                    <input type="number" id="setting-thresh-5xx" min="0" max="100" value="5" step="0.1" class="settings-input" />
+                    <span class="settings-unit">%</span>
+                  </div>
+                </div>
+                <div class="settings-field">
+                  <label class="settings-field-label" for="setting-thresh-tick">Bot Engine tick gecikmesi</label>
+                  <div class="settings-field-control">
+                    <input type="number" id="setting-thresh-tick" min="0" value="60" class="settings-input" />
+                    <span class="settings-unit">sn</span>
+                  </div>
+                </div>
+                <div class="settings-field">
+                  <label class="settings-field-label" for="setting-thresh-login">Başarısız giriş eşiği</label>
+                  <div class="settings-field-control">
+                    <input type="number" id="setting-thresh-login" min="0" value="10" class="settings-input" />
+                    <span class="settings-unit">adet</span>
+                  </div>
+                </div>
               </div>
-            </section>
-            <section class="settings-section">
-              <h3 class="settings-section-title">Uyarı eşikleri</h3>
-              <p class="settings-desc">Bu değerler aşıldığında uyarı üretilebilir.</p>
-              <div class="settings-row">
-                <label class="settings-label" for="setting-thresh-5xx">Web 5xx oranı (%)</label>
-                <input type="number" id="setting-thresh-5xx" min="0" max="100" value="5" step="0.1" class="settings-input" />
+            </article>
+
+            <article class="settings-card settings-card-refresh">
+              <header class="settings-card-head">
+                <span class="settings-card-icon settings-icon-refresh" aria-hidden="true"></span>
+                <div>
+                  <h3 class="settings-card-title">Yenileme</h3>
+                  <p class="settings-card-desc">Kontrol merkezi ve metrik kartlarının güncellenme sıklığı.</p>
+                </div>
+              </header>
+              <div class="settings-fields">
+                <div class="settings-field">
+                  <label class="settings-field-label" for="setting-poll-interval">Metrik aralığı</label>
+                  <select id="setting-poll-interval" class="settings-select">
+                    <option value="1000">1 saniye</option>
+                    <option value="2000" selected>2 saniye</option>
+                    <option value="5000">5 saniye</option>
+                    <option value="10000">10 saniye</option>
+                  </select>
+                </div>
               </div>
-              <div class="settings-row">
-                <label class="settings-label" for="setting-thresh-tick">Motor tick gecikmesi (sn)</label>
-                <input type="number" id="setting-thresh-tick" min="0" value="60" class="settings-input" />
+            </article>
+
+            <article class="settings-card settings-card-appearance">
+              <header class="settings-card-head">
+                <span class="settings-card-icon settings-icon-appearance" aria-hidden="true"></span>
+                <div>
+                  <h3 class="settings-card-title">Görünüm</h3>
+                  <p class="settings-card-desc">Tema ve arayüz yoğunluğu.</p>
+                </div>
+              </header>
+              <div class="settings-fields">
+                <div class="settings-field settings-field-stack">
+                  <span class="settings-field-label">Tema</span>
+                  <div class="settings-segment" role="group" aria-label="Tema">
+                    <label class="settings-segment-item"><input type="radio" name="theme" value="dark" checked /><span>Koyu</span></label>
+                    <label class="settings-segment-item"><input type="radio" name="theme" value="light" /><span>Açık</span></label>
+                  </div>
+                </div>
+                <div class="settings-field">
+                  <div class="settings-field-text">
+                    <span class="settings-field-label">Kompakt mod</span>
+                    <span class="settings-field-hint">Daha az boşluk, daha çok içerik</span>
+                  </div>
+                  <label class="settings-toggle" for="setting-compact">
+                    <input type="checkbox" id="setting-compact" />
+                    <span class="settings-toggle-track" aria-hidden="true"></span>
+                  </label>
+                </div>
               </div>
-              <div class="settings-row">
-                <label class="settings-label" for="setting-thresh-login">Başarısız giriş uyarı eşiği</label>
-                <input type="number" id="setting-thresh-login" min="0" value="10" class="settings-input" />
+            </article>
+
+            <article class="settings-card settings-card-log">
+              <header class="settings-card-head">
+                <span class="settings-card-icon settings-icon-log" aria-hidden="true"></span>
+                <div>
+                  <h3 class="settings-card-title">Log</h3>
+                  <p class="settings-card-desc">Canlı log ve hata panelleri davranışı.</p>
+                </div>
+              </header>
+              <div class="settings-fields">
+                <div class="settings-field">
+                  <label class="settings-field-label" for="setting-log-max-lines">Maks. satır</label>
+                  <div class="settings-field-control">
+                    <input type="number" id="setting-log-max-lines" min="100" max="2000" value="1000" class="settings-input" />
+                    <span class="settings-unit">/ servis</span>
+                  </div>
+                </div>
+                <div class="settings-field">
+                  <div class="settings-field-text">
+                    <span class="settings-field-label">Otomatik kaydır</span>
+                    <span class="settings-field-hint">Yeni log gelince alta in</span>
+                  </div>
+                  <label class="settings-toggle" for="setting-autoscroll">
+                    <input type="checkbox" id="setting-autoscroll" checked />
+                    <span class="settings-toggle-track" aria-hidden="true"></span>
+                  </label>
+                </div>
               </div>
-            </section>
-            <section class="settings-section">
-              <h3 class="settings-section-title">Yenileme</h3>
-              <p class="settings-desc">Özet ve metriklerin ne sıklıkla güncelleneceği.</p>
-              <div class="settings-row">
-                <label class="settings-label" for="setting-poll-interval">Metrik aralığı</label>
-                <select id="setting-poll-interval" class="settings-select">
-                  <option value="1000">1 saniye</option>
-                  <option value="2000" selected>2 saniye</option>
-                  <option value="5000">5 saniye</option>
-                  <option value="10000">10 saniye</option>
-                </select>
+            </article>
+
+            <article class="settings-card settings-card-connection">
+              <header class="settings-card-head">
+                <span class="settings-card-icon settings-icon-connection" aria-hidden="true"></span>
+                <div>
+                  <h3 class="settings-card-title">Bağlantı</h3>
+                  <p class="settings-card-desc">Canlı güncellemeler için WebSocket kanalı.</p>
+                </div>
+              </header>
+              <div class="settings-fields">
+                <div class="settings-field">
+                  <div class="settings-field-text">
+                    <span class="settings-field-label">Tek kanal</span>
+                    <span class="settings-field-hint"><code class="settings-code">/ws/events</code> — tüm servisler bir bağlantıda</span>
+                  </div>
+                  <label class="settings-toggle" for="setting-ws-events">
+                    <input type="checkbox" id="setting-ws-events" checked />
+                    <span class="settings-toggle-track" aria-hidden="true"></span>
+                  </label>
+                </div>
               </div>
-            </section>
-            <section class="settings-section">
-              <h3 class="settings-section-title">Görünüm</h3>
-              <p class="settings-desc">Tema ve arayüz yoğunluğu.</p>
-              <div class="settings-row settings-row-radio">
-                <span class="settings-label">Tema</span>
-                <label class="settings-radio"><input type="radio" name="theme" value="dark" checked /> Koyu</label>
-                <label class="settings-radio"><input type="radio" name="theme" value="light" /> Açık</label>
-              </div>
-              <div class="settings-row">
-                <label class="settings-label">
-                  <input type="checkbox" id="setting-compact" />
-                  <span>Kompakt mod</span>
-                </label>
-                <span class="settings-hint">Daha az boşluk, daha çok içerik</span>
-              </div>
-            </section>
-            <section class="settings-section">
-              <h3 class="settings-section-title">Log</h3>
-              <p class="settings-desc">Canlı log ve hata panelleri.</p>
-              <div class="settings-row">
-                <label class="settings-label" for="setting-log-max-lines">Maks. satır (servis başına)</label>
-                <input type="number" id="setting-log-max-lines" min="100" max="2000" value="1000" class="settings-input" />
-              </div>
-              <div class="settings-row">
-                <label class="settings-label">
-                  <input type="checkbox" id="setting-autoscroll" checked />
-                  <span>Varsayılan otomatik kaydır</span>
-                </label>
-                <span class="settings-hint">Yeni log geldiğinde aşağı kaydır (Web/Motor/Yönetici)</span>
-              </div>
-            </section>
-            <section class="settings-section">
-              <h3 class="settings-section-title">Bağlantı</h3>
-              <p class="settings-desc">Canlı güncellemeler için WebSocket.</p>
-              <div class="settings-row">
-                <label class="settings-label">
-                  <input type="checkbox" id="setting-ws-events" checked />
-                  <span>Tek kanal (/ws/events)</span>
-                </label>
-                <span class="settings-hint">Açıksa tüm servisler tek WebSocket üzerinden gelir</span>
-              </div>
-            </section>
+            </article>
           </div>
-          <p class="settings-footer">Ayarlar tarayıcıda (localStorage) saklanır. Sekme değişince otomatik kaydedilir.</p>
+
+          <div class="settings-footnote">
+            <span class="settings-footnote-icon" aria-hidden="true">ℹ</span>
+            <p>Ayarlar yalnızca bu tarayıcıda (<code>localStorage</code>) saklanır. Değişiklikler anında uygulanır; sunucu tarafında kalıcı değildir.</p>
+          </div>
         </div>
       </section>
     </main>
   </div>
 
-  <div id="toast-container" class="toast-container" aria-live="polite"></div>
+  <script src="/ui/assets/logHumanize.js?v=2"></script>
   <script src="/ui/assets/manager.js"></script>
 </body>
 </html>

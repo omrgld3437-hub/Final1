@@ -261,6 +261,13 @@
         .grid-points-table th, .profit-points-table th { color: var(--ds-text-secondary); font-weight: 500; }
         .cycle-pnls-list { max-height: 320px; overflow-y: auto; }
         .cycle-pnl-item { padding: 10px 12px; border-bottom: 1px solid var(--ds-border, #2b3139); display: flex; justify-content: space-between; align-items: center; }
+        .cycle-pnl-item.cycle-trade-clickable { cursor: pointer; transition: background 0.15s ease; }
+        .cycle-pnl-item.cycle-trade-clickable:hover { background: rgba(240, 185, 11, 0.08); }
+        .grid-trade-detail-rows { display: flex; flex-direction: column; gap: 0; font-size: 0.9rem; }
+        .grid-trade-detail-row { display: flex; justify-content: space-between; gap: 1rem; padding: 0.55rem 0; border-bottom: 1px solid var(--ds-border, #2b3139); }
+        .grid-trade-detail-row:last-child { border-bottom: none; }
+        .grid-trade-detail-label { color: var(--ds-text-secondary); flex-shrink: 0; }
+        .grid-trade-detail-value { color: var(--ds-text-primary); text-align: right; word-break: break-word; }
         #engineLogList .engine-log-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
         #engineLogList .engine-log-table col.log-col-time { width: 11rem; }
         #engineLogList .engine-log-table col.log-col-type { width: 4.5rem; }
@@ -743,6 +750,19 @@
             </div>
         </div>
 
+        <div id="gridTradeDetailModal" class="modal-overlay" style="display: none;">
+            <div class="modal-panel parametreler-modal-panel" style="max-width: 480px;">
+                <div class="modal-panel-head">
+                    <h3 class="modal-title" id="gridTradeDetailTitle">Grid işlem detayı</h3>
+                    <button type="button" class="parametreler-modal-close" id="gridTradeDetailClose" aria-label="Kapat">&times;</button>
+                </div>
+                <div id="gridTradeDetailBody" class="parametreler-body grid-trade-detail-rows"></div>
+                <div class="modal-actions" style="margin-top: 1rem;">
+                    <button type="button" class="btn btn-ghost" id="gridTradeDetailKapat">Kapat</button>
+                </div>
+            </div>
+        </div>
+
         <div class="perf-chart-modal-overlay" id="symbolChartModalOverlay">
             <div class="perf-chart-modal symbol-chart-full" id="symbolChartModal">
                 <div class="perf-chart-modal-head">
@@ -769,6 +789,13 @@
         var botId = qs.get('bot_id') || qs.get('id');
         var accountId = qs.get('account_id');
         var accountCode = qs.get('account_code');
+        var _showDetailGen = 0;
+        var _tradesLoadGen = 0;
+
+        function readBotIdFromUrl() {
+            var q = new URLSearchParams(location.search);
+            return q.get('bot_id') || q.get('id');
+        }
 
         var backLink = document.getElementById('backLink');
         var base = '/ui/dashboard.html?';
@@ -817,6 +844,19 @@
         var errorEl = document.getElementById('errorEl');
         var lastPriceForBlink = null;
         var lastKnownCycleId = null;
+        function onBotCycleChanged(newCid) {
+            if (newCid == null || isNaN(newCid)) return;
+            var cid = Number(newCid);
+            if (lastKnownCycleId != null && cid <= lastKnownCycleId) return;
+            lastKnownCycleId = cid;
+            if (lastBotDetail) lastBotDetail.currentCycleId = cid;
+            var stateCycleEl = document.getElementById('stateCycleValue');
+            if (stateCycleEl) stateCycleEl.textContent = String(cid);
+            if (typeof window._botDetailRefreshTradesPanel === 'function') {
+                window._botDetailRefreshTradesPanel(cid);
+            }
+            if (typeof loadPerfMetrics === 'function') loadPerfMetrics();
+        }
         var stripKlinesRefreshMs = 120000;
         var lastRefPriceForPerf = null;
         var initialCapForPerf = null;
@@ -1101,6 +1141,7 @@
 
         function startEngineLogLive() {
             if (!window.EngineLogLive || !botId) return;
+            stopEngineLogLive();
             loadEngineEvents(botId, false).then(function (events) {
                 if (window.BotHealthAlerts) {
                     window._lastSeenHealthEventId = window.BotHealthAlerts.maxHealthEventId(events || window._lastEngineEvents);
@@ -1113,7 +1154,83 @@
             if (window.EngineLogLive) window.EngineLogLive.stopPolling(_engineLogLiveOpts);
         }
 
+        function resetBotDetailUi() {
+            stopEngineLogLive();
+            if (window.intervalRegistry) window.intervalRegistry.stopByOwner('bot-detail');
+            _engineLogLiveOpts.state = { events: [], lastId: 0 };
+            _engineLogLiveOpts.botId = botId;
+            window._lastEngineEvents = [];
+            lastBotDetail = { symbol: '', baseBalance: 0, quoteAsset: 'USDT' };
+            prevLiveState = null;
+            lastPriceForBlink = null;
+            lastKnownCycleId = null;
+            window._botDetailSelectedCycleId = null;
+            window._botDetailLoadCycleTrades = null;
+            if (cycleTradesList) cycleTradesList.innerHTML = '<div class="cycle-pnl-item muted">Yükleniyor…</div>';
+            var turBtns = document.getElementById('cycleTradesTurButtons');
+            if (turBtns) turBtns.innerHTML = '';
+            if (engineLogList) engineLogList.innerHTML = '<div class="muted" style="padding: 0.75rem;">Yükleniyor…</div>';
+            if (configGrid) configGrid.innerHTML = '';
+            var pModal = document.getElementById('parametrelerModal');
+            if (pModal) pModal.style.display = 'none';
+            document.body.style.overflow = '';
+        }
+
+        function botWaitingFirstBuy(status, opts) {
+            opts = opts || {};
+            var st = (status || '').toLowerCase();
+            if (st !== 'running') return false;
+            if (opts.firstBuyPending === true) return true;
+            if ((opts.displayStatus || '').toLowerCase() === 'starting') return true;
+            if (opts.initialAllocationDone === true) return false;
+            return (Number(opts.baseBalance) || 0) <= 0;
+        }
+
+        function applyStatusBadge(status, opts) {
+            opts = opts || {};
+            var st = (status || 'stopped').toLowerCase();
+            var waitingFirstBuy = botWaitingFirstBuy(st, opts);
+            var showAsError = opts.showAsError === true;
+            var statusText = st === 'starting' ? 'Başlatılıyor'
+                : st === 'running' ? (showAsError ? 'Hata (API anahtarı)' : waitingFirstBuy ? 'Alım bekliyor' : 'Çalışıyor')
+                : st === 'error' || (st && st.indexOf('paused') === 0) ? 'Hata'
+                : st === 'stopped' ? 'Durduruldu' : 'Bekliyor';
+            if (statusBadge) {
+                statusBadge.textContent = statusText;
+                statusBadge.className = 'status-badge ' + (showAsError || st === 'error' || (st && st.indexOf('paused') === 0) ? 'status-error' : st === 'running' ? 'status-running' : 'status-stopped');
+                statusBadge.title = showAsError
+                    ? 'Binance API anahtarı geçersiz veya IP/Spot izni yok. API Key, IP beyaz listesi ve Spot izinlerini kontrol edin.'
+                    : (waitingFirstBuy ? 'Bot başlatıldı; ilk base alımı henüz gerçekleşmedi.' : '');
+            }
+            var stateHeroTitleEl = document.getElementById('stateHeroTitle');
+            if (stateHeroTitleEl) {
+                var titleText = st === 'starting' ? 'Durum · Başlatılıyor'
+                    : st === 'running' ? (showAsError ? 'Durum · Hata' : waitingFirstBuy ? 'Durum · Alım bekliyor' : 'Durum · Canlı')
+                    : 'Durum · ' + statusText;
+                if (stateHeroTitleEl.textContent !== titleText) stateHeroTitleEl.textContent = titleText;
+            }
+            return waitingFirstBuy;
+        }
+
         /** Grid alım/satım noktaları tablolarını günceller (tepe/dip, gerçekleşme fiyatı anlık). */
+        function quotePoolUsdForBuyGrids(st, cfg, quoteBal) {
+            if (st.target_budgets && st.target_budgets.target_quote_usdt != null) {
+                return Number(st.target_budgets.target_quote_usdt);
+            }
+            var eq = st.cycle_start_equity != null ? Number(st.cycle_start_equity) : 0;
+            var qa = 50;
+            if (cfg) {
+                if (cfg.quote_alloc_pct != null) qa = Number(cfg.quote_alloc_pct);
+                else if (cfg.allocation && cfg.allocation.quote_pct != null) qa = Number(cfg.allocation.quote_pct);
+            }
+            if (eq > 0) return eq * qa / 100;
+            var ref = st.grid_reference_quote != null ? Number(st.grid_reference_quote) : 0;
+            if (ref > 0 && eq > 0) {
+                var pool = eq * qa / 100;
+                return pool > 0 ? Math.min(ref, pool) : ref;
+            }
+            return ref > 0 ? ref : quoteBal;
+        }
         function renderGridPointsPanel(data) {
             if (!gridSellBody || !gridBuyBody) return;
             var gps = data.grid_points || [];
@@ -1123,6 +1240,12 @@
             var symbol = data.symbol || lastBotDetail.symbol || '?';
             var baseBal = st.base_balance != null ? Number(st.base_balance) : 0;
             var quoteBal = st.quote_balance != null ? Number(st.quote_balance) : 0;
+            var cfg = data.config || {};
+            var quotePoolUsd = (function() {
+                var m = data.meta || data.grid_meta;
+                if (m && m.quote_pool_usd != null) return Number(m.quote_pool_usd);
+                return quotePoolUsdForBuyGrids(st, cfg, quoteBal);
+            })();
             var baseAsset = baseFromSymbol(symbol) || '';
             var refD = data.reference_display != null && !isNaN(data.reference_display) ? Number(data.reference_display) : null;
             gridPointsPanel.style.display = 'block';
@@ -1139,7 +1262,9 @@
                 var anchor = p.anchor != null ? fmtNum(p.anchor, 4) : '—';
                 var exec = p.execution_price != null ? fmtNum(p.execution_price, 4) : '—';
                 var miktar = '—';
-                if (p.qty_pct != null && !isNaN(p.qty_pct)) {
+                if (p.planned_base_qty != null && !isNaN(p.planned_base_qty) && p.planned_base_qty > 0) {
+                    miktar = fmtBaseCompact(Number(p.planned_base_qty)) + (baseAsset ? ' ' + baseAsset : '');
+                } else if (p.qty_pct != null && !isNaN(p.qty_pct)) {
                     if (baseBal > 0) {
                         var sellQty = baseBal * (Number(p.qty_pct) / 100);
                         miktar = fmtBaseCompact(sellQty) + (baseAsset ? ' ' + baseAsset : '');
@@ -1147,7 +1272,7 @@
                         miktar = Number(p.qty_pct) + '%';
                     }
                 }
-                tr.innerHTML = '<td>' + level + '</td><td title="Satılacak miktar (base\'in %' + (p.qty_pct != null ? p.qty_pct : '') + ')">' + miktar + '</td><td>' + trigger + '</td><td>' + anchor + '</td><td>' + exec + '</td><td><span class="grid-status-badge ' + statusClass + '">' + statusText + '</span></td>';
+                tr.innerHTML = '<td>' + level + '</td><td title="Satılacak miktar (base havuzunun %' + (p.qty_pct != null ? p.qty_pct : '') + ')">' + miktar + '</td><td>' + trigger + '</td><td>' + anchor + '</td><td>' + exec + '</td><td><span class="grid-status-badge ' + statusClass + '">' + statusText + '</span></td>';
                 gridSellBody.appendChild(tr);
             });
             if (!sellPoints.length) {
@@ -1168,15 +1293,19 @@
                 var anchor = p.anchor != null ? fmtNum(p.anchor, 4) : '—';
                 var exec = p.execution_price != null ? fmtNum(p.execution_price, 4) : '—';
                 var tutar = '—';
-                if (p.qty_pct != null && !isNaN(p.qty_pct)) {
-                    if (quoteBal > 0) {
-                        var buyUsd = quoteBal * (Number(p.qty_pct) / 100);
+                var buyTitle = 'Alım yapılacak tutar (quote havuzunun %' + (p.qty_pct != null ? p.qty_pct : '') + ')';
+                if (quotePoolUsd > 0) buyTitle += ' · Havuz ' + fmtUsd(quotePoolUsd);
+                if (p.planned_usd != null && !isNaN(p.planned_usd) && p.planned_usd > 0) {
+                    tutar = fmtUsd(Number(p.planned_usd));
+                } else if (p.qty_pct != null && !isNaN(p.qty_pct)) {
+                    if (quotePoolUsd > 0) {
+                        var buyUsd = quotePoolUsd * (Number(p.qty_pct) / 100);
                         tutar = fmtUsd(buyUsd);
                     } else {
                         tutar = Number(p.qty_pct) + '%';
                     }
                 }
-                tr.innerHTML = '<td>' + level + '</td><td title="Alım yapılacak tutar (quote\'un %' + (p.qty_pct != null ? p.qty_pct : '') + ')">' + tutar + '</td><td>' + trigger + '</td><td>' + anchor + '</td><td>' + exec + '</td><td><span class="grid-status-badge ' + statusClass + '">' + statusText + '</span></td>';
+                tr.innerHTML = '<td>' + level + '</td><td title="' + buyTitle + '">' + tutar + '</td><td>' + trigger + '</td><td>' + anchor + '</td><td>' + exec + '</td><td><span class="grid-status-badge ' + statusClass + '">' + statusText + '</span></td>';
                 gridBuyBody.appendChild(tr);
             });
             if (!buyPoints.length) {
@@ -1265,6 +1394,8 @@
                 grid_points: res.grid_points || [],
                 profit_points: res.profit_points || [],
                 reference_display: res.reference_display != null ? res.reference_display : (base && base.reference_display),
+                meta: res.meta || (base && base.meta) || (base && base.grid_meta) || null,
+                grid_meta: res.meta || res.grid_meta || (base && base.grid_meta) || null,
                 symbol: res.symbol || (base && base.symbol),
                 state: st,
                 config: res.config || (base && base.config) || {}
@@ -1305,8 +1436,22 @@
         function refreshTradesPanelPoll() {
             if (document.hidden || !botId || !window.apiClient) return;
             var sel = window._botDetailSelectedCycleId;
-            if (typeof window._botDetailLoadCycleTrades !== 'function' || sel == null) return;
-            window._botDetailLoadCycleTrades(Number(sel));
+            window.apiClient.get('/api/bots-engine/' + botId + '/cycles?account_id=' + (accountId || ''))
+                .then(function(cyRes) {
+                    var cycles = cyRes.cycles || [1];
+                    if (cycles.length) {
+                        var maxC = Math.max.apply(null, cycles.map(function(c) { return Number(c); }));
+                        if (maxC > (lastKnownCycleId || 0)) onBotCycleChanged(maxC);
+                    }
+                    if (typeof window._botDetailLoadCycleTrades === 'function' && sel != null) {
+                        window._botDetailLoadCycleTrades(Number(sel));
+                    }
+                })
+                .catch(function() {
+                    if (typeof window._botDetailLoadCycleTrades === 'function' && sel != null) {
+                        window._botDetailLoadCycleTrades(Number(sel));
+                    }
+                });
         }
         function syncTradesPanelPoll() {
             if (!window.intervalRegistry) return;
@@ -1319,8 +1464,11 @@
         }
 
         function showDetail(data) {
+            var myDetailGen = ++_showDetailGen;
+            if (data && data.bot_id != null && String(data.bot_id) !== String(botId)) return;
             loadingEl.style.display = 'none';
             setError(null);
+            if (data.account_id != null && !accountId) accountId = String(data.account_id);
             var symbol = (data.symbol || '?').toString().toUpperCase();
             var cfg = data.config || {};
             if (symbol === 'MULTI' || (cfg.strategy_id === 'multi_asset_rebalance')) {
@@ -1369,21 +1517,31 @@
                 bot24hEl.className = 'bot-24h';
             }
 
-            var status = (data.display_status || data.status || 'stopped').toLowerCase();
+            var botStatus = (data.status || 'stopped').toLowerCase();
+            var displayStatus = (data.display_status || botStatus).toLowerCase();
             var st = data.state || {};
             var baseBal = st.base_balance != null ? Number(st.base_balance) : 0;
             var quoteBal = st.quote_balance != null ? Number(st.quote_balance) : 0;
             var iaDone = st.initial_allocation_done === true;
             var lastErrorCode = (st.last_error_code || '').trim();
             var hasApiKeyError = lastErrorCode === 'API_UNAUTHORIZED';
-            var waitingFirstBuy = status === 'running' && !iaDone && baseBal <= 0;
+            var waitingFirstBuy = botWaitingFirstBuy(botStatus, {
+                firstBuyPending: data.first_buy_pending === true,
+                displayStatus: displayStatus,
+                initialAllocationDone: iaDone,
+                baseBalance: baseBal
+            });
             var showAsError = hasApiKeyError && waitingFirstBuy;
-            var statusText = status === 'starting' ? 'Başlatılıyor' : status === 'running' ? (showAsError ? 'Hata (API anahtarı)' : waitingFirstBuy ? 'İlk alım bekleniyor' : 'Çalışıyor') : status === 'error' || (status && status.indexOf('paused') === 0) ? 'Hata' : status === 'stopped' ? 'Durduruldu' : 'Bekliyor';
-            statusBadge.textContent = statusText;
-            statusBadge.className = 'status-badge ' + (showAsError || status === 'error' || (status && status.indexOf('paused') === 0) ? 'status-error' : status === 'running' ? 'status-running' : 'status-stopped');
-            statusBadge.title = showAsError ? 'Binance API anahtarı geçersiz veya IP/Spot izni yok. API Key, IP beyaz listesi ve Spot izinlerini kontrol edin.' : (waitingFirstBuy ? 'Bot çalışıyor; ilk base alımı henüz gerçekleşmedi.' : '');
+            applyStatusBadge(botStatus, {
+                showAsError: showAsError,
+                firstBuyPending: data.first_buy_pending === true,
+                displayStatus: displayStatus,
+                initialAllocationDone: iaDone,
+                baseBalance: baseBal
+            });
+            lastBotDetail.initialAllocationDone = iaDone;
 
-            if (btnStart) btnStart.style.display = status !== 'running' ? 'flex' : 'none';
+            if (btnStart) btnStart.style.display = botStatus !== 'running' ? 'flex' : 'none';
             if (btnStopAndDelete) btnStopAndDelete.style.display = 'inline-block';
             lastBotDetail.symbol = symbol || '';
             lastBotDetail.baseBalance = Number((data.state || {}).base_balance) || 0;
@@ -1441,15 +1599,15 @@
                 '<div class="state-hero-item" title="Gece 00:00 referans bakiyesine göre; her gün sıfırlanır"><span class="state-label">Günlük K/Z</span><span class="state-value" id="stateDailyKzValue" style="color:' + dailyKzCl + '">' + dailyKzStr + '</span></div>' +
                 '<div class="state-hero-item" title="Başlangıç sermayesine göre toplam kar/zarar"><span class="state-label">Toplam K/Z</span><span class="state-value" id="stateTotalKzValue" style="color:' + totalKzCl + '">' + totalKzStr + '</span></div>';
             var stateHeroTitleEl = document.getElementById('stateHeroTitle');
-            if (stateHeroTitleEl) stateHeroTitleEl.textContent = status === 'starting' ? 'Durum · Başlatılıyor' : status === 'running' ? (showAsError ? 'Durum · Hata' : waitingFirstBuy ? 'Durum · İlk alım bekleniyor' : 'Durum · Canlı') : 'Durum · ' + statusText;
-            syncEngineAlertBlink(window._engineLogHasCritical && status === 'running');
+            if (stateHeroTitleEl) stateHeroTitleEl.textContent = botStatus === 'starting' ? 'Durum · Başlatılıyor' : botStatus === 'running' ? (showAsError ? 'Durum · Hata' : waitingFirstBuy ? 'Durum · Alım bekliyor' : 'Durum · Canlı') : 'Durum · ' + (botStatus === 'stopped' ? 'Durduruldu' : botStatus === 'error' || (botStatus && botStatus.indexOf('paused') === 0) ? 'Hata' : 'Bekliyor');
+            syncEngineAlertBlink(window._engineLogHasCritical && botStatus === 'running');
             lastBotStartedAt = data.started_at || null;
             if (stateHeroMetaInterval) { clearInterval(stateHeroMetaInterval); stateHeroMetaInterval = null; }
             if (window.intervalRegistry) window.intervalRegistry.stop('bot-detail-duration');
             var stateHeroMetaEl = document.getElementById('stateHeroMeta');
             if (stateHeroMetaEl) {
-                setStateHeroMetaHtml(stateHeroMetaEl, data.started_at, status);
-                if (status === 'running' && data.started_at && window.intervalRegistry) {
+                setStateHeroMetaHtml(stateHeroMetaEl, data.started_at, botStatus);
+                if (botStatus === 'running' && data.started_at && window.intervalRegistry) {
                     window.intervalRegistry.start('bot-detail-duration', function () {
                         var durEl = document.getElementById('stateHeroMetaDur');
                         if (durEl) durEl.textContent = formatStartMetaDurationOnly(lastBotStartedAt);
@@ -1499,9 +1657,19 @@
                     if (cid.indexOf('sell_grid') >= 0 || cid.indexOf('buy_grid') >= 0 || cid.indexOf('grid') >= 0) return (slot != null && slot >= 0) ? 'Grid #' + (slot + 1) : 'Grid';
                     return 'Grid';
                 }
+                function isGridTradeRow(t) {
+                    if (!t) return false;
+                    if (isInitialAllocationTrade(t)) return false;
+                    var cid = (t.client_order_id || '').toLowerCase();
+                    if (cid.indexOf('cycle_open_') === 0 || cid.indexOf('reentry') >= 0 || cid.indexOf('profit') >= 0) return false;
+                    var slot = t.slot_id;
+                    if (slot != null && !isNaN(Number(slot)) && Number(slot) >= 0) return true;
+                    return cid.indexOf('grid') >= 0 && cid.indexOf('init_') < 0;
+                }
                 trades.forEach(function(t) {
                     var div = document.createElement('div');
-                    div.className = 'cycle-pnl-item';
+                    var isGrid = isGridTradeRow(t);
+                    div.className = 'cycle-pnl-item' + (isGrid ? ' cycle-trade-clickable' : '');
                     var side = (t.side || '').toUpperCase();
                     var sideCl = side === 'BUY' ? 'trade-side-buy' : 'trade-side-sell';
                     var baseLabel = side === 'BUY' ? 'Alış' : 'Satış';
@@ -1523,6 +1691,15 @@
                     }
                     var midPart = reason + ' · ' + coin;
                     div.innerHTML = '<div><span class="' + sideCl + '" style="font-weight:600">' + baseLabel + '</span> · ' + midPart + ' · Miktar ' + qty + ' · Fiyat @ ' + price + ' · ' + quoteQty + ' · Komisyon ' + feeStr + realizedPctStr + '</div><div class="muted" style="font-size:0.8rem">' + ts + '</div>';
+                    if (isGrid) {
+                        div.setAttribute('role', 'button');
+                        div.setAttribute('tabindex', '0');
+                        div.title = 'Grid detayını göster';
+                        div.addEventListener('click', function() { openGridTradeDetailModal(t, tradeReason, botSymbolForTrades); });
+                        div.addEventListener('keydown', function(ev) {
+                            if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); openGridTradeDetailModal(t, tradeReason, botSymbolForTrades); }
+                        });
+                    }
                     cycleTradesList.appendChild(div);
                 });
             }
@@ -1566,7 +1743,7 @@
                 var invFees = summary && summary.inventory_fees_usdt != null ? Number(summary.inventory_fees_usdt) : 0;
                 var cashStr = (cashUsdt >= 0 ? '+' : '') + fmtUsd(cashUsdt) + (cashFees !== 0 ? ' (Komisyon: ' + fmtUsd(cashFees) + ')' : '');
                 var invStr = (invQty >= 0 ? '+' : '') + fmtBaseCompact(invQty) + ' ' + baseAsset + (invFees !== 0 ? ' (Komisyon: ' + fmtUsd(invFees) + ')' : '');
-                var curPrice = (lastBotDetail.dual_pnl && lastBotDetail.dual_pnl.current_price != null) ? Number(lastBotDetail.dual_pnl.current_price) : null;
+                var curPrice = (lastBotDetail && lastBotDetail.dual_pnl && lastBotDetail.dual_pnl.current_price != null) ? Number(lastBotDetail.dual_pnl.current_price) : null;
                 var invUsdtEquiv = (curPrice != null && curPrice > 0 && invQty !== 0) ? (invQty * curPrice - invFees) : null;
                 parts.push('<div class="cycle-report-item"><span class="cycle-report-label">CASH PNL (USDT)</span><span class="cycle-report-value ' + (cashUsdt >= 0 ? 'positive' : 'negative') + '">' + cashStr + '</span></div>');
                 parts.push('<div class="cycle-report-item"><span class="cycle-report-label">INVENTORY PNL (coin)</span><span class="cycle-report-value ' + (invQty >= 0 ? 'positive' : 'negative') + '">' + invStr + '</span></div>');
@@ -1578,6 +1755,7 @@
                 if (isOpenCycle) updateCycleReportDurationLive();
             }
             function loadCycleTrades(cycleId) {
+                var myTradesGen = ++_tradesLoadGen;
                 selectedCycleId = cycleId;
                 window._botDetailSelectedCycleId = cycleId;
                 window._botDetailLoadCycleTrades = loadCycleTrades;
@@ -1590,23 +1768,31 @@
                 var q = 'account_id=' + (accountId || '') + '&limit=100&cycle_id=' + cycleId;
                 window.apiClient.get('/api/bots-engine/' + botId + '/trades?' + q)
                     .then(function(res) {
-                        var tradesList = res.trades || [];
-                        renderCycleTradesList(tradesList, cycleId);
-                        var summary = res.cycle_summary ? Object.assign({}, res.cycle_summary) : {};
-                        summary.trade_count = tradesList.length;
-                        if (cycleId === currentCycleFromState && lastBotDetail.dual_pnl && lastBotDetail.dual_pnl.current_cycle) {
-                            var cur = lastBotDetail.dual_pnl.current_cycle;
-                            summary.cycle_type = 'Açık tur';
-                            summary.cash_pnl_usdt = cur.cash_pnl_usdt;
-                            summary.cash_fees_usdt = cur.cash_fees_usdt;
-                            summary.inventory_coin_adv_qty = cur.inventory_coin_adv_qty;
-                            summary.inventory_fees_usdt = cur.inventory_fees_usdt;
-                            summary.duration_sec = summary.duration_sec != null ? summary.duration_sec : null;
-                            summary.pnl_primary_mode = (cur.cash_pnl_usdt != null && cur.cash_pnl_usdt !== 0) ? 'CASH_USDT_V1' : 'INVENTORY_QTY_V1';
+                        if (myDetailGen !== _showDetailGen || myTradesGen !== _tradesLoadGen) return;
+                        try {
+                            var tradesList = (res && res.trades) ? res.trades : [];
+                            renderCycleTradesList(tradesList, cycleId);
+                            var summary = res.cycle_summary ? Object.assign({}, res.cycle_summary) : {};
+                            summary.trade_count = tradesList.length;
+                            if (cycleId === currentCycleFromState && lastBotDetail && lastBotDetail.dual_pnl && lastBotDetail.dual_pnl.current_cycle) {
+                                var cur = lastBotDetail.dual_pnl.current_cycle;
+                                summary.cycle_type = 'Açık tur';
+                                summary.cash_pnl_usdt = cur.cash_pnl_usdt;
+                                summary.cash_fees_usdt = cur.cash_fees_usdt;
+                                summary.inventory_coin_adv_qty = cur.inventory_coin_adv_qty;
+                                summary.inventory_fees_usdt = cur.inventory_fees_usdt;
+                                summary.duration_sec = summary.duration_sec != null ? summary.duration_sec : null;
+                                summary.pnl_primary_mode = (cur.cash_pnl_usdt != null && cur.cash_pnl_usdt !== 0) ? 'CASH_USDT_V1' : 'INVENTORY_QTY_V1';
+                            }
+                            renderCycleReport(summary, cycleId);
+                        } catch (uiErr) {
+                            console.warn('loadCycleTrades render', uiErr);
+                            cycleTradesList.innerHTML = '<div class="cycle-pnl-item muted">İşlemler gösterilemedi.</div>';
                         }
-                        renderCycleReport(summary, cycleId);
                     })
-                    .catch(function() {
+                    .catch(function(err) {
+                        if (myDetailGen !== _showDetailGen || myTradesGen !== _tradesLoadGen) return;
+                        console.warn('loadCycleTrades', err);
                         cycleTradesList.innerHTML = '<div class="cycle-pnl-item muted">İşlemler yüklenemedi.</div>';
                         if (cycleReportEl) cycleReportEl.style.display = 'none';
                     });
@@ -1764,7 +1950,7 @@
                     pnlStr += ' <span class="perf-pnl-pct">(' + pctStr + ')</span>';
                     perfMetrics.innerHTML =
                         '<div class="perf-metric-card"><div class="perf-metric-label">PnL</div><div class="perf-metric-value" style="color:' + pnlColor + '">' + pnlStr + '</div></div>' +
-                        '<div class="perf-metric-card"><div class="perf-metric-label">Tur</div><div class="perf-metric-value">' + (res.cycles_count != null ? res.cycles_count : 0) + '</div></div>' +
+                        '<div class="perf-metric-card"><div class="perf-metric-label">Aktif tur</div><div class="perf-metric-value">' + (res.current_cycle_id != null ? res.current_cycle_id : (res.cycles_count != null ? res.cycles_count : 0)) + '</div></div>' +
                         '<div class="perf-metric-card"><div class="perf-metric-label">Komisyon (USDT)</div><div class="perf-metric-value">' + (res.fees_usd != null ? Number(res.fees_usd).toFixed(2) : '0.00') + '</div></div>';
                     window._lastPerfChartSeries = res.chart_series || [];
                     window._lastPerfPairSeries = res.pair_series || [];
@@ -2024,9 +2210,11 @@
 
         function loadDetail() {
             if (!botId || !window.apiClient) return;
+            resetBotDetailUi();
             var q = '?account_id=' + (accountId || '');
             window.apiClient.get('/api/bots-engine/' + botId + q)
                 .then(function (res) {
+                    if (res && res.bot_id != null && String(res.bot_id) !== String(botId)) return;
                     showDetail(res);
                     fetchLive();
                     fetchBotHealth();
@@ -2048,9 +2236,14 @@
             if (a === b) return true;
             if (!a || !b) return false;
             return a.status === b.status && a.pnl_pct === b.pnl_pct && a.equity === b.equity && a.last_price === b.last_price && a.last_tick_at === b.last_tick_at && a.last_error_code === b.last_error_code
-                && a.initial_capital === b.initial_capital && a.daily_pnl_usd === b.daily_pnl_usd && a.daily_pnl_pct === b.daily_pnl_pct;
+                && a.initial_capital === b.initial_capital && a.daily_pnl_usd === b.daily_pnl_usd && a.daily_pnl_pct === b.daily_pnl_pct
+                && a.first_buy_pending === b.first_buy_pending && a.base_balance === b.base_balance
+                && a.cycle_id === b.cycle_id;
         }
         function applyLive(newState) {
+            if (newState && newState.cycle_id != null && !isNaN(newState.cycle_id)) {
+                onBotCycleChanged(Number(newState.cycle_id));
+            }
             if (shallowEqualLive(prevLiveState, newState)) return;
             prevLiveState = newState;
             var price = newState.last_price;
@@ -2080,13 +2273,20 @@
                 }
             }
             var pollStatus = (newState.status || 'stopped').toLowerCase();
-            var pollStatusText = pollStatus === 'running' ? 'Çalışıyor' : pollStatus === 'error' || (pollStatus && pollStatus.indexOf('paused') === 0) ? 'Hata' : pollStatus === 'stopped' ? 'Durduruldu' : 'Bekliyor';
-            var stateHeroTitleEl = document.getElementById('stateHeroTitle');
-            if (stateHeroTitleEl) {
-                var titleText = pollStatus === 'running' ? 'Durum · Canlı' : 'Durum · ' + pollStatusText;
-                if (stateHeroTitleEl.textContent !== titleText) stateHeroTitleEl.textContent = titleText;
-                syncEngineAlertBlink(window._engineLogHasCritical && pollStatus === 'running');
+            var waitingFirstBuyLive = botWaitingFirstBuy(pollStatus, {
+                firstBuyPending: newState.first_buy_pending === true,
+                initialAllocationDone: lastBotDetail.initialAllocationDone === true,
+                baseBalance: newState.base_balance
+            });
+            applyStatusBadge(pollStatus, {
+                firstBuyPending: newState.first_buy_pending === true,
+                initialAllocationDone: lastBotDetail.initialAllocationDone === true,
+                baseBalance: newState.base_balance
+            });
+            if (newState.first_buy_pending === false && lastBotDetail.initialAllocationDone !== true) {
+                lastBotDetail.initialAllocationDone = true;
             }
+            syncEngineAlertBlink(window._engineLogHasCritical && pollStatus === 'running' && !waitingFirstBuyLive);
             if (stateHeroMetaInterval) { clearInterval(stateHeroMetaInterval); stateHeroMetaInterval = null; }
             if (window.intervalRegistry) window.intervalRegistry.stop('bot-detail-duration');
             if (pollStatus === 'running' && lastBotStartedAt) {
@@ -2172,7 +2372,10 @@
         function refreshAll() {
             if (!botId || !window.apiClient) return;
             window.apiClient.get('/api/bots-engine/' + botId + '?account_id=' + (accountId || ''))
-                .then(showDetail)
+                .then(function (res) {
+                    if (res && res.bot_id != null && String(res.bot_id) !== String(botId)) return;
+                    showDetail(res);
+                })
                 .catch(function () {});
         }
 
@@ -2210,6 +2413,41 @@
         function closeParametrelerModal() {
             if (parametrelerModal) parametrelerModal.style.display = 'none';
         }
+        function closeGridTradeDetailModal() {
+            var modal = document.getElementById('gridTradeDetailModal');
+            if (modal) modal.style.display = 'none';
+        }
+        function openGridTradeDetailModal(t, tradeReasonFn, symbolHint) {
+            var modal = document.getElementById('gridTradeDetailModal');
+            var body = document.getElementById('gridTradeDetailBody');
+            var titleEl = document.getElementById('gridTradeDetailTitle');
+            if (!modal || !body || !t) return;
+            var gd = t.grid_detail || {};
+            var side = (t.side || '').toUpperCase();
+            var coin = baseFromSymbol(t.symbol || symbolHint || (lastBotDetail && lastBotDetail.symbol) || '') || '—';
+            var reason = tradeReasonFn ? tradeReasonFn(t) : (gd.grid_label || 'Grid');
+            if (titleEl) titleEl.textContent = (gd.grid_label || reason || 'Grid') + ' · Detay';
+            var ts = t.ts ? (function() { var d = new Date(t.ts); return d.toLocaleString('tr-TR'); })() : '—';
+            var qty = t.qty != null ? fmtNum(t.qty, 8) + ' ' + coin : '—';
+            var quoteQty = (t.qty && t.price) ? fmtUsd(t.qty * t.price) : '—';
+            var rows = [
+                ['Grid sırası', gd.grid_label || reason || '—'],
+                ['Grid payı', gd.qty_pct != null ? gd.qty_pct + '%' : '—'],
+                ['Grid yüzdesi (tetik)', gd.grid_pct != null ? gd.grid_pct + '%' : '—'],
+                ['Tür', gd.grid_type || (side === 'BUY' ? 'Alış gridi' : side === 'SELL' ? 'Satış gridi' : '—')],
+                ['Tarih / saat', ts],
+                ['Miktar', qty],
+                ['Tutar (USDT)', quoteQty],
+                ['Tetik fiyat', (gd.trigger_price != null && !isNaN(Number(gd.trigger_price))) ? fmtNum(Number(gd.trigger_price), 4) : '—'],
+                [gd.extreme_label || (side === 'SELL' ? 'Tepe fiyat' : 'Dip fiyat'), (gd.extreme_price != null && !isNaN(Number(gd.extreme_price))) ? fmtNum(Number(gd.extreme_price), 4) : '—'],
+                ['Gerçekleşme fiyatı', (gd.execution_price != null && !isNaN(Number(gd.execution_price))) ? fmtNum(Number(gd.execution_price), 4) : '—'],
+                ['Borsa dolum fiyatı', (t.price != null && !isNaN(Number(t.price))) ? fmtNum(Number(t.price), 4) : '—']
+            ];
+            body.innerHTML = rows.map(function(r) {
+                return '<div class="grid-trade-detail-row"><span class="grid-trade-detail-label">' + r[0] + '</span><span class="grid-trade-detail-value">' + r[1] + '</span></div>';
+            }).join('');
+            modal.style.display = 'flex';
+        }
         if (btnParametreler) {
             btnParametreler.addEventListener('click', openParametrelerModal);
         }
@@ -2218,6 +2456,16 @@
         if (parametrelerModal) {
             parametrelerModal.addEventListener('click', function (e) {
                 if (e.target === parametrelerModal) closeParametrelerModal();
+            });
+        }
+        var gridTradeDetailModal = document.getElementById('gridTradeDetailModal');
+        var gridTradeDetailClose = document.getElementById('gridTradeDetailClose');
+        var gridTradeDetailKapat = document.getElementById('gridTradeDetailKapat');
+        if (gridTradeDetailClose) gridTradeDetailClose.addEventListener('click', closeGridTradeDetailModal);
+        if (gridTradeDetailKapat) gridTradeDetailKapat.addEventListener('click', closeGridTradeDetailModal);
+        if (gridTradeDetailModal) {
+            gridTradeDetailModal.addEventListener('click', function(e) {
+                if (e.target === gridTradeDetailModal) closeGridTradeDetailModal();
             });
         }
         if (btnStopAndDelete) {
@@ -2286,6 +2534,15 @@
                 loadStripKlinesChart(lastBotDetail.symbol);
             }, stripKlinesRefreshMs);
         }
+        window.addEventListener('pageshow', function (e) {
+            var urlId = readBotIdFromUrl();
+            if (urlId && String(urlId) !== String(botId)) {
+                botId = urlId;
+                loadDetail();
+                return;
+            }
+            if (e.persisted && botId) loadDetail();
+        });
         window.addEventListener('visibilitychange', function () {
             if (!document.hidden && botId) {
                 refreshAll();

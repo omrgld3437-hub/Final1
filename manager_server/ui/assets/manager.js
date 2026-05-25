@@ -17,24 +17,13 @@
   let filterLevel = { web: "WARN+", engine: "WARN+", manager: "WARN+", html: "WARN+" };
   let searchQuery = { web: "", engine: "", manager: "", html: "" };
   let autoscroll = { web: true, engine: true, manager: true, html: true };
-  const TOAST_QUEUE_MAX = 10;
-  const TOAST_DISMISS_MS = 10000;
-  const TOAST_SAME_ERROR_COOLDOWN_MS = 600000; // Aynı kritik hata 10 dk'da en fazla 1 kere
-  const DIAGNOSIS_COOLDOWN_MS = 600000;        // Aynı teşhis 10 dk'da en fazla 1 kere
-  let toastQueue = [];
-  let toastCooldown = {};          // "level:messageKey" -> timestamp (aynı hata tekrar gelmesin)
   let lastMetricsReceivedAt = 0;
-  let diagnosisToastCooldown = {}; // "service:reason_code" -> timestamp
   let lastDiagnosis = {};          // key -> diagnosis object
+  let lastIssuesFingerprint = "";
+  let lastWsIssuesFp = "";
 
-  function dismissToast(el) {
-    if (el && el.dataset && el.dataset.alertId) {
-      fetch(API + "/api/alerts/ack", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: el.dataset.alertId }) }).catch(function () {});
-    }
-    if (el && el.parentNode) el.parentNode.removeChild(el);
-    const i = toastQueue.indexOf(el);
-    if (i >= 0) toastQueue.splice(i, 1);
-  }
+  function showToast() {}
+  function showDiagnosisToast() {}
 
   function qs(s) { return document.querySelector(s); }
   function qsa(s) { return document.querySelectorAll(s); }
@@ -130,7 +119,80 @@
     if (el.className !== className) el.className = className;
   }
 
+  function setOverviewStatusChip(el, running) {
+    if (!el) return;
+    el.textContent = running ? "ÇALIŞIYOR" : "DURDURULDU";
+    el.className = "status-chip service-status " + (running ? "running" : "stopped");
+  }
+
+  function setProgressBar(el, pct) {
+    if (!el) return;
+    el.style.width = Math.min(100, pct) + "%";
+    el.className = "ov-progress-fill" + (pct > 90 ? " crit" : pct > 70 ? " warn" : "");
+  }
+
+  function renderOverviewAlerts(errWeb, wrnWeb, errEng, wrnEng, errMgr, wrnMgr) {
+    var listEl = qs("#overview-alerts-list");
+    if (!listEl) return;
+    var items = [];
+    errWeb.slice(-5).forEach(function (l) { items.push({ svc: "TraderTrailing", type: "err", msg: l || "" }); });
+    wrnWeb.slice(-5).forEach(function (l) { items.push({ svc: "TraderTrailing", type: "wrn", msg: l || "" }); });
+    errEng.slice(-5).forEach(function (l) { items.push({ svc: "Bot Engine", type: "err", msg: l || "" }); });
+    wrnEng.slice(-5).forEach(function (l) { items.push({ svc: "Bot Engine", type: "wrn", msg: l || "" }); });
+    errMgr.slice(-3).forEach(function (l) { items.push({ svc: "Yönetici", type: "err", msg: l || "" }); });
+    wrnMgr.slice(-3).forEach(function (l) { items.push({ svc: "Yönetici", type: "wrn", msg: l || "" }); });
+    if (!items.length) {
+      listEl.innerHTML = "<div class=\"overview-alerts-empty\">Son hata veya uyarı yok.</div>";
+      return;
+    }
+    listEl.innerHTML = items.map(function (it) {
+      var cls = it.type === "err" ? "alert-err" : "alert-wrn";
+      var typeLabel = it.type === "err" ? "HATA" : "UYARI";
+      var typeCls = it.type === "err" ? "type-err" : "type-wrn";
+      return "<div class=\"overview-alert-item " + cls + "\">" +
+        "<span class=\"overview-alert-svc\">" + escHtml(it.svc) + "</span>" +
+        "<span class=\"overview-alert-type " + typeCls + "\">" + typeLabel + "</span>" +
+        "<span class=\"overview-alert-msg\">" + escHtml(it.msg) + "</span></div>";
+    }).join("");
+  }
+
+  function formatResource(proc) {
+    if (!proc) return "—";
+    return [proc.cpu_pct != null ? proc.cpu_pct + "% CPU" : null, proc.rss_mb != null ? proc.rss_mb + " MB" : null].filter(Boolean).join(" · ") || "—";
+  }
+
+  function mergeMetricsPayload(incoming) {
+    incoming = incoming || {};
+    if (!lastMetrics) return incoming;
+    var out = Object.assign({}, lastMetrics, incoming);
+    var prevWeb = lastMetrics.web_app || {};
+    var nextWeb = incoming.web_app || {};
+    out.web_app = Object.assign({}, prevWeb, nextWeb);
+    if (nextWeb.requests_per_min == null && prevWeb.requests_per_min != null) {
+      out.web_app.requests_per_min = prevWeb.requests_per_min;
+    }
+    if (nextWeb.error_rate == null && prevWeb.error_rate != null) {
+      out.web_app.error_rate = prevWeb.error_rate;
+    }
+    if (nextWeb.latency_p95_ms == null && prevWeb.latency_p95_ms != null) {
+      out.web_app.latency_p95_ms = prevWeb.latency_p95_ms;
+    }
+    var prevEng = lastMetrics.engine_app || {};
+    var nextEng = incoming.engine_app || {};
+    out.engine_app = Object.assign({}, prevEng, nextEng);
+    if (!incoming.errors_ring && lastMetrics.errors_ring) out.errors_ring = lastMetrics.errors_ring;
+    if (!incoming.warns_ring && lastMetrics.warns_ring) out.warns_ring = lastMetrics.warns_ring;
+    if (!incoming.status && lastMetrics.status) out.status = lastMetrics.status;
+    return out;
+  }
+
+  function metricOrDash(val, running, fmt) {
+    if (val != null && val !== "") return fmt ? fmt(val) : String(val);
+    return running ? (fmt ? fmt(0) : "0") : "—";
+  }
+
   function updateMetricsUI(m) {
+    m = mergeMetricsPayload(m);
     lastMetrics = m;
     lastMetricsReceivedAt = Date.now() / 1000;
     const sys = m.system || {};
@@ -171,51 +233,62 @@
       ? Math.round(sys.disk_used_mb / 1024) + " / " + Math.round(sys.disk_total_mb / 1024) + " GB" : "—");
     el("#overview-load", sys.load_avg != null ? sys.load_avg : "—");
     const progressCpu = qs("#progress-cpu");
-    if (progressCpu) { progressCpu.style.width = Math.min(100, cpuPct) + "%"; progressCpu.className = "progress-fill" + (cpuPct > 90 ? " crit" : cpuPct > 70 ? " warn" : ""); }
+    setProgressBar(progressCpu, cpuPct);
     const progressRam = qs("#progress-ram");
-    if (progressRam) { progressRam.style.width = Math.min(100, ramPct) + "%"; progressRam.className = "progress-fill" + (ramPct > 90 ? " crit" : ramPct > 70 ? " warn" : ""); }
+    setProgressBar(progressRam, ramPct);
     const progressDisk = qs("#progress-disk");
-    if (progressDisk) { progressDisk.style.width = Math.min(100, diskPct) + "%"; progressDisk.className = "progress-fill" + (diskPct > 90 ? " crit" : diskPct > 70 ? " warn" : ""); }
+    setProgressBar(progressDisk, diskPct);
 
     setTextIfChanged(qs("#overview-manager-port"), "7999");
     var mgrRunning = m.status && m.status.manager && m.status.manager.running;
     var mgrStatus = qs("#overview-manager-status");
-    if (mgrStatus) { mgrStatus.textContent = mgrRunning ? "ÇALIŞIYOR" : "—"; mgrStatus.className = "status-chip " + (mgrRunning ? "running" : "stopped"); }
+    setOverviewStatusChip(mgrStatus, mgrRunning);
     var d = m.status && m.status.manager ? m.status.manager : {};
     var liveMgrUptime = (d.running && m.manager) ? getLiveUptime("manager") : (m.manager ? m.manager.uptime_s : null);
     el("#overview-manager-pid", d.pid != null ? String(d.pid) : "—");
     el("#overview-manager-uptime", formatUptime(liveMgrUptime) || "—");
-    el("#overview-manager-resource", [m.manager && m.manager.cpu_pct != null ? m.manager.cpu_pct + "% CPU" : null, m.manager && m.manager.rss_mb != null ? m.manager.rss_mb + " MB" : null].filter(Boolean).join(" · ") || "—");
+    el("#overview-manager-resource", formatResource(m.manager));
+    setTextIfChanged(qs("#overview-manager-err-wrn"), errMgr.length + " / " + wrnMgr.length);
 
     const webProc = m.web || {};
     const webApp = m.web_app || {};
     const webRunning = (m.status && m.status.web && m.status.web.running);
     setTextIfChanged(qs("#overview-web-port"), "8000");
     const overviewWebChip = qs("#overview-web-status");
-    if (overviewWebChip) { overviewWebChip.textContent = webRunning ? "ÇALIŞIYOR" : "DURDURULDU"; overviewWebChip.className = "status-chip " + (webRunning ? "running" : "stopped"); }
-    el("#overview-web-reqmin", webApp.requests_per_min != null ? webApp.requests_per_min : "—");
-    el("#overview-web-error-rate", webApp.error_rate != null ? (webApp.error_rate * 100).toFixed(2) + "%" : "—");
-    el("#overview-web-p95", webApp.latency_p95_ms != null ? webApp.latency_p95_ms + " ms" : "—");
+    setOverviewStatusChip(overviewWebChip, webRunning);
+    el("#overview-web-reqmin", metricOrDash(webApp.requests_per_min, webRunning));
+    el("#overview-web-error-rate", metricOrDash(webApp.error_rate, webRunning, function (v) { return (Number(v) * 100).toFixed(2) + "%"; }));
+    el("#overview-web-p95", metricOrDash(webApp.latency_p95_ms, webRunning, function (v) { return v + " ms"; }));
     setTextIfChanged(qs("#overview-web-err-wrn"), errWeb.length + " / " + wrnWeb.length);
 
     const engProc = m.engine || {};
     const engApp = m.engine_app || {};
-    const engRunning = (m.status && m.status.engine && m.status.engine.running);
-    setTextIfChanged(qs("#overview-engine-port"), "—");
+    const engStatus = m.status && m.status.engine ? m.status.engine : {};
+    const engRunning = !!engStatus.running;
+    const engPid = engStatus.pid != null ? engStatus.pid : engProc.pid;
+    el("#overview-engine-pid", engPid != null ? String(engPid) : "—");
     const overviewEngChip = qs("#overview-engine-status");
-    if (overviewEngChip) { overviewEngChip.textContent = engRunning ? "ÇALIŞIYOR" : "DURDURULDU"; overviewEngChip.className = "status-chip " + (engRunning ? "running" : "stopped"); }
+    setOverviewStatusChip(overviewEngChip, engRunning);
     el("#overview-engine-bots", engApp.active_bots != null ? engApp.active_bots : "—");
     el("#overview-engine-tick", engApp.tick_rate_10s != null ? engApp.tick_rate_10s : "—");
     el("#overview-engine-tick-age", engApp.last_tick_age_s != null ? engApp.last_tick_age_s + " sn" : "—");
     setTextIfChanged(qs("#overview-engine-err-wrn"), errEng.length + " / " + wrnEng.length);
 
+    var htmlProc = m.html || {};
     var htmlStatus = m.status && m.status.html ? m.status.html : {};
     var htmlChip = qs("#overview-html-status");
-    if (htmlChip) { htmlChip.textContent = htmlStatus.running ? "ÇALIŞIYOR" : "DURDURULDU"; htmlChip.className = "status-chip " + (htmlStatus.running ? "running" : "stopped"); }
+    setOverviewStatusChip(htmlChip, !!htmlStatus.running);
     setTextIfChanged(qs("#overview-html-port"), "8080");
-    el("#overview-html-pid", htmlStatus.pid != null ? String(htmlStatus.pid) : "—");
-    var htmlUptime = (typeof htmlStatus.started_at === "number") ? Math.max(0, Math.floor(Date.now() / 1000 - htmlStatus.started_at)) : null;
+    var htmlPid = htmlStatus.pid != null ? htmlStatus.pid : htmlProc.pid;
+    el("#overview-html-pid", htmlPid != null ? String(htmlPid) : "—");
+    var htmlUptime = (typeof htmlStatus.started_at === "number")
+      ? Math.max(0, Math.floor(Date.now() / 1000 - htmlStatus.started_at))
+      : (htmlProc.uptime_s != null ? htmlProc.uptime_s : null);
     el("#overview-html-uptime", formatUptime(htmlUptime) || "—");
+    var errHtml = (m.errors_ring && m.errors_ring.html) ? m.errors_ring.html : [];
+    var wrnHtml = (m.warns_ring && m.warns_ring.html) ? m.warns_ring.html : [];
+    el("#overview-html-resource", formatResource(htmlProc));
+    setTextIfChanged(qs("#overview-html-err-wrn"), errHtml.length + " / " + wrnHtml.length);
 
     const total = webApp.request_total || 0;
     const bad = webApp.status_5xx || 0;
@@ -223,24 +296,22 @@
     const sloBar = qs("#slo-bar");
     if (sloBar) {
       sloBar.style.width = Math.min(100, availability) + "%";
-      sloBar.className = "slo-bar " + (availability >= 99.9 ? "ok" : availability >= 99 ? "warn" : "crit");
+      sloBar.className = "ov-progress-fill slo-bar" + (availability >= 99.9 ? "" : availability >= 99 ? " warn" : " crit");
     }
-    el("#slo-text", "Erişilebilirlik: " + availability.toFixed(2) + "% (hedef 99.9%) | 5xx: " + bad);
+    el("#slo-text", availability.toFixed(2) + "% · hedef 99.9% · 5xx: " + bad);
 
+    renderOverviewAlerts(errWeb, wrnWeb, errEng, wrnEng, errMgr, wrnMgr);
     const alertsPre = qs("#overview-alerts");
-    if (alertsPre) {
-      const lines = [];
-      errWeb.slice(-5).forEach(function (l) { lines.push("Web · Hata: " + (l || "")); });
-      wrnWeb.slice(-5).forEach(function (l) { lines.push("Web · Uyarı: " + (l || "")); });
-      errEng.slice(-5).forEach(function (l) { lines.push("Motor · Hata: " + (l || "")); });
-      wrnEng.slice(-5).forEach(function (l) { lines.push("Motor · Uyarı: " + (l || "")); });
-      errMgr.slice(-3).forEach(function (l) { lines.push("Yönetici · Hata: " + (l || "")); });
-      wrnMgr.slice(-3).forEach(function (l) { lines.push("Yönetici · Uyarı: " + (l || "")); });
-      var alertsText = lines.length ? lines.join("\n") : "Son hata veya uyarı yok.";
-      setTextIfChanged(alertsPre, alertsText);
-    }
+    if (alertsPre) alertsPre.textContent = "";
 
-    setTextIfChanged(qs("#overview-errors-summary"), "Web: " + errWeb.length + ", Motor: " + errEng.length + ", Yönetici: " + errMgr.length);
+    setTextIfChanged(qs("#overview-errors-summary"), "TraderTrailing: " + errWeb.length + ", Bot Engine: " + errEng.length + ", Yönetici: " + errMgr.length);
+
+    keys.forEach(function (k) {
+      var ec = (m.errors_ring && m.errors_ring[k]) ? m.errors_ring[k].length : 0;
+      var wc = (m.warns_ring && m.warns_ring[k]) ? m.warns_ring[k].length : 0;
+      updateNavAlertState(k, ec, wc);
+    });
+
     setTextIfChanged(qs("#overview-login-fail"), "Toplam " + (traffic.login_fail_total || 0) + " · Listede: " + loginFails.length);
 
     const restWeb = (m.status && m.status.web && m.status.web.restart_count != null) ? m.status.web.restart_count : 0;
@@ -272,13 +343,11 @@
     }
 
     const loginPre = qs("#security-login-fails");
-    if (loginPre) loginPre.textContent = loginFails.length
-      ? formatLoginFails(loginFails)
-      : "Başarısız giriş yok.";
+    if (loginPre) patchLogPre(loginPre, loginFails.length ? formatLoginFails(loginFails) : "Başarısız giriş yok.");
     const ipsPre = qs("#security-top-ips");
-    if (ipsPre) ipsPre.textContent = topIps.length
+    if (ipsPre) patchLogPre(ipsPre, topIps.length
       ? topIps.map(x => (x.ip || "") + " " + (x.count || 0)).join("\n")
-      : "IP verisi yok.";
+      : "IP verisi yok.");
     const fivexx = qs("#security-5xx-msg");
     if (fivexx) fivexx.textContent = (traffic.status_5xx || 0) > 0
       ? "5xx: " + traffic.status_5xx + " | Hata oranı: " + (traffic.error_rate != null ? (traffic.error_rate * 100).toFixed(2) + "%" : "—")
@@ -290,7 +359,11 @@
       var ts = f.ts ? new Date(f.ts * 1000).toLocaleString("tr-TR") : "—";
       var ip = f.ip || "—";
       var user = f.user || "—";
-      var reason = f.reason ? f.reason : "—";
+      var reasonRaw = f.reason ? f.reason : "—";
+      var reason = reasonRaw;
+      if (window.LogHumanize && reasonRaw !== "—" && /ERROR|WARN|fail|SSL|401|Unauthorized|Exception/i.test(reasonRaw)) {
+        reason = window.LogHumanize.format(reasonRaw, "web");
+      }
       return "Tarih: " + ts + "\nIP: " + ip + "\nKullanıcı: " + user + "\nSebep: " + reason;
     }).join("\n\n");
   }
@@ -301,13 +374,11 @@
       const loginFails = traffic.last_login_fails || [];
       const topIps = traffic.top_ips || [];
       const loginPre = qs("#security-login-fails");
-      if (loginPre) loginPre.textContent = loginFails.length
-        ? formatLoginFails(loginFails)
-        : "Başarısız giriş yok.";
+      if (loginPre) patchLogPre(loginPre, loginFails.length ? formatLoginFails(loginFails) : "Başarısız giriş yok.");
       const ipsPre = qs("#security-top-ips");
-      if (ipsPre) ipsPre.textContent = topIps.length
+      if (ipsPre) patchLogPre(ipsPre, topIps.length
         ? topIps.map(function (x) { return (x.ip || "") + " " + (x.count || 0); }).join("\n")
-        : "IP verisi yok.";
+        : "IP verisi yok.");
       const fivexx = qs("#security-5xx-msg");
       if (fivexx) fivexx.textContent = (traffic.status_5xx || 0) > 0
         ? "5xx: " + traffic.status_5xx + " | Hata oranı: " + (traffic.error_rate != null ? (traffic.error_rate * 100).toFixed(2) + "%" : "—")
@@ -342,23 +413,33 @@
       const status = await statusRes.json().catch(function () { return {}; });
       if (metrics && typeof metrics === "object") {
         metrics.status = status;
-        const [errWeb, errEng, errMgr] = await Promise.all([
+        if (!metrics.web_app || metrics.web_app.requests_per_min == null) {
+          try {
+            var traffic = await fetch(API + "/api/traffic").then(function (r) { return r.ok ? r.json() : {}; });
+            if (traffic && typeof traffic === "object" && Object.keys(traffic).length) {
+              metrics.web_app = Object.assign({}, metrics.web_app || {}, traffic);
+            }
+          } catch (_) {}
+        }
+        const [errWeb, errEng, errMgr, errHtml] = await Promise.all([
           fetch(API + "/api/logs/web?tail=0").then(r => r.ok ? r.json() : {}).catch(() => ({})),
           fetch(API + "/api/logs/engine?tail=0").then(r => r.ok ? r.json() : {}).catch(() => ({})),
-          fetch(API + "/api/logs/manager?tail=0").then(r => r.ok ? r.json() : {}).catch(() => ({}))
+          fetch(API + "/api/logs/manager?tail=0").then(r => r.ok ? r.json() : {}).catch(() => ({})),
+          fetch(API + "/api/logs/html?tail=0").then(r => r.ok ? r.json() : {}).catch(() => ({}))
         ]);
-        metrics.errors_ring = { web: (errWeb.errors || []), engine: (errEng.errors || []), manager: (errMgr.errors || []) };
-        metrics.warns_ring = { web: (errWeb.warns || []), engine: (errEng.warns || []), manager: (errMgr.warns || []) };
+        metrics.errors_ring = { web: (errWeb.errors || []), engine: (errEng.errors || []), manager: (errMgr.errors || []), html: (errHtml.errors || []) };
+        metrics.warns_ring = { web: (errWeb.warns || []), engine: (errEng.warns || []), manager: (errMgr.warns || []), html: (errHtml.warns || []) };
         updateMetricsUI(metrics);
       }
       keys.forEach(k => setStatus(k, status[k]));
       var hostEl = qs("#manager-controlled-host");
       if (hostEl) hostEl.textContent = "Kontrol edilen sunucu: " + (status.host || "—");
-      const [issues, audit] = await Promise.all([
-        fetch(API + "/api/issues?status=OPEN").then(r => r.ok ? r.json() : []).catch(() => []),
-        fetch(API + "/api/audit?limit=200").then(r => r.ok ? r.json() : []).catch(() => [])
+      const [audit] = await Promise.all([
+        fetch(API + "/api/audit?limit=300").then(r => r.ok ? r.json() : []).catch(() => []),
       ]);
-      setTextIfChanged(qs("#overview-issue-count"), issues.length);
+      var overviewActive = qs("#panel-overview") && qs("#panel-overview").classList.contains("active");
+      var incidentsActive = qs("#panel-incidents") && qs("#panel-incidents").classList.contains("active");
+      if (overviewActive || incidentsActive) refreshIssueStats();
       const restarts = Array.isArray(audit) ? audit.filter(function (e) { return ["start", "stop", "restart"].indexOf(e.action) >= 0; }).slice(-10) : [];
       var restartsText = restarts.length ? restarts.map(function (e) {
         var svc = (e.detail && e.detail.service) ? e.detail.service : "";
@@ -376,89 +457,265 @@
     } catch (_) { return s; }
   }
 
-  async function refreshIssues() {
-    const openOnly = qs("#incidents-filter-open") ? qs("#incidents-filter-open").checked : false;
-    const url = API + "/api/issues" + (openOnly ? "?status=OPEN" : "");
-    const list = await fetch(url).then(r => r.ok ? r.json() : []).catch(() => []);
+  let incidentsView = "ACTIVE";
+  let incidentsSearchTimer = null;
+  let incidentsPollTimer = null;
+
+  function escHtml(s) {
+    return String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+
+  function issueSummary(issue) {
+    var samples = issue.samples || [];
+    if (samples.length) return samples[samples.length - 1];
+    return (issue.fingerprint || "").slice(0, 80);
+  }
+
+  function statusPill(status) {
+    var st = (status || "OPEN").toUpperCase();
+    var cls = "status-pill-open";
+    if (st === "ACK") cls = "status-pill-ack";
+    else if (st === "RESOLVED") cls = "status-pill-resolved";
+    else if (st === "ARCHIVED") cls = "status-pill-archived";
+    return "<span class=\"status-pill " + cls + "\">" + escHtml(st) + "</span>";
+  }
+
+  function buildIssuesQuery() {
+    var parts = ["limit=200"];
+    if (incidentsView && incidentsView !== "BACKUP") parts.push("status=" + encodeURIComponent(incidentsView));
+    var svc = qs("#incidents-filter-service") ? qs("#incidents-filter-service").value : "";
+    if (svc) parts.push("service=" + encodeURIComponent(svc));
+    var q = qs("#incidents-search") ? qs("#incidents-search").value.trim() : "";
+    if (q) parts.push("q=" + encodeURIComponent(q));
+    return "?" + parts.join("&");
+  }
+
+  function buildIssuesArchiveQuery() {
+    var parts = ["limit=200"];
+    var svc = qs("#incidents-filter-service") ? qs("#incidents-filter-service").value : "";
+    if (svc) parts.push("service=" + encodeURIComponent(svc));
+    var q = qs("#incidents-search") ? qs("#incidents-search").value.trim() : "";
+    if (q) parts.push("q=" + encodeURIComponent(q));
+    return "?" + parts.join("&");
+  }
+
+  const ISSUE_SUMMARY_FALLBACK_KEY = "mgr_issue_summary_fallback";
+  let issueSummaryUseFallback = false;
+  try {
+    issueSummaryUseFallback = sessionStorage.getItem(ISSUE_SUMMARY_FALLBACK_KEY) === "1";
+  } catch (_) {}
+  let issueSummaryProbePending = issueSummaryUseFallback;
+  let lastIssueStatsFetchMs = 0;
+
+  function markIssueSummaryFallback() {
+    issueSummaryUseFallback = true;
+    issueSummaryProbePending = false;
+    try { sessionStorage.setItem(ISSUE_SUMMARY_FALLBACK_KEY, "1"); } catch (_) {}
+  }
+
+  function clearIssueSummaryFallback() {
+    issueSummaryUseFallback = false;
+    issueSummaryProbePending = false;
+    try { sessionStorage.removeItem(ISSUE_SUMMARY_FALLBACK_KEY); } catch (_) {}
+  }
+
+  function computeIssueStatsFromList(list) {
+    var counts = { open: 0, ack: 0, resolved: 0, archived: 0, active: 0, total: 0 };
+    (list || []).forEach(function (i) {
+      counts.total += 1;
+      var st = (i.status || "OPEN").toUpperCase();
+      if (st === "OPEN") counts.open += 1;
+      else if (st === "ACK") counts.ack += 1;
+      else if (st === "RESOLVED") counts.resolved += 1;
+      else if (st === "ARCHIVED") counts.archived += 1;
+    });
+    counts.active = counts.open + counts.ack + counts.resolved;
+    return counts;
+  }
+
+  function applyIssueStats(stats) {
+    stats = stats || {};
+    setTextIfChanged(qs("#inc-stat-open"), stats.open != null ? stats.open : 0);
+    setTextIfChanged(qs("#inc-stat-ack"), stats.ack != null ? stats.ack : 0);
+    setTextIfChanged(qs("#inc-stat-resolved"), stats.resolved != null ? stats.resolved : 0);
+    setTextIfChanged(qs("#inc-stat-archived"), stats.archived != null ? stats.archived : 0);
+    setTextIfChanged(qs("#inc-stat-backup"), stats.backup != null ? stats.backup : 0);
+    setTextIfChanged(qs("#overview-issue-count"), stats.active != null ? stats.active : (stats.open || 0));
+  }
+
+  async function refreshIssueStats(cachedList, force) {
+    var now = Date.now();
+    if (!force && now - lastIssueStatsFetchMs < 3000) return;
+    lastIssueStatsFetchMs = now;
+    try {
+      var stats = null;
+      if (!issueSummaryUseFallback || issueSummaryProbePending) {
+        var r = await fetch(API + "/api/issues/summary");
+        if (r.ok) {
+          stats = await r.json();
+          clearIssueSummaryFallback();
+        } else if (r.status === 404) {
+          markIssueSummaryFallback();
+        }
+      }
+      if (!stats) {
+        var list = cachedList;
+        if (!list) {
+          list = await fetch(API + "/api/issues?limit=200").then(function (res) { return res.ok ? res.json() : []; }).catch(function () { return []; });
+        }
+        stats = computeIssueStatsFromList(list);
+      }
+      applyIssueStats(stats);
+    } catch (_) {}
+  }
+
+  function issuesFingerprint(list) {
+    return (list || []).map(function (i) {
+      var svc = (i.tags && i.tags.service) ? i.tags.service : "";
+      return [
+        i.id || "",
+        i.status || "",
+        String(i.count != null ? i.count : ""),
+        i.last_seen || "",
+        i.severity || "",
+        svc
+      ].join("\t");
+    }).join("\n");
+  }
+
+  function issueAction(path, issueId, after) {
+    return api("POST", "/api/issues/" + issueId + path, {})
+      .then(function () {
+        if (typeof after === "function") after();
+        return refreshIssueStats(null, true).then(function () { return refreshIssues(true); });
+      })
+      .catch(function (e) { alert(e.message); });
+  }
+
+  function renderIssueRowActions(issue, readOnly) {
+    var id = issue.id;
+    var st = (issue.status || "OPEN").toUpperCase();
+    function actBtn(cls, label, icon) {
+      return "<button type=\"button\" class=\"inc-act " + cls + "\" data-id=\"" + escHtml(id) + "\" title=\"" + escHtml(label) + "\">" +
+        "<span class=\"inc-act-icon\" aria-hidden=\"true\">" + icon + "</span>" +
+        "<span class=\"inc-act-label\">" + escHtml(label) + "</span></button>";
+    }
+    var icons = {
+      detail: "<svg viewBox=\"0 0 16 16\" width=\"14\" height=\"14\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\"><circle cx=\"8\" cy=\"8\" r=\"5.5\"/><path d=\"M8 7v4M8 5.2v.1\"/></svg>",
+      ack: "<svg viewBox=\"0 0 16 16\" width=\"14\" height=\"14\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\"><path d=\"M4 8.2l2.6 2.6L12 5.2\"/></svg>",
+      resolve: "<svg viewBox=\"0 0 16 16\" width=\"14\" height=\"14\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\"><circle cx=\"8\" cy=\"8\" r=\"5.5\"/><path d=\"M5.5 8.2l1.8 1.8 3.4-3.6\" stroke-width=\"1.6\"/></svg>",
+      archive: "<svg viewBox=\"0 0 16 16\" width=\"14\" height=\"14\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\"><path d=\"M3 5.5h10v7a1 1 0 01-1 1H4a1 1 0 01-1-1v-7z\"/><path d=\"M2 5.5l2-2.5h8l2 2.5M6.5 8.5h3\"/></svg>",
+      reopen: "<svg viewBox=\"0 0 16 16\" width=\"14\" height=\"14\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\"><path d=\"M3.5 8a4.5 4.5 0 018.2-2.6M12.5 8A4.5 4.5 0 014.3 10.6\"/><path d=\"M11.5 3.5V6h-2.5\"/></svg>"
+    };
+    var html = "<div class=\"incident-actions\" role=\"group\" aria-label=\"Olay işlemleri\">";
+    html += actBtn("inc-act-detail btn-issue-detail", "Detay", icons.detail);
+    if (!readOnly) {
+      if (st !== "ACK" && st !== "ARCHIVED") html += actBtn("inc-act-ack btn-issue-ack", "Onayla", icons.ack);
+      if (st !== "RESOLVED" && st !== "ARCHIVED") html += actBtn("inc-act-resolve btn-issue-resolve", "Çöz", icons.resolve);
+      if (st !== "ARCHIVED") html += actBtn("inc-act-archive btn-issue-archive", "Arşiv", icons.archive);
+      else html += actBtn("inc-act-reopen btn-issue-reopen", "Geri al", icons.reopen);
+    }
+    html += "</div>";
+    return html;
+  }
+
+  function bindIssueRowActions(tbody) {
+    if (!tbody) return;
+    tbody.querySelectorAll(".incident-actions").forEach(function (group) {
+      group.addEventListener("click", function (e) { e.stopPropagation(); });
+    });
+    tbody.querySelectorAll(".btn-issue-detail").forEach(function (btn) {
+      btn.addEventListener("click", function (e) {
+        e.stopPropagation();
+        var id = btn.getAttribute("data-id");
+        var cached = lastIssuesListCache.find(function (i) { return i.id === id; });
+        if (cached) {
+          openDrawer(cached, incidentsView === "BACKUP");
+          return;
+        }
+        fetch(API + "/api/issues/" + id).then(function (r) { return r.ok ? r.json() : null; }).then(function (issue) {
+          if (issue) openDrawer(issue, false);
+        });
+      });
+    });
+    tbody.querySelectorAll(".btn-issue-ack").forEach(function (btn) {
+      btn.addEventListener("click", function (e) { e.stopPropagation(); issueAction("/ack", btn.getAttribute("data-id")); });
+    });
+    tbody.querySelectorAll(".btn-issue-resolve").forEach(function (btn) {
+      btn.addEventListener("click", function (e) { e.stopPropagation(); issueAction("/resolve", btn.getAttribute("data-id")); });
+    });
+    tbody.querySelectorAll(".btn-issue-archive").forEach(function (btn) {
+      btn.addEventListener("click", function (e) { e.stopPropagation(); issueAction("/archive", btn.getAttribute("data-id")); });
+    });
+    tbody.querySelectorAll(".btn-issue-reopen").forEach(function (btn) {
+      btn.addEventListener("click", function (e) { e.stopPropagation(); issueAction("/reopen", btn.getAttribute("data-id")); });
+    });
+  }
+
+  async function refreshIssues(force) {
+    var isBackup = incidentsView === "BACKUP";
+    var list = [];
+    if (isBackup) {
+      var archiveData = await fetch(API + "/api/issues/archive" + buildIssuesArchiveQuery())
+        .then(function (r) { return r.ok ? r.json() : { items: [] }; })
+        .catch(function () { return { items: [] }; });
+      list = archiveData.items || [];
+    } else {
+      list = await fetch(API + "/api/issues" + buildIssuesQuery()).then(function (r) { return r.ok ? r.json() : []; }).catch(function () { return []; });
+    }
+    const fp = issuesFingerprint(list) + "|view:" + incidentsView;
+    if (!force && fp === lastIssuesFingerprint) return;
+    lastIssuesFingerprint = fp;
+    await refreshIssueStats(null, force);
     const tbody = qs("#incidents-list");
     const emptyEl = qs("#incidents-empty");
+    const footnoteEl = qs("#incidents-footnote");
     const tableWrap = tbody && tbody.closest(".incidents-table-wrap");
     if (!tbody) return;
     tbody.innerHTML = "";
+    lastIssuesListCache = list;
     list.forEach(function (issue) {
       const tr = document.createElement("tr");
-      tr.className = "incident-row incident-row-" + (issue.status || "open").toLowerCase();
+      var stLower = isBackup ? "backup" : (issue.status || "open").toLowerCase();
+      tr.className = "incident-row incident-row-" + stLower + (selectedIssueId === issue.id ? " selected" : "");
       const service = (issue.tags && issue.tags.service) ? issue.tags.service : "—";
+      var sev = (issue.severity || "").toLowerCase();
+      var statusHtml = isBackup
+        ? "<span class=\"status-pill status-pill-backup\">YEDEK</span>"
+        : statusPill(issue.status);
       tr.innerHTML =
-        "<td class=\"incident-id\">" + (issue.id || "—") + "</td>" +
-        "<td class=\"incident-severity\"><span class=\"severity-badge severity-" + (issue.severity || "").toLowerCase() + "\">" + (issue.severity || "—") + "</span></td>" +
-        "<td class=\"incident-service\">" + service + "</td>" +
+        "<td class=\"incident-id\">" + escHtml(issue.id || "—") + "</td>" +
+        "<td class=\"incident-severity\"><span class=\"severity-badge severity-" + escHtml(sev) + "\">" + escHtml(issue.severity || "—") + "</span></td>" +
+        "<td class=\"incident-service\">" + escHtml(service) + "</td>" +
+        "<td class=\"incident-summary\" title=\"" + escHtml(issueSummary(issue)) + "\">" + escHtml(issueSummary(issue)) + "</td>" +
         "<td class=\"incident-count\">" + (issue.count != null ? issue.count : "—") + "</td>" +
-        "<td class=\"incident-last\">" + formatIssueLastSeen(issue.last_seen) + "</td>" +
-        "<td class=\"incident-status\">" + (issue.status || "OPEN") + "</td>";
-      tr.addEventListener("click", function () { openDrawer(issue); });
+        "<td class=\"incident-last\">" + escHtml(formatIssueLastSeen(issue.last_seen || issue._backup_at)) + "</td>" +
+        "<td class=\"incident-status\">" + statusHtml + "</td>" +
+        "<td class=\"inc-col-actions\">" + renderIssueRowActions(issue, isBackup) + "</td>";
+      tr.addEventListener("click", function () { openDrawer(issue, isBackup); });
       tbody.appendChild(tr);
     });
-    if (emptyEl) emptyEl.classList.toggle("hidden", list.length > 0);
-    if (tableWrap) tableWrap.classList.toggle("hidden", list.length === 0);
-  }
-
-  function showToast(message, level, kind, alertId) {
-    if (!qs("#setting-toast") || !qs("#setting-toast").checked) return;
-    var container = qs("#toast-container");
-    if (!container) return;
-    var cooldownKey = (level || "WARN") + ":" + (kind || (message || "").substring(0, 120));
-    var now = Date.now();
-    if (toastCooldown[cooldownKey] && (now - toastCooldown[cooldownKey]) < TOAST_SAME_ERROR_COOLDOWN_MS) return;
-    toastCooldown[cooldownKey] = now;
-    if (toastQueue.length >= TOAST_QUEUE_MAX) {
-      var old = toastQueue.shift();
-      dismissToast(old);
+    bindIssueRowActions(tbody);
+    if (emptyEl) {
+      emptyEl.textContent = isBackup ? "Yerel yedekte olay yok." : "Bu filtrede olay yok.";
+      emptyEl.classList.toggle("hidden", list.length > 0);
     }
-    var el = document.createElement("div");
-    if (alertId) el.dataset.alertId = alertId;
-    el.className = "toast " + (level === "CRIT" ? "crit" : "warn") + " toast-with-close";
-    el.innerHTML = "<button type=\"button\" class=\"toast-close\" aria-label=\"Kapat\">&times;</button><span class=\"toast-text\">" + (message || "").replace(/</g, "&lt;").replace(/>/g, "&gt;") + "</span>";
-    container.appendChild(el);
-    toastQueue.push(el);
-    el.querySelector(".toast-close").addEventListener("click", function () { dismissToast(el); });
-    if (level !== "CRIT") setTimeout(function () { dismissToast(el); }, TOAST_DISMISS_MS);
+    if (tableWrap) tableWrap.classList.toggle("hidden", list.length === 0);
+    if (footnoteEl) footnoteEl.classList.toggle("hidden", false);
   }
 
-  const serviceLabel = { web: "WEB", engine: "MOTOR", manager: "YÖNETİCİ" };
-  function showDiagnosisToast(diagnosis) {
-    if (!diagnosis || !qs("#setting-toast") || !qs("#setting-toast").checked) return;
-    var service = diagnosis.service;
-    var code = diagnosis.reason_code || "UNKNOWN";
-    var cooldownKey = service + ":" + code;
-    var now = Date.now();
-    if (diagnosisToastCooldown[cooldownKey] && (now - diagnosisToastCooldown[cooldownKey]) < DIAGNOSIS_COOLDOWN_MS) return;
-    diagnosisToastCooldown[cooldownKey] = now;
-    var container = qs("#toast-container");
-    if (!container || toastQueue.length >= TOAST_QUEUE_MAX) return;
-    var title = (serviceLabel[service] || service) + ": " + (diagnosis.title_tr || code);
-    var el = document.createElement("div");
-    el.className = "toast crit toast-with-close";
-    el.innerHTML = "<button type=\"button\" class=\"toast-close\" aria-label=\"Kapat\">&times;</button>" +
-      "<strong>" + title + "</strong><br/>" + (diagnosis.summary_tr || "") +
-      (diagnosis.impact_tr ? "<br/><small>Etkisi: " + diagnosis.impact_tr + "</small>" : "") +
-      "<div class=\"toast-diagnosis-actions\">" +
-      "<button type=\"button\" class=\"btn btn-sm btn-detail\" data-service=\"" + service + "\">Detay</button>" +
-      "<button type=\"button\" class=\"btn btn-sm btn-copy-diagnosis\">Kopyala</button>" +
-      "<button type=\"button\" class=\"btn btn-sm btn-ack-toast\">ACK</button></div>";
-    container.appendChild(el);
-    toastQueue.push(el);
-    el.querySelector(".toast-close").addEventListener("click", function () { dismissToast(el); });
-    el.querySelector(".btn-detail").addEventListener("click", function () {
-      var tab = document.querySelector(".nav-item[data-tab=\"" + service + "\"]");
-      if (tab) { tab.click(); qs("#diagnosis-" + service).scrollIntoView({ behavior: "smooth" }); }
-      dismissToast(el);
-    });
-    el.querySelector(".btn-copy-diagnosis").addEventListener("click", function () {
-      try { navigator.clipboard.writeText(JSON.stringify(diagnosis, null, 2)); } catch (_) {}
-      dismissToast(el);
-    });
-    el.querySelector(".btn-ack-toast").addEventListener("click", function () { dismissToast(el); });
+  function startIncidentsPoll() {
+    stopIncidentsPoll();
+    incidentsPollTimer = setInterval(function () {
+      if (document.hidden) return;
+      var panel = qs("#panel-incidents");
+      if (!panel || !panel.classList.contains("active")) return;
+      refreshIssues(false);
+    }, 5000);
+  }
+
+  function stopIncidentsPoll() {
+    if (incidentsPollTimer) { clearInterval(incidentsPollTimer); incidentsPollTimer = null; }
   }
 
   function renderDiagnosis(key, data, isRunning) {
@@ -503,73 +760,178 @@
     box.innerHTML = html;
   }
 
-  function openDrawer(issue) {
-    selectedIssueId = issue.id;
+  let lastIssuesListCache = [];
+
+  function openDrawer(issue, isBackup) {
+    isBackup = !!isBackup;
+    selectedIssueId = isBackup ? null : issue.id;
     const drawer = qs("#incident-drawer");
+    const backdrop = qs("#incident-drawer-backdrop");
     if (!drawer) return;
-    qs("#drawer-title").textContent = (issue.id || "") + " — " + (issue.severity || "");
-    qs("#drawer-meta").textContent = "İlk: " + formatIssueLastSeen(issue.first_seen) + " · Son: " + formatIssueLastSeen(issue.last_seen) + " · Adet: " + (issue.count != null ? issue.count : "—");
-    qs("#drawer-status").textContent = "Durum: " + (issue.status || "OPEN");
+    var st = (issue.status || "OPEN").toUpperCase();
+    qs("#drawer-title").textContent = issue.id || "Olay";
+    var sub = qs("#drawer-subtitle");
+    if (sub) {
+      sub.textContent = (issue.severity || "—") + " · " + ((issue.tags && issue.tags.service) || "—") +
+        (isBackup ? " · Yerel yedek (salt okunur)" : "");
+    }
+    var statusEl = qs("#drawer-status");
+    if (statusEl) {
+      statusEl.innerHTML = isBackup
+        ? "<span class=\"status-pill status-pill-backup\">YEDEK</span>"
+        : statusPill(st);
+    }
+    setTextIfChanged(qs("#drawer-first-seen"), formatIssueLastSeen(issue.first_seen));
+    setTextIfChanged(qs("#drawer-last-seen"), formatIssueLastSeen(issue.last_seen || issue._backup_at));
+    setTextIfChanged(qs("#drawer-count"), issue.count != null ? String(issue.count) : "—");
     const assigneeInp = qs("#drawer-assignee");
-    if (assigneeInp) assigneeInp.value = issue.assignee || "";
+    if (assigneeInp) { assigneeInp.value = issue.assignee || ""; assigneeInp.disabled = isBackup; }
     const labelsInp = qs("#drawer-labels");
-    if (labelsInp) labelsInp.value = Array.isArray(issue.labels) ? issue.labels.join(", ") : "";
+    if (labelsInp) { labelsInp.value = Array.isArray(issue.labels) ? issue.labels.join(", ") : ""; labelsInp.disabled = isBackup; }
     const slaInp = qs("#drawer-sla");
-    if (slaInp) slaInp.value = issue.sla_note || "";
+    if (slaInp) { slaInp.value = issue.sla_note || ""; slaInp.disabled = isBackup; }
+    const commentInp = qs("#drawer-comment-text");
+    if (commentInp) { commentInp.value = ""; commentInp.disabled = isBackup; }
     const histEl = qs("#drawer-status-history");
-    if (histEl) histEl.textContent = (issue.status_history || []).map(h => (h.ts || "") + " " + (h.status || "")).join("\n") || "—";
+    if (histEl) {
+      var histLines = (issue.status_history || []).map(function (h) { return (h.ts || "") + " " + (h.status || ""); });
+      if (isBackup && issue._backup_at) histLines.unshift((issue._backup_at || "") + " YEDEK");
+      patchLogPre(histEl, histLines.join("\n") || "—");
+    }
     const commentsEl = qs("#drawer-comments");
     if (commentsEl) {
       commentsEl.innerHTML = "";
-      (issue.comments || []).forEach(c => {
+      (issue.comments || []).forEach(function (c) {
         const div = document.createElement("div");
         div.className = "drawer-comment-item";
-        div.innerHTML = "<span class=\"comment-meta\">" + (c.ts || "") + " " + (c.author || "") + "</span><br/>" + (c.text || "");
+        div.innerHTML = "<span class=\"comment-meta\">" + escHtml(c.ts || "") + " " + escHtml(c.author || "") + "</span><br/>" + escHtml(c.text || "");
         commentsEl.appendChild(div);
       });
     }
-    qs("#drawer-comment-text").value = "";
-    qs("#drawer-samples").textContent = (issue.samples || []).join("\n") || "Örnek kayıt yok.";
+    var drawerSamplesEl = qs("#drawer-samples");
+    if (drawerSamplesEl) {
+      var svc = (issue.tags && issue.tags.service) || "web";
+      var samples = issue.samples || [];
+      var sampleText = samples.length
+        ? samples.map(function (s) {
+            return window.LogHumanize ? window.LogHumanize.format(String(s), svc) : String(s);
+          }).join("\n\n---\n\n")
+        : "Örnek kayıt yok.";
+      patchLogPre(drawerSamplesEl, sampleText);
+    }
+    var actionsTop = qs(".drawer-actions-top");
+    if (actionsTop) actionsTop.classList.toggle("hidden", isBackup);
+    var ackBtn = qs("#drawer-ack");
+    var resolveBtn = qs("#drawer-resolve");
+    var archiveBtn = qs("#drawer-archive");
+    var reopenBtn = qs("#drawer-reopen");
+    if (ackBtn) ackBtn.classList.toggle("hidden", isBackup || st === "ACK" || st === "ARCHIVED");
+    if (resolveBtn) resolveBtn.classList.toggle("hidden", isBackup || st === "RESOLVED" || st === "ARCHIVED");
+    if (archiveBtn) archiveBtn.classList.toggle("hidden", isBackup || st === "ARCHIVED");
+    if (reopenBtn) reopenBtn.classList.toggle("hidden", isBackup || st !== "ARCHIVED");
     drawer.classList.remove("hidden");
+    if (backdrop) backdrop.classList.remove("hidden");
+    qsa(".incident-row").forEach(function (row) { row.classList.remove("selected"); });
+    qsa(".incident-row").forEach(function (row) {
+      if (row.querySelector(".incident-id") && row.querySelector(".incident-id").textContent === issue.id) row.classList.add("selected");
+    });
   }
 
   function closeDrawer() {
     selectedIssueId = null;
     const drawer = qs("#incident-drawer");
+    const backdrop = qs("#incident-drawer-backdrop");
     if (drawer) drawer.classList.add("hidden");
+    if (backdrop) backdrop.classList.add("hidden");
+    qsa(".incident-row.selected").forEach(function (row) { row.classList.remove("selected"); });
+  }
+
+  function reloadSelectedIssue() {
+    if (!selectedIssueId) return Promise.resolve();
+    return fetch(API + "/api/issues/" + selectedIssueId)
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (issue) { if (issue) openDrawer(issue); });
+  }
+
+  function saveDrawerAssignee() {
+    if (!selectedIssueId) return;
+    const v = qs("#drawer-assignee").value;
+    api("POST", "/api/issues/" + selectedIssueId + "/assign", { assignee: v })
+      .then(function () { return reloadSelectedIssue().then(function () { return refreshIssues(true); }); })
+      .catch(function (e) { alert(e.message); });
+  }
+
+  function saveDrawerLabels() {
+    if (!selectedIssueId) return;
+    const v = qs("#drawer-labels").value;
+    const labels = v.split(",").map(function (s) { return s.trim(); }).filter(Boolean).slice(0, 10);
+    api("POST", "/api/issues/" + selectedIssueId + "/labels", { labels: labels })
+      .then(function () { return reloadSelectedIssue().then(function () { return refreshIssues(true); }); })
+      .catch(function (e) { alert(e.message); });
+  }
+
+  function saveDrawerSla() {
+    if (!selectedIssueId) return;
+    const v = qs("#drawer-sla").value;
+    api("POST", "/api/issues/" + selectedIssueId + "/sla", { sla_note: v })
+      .then(function () { return reloadSelectedIssue().then(function () { return refreshIssues(true); }); })
+      .catch(function (e) { alert(e.message); });
+  }
+
+  function addDrawerComment() {
+    if (!selectedIssueId) return;
+    const inp = qs("#drawer-comment-text");
+    const v = inp ? inp.value : "";
+    if (!v.trim()) return;
+    api("POST", "/api/issues/" + selectedIssueId + "/comment", { text: v })
+      .then(function () { return reloadSelectedIssue().then(function () { return refreshIssues(true); }); })
+      .catch(function (e) { alert(e.message); });
+  }
+
+  function bindDrawerEnterAdvance(inputId, saveFn, nextInputId) {
+    const inp = qs(inputId);
+    if (!inp) return;
+    inp.addEventListener("keydown", function (e) {
+      if (e.key !== "Enter") return;
+      e.preventDefault();
+      saveFn();
+      if (nextInputId) {
+        var next = qs(nextInputId);
+        if (next) {
+          setTimeout(function () {
+            next.focus();
+            if (typeof next.select === "function") next.select();
+          }, 0);
+        }
+      }
+    });
   }
 
   qs("#drawer-close").addEventListener("click", closeDrawer);
+  var drawerBackdrop = qs("#incident-drawer-backdrop");
+  if (drawerBackdrop) drawerBackdrop.addEventListener("click", closeDrawer);
   qs("#drawer-ack").addEventListener("click", function () {
     if (!selectedIssueId) return;
-    api("POST", "/api/issues/" + selectedIssueId + "/ack").then(() => { refreshIssues(); refreshMetrics(); closeDrawer(); }).catch(e => alert(e.message));
+    issueAction("/ack", selectedIssueId, closeDrawer);
   });
   qs("#drawer-resolve").addEventListener("click", function () {
     if (!selectedIssueId) return;
-    api("POST", "/api/issues/" + selectedIssueId + "/resolve").then(() => { refreshIssues(); refreshMetrics(); closeDrawer(); }).catch(e => alert(e.message));
+    issueAction("/resolve", selectedIssueId, closeDrawer);
   });
-  qs("#drawer-assign-btn").addEventListener("click", function () {
+  var drawerArchiveBtn = qs("#drawer-archive");
+  if (drawerArchiveBtn) drawerArchiveBtn.addEventListener("click", function () {
     if (!selectedIssueId) return;
-    const v = qs("#drawer-assignee").value;
-    api("POST", "/api/issues/" + selectedIssueId + "/assign", { assignee: v }).then(() => fetch(API + "/api/issues/" + selectedIssueId).then(r => r.json()).then(openDrawer)).catch(e => alert(e.message));
+    issueAction("/archive", selectedIssueId, closeDrawer);
   });
-  qs("#drawer-labels-btn").addEventListener("click", function () {
+  var drawerReopenBtn = qs("#drawer-reopen");
+  if (drawerReopenBtn) drawerReopenBtn.addEventListener("click", function () {
     if (!selectedIssueId) return;
-    const v = qs("#drawer-labels").value;
-    const labels = v.split(",").map(s => s.trim()).filter(Boolean).slice(0, 10);
-    api("POST", "/api/issues/" + selectedIssueId + "/labels", { labels }).then(() => fetch(API + "/api/issues/" + selectedIssueId).then(r => r.json()).then(openDrawer)).catch(e => alert(e.message));
+    issueAction("/reopen", selectedIssueId);
   });
-  qs("#drawer-sla-btn").addEventListener("click", function () {
-    if (!selectedIssueId) return;
-    const v = qs("#drawer-sla").value;
-    api("POST", "/api/issues/" + selectedIssueId + "/sla", { sla_note: v }).then(() => fetch(API + "/api/issues/" + selectedIssueId).then(r => r.json()).then(openDrawer)).catch(e => alert(e.message));
-  });
-  qs("#drawer-comment-btn").addEventListener("click", function () {
-    if (!selectedIssueId) return;
-    const v = qs("#drawer-comment-text").value;
-    if (!v.trim()) return;
-    api("POST", "/api/issues/" + selectedIssueId + "/comment", { text: v }).then(() => fetch(API + "/api/issues/" + selectedIssueId).then(r => r.json()).then(openDrawer)).catch(e => alert(e.message));
-  });
+  bindDrawerEnterAdvance("#drawer-assignee", saveDrawerAssignee, "#drawer-labels");
+  bindDrawerEnterAdvance("#drawer-labels", saveDrawerLabels, "#drawer-sla");
+  bindDrawerEnterAdvance("#drawer-sla", saveDrawerSla, "#drawer-comment-text");
+  bindDrawerEnterAdvance("#drawer-comment-text", addDrawerComment, null);
 
   async function refreshStatus() {
     try {
@@ -580,7 +942,7 @@
       if (s.html) {
         setStatus("html", s.html);
         var chip = qs("#overview-html-status");
-        if (chip) { chip.textContent = s.html.running ? "ÇALIŞIYOR" : "DURDURULDU"; chip.className = "status-chip " + (s.html.running ? "running" : "stopped"); }
+        setOverviewStatusChip(chip, !!s.html.running);
         var pidEl = qs("#overview-html-pid"); if (pidEl) pidEl.textContent = s.html.pid != null ? String(s.html.pid) : "—";
         var htmlUptime = (typeof s.html.started_at === "number") ? Math.max(0, Math.floor(Date.now() / 1000 - s.html.started_at)) : null;
         var uptimeEl = qs("#overview-html-uptime"); if (uptimeEl) uptimeEl.textContent = formatUptime(htmlUptime) || "—";
@@ -604,20 +966,63 @@
         var running = !!(status[k] && status[k].running);
         renderDiagnosis(k, d, running);
         var ov = qs("#overview-" + k + "-diagnosis");
-        if (ov) ov.textContent = (running || !d || !d.title_tr) ? "—" : ("Son teşhis: " + d.title_tr + (d.ts ? " (" + d.ts + ")" : ""));
+        if (ov) {
+          var txt = (running || !d || !d.title_tr) ? "—" : ("Son teşhis: " + d.title_tr + (d.ts ? " (" + d.ts + ")" : ""));
+          setTextIfChanged(ov, txt);
+          ov.classList.toggle("diagnosis-empty", txt === "—");
+        }
       });
     } catch (e) { console.error(e); }
   }
 
-  function formatErrWrnLine(l) {
+  function humanizeLogLineIfNeeded(line, serviceKey) {
+    if (!line || !window.LogHumanize) return line;
+    if (!/ERROR|CRITICAL|Traceback|Exception|WARNING|\bWARN\b/i.test(line)) return line;
+    return window.LogHumanize.format(line, serviceKey);
+  }
+  function formatErrWrnLine(l, serviceKey) {
+    if (window.LogHumanize && typeof window.LogHumanize.formatEntry === "function") {
+      return window.LogHumanize.formatEntry(l, serviceKey);
+    }
     const raw = typeof l === "string" ? l : (l.ts || "") + " " + (l.text || l);
     return "Sebep: " + raw;
   }
-  function updateNavErrCount(key, count) {
-    var navEl = qs("#nav-err-" + key);
-    if (!navEl) return;
-    navEl.textContent = count;
-    navEl.classList.toggle("hidden", !count || count === 0);
+  function updateNavAlertState(key, errCount, wrnCount) {
+    errCount = errCount || 0;
+    wrnCount = wrnCount || 0;
+    var navItem = document.querySelector('.nav-item[data-tab="' + key + '"]');
+    if (navItem) {
+      navItem.classList.remove("nav-alert-err", "nav-alert-wrn");
+      if (errCount > 0) navItem.classList.add("nav-alert-err");
+      else if (wrnCount > 0) navItem.classList.add("nav-alert-wrn");
+    }
+    var badge = qs("#nav-err-" + key);
+    if (badge) {
+      var showCount = errCount > 0 ? errCount : wrnCount;
+      badge.textContent = String(showCount);
+      badge.classList.toggle("hidden", showCount === 0);
+      badge.classList.remove("nav-badge-err", "nav-badge-wrn");
+      if (errCount > 0) badge.classList.add("nav-badge-err");
+      else if (wrnCount > 0) badge.classList.add("nav-badge-wrn");
+    }
+  }
+  function logPreWasAtBottom(el, threshold) {
+    if (!el) return true;
+    threshold = threshold == null ? 32 : threshold;
+    return el.scrollHeight - el.scrollTop - el.clientHeight <= threshold;
+  }
+  function patchLogPre(el, text) {
+    if (!el) return;
+    var next = text || "";
+    if (el.textContent === next) return;
+    var atBottom = logPreWasAtBottom(el);
+    var prevTop = el.scrollTop;
+    el.textContent = next;
+    if (atBottom) {
+      el.scrollTop = el.scrollHeight;
+    } else {
+      el.scrollTop = prevTop;
+    }
   }
   function setErrWrn(key, newErrors, newWarns) {
     var errEl = qs("#err-" + key);
@@ -627,20 +1032,18 @@
     var errNum = errList.length;
     var wrnNum = wrnList.length;
     if (errEl) {
-      var errLines = errList.slice(-errWrnMaxLines).map(formatErrWrnLine);
-      errEl.textContent = errLines.join("\n") + (errLines.length ? "\n" : "");
-      errEl.scrollTop = errEl.scrollHeight;
+      var errLines = errList.slice(-errWrnMaxLines).map(function (l) { return formatErrWrnLine(l, key); });
+      patchLogPre(errEl, errLines.join("\n\n") + (errLines.length ? "\n" : ""));
       var errCountEl = qs("#err-" + key + "-count");
       if (errCountEl) errCountEl.textContent = String(errNum);
-      updateNavErrCount(key, errNum);
     }
     if (wrnEl) {
-      var wrnLines = wrnList.slice(-errWrnMaxLines).map(formatErrWrnLine);
-      wrnEl.textContent = wrnLines.join("\n") + (wrnLines.length ? "\n" : "");
-      wrnEl.scrollTop = wrnEl.scrollHeight;
+      var wrnLines = wrnList.slice(-errWrnMaxLines).map(function (l) { return formatErrWrnLine(l, key); });
+      patchLogPre(wrnEl, wrnLines.join("\n\n") + (wrnLines.length ? "\n" : ""));
       var wrnCountEl = qs("#wrn-" + key + "-count");
       if (wrnCountEl) wrnCountEl.textContent = String(wrnNum);
     }
+    updateNavAlertState(key, errNum, wrnNum);
   }
 
   async function fetchLogs(key) {
@@ -652,18 +1055,18 @@
       var errList = d.errors || [];
       var wrnList = d.warns || [];
       if (errEl) {
-        var errLines = errList.slice(-errWrnMaxLines).map(function (l) { return "Sebep: " + (typeof l === "string" ? l : ((l && l.ts) || "") + " " + toLogText(l)); });
-        errEl.textContent = errLines.join("\n") + (errLines.length ? "\n" : "");
+        var errLines = errList.slice(-errWrnMaxLines).map(function (l) { return formatErrWrnLine(typeof l === "string" ? l : { ts: (l && l.ts) || "", text: toLogText(l) }, key); });
+        patchLogPre(errEl, errLines.join("\n\n") + (errLines.length ? "\n" : ""));
         var errCountEl = qs("#err-" + key + "-count");
         if (errCountEl) errCountEl.textContent = String(errList.length);
-        updateNavErrCount(key, errList.length);
       }
       if (wrnEl) {
-        var wrnLines = wrnList.slice(-errWrnMaxLines).map(function (l) { return "Sebep: " + (typeof l === "string" ? l : ((l && l.ts) || "") + " " + toLogText(l)); });
-        wrnEl.textContent = wrnLines.join("\n") + (wrnLines.length ? "\n" : "");
+        var wrnLines = wrnList.slice(-errWrnMaxLines).map(function (l) { return formatErrWrnLine(typeof l === "string" ? l : { ts: (l && l.ts) || "", text: toLogText(l) }, key); });
+        patchLogPre(wrnEl, wrnLines.join("\n\n") + (wrnLines.length ? "\n" : ""));
         var wrnCountEl = qs("#wrn-" + key + "-count");
         if (wrnCountEl) wrnCountEl.textContent = String(wrnList.length);
       }
+      updateNavAlertState(key, errList.length, wrnList.length);
       renderLog(key);
     } catch (e) { console.error(e); }
   }
@@ -681,15 +1084,9 @@
     }
     if (q) lines = lines.filter(l => l.toLowerCase().indexOf(q) >= 0);
     lines = lines.slice(-logMaxLines);
-    const fragment = document.createDocumentFragment();
-    lines.forEach(l => {
-      const span = document.createElement("span");
-      span.className = /ERROR|Traceback|Exception|CRITICAL/i.test(l) ? "line-err" : /WARN/i.test(l) ? "line-wrn" : "";
-      span.textContent = l + "\n";
-      fragment.appendChild(span);
-    });
-    logEl.textContent = "";
-    logEl.appendChild(fragment);
+    lines = lines.map(function (l) { return humanizeLogLineIfNeeded(l, key); });
+    var logText = lines.join("\n") + (lines.length ? "\n" : "");
+    patchLogPre(logEl, logText);
     if (autoscroll[key]) logEl.scrollTop = logEl.scrollHeight;
   }
 
@@ -764,7 +1161,15 @@
           updateMetricsUI(mu);
           keys.forEach(k => setStatus(k, mu.status && mu.status[k] ? mu.status[k] : {}));
         }
-        if (d.issue_events && d.issue_events.length) refreshIssues();
+        if (d.issue_events && d.issue_events.length) {
+          var wsFp = d.issue_events.map(function (i) {
+            return (i.id || "") + ":" + (i.count != null ? i.count : 0) + ":" + (i.service || "");
+          }).join("|");
+          if (wsFp !== lastWsIssuesFp) {
+            lastWsIssuesFp = wsFp;
+            refreshIssues(false);
+          }
+        }
         if (d.alert_events && d.alert_events.length) {
           d.alert_events.forEach(function (a) { showToast(a.message || a.kind || "Alert", a.level || "WARN", a.kind, a.id); });
         }
@@ -773,20 +1178,272 @@
     wsEvents.onclose = function () { if (useWsEvents) setTimeout(connectWsEvents, 3000); };
   }
 
-  async function refreshAudit() {
+  let auditView = "";
+  let auditSearchTimer = null;
+  let auditPollTimer = null;
+  let lastAuditFingerprint = "";
+  let auditEventsCache = [];
+
+  const AUDIT_ACTION_TR = {
+    start: "Servis başlatıldı",
+    stop: "Servis durduruldu",
+    restart: "Servis yeniden başlatıldı",
+    reset: "Metrikler sıfırlandı",
+    lock: "Servis kilidi değiştirildi",
+    alert_ack: "Uyarı onaylandı",
+    export_action: "Dışa aktarma yapıldı",
+    issue_ack: "Olay onaylandı",
+    issue_resolve: "Olay çözüldü",
+    issue_archive: "Olay arşivlendi",
+    issue_reopen: "Olay geri alındı",
+    issue_assign: "Olay atandı",
+    issue_labels: "Olay etiketleri güncellendi",
+    issue_comment: "Olaya yorum eklendi",
+    issue_sla: "Olay SLA notu güncellendi"
+  };
+
+  const AUDIT_CAT_TR = {
+    servis: "Servis",
+    olay: "Olay",
+    uyari: "Uyarı",
+    export: "Dışa aktarma",
+    diger: "Diğer",
+    yedek: "Yedek"
+  };
+
+  const AUDIT_EXPORT_TYPE_TR = {
+    logs: "Log",
+    issues: "Olay listesi",
+    metrics: "Metrik",
+    audit: "Denetim günlüğü",
+    security: "Güvenlik",
+    alerts: "Uyarı listesi",
+    diagnosis: "Teşhis"
+  };
+
+  function auditCategory(action) {
+    var a = action || "";
+    if (a === "start" || a === "stop" || a === "restart" || a === "reset" || a === "lock") return "servis";
+    if (a.indexOf("issue_") === 0) return "olay";
+    if (a === "alert_ack") return "uyari";
+    if (a === "export_action") return "export";
+    return "diger";
+  }
+
+  function auditServiceName(key) {
+    var map = { web: "Web", engine: "Motor", manager: "Yönetici", html: "HTML", all: "Tümü" };
+    return map[key] || key || "—";
+  }
+
+  function auditEventService(action, detail) {
+    detail = detail || {};
+    if (detail.service) return detail.service;
+    if (detail.key && detail.key !== "all") return detail.key;
+    if (action === "export_action" && detail.service) return detail.service;
+    if (action === "lock") {
+      if (detail.web && !detail.engine) return "web";
+      if (detail.engine && !detail.web) return "engine";
+    }
+    return "";
+  }
+
+  function formatAuditDescription(action, detail) {
+    detail = detail || {};
+    switch (action) {
+      case "start":
+      case "stop":
+      case "restart":
+        return auditServiceName(detail.service) + " servisi " + (action === "start" ? "başlatıldı" : action === "stop" ? "durduruldu" : "yeniden başlatıldı");
+      case "reset":
+        return detail.key === "all" ? "Tüm servislerin sayaç ve metrikleri sıfırlandı" : auditServiceName(detail.key) + " servis metrikleri sıfırlandı";
+      case "lock": {
+        var parts = [];
+        if ("web" in detail) parts.push("Web: " + (detail.web ? "kilitli (otomatik başlatma kapalı)" : "serbest"));
+        if ("engine" in detail) parts.push("Motor: " + (detail.engine ? "kilitli (otomatik başlatma kapalı)" : "serbest"));
+        return parts.length ? parts.join(" · ") : "Kilit ayarı güncellendi";
+      }
+      case "alert_ack":
+        return "Uyarı " + (detail.alert_id || "—") + " okundu / onaylandı";
+      case "export_action": {
+        var label = AUDIT_EXPORT_TYPE_TR[detail.type] || detail.type || "Veri";
+        var fmt = (detail.format || "csv").toUpperCase();
+        var extra = detail.service ? " · " + auditServiceName(detail.service) : "";
+        if (detail.range) extra += " · " + detail.range;
+        return label + " " + fmt + " olarak indirildi" + extra;
+      }
+      case "issue_ack":
+        return "Olay " + (detail.issue_id || "—") + " incelendi ve onaylandı";
+      case "issue_resolve":
+        return "Olay " + (detail.issue_id || "—") + " çözüldü olarak işaretlendi";
+      case "issue_archive":
+        return "Olay " + (detail.issue_id || "—") + " arşive taşındı";
+      case "issue_reopen":
+        return "Olay " + (detail.issue_id || "—") + " arşivden geri alındı";
+      case "issue_assign":
+        return "Olay " + (detail.issue_id || "—") + " → " + (detail.assignee || "atanmadı");
+      case "issue_labels":
+        return "Olay " + (detail.issue_id || "—") + " · etiketler: " + ((detail.labels || []).join(", ") || "—");
+      case "issue_comment":
+        return "Olay " + (detail.issue_id || "—") + " · yeni yorum eklendi";
+      case "issue_sla":
+        return "Olay " + (detail.issue_id || "—") + " · SLA notu güncellendi";
+      default:
+        return JSON.stringify(detail);
+    }
+  }
+
+  function formatAuditTs(ts) {
+    if (!ts) return "—";
     try {
-      const list = await fetch(API + "/api/audit?limit=200").then(r => r.ok ? r.json() : []).catch(() => []);
-      const container = qs("#audit-list");
-      if (!container) return;
-      container.innerHTML = "";
-      (list || []).reverse().forEach(e => {
-        const row = document.createElement("div");
-        row.className = "audit-row";
-        row.innerHTML = "<span class=\"audit-ts\">" + (e.ts || "") + "</span><span class=\"audit-action\">" + (e.action || "") + "</span><span class=\"audit-detail\">" + JSON.stringify(e.detail || {}) + "</span>";
-        container.appendChild(row);
+      var d = new Date(ts);
+      return isNaN(d.getTime()) ? ts : d.toLocaleString("tr-TR");
+    } catch (_) { return ts; }
+  }
+
+  function auditCategoryPill(cat) {
+    return "<span class=\"audit-cat-pill audit-cat-" + escHtml(cat) + "\">" + escHtml(AUDIT_CAT_TR[cat] || cat) + "</span>";
+  }
+
+  function buildAuditArchiveQuery() {
+    var parts = ["limit=300"];
+    var svc = qs("#audit-filter-service") ? qs("#audit-filter-service").value : "";
+    if (svc) parts.push("service=" + encodeURIComponent(svc));
+    var q = qs("#audit-search") ? qs("#audit-search").value.trim() : "";
+    if (q) parts.push("q=" + encodeURIComponent(q));
+    return "?" + parts.join("&");
+  }
+
+  function filterAuditEvents(list) {
+    var svc = qs("#audit-filter-service") ? qs("#audit-filter-service").value : "";
+    var q = qs("#audit-search") ? qs("#audit-search").value.trim().toLowerCase() : "";
+    return (list || []).filter(function (e) {
+      var cat = auditCategory(e.action);
+      if (auditView && auditView !== "BACKUP" && cat !== auditView) return false;
+      var evSvc = auditEventService(e.action, e.detail);
+      if (svc && evSvc !== svc) return false;
+      if (q) {
+        var hay = [
+          e.action || "",
+          AUDIT_ACTION_TR[e.action] || "",
+          formatAuditDescription(e.action, e.detail),
+          auditServiceName(evSvc)
+        ].join(" ").toLowerCase();
+        if (hay.indexOf(q) < 0) return false;
+      }
+      return true;
+    });
+  }
+
+  function updateAuditStats(list) {
+    var counts = { servis: 0, olay: 0, uyari: 0, export: 0 };
+    (list || []).forEach(function (e) {
+      var cat = auditCategory(e.action);
+      if (counts[cat] != null) counts[cat] += 1;
+    });
+    setTextIfChanged(qs("#audit-stat-service"), counts.servis);
+    setTextIfChanged(qs("#audit-stat-issue"), counts.olay);
+    setTextIfChanged(qs("#audit-stat-alert"), counts.uyari);
+    setTextIfChanged(qs("#audit-stat-export"), counts.export);
+  }
+
+  function auditFingerprint(list) {
+    return (list || []).map(function (e) {
+      return (e.ts || "") + "\t" + (e.action || "") + "\t" + JSON.stringify(e.detail || {});
+    }).join("\n");
+  }
+
+  function renderAuditTable(list, isBackup) {
+    isBackup = !!isBackup;
+    var tbody = qs("#audit-list");
+    var emptyEl = qs("#audit-empty");
+    var tableWrap = qs(".audit-table-wrap");
+    if (!tbody) return;
+    tbody.innerHTML = "";
+    list.forEach(function (e, idx) {
+      var cat = isBackup ? "yedek" : auditCategory(e.action);
+      var actionLabel = AUDIT_ACTION_TR[e.action] || e.action || "—";
+      var desc = formatAuditDescription(e.action, e.detail);
+      var evSvc = auditEventService(e.action, e.detail);
+      var svcLabel = evSvc ? auditServiceName(evSvc) : "—";
+      var trMain = document.createElement("tr");
+      trMain.className = "audit-row-main" + (isBackup ? " audit-row-backup" : "");
+      trMain.setAttribute("data-audit-idx", String(idx));
+      trMain.innerHTML =
+        "<td class=\"audit-ts\">" + escHtml(formatAuditTs(e.ts || e._backup_at)) + "</td>" +
+        "<td>" + auditCategoryPill(cat) + "</td>" +
+        "<td class=\"audit-action-label\">" + escHtml(actionLabel) + "</td>" +
+        "<td class=\"audit-desc\">" + escHtml(desc) + "</td>" +
+        "<td class=\"audit-service\">" + escHtml(svcLabel) + "</td>";
+      trMain.addEventListener("click", function () {
+        var detailRow = trMain.nextElementSibling;
+        var open = trMain.classList.toggle("expanded");
+        if (detailRow && detailRow.classList.contains("audit-row-detail")) {
+          detailRow.classList.toggle("hidden", !open);
+        }
       });
-      if (!list || list.length === 0) container.innerHTML = "<p class=\"audit-empty\">Denetim kaydı yok.</p>";
+      tbody.appendChild(trMain);
+      var trDetail = document.createElement("tr");
+      trDetail.className = "audit-row-detail hidden";
+      trDetail.innerHTML = "<td colspan=\"5\"><pre>" + escHtml(JSON.stringify({ action: e.action, detail: e.detail || {} }, null, 2)) + "</pre></td>";
+      tbody.appendChild(trDetail);
+    });
+    if (emptyEl) {
+      emptyEl.textContent = isBackup ? "Yerel yedekte denetim kaydı yok." : "Bu filtrede denetim kaydı yok.";
+      emptyEl.classList.toggle("hidden", list.length > 0);
+    }
+    if (tableWrap) tableWrap.classList.toggle("hidden", list.length === 0);
+  }
+
+  async function refreshAuditFootnote() {
+    try {
+      var stats = await fetch(API + "/api/audit/summary").then(function (r) { return r.ok ? r.json() : {}; }).catch(function () { return {}; });
+      var el = qs("#audit-footnote");
+      if (!el) return;
+      var backup = stats.backup != null ? stats.backup : 0;
+      var max = stats.max_active != null ? stats.max_active : 300;
+      el.innerHTML = "En fazla " + max + " kayıt bellekte · yerel yedek: <strong>" + backup + "</strong> · taşanlar <code>.run/audit_archive.jsonl</code> dosyasında";
+    } catch (_) {}
+  }
+
+  async function refreshAudit(force) {
+    try {
+      var isBackup = auditView === "BACKUP";
+      var list = [];
+      if (isBackup) {
+        var archiveData = await fetch(API + "/api/audit/archive" + buildAuditArchiveQuery())
+          .then(function (r) { return r.ok ? r.json() : { items: [] }; })
+          .catch(function () { return { items: [] }; });
+        list = (archiveData.items || []).slice().reverse();
+      } else {
+        list = await fetch(API + "/api/audit?limit=300").then(function (r) { return r.ok ? r.json() : []; }).catch(function () { return []; });
+        list = (list || []).slice().reverse();
+      }
+      var fp = auditFingerprint(list) + "|view:" + auditView;
+      if (!force && fp === lastAuditFingerprint) return;
+      lastAuditFingerprint = fp;
+      auditEventsCache = list;
+      if (!isBackup) updateAuditStats(list);
+      renderAuditTable(filterAuditEvents(list), isBackup);
+      refreshAuditFootnote();
     } catch (e) { console.error(e); }
+  }
+
+  function startAuditPoll() {
+    stopAuditPoll();
+    auditPollTimer = setInterval(function () {
+      if (document.hidden) return;
+      var panel = qs("#panel-audit");
+      if (!panel || !panel.classList.contains("active")) return;
+      refreshAudit(false);
+    }, 5000);
+  }
+
+  function stopAuditPoll() {
+    if (auditPollTimer) { clearInterval(auditPollTimer); auditPollTimer = null; }
+  }
+
+  function applyAuditFilters() {
+    renderAuditTable(filterAuditEvents(auditEventsCache), auditView === "BACKUP");
   }
 
   const VALID_TABS = ["overview", "web", "engine", "manager", "html", "security", "incidents", "audit", "settings"];
@@ -799,7 +1456,7 @@
       x.classList.toggle("active", x.id === "panel-" + tab);
     });
     if (securityPollIntervalId) { clearInterval(securityPollIntervalId); securityPollIntervalId = null; }
-    if (tab === "overview") refreshMetrics();
+    if (tab === "overview") { refreshMetrics(); refreshDiagnosis(); }
     if (tab === "web") { refreshMetrics(); fetchLogs("web"); }
     if (tab === "engine") { refreshMetrics(); fetchLogs("engine"); }
     if (tab === "manager") { refreshMetrics(); fetchLogs("manager"); }
@@ -808,8 +1465,8 @@
       refreshSecurity();
       securityPollIntervalId = setInterval(refreshSecurity, 1500);
     }
-    if (tab === "incidents") refreshIssues();
-    if (tab === "audit") refreshAudit();
+    if (tab === "incidents") { refreshIssues(true); startIncidentsPoll(); } else { stopIncidentsPoll(); }
+    if (tab === "audit") { refreshAudit(true); startAuditPoll(); } else { stopAuditPoll(); }
     if (tab === "web" || tab === "engine" || tab === "manager") refreshDiagnosis();
     if (tab === "settings") loadSettings();
   }
@@ -822,6 +1479,13 @@
     });
   });
   document.body.addEventListener("click", function (e) {
+    var tabLinkCard = e.target && e.target.closest && e.target.closest("[data-tab-link]");
+    if (tabLinkCard) {
+      e.preventDefault();
+      var tabFromCard = tabLinkCard.getAttribute("data-tab-link");
+      if (tabFromCard) { switchToTab(tabFromCard); try { localStorage.setItem("manager_active_tab", tabFromCard); } catch (_) {} }
+      return;
+    }
     var link = e.target && e.target.closest && e.target.closest(".link-tab");
     if (link) {
       e.preventDefault();
@@ -868,7 +1532,85 @@
     });
   });
 
-  if (qs("#incidents-filter-open")) qs("#incidents-filter-open").addEventListener("change", refreshIssues);
+  qsa(".audit-view-tab").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      auditView = btn.getAttribute("data-audit-view") || "";
+      qsa(".audit-view-tab").forEach(function (b) { b.classList.toggle("active", b === btn); });
+      lastAuditFingerprint = "";
+      refreshAudit(true);
+    });
+  });
+  if (qs("#audit-filter-service")) qs("#audit-filter-service").addEventListener("change", function () {
+    if (auditView === "BACKUP") { lastAuditFingerprint = ""; refreshAudit(true); }
+    else applyAuditFilters();
+  });
+  if (qs("#audit-search")) qs("#audit-search").addEventListener("input", function () {
+    clearTimeout(auditSearchTimer);
+    auditSearchTimer = setTimeout(function () {
+      if (auditView === "BACKUP") { lastAuditFingerprint = ""; refreshAudit(true); }
+      else applyAuditFilters();
+    }, 300);
+  });
+  if (qs("#audit-refresh-btn")) qs("#audit-refresh-btn").addEventListener("click", function () { lastAuditFingerprint = ""; refreshAudit(true); });
+  qsa(".audit-stat-card[data-audit-cat]").forEach(function (card) {
+    card.addEventListener("click", function () {
+      var cat = card.getAttribute("data-audit-cat") || "";
+      auditView = cat;
+      qsa(".audit-view-tab").forEach(function (b) {
+        b.classList.toggle("active", (b.getAttribute("data-audit-view") || "") === cat);
+      });
+      applyAuditFilters();
+    });
+  });
+
+  qsa(".inc-view-tab").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      incidentsView = btn.getAttribute("data-inc-view") || "";
+      qsa(".inc-view-tab").forEach(function (b) { b.classList.toggle("active", b === btn); });
+      lastIssuesFingerprint = "";
+      refreshIssues(true);
+    });
+  });
+  if (qs("#incidents-filter-service")) qs("#incidents-filter-service").addEventListener("change", function () { lastIssuesFingerprint = ""; refreshIssues(true); });
+  if (qs("#incidents-search")) qs("#incidents-search").addEventListener("input", function () {
+    clearTimeout(incidentsSearchTimer);
+    incidentsSearchTimer = setTimeout(function () { lastIssuesFingerprint = ""; refreshIssues(true); }, 300);
+  });
+  if (qs("#incidents-refresh-btn")) qs("#incidents-refresh-btn").addEventListener("click", function () { refreshIssues(true); });
+
+  qsa(".inc-stat-card").forEach(function (card) {
+    card.addEventListener("click", function () {
+      var view = card.getAttribute("data-inc-view") || "";
+      if (!view) {
+        if (card.classList.contains("inc-stat-open")) view = "OPEN";
+        else if (card.classList.contains("inc-stat-ack")) view = "ACK";
+        else if (card.classList.contains("inc-stat-resolved")) view = "RESOLVED";
+      }
+      if (!view) return;
+      incidentsView = view;
+      qsa(".inc-view-tab").forEach(function (b) {
+        b.classList.toggle("active", (b.getAttribute("data-inc-view") || "") === view);
+      });
+      lastIssuesFingerprint = "";
+      refreshIssues(true);
+    });
+  });
+
+  let settingsSaveTimer = null;
+  function flashSettingsSaved() {
+    var badge = qs("#settings-save-status");
+    if (!badge) return;
+    badge.textContent = "Kaydedildi";
+    badge.classList.remove("pending");
+    if (settingsSaveTimer) clearTimeout(settingsSaveTimer);
+    settingsSaveTimer = setTimeout(function () {
+      badge.textContent = "Kaydedildi";
+    }, 1200);
+  }
+  function markSettingsPending() {
+    var badge = qs("#settings-save-status");
+    if (badge) { badge.textContent = "Kaydediliyor…"; badge.classList.add("pending"); }
+  }
 
   function loadSettings() {
     try {
@@ -877,7 +1619,6 @@
         const s = JSON.parse(raw);
         if (s.pollIntervalMs) { pollIntervalMs = s.pollIntervalMs; const sel = qs("#setting-poll-interval"); if (sel) sel.value = String(pollIntervalMs); }
         if (s.logMaxLines) { logMaxLines = s.logMaxLines; const inp = qs("#setting-log-max-lines"); if (inp) inp.value = s.logMaxLines; }
-        if (s.toast !== undefined) { const cb = qs("#setting-toast"); if (cb) cb.checked = !!s.toast; }
         if (s.sound !== undefined) { const cb = qs("#setting-sound"); if (cb) cb.checked = !!s.sound; }
         if (s.compact !== undefined) { const cb = qs("#setting-compact"); if (cb) cb.checked = !!s.compact; document.body.classList.toggle("compact-mode", !!s.compact); }
         if (s.useWsEvents !== undefined) { useWsEvents = s.useWsEvents; const cb = qs("#setting-ws-events"); if (cb) cb.checked = s.useWsEvents; }
@@ -892,15 +1633,16 @@
         if (s.autoscroll !== undefined) { const cb = qs("#setting-autoscroll"); if (cb) cb.checked = !!s.autoscroll; applyAutoscrollFromSetting(); }
       }
       if (!qs("#setting-autoscroll") || !raw) applyAutoscrollFromSetting();
+      flashSettingsSaved();
     } catch (_) {}
   }
   function saveSettings() {
+    markSettingsPending();
     try {
       const themeEl = document.querySelector("input[name=theme]:checked");
       const s = {
         pollIntervalMs,
         logMaxLines,
-        toast: qs("#setting-toast") ? qs("#setting-toast").checked : true,
         sound: qs("#setting-sound") ? qs("#setting-sound").checked : false,
         compact: qs("#setting-compact") ? qs("#setting-compact").checked : false,
         useWsEvents: qs("#setting-ws-events") ? qs("#setting-ws-events").checked : true,
@@ -911,12 +1653,12 @@
         autoscroll: qs("#setting-autoscroll") ? qs("#setting-autoscroll").checked : true,
       };
       localStorage.setItem("manager_settings", JSON.stringify(s));
+      flashSettingsSaved();
     } catch (_) {}
   }
   function setDefaults() {
     const sel = qs("#setting-poll-interval"); if (sel) sel.value = "2000";
     const logInp = qs("#setting-log-max-lines"); if (logInp) logInp.value = "1000";
-    const toastCb = qs("#setting-toast"); if (toastCb) toastCb.checked = true;
     const soundCb = qs("#setting-sound"); if (soundCb) soundCb.checked = false;
     const compactCb = qs("#setting-compact"); if (compactCb) compactCb.checked = false;
     const wsCb = qs("#setting-ws-events"); if (wsCb) wsCb.checked = true;
@@ -949,7 +1691,13 @@
       const format = "csv";
       let url = "";
       if (kind === "metrics") url = base + "metrics?format=" + format;
-      else if (kind === "issues") url = base + "issues?format=" + format;
+      else if (kind === "issues") {
+        var parts = ["format=" + format];
+        if (incidentsView) parts.push("status=" + encodeURIComponent(incidentsView));
+        var svcEl = qs("#incidents-filter-service");
+        if (svcEl && svcEl.value) parts.push("service=" + encodeURIComponent(svcEl.value));
+        url = base + "issues?" + parts.join("&");
+      }
       else if (kind === "audit") url = base + "audit?format=" + format;
       else if (kind === "security") url = base + "security?format=" + format;
       else if (kind === "logs-web") url = base + "logs?service=web&tail=1000&format=" + format;
@@ -964,7 +1712,6 @@
     });
   });
 
-  if (qs("#setting-toast")) qs("#setting-toast").addEventListener("change", saveSettings);
   if (qs("#setting-sound")) qs("#setting-sound").addEventListener("change", saveSettings);
   if (qs("#setting-compact")) qs("#setting-compact").addEventListener("change", function () { document.body.classList.toggle("compact-mode", this.checked); saveSettings(); });
   var autoScrollSetting = qs("#setting-autoscroll");
@@ -1094,6 +1841,8 @@
   refreshMetrics();
   refreshDiagnosis();
   refreshIssues();
+  var initIncidentsPanel = qs("#panel-incidents");
+  if (initIncidentsPanel && initIncidentsPanel.classList.contains("active")) startIncidentsPoll();
   keys.forEach(k => fetchLogs(k));
   useWsEvents = wsEventsCb && wsEventsCb.checked;
   if (useWsEvents) connectWsEvents(); else keys.forEach(k => connectWs(k));
@@ -1106,7 +1855,7 @@
         var h = lastMetrics.status.html;
         setStatus("html", h);
         var chip = qs("#overview-html-status");
-        if (chip) { chip.textContent = h.running ? "ÇALIŞIYOR" : "DURDURULDU"; chip.className = "status-chip " + (h.running ? "running" : "stopped"); }
+        setOverviewStatusChip(chip, !!h.running);
         var pidEl = qs("#overview-html-pid"); if (pidEl) pidEl.textContent = h.pid != null ? String(h.pid) : "—";
         var htmlUptime = (typeof h.started_at === "number") ? Math.max(0, Math.floor(Date.now() / 1000 - h.started_at)) : null;
         var uptimeEl = qs("#overview-html-uptime"); if (uptimeEl) uptimeEl.textContent = formatUptime(htmlUptime) || "—";

@@ -4,6 +4,7 @@ Manager Server v3 — FastAPI app: 127.0.0.1:7999, local-only, API + WS + /ui + 
 import logging
 import os
 import socket
+import time
 import traceback
 from pathlib import Path
 
@@ -125,14 +126,26 @@ async def catch_http_exceptions(request: Request, call_next):
     return response
 
 
+# Bilinen / isteğe bağlı endpoint 404'leri log spam üretmesin (eski UI sürümü veya probe).
+_SUPPRESS_404_PATHS = frozenset({"/", "/favicon.ico", "/api/issues/summary"})
+_last_404_log_ts: dict[str, float] = {}
+_404_LOG_THROTTLE_SEC = 60.0
+
+
 # Sadece hata (4xx/5xx) istekleri logla; 200 OK loglanmaz. Düzeltilemeyen / bilinen 404'ler loglanmaz.
 @app.middleware("http")
 async def log_errors_only(request: Request, call_next):
     response = await call_next(request)
     if response.status_code >= 400:
         path = (request.url.path or "").rstrip("/") or "/"
-        if response.status_code == 404 and path in ("/", "/favicon.ico"):
-            return response
+        if response.status_code == 404:
+            if path in _SUPPRESS_404_PATHS:
+                return response
+            now = time.time()
+            last = _last_404_log_ts.get(path, 0.0)
+            if now - last < _404_LOG_THROTTLE_SEC:
+                return response
+            _last_404_log_ts[path] = now
         logging.getLogger().warning(
             "%s %s %s %s",
             request.client.host if request.client else "-",
@@ -257,9 +270,14 @@ async def api_engine_metrics():
 
 
 @app.get("/api/issues")
-async def api_issues(service: str = None, status: str = None, limit: int = 50):
+async def api_issues(service: str = None, status: str = None, limit: int = 50, q: str = None):
     limit = max(1, min(200, limit))
-    return state.get_issues(service=service, status_filter=status, limit=limit)
+    return state.get_issues(service=service, status_filter=status, limit=limit, q=q)
+
+
+@app.get("/api/issues/summary")
+async def api_issues_summary():
+    return state.get_issue_stats()
 
 
 @app.get("/api/diagnosis")
@@ -272,6 +290,13 @@ async def api_diagnosis_one(service: str):
     if service not in ("web", "engine", "manager"):
         return JSONResponse(status_code=400, content={"detail": "Invalid service"})
     return state.get_diagnosis(service) or {}
+
+
+@app.get("/api/issues/archive")
+async def api_issues_archive(limit: int = 100, offset: int = 0, q: str = None, service: str = None):
+    limit = max(1, min(500, limit))
+    offset = max(0, offset)
+    return state.get_issues_archive(limit=limit, offset=offset, q=q, service=service)
 
 
 @app.get("/api/issues/{issue_id}")
@@ -293,6 +318,22 @@ async def api_issue_ack(issue_id: str):
 @app.post("/api/issues/{issue_id}/resolve")
 async def api_issue_resolve(issue_id: str):
     out = state.issue_resolve(issue_id)
+    if out is None:
+        return JSONResponse(status_code=404, content={"detail": "Issue not found"})
+    return out
+
+
+@app.post("/api/issues/{issue_id}/archive")
+async def api_issue_archive(issue_id: str):
+    out = state.issue_archive(issue_id)
+    if out is None:
+        return JSONResponse(status_code=404, content={"detail": "Issue not found"})
+    return out
+
+
+@app.post("/api/issues/{issue_id}/reopen")
+async def api_issue_reopen(issue_id: str):
+    out = state.issue_reopen(issue_id)
     if out is None:
         return JSONResponse(status_code=404, content={"detail": "Issue not found"})
     return out
@@ -364,8 +405,20 @@ async def api_alerts_ack(request: Request):
 
 @app.get("/api/audit")
 async def api_audit(limit: int = 100):
-    limit = max(1, min(200, limit))
+    limit = max(1, min(300, limit))
     return state.get_audit_events(limit=limit)
+
+
+@app.get("/api/audit/summary")
+async def api_audit_summary():
+    return state.get_audit_stats()
+
+
+@app.get("/api/audit/archive")
+async def api_audit_archive(limit: int = 100, offset: int = 0, q: str = None, service: str = None):
+    limit = max(1, min(500, limit))
+    offset = max(0, offset)
+    return state.get_audit_archive(limit=limit, offset=offset, q=q, service=service)
 
 
 # --- Export (streaming CSV/JSON) ---
@@ -395,8 +448,8 @@ async def api_export_logs(service: str = "web", tail: int = 1000, format: str = 
 
 
 @app.get("/api/export/issues")
-async def api_export_issues(status: str = None, format: str = "csv"):
-    issues = state.get_issues(status_filter=status, limit=200)
+async def api_export_issues(service: str = None, status: str = None, format: str = "csv"):
+    issues = state.get_issues(service=service, status_filter=status, limit=200)
     state.audit_event("export_action", {"type": "issues", "format": format})
     if format == "json":
         return JSONResponse(content=issues)
@@ -419,7 +472,7 @@ async def api_export_issues(status: str = None, format: str = "csv"):
 @app.get("/api/export/metrics")
 async def api_export_metrics(range: str = "5m", format: str = "csv"):
     # range 5m ~ 150 samples at 2s, 1h ~ 1800 but we cap at 900
-    hist = state.get_metrics_history(limit=900)
+    hist = state.get_metrics_history(limit=180)
     state.audit_event("export_action", {"type": "metrics", "range": range, "format": format})
     if format == "json":
         return JSONResponse(content=hist)
@@ -440,21 +493,32 @@ async def api_export_metrics(range: str = "5m", format: str = "csv"):
 
 @app.get("/api/export/audit")
 async def api_export_audit(format: str = "csv"):
-    events = state.get_audit_events(limit=200)
+    events = state.get_audit_events(limit=300)
     state.audit_event("export_action", {"type": "audit", "format": format})
     if format == "json":
         return JSONResponse(content=events)
-    columns = ["ts", "action", "detail"]
+    columns = ["zaman", "kategori", "islem", "aciklama", "servis", "action", "detail_json"]
     def gen():
         yield "\ufeff"
         buf = io.StringIO()
         w = csv.writer(buf)
         w.writerow(columns)
         yield buf.getvalue()
-        for e in events:
+        for e in reversed(events):
             buf = io.StringIO()
             w = csv.writer(buf)
-            w.writerow([e.get("ts"), e.get("action"), _json.dumps(e.get("detail", {}))])
+            detail = e.get("detail") or {}
+            action = e.get("action") or ""
+            cat = state.audit_category(action)
+            w.writerow([
+                e.get("ts"),
+                state.audit_category_label(cat),
+                state.audit_action_label(action),
+                state.audit_describe(action, detail),
+                state.audit_service_label(state.audit_event_service(action, detail)),
+                action,
+                _json.dumps(detail, ensure_ascii=False),
+            ])
             yield buf.getvalue()
     return StreamingResponse(gen(), media_type="text/csv", headers={"Content-Disposition": "attachment; filename=audit.csv"})
 
@@ -573,20 +637,32 @@ async def ws_events(websocket: WebSocket):
     await websocket.accept()
     import asyncio
     last_metrics_ts = 0.0
+    last_issue_fp = ""
     try:
         while True:
             lines_batched = []
             errors_by_service = {}
             warns_by_service = {}
             for key in ("manager", "web", "engine", "html"):
-                batch = state.pop_ws_batch(key, max_lines=200)
+                batch = state.pop_ws_batch(key, max_lines=state.WS_BATCH_MAX)
                 for item in batch:
                     lines_batched.append({"service": key, "ts": item.get("ts"), "level": item.get("level"), "text": item.get("text", "")})
                 snap = state.get_logs(key, tail=0)
                 errors_by_service[key] = (snap.get("errors") or [])[-50:]
                 warns_by_service[key] = (snap.get("warns") or [])[-50:]
             open_issues = state.get_issues(status_filter="OPEN", limit=20)
-            issue_events = [{"id": i["id"], "count": i.get("count", 0), "service": i.get("tags", {}).get("service")} for i in open_issues]
+            issue_fp = "|".join(
+                f"{i.get('id', '')}:{i.get('count', 0)}"
+                for i in open_issues
+            )
+            if issue_fp != last_issue_fp:
+                last_issue_fp = issue_fp
+                issue_events = [
+                    {"id": i["id"], "count": i.get("count", 0), "service": i.get("tags", {}).get("service")}
+                    for i in open_issues
+                ]
+            else:
+                issue_events = []
             import time as _time
             now = _time.time()
             metrics_update = None
@@ -623,7 +699,7 @@ async def ws_logs(websocket: WebSocket, key: str):
     import asyncio
     try:
         while True:
-            batch = state.pop_ws_batch(key, max_lines=200)
+            batch = state.pop_ws_batch(key, max_lines=state.WS_BATCH_MAX)
             snap = state.get_logs(key, tail=0)
             open_issues = state.get_issues(service=key, status_filter="OPEN")
             payload = {

@@ -1,11 +1,5 @@
-"""
-reason engine modulu (manager_server/).
-"""
 # -*- coding: utf-8 -*-
-"""
-Reason Engine: servis durumuna göre kök neden teşhisi (Türkçe).
-Pattern-based kurallar; RAM bounded (last_lines max 8, actions/checks max 6).
-"""
+"""Reason Engine: servis durumuna göre kök neden teşhisi (Türkçe)."""
 from __future__ import annotations
 
 import re
