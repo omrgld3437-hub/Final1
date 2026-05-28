@@ -21,6 +21,7 @@ _CRIT_EMIT_INTERVAL = 120.0
 
 _CRITICAL_ERROR_CODES = frozenset({
     "API_UNAUTHORIZED",
+    "BINANCE_UNREACHABLE",
     "SAFE_STOP",
     "BOT_LOOP_TOPLEVEL_EXCEPTION",
     "ACCOUNT_KEYS_MISSING",
@@ -103,6 +104,16 @@ _HEALTH_MESSAGES: Dict[str, Dict[str, Any]] = {
         "actions": [
             "Bütçe, minimum tutar (10 USDT) ve bakiye yeterliliğini kontrol edin.",
             "Grid yüzdelerini ve bütçeyi artırmayı düşünün.",
+        ],
+    },
+    "BINANCE_UNREACHABLE": {
+        "severity": "critical",
+        "title": "Binance'e ulaşılamıyor",
+        "cause": "Hesap bakiyesi veya piyasa verisi Binance API üzerinden okunamadı.",
+        "actions": [
+            "İnternet bağlantısını ve sunucu IP beyaz listesini kontrol edin.",
+            "Binance API anahtarı ve Spot izinlerini doğrulayın.",
+            "Birkaç dakika bekleyip bot sayfasını yenileyin.",
         ],
     },
 }
@@ -190,11 +201,29 @@ def evaluate_bot_health(bot, state: Optional[Dict[str, Any]], db: Session) -> Li
     if state is None:
         state = load_state(db, bot.id) or {}
     status = (bot.status or "stopped").lower()
+    alerts: List[Dict[str, Any]] = []
+
+    # Binance bağlantı hatası — bot durdurulmuş/pause olsa da göster (manager + bot log)
+    try:
+        from app.services.binance_connectivity import active_failure
+        bfail = active_failure(bot.account_id)
+        if bfail:
+            tmpl = _HEALTH_MESSAGES["BINANCE_UNREACHABLE"]
+            alerts.append(_alert_from_tmpl(
+                "BINANCE_UNREACHABLE", "critical", tmpl,
+                {
+                    "error_code": bfail.get("error_code"),
+                    "source": bfail.get("source"),
+                },
+                message=bfail.get("message") or tmpl.get("title"),
+            ))
+    except Exception as e:
+        logger.debug("health_watch binance_connectivity bot_id=%s: %s", bot.id, e)
+
     if status != "running":
-        return []
+        return alerts
 
     now = int(datetime.now(timezone.utc).timestamp())
-    alerts: List[Dict[str, Any]] = []
     interval = _expected_tick_interval_sec(bot)
     last_tick = _parse_last_tick_ts(state)
     tick_age = (now - last_tick) if last_tick is not None else None
@@ -222,21 +251,25 @@ def evaluate_bot_health(bot, state: Optional[Dict[str, Any]], db: Session) -> Li
             ))
 
     err_code = (state.get("last_error_code") or "").strip()
+    ack_at = int(state.get("health_ack_at") or 0)
+    err_since = int(state.get("health_error_since") or 0)
     if err_code:
-        if err_code in _CRITICAL_ERROR_CODES:
-            tmpl = _HEALTH_MESSAGES["STATE_ERROR"]
-            alerts.append(_alert_from_tmpl(
-                "STATE_ERROR", "critical", tmpl,
-                {"error_code": err_code},
-                message=f"Kritik hata kodu: {err_code}",
-            ))
-        else:
-            tmpl = _HEALTH_MESSAGES["STATE_ERROR_WARN"]
-            alerts.append(_alert_from_tmpl(
-                "STATE_ERROR_WARN", "warn", tmpl,
-                {"error_code": err_code},
-                message=f"Uyarı kodu: {err_code}",
-            ))
+        stale_after_ack = ack_at > 0 and (not err_since or err_since <= ack_at)
+        if not stale_after_ack:
+            if err_code in _CRITICAL_ERROR_CODES:
+                tmpl = _HEALTH_MESSAGES["STATE_ERROR"]
+                alerts.append(_alert_from_tmpl(
+                    "STATE_ERROR", "critical", tmpl,
+                    {"error_code": err_code},
+                    message=f"Kritik hata kodu: {err_code}",
+                ))
+            else:
+                tmpl = _HEALTH_MESSAGES["STATE_ERROR_WARN"]
+                alerts.append(_alert_from_tmpl(
+                    "STATE_ERROR_WARN", "warn", tmpl,
+                    {"error_code": err_code},
+                    message=f"Uyarı kodu: {err_code}",
+                ))
 
     ia_done = state.get("initial_allocation_done") is True
     base_bal = float(state.get("base_balance") or 0)
@@ -256,12 +289,13 @@ def evaluate_bot_health(bot, state: Optional[Dict[str, Any]], db: Session) -> Li
         recent = list_events(db, bot.id, limit=40)
         fail_count = 0
         cutoff = now - 900
+        ack_at = int(state.get("health_ack_at") or 0)
         for ev in recent:
             if (ev.get("type") or "") != "SKIP_REASON":
                 continue
             meta = ev.get("meta") or {}
             skip = (meta.get("skip_reason") or meta.get("error_code") or "").upper()
-            if skip not in ("ORDER_FAILED", "MIN_NOTIONAL", "MIN_NOTIONAL_AFTER_CAP", "INSUFFICIENT_QUOTE", "ORDER_TIMEOUT"):
+            if skip not in ("ORDER_FAILED", "LOT_SIZE", "MIN_NOTIONAL", "MIN_NOTIONAL_AFTER_CAP", "INSUFFICIENT_QUOTE", "ORDER_TIMEOUT"):
                 continue
             ts = ev.get("ts")
             if ts:
@@ -269,7 +303,10 @@ def evaluate_bot_health(bot, state: Optional[Dict[str, Any]], db: Session) -> Li
                     t = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
                     if t.tzinfo is None:
                         t = t.replace(tzinfo=timezone.utc)
-                    if int(t.timestamp()) < cutoff:
+                    ev_ts = int(t.timestamp())
+                    if ev_ts < cutoff:
+                        continue
+                    if ack_at and ev_ts <= ack_at:
                         continue
                 except Exception:
                     pass

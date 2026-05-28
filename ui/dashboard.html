@@ -62,7 +62,7 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
     <link rel="stylesheet" href="/ui/assets/theme.css?v=clean1">
     <link rel="stylesheet" href="/ui/assets/ui.css?v=clean1">
     <link rel="stylesheet" href="/ui/assets/design.css?v=clean1">
-    <link rel="stylesheet" href="/ui/assets/dashboard.css?v=botlogo1">
+    <link rel="stylesheet" href="/ui/assets/dashboard.css?v=wallet-live-kpi1">
     <link rel="stylesheet" href="/ui/assets/binance-colors.css?v=bin1">
     <link rel="stylesheet" href="/ui/assets/blink.css?v=1">
     <link rel="stylesheet" href="/ui/assets/dashboard-login-theme.css?v=1">
@@ -291,8 +291,13 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
 
             <!-- Cüzdan varlıkları tablosu (1 USD üstü, Al/Sat ortak modal) -->
             <div class="panel binance-varliklar-panel">
-                <h3 class="binance-varliklar-panel__title">Cüzdan Varlıkları
-                    <span id="flashHomeUpdatingBadge" style="display:none; margin-left:0.5rem; font-size:0.75rem; color:var(--ds-text-tertiary); font-weight:normal;">Güncelleniyor…</span>
+                <h3 class="binance-varliklar-panel__title">
+                    <span class="binance-varliklar-panel__title-text">Cüzdan Varlıkları</span>
+                    <span class="binance-varliklar-panel__title-meta">
+                        <span id="bnWalletLiveBadge" class="kpi-value-sub kpi-spot-status">—</span>
+                        <span id="bnAssetsStaleBadge" class="binance-varliklar-panel__badge binance-varliklar-panel__badge--stale" hidden>Güncel değil</span>
+                        <span id="flashHomeUpdatingBadge" class="binance-varliklar-panel__badge binance-varliklar-panel__badge--updating" hidden aria-hidden="true">Güncelleniyor…</span>
+                    </span>
                 </h3>
                 <div id="flashHomeWalletContent"><div class="varliklar-table-wrap">
                 <table class="varliklar-table">
@@ -1862,10 +1867,10 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
     <script src="/ui/assets/utils/coinLogo.js?v=1"></script>
     <!-- Flash Home (Patch H). Deploy ui/assets/ so storageCache, renderHome, homeFlash exist (else 404). -->
     <script src="/ui/assets/storageCache.js?v=flash1"></script>
-    <script src="/ui/assets/renderHome.js?v=botlocked1"></script>
-    <script src="/ui/assets/homeFlash.js?v=flash1"></script>
+    <script src="/ui/assets/renderHome.js?v=wallet-live-kpi1"></script>
+    <script src="/ui/assets/homeFlash.js?v=wallet-live-kpi1"></script>
     <!-- Main dashboard (refactored) -->
-    <script src="/ui/assets/dashboard.js?v=bots-cache-fix1"></script>
+    <script src="/ui/assets/dashboard.js?v=wallet-live-kpi1"></script>
     <script src="/ui/assets/ticker.js?v=mobile1" defer></script>
 </body>
 </html>

@@ -14,6 +14,12 @@
   let selectedIssueId = null;
   let useWsEvents = true;
   let rawLogLines = { web: [], engine: [], manager: [], html: [] };
+  let errWrnSnapshot = {
+    web: { errors: [], warns: [] },
+    engine: { errors: [], warns: [] },
+    manager: { errors: [], warns: [] },
+    html: { errors: [], warns: [] }
+  };
   let filterLevel = { web: "WARN+", engine: "WARN+", manager: "WARN+", html: "WARN+" };
   let searchQuery = { web: "", engine: "", manager: "", html: "" };
   let autoscroll = { web: true, engine: true, manager: true, html: true };
@@ -1024,11 +1030,42 @@
       el.scrollTop = prevTop;
     }
   }
+  function normalizeLogLine(l) {
+    if (typeof l === "string") return l.trim();
+    return (((l && l.ts) || "") + " " + toLogText(l)).trim();
+  }
+  function errWrnLineSet(key, kind) {
+    var snap = errWrnSnapshot[key] || { errors: [], warns: [] };
+    var src = kind === "ERROR" ? snap.errors : kind === "WARN" ? snap.warns : snap.errors.concat(snap.warns);
+    var set = new Set();
+    src.forEach(function (l) {
+      var s = normalizeLogLine(l);
+      if (s) set.add(s);
+    });
+    return set;
+  }
+  function mergedLogLinesFor(key) {
+    var lines = (rawLogLines[key] || []).slice();
+    var seen = new Set(lines);
+    errWrnLineSet(key).forEach(function (s) {
+      if (!seen.has(s)) {
+        seen.add(s);
+        lines.push(s);
+      }
+    });
+    return lines;
+  }
+  function errWrnFingerprint(errList, wrnList) {
+    return errList.map(normalizeLogLine).join("\0") + "\1" + wrnList.map(normalizeLogLine).join("\0");
+  }
   function setErrWrn(key, newErrors, newWarns) {
     var errEl = qs("#err-" + key);
     var wrnEl = qs("#wrn-" + key);
     var errList = Array.isArray(newErrors) ? newErrors : [];
     var wrnList = Array.isArray(newWarns) ? newWarns : [];
+    var nextFp = errWrnFingerprint(errList, wrnList);
+    var prevFp = errWrnSnapshot[key] && errWrnSnapshot[key]._fp;
+    errWrnSnapshot[key] = { errors: errList.slice(), warns: wrnList.slice(), _fp: nextFp };
     var errNum = errList.length;
     var wrnNum = wrnList.length;
     if (errEl) {
@@ -1044,16 +1081,22 @@
       if (wrnCountEl) wrnCountEl.textContent = String(wrnNum);
     }
     updateNavAlertState(key, errNum, wrnNum);
+    if (nextFp !== prevFp) renderLog(key);
   }
 
   async function fetchLogs(key) {
     try {
       const d = await api("GET", "/api/logs/" + key + "?tail=300");
-      rawLogLines[key] = (d.lines || []).map(l => (typeof l === "string" ? l : ((l && l.ts) || "") + " " + toLogText(l)).trim()).filter(Boolean);
-      const errEl = qs("#err-" + key);
-      const wrnEl = qs("#wrn-" + key);
+      rawLogLines[key] = (d.lines || []).map(function (l) { return normalizeLogLine(l); }).filter(Boolean);
       var errList = d.errors || [];
       var wrnList = d.warns || [];
+      errWrnSnapshot[key] = {
+        errors: errList.slice(),
+        warns: wrnList.slice(),
+        _fp: errWrnFingerprint(errList, wrnList)
+      };
+      const errEl = qs("#err-" + key);
+      const wrnEl = qs("#wrn-" + key);
       if (errEl) {
         var errLines = errList.slice(-errWrnMaxLines).map(function (l) { return formatErrWrnLine(typeof l === "string" ? l : { ts: (l && l.ts) || "", text: toLogText(l) }, key); });
         patchLogPre(errEl, errLines.join("\n\n") + (errLines.length ? "\n" : ""));
@@ -1076,11 +1119,24 @@
     if (!logEl) return;
     const level = (filterLevel[key] || "").toUpperCase();
     const q = (searchQuery[key] || "").toLowerCase();
-    let lines = rawLogLines[key] || [];
+    let lines = mergedLogLinesFor(key);
     if (level === "WARN+") {
-      lines = lines.filter(l => /WARN|ERROR|Traceback|Exception|CRITICAL/i.test(l));
+      var ewAll = errWrnLineSet(key);
+      lines = lines.filter(function (l) {
+        return ewAll.has(l) || /WARN|ERROR|Traceback|Exception|CRITICAL/i.test(l);
+      });
+    } else if (level === "ERROR") {
+      var ewErr = errWrnLineSet(key, "ERROR");
+      lines = lines.filter(function (l) {
+        return ewErr.has(l) || /ERROR|Traceback|Exception|CRITICAL/i.test(l);
+      });
+    } else if (level === "WARN") {
+      var ewWrn = errWrnLineSet(key, "WARN");
+      lines = lines.filter(function (l) {
+        return ewWrn.has(l) || /WARN/i.test(l);
+      });
     } else if (level) {
-      lines = lines.filter(l => l.indexOf(level) >= 0 || (level === "ERROR" && (/ERROR|Traceback|Exception|CRITICAL/i.test(l))) || (level === "WARN" && /WARN/i.test(l)));
+      lines = lines.filter(function (l) { return l.indexOf(level) >= 0; });
     }
     if (q) lines = lines.filter(l => l.toLowerCase().indexOf(q) >= 0);
     lines = lines.slice(-logMaxLines);
@@ -1101,10 +1157,8 @@
     if (pause[key] || !lines || !lines.length) return;
     var arr = rawLogLines[key] || [];
     var statsPattern = /Günlük:\s*\d+\s*\|\s*Aylık:\s*\d+\s*\|\s*Toplam:\s*\d+/;
-    lines.forEach(l => {
-      var text = toLogText(l);
-      var lineStr = ((l && l.ts) || "") + (text ? " " + text : "");
-      lineStr = lineStr.trim();
+    lines.forEach(function (l) {
+      var lineStr = normalizeLogLine(l);
       if (!lineStr) return;
       if (key === "html" && statsPattern.test(lineStr) && arr.length && arr[arr.length - 1] === lineStr) return;
       arr.push(lineStr);

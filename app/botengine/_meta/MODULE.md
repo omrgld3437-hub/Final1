@@ -27,7 +27,7 @@ python -m app.botengine.worker_main
 
 | Klasör | İçerik |
 |--------|--------|
-| `strategies/` | dca_grid_trailing, trdca_pro, multi_asset_rebalance |
+| `strategies/` | dca_grid_trailing, grid_outage_recovery, trdca_pro, multi_asset_rebalance |
 | `adapters/` | binance_adapter |
 
 ## Stratejiler

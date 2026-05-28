@@ -228,6 +228,7 @@ def test_parallel_sell_grids_trigger_independently():
     price = 2119.37
     actions, _ = tick_dca_grid_trailing(state, cfg, price, 0.0048, 10.0)
     assert state["sell_grid_trigger_price"][1] is not None, "grid 2 should trigger"
+    assert abs(state["sell_grid_trigger_price"][1] - ref * 1.02) < 0.02, "trigger stores threshold not tick price"
     assert state["sell_grid_peak_price"][1] == price
     assert not any(a.get("grid_index") == 1 for a in actions), "grid 2 should trail first, not sell immediately"
     assert state["sell_grid_peak_price"][0] >= price

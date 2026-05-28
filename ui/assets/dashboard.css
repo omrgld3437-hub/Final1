@@ -1069,6 +1069,22 @@ h1, h2, h3, h4 {
     margin-top: 0.35rem;
     display: block;
 }
+.page-dashboard .kpi-spot-status--live {
+    color: #0ecb81;
+}
+.page-dashboard .kpi-spot-status--stale {
+    color: #f0b90b;
+}
+.page-dashboard .kpi-spot-status--offline {
+    color: #f6465d;
+}
+.page-dashboard .binance-varliklar-panel__title-meta .kpi-spot-status {
+    font-size: 0.65rem;
+    margin-top: 0;
+    margin-left: 0.35rem;
+    display: inline;
+    vertical-align: middle;
+}
 
 /* DataHub WS status indicator (appbar) */
 .datahub-ws-indicator {
@@ -1337,11 +1353,37 @@ h1, h2, h3, h4 {
     box-sizing: border-box;
 }
 .page-dashboard .binance-varliklar-panel__title {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: center;
     margin: 0 0 1rem 0;
     font-size: 1.2rem;
     font-weight: 600;
     color: var(--ds-text-primary);
     text-align: center;
+}
+.page-dashboard .binance-varliklar-panel__title-text {
+    grid-column: 2;
+    grid-row: 1;
+}
+.page-dashboard .binance-varliklar-panel__title-meta {
+    grid-column: 3;
+    grid-row: 1;
+    justify-self: start;
+    display: inline-flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    font-size: 0.75rem;
+    font-weight: normal;
+    line-height: 1.25;
+    min-height: 1.25rem;
+}
+.page-dashboard .binance-varliklar-panel__badge--stale {
+    color: #f0b90b;
+}
+.page-dashboard .binance-varliklar-panel__badge--updating {
+    color: var(--ds-text-tertiary);
 }
 .page-dashboard .binance-varliklar-panel .varliklar-table-wrap {
     overflow-x: auto;
@@ -4028,11 +4070,28 @@ body.tab-bots-active #transactionHistoryPanel {
         overflow: hidden;
     }
     .page-dashboard .binance-varliklar-panel__title {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.35rem;
         font-size: 1.1rem;
         font-weight: 600;
         color: var(--ds-text-primary);
         margin: 0 0 0.75rem 0;
         text-align: left;
+    }
+    .page-dashboard .binance-varliklar-panel__title-text {
+        flex: 0 0 auto;
+    }
+    .page-dashboard .binance-varliklar-panel__title-meta {
+        flex: 0 0 auto;
+        display: inline-flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 0.35rem;
+        font-size: 0.75rem;
+        font-weight: normal;
+        min-height: 1.25rem;
     }
     .page-dashboard .binance-varliklar-panel .varliklar-table-wrap {
         width: 100%;

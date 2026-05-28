@@ -1,6 +1,6 @@
 """
 Compute grid points and profit points for bot detail UI.
-Uses state + config + current price. Peak/trough/execution update with live price.
+Uses state + config. Dip/tepe yalnızca state'teki saklı tepe/dip (motor min/max ile günceller).
 """
 from __future__ import annotations
 from typing import Any, Dict, List, Optional, Tuple
@@ -67,6 +67,86 @@ def _avg_buy_price_grid_only(state: Dict) -> Optional[float]:
     return tv / tq
 
 
+def _sell_qty_from_history(state: Dict, idx: int) -> Optional[float]:
+    for h in state.get("sell_history") or []:
+        if isinstance(h, dict) and int(h.get("grid_index") or -1) == idx:
+            q = _f(h.get("qty"))
+            if q > 0:
+                return q
+    return None
+
+
+def _buy_usd_from_history(state: Dict, idx: int) -> Optional[float]:
+    for h in state.get("buy_history") or []:
+        if isinstance(h, dict) and int(h.get("grid_index") or -1) == idx:
+            q = _f(h.get("qty"))
+            p = _f(h.get("execution_price") or h.get("price"))
+            if q > 0 and p > 0:
+                return q * p
+    return None
+
+
+def _planned_sell_base_qty_display(
+    state: Dict[str, Any],
+    cfg_obj: Any,
+    idx: int,
+    price: float,
+    base_bal: float,
+) -> Optional[float]:
+    """UI: tur başı planlanan satış miktarı; gerçekleşince sell_history qty (sabit gösterim)."""
+    hist_q = _sell_qty_from_history(state, idx)
+    if hist_q is not None:
+        return hist_q
+    try:
+        from app.botengine.strategies.dca_grid_trailing import _float as strat_float
+    except Exception:
+        return None
+    sell_grids = getattr(cfg_obj, "sell_grids", None) or []
+    if idx >= len(sell_grids):
+        return None
+    g = sell_grids[idx]
+    pct = strat_float(g.get("sell_qty_pct_of_base") or g.get("qty_pct"), 10.0) / 100.0
+    ref_base = _f(state.get("grid_reference_base") or 0)
+    if ref_base <= 0:
+        ref_base = base_bal
+    tb = state.get("target_budgets")
+    buffer = strat_float(getattr(cfg_obj, "available_quote_buffer_pct", 0.005), 0.005)
+    if isinstance(tb, dict) and price and price > 0:
+        target_base = strat_float(tb.get("target_base_usdt"), 0)
+        if target_base > 0:
+            cap_base = (target_base / price) * (1.0 - buffer)
+            ref_base = min(ref_base, cap_base)
+    q = ref_base * pct
+    return q if q > 0 else None
+
+
+def _planned_buy_usd_display(
+    state: Dict[str, Any],
+    cfg_obj: Any,
+    idx: int,
+    quote_bal: float,
+) -> Optional[float]:
+    """UI: tur başı planlanan alım tutarı; gerçekleşince buy_history notional (sabit gösterim)."""
+    hist_usd = _buy_usd_from_history(state, idx)
+    if hist_usd is not None:
+        return hist_usd
+    try:
+        from app.botengine.strategies.dca_grid_trailing import (
+            _float as strat_float,
+            _quote_ref_for_buy_grid,
+        )
+    except Exception:
+        return None
+    buy_grids = getattr(cfg_obj, "buy_grids", None) or []
+    if idx >= len(buy_grids):
+        return None
+    g = buy_grids[idx]
+    pct = strat_float(g.get("buy_qty_pct_of_quote") or g.get("qty_pct"), 10.0) / 100.0
+    ref = _quote_ref_for_buy_grid(state, cfg_obj, quote_bal)
+    q = ref * pct
+    return q if q > 0 else None
+
+
 def compute_grid_profit_view(
     state: Dict[str, Any],
     config: Dict[str, Any],
@@ -101,6 +181,12 @@ def compute_grid_profit_view(
 
     sell_fired = state.get("sell_grid_fired") or []
     buy_fired = state.get("buy_grid_fired") or []
+    cycle_side = state.get("cycle_grid_side")
+    if cycle_side not in ("SELL", "BUY"):
+        cycle_side = None
+    meta["cycle_grid_side"] = cycle_side
+    sell_grids_enabled = cycle_side != "BUY"
+    buy_grids_enabled = cycle_side != "SELL"
     trigger_sell = state.get("sell_grid_trigger_price") or []
     trigger_buy = state.get("buy_grid_trigger_price") or []
     sell_peak = state.get("sell_grid_peak_price") or []
@@ -125,11 +211,7 @@ def compute_grid_profit_view(
     base_bal = _f(state.get("base_balance"))
     try:
         from app.botengine.models import DcaGridTrailingConfig
-        from app.botengine.strategies.dca_grid_trailing import (
-            _buy_qty_for_grid,
-            _quote_ref_for_buy_grid,
-            _sell_qty_for_grid,
-        )
+        from app.botengine.strategies.dca_grid_trailing import _quote_ref_for_buy_grid
         cfg_obj = DcaGridTrailingConfig(config)
         quote_pool = _quote_ref_for_buy_grid(state, cfg_obj, quote_bal)
         if quote_pool > 0:
@@ -148,11 +230,10 @@ def compute_grid_profit_view(
         fired = bool(sell_fired[i]) if i < len(sell_fired) else False
         trigger_hit = trigger_sell[i] if i < len(trigger_sell) else None
         th_num = _f(trigger_hit) if trigger_hit is not None else None
-        # Tamamlanan grid: tetik fiyatı tetik anındaki fiyata dondur (güncellenmez)
-        if fired and th_num is not None:
+        calc_trigger = round(ref * (1 + pct / 100.0), 4) if ref_available else None
+        trigger_price = calc_trigger
+        if trigger_price is None and fired and th_num is not None:
             trigger_price = round(th_num, 4)
-        else:
-            trigger_price = round(ref * (1 + pct / 100.0), 4) if ref_available else None
         anchor: Optional[float] = None
         execution_price: Optional[float] = None
         triggered_trailing = (not fired) and (th_num is not None)
@@ -169,13 +250,15 @@ def compute_grid_profit_view(
                     anchor = th_num
                     execution_price = anchor * (1 - sell_trail / 100.0)
             else:
-                peak_val = _f(sell_peak[i]) if i < len(sell_peak) and sell_peak[i] is not None else th_num
-                anchor = peak_val if peak_val > 0 else _f(price)
-                anchor = max(anchor, _f(price))
-                execution_price = anchor * (1 - sell_trail / 100.0)
+                if i < len(sell_peak) and sell_peak[i] is not None:
+                    anchor = _f(sell_peak[i])
+                elif th_num is not None:
+                    anchor = th_num
+                if anchor is not None:
+                    execution_price = anchor * (1 - sell_trail / 100.0)
         planned_base_qty = None
         if cfg_obj is not None:
-            planned_base_qty = _sell_qty_for_grid(state, cfg_obj, i, base_bal, price)
+            planned_base_qty = _planned_sell_base_qty_display(state, cfg_obj, i, price, base_bal)
         grid_points.append({
             "type": "sell",
             "i": i,
@@ -185,6 +268,8 @@ def compute_grid_profit_view(
             "anchor": round(anchor, 4) if anchor is not None else None,
             "execution_price": round(execution_price, 4) if execution_price is not None else None,
             "active": active,
+            "enabled": sell_grids_enabled or fired,
+            "disabled": not sell_grids_enabled and not fired,
             "qty_pct": round(qty_pct, 1) if qty_pct else None,
             "planned_base_qty": round(planned_base_qty, 8) if planned_base_qty else None,
         })
@@ -196,11 +281,10 @@ def compute_grid_profit_view(
         fired = bool(buy_fired[j]) if j < len(buy_fired) else False
         trigger_hit = trigger_buy[j] if j < len(trigger_buy) else None
         th_num = _f(trigger_hit) if trigger_hit is not None else None
-        # Tamamlanan grid: tetik fiyatı tetik anındaki fiyata dondur (güncellenmez)
-        if fired and th_num is not None:
+        calc_trigger = round(ref * (1 - pct / 100.0), 4) if ref_available else None
+        trigger_price = calc_trigger
+        if trigger_price is None and fired and th_num is not None:
             trigger_price = round(th_num, 4)
-        else:
-            trigger_price = round(ref * (1 - pct / 100.0), 4) if ref_available else None
         anchor = None
         execution_price = None
         triggered_trailing = (not fired) and (th_num is not None)
@@ -217,13 +301,15 @@ def compute_grid_profit_view(
                     anchor = th_num
                     execution_price = anchor * (1 + buy_trail / 100.0)
             else:
-                trough_val = _f(buy_trough[j]) if j < len(buy_trough) and buy_trough[j] is not None else th_num
-                anchor = trough_val if trough_val > 0 else _f(price)
-                anchor = min(anchor, _f(price))
-                execution_price = anchor * (1 + buy_trail / 100.0)
+                if j < len(buy_trough) and buy_trough[j] is not None:
+                    anchor = _f(buy_trough[j])
+                elif th_num is not None:
+                    anchor = th_num
+                if anchor is not None:
+                    execution_price = anchor * (1 + buy_trail / 100.0)
         planned_usd = None
         if cfg_obj is not None:
-            planned_usd = _buy_qty_for_grid(state, cfg_obj, j, quote_bal, price)
+            planned_usd = _planned_buy_usd_display(state, cfg_obj, j, quote_bal)
         grid_points.append({
             "type": "buy",
             "i": j,
@@ -233,59 +319,76 @@ def compute_grid_profit_view(
             "anchor": round(anchor, 4) if anchor is not None else None,
             "execution_price": round(execution_price, 4) if execution_price is not None else None,
             "active": active,
+            "enabled": buy_grids_enabled or fired,
+            "disabled": not buy_grids_enabled and not fired,
             "qty_pct": round(qty_pct, 1) if qty_pct else None,
             "planned_usd": round(planned_usd, 2) if planned_usd else None,
         })
 
-    avg_sell = _avg_sell_price(state)
-    avg_buy = _avg_buy_price(state)
     avg_sell_grid = _avg_sell_price_grid_only(state)
     avg_buy_grid = _avg_buy_price_grid_only(state)
+    if avg_sell_grid is not None:
+        meta["avg_sell_grid"] = round(avg_sell_grid, 4)
+    if avg_buy_grid is not None:
+        meta["avg_buy_grid"] = round(avg_buy_grid, 4)
     reentry_done = bool(state.get("_reentry_done"))
     profit_exit_done = bool(state.get("_profit_exit_done"))
 
     reentry_trigger_hit = mode == "TRAIL_REENTRY_BUY"
     profit_exit_trigger_hit = mode == "TRAIL_PROFIT_SELL"
 
-    if active and sell_hist and not reentry_done and avg_sell and avg_sell > 0:
-        trigger = avg_sell * (1 - reentry_drop / 100.0)
-        anchor = trail_anchor if trail_anchor > 0 and reentry_trigger_hit else min(price, trigger)
-        anchor = min(anchor, price)
-        execution = anchor * (1 + reentry_rise / 100.0)
+    if cycle_side == "SELL" and sell_hist and not reentry_done and avg_sell_grid and avg_sell_grid > 0:
+        trigger = avg_sell_grid * (1 - reentry_drop / 100.0)
+        if reentry_trigger_hit and trail_anchor > 0:
+            anchor = trail_anchor
+        elif reentry_trigger_hit:
+            anchor = min(_f(price), trigger) if _f(price) > 0 else trigger
+        else:
+            anchor = None
+        execution = (anchor * (1 + reentry_rise / 100.0)) if anchor is not None else None
         status = "tamamlandi" if reentry_done else ("tetiklendi" if reentry_trigger_hit else "bekliyor")
         profit_points.append({
             "type": "reentry",
             "trigger_price": round(trigger, 4),
             "average_cost": round(avg_sell_grid, 4) if avg_sell_grid else None,
             "profit_pct": round(reentry_drop, 2),
-            "anchor": round(anchor, 4),
-            "dip": round(anchor, 4) if reentry_trigger_hit else None,
+            "anchor": round(anchor, 4) if anchor is not None else None,
+            "dip": round(anchor, 4) if (reentry_trigger_hit and anchor is not None) else None,
             "tepe": None,
-            "execution_price": round(execution, 4),
+            "execution_price": round(execution, 4) if execution is not None else None,
             "trigger_hit": reentry_trigger_hit,
             "status": status,
             "active": True,
+            "enabled": True,
         })
 
-    if active and buy_hist and not profit_exit_done and avg_buy and avg_buy > 0:
-        trigger = avg_buy * (1 + exit_rise / 100.0)
-        anchor = trail_anchor if trail_anchor > 0 and profit_exit_trigger_hit else max(price, trigger)
-        anchor = max(anchor, price)
-        execution = anchor * (1 - exit_drop / 100.0)
+    if cycle_side == "BUY" and buy_hist and not profit_exit_done and avg_buy_grid and avg_buy_grid > 0:
+        trigger = avg_buy_grid * (1 + exit_rise / 100.0)
+        if profit_exit_trigger_hit and trail_anchor > 0:
+            anchor = trail_anchor
+        elif profit_exit_trigger_hit:
+            anchor = max(_f(price), trigger) if _f(price) > 0 else trigger
+        else:
+            anchor = None
+        execution = (anchor * (1 - exit_drop / 100.0)) if anchor is not None else None
         status = "tamamlandi" if profit_exit_done else ("tetiklendi" if profit_exit_trigger_hit else "bekliyor")
         profit_points.append({
             "type": "profit_exit",
             "trigger_price": round(trigger, 4),
             "average_cost": round(avg_buy_grid, 4) if avg_buy_grid else None,
             "profit_pct": round(exit_rise, 2),
-            "anchor": round(anchor, 4),
-            "tepe": round(anchor, 4) if profit_exit_trigger_hit else None,
+            "anchor": round(anchor, 4) if anchor is not None else None,
+            "tepe": round(anchor, 4) if (profit_exit_trigger_hit and anchor is not None) else None,
             "dip": None,
-            "execution_price": round(execution, 4),
+            "execution_price": round(execution, 4) if execution is not None else None,
             "trigger_hit": profit_exit_trigger_hit,
             "status": status,
             "active": True,
+            "enabled": True,
         })
+
+    if cycle_side is None:
+        meta["cycle_side_pending"] = True
 
     return grid_points, profit_points, meta
 

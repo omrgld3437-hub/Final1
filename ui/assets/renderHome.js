@@ -30,16 +30,17 @@
 
     /** Map wallet_cached / wallet_live to assetsState via normalizeAndApplyWallet.
      *  Backend enriches bot_locked (virtual_wallet + state fallback); do not strip those fields. */
-    function walletCachedToAssetsState(walletCached, walletCachedAt) {
+    function walletCachedToAssetsState(walletCached, walletCachedAt, meta) {
+        meta = meta || {};
         if (!walletCached || typeof walletCached !== 'object') return;
         var ts = walletCachedAt ? (typeof walletCachedAt === 'string' ? new Date(walletCachedAt).getTime() : walletCachedAt) : Date.now();
         if (typeof window !== 'undefined' && window.normalizeAndApplyWallet) {
             var p = Object.assign({}, walletCached, {
                 ts: ts,
                 keys_configured: walletCached.keys_configured !== false,
-                data_status: walletCached.data_status || 'cached'
+                data_status: meta.live ? 'fresh' : (walletCached.data_status || 'cached')
             });
-            window.normalizeAndApplyWallet(p, { source: 'home_fast_cached' });
+            window.normalizeAndApplyWallet(p, { source: meta.live ? 'wallet_refresh' : 'home_fast_cached' });
             return;
         }
         var assets = Array.isArray(walletCached.assets) ? walletCached.assets : [];
@@ -146,7 +147,9 @@
 
     function showUpdatingBadge(show) {
         var badge = document.getElementById('flashHomeUpdatingBadge');
-        if (badge) badge.style.display = show ? 'inline' : 'none';
+        if (!badge) return;
+        badge.hidden = !show;
+        badge.setAttribute('aria-hidden', show ? 'false' : 'true');
     }
 
     return {

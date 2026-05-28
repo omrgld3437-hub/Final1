@@ -2952,6 +2952,11 @@ async def _fetch_wallet_uncached(account_id: int, db: Session):
     bot_locked = get_bot_locked_balances_for_account(db, account_id)
     out = _wallet_response(account_id, balances, price_map, bot_locked=bot_locked)
     out["keys_configured"] = True
+    try:
+        from app.services.binance_connectivity import note_binance_success
+        note_binance_success(account_id)
+    except Exception:
+        pass
     return out
 
 
@@ -3049,6 +3054,17 @@ async def api_binance_wallet(
                 stale["retry_after"] = 10
                 if invalid_key:
                     stale["message"] = "Binance API anahtarı veya IP izni geçersiz (401/-2015). Binance hesabında API Key ve IP kısıtlamasını kontrol edin."
+                try:
+                    from app.services.binance_connectivity import note_binance_failure
+                    err_code = "API_UNAUTHORIZED" if invalid_key else "BINANCE_UNREACHABLE"
+                    note_binance_failure(
+                        account_id,
+                        err_code,
+                        stale.get("message") or "Hesap bakiyesi alınamadı",
+                        "wallet_stale",
+                    )
+                except Exception:
+                    pass
                 if invalid_key:
                     log.debug("wallet serve_stale=200 cache_hit=true upstream_failed account_id=%s reason=invalid_api_key", account_id)
                 else:
@@ -3078,6 +3094,12 @@ async def api_binance_wallet(
             if invalid_key
             else "Upstream geçici hata; veri boş veya güncel değil. Kısa süre sonra tekrar denenecek."
         )
+        try:
+            from app.services.binance_connectivity import note_binance_failure
+            err_code = "API_UNAUTHORIZED" if invalid_key else "BINANCE_UNREACHABLE"
+            note_binance_failure(account_id, err_code, out["message"], "wallet")
+        except Exception:
+            pass
         return out
 
     if is_creator:
@@ -3111,6 +3133,11 @@ async def api_binance_wallet(
             "wallet cache_hit=false upstream_call=true upstream_ok account_id=%s latency_ms=%.0f request_id=%s total_usd=%s",
             account_id, latency_ms, request_id, out.get("total_usd"),
         )
+        try:
+            from app.services.binance_connectivity import note_binance_success
+            note_binance_success(account_id)
+        except Exception:
+            pass
     return out
 
 

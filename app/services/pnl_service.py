@@ -89,10 +89,28 @@ def _compute_multi_total_usd_from_state(db: Session, bot_id: int, account_id: in
 
 
 def _fee_quote(t: Trade) -> float:
-    """Fee in quote (USDT). Spec: fee in quote for PnL."""
-    if getattr(t, "fee_asset", None) and (t.fee_asset or "").upper() != "USDT":
+    """Fee in quote (USDT). Yeni kayıtlarda fee=USDT; fee_asset yalnızca gösterim."""
+    try:
+        fee = float(t.fee or 0)
+    except (TypeError, ValueError):
         return 0.0
-    return float(t.fee or 0.0)
+    if fee <= 0:
+        return 0.0
+    asset = (getattr(t, "fee_asset", None) or "USDT").upper()
+    if asset == "USDT":
+        return fee
+    sym = (getattr(t, "symbol", None) or "").upper()
+    try:
+        px = float(t.price or 0)
+        qty = float(t.qty or 0)
+    except (TypeError, ValueError):
+        px = qty = 0.0
+    notional = qty * px if qty > 0 and px > 0 else 0.0
+    if notional > 0 and fee <= notional * 0.02:
+        return fee
+    from app.botengine.fee_utils import commission_to_usdt
+
+    return commission_to_usdt(fee, asset, sym, px)
 
 
 def _apply_stale_return(

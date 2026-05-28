@@ -6,6 +6,7 @@
 
     var POLL_MS = 4000;
     var MAX_EVENTS = 500;
+    var FULL_REFRESH_MS = 90000;
 
     function maxEventId(events) {
         var max = 0;
@@ -35,6 +36,72 @@
         return el.scrollTop < 48;
     }
 
+    function isConnectivityEvent(ev) {
+        if (!ev) return false;
+        var ty = String(ev.type || '').toUpperCase();
+        var meta = ev.meta || {};
+        var code = String(meta.error_code || meta.health_code || '').toUpperCase();
+        if (/API_UNAUTHORIZED|BINANCE_UNREACHABLE|BINANCE_RATE|ACCOUNT_KEYS/.test(code)) return true;
+        if (ty === 'ERROR' || ty === 'HEALTH_CRITICAL' || ty === 'HEALTH_WARN') {
+            return /binance|beyaz liste|401|-2015|ulaşılamıyor|api anahtar/i.test(String(ev.message || ''));
+        }
+        return false;
+    }
+
+    function connectivityEventVisible(ev, fmtApi) {
+        if (!isConnectivityEvent(ev)) return false;
+        if (fmtApi && fmtApi.formatEngineEvent) {
+            var fmt = fmtApi.formatEngineEvent(ev);
+            if (fmt && fmt.hidden) return false;
+        }
+        return true;
+    }
+
+    function injectConnectivityFromHealth(events, healthData, fmtApi, botId, connectivityFailure) {
+        var list = (events || []).filter(function (e) {
+            return !(e && e.meta && e.meta.synthetic_live);
+        });
+        var fail = connectivityFailure && connectivityFailure.error_code ? connectivityFailure : null;
+        if (!fail && healthData) {
+            var alerts = healthData.alerts || [];
+            var errCode = String(healthData.last_error_code || '').trim();
+            var connAlert = alerts.some(function (a) {
+                return a && (a.code === 'BINANCE_UNREACHABLE' || a.code === 'STATE_ERROR');
+            });
+            if (connAlert || /API_UNAUTHORIZED|BINANCE_UNREACHABLE|ACCOUNT_KEYS/i.test(errCode)) {
+                fail = {
+                    error_code: errCode || 'BINANCE_UNREACHABLE',
+                    message: (alerts[0] && (alerts[0].message || alerts[0].title)) || 'Binance bağlantı hatası'
+                };
+            }
+        }
+        if (!fail) return list;
+        if (botId && global.BotHealthAlerts && global.BotHealthAlerts.isConnectivityLogSuppressed
+            && global.BotHealthAlerts.isConnectivityLogSuppressed(botId, list)) {
+            return list;
+        }
+        if (list.some(function (ev) { return connectivityEventVisible(ev, fmtApi); })) return list;
+
+        var msg = fail.message || 'Binance bağlantı hatası';
+        if (/^Binance bağlantı hatası/i.test(msg) === false && fail.error_code) {
+            msg = 'Binance bağlantı hatası — ' + msg;
+        }
+        var nextId = maxEventId(list) + 1;
+        var synthetic = {
+            id: nextId,
+            type: 'ERROR',
+            ts: new Date().toISOString(),
+            message: msg,
+            meta: {
+                error_code: fail.error_code || 'BINANCE_UNREACHABLE',
+                health_code: 'BINANCE_UNREACHABLE',
+                synthetic_live: true,
+                source: fail.source || 'connectivity'
+            }
+        };
+        return [synthetic].concat(list);
+    }
+
     function enrichStartEvents(events, opts) {
         var ic = opts && opts.initialCapital != null ? Number(opts.initialCapital) : 0;
         var cse = opts && opts.cycleStartEquity != null ? Number(opts.cycleStartEquity) : 0;
@@ -53,6 +120,38 @@
             else if (cse > 0 && meta.cycle_start_equity == null) meta.cycle_start_equity = cse;
             return Object.assign({}, ev, { meta: meta });
         });
+    }
+
+    function archiveIngest(opts, events, incoming) {
+        if (!global.EngineLogArchive || !opts || !opts.botId) return;
+        if (incoming && incoming.length) global.EngineLogArchive.ingest(opts.botId, incoming);
+        else if (events && events.length) global.EngineLogArchive.ingest(opts.botId, events);
+    }
+
+    function archiveDisplayEvents(opts, displayEvents, stateEvents) {
+        if (!global.EngineLogArchive || !opts || !opts.botId || !displayEvents) return;
+        displayEvents.forEach(function (ev) {
+            if (ev && ev.meta && ev.meta.synthetic_live) {
+                global.EngineLogArchive.ingestOne(opts.botId, ev);
+            }
+        });
+    }
+
+    function renderDisplayEvents(opts) {
+        if (!opts || !opts.container) return;
+        var state = opts.state || { events: [], lastId: 0 };
+        var fmtApi = global.EngineLogFormat;
+        if (opts.botId && fmtApi && fmtApi.setLogContext) {
+            fmtApi.setLogContext({ botId: opts.botId });
+        }
+        var healthData = typeof opts.getHealthData === 'function' ? opts.getHealthData() : opts.healthData;
+        var connFail = opts.connectivityFailure || null;
+        var displayEvents = injectConnectivityFromHealth(state.events, healthData, fmtApi, opts.botId, connFail);
+        archiveDisplayEvents(opts, displayEvents, state.events);
+        renderTable(opts.container, enrichStartEvents(displayEvents, opts), fmtApi);
+        if (typeof opts.onAfterRender === 'function') {
+            opts.onAfterRender(state.events);
+        }
     }
 
     function renderTable(container, events, fmtApi) {
@@ -119,22 +218,39 @@
                 (qBase ? '&' : '?') + 'limit=' + MAX_EVENTS;
         }
         return opts.apiClient.get(url).then(function (res) {
+            opts._failCount = 0;
+            opts.connectivityFailure = (res && res.connectivity_failure) ? res.connectivity_failure : null;
             var incoming = (res && res.events) ? res.events : [];
             if (incremental && state.lastId > 0) {
-                if (!incoming.length) return state.events;
-                state.events = mergeEvents(state.events, incoming, MAX_EVENTS);
+                if (incoming.length) {
+                    state.events = mergeEvents(state.events, incoming, MAX_EVENTS);
+                    state.lastId = maxEventId(state.events);
+                    archiveIngest(opts, state.events, incoming);
+                }
             } else {
                 state.events = incoming.slice(0, MAX_EVENTS);
+                state.lastId = maxEventId(state.events);
+                archiveIngest(opts, state.events, incoming);
             }
-            state.lastId = maxEventId(state.events);
-            renderTable(opts.container, enrichStartEvents(state.events, opts), global.EngineLogFormat);
+            if (opts.botId && global.EngineLogFormat && global.EngineLogFormat.setLogContext) {
+                global.EngineLogFormat.setLogContext({ botId: opts.botId });
+            }
+            var fmtApi = global.EngineLogFormat;
+            var healthData = typeof opts.getHealthData === 'function' ? opts.getHealthData() : opts.healthData;
+            var connFail = opts.connectivityFailure || null;
+            var displayEvents = injectConnectivityFromHealth(state.events, healthData, fmtApi, opts.botId, connFail);
+            archiveDisplayEvents(opts, displayEvents, state.events);
+            renderTable(opts.container, enrichStartEvents(displayEvents, opts), fmtApi);
             if (typeof opts.onAfterRender === 'function') {
                 opts.onAfterRender(state.events);
             }
             return state.events;
         }).catch(function () {
+            opts._failCount = (opts._failCount || 0) + 1;
             if (!incremental) {
                 opts.container.innerHTML = '<div class="muted" style="padding: 0.75rem;">Loglar yüklenemedi.</div>';
+            } else if (opts._failCount >= 2 && typeof opts.onPollError === 'function') {
+                opts.onPollError(opts._failCount);
             }
             return state.events;
         });
@@ -144,9 +260,14 @@
         stopPolling(opts);
         if (!opts || !opts.botId) return;
         opts.state = opts.state || { events: [], lastId: 0 };
+        opts._failCount = 0;
+        opts._lastFullRefresh = Date.now();
         opts._pollTimer = setInterval(function () {
             if (document.hidden) return;
-            fetchAndRender(opts, true);
+            var forceFull = (opts._failCount || 0) >= 2
+                || (Date.now() - (opts._lastFullRefresh || 0) > FULL_REFRESH_MS);
+            if (forceFull) opts._lastFullRefresh = Date.now();
+            fetchAndRender(opts, !forceFull && opts.state.lastId > 0);
         }, opts.pollMs || POLL_MS);
     }
 
@@ -160,6 +281,7 @@
     global.EngineLogLive = {
         POLL_MS: POLL_MS,
         fetchAndRender: fetchAndRender,
+        renderDisplayEvents: renderDisplayEvents,
         startPolling: startPolling,
         stopPolling: stopPolling,
         renderTable: renderTable

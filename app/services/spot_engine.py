@@ -238,8 +238,23 @@ class SpotEngine:
                     "quote": quote_balance
                 }
                 spot_cache.set_balance(account_id, balance_data)
+                try:
+                    from app.services.binance_connectivity import note_binance_success
+                    note_binance_success(account_id)
+                except Exception:
+                    pass
             except Exception as e:
                 logger.warning(f"Balance fetch error for account {account_id}: {e}")
+                try:
+                    from app.services.binance_connectivity import note_binance_failure
+                    note_binance_failure(
+                        account_id,
+                        "BINANCE_UNREACHABLE",
+                        f"Hesap bakiyesi alınamadı: {e}",
+                        "spot_engine",
+                    )
+                except Exception:
+                    pass
                 balance_data = {"base": 0.0, "quote": 0.0}
         
         # 4. 24h change: market_data cache only

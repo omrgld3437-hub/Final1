@@ -3,6 +3,7 @@ Cycle Trade Ledger: single source of truth for cycle PnL (fee-aware, cycle-isola
 Each cycle records only fills belonging to that cycle; realized_pnl_quote = sell_quote - buy_quote - fees.
 """
 from __future__ import annotations
+import copy
 import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -80,6 +81,8 @@ def cycle_ledger_add_fill(
     fee: float,
     fee_asset: str,
     reason: str,
+    slot_id: Optional[int] = None,
+    fee_raw: Optional[float] = None,
 ) -> None:
     """Append one fill to cycle ledger and recompute totals. Mutates ledger in place."""
     qty = max(0.0, _num(qty))
@@ -102,6 +105,14 @@ def cycle_ledger_add_fill(
         "fee_asset": fee_asset or "USDT",
         "reason": reason or "",
     }
+    if slot_id is not None:
+        try:
+            entry["slot_id"] = int(slot_id)
+        except (TypeError, ValueError):
+            pass
+    if fee_raw is not None and fee_raw > 0:
+        entry["fee_raw"] = round(float(fee_raw), 10)
+    entry["fee_usdt"] = round(fee_quote, 8)
     ledger.setdefault("fills", []).append(entry)
     if side and side.upper() == "BUY":
         ledger["buy_qty_total"] = _num(ledger.get("buy_qty_total")) + qty
@@ -363,3 +374,26 @@ def get_cycle_type_and_base_delta(
             base_delta = round(buy_qty - sell_qty, 8)
         return "INVENTORY_REBALANCE", base_delta
     return "UNKNOWN", 0.0
+
+
+def archive_cycle_ledger_fills(state: Dict[str, Any], cycle_id: int) -> None:
+    """Tur kapanmadan önce cycle ledger fill listesini arşivle (tamamlanmış tur reason eşlemesi)."""
+    ledger = state.get("cycle_ledger_current")
+    if not isinstance(ledger, dict):
+        return
+    fills = ledger.get("fills") or []
+    if not fills:
+        return
+    archive = state.setdefault("cycle_ledger_fills_archive", [])
+    for block in archive:
+        if isinstance(block, dict) and int(block.get("cycle_id") or 0) == int(cycle_id):
+            return
+    archive.append({
+        "cycle_id": int(cycle_id),
+        "fills": copy.deepcopy(fills),
+        "avg_cost_quote_per_base": ledger.get("avg_cost_quote_per_base"),
+        "buy_quote_total": ledger.get("buy_quote_total"),
+        "sell_quote_total": ledger.get("sell_quote_total"),
+    })
+    if len(archive) > 50:
+        state["cycle_ledger_fills_archive"] = archive[-50:]

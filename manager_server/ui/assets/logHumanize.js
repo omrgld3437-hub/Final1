@@ -12,6 +12,32 @@
     html: 'Statik HTML sunucusu'
   };
 
+  var MODULE_LABELS = {
+    'app.botengine.execution': 'Bot emir yürütme',
+    'app.botengine.worker_main': 'Bot engine worker',
+    'app.botengine.orchestrator': 'Bot tick döngüsü',
+    'app.services.binance_spot': 'Binance Spot API',
+    'app.botengine.adapters.binance_adapter': 'Binance adapter',
+    'app.botengine.health_watch': 'Bot sağlık izleme',
+    'app.botengine.intent_ledger': 'Emir intent defteri',
+    'uvicorn.error': 'Web sunucusu',
+    'uvicorn.access': 'Web erişim günlüğü'
+  };
+
+  var SKIP_REASON_TR = {
+    ORDER_FAILED: 'Emir borsa veya ağ hatasıyla reddedildi',
+    LOT_SIZE: 'Emir miktarı lot/step filtresine uymuyor',
+    INSUFFICIENT_BALANCE: 'Hesap bakiyesi yetersiz (-2010)',
+    ORDER_TIMEOUT: 'Emir gönderimi zaman aşımına uğradı',
+    WEIGHT_DENIED: 'Binance istek ağırlık limiti (rate limit)',
+    LOCK_LEASE_EXPIRED: 'Sembol kilidi süresi doldu',
+    BINANCE_FREE_BASE_INSUFFICIENT: 'Binance serbest coin bakiyesi yetersiz',
+    BINANCE_FREE_QUOTE_INSUFFICIENT: 'Binance serbest USDT bakiyesi yetersiz',
+    MIN_NOTIONAL: 'Emir tutarı minimum notional altında',
+    MIN_NOTIONAL_AFTER_CAP: 'Miktar kısıtlandıktan sonra minimum tutar altında kaldı',
+    API_UNAUTHORIZED: 'Binance API yetkilendirme hatası (401)'
+  };
+
   var LEVEL_LABELS = {
     WARNING: 'Uyarı',
     WARN: 'Uyarı',
@@ -39,7 +65,7 @@
   function extractParams(text) {
     var params = {};
     if (!text) return params;
-    var re = /\b(bot_id|account_id|symbol|order_id|cycle_id|run_id|err_code|error_code)=([^\s,;]+)/gi;
+    var re = /\b(bot_id|account_id|symbol|order_id|cycle_id|run_id|err_code|error_code|skip_reason|binance_code|reason)=([^\s,;]+)/gi;
     var m;
     while ((m = re.exec(text)) !== null) {
       params[m[1].toLowerCase()] = m[2];
@@ -99,6 +125,162 @@
   }
 
   var RULES = [
+    {
+      test: function (msg) { return /BOT_EXECUTION_SKIP/i.test(msg); },
+      apply: function (ctx) {
+        var p = ctx.params || {};
+        var skip = String(p.skip_reason || '').toUpperCase();
+        var skipTr = SKIP_REASON_TR[skip] || (skip ? ('Emir atlandı: ' + skip) : 'Grid veya kapanış emri gönderilemedi');
+        var botHint = p.bot_id ? (' (bot #' + p.bot_id + ')') : '';
+        var gridHint = /trail_sell_grid|sell_grid/i.test(String(p.reason || ctx.message || ''))
+          ? ' Satış gridi emri.'
+          : (/trail_buy_grid|buy_grid/i.test(String(p.reason || ctx.message || '')) ? ' Alış gridi emri.' : '');
+        var binHint = '';
+        if (p.binance_code && p.binance_code !== 'None' && p.binance_code !== 'null') {
+          binHint = ' Binance kodu: ' + p.binance_code + '.';
+        }
+        return {
+          konu: 'Emir gönderilemedi' + botHint,
+          sebep: skipTr + gridHint + binHint + (p.err ? (' Detay: ' + String(p.err).slice(0, 160)) : ''),
+          etki: 'Bu tick\'te ilgili grid/kapanış emri yapılmadı; bot sonraki tick\'te tekrar dener. Tekrarlayan hatalarda sağlık uyarısı görünebilir.',
+          oneri: skip === 'LOT_SIZE' || skip === 'ORDER_FAILED'
+            ? 'Grid bütçesini, minimum tutarı (10 USDT) ve ETH serbest bakiyesini kontrol edin. Logdaki Binance mesaj koduna bakın.'
+            : (skip === 'INSUFFICIENT_BALANCE' || skip === 'BINANCE_FREE_BASE_INSUFFICIENT'
+              ? 'Binance cüzdanındaki serbest bakiyeyi kontrol edin; sanal bot bakiyesi gerçek bakiyeden fazla olabilir.'
+              : 'Bot engine logunda aynı zaman damgasındaki teknik detayı inceleyin; gerekirse botu durdurup açık emirleri Binance\'ten kontrol edin.')
+        };
+      }
+    },
+    {
+      test: function (msg) { return /BINANCE_SIGNED_ERROR/i.test(msg); },
+      apply: function (ctx) {
+        var m = String(ctx.message || ctx.raw || '');
+        var status = (m.match(/\bstatus=(\d+)/) || [])[1] || '';
+        var path = (m.match(/\bpath=([^\s]+)/) || [])[1] || '';
+        var isOrder = /\/api\/v3\/order/i.test(path);
+        return {
+          konu: isOrder ? 'Binance emir isteği reddedildi' : 'Binance imzalı API hatası',
+          sebep: 'Binance imzalı istek HTTP ' + (status || '?') + ' döndü'
+            + (path ? (' (' + path + ').') : '.')
+            + (isOrder && status === '400' ? ' Genelde miktar/lot filtresi, minimum tutar veya bakiye uyumsuzluğu.' : ''),
+          etki: isOrder ? 'Emir borsaya iletilmedi; bot bir sonraki denemede tekrar dener.' : 'İlgili Binance sorgusu başarısız; senkron veya emir akışı gecikebilir.',
+          oneri: status === '401'
+            ? 'API anahtarı, IP whitelist ve sunucu saati (NTP) ayarlarını kontrol edin.'
+            : (status === '400' && isOrder
+              ? 'Emir miktarını, step size ve min notional kurallarını doğrulayın; serbest bakiyeyi Binance\'ten kontrol edin.'
+              : 'Ağ bağlantısı ve Binance API durumunu kontrol edin; teknik detaydaki body/hint alanına bakın.')
+        };
+      }
+    },
+    {
+      test: function (msg) { return /binance_spot signed method=/i.test(msg); },
+      apply: function (ctx) {
+        var m = String(ctx.message || ctx.raw || '');
+        var status = (m.match(/\bstatus=(\S+)/) || [])[1] || '';
+        var path = (m.match(/\bpath=([^\s]+)/) || [])[1] || '';
+        var attempt = (m.match(/\battempt=(\d+)/) || [])[1] || '';
+        var isOrder = /\/order/i.test(path);
+        return {
+          konu: isOrder ? 'Binance emir isteği başarısız (yeniden denenecek)' : 'Binance API isteği başarısız',
+          sebep: 'İmzalı Binance isteği' + (attempt ? (' (deneme ' + attempt + ')') : '') + ' HTTP '
+            + (status || '?') + ' ile döndü' + (path ? (' — ' + path) : '') + '.',
+          etki: isOrder
+            ? 'Emir henüz gönderilmedi; engine kısa süre içinde yeniden dener veya execution katmanında atlanır.'
+            : 'Bakiye, emir veya hesap sorgusu gecikebilir.',
+          oneri: status === '400' && isOrder
+            ? 'Lot boyutu, minimum tutar (10 USDT) ve serbest bakiyeyi kontrol edin.'
+            : 'Geçici ağ sorunu olabilir; tekrar ederse API anahtarı ve Binance durumunu kontrol edin.'
+        };
+      }
+    },
+    {
+      test: function (msg) { return /binance_spot public_get/i.test(msg); },
+      apply: function () {
+        return {
+          konu: 'Binance genel API isteği başarısız',
+          sebep: 'Fiyat, exchangeInfo veya sunucu saati gibi imzasız Binance isteği hata aldı; yeniden deneme yapılıyor olabilir.',
+          etki: 'Fiyat veya sembol filtresi güncellenemeyebilir; bot tick\'i gecikebilir.',
+          oneri: 'Ağ ve SSL ayarlarını kontrol edin; sürekli tekrarlıyorsa Binance erişilebilirliğini doğrulayın.'
+        };
+      }
+    },
+    {
+      test: function (msg) { return /BOT_EXECUTION_CAP_BASE/i.test(msg); },
+      apply: function (ctx) {
+        var p = ctx.params || {};
+        return {
+          konu: 'Satış miktarı gerçek bakiyeye kısıtlandı',
+          sebep: 'Bot state\'indeki coin miktarı Binance serbest bakiyesinden fazlaydı; emir gönderilmeden önce miktar otomatik düşürüldü'
+            + (p.bot_id ? (' (bot #' + p.bot_id + ').') : '.'),
+          etki: 'Emir daha küçük miktarla gönderilir; lot filtresine uymazsa yine reddedilebilir.',
+          oneri: 'Komisyon/rounding farkı normal olabilir. Tekrarlayan reddedilmelerde grid bütçesini ve min tutarı gözden geçirin.'
+        };
+      }
+    },
+    {
+      test: function (msg) { return /run_actions WEIGHT_DENIED|skip_reason=WEIGHT_DENIED/i.test(msg); },
+      apply: function (ctx) {
+        var p = ctx.params || {};
+        return {
+          konu: 'Binance istek limiti (weight) aşıldı',
+          sebep: 'Emir gönderilmeden önce Binance API weight kotası alınamadı; istek sırası bekletildi veya atlandı'
+            + (p.bot_id ? (' (bot #' + p.bot_id + ').') : '.'),
+          etki: 'Bu tick\'te emir gönderilmez; weight boşalınca devam eder.',
+          oneri: 'Çok sayıda bot veya sık tick varsa weight kullanımını azaltın; geçici ise bekleyin.'
+        };
+      }
+    },
+    {
+      test: function (msg) { return /run_actions TIMEOUT|ORDER_TIMEOUT|skip_reason=ORDER_TIMEOUT/i.test(msg); },
+      apply: function (ctx) {
+        var p = ctx.params || {};
+        return {
+          konu: 'Emir gönderimi zaman aşımı',
+          sebep: 'Binance emir isteği belirlenen sürede yanıt vermedi; emir durumu belirsiz (unknown) olarak işaretlendi'
+            + (p.bot_id ? (' (bot #' + p.bot_id + ').') : '.'),
+          etki: 'Emir borsada açılmış olabilir; reconcile bir sonraki tick\'te durumu netleştirir.',
+          oneri: 'Binance açık emirler ve işlem geçmişini kontrol edin; ağ gecikmesi sürerse timeout ayarlarını gözden geçirin.'
+        };
+      }
+    },
+    {
+      test: function (msg) { return /BOT SLIPPAGE_WARN|SLIPPAGE_WARN/i.test(msg); },
+      apply: function (ctx) {
+        var slip = (String(ctx.message || '').match(/slip_pct=([\d.]+)/) || [])[1];
+        return {
+          konu: 'Yüksek kayma (slippage) uyarısı',
+          sebep: 'Gerçekleşen fiyat tetik fiyatından beklenenden fazla sapmış'
+            + (slip ? (' (kayma %' + slip + ').') : '.'),
+          etki: 'Emir yine de gerçekleşmiş olabilir; K/Z ve grid hesabı etkilenebilir.',
+          oneri: 'Volatil piyasa veya düşük likidite olabilir; max_slippage_pct ayarını ve grid yüzdelerini gözden geçirin.'
+        };
+      }
+    },
+    {
+      test: function (msg) { return /write_fill_snapshot|update_virtual_after_fill|record_trade failed|BOT_EXECUTION_REPAIR/i.test(msg); },
+      apply: function (ctx) {
+        var isRepair = /REPAIR/i.test(ctx.message || '');
+        return {
+          konu: isRepair ? 'Emir onarımı / kayıt hatası' : 'Fill sonrası state güncelleme hatası',
+          sebep: isRepair
+            ? 'Borsada bulunan emir bot state\'ine veya işlem tablosuna yazılırken hata oluştu.'
+            : 'Emir başarılı olsa da bakiye snapshot\'ı, sanal cüzdan veya işlem kaydı güncellenemedi.',
+          etki: 'UI bakiyesi veya işlem geçmişi kısa süre eski kalabilir; strateji state\'i kısmen güncellenmiş olabilir.',
+          oneri: 'DB ve disk alanını kontrol edin; bot detay sayfasını yenileyin; hata sürerse botu durdurup state ile Binance\'i karşılaştırın.'
+        };
+      }
+    },
+    {
+      test: function (msg) { return /Binance server time unavailable|using local timestamp/i.test(msg); },
+      apply: function () {
+        return {
+          konu: 'Binance sunucu saati alınamadı',
+          sebep: 'Binance /api/v3/time yanıt vermedi; istek imzalarında yerel saat kullanılıyor.',
+          etki: 'Saat farkı büyükse 401 imza hatası ve emir reddi oluşabilir.',
+          oneri: 'Sunucu saatini NTP ile senkronize edin (macOS: Sistem Ayarları → Tarih ve Saat).'
+        };
+      }
+    },
     {
       test: function (msg) { return /^\[401\/Binance uyarısı/i.test(msg); },
       apply: function () {
@@ -455,6 +637,7 @@
     {
       test: function (msg) { return /ValueError|TypeError|AttributeError|KeyError|IndexError|RuntimeError/i.test(msg); },
       apply: function (ctx) {
+        var msg = ctx.message || ctx.raw || '';
         var m = msg.match(/(\w+Error|\w+Exception)/);
         return {
           konu: 'Python program hatası' + (m ? ' (' + m[1] + ')' : ''),
@@ -488,22 +671,52 @@
     return msg;
   }
 
+  function moduleLabel(module) {
+    if (!module) return null;
+    return MODULE_LABELS[module] || null;
+  }
+
   function genericFallback(ctx) {
     var isErr = /ERROR|CRITICAL|Exception|Traceback/i.test(ctx.raw);
+    var mod = ctx.module || '';
+    var msg = ctx.message || ctx.raw || '';
+    var konu = isErr ? 'Sistem hatası' : 'Sistem uyarısı';
+    if (/app\.botengine\.execution/i.test(mod)) {
+      konu = isErr ? 'Bot emir yürütme hatası' : 'Bot emir yürütme uyarısı';
+    } else if (/binance_spot|binance_adapter/i.test(mod)) {
+      konu = 'Binance API uyarısı';
+    } else if (/botengine/i.test(mod)) {
+      konu = isErr ? 'Bot engine hatası' : 'Bot engine uyarısı';
+    }
+    var sebep = 'Bu log satırı için özel Türkçe şablon yok; tam kaynak metin en altta (Ham satır).';
+    if (/BOT_EXECUTION|run_actions|EXEC_ORDER/i.test(msg)) {
+      sebep = 'Bot emir yürütme aşamasında uyarı veya hata kaydedildi.';
+    } else if (/binance_spot|BINANCE_/i.test(msg)) {
+      sebep = 'Binance API çağrısı sırasında uyarı kaydedildi.';
+    }
     return {
-      konu: isErr ? 'Sistem hatası' : 'Sistem uyarısı',
-      sebep: 'Log satırı otomatik sınıflandırılamadı; ham kayıt aşağıda.',
-      etki: isErr ? 'İlgili işlem başarısız olmuş olabilir.' : 'İşlem devam edebilir; davranışı izleyin.',
-      oneri: null
+      konu: konu,
+      sebep: sebep,
+      etki: isErr ? 'İlgili işlem başarısız olmuş olabilir.' : 'İşlem devam edebilir; bot davranışını izleyin.',
+      oneri: 'Tekrarlıyorsa bot engine worker.log dosyasında aynı zaman damgasını arayın.',
+      _isGenericFallback: true
     };
+  }
+
+  function rawLogLine(ctx) {
+    return String(ctx.raw || ctx.message || '').trim() || '—';
   }
 
   function buildBlock(ctx, tr, serviceKey) {
     var lines = [];
+    var isFallback = tr && tr._isGenericFallback === true;
     lines.push('Konu: ' + (tr.konu || '—'));
     if (ctx.timestamp) lines.push('Tarih: ' + formatTsTr(ctx.timestamp));
     if (serviceKey && SERVICE_LABELS[serviceKey]) lines.push('Servis: ' + SERVICE_LABELS[serviceKey]);
-    if (ctx.module) lines.push('Modül: ' + ctx.module);
+    if (ctx.module) {
+      var modLbl = moduleLabel(ctx.module);
+      lines.push('Modül: ' + (modLbl ? modLbl + ' (' + ctx.module + ')' : ctx.module));
+    }
     if (ctx.level) lines.push('Seviye: ' + levelTr(ctx.level));
     lines.push('Sebep: ' + (tr.sebep || '—'));
     if (tr.etki) lines.push('Etki: ' + tr.etki);
@@ -515,10 +728,12 @@
       }).filter(Boolean);
       if (paramParts.length) lines.push('Parametreler: ' + paramParts.join(', '));
     }
-    var tech = technicalDetail(ctx);
-    if (tech) lines.push('Teknik detay: ' + tech);
+    if (!isFallback) {
+      var tech = technicalDetail(ctx);
+      if (tech) lines.push('Teknik detay: ' + tech);
+    }
     if (tr.oneri) lines.push('Ne yapmalı: ' + tr.oneri);
-    lines.push('Ham kayıt: ' + ctx.raw);
+    lines.push('Ham satır: ' + rawLogLine(ctx));
     return lines.join('\n');
   }
 

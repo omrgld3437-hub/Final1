@@ -35,7 +35,8 @@
         .status-badge { display: inline-flex; align-items: center; padding: 0 10px; min-height: 36px; border-radius: 6px; font-size: 0.8rem; font-weight: 600; box-sizing: border-box; }
         .status-running { background: rgba(14, 203, 129, 0.15); color: #0ecb81; }
         .status-stopped { background: rgba(108, 117, 125, 0.2); color: #6c757d; }
-        .status-error { background: rgba(246, 70, 93, 0.15); color: #f6465d; }
+        .status-error { background: rgba(246, 70, 93, 0.15); color: #f6465d; animation: status-error-blink 0.85s ease-in-out infinite; }
+        @keyframes status-error-blink { 0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(246, 70, 93, 0.35); } 50% { opacity: 0.45; box-shadow: 0 0 8px 2px rgba(246, 70, 93, 0.4); } }
         .health-alert-badge { display: none; align-items: center; padding: 0 10px; min-height: 36px; border-radius: 6px; font-size: 0.78rem; font-weight: 700; box-sizing: border-box; cursor: default; }
         .health-alert-warn { background: rgba(240, 185, 11, 0.2); color: #f0b90b; border: 1px solid rgba(240, 185, 11, 0.45); animation: health-warn-blink 2.2s ease-in-out infinite; }
         .health-alert-critical { background: rgba(246, 70, 93, 0.22); color: #f6465d; border: 1px solid rgba(246, 70, 93, 0.5); animation: health-crit-blink 0.65s ease-in-out infinite; }
@@ -47,6 +48,12 @@
             50% { border-color: rgba(246, 70, 93, 0.25); box-shadow: 0 0 12px 2px rgba(246, 70, 93, 0.2); }
         }
         #headerPanel.panel-health-critical, #engineLogPanel.panel-health-critical { border: 2px solid rgba(246, 70, 93, 0.7); border-radius: 8px; }
+        .panel-health-warn { animation: panel-warn-border 2.2s ease-in-out infinite; }
+        @keyframes panel-warn-border {
+            0%, 100% { border-color: rgba(240, 185, 11, 0.75); box-shadow: 0 0 0 1px rgba(240, 185, 11, 0.25); }
+            50% { border-color: rgba(240, 185, 11, 0.3); box-shadow: 0 0 10px 2px rgba(240, 185, 11, 0.15); }
+        }
+        #headerPanel.panel-health-warn, #engineLogPanel.panel-health-warn { border: 2px solid rgba(240, 185, 11, 0.55); border-radius: 8px; }
         @keyframes page-crit-frame {
             0%, 100% {
                 border-color: rgba(246, 70, 93, 0.95);
@@ -268,6 +275,17 @@
         .grid-trade-detail-row:last-child { border-bottom: none; }
         .grid-trade-detail-label { color: var(--ds-text-secondary); flex-shrink: 0; }
         .grid-trade-detail-value { color: var(--ds-text-primary); text-align: right; word-break: break-word; }
+        html.modal-scroll-locked,
+        body.modal-scroll-locked {
+            overflow: hidden !important;
+            height: 100%;
+        }
+        body.modal-scroll-locked {
+            position: fixed;
+            width: 100%;
+            left: 0;
+            right: 0;
+        }
         #engineLogList .engine-log-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
         #engineLogList .engine-log-table col.log-col-time { width: 11rem; }
         #engineLogList .engine-log-table col.log-col-type { width: 4.5rem; }
@@ -293,6 +311,9 @@
             font-weight: 700;
         }
         #engineLogList .log-repeat-badge { font-size: 0.65rem; color: var(--ds-text-tertiary); font-weight: 600; white-space: nowrap; }
+        #engineLogPanel .engine-log-actions { display: flex; justify-content: flex-end; gap: 0.35rem; margin-bottom: 0.5rem; flex-wrap: wrap; }
+        #engineLogPanel #btnEngineLogReset,
+        #engineLogPanel #btnEngineLogExport { min-height: 28px; height: 28px; padding: 0 0.65rem; font-size: 0.72rem; border-radius: 6px; }
         .trade-side-buy { color: #0ecb81; }
         .trade-side-sell { color: #f6465d; }
         .loading { text-align: center; padding: 2rem; color: var(--ds-text-secondary); }
@@ -486,7 +507,9 @@
             /* Loglar: mesaj sütunu taşmasın, iç içe girmesin; mesajlar alt alta; sadece masaüstü */
             #engineLogPanel { overflow: hidden; max-width: 100%; }
             #engineLogPanel .btn, #engineLogPanel .btn-secondary { min-height: 48px; height: 48px; padding: 0 1.25rem; border-radius: 10px; }
-            #engineLogPanel #btnEngineLogReset { min-height: 28px; height: 28px; padding: 0 0.5rem; font-size: 0.72rem; border-radius: 6px; }
+            #engineLogPanel #btnEngineLogReset,
+            #engineLogPanel #btnEngineLogExport { min-height: 28px; height: 28px; padding: 0 0.5rem; font-size: 0.72rem; border-radius: 6px; }
+            #engineLogPanel .engine-log-actions { display: flex; justify-content: flex-end; gap: 0.35rem; margin-bottom: 0.5rem; flex-wrap: wrap; }
             @media (max-width: 768px) {
                 #engineLogPanel { display: none !important; }
             }
@@ -541,6 +564,8 @@
         .grid-status-bekliyor { background: rgba(246, 70, 93, 0.15); color: #f6465d; border: 1px solid rgba(246, 70, 93, 0.4); }
         .grid-status-tetiklendi { background: rgba(240, 185, 11, 0.15); color: #f0b90b; border: 1px solid rgba(240, 185, 11, 0.5); }
         .grid-status-tamamlandi { background: rgba(14, 203, 129, 0.15); color: #0ecb81; border: 1px solid rgba(14, 203, 129, 0.4); }
+        .grid-status-disabled { background: rgba(128, 128, 128, 0.12); color: var(--ds-text-secondary, #848e9c); border: 1px solid rgba(128, 128, 128, 0.25); }
+        .grid-section-disabled { opacity: 0.55; }
         .perf-genel-block { background: linear-gradient(135deg, var(--ds-bg-tertiary, #2b3139) 0%, rgba(0,0,0,0.3) 100%); border-radius: 12px; padding: 1.5rem 2rem; margin-bottom: 1.25rem; border: 1px solid var(--ds-border, #2b3139); text-align: center; }
         .perf-genel-block .perf-genel-title { font-size: 0.8rem; font-weight: 600; color: var(--ds-text-secondary); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.5rem; }
         .perf-genel-block .perf-genel-value { font-size: 2.25rem; font-weight: 700; line-height: 1.2; }
@@ -549,7 +574,16 @@
         .perf-metric-label { font-size: 0.75rem; color: var(--ds-text-secondary); text-transform: uppercase; margin-bottom: 0.25rem; }
         .perf-metric-value { font-size: 1.1rem; font-weight: 600; }
         .perf-report { background: var(--ds-bg-tertiary, #2b3139); border-radius: 8px; padding: 1.25rem; margin-top: 1rem; font-size: 0.9rem; line-height: 1.6; color: var(--ds-text-secondary); }
-        .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 9998; display: flex; align-items: center; justify-content: center; padding: 1.5rem; }
+        .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 9998; display: flex; align-items: center; justify-content: center; padding: 1.5rem; overscroll-behavior: contain; touch-action: none; }
+        #gridTradeDetailModal.modal-overlay {
+            background: rgba(11, 14, 20, 0.42);
+            backdrop-filter: blur(14px) saturate(1.08);
+            -webkit-backdrop-filter: blur(14px) saturate(1.08);
+        }
+        #gridTradeDetailModal.modal-overlay .parametreler-modal-panel {
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(255, 255, 255, 0.06);
+        }
+        .modal-overlay .parametreler-modal-panel { touch-action: pan-y; max-height: 85vh; }
         .modal-panel { background: var(--ds-bg-secondary, #1e2329); border-radius: 12px; padding: 1.5rem 1.75rem; max-width: 440px; width: 100%; border: 1px solid var(--ds-border, #2b3139); box-shadow: 0 12px 40px rgba(0,0,0,0.4); }
         .modal-title { margin: 0 0 0.5rem 0; font-size: 1.15rem; font-weight: 600; color: var(--ds-text-primary); }
         .modal-desc { color: var(--ds-text-secondary); font-size: 0.9rem; margin-bottom: 1.25rem; line-height: 1.45; }
@@ -565,10 +599,12 @@
         #cycleTradesTurButtons .cycle-tur-btn { padding: 4px 10px; font-size: 0.75rem; font-weight: 500; border-radius: 6px; border: 1px solid var(--ds-border, #2b3139); background: var(--ds-bg-tertiary, #2b3139); color: var(--ds-text-secondary, #848e9c); cursor: pointer; transition: background 0.2s, border-color 0.2s, color 0.2s; }
         #cycleTradesTurButtons .cycle-tur-btn:hover { background: var(--ds-bg-secondary, #1e2329); color: var(--ds-text-primary, #eaecef); border-color: var(--ds-border, #2b3139); }
         #cycleTradesTurButtons .cycle-tur-btn.active { background: rgba(240, 185, 11, 0.15); color: var(--ds-accent, #f0b90b); border-color: var(--ds-accent, #f0b90b); }
-        .cycle-report { background: var(--ds-bg-tertiary, #2b3139); border-radius: 8px; padding: 0.75rem 1rem; font-size: 0.82rem; color: var(--ds-text-secondary); display: flex; flex-wrap: wrap; gap: 1rem; align-items: center; }
-        .cycle-report .cycle-report-item { display: flex; align-items: center; gap: 0.35rem; }
-        .cycle-report .cycle-report-label { text-transform: uppercase; letter-spacing: 0.04em; opacity: 0.9; }
-        .cycle-report .cycle-report-value { font-weight: 600; color: var(--ds-text-primary, #eaecef); }
+        .cycle-report { background: var(--ds-bg-tertiary, #2b3139); border-radius: 8px; padding: 0.75rem 1rem; font-size: 0.82rem; color: var(--ds-text-secondary); display: flex; flex-wrap: wrap; gap: 1rem; align-items: center; min-height: 2.5rem; }
+        .cycle-report .cycle-report-item { display: flex; align-items: center; gap: 0.35rem; flex: 0 0 auto; }
+        .cycle-report .cycle-report-label { text-transform: uppercase; letter-spacing: 0.04em; opacity: 0.9; white-space: nowrap; }
+        .cycle-report .cycle-report-value { font-weight: 600; color: var(--ds-text-primary, #eaecef); font-variant-numeric: tabular-nums; white-space: nowrap; }
+        #cycleReportDuration { min-width: 6.5rem; display: inline-block; text-align: left; }
+        #cycleTradesList { min-height: 2.5rem; }
         .cycle-report .cycle-report-value.positive { color: #0ecb81; }
         .cycle-report .cycle-report-value.negative { color: #f6465d; }
         /* Bot tipi üst başlık – modal’daki yapı adıyla aynı */
@@ -611,7 +647,8 @@
 
         <div class="panel" id="gridPointsPanel" style="display: none;">
             <h2>Grid alım satım noktaları</h2>
-            <p class="muted poll-note" style="font-size: 0.85rem; margin-bottom: 1rem;">Tepe/dip noktası grid tetiklendikten sonra aktif olur; anlık en tepe veya en dip her yakalandığında güncellenir, gerçekleşme fiyatı da belirlenen yüzdeliğe göre anlık güncellenir.</p>
+            <p id="gridPointsRefPrice" class="muted poll-note grid-points-ref-price" style="font-size: 0.85rem; margin-top: -0.35rem; margin-bottom: 0.75rem;"></p>
+            <p class="muted poll-note" style="font-size: 0.85rem; margin-bottom: 1rem;">Tepe/dip noktası grid tetiklendikten sonra aktif olur. Aynı anda birden fazla seviye tetiklenebilir; dip/tepe ve gerçekleşme fiyatları aynı olabilir — her seviye kendi miktar/tutarıyla bağımsız işlem yapar. Turda ilk <strong>başarılı</strong> grid işlemi hangi yöndeyse o tur yalnızca o yönde devam eder.</p>
             <div class="grid-section-title grid-section-title first">Satış gridleri</div>
             <div style="overflow-x: auto;">
                 <table class="grid-points-table grid-sell-table" id="gridSellTable">
@@ -700,9 +737,10 @@
 
         <div class="panel" id="engineLogPanel" style="display: none;">
             <h2>Bot Logları</h2>
-            <p class="muted poll-note" style="font-size: 0.85rem; margin-bottom: 0.75rem;">En son 500 kayıt listelenir. Bütün hareketler gösterilir. Uyarı alarmlarını kapatmak için Resetle butonuna basın.</p>
-            <div style="display: flex; justify-content: flex-end; margin-bottom: 0.5rem;">
-                <button type="button" class="btn btn-sm btn-secondary" id="btnEngineLogReset" title="Uyarı alarmlarını sıfırla (loglar kalır)">Resetle</button>
+            <p class="muted poll-note" style="font-size: 0.85rem; margin-bottom: 0.75rem;">Tabloda son 500 kayıt gösterilir. Oturum arşivi sayfa açıldığından beri tüm işlem/uyarı/hata kayıtlarını tutar (Resetle arşivi silmez). Dışarı aktar ile .txt ve .json indirirsiniz.</p>
+            <div class="engine-log-actions">
+                <button type="button" class="btn btn-sm btn-secondary" id="btnEngineLogExport" title="Bu oturumdaki tüm logları okunabilir dosya olarak indir">Dışarı aktar</button>
+                <button type="button" class="btn btn-sm btn-secondary" id="btnEngineLogReset" title="Banner, yanıp sönme ve tekrarlayan bağlantı loglarını sıfırla">Resetle</button>
             </div>
             <div id="engineLogList" style="max-height: 420px; overflow: auto; font-family: monospace; font-size: 0.8rem; border: 1px solid var(--ds-border, #2b3139); border-radius: 8px; padding: 0.5rem;"></div>
         </div>
@@ -777,9 +815,11 @@
     </div>
     <script src="/ui/assets/utils/coinLogo.js?v=1"></script>
     <script src="/ui/assets/core/apiClient.js?v=refactor1"></script>
-    <script src="/ui/assets/utils/engineLogFormat.js?v=23"></script>
-    <script src="/ui/assets/utils/botHealthAlerts.js?v=8"></script>
-    <script src="/ui/assets/utils/engineLogLive.js?v=4"></script>
+    <script src="/ui/assets/utils/gridTrailEnvelope.js?v=2"></script>
+    <script src="/ui/assets/utils/engineLogArchive.js?v=1"></script>
+    <script src="/ui/assets/utils/botHealthAlerts.js?v=18"></script>
+    <script src="/ui/assets/utils/engineLogLive.js?v=11"></script>
+    <script src="/ui/assets/utils/engineLogFormat.js?v=29"></script>
     <script src="/ui/assets/core/intervalRegistry.js?v=1"></script>
     <script src="/ui/vendor/lightweight-charts.standalone.production.js"></script>
     <script src="/ui/assets/perf_chart_tv.js?v=1"></script>
@@ -790,7 +830,32 @@
         var accountId = qs.get('account_id');
         var accountCode = qs.get('account_code');
         var _showDetailGen = 0;
+        var _lastTradesPanelFingerprint = '';
         var _tradesLoadGen = 0;
+
+        var _bodyScrollLockCount = 0;
+        function lockBodyScroll() {
+            if (_bodyScrollLockCount === 0) {
+                var scrollY = window.scrollY || window.pageYOffset || document.documentElement.scrollTop || 0;
+                document.body.dataset.scrollLockY = String(scrollY);
+                document.body.classList.add('modal-scroll-locked');
+                document.body.style.top = '-' + scrollY + 'px';
+                document.documentElement.classList.add('modal-scroll-locked');
+            }
+            _bodyScrollLockCount++;
+        }
+        function unlockBodyScroll() {
+            if (_bodyScrollLockCount <= 0) return;
+            _bodyScrollLockCount--;
+            if (_bodyScrollLockCount === 0) {
+                var y = parseInt(document.body.dataset.scrollLockY || '0', 10) || 0;
+                document.body.classList.remove('modal-scroll-locked');
+                document.body.style.top = '';
+                delete document.body.dataset.scrollLockY;
+                document.documentElement.classList.remove('modal-scroll-locked');
+                window.scrollTo(0, y);
+            }
+        }
 
         function readBotIdFromUrl() {
             var q = new URLSearchParams(location.search);
@@ -881,6 +946,97 @@
             var s = n.toFixed(8).replace(/\.?0+$/, '');
             return s;
         }
+        function fmtSignedUsd(v) {
+            if (v == null || v === '' || isNaN(v)) return '—';
+            var n = Number(v);
+            return (n >= 0 ? '+' : '-') + fmtUsd(Math.abs(n));
+        }
+        function tradeFeeUsd(t) {
+            if (!t) return 0;
+            if (t.fee_usdt != null && !isNaN(Number(t.fee_usdt)) && Number(t.fee_usdt) > 0) return Number(t.fee_usdt);
+            var fee = t.fee != null ? Number(t.fee) : (t.commission != null ? Number(t.commission) : 0);
+            return !isNaN(fee) && fee > 0 ? fee : 0;
+        }
+        function formatTradeFeeDisplay(t, symbolHint) {
+            if (!t) return '—';
+            var sym = (t.symbol || symbolHint || '').toUpperCase();
+            var base = baseFromSymbol(sym) || '';
+            var feeAsset = (t.fee_asset || 'USDT').toUpperCase();
+            var feeRaw = t.fee_raw != null && !isNaN(Number(t.fee_raw)) ? Number(t.fee_raw) : null;
+            var feeUsd = tradeFeeUsd(t);
+            if (feeRaw == null && t.fee != null && feeAsset !== 'USDT') {
+                var legacyRaw = Number(t.fee);
+                var notional = (t.qty && t.price) ? Number(t.qty) * Number(t.price) : 0;
+                if (!isNaN(legacyRaw) && legacyRaw > 0 && (notional <= 0 || legacyRaw > notional * 0.02)) {
+                    feeRaw = legacyRaw;
+                }
+            }
+            if ((!feeUsd || feeUsd <= 0) && feeRaw > 0 && feeAsset === base && t.price) {
+                feeUsd = feeRaw * Number(t.price);
+            }
+            if (!feeUsd || feeUsd <= 0) return '—';
+            var usdStr = fmtUsd(feeUsd);
+            if (feeAsset !== 'USDT' && feeRaw > 0) {
+                return fmtNum(feeRaw, 8) + ' ' + feeAsset + ' (≈ ' + usdStr + ')';
+            }
+            return usdStr;
+        }
+        function computeTradeKarUsd(opts) {
+            opts = opts || {};
+            var qty = opts.qty != null && !isNaN(Number(opts.qty)) ? Number(opts.qty) : null;
+            var execP = opts.execP != null && !isNaN(Number(opts.execP)) ? Number(opts.execP) : null;
+            var refP = opts.refP != null && !isNaN(Number(opts.refP)) ? Number(opts.refP) : null;
+            var fee = opts.fee != null && !isNaN(Number(opts.fee)) ? Number(opts.fee) : 0;
+            if (qty == null || qty <= 0 || execP == null || refP == null) return null;
+            if (opts.mode === 'buy') return qty * (refP - execP) - fee;
+            return qty * (execP - refP) - fee;
+        }
+        function sameTradeRow(a, b) {
+            if (!a || !b) return false;
+            if (a === b) return true;
+            if (a.order_id && b.order_id && String(a.order_id) === String(b.order_id)) return true;
+            if (a.id != null && b.id != null && String(a.id) === String(b.id)) return true;
+            if (a.client_order_id && b.client_order_id && String(a.client_order_id) === String(b.client_order_id)) return true;
+            return false;
+        }
+        function cyclePnlEntry(cycleNum) {
+            var pnls = lastBotDetail && lastBotDetail.state && lastBotDetail.state.cycle_pnls;
+            if (!pnls || cycleNum == null) return null;
+            for (var i = 0; i < pnls.length; i++) {
+                if (Number(pnls[i].cycle_id) === Number(cycleNum)) return pnls[i];
+            }
+            return null;
+        }
+        function formatCloseTradeKar(closeKind, cycleNum, tradeQty, execP, avgCost, feeUsd, coin, td) {
+            td = td || {};
+            if (closeKind === 'reentry') {
+                var inv = td.inventory_coin_adv_qty != null ? Number(td.inventory_coin_adv_qty) : null;
+                if (inv == null || isNaN(inv)) {
+                    var entry = cyclePnlEntry(cycleNum);
+                    if (entry && entry.inventory_coin_adv_qty != null) inv = Number(entry.inventory_coin_adv_qty);
+                }
+                if (inv != null && !isNaN(inv) && inv !== 0) {
+                    return (inv >= 0 ? '+' : '-') + fmtBaseCompact(Math.abs(inv)) + (coin && coin !== '—' ? ' ' + coin : '');
+                }
+            }
+            var karUsd = computeTradeKarUsd({
+                qty: tradeQty,
+                execP: execP,
+                refP: avgCost,
+                fee: feeUsd,
+                mode: closeKind === 'reentry' ? 'buy' : 'sell'
+            });
+            if (karUsd == null && td.realized_profit_usdt != null && !isNaN(Number(td.realized_profit_usdt))) {
+                return fmtSignedUsd(Number(td.realized_profit_usdt));
+            }
+            if (karUsd == null) {
+                var entry2 = cyclePnlEntry(cycleNum);
+                if (entry2 && entry2.pnl_usdt_net != null && !isNaN(Number(entry2.pnl_usdt_net))) {
+                    return fmtSignedUsd(Number(entry2.pnl_usdt_net));
+                }
+            }
+            return fmtSignedUsd(karUsd);
+        }
         /** Bot başlangıç tarihi ve çalışma süresi (stateHeroMeta). Döner: { start: string, duration: string | null } */
         function formatStartMeta(startedAtIso, status) {
             if (!startedAtIso || typeof startedAtIso !== 'string') return { start: '', duration: null };
@@ -921,13 +1077,55 @@
             }
             return '';
         }
+        function formatDurationSec(sec) {
+            if (sec == null || isNaN(sec) || sec < 0) return '—';
+            sec = Math.floor(Number(sec));
+            var h = Math.floor(sec / 3600);
+            var m = Math.floor((sec % 3600) / 60);
+            var s = sec % 60;
+            if (h > 0) return h + 's ' + m + 'dk';
+            if (m > 0) return m + 'dk ' + s + 'sn';
+            return s + 'sn';
+        }
+        function tradesPanelFingerprint(trades, summary, cycleId) {
+            var ids = (trades || []).map(function (t) {
+                return String(t.order_id || t.client_order_id || t.id || '') + ':' + String(t.qty) + ':' + String(t.price);
+            }).join('|');
+            var sum = summary
+                ? [
+                    summary.trade_count,
+                    summary.cash_pnl_usdt,
+                    summary.inventory_coin_adv_qty,
+                    summary.started_at
+                ].join(':')
+                : '';
+            return String(cycleId) + '::' + ids + '::' + sum;
+        }
+        function formatDurationFromStartedAt(startedAtIso) {
+            if (!startedAtIso || typeof startedAtIso !== 'string') return '';
+            var d = new Date(startedAtIso);
+            if (isNaN(d.getTime())) return '';
+            var sec = Math.max(0, Math.floor((Date.now() - d.getTime()) / 1000));
+            return formatDurationSec(sec);
+        }
+        function setCycleReportStartedAt(iso) {
+            window._cycleReportStartedAt = iso || null;
+        }
+        function resolveOpenCycleStartedAt(summary) {
+            if (summary && summary.started_at) return summary.started_at;
+            if (lastBotDetail && lastBotDetail.dual_pnl && lastBotDetail.dual_pnl.current_cycle) {
+                return lastBotDetail.dual_pnl.current_cycle.started_at || null;
+            }
+            return null;
+        }
         function updateCycleReportDurationLive() {
             var durEl = document.getElementById('cycleReportDuration');
             if (!durEl) return;
             var sel = window._botDetailSelectedCycleId;
             var cur = (lastBotDetail && lastBotDetail.currentCycleId != null) ? lastBotDetail.currentCycleId : lastKnownCycleId;
             if (sel == null || cur == null || Number(sel) !== Number(cur)) return;
-            var v = getStateHeroDurationValue();
+            var startedAt = window._cycleReportStartedAt || resolveOpenCycleStartedAt(null);
+            var v = formatDurationFromStartedAt(startedAt);
             if (v) durEl.textContent = v;
         }
         function setStateHeroMetaHtml(metaEl, startedAtIso, status) {
@@ -1083,6 +1281,8 @@
         window._lastEngineEvents = [];
         window._lastHealthData = null;
         window._lastSeenHealthEventId = 0;
+        window._lastConnLogReload = 0;
+        var _botDetailDurationActive = false;
 
         function isBotRunning() {
             var st = (lastBotDetail && (lastBotDetail.display_status || lastBotDetail.status)) ? String(lastBotDetail.display_status || lastBotDetail.status).toLowerCase() : '';
@@ -1104,6 +1304,9 @@
             var q = accountCode ? '?account_code=' + encodeURIComponent(accountCode) : '?account_id=' + (accountId || '');
             window.apiClient.get('/api/bots-engine/' + botId + '/health' + q).then(function(res) {
                 window._lastHealthData = res || { alerts: [] };
+                if (window.EngineLogLive && _engineLogLiveOpts) {
+                    window.EngineLogLive.renderDisplayEvents(_engineLogLiveOpts);
+                }
                 syncHealthFromState();
             }).catch(function() {});
         }
@@ -1129,7 +1332,18 @@
             container: engineLogList,
             apiClient: window.apiClient,
             state: { events: [], lastId: 0 },
-            onAfterRender: onEngineEventsForHealth
+            getHealthData: function () { return window._lastHealthData || null; },
+            onAfterRender: onEngineEventsForHealth,
+            onPollError: function (failCount) {
+                if (typeof fetchBotHealth === 'function') fetchBotHealth();
+                if (failCount >= 3 && engineLogList && !engineLogList.querySelector('.engine-log-poll-error')) {
+                    var note = document.createElement('div');
+                    note.className = 'muted engine-log-poll-error';
+                    note.style.cssText = 'padding:0.5rem 0.75rem;color:#f6465d;font-size:0.8rem;';
+                    note.textContent = 'Log güncellenemedi — bağlantıyı kontrol edin.';
+                    engineLogList.insertBefore(note, engineLogList.firstChild);
+                }
+            }
         };
 
         function loadEngineEvents(bid, incremental) {
@@ -1166,6 +1380,7 @@
             lastKnownCycleId = null;
             window._botDetailSelectedCycleId = null;
             window._botDetailLoadCycleTrades = null;
+            _lastTradesPanelFingerprint = '';
             if (cycleTradesList) cycleTradesList.innerHTML = '<div class="cycle-pnl-item muted">Yükleniyor…</div>';
             var turBtns = document.getElementById('cycleTradesTurButtons');
             if (turBtns) turBtns.innerHTML = '';
@@ -1173,7 +1388,8 @@
             if (configGrid) configGrid.innerHTML = '';
             var pModal = document.getElementById('parametrelerModal');
             if (pModal) pModal.style.display = 'none';
-            document.body.style.overflow = '';
+            unlockBodyScroll();
+            _bodyScrollLockCount = 0;
         }
 
         function botWaitingFirstBuy(status, opts) {
@@ -1186,20 +1402,43 @@
             return (Number(opts.baseBalance) || 0) <= 0;
         }
 
+        function botTickIsStale(lastTickAt, maxAgeSec) {
+            if (lastTickAt == null || lastTickAt === '') return false;
+            maxAgeSec = maxAgeSec == null ? 30 : maxAgeSec;
+            var tickTs = typeof lastTickAt === 'number'
+                ? lastTickAt
+                : Math.floor(new Date(lastTickAt).getTime() / 1000);
+            if (isNaN(tickTs) || tickTs <= 0) return false;
+            return (Date.now() / 1000 - tickTs) > maxAgeSec;
+        }
+
+        function botShowAsError(status, lastErrorCode, opts) {
+            if ((status || '').toLowerCase() !== 'running') return false;
+            var err = String(lastErrorCode || '').trim();
+            if (err === 'API_UNAUTHORIZED' || err === 'ACCOUNT_KEYS_MISSING' || err === 'BINANCE_UNREACHABLE') return true;
+            opts = opts || {};
+            if (opts.stale === true) return true;
+            if (opts.equityUnavailable === true) return true;
+            if (botTickIsStale(opts.lastTickAt)) return true;
+            return false;
+        }
+
         function applyStatusBadge(status, opts) {
             opts = opts || {};
             var st = (status || 'stopped').toLowerCase();
             var waitingFirstBuy = botWaitingFirstBuy(st, opts);
-            var showAsError = opts.showAsError === true;
+            var showAsError = opts.showAsError === true || botShowAsError(st, opts.lastErrorCode, opts);
             var statusText = st === 'starting' ? 'Başlatılıyor'
-                : st === 'running' ? (showAsError ? 'Hata (API anahtarı)' : waitingFirstBuy ? 'Alım bekliyor' : 'Çalışıyor')
+                : st === 'running' ? (showAsError ? 'Hata (bağlantı)' : waitingFirstBuy ? 'Alım bekliyor' : 'Çalışıyor')
                 : st === 'error' || (st && st.indexOf('paused') === 0) ? 'Hata'
                 : st === 'stopped' ? 'Durduruldu' : 'Bekliyor';
             if (statusBadge) {
                 statusBadge.textContent = statusText;
                 statusBadge.className = 'status-badge ' + (showAsError || st === 'error' || (st && st.indexOf('paused') === 0) ? 'status-error' : st === 'running' ? 'status-running' : 'status-stopped');
                 statusBadge.title = showAsError
-                    ? 'Binance API anahtarı geçersiz veya IP/Spot izni yok. API Key, IP beyaz listesi ve Spot izinlerini kontrol edin.'
+                    ? (opts.stale === true
+                        ? 'Güncel veri alınamıyor; son tick eski veya fiyat/bakiye güncellenemiyor.'
+                        : 'Binance API anahtarı geçersiz veya IP/Spot izni yok. API Key, IP beyaz listesi ve Spot izinlerini kontrol edin.')
                     : (waitingFirstBuy ? 'Bot başlatıldı; ilk base alımı henüz gerçekleşmedi.' : '');
             }
             var stateHeroTitleEl = document.getElementById('stateHeroTitle');
@@ -1209,7 +1448,16 @@
                     : 'Durum · ' + statusText;
                 if (stateHeroTitleEl.textContent !== titleText) stateHeroTitleEl.textContent = titleText;
             }
+            window._botLiveProblem = (st === 'running' && showAsError);
             return waitingFirstBuy;
+        }
+
+        function scheduleSyncHealthUi() {
+            if (window._syncHealthUiTimer) return;
+            window._syncHealthUiTimer = setTimeout(function () {
+                window._syncHealthUiTimer = null;
+                syncHealthFromState();
+            }, 150);
         }
 
         /** Grid alım/satım noktaları tablolarını günceller (tepe/dip, gerçekleşme fiyatı anlık). */
@@ -1231,16 +1479,70 @@
             }
             return ref > 0 ? ref : quoteBal;
         }
-        function renderGridPointsPanel(data) {
+        var _gridPointsRefCtx = null;
+        function setGridPointsRefContext(refD, cycleNum, baseAsset) {
+            _gridPointsRefCtx = { refD: refD, cycleNum: cycleNum, baseAsset: baseAsset || '' };
+        }
+        function formatPctFromRef(refPrice, livePrice) {
+            if (refPrice == null || refPrice <= 0 || livePrice == null || livePrice <= 0) return '';
+            var pct = (Number(livePrice) - Number(refPrice)) / Number(refPrice) * 100;
+            return ' · ' + (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%';
+        }
+        function gridTrailPct(side, cfg) {
+            cfg = cfg || {};
+            if (side === 'buy') {
+                var v = cfg.buy_trigger_trailing_pct;
+                if (v == null && cfg.down) v = cfg.down.trail_pct;
+                return v != null && !isNaN(Number(v)) ? Number(v) : 0.3;
+            }
+            var sv = cfg.sell_trigger_trailing_pct;
+            if (sv == null && cfg.up) sv = cfg.up.trail_pct;
+            return sv != null && !isNaN(Number(sv)) ? Number(sv) : 0.3;
+        }
+        function gridTrailLivePrice(data, opts) {
+            opts = opts || {};
+            if (opts.livePrice != null && Number(opts.livePrice) > 0) return Number(opts.livePrice);
+            if (lastPriceForBlink != null && lastPriceForBlink > 0) return lastPriceForBlink;
+            if (data && data.current_price != null && !isNaN(Number(data.current_price)) && Number(data.current_price) > 0) {
+                return Number(data.current_price);
+            }
+            return null;
+        }
+        function refreshGridPointsLivePrice(livePrice) {
+            updateGridPointsRefPriceLine(livePrice);
+            if (!lastBotDetail || !gridPointsPanel || gridPointsPanel.style.display === 'none') return;
+            if (!botDetailGridTrailActive(lastBotDetail)) return;
+            var merged = Object.assign({}, lastBotDetail);
+            renderGridPointsPanel(merged, { livePrice: livePrice, applyLive: true });
+            if (typeof renderProfitPointsPanel === 'function') {
+                renderProfitPointsPanel(merged, { livePrice: livePrice, applyLive: true });
+            }
+        }
+        function updateGridPointsRefPriceLine(livePrice) {
+            var refEl = document.getElementById('gridPointsRefPrice');
+            var ctx = _gridPointsRefCtx;
+            if (!refEl || !ctx) return;
+            if (ctx.refD != null && ctx.refD > 0) {
+                refEl.textContent = 'Tur ' + ctx.cycleNum + ' referans fiyatı: ' + (ctx.baseAsset ? ctx.baseAsset + ' ' : '') + fmtNum(ctx.refD, 4) + formatPctFromRef(ctx.refD, livePrice);
+            } else {
+                refEl.textContent = 'Tur ' + ctx.cycleNum + ' referans fiyatı: —';
+            }
+        }
+        function renderGridPointsPanel(data, opts) {
             if (!gridSellBody || !gridBuyBody) return;
+            opts = opts || {};
             var gps = data.grid_points || [];
             var sellPoints = gps.filter(function(p) { return p.type === 'sell'; });
             var buyPoints = gps.filter(function(p) { return p.type === 'buy'; });
             var st = data.state || {};
             var symbol = data.symbol || lastBotDetail.symbol || '?';
             var baseBal = st.base_balance != null ? Number(st.base_balance) : 0;
+            var refBaseBal = st.grid_reference_base != null && !isNaN(Number(st.grid_reference_base)) && Number(st.grid_reference_base) > 0
+                ? Number(st.grid_reference_base) : baseBal;
             var quoteBal = st.quote_balance != null ? Number(st.quote_balance) : 0;
             var cfg = data.config || {};
+            var sellTrailPct = gridTrailPct('sell', cfg);
+            var buyTrailPct = gridTrailPct('buy', cfg);
             var quotePoolUsd = (function() {
                 var m = data.meta || data.grid_meta;
                 if (m && m.quote_pool_usd != null) return Number(m.quote_pool_usd);
@@ -1248,7 +1550,32 @@
             })();
             var baseAsset = baseFromSymbol(symbol) || '';
             var refD = data.reference_display != null && !isNaN(data.reference_display) ? Number(data.reference_display) : null;
+            if (refD == null && st.reference_price != null && !isNaN(Number(st.reference_price))) refD = Number(st.reference_price);
+            var cycleNum = st.cycle_id != null ? st.cycle_id : '?';
+            setGridPointsRefContext(refD, cycleNum, baseAsset);
+            var livePrice = gridTrailLivePrice(data, opts);
+            var cycleId = st.cycle_id != null ? st.cycle_id : 0;
+            if (window.GridTrailEnvelope) {
+                window.GridTrailEnvelope.syncGridTrailEnvelope(
+                    botId, cycleId, sellPoints, buyPoints,
+                    opts.applyLive ? livePrice : null,
+                    opts.applyLive === true
+                );
+            }
+            updateGridPointsRefPriceLine(livePrice);
             gridPointsPanel.style.display = 'block';
+            var gmSide = (data.grid_meta || data.meta || {});
+            var cycleSide = gmSide.cycle_grid_side || st.cycle_grid_side || null;
+            var sellSectionTitle = document.querySelector('#gridPointsPanel .grid-section-title.first');
+            var buySectionTitle = document.querySelector('#gridPointsPanel .grid-section-title:not(.first)');
+            if (sellSectionTitle) sellSectionTitle.classList.toggle('grid-section-disabled', cycleSide === 'BUY');
+            if (buySectionTitle) buySectionTitle.classList.toggle('grid-section-disabled', cycleSide === 'SELL');
+            function gridStatusBadge(p) {
+                if (p.disabled) return { text: 'Devre dışı', cls: 'grid-status-disabled' };
+                if (p.fired) return { text: 'Tamamlandı', cls: 'grid-status-tamamlandi' };
+                if (p.anchor != null || p.trigger_hit_price != null) return { text: 'Tetiklendi', cls: 'grid-status-tetiklendi' };
+                return { text: 'Bekliyor', cls: 'grid-status-bekliyor' };
+            }
             gridSellBody.innerHTML = '';
             sellPoints.forEach(function (p) {
                 var tr = document.createElement('tr');
@@ -1256,17 +1583,23 @@
                 if (refD && p.trigger_price != null) level += ' (+' + ((p.trigger_price / refD - 1) * 100).toFixed(2) + '%)';
                 else level += ' (satış)';
                 if (p.qty_pct != null && !isNaN(p.qty_pct)) level += ' %' + Number(p.qty_pct);
-                var statusText = p.fired ? 'Tamamlandı' : ((p.anchor != null || (p.trigger_hit_price != null)) ? 'Tetiklendi' : 'Bekliyor');
-                var statusClass = p.fired ? 'grid-status-tamamlandi' : ((p.anchor != null || (p.trigger_hit_price != null)) ? 'grid-status-tetiklendi' : 'grid-status-bekliyor');
+                var stBadge = gridStatusBadge(p);
+                var statusText = stBadge.text;
+                var statusClass = stBadge.cls;
                 var trigger = (p.trigger_price != null && !isNaN(p.trigger_price)) ? fmtNum(p.trigger_price, 4) : '—';
-                var anchor = p.anchor != null ? fmtNum(p.anchor, 4) : '—';
-                var exec = p.execution_price != null ? fmtNum(p.execution_price, 4) : '—';
+                var liveTrailS = window.GridTrailEnvelope
+                    ? window.GridTrailEnvelope.trailDisplayFromEnvelope(p, 'sell', sellTrailPct)
+                    : { anchor: p.anchor, exec: p.execution_price };
+                var anchorVal = liveTrailS.anchor != null ? liveTrailS.anchor : p.anchor;
+                var execVal = liveTrailS.exec != null ? liveTrailS.exec : p.execution_price;
+                var anchor = anchorVal != null ? fmtNum(anchorVal, 4) : '—';
+                var exec = execVal != null ? fmtNum(execVal, 4) : '—';
                 var miktar = '—';
                 if (p.planned_base_qty != null && !isNaN(p.planned_base_qty) && p.planned_base_qty > 0) {
                     miktar = fmtBaseCompact(Number(p.planned_base_qty)) + (baseAsset ? ' ' + baseAsset : '');
                 } else if (p.qty_pct != null && !isNaN(p.qty_pct)) {
-                    if (baseBal > 0) {
-                        var sellQty = baseBal * (Number(p.qty_pct) / 100);
+                    if (refBaseBal > 0) {
+                        var sellQty = refBaseBal * (Number(p.qty_pct) / 100);
                         miktar = fmtBaseCompact(sellQty) + (baseAsset ? ' ' + baseAsset : '');
                     } else {
                         miktar = Number(p.qty_pct) + '%';
@@ -1287,11 +1620,17 @@
                 if (refD && p.trigger_price != null) level += ' (-' + ((1 - p.trigger_price / refD) * 100).toFixed(2) + '%)';
                 else level += ' (alım)';
                 if (p.qty_pct != null && !isNaN(p.qty_pct)) level += ' %' + Number(p.qty_pct);
-                var statusText = p.fired ? 'Tamamlandı' : ((p.anchor != null || (p.trigger_hit_price != null)) ? 'Tetiklendi' : 'Bekliyor');
-                var statusClass = p.fired ? 'grid-status-tamamlandi' : ((p.anchor != null || (p.trigger_hit_price != null)) ? 'grid-status-tetiklendi' : 'grid-status-bekliyor');
+                var stBadgeB = gridStatusBadge(p);
+                var statusText = stBadgeB.text;
+                var statusClass = stBadgeB.cls;
                 var trigger = (p.trigger_price != null && !isNaN(p.trigger_price)) ? fmtNum(p.trigger_price, 4) : '—';
-                var anchor = p.anchor != null ? fmtNum(p.anchor, 4) : '—';
-                var exec = p.execution_price != null ? fmtNum(p.execution_price, 4) : '—';
+                var liveTrailB = window.GridTrailEnvelope
+                    ? window.GridTrailEnvelope.trailDisplayFromEnvelope(p, 'buy', buyTrailPct)
+                    : { anchor: p.anchor, exec: p.execution_price };
+                var anchorValB = liveTrailB.anchor != null ? liveTrailB.anchor : p.anchor;
+                var execValB = liveTrailB.exec != null ? liveTrailB.exec : p.execution_price;
+                var anchor = anchorValB != null ? fmtNum(anchorValB, 4) : '—';
+                var exec = execValB != null ? fmtNum(execValB, 4) : '—';
                 var tutar = '—';
                 var buyTitle = 'Alım yapılacak tutar (quote havuzunun %' + (p.qty_pct != null ? p.qty_pct : '') + ')';
                 if (quotePoolUsd > 0) buyTitle += ' · Havuz ' + fmtUsd(quotePoolUsd);
@@ -1316,22 +1655,28 @@
         }
 
         /** Kar alım/satım noktaları tablosunu günceller (ortalama maliyet, tepe/dip, gerçekleşme anlık). */
-        function renderProfitPointsPanel(data) {
+        function renderProfitPointsPanel(data, opts) {
             if (!profitPointsBody) return;
+            opts = opts || {};
             var st = data.state || {};
             var sellHist = st.sell_history || [];
             var buyHist = st.buy_history || [];
             var cfg = data.config || {};
+            function gridHistPrice(x) {
+                if (x.execution_price != null && !isNaN(Number(x.execution_price))) return Number(x.execution_price);
+                return Number(x.price) || 0;
+            }
             function avgFromHist(hist, gridOnly) {
-                var h = gridOnly && Array.isArray(hist) ? hist.filter(function(x) { return x != null && (x.grid_index != null || x.slot_id != null); }) : (hist || []);
+                var h = gridOnly && Array.isArray(hist) ? hist.filter(function(x) { return x != null && x.grid_index != null; }) : (hist || []);
                 if (!h.length) return null;
                 var tq = h.reduce(function(s, x) { return s + (Number(x.qty) || 0); }, 0);
                 if (tq <= 0) return null;
-                var tv = h.reduce(function(s, x) { return s + (Number(x.qty) || 0) * (Number(x.price) || 0); }, 0);
+                var tv = h.reduce(function(s, x) { return s + (Number(x.qty) || 0) * gridHistPrice(x); }, 0);
                 return (tv / tq).toFixed(4);
             }
-            var avgSellGrid = avgFromHist(sellHist, true);
-            var avgBuyGrid = avgFromHist(buyHist, true);
+            var gm = data.grid_meta || {};
+            var avgSellGrid = gm.avg_sell_grid != null ? String(gm.avg_sell_grid) : avgFromHist(sellHist, true);
+            var avgBuyGrid = gm.avg_buy_grid != null ? String(gm.avg_buy_grid) : avgFromHist(buyHist, true);
             profitPointsPanel.style.display = 'block';
             if (profitAvgCostNote) {
                 profitAvgCostNote.textContent = (avgSellGrid != null || avgBuyGrid != null) ? ('Ortalama maliyet (sadece grid): Satış bazı ' + (avgSellGrid || '—') + ', Alım bazı ' + (avgBuyGrid || '—') + '.') : '';
@@ -1339,8 +1684,26 @@
             var pr = cfg.profit || {};
             var profitExitPctConfig = cfg.profit_exit_rise_pct != null ? cfg.profit_exit_rise_pct : pr.resell_trigger_pct;
             var reentryPctConfig = cfg.profit_reentry_drop_pct != null ? cfg.profit_reentry_drop_pct : pr.rebuy_trigger_pct;
+            var sellTrailPctProfit = gridTrailPct('sell', cfg);
+            var buyTrailPctProfit = gridTrailPct('buy', cfg);
+            var livePriceProfit = gridTrailLivePrice(data, opts);
             var pps = data.profit_points || [];
+            var cycleIdProfit = (data.state || {}).cycle_id != null ? (data.state || {}).cycle_id : 0;
+            if (window.GridTrailEnvelope) {
+                window.GridTrailEnvelope.syncProfitTrailEnvelope(
+                    botId, cycleIdProfit, pps,
+                    opts.applyLive ? livePriceProfit : null,
+                    opts.applyLive === true
+                );
+            }
+            var metaSide = data.grid_meta || data.meta || {};
+            var cycleSideProfit = metaSide.cycle_grid_side || st.cycle_grid_side || null;
             profitPointsBody.innerHTML = '';
+            if (!pps.length && (metaSide.cycle_side_pending || !cycleSideProfit)) {
+                var trPending = document.createElement('tr');
+                trPending.innerHTML = '<td colspan="6" class="muted">Kar noktaları, tur yönü ilk başarılı grid işlemiyle belirlendikten sonra aktif olur.</td>';
+                profitPointsBody.appendChild(trPending);
+            }
             pps.forEach(function (p) {
                 var tr = document.createElement('tr');
                 var typ = p.type === 'reentry' ? 'Kar alım (Re-entry)' : 'Kar satış (Profit exit)';
@@ -1351,9 +1714,37 @@
                 var triggerStr = (p.trigger_price != null && !isNaN(p.trigger_price)) ? fmtNum(p.trigger_price, 4) : '—';
                 var avgCostStr = (p.average_cost != null && !isNaN(p.average_cost)) ? fmtNum(p.average_cost, 4) : (p.type === 'profit_exit' && avgBuyGrid ? fmtNum(avgBuyGrid, 4) : (p.type === 'reentry' && avgSellGrid ? fmtNum(avgSellGrid, 4) : '—'));
                 var tepeDipLabel = p.type === 'reentry' ? 'Dip' : 'Tepe';
-                var tepeDipVal = (p.trigger_hit && (p.type === 'reentry' ? p.dip : p.tepe) != null) ? fmtNum(p.type === 'reentry' ? p.dip : p.tepe, 4) : '—';
+                var tepeDipVal = '—';
+                if (p.trigger_hit) {
+                    if (p.type === 'reentry' && p.dip != null) {
+                        var liveD = window.GridTrailEnvelope
+                            ? window.GridTrailEnvelope.profitTrailDisplay(p, 'buy', buyTrailPctProfit)
+                            : { anchor: p.dip, exec: p.execution_price };
+                        tepeDipVal = liveD.anchor != null ? fmtNum(liveD.anchor, 4) : fmtNum(p.dip, 4);
+                    } else if (p.type !== 'reentry' && p.tepe != null) {
+                        var liveT = window.GridTrailEnvelope
+                            ? window.GridTrailEnvelope.profitTrailDisplay(p, 'sell', sellTrailPctProfit)
+                            : { anchor: p.tepe, exec: p.execution_price };
+                        tepeDipVal = liveT.anchor != null ? fmtNum(liveT.anchor, 4) : fmtNum(p.tepe, 4);
+                    }
+                }
                 var tepeDipStr = tepeDipLabel + ': ' + tepeDipVal;
-                var execStr = (p.trigger_hit && p.execution_price != null && !isNaN(p.execution_price)) ? fmtNum(p.execution_price, 4) : '—';
+                var execStr = '—';
+                if (p.trigger_hit) {
+                    if (p.type === 'reentry' && p.dip != null) {
+                        var liveExecD = window.GridTrailEnvelope
+                            ? window.GridTrailEnvelope.profitTrailDisplay(p, 'buy', buyTrailPctProfit)
+                            : { anchor: p.dip, exec: p.execution_price };
+                        execStr = liveExecD.exec != null ? fmtNum(liveExecD.exec, 4) : ((p.execution_price != null && !isNaN(p.execution_price)) ? fmtNum(p.execution_price, 4) : '—');
+                    } else if (p.type !== 'reentry' && p.tepe != null) {
+                        var liveExecT = window.GridTrailEnvelope
+                            ? window.GridTrailEnvelope.profitTrailDisplay(p, 'sell', sellTrailPctProfit)
+                            : { anchor: p.tepe, exec: p.execution_price };
+                        execStr = liveExecT.exec != null ? fmtNum(liveExecT.exec, 4) : ((p.execution_price != null && !isNaN(p.execution_price)) ? fmtNum(p.execution_price, 4) : '—');
+                    } else if (p.execution_price != null && !isNaN(p.execution_price)) {
+                        execStr = fmtNum(p.execution_price, 4);
+                    }
+                }
                 var statusKey = (p.status || '').toLowerCase();
                 var statusText = statusKey === 'tamamlandi' ? 'Tamamlandı' : (statusKey === 'tetiklendi' ? 'Tetiklendi' : 'Bekliyor');
                 var statusClass = statusKey === 'tamamlandi' ? 'grid-status-tamamlandi' : (statusKey === 'tetiklendi' ? 'grid-status-tetiklendi' : 'grid-status-bekliyor');
@@ -1397,6 +1788,7 @@
                 meta: res.meta || (base && base.meta) || (base && base.grid_meta) || null,
                 grid_meta: res.meta || res.grid_meta || (base && base.grid_meta) || null,
                 symbol: res.symbol || (base && base.symbol),
+                current_price: res.current_price != null ? res.current_price : (base && base.current_price),
                 state: st,
                 config: res.config || (base && base.config) || {}
             });
@@ -1415,8 +1807,9 @@
                     lastBotDetail.grid_points = merged.grid_points;
                     lastBotDetail.profit_points = merged.profit_points;
                     lastBotDetail.state = merged.state;
-                    renderGridPointsPanel(merged);
-                    renderProfitPointsPanel(merged);
+                    if (merged.current_price != null) lastBotDetail.current_price = merged.current_price;
+                    renderGridPointsPanel(merged, { applyLive: false });
+                    renderProfitPointsPanel(merged, { applyLive: false });
                     if (!botDetailGridTrailActive(merged)) syncGridPointsPoll();
                 })
                 .catch(function () {})
@@ -1426,6 +1819,7 @@
         function syncGridPointsPoll() {
             if (!window.intervalRegistry) return;
             if (botDetailGridTrailActive(lastBotDetail)) {
+                fetchGridPointsLive();
                 window.intervalRegistry.start('bot-detail-grid-points', fetchGridPointsLive, gridPointsPollMs, 'bot-detail');
             } else {
                 window.intervalRegistry.stop('bot-detail-grid-points');
@@ -1436,22 +1830,9 @@
         function refreshTradesPanelPoll() {
             if (document.hidden || !botId || !window.apiClient) return;
             var sel = window._botDetailSelectedCycleId;
-            window.apiClient.get('/api/bots-engine/' + botId + '/cycles?account_id=' + (accountId || ''))
-                .then(function(cyRes) {
-                    var cycles = cyRes.cycles || [1];
-                    if (cycles.length) {
-                        var maxC = Math.max.apply(null, cycles.map(function(c) { return Number(c); }));
-                        if (maxC > (lastKnownCycleId || 0)) onBotCycleChanged(maxC);
-                    }
-                    if (typeof window._botDetailLoadCycleTrades === 'function' && sel != null) {
-                        window._botDetailLoadCycleTrades(Number(sel));
-                    }
-                })
-                .catch(function() {
-                    if (typeof window._botDetailLoadCycleTrades === 'function' && sel != null) {
-                        window._botDetailLoadCycleTrades(Number(sel));
-                    }
-                });
+            if (typeof window._botDetailLoadCycleTrades === 'function' && sel != null) {
+                window._botDetailLoadCycleTrades(Number(sel), { silent: true });
+            }
         }
         function syncTradesPanelPoll() {
             if (!window.intervalRegistry) return;
@@ -1506,6 +1887,7 @@
                     botPriceEl.textContent = priceStr;
                 }
                 lastPriceForBlink = (price != null && !isNaN(price) && price > 0) ? Number(price) : null;
+                refreshGridPointsLivePrice(lastPriceForBlink);
             }
             if (symbol) loadStripKlinesChart(symbol);
             var ch24 = data.price_24h_change_pct;
@@ -1524,16 +1906,18 @@
             var quoteBal = st.quote_balance != null ? Number(st.quote_balance) : 0;
             var iaDone = st.initial_allocation_done === true;
             var lastErrorCode = (st.last_error_code || '').trim();
-            var hasApiKeyError = lastErrorCode === 'API_UNAUTHORIZED';
             var waitingFirstBuy = botWaitingFirstBuy(botStatus, {
                 firstBuyPending: data.first_buy_pending === true,
                 displayStatus: displayStatus,
                 initialAllocationDone: iaDone,
                 baseBalance: baseBal
             });
-            var showAsError = hasApiKeyError && waitingFirstBuy;
+            var liveStale = data.stale === true || botTickIsStale(st.last_tick_at);
             applyStatusBadge(botStatus, {
-                showAsError: showAsError,
+                lastErrorCode: lastErrorCode,
+                stale: liveStale,
+                lastTickAt: st.last_tick_at,
+                equityUnavailable: data.equity_unavailable === true,
                 firstBuyPending: data.first_buy_pending === true,
                 displayStatus: displayStatus,
                 initialAllocationDone: iaDone,
@@ -1544,6 +1928,7 @@
             if (btnStart) btnStart.style.display = botStatus !== 'running' ? 'flex' : 'none';
             if (btnStopAndDelete) btnStopAndDelete.style.display = 'inline-block';
             lastBotDetail.symbol = symbol || '';
+            lastBotDetail.botCode = code || String(botId);
             lastBotDetail.baseBalance = Number((data.state || {}).base_balance) || 0;
             lastBotDetail.quoteAsset = (symbol || '').match(/USDT|FDUSD|BUSD$/i) ? (symbol.match(/USDT|FDUSD|BUSD$/i)[0] || 'USDT') : 'USDT';
             lastBotDetail.dual_pnl = data.dual_pnl || null;
@@ -1598,8 +1983,6 @@
                 '<div class="state-hero-item"><span class="state-label">Tur sayısı</span><span class="state-value" id="stateCycleValue">' + cycleVal + '</span></div>' +
                 '<div class="state-hero-item" title="Gece 00:00 referans bakiyesine göre; her gün sıfırlanır"><span class="state-label">Günlük K/Z</span><span class="state-value" id="stateDailyKzValue" style="color:' + dailyKzCl + '">' + dailyKzStr + '</span></div>' +
                 '<div class="state-hero-item" title="Başlangıç sermayesine göre toplam kar/zarar"><span class="state-label">Toplam K/Z</span><span class="state-value" id="stateTotalKzValue" style="color:' + totalKzCl + '">' + totalKzStr + '</span></div>';
-            var stateHeroTitleEl = document.getElementById('stateHeroTitle');
-            if (stateHeroTitleEl) stateHeroTitleEl.textContent = botStatus === 'starting' ? 'Durum · Başlatılıyor' : botStatus === 'running' ? (showAsError ? 'Durum · Hata' : waitingFirstBuy ? 'Durum · Alım bekliyor' : 'Durum · Canlı') : 'Durum · ' + (botStatus === 'stopped' ? 'Durduruldu' : botStatus === 'error' || (botStatus && botStatus.indexOf('paused') === 0) ? 'Hata' : 'Bekliyor');
             syncEngineAlertBlink(window._engineLogHasCritical && botStatus === 'running');
             lastBotStartedAt = data.started_at || null;
             if (stateHeroMetaInterval) { clearInterval(stateHeroMetaInterval); stateHeroMetaInterval = null; }
@@ -1619,8 +2002,8 @@
             var refPrice = data.reference_display != null && !isNaN(data.reference_display) ? Number(data.reference_display) : (data.state && data.state.reference_price != null ? Number(data.state.reference_price) : null);
             renderConfig(data.config || {}, symbol, refPrice);
 
-            renderGridPointsPanel(data);
-            renderProfitPointsPanel(data);
+            renderGridPointsPanel(data, { applyLive: false });
+            renderProfitPointsPanel(data, { applyLive: false });
             lastBotDetail.state = st;
             lastBotDetail.config = data.config || {};
             lastBotDetail.grid_points = data.grid_points || [];
@@ -1632,12 +2015,18 @@
 
             tradesPanel.style.display = 'block';
             lastKnownCycleId = st.cycle_id != null ? st.cycle_id : 1;
+            lastBotDetail.currentCycleId = lastKnownCycleId;
             var cycleTradesTurButtons = document.getElementById('cycleTradesTurButtons');
             var currentCycleFromState = st.cycle_id != null ? Number(st.cycle_id) : 1;
             var selectedCycleId = currentCycleFromState;
             var botSymbolForTrades = symbol || '';
             function renderCycleTradesList(trades, cycleNum) {
                 cycleTradesList.innerHTML = '';
+                trades = (trades || []).filter(function(t) {
+                    var cid = (t.client_order_id || '').toLowerCase();
+                    return cid.indexOf('cycle_open_') !== 0;
+                });
+                window._botDetailCycleTrades = trades;
                 if (!trades || !trades.length) {
                     cycleTradesList.innerHTML = '<div class="cycle-pnl-item muted">Tur ' + (cycleNum || selectedCycleId) + ' için henüz işlem yok.</div>';
                     return;
@@ -1647,29 +2036,63 @@
                     return cid.indexOf('init_') === 0 || /c0i/i.test(cid);
                 }
                 function tradeReason(t) {
+                    if (t.trade_detail && t.trade_detail.label) return t.trade_detail.label;
+                    if (t.is_cycle_close) {
+                        var rk = resolveTradeKind(t, cycleNum, trades);
+                        if (rk === 'profit_exit') return 'Kar satışı';
+                        if (rk === 'reentry') return 'Kar alımı';
+                    }
+                    if (t.grid_detail && t.grid_detail.grid_label) return t.grid_detail.grid_label;
+                    var reason = (t.reason || '').toLowerCase();
+                    if (reason === 'trail_sell_grid' || reason === 'trail_buy_grid') {
+                        var gi = t.grid_detail && t.grid_detail.grid_index != null ? Number(t.grid_detail.grid_index) : (t.slot_id != null ? Number(t.slot_id) : null);
+                        if (gi != null && !isNaN(gi) && gi >= 0) return 'Grid #' + (gi + 1);
+                        return 'Grid';
+                    }
                     var cid = (t.client_order_id || '').toLowerCase();
                     var slot = t.slot_id;
                     if (cid.indexOf('cycle_open_') === 0) return 'Tur başlangıç (Base)';
                     if (isInitialAllocationTrade(t)) return 'İlk base alımı';
-                    if (cid.indexOf('reentry') >= 0) return 'Kar alımı';
-                    if (cid.indexOf('profit_exit') >= 0 || cid.indexOf('profit') >= 0) return 'Kar satışı';
+                    if (cid.indexOf('reentry') >= 0 || reason === 'trail_reentry_buy') return 'Kar alımı';
+                    if (cid.indexOf('profit_exit') >= 0 || cid.indexOf('profit') >= 0 || reason === 'trail_profit_sell') return 'Kar satışı';
                     if (slot != null && slot >= 0) return 'Grid #' + (slot + 1);
                     if (cid.indexOf('sell_grid') >= 0 || cid.indexOf('buy_grid') >= 0 || cid.indexOf('grid') >= 0) return (slot != null && slot >= 0) ? 'Grid #' + (slot + 1) : 'Grid';
                     return 'Grid';
                 }
+                function isCycleCloseTradeRow(t) {
+                    if (!t) return false;
+                    if (t.trade_detail) return true;
+                    if (t.is_cycle_close) return true;
+                    var reason = (t.reason || '').toLowerCase();
+                    var cid = (t.client_order_id || '').toLowerCase();
+                    if (reason === 'trail_profit_sell' || reason === 'trail_reentry_buy') return true;
+                    if (cid.indexOf('profit_exit') >= 0 || cid.indexOf('reentry') >= 0) return true;
+                    return resolveTradeKind(t, cycleNum, trades) != null;
+                }
                 function isGridTradeRow(t) {
                     if (!t) return false;
+                    if (isCycleCloseTradeRow(t)) return false;
+                    if (t.grid_detail) return true;
                     if (isInitialAllocationTrade(t)) return false;
                     var cid = (t.client_order_id || '').toLowerCase();
-                    if (cid.indexOf('cycle_open_') === 0 || cid.indexOf('reentry') >= 0 || cid.indexOf('profit') >= 0) return false;
+                    if (cid.indexOf('cycle_open_') === 0) return false;
+                    var reason = (t.reason || '').toLowerCase();
+                    if (reason === 'trail_profit_sell' || reason === 'trail_reentry_buy' || reason === 'initial_allocation') return false;
+                    if (cid.indexOf('reentry') >= 0 || cid.indexOf('profit_exit') >= 0) return false;
+                    if (reason === 'trail_sell_grid' || reason === 'trail_buy_grid') return true;
                     var slot = t.slot_id;
                     if (slot != null && !isNaN(Number(slot)) && Number(slot) >= 0) return true;
-                    return cid.indexOf('grid') >= 0 && cid.indexOf('init_') < 0;
+                    if (resolveTradeKind(t, cycleNum, trades)) return false;
+                    var r = tradeReason(t);
+                    return r === 'Grid' || /^Grid #\d+/.test(r);
+                }
+                function isTradeDetailRow(t) {
+                    return isGridTradeRow(t) || isCycleCloseTradeRow(t);
                 }
                 trades.forEach(function(t) {
                     var div = document.createElement('div');
-                    var isGrid = isGridTradeRow(t);
-                    div.className = 'cycle-pnl-item' + (isGrid ? ' cycle-trade-clickable' : '');
+                    var isDetail = isTradeDetailRow(t);
+                    div.className = 'cycle-pnl-item' + (isDetail ? ' cycle-trade-clickable' : '');
                     var side = (t.side || '').toUpperCase();
                     var sideCl = side === 'BUY' ? 'trade-side-buy' : 'trade-side-sell';
                     var baseLabel = side === 'BUY' ? 'Alış' : 'Satış';
@@ -1691,27 +2114,17 @@
                     }
                     var midPart = reason + ' · ' + coin;
                     div.innerHTML = '<div><span class="' + sideCl + '" style="font-weight:600">' + baseLabel + '</span> · ' + midPart + ' · Miktar ' + qty + ' · Fiyat @ ' + price + ' · ' + quoteQty + ' · Komisyon ' + feeStr + realizedPctStr + '</div><div class="muted" style="font-size:0.8rem">' + ts + '</div>';
-                    if (isGrid) {
+                    if (isDetail) {
                         div.setAttribute('role', 'button');
                         div.setAttribute('tabindex', '0');
-                        div.title = 'Grid detayını göster';
-                        div.addEventListener('click', function() { openGridTradeDetailModal(t, tradeReason, botSymbolForTrades); });
+                        div.title = isCycleCloseTradeRow(t) ? 'İşlem detayını göster' : 'Grid detayını göster';
+                        div.addEventListener('click', function() { openGridTradeDetailModal(t, tradeReason, botSymbolForTrades, cycleNum); });
                         div.addEventListener('keydown', function(ev) {
-                            if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); openGridTradeDetailModal(t, tradeReason, botSymbolForTrades); }
+                            if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); openGridTradeDetailModal(t, tradeReason, botSymbolForTrades, cycleNum); }
                         });
                     }
                     cycleTradesList.appendChild(div);
                 });
-            }
-            function formatDurationSec(sec) {
-                if (sec == null || isNaN(sec) || sec < 0) return '—';
-                sec = Math.floor(Number(sec));
-                var h = Math.floor(sec / 3600);
-                var m = Math.floor((sec % 3600) / 60);
-                var s = sec % 60;
-                if (h > 0) return h + 's ' + m + 'dk';
-                if (m > 0) return m + 'dk ' + s + 'sn';
-                return s + 'sn';
             }
             function renderCycleReport(summary, cycleNum) {
                 var cycleReportEl = document.getElementById('cycleReport');
@@ -1724,8 +2137,13 @@
                 }
                 var dur = '—';
                 if (isOpenCycle) {
-                    dur = getStateHeroDurationValue() || '—';
+                    var startedAt = resolveOpenCycleStartedAt(summary);
+                    setCycleReportStartedAt(startedAt);
+                    dur = startedAt
+                        ? formatDurationFromStartedAt(startedAt)
+                        : formatDurationSec(summary && summary.duration_sec != null ? summary.duration_sec : null);
                 } else {
+                    setCycleReportStartedAt(null);
                     dur = formatDurationSec(summary && summary.duration_sec != null ? summary.duration_sec : null);
                 }
                 var count = summary && summary.trade_count != null ? summary.trade_count : '—';
@@ -1735,7 +2153,7 @@
                 var parts = [
                     '<div class="cycle-report-item cycle-report-type"><span class="cycle-report-label">Tur tipi</span><span class="cycle-report-value">' + cycleTypeLabel + '</span></div>',
                     '<div class="cycle-report-item"><span class="cycle-report-label">Tur süresi</span><span class="cycle-report-value" id="cycleReportDuration">' + dur + '</span></div>',
-                    '<div class="cycle-report-item"><span class="cycle-report-label">İşlem sayısı</span><span class="cycle-report-value">' + count + '</span></div>'
+                    '<div class="cycle-report-item"><span class="cycle-report-label">İşlem sayısı</span><span class="cycle-report-value" id="cycleReportCount">' + count + '</span></div>'
                 ];
                 var cashUsdt = summary && summary.cash_pnl_usdt != null ? Number(summary.cash_pnl_usdt) : 0;
                 var cashFees = summary && summary.cash_fees_usdt != null ? Number(summary.cash_fees_usdt) : 0;
@@ -1745,8 +2163,8 @@
                 var invStr = (invQty >= 0 ? '+' : '') + fmtBaseCompact(invQty) + ' ' + baseAsset + (invFees !== 0 ? ' (Komisyon: ' + fmtUsd(invFees) + ')' : '');
                 var curPrice = (lastBotDetail && lastBotDetail.dual_pnl && lastBotDetail.dual_pnl.current_price != null) ? Number(lastBotDetail.dual_pnl.current_price) : null;
                 var invUsdtEquiv = (curPrice != null && curPrice > 0 && invQty !== 0) ? (invQty * curPrice - invFees) : null;
-                parts.push('<div class="cycle-report-item"><span class="cycle-report-label">CASH PNL (USDT)</span><span class="cycle-report-value ' + (cashUsdt >= 0 ? 'positive' : 'negative') + '">' + cashStr + '</span></div>');
-                parts.push('<div class="cycle-report-item"><span class="cycle-report-label">INVENTORY PNL (coin)</span><span class="cycle-report-value ' + (invQty >= 0 ? 'positive' : 'negative') + '">' + invStr + '</span></div>');
+                parts.push('<div class="cycle-report-item"><span class="cycle-report-label">CASH PNL (USDT)</span><span class="cycle-report-value ' + (cashUsdt >= 0 ? 'positive' : 'negative') + '" id="cycleReportCash">' + cashStr + '</span></div>');
+                parts.push('<div class="cycle-report-item"><span class="cycle-report-label">INVENTORY PNL (coin)</span><span class="cycle-report-value ' + (invQty >= 0 ? 'positive' : 'negative') + '" id="cycleReportInv">' + invStr + '</span></div>');
                 if (invUsdtEquiv != null && !isNaN(invUsdtEquiv)) {
                     parts.push('<div class="cycle-report-item"><span class="cycle-report-label">INVENTORY (USDT eşdeğer)</span><span class="cycle-report-value ' + (invUsdtEquiv >= 0 ? 'positive' : 'negative') + '">' + (invUsdtEquiv >= 0 ? '+' : '') + fmtUsd(invUsdtEquiv) + '</span></div>');
                 }
@@ -1754,7 +2172,9 @@
                 cycleReportEl.style.display = 'flex';
                 if (isOpenCycle) updateCycleReportDurationLive();
             }
-            function loadCycleTrades(cycleId) {
+            function loadCycleTrades(cycleId, opts) {
+                opts = opts || {};
+                var silent = opts.silent === true;
                 var myTradesGen = ++_tradesLoadGen;
                 selectedCycleId = cycleId;
                 window._botDetailSelectedCycleId = cycleId;
@@ -1762,16 +2182,17 @@
                 cycleTradesTurButtons.querySelectorAll('button[data-cycle]').forEach(function(btn) {
                     btn.classList.toggle('active', Number(btn.getAttribute('data-cycle')) === cycleId);
                 });
-                cycleTradesList.innerHTML = '<div class="cycle-pnl-item muted">Yükleniyor…</div>';
                 var cycleReportEl = document.getElementById('cycleReport');
-                if (cycleReportEl) cycleReportEl.style.display = 'none';
+                if (!silent) {
+                    cycleTradesList.innerHTML = '<div class="cycle-pnl-item muted">Yükleniyor…</div>';
+                    if (cycleReportEl) cycleReportEl.style.display = 'none';
+                }
                 var q = 'account_id=' + (accountId || '') + '&limit=100&cycle_id=' + cycleId;
                 window.apiClient.get('/api/bots-engine/' + botId + '/trades?' + q)
                     .then(function(res) {
                         if (myDetailGen !== _showDetailGen || myTradesGen !== _tradesLoadGen) return;
                         try {
                             var tradesList = (res && res.trades) ? res.trades : [];
-                            renderCycleTradesList(tradesList, cycleId);
                             var summary = res.cycle_summary ? Object.assign({}, res.cycle_summary) : {};
                             summary.trade_count = tradesList.length;
                             if (cycleId === currentCycleFromState && lastBotDetail && lastBotDetail.dual_pnl && lastBotDetail.dual_pnl.current_cycle) {
@@ -1781,9 +2202,16 @@
                                 summary.cash_fees_usdt = cur.cash_fees_usdt;
                                 summary.inventory_coin_adv_qty = cur.inventory_coin_adv_qty;
                                 summary.inventory_fees_usdt = cur.inventory_fees_usdt;
-                                summary.duration_sec = summary.duration_sec != null ? summary.duration_sec : null;
+                                if (!summary.started_at && cur.started_at) summary.started_at = cur.started_at;
                                 summary.pnl_primary_mode = (cur.cash_pnl_usdt != null && cur.cash_pnl_usdt !== 0) ? 'CASH_USDT_V1' : 'INVENTORY_QTY_V1';
                             }
+                            var fp = tradesPanelFingerprint(tradesList, summary, cycleId);
+                            if (silent && fp === _lastTradesPanelFingerprint) {
+                                if (Number(cycleId) === Number(currentCycleFromState)) updateCycleReportDurationLive();
+                                return;
+                            }
+                            _lastTradesPanelFingerprint = fp;
+                            renderCycleTradesList(tradesList, cycleId);
                             renderCycleReport(summary, cycleId);
                         } catch (uiErr) {
                             console.warn('loadCycleTrades render', uiErr);
@@ -1793,8 +2221,10 @@
                     .catch(function(err) {
                         if (myDetailGen !== _showDetailGen || myTradesGen !== _tradesLoadGen) return;
                         console.warn('loadCycleTrades', err);
-                        cycleTradesList.innerHTML = '<div class="cycle-pnl-item muted">İşlemler yüklenemedi.</div>';
-                        if (cycleReportEl) cycleReportEl.style.display = 'none';
+                        if (!silent) {
+                            cycleTradesList.innerHTML = '<div class="cycle-pnl-item muted">İşlemler yüklenemedi.</div>';
+                            if (cycleReportEl) cycleReportEl.style.display = 'none';
+                        }
                     });
             }
             cycleTradesTurButtons.innerHTML = '';
@@ -1918,6 +2348,7 @@
             if (window.innerWidth > 768) { engineLogPanel.style.display = 'block'; } else { engineLogPanel.style.display = 'none'; }
             if (window.EngineLogFormat && window.EngineLogFormat.setLogContext) {
                 window.EngineLogFormat.setLogContext({
+                    botId: botId,
                     initialCapital: initialCapital,
                     cycleStartEquity: st.cycle_start_equity != null ? Number(st.cycle_start_equity) : null
                 });
@@ -2211,7 +2642,7 @@
         function loadDetail() {
             if (!botId || !window.apiClient) return;
             resetBotDetailUi();
-            var q = '?account_id=' + (accountId || '');
+            var q = accountCode ? '?account_code=' + encodeURIComponent(accountCode) : '?account_id=' + (accountId || '');
             window.apiClient.get('/api/bots-engine/' + botId + q)
                 .then(function (res) {
                     if (res && res.bot_id != null && String(res.bot_id) !== String(botId)) return;
@@ -2220,7 +2651,7 @@
                     fetchBotHealth();
                     if (window.intervalRegistry) {
                         window.intervalRegistry.start('bot-detail-live', fetchLive, 2500, 'bot-detail');
-                        window.intervalRegistry.start('bot-detail-health', fetchBotHealth, 15000, 'bot-detail');
+                        window.intervalRegistry.start('bot-detail-health', fetchBotHealth, 8000, 'bot-detail');
                     }
                     if (lastBotDetail.symbol && lastBotDetail.symbol !== 'MULTI' && accountId && window.intervalRegistry) {
                         window.intervalRegistry.start('bot-detail-strip-price', fetchStripPrice, 1500, 'bot-detail');
@@ -2238,7 +2669,7 @@
             return a.status === b.status && a.pnl_pct === b.pnl_pct && a.equity === b.equity && a.last_price === b.last_price && a.last_tick_at === b.last_tick_at && a.last_error_code === b.last_error_code
                 && a.initial_capital === b.initial_capital && a.daily_pnl_usd === b.daily_pnl_usd && a.daily_pnl_pct === b.daily_pnl_pct
                 && a.first_buy_pending === b.first_buy_pending && a.base_balance === b.base_balance
-                && a.cycle_id === b.cycle_id;
+                && a.cycle_id === b.cycle_id && a.stale === b.stale && a.equity_unavailable === b.equity_unavailable;
         }
         function applyLive(newState) {
             if (newState && newState.cycle_id != null && !isNaN(newState.cycle_id)) {
@@ -2267,9 +2698,11 @@
                     botPriceEl.textContent = priceStr;
                 }
                 lastPriceForBlink = numPrice;
+                refreshGridPointsLivePrice(numPrice);
                 } else {
                     botPriceEl.textContent = '—';
                     lastPriceForBlink = null;
+                    refreshGridPointsLivePrice(null);
                 }
             }
             var pollStatus = (newState.status || 'stopped').toLowerCase();
@@ -2279,26 +2712,36 @@
                 baseBalance: newState.base_balance
             });
             applyStatusBadge(pollStatus, {
+                lastErrorCode: newState.last_error_code,
+                stale: newState.stale === true,
+                lastTickAt: newState.last_tick_at,
+                equityUnavailable: newState.equity_unavailable === true,
                 firstBuyPending: newState.first_buy_pending === true,
                 initialAllocationDone: lastBotDetail.initialAllocationDone === true,
                 baseBalance: newState.base_balance
             });
+            scheduleSyncHealthUi();
+            if (newState.stale === true || newState.last_error_code) {
+                if (typeof fetchBotHealth === 'function') fetchBotHealth();
+            }
             if (newState.first_buy_pending === false && lastBotDetail.initialAllocationDone !== true) {
                 lastBotDetail.initialAllocationDone = true;
             }
-            syncEngineAlertBlink(window._engineLogHasCritical && pollStatus === 'running' && !waitingFirstBuyLive);
             if (stateHeroMetaInterval) { clearInterval(stateHeroMetaInterval); stateHeroMetaInterval = null; }
-            if (window.intervalRegistry) window.intervalRegistry.stop('bot-detail-duration');
             if (pollStatus === 'running' && lastBotStartedAt) {
                 var stateHeroMetaElPoll = document.getElementById('stateHeroMeta');
                 if (stateHeroMetaElPoll) setStateHeroMetaHtml(stateHeroMetaElPoll, lastBotStartedAt, pollStatus);
-                if (window.intervalRegistry) {
+                if (window.intervalRegistry && !_botDetailDurationActive) {
+                    _botDetailDurationActive = true;
                     window.intervalRegistry.start('bot-detail-duration', function() {
                         var durEl = document.getElementById('stateHeroMetaDur');
                         if (durEl) durEl.textContent = formatStartMetaDurationOnly(lastBotStartedAt);
                         updateCycleReportDurationLive();
                     }, 1000, 'bot-detail');
                 }
+            } else if (_botDetailDurationActive && window.intervalRegistry) {
+                _botDetailDurationActive = false;
+                window.intervalRegistry.stop('bot-detail-duration');
             }
             var stateBotBalanceEl = document.getElementById('stateBotBalanceValue');
             var eq = newState.equity;
@@ -2365,6 +2808,7 @@
                         botPriceEl.textContent = priceStr;
                     }
                     lastPriceForBlink = numPrice;
+                    refreshGridPointsLivePrice(numPrice);
                 })
                 .catch(function() {});
         }
@@ -2379,16 +2823,53 @@
                 .catch(function () {});
         }
 
+        function exportEngineLogArchive() {
+            if (!window.EngineLogArchive || !botId) return;
+            var count = window.EngineLogArchive.countEvents(botId);
+            if (count <= 0) {
+                alert('Dışa aktarılacak log yok. Bot sayfası açıkken kayıtlar oturum arşivine eklenir.');
+                return;
+            }
+            var res = window.EngineLogArchive.exportSession(botId, {
+                symbol: lastBotDetail.symbol || '',
+                botCode: lastBotDetail.botCode || String(botId),
+                accountCode: accountCode || ''
+            });
+            if (!res || !res.ok) {
+                alert('Log dosyası indirilemedi.');
+            }
+        }
+
         function resetHealthAlerts() {
             if (!window.BotHealthAlerts || !botId) return;
-            window.BotHealthAlerts.resetUi(
-                botId,
-                (window._lastHealthData && window._lastHealthData.alerts) || []
-            );
+            var alerts = (window._lastHealthData && window._lastHealthData.alerts) || [];
+            var q = accountCode ? '?account_code=' + encodeURIComponent(accountCode) : '?account_id=' + (accountId || '');
+            var finish = function () {
+                var events = window._lastEngineEvents
+                    || (_engineLogLiveOpts && _engineLogLiveOpts.state && _engineLogLiveOpts.state.events)
+                    || [];
+                window.BotHealthAlerts.resetUi(botId, alerts, events);
+                if (window.EngineLogFormat && window.EngineLogFormat.setLogContext) {
+                    window.EngineLogFormat.setLogContext({ botId: botId });
+                }
+                if (window.EngineLogLive && _engineLogLiveOpts) {
+                    window.EngineLogLive.renderDisplayEvents(_engineLogLiveOpts);
+                }
+                syncHealthFromState();
+            };
+            if (window.apiClient) {
+                window.apiClient.post('/api/bots-engine/' + botId + '/health/ack' + q, {})
+                    .catch(function () {})
+                    .finally(finish);
+            } else {
+                finish();
+            }
         }
 
         var btnEngineLogReset = document.getElementById('btnEngineLogReset');
         if (btnEngineLogReset) btnEngineLogReset.addEventListener('click', resetHealthAlerts);
+        var btnEngineLogExport = document.getElementById('btnEngineLogExport');
+        if (btnEngineLogExport) btnEngineLogExport.addEventListener('click', exportEngineLogArchive);
         document.addEventListener('bot-health-reset', resetHealthAlerts);
         /* Başlat butonu kaldırıldı; bot oluşturulunca otomatik başlar */
 
@@ -2403,50 +2884,348 @@
             }
             document.getElementById('stopDeleteAsIs').checked = true;
             stopAndDeleteModal.style.display = 'flex';
+            lockBodyScroll();
         }
         function closeStopAndDeleteModal() {
             if (stopAndDeleteModal) stopAndDeleteModal.style.display = 'none';
+            unlockBodyScroll();
         }
         function openParametrelerModal() {
-            if (parametrelerModal) parametrelerModal.style.display = 'flex';
+            if (parametrelerModal) {
+                parametrelerModal.style.display = 'flex';
+                lockBodyScroll();
+            }
         }
         function closeParametrelerModal() {
             if (parametrelerModal) parametrelerModal.style.display = 'none';
+            unlockBodyScroll();
         }
         function closeGridTradeDetailModal() {
             var modal = document.getElementById('gridTradeDetailModal');
             if (modal) modal.style.display = 'none';
+            unlockBodyScroll();
         }
-        function openGridTradeDetailModal(t, tradeReasonFn, symbolHint) {
+        function resolveTradeKind(t, cycleNum, tradesList) {
+            if (!t) return null;
+            if (t.trade_detail && t.trade_detail.trade_type) return t.trade_detail.trade_type;
+            var reason = (t.reason || '').toLowerCase();
+            if (reason === 'trail_profit_sell') return 'profit_exit';
+            if (reason === 'trail_reentry_buy') return 'reentry';
+            if (t.is_cycle_close) {
+                if (reason === 'trail_profit_sell' || reason.indexOf('profit') >= 0) return 'profit_exit';
+                if (reason === 'trail_reentry_buy' || reason.indexOf('reentry') >= 0) return 'reentry';
+            }
+            var cid = (t.client_order_id || '').toLowerCase();
+            if (cid.indexOf('profit_exit') >= 0) return 'profit_exit';
+            if (cid.indexOf('reentry') >= 0) return 'reentry';
+            var st = lastBotDetail && lastBotDetail.state;
+            var pnls = st && st.cycle_pnls;
+            if (!pnls || cycleNum == null) return null;
+            var entry = null;
+            for (var i = 0; i < pnls.length; i++) {
+                if (Number(pnls[i].cycle_id) === Number(cycleNum)) { entry = pnls[i]; break; }
+            }
+            if (!entry) return null;
+            var cr = (entry.close_reason || '').toLowerCase();
+            if (cr !== 'trail_profit_sell' && cr !== 'trail_reentry_buy') return null;
+            var closeSide = (entry.close_side || (cr === 'trail_profit_sell' ? 'SELL' : 'BUY')).toUpperCase();
+            if ((t.side || '').toUpperCase() !== closeSide) return null;
+            var slot = t.slot_id;
+            if (slot != null && !isNaN(Number(slot)) && Number(slot) >= 0) return null;
+            var cf = entry.close_fill;
+            if (cf && cf.qty != null && cf.price != null && t.qty != null && t.price != null) {
+                if (Math.abs(Number(t.qty) - Number(cf.qty)) <= Math.max(1e-6, Number(cf.qty) * 1e-4)
+                    && Math.abs(Number(t.price) - Number(cf.price)) <= Math.max(0.5, Number(cf.price) * 0.02)) {
+                    return cr === 'trail_profit_sell' ? 'profit_exit' : 'reentry';
+                }
+            }
+            tradesList = tradesList || [];
+            var sideTrades = tradesList.filter(function(x) {
+                return (x.side || '').toUpperCase() === closeSide;
+            });
+            var nonGrid = sideTrades.filter(function(x) {
+                var s = x.slot_id;
+                return s == null || isNaN(Number(s)) || Number(s) < 0;
+            });
+            var candidate = nonGrid.length ? nonGrid[nonGrid.length - 1] : (sideTrades.length ? sideTrades[sideTrades.length - 1] : null);
+            if (candidate && sameTradeRow(candidate, t)) {
+                return cr === 'trail_profit_sell' ? 'profit_exit' : 'reentry';
+            }
+            return null;
+        }
+        function gridCostFromLedgerArchive(cycleNum, kind) {
+            var st = lastBotDetail && lastBotDetail.state;
+            if (!st || cycleNum == null) return { avg: null, quoteUsdt: null };
+            var blocks = st.cycle_ledger_fills_archive || [];
+            var block = null;
+            for (var bi = 0; bi < blocks.length; bi++) {
+                if (Number(blocks[bi].cycle_id) === Number(cycleNum)) { block = blocks[bi]; break; }
+            }
+            if (!block) return { avg: null, quoteUsdt: null };
+            var quoteKey = kind === 'profit_exit' ? 'buy_quote_total' : 'sell_quote_total';
+            var quoteUsdt = block[quoteKey] != null && !isNaN(Number(block[quoteKey])) ? Number(block[quoteKey]) : null;
+            var fills = block.fills || [];
+            var reason = kind === 'profit_exit' ? 'trail_buy_grid' : 'trail_sell_grid';
+            var side = kind === 'profit_exit' ? 'BUY' : 'SELL';
+            var rows = fills.filter(function(f) {
+                return f && f.reason === reason && (f.side || '').toUpperCase() === side;
+            });
+            if (kind === 'profit_exit' && block.avg_cost_quote_per_base != null && !isNaN(Number(block.avg_cost_quote_per_base))) {
+                return { avg: Number(block.avg_cost_quote_per_base), quoteUsdt: quoteUsdt };
+            }
+            if (!rows.length) return { avg: null, quoteUsdt: quoteUsdt };
+            var tq = 0, tv = 0;
+            rows.forEach(function(f) {
+                var q = Number(f.qty || 0), p = Number(f.price || 0);
+                if (q > 0 && p > 0) { tq += q; tv += q * p; }
+            });
+            return { avg: tq > 0 ? tv / tq : null, quoteUsdt: quoteUsdt != null ? quoteUsdt : (tv > 0 ? tv : null) };
+        }
+        function gridCostFromCycleTrades(kind) {
+            var list = window._botDetailCycleTrades || [];
+            var side = kind === 'profit_exit' ? 'BUY' : 'SELL';
+            var rows = list.filter(function(t) {
+                if ((t.side || '').toUpperCase() !== side) return false;
+                var slot = t.slot_id;
+                return slot != null && !isNaN(Number(slot)) && Number(slot) >= 0;
+            });
+            if (!rows.length) return { avg: null, quoteUsdt: null };
+            var tq = 0, tv = 0;
+            rows.forEach(function(t) {
+                var q = Number(t.qty || 0), p = Number(t.price || 0);
+                if (q > 0 && p > 0) { tq += q; tv += q * p; }
+            });
+            return { avg: tq > 0 ? tv / tq : null, quoteUsdt: tv > 0 ? tv : null };
+        }
+        function formatAvgCostWithQuote(avgCost, quoteUsdt, kind) {
+            if (avgCost == null || isNaN(Number(avgCost))) return '—';
+            var s = fmtNum(avgCost, 4);
+            if (quoteUsdt != null && !isNaN(Number(quoteUsdt))) {
+                var quoteLabel = kind === 'reentry' ? 'toplam' : 'harcanan';
+                s += ' · ' + quoteLabel + ' ' + fmtUsd(quoteUsdt);
+            }
+            return s;
+        }
+        function formatGridTriggerLevel(refP, gridPct, side) {
+            if (refP == null || isNaN(Number(refP)) || gridPct == null || isNaN(Number(gridPct))) return null;
+            var ref = Number(refP);
+            var pct = Number(gridPct);
+            return side === 'SELL' ? ref * (1 + pct / 100) : ref * (1 - pct / 100);
+        }
+        function formatGridTriggerDisplay(refP, gridPct, side, levelP, hitP) {
+            var level = levelP != null && !isNaN(Number(levelP))
+                ? Number(levelP)
+                : formatGridTriggerLevel(refP, gridPct, side);
+            if (level == null || isNaN(level)) return '—';
+            return formatGridModalPrice(level, refP);
+        }
+        function formatPriceWithChangeFromRef(price, refPrice, decimals, pctSep) {
+            if (price == null || isNaN(Number(price))) return '—';
+            var dec = decimals != null ? decimals : 4;
+            var sep = pctSep != null ? pctSep : ' · ';
+            var s = fmtNum(price, dec);
+            if (refPrice == null || isNaN(Number(refPrice)) || Number(refPrice) <= 0) return s;
+            var pct = (Number(price) - Number(refPrice)) / Number(refPrice) * 100;
+            s += sep + (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%';
+            return s;
+        }
+        function formatGridModalPrice(price, refPrice) {
+            return formatPriceWithChangeFromRef(price, refPrice, 2, ' ');
+        }
+        function avgCostFromLedgerArchive(cycleNum, kind) {
+            return gridCostFromLedgerArchive(cycleNum, kind).avg;
+        }
+        function avgCostFromCycleTrades(kind) {
+            return gridCostFromCycleTrades(kind).avg;
+        }
+        function buildCloseTradeDetailClient(t, kind, cycleNum) {
+            var cfg = (lastBotDetail && lastBotDetail.config) || {};
+            var pr = cfg.profit || {};
+            var isProfit = kind === 'profit_exit';
+            var triggerPct = isProfit
+                ? (cfg.profit_exit_rise_pct != null ? cfg.profit_exit_rise_pct : pr.resell_trigger_pct)
+                : (cfg.profit_reentry_drop_pct != null ? cfg.profit_reentry_drop_pct : pr.rebuy_trigger_pct);
+            var trailPct = isProfit
+                ? (cfg.profit_exit_drop_pct != null ? cfg.profit_exit_drop_pct : pr.resell_trail_pct)
+                : (cfg.profit_reentry_rise_pct != null ? cfg.profit_reentry_rise_pct : pr.rebuy_trail_pct);
+            var entry = null;
+            var pnls = lastBotDetail && lastBotDetail.state && lastBotDetail.state.cycle_pnls;
+            if (pnls && cycleNum != null) {
+                for (var i = 0; i < pnls.length; i++) {
+                    if (Number(pnls[i].cycle_id) === Number(cycleNum)) { entry = pnls[i]; break; }
+                }
+            }
+            var cf = entry && entry.close_fill;
+            var pp = (lastBotDetail && lastBotDetail.profit_points) || [];
+            var ppRow = null;
+            for (var j = 0; j < pp.length; j++) {
+                if (pp[j] && pp[j].type === kind) { ppRow = pp[j]; break; }
+            }
+            var execP = t.price != null && !isNaN(Number(t.price)) ? Number(t.price) : null;
+            if (cf && cf.execution_price != null) execP = Number(cf.execution_price);
+            else if (ppRow && ppRow.execution_price != null) execP = Number(ppRow.execution_price);
+            var avgCost = null;
+            if (cf) {
+                if (isProfit && cf.avg_cost_quote_per_base != null) avgCost = Number(cf.avg_cost_quote_per_base);
+                else if (!isProfit && cf.avg_sell_grid_quote_per_base != null) avgCost = Number(cf.avg_sell_grid_quote_per_base);
+            }
+            var avgQuote = null;
+            var ledgerBasis = gridCostFromLedgerArchive(cycleNum, kind);
+            var tradeBasis = gridCostFromCycleTrades(kind);
+            if (avgCost == null) avgCost = ledgerBasis.avg;
+            if (avgCost == null) avgCost = tradeBasis.avg;
+            if (avgCost == null && ppRow && ppRow.average_cost != null) avgCost = Number(ppRow.average_cost);
+            if (ledgerBasis.quoteUsdt != null) avgQuote = ledgerBasis.quoteUsdt;
+            else if (tradeBasis.quoteUsdt != null) avgQuote = tradeBasis.quoteUsdt;
+            var tepeP = cf && cf.tepe_price != null ? Number(cf.tepe_price) : null;
+            if (tepeP == null && ppRow && ppRow.tepe != null) tepeP = Number(ppRow.tepe);
+            var dipP = cf && cf.dip_price != null ? Number(cf.dip_price) : null;
+            if (dipP == null && ppRow && ppRow.dip != null) dipP = Number(ppRow.dip);
+            var triggerP = ppRow && ppRow.trigger_price != null ? Number(ppRow.trigger_price) : null;
+            if (avgCost != null && triggerPct != null) {
+                triggerP = isProfit
+                    ? avgCost * (1 + Number(triggerPct) / 100)
+                    : avgCost * (1 - Number(triggerPct) / 100);
+            }
+            if (isProfit && tepeP == null && execP != null && trailPct != null && Number(trailPct) > 0) {
+                var td = 1 - Number(trailPct) / 100;
+                tepeP = td > 0 ? execP / td : null;
+            }
+            if (!isProfit && dipP == null && execP != null && trailPct != null && Number(trailPct) > 0) {
+                dipP = execP / (1 + Number(trailPct) / 100);
+            }
+            return {
+                trade_type: kind,
+                label: isProfit ? 'Kar satışı' : 'Kar alımı',
+                trigger_pct: triggerPct,
+                trailing_pct: trailPct,
+                average_cost: avgCost,
+                average_cost_quote_usdt: avgQuote,
+                trigger_price: triggerP,
+                tepe_price: tepeP,
+                dip_price: dipP,
+                execution_price: execP
+            };
+        }
+        function openGridTradeDetailModal(t, tradeReasonFn, symbolHint, cycleNumHint) {
             var modal = document.getElementById('gridTradeDetailModal');
             var body = document.getElementById('gridTradeDetailBody');
             var titleEl = document.getElementById('gridTradeDetailTitle');
             if (!modal || !body || !t) return;
+            var cycleNum = cycleNumHint != null ? cycleNumHint : (window._botDetailSelectedCycleId != null ? window._botDetailSelectedCycleId : null);
+            var tdRaw = t.trade_detail || {};
+            var kind = tdRaw.trade_type || resolveTradeKind(t, cycleNum, window._botDetailCycleTrades || null);
+            var closeKind = kind;
+            var td = tdRaw;
+            if (closeKind === 'profit_exit' || closeKind === 'reentry') {
+                td = Object.assign({}, buildCloseTradeDetailClient(t, closeKind, cycleNum), tdRaw);
+                td.trade_type = closeKind;
+                if (!td.label) td.label = closeKind === 'profit_exit' ? 'Kar satışı' : 'Kar alımı';
+            }
             var gd = t.grid_detail || {};
             var side = (t.side || '').toUpperCase();
             var coin = baseFromSymbol(t.symbol || symbolHint || (lastBotDetail && lastBotDetail.symbol) || '') || '—';
-            var reason = tradeReasonFn ? tradeReasonFn(t) : (gd.grid_label || 'Grid');
-            if (titleEl) titleEl.textContent = (gd.grid_label || reason || 'Grid') + ' · Detay';
+            var reason = tradeReasonFn ? tradeReasonFn(t) : (td.label || gd.grid_label || 'Grid');
+            if (titleEl) titleEl.textContent = (td.label || gd.grid_label || reason || 'İşlem') + ' · Detay';
             var ts = t.ts ? (function() { var d = new Date(t.ts); return d.toLocaleString('tr-TR'); })() : '—';
             var qty = t.qty != null ? fmtNum(t.qty, 8) + ' ' + coin : '—';
+            var tradeQty = t.qty != null && !isNaN(Number(t.qty)) ? Number(t.qty) : null;
+            var feeUsd = tradeFeeUsd(t);
+            var feeDisplay = formatTradeFeeDisplay(t, symbolHint);
             var quoteQty = (t.qty && t.price) ? fmtUsd(t.qty * t.price) : '—';
-            var rows = [
-                ['Grid sırası', gd.grid_label || reason || '—'],
-                ['Grid payı', gd.qty_pct != null ? gd.qty_pct + '%' : '—'],
-                ['Grid yüzdesi (tetik)', gd.grid_pct != null ? gd.grid_pct + '%' : '—'],
-                ['Tür', gd.grid_type || (side === 'BUY' ? 'Alış gridi' : side === 'SELL' ? 'Satış gridi' : '—')],
-                ['Tarih / saat', ts],
-                ['Miktar', qty],
-                ['Tutar (USDT)', quoteQty],
-                ['Tetik fiyat', (gd.trigger_price != null && !isNaN(Number(gd.trigger_price))) ? fmtNum(Number(gd.trigger_price), 4) : '—'],
-                [gd.extreme_label || (side === 'SELL' ? 'Tepe fiyat' : 'Dip fiyat'), (gd.extreme_price != null && !isNaN(Number(gd.extreme_price))) ? fmtNum(Number(gd.extreme_price), 4) : '—'],
-                ['Gerçekleşme fiyatı', (gd.execution_price != null && !isNaN(Number(gd.execution_price))) ? fmtNum(Number(gd.execution_price), 4) : '—'],
-                ['Borsa dolum fiyatı', (t.price != null && !isNaN(Number(t.price))) ? fmtNum(Number(t.price), 4) : '—']
-            ];
+            var rows = [];
+            if (closeKind === 'profit_exit' || closeKind === 'reentry') {
+                var execP = td.execution_price != null && !isNaN(Number(td.execution_price)) ? Number(td.execution_price) : (t.price != null && !isNaN(Number(t.price)) ? Number(t.price) : null);
+                var trailPct = td.trailing_pct != null && !isNaN(Number(td.trailing_pct)) ? Number(td.trailing_pct) : null;
+                var tepeP = td.tepe_price != null && !isNaN(Number(td.tepe_price)) ? Number(td.tepe_price) : null;
+                var dipP = td.dip_price != null && !isNaN(Number(td.dip_price)) ? Number(td.dip_price) : null;
+                var avgCost = td.average_cost != null && !isNaN(Number(td.average_cost)) ? Number(td.average_cost) : null;
+                var avgQuote = td.average_cost_quote_usdt != null && !isNaN(Number(td.average_cost_quote_usdt)) ? Number(td.average_cost_quote_usdt) : null;
+                var triggerP = td.trigger_price != null && !isNaN(Number(td.trigger_price)) ? Number(td.trigger_price) : null;
+                var ledgerBasis = gridCostFromLedgerArchive(cycleNum, closeKind);
+                var tradeBasis = gridCostFromCycleTrades(closeKind);
+                if (avgCost == null) avgCost = ledgerBasis.avg;
+                if (avgCost == null) avgCost = tradeBasis.avg;
+                if (avgQuote == null) avgQuote = ledgerBasis.quoteUsdt;
+                if (avgQuote == null) avgQuote = tradeBasis.quoteUsdt;
+                if (avgCost != null && td.trigger_pct != null) {
+                    triggerP = closeKind === 'profit_exit'
+                        ? avgCost * (1 + Number(td.trigger_pct) / 100)
+                        : avgCost * (1 - Number(td.trigger_pct) / 100);
+                }
+                if (closeKind === 'profit_exit' && tepeP == null && execP != null && trailPct != null && trailPct > 0) {
+                    var tepeDenom = 1 - trailPct / 100;
+                    tepeP = tepeDenom > 0 ? execP / tepeDenom : null;
+                }
+                if (closeKind === 'reentry' && dipP == null && execP != null && trailPct != null && trailPct > 0) {
+                    dipP = execP / (1 + trailPct / 100);
+                }
+                var tetikTrailing = (td.trigger_pct != null || trailPct != null)
+                    ? ((td.trigger_pct != null ? td.trigger_pct + '%' : '—') + ' / ' + (trailPct != null ? trailPct + '%' : '—'))
+                    : '—';
+                var extremeLabel = closeKind === 'profit_exit' ? 'Tepe fiyat' : 'Dip fiyat';
+                var extremeVal = closeKind === 'profit_exit' ? tepeP : dipP;
+                var karStr = formatCloseTradeKar(closeKind, cycleNum, tradeQty, execP, avgCost, feeUsd, coin, td);
+                rows = [
+                    ['Tür', td.label || reason || '—'],
+                    ['Tetik / trailing', tetikTrailing],
+                    ['Ortalama maliyet', formatAvgCostWithQuote(avgCost, avgQuote, closeKind)],
+                    ['Tetik fiyat', formatGridModalPrice(triggerP, avgCost)],
+                    [extremeLabel, formatGridModalPrice(extremeVal, avgCost)],
+                    ['Gerçekleşme fiyatı', formatGridModalPrice(execP, avgCost)],
+                    ['Miktar', qty],
+                    ['Tutar (USDT)', quoteQty],
+                    ['Komisyon', feeDisplay],
+                    ['Kar', karStr],
+                    ['Tarih / saat', ts]
+                ];
+            } else {
+                var execP = gd.execution_price != null && !isNaN(Number(gd.execution_price)) ? Number(gd.execution_price) : (t.price != null && !isNaN(Number(t.price)) ? Number(t.price) : null);
+                var trailPct = gd.trailing_pct != null && !isNaN(Number(gd.trailing_pct)) ? Number(gd.trailing_pct) : null;
+                var extremeP = gd.extreme_price != null && !isNaN(Number(gd.extreme_price)) ? Number(gd.extreme_price) : null;
+                var refP = gd.reference_price != null && !isNaN(Number(gd.reference_price)) ? Number(gd.reference_price) : null;
+                if (refP == null && t.reference_price != null && !isNaN(Number(t.reference_price))) refP = Number(t.reference_price);
+                if (refP == null && lastBotDetail && lastBotDetail.state && lastBotDetail.state.reference_price != null && !isNaN(Number(lastBotDetail.state.reference_price))) {
+                    refP = Number(lastBotDetail.state.reference_price);
+                }
+                var triggerP = gd.trigger_price != null && !isNaN(Number(gd.trigger_price)) ? Number(gd.trigger_price) : null;
+                var triggerLevelP = gd.trigger_level_price != null && !isNaN(Number(gd.trigger_level_price))
+                    ? Number(gd.trigger_level_price)
+                    : formatGridTriggerLevel(refP, gd.grid_pct, side);
+                var triggerHitP = gd.trigger_hit_price != null && !isNaN(Number(gd.trigger_hit_price))
+                    ? Number(gd.trigger_hit_price)
+                    : triggerP;
+                if (extremeP == null && execP != null && trailPct != null && trailPct > 0) {
+                    if (side === 'SELL') {
+                        var denom = 1 - trailPct / 100;
+                        extremeP = denom > 0 ? execP / denom : null;
+                    } else {
+                        extremeP = execP / (1 + trailPct / 100);
+                    }
+                }
+                var gridPctVal = gd.grid_pct != null && !isNaN(Number(gd.grid_pct)) ? Number(gd.grid_pct) : null;
+                var gridPctLabel = gridPctVal != null ? gridPctVal + '%' : '—';
+                rows = [
+                    ['Grid sırası', gd.grid_label || reason || '—'],
+                    ['Grid payı', gd.qty_pct != null ? gd.qty_pct + '%' : '—'],
+                    ['Tetik yüzdesi', gridPctLabel],
+                    ['Trailing yüzdesi', trailPct != null ? trailPct + '%' : '—'],
+                    ['Tür', gd.grid_type || (side === 'BUY' ? 'Alış gridi' : side === 'SELL' ? 'Satış gridi' : '—')],
+                    ['Tarih / saat', ts],
+                    ['Miktar', qty],
+                    ['Tutar (USDT)', quoteQty],
+                    ['Komisyon', feeDisplay],
+                    ['Tur referans fiyatı', refP != null ? fmtNum(refP, 4) : '—'],
+                    ['Tetik seviyesi', formatGridTriggerDisplay(refP, gridPctVal, side, triggerLevelP, triggerHitP)],
+                    [gd.extreme_label || (side === 'SELL' ? 'Tepe fiyat' : 'Dip fiyat'), formatGridModalPrice(extremeP, refP)],
+                    ['Gerçekleşme fiyatı', formatGridModalPrice(execP, refP)]
+                ];
+            }
             body.innerHTML = rows.map(function(r) {
                 return '<div class="grid-trade-detail-row"><span class="grid-trade-detail-label">' + r[0] + '</span><span class="grid-trade-detail-value">' + r[1] + '</span></div>';
             }).join('');
             modal.style.display = 'flex';
+            lockBodyScroll();
         }
         if (btnParametreler) {
             btnParametreler.addEventListener('click', openParametrelerModal);
@@ -2508,6 +3287,10 @@
         }
 
         function run() {
+            document.body.classList.remove('modal-scroll-locked');
+            document.documentElement.classList.remove('modal-scroll-locked');
+            document.body.style.top = '';
+            _bodyScrollLockCount = 0;
             loadDetail();
         }
 

@@ -39,6 +39,7 @@ from app.botengine.cycle_ledger import (
     cycle_ledger_from_state,
     get_cycle_type_and_base_delta,
 )
+from app.botengine.fee_utils import parse_fill_commission
 from app.botengine.strategies.dca_grid_trailing import (
     apply_fill_to_state,
     cycle_reset_after_fill,
@@ -125,6 +126,52 @@ def _num(v: Any) -> float:
         return float(v)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _parse_binance_order_error(e: Exception) -> Dict[str, Any]:
+    """Extract Binance code/msg from adapter errors; map to skip_reason hints."""
+    import json as _json
+    import httpx
+    from app.services.binance_spot import BinanceSignedError
+
+    out: Dict[str, Any] = {
+        "binance_code": None,
+        "binance_msg": None,
+        "skip_reason": "ORDER_FAILED",
+        "error": str(e)[:500],
+        "request_id": None,
+    }
+    try:
+        if isinstance(e, BinanceSignedError):
+            out["binance_code"] = getattr(e, "code", None)
+            out["binance_msg"] = getattr(e, "msg", None) or ""
+            data = getattr(e, "data", None)
+            if isinstance(data, dict):
+                out["request_id"] = (data.get("requestId") or data.get("request_id")) or None
+        elif isinstance(e, httpx.HTTPStatusError) and getattr(e, "response", None):
+            resp = e.response
+            body = (getattr(resp, "text", None) or "")[:500]
+            try:
+                b = _json.loads(body) if body else {}
+                if isinstance(b, dict):
+                    out["binance_code"] = b.get("code")
+                    out["binance_msg"] = b.get("msg")
+                    out["request_id"] = (b.get("requestId") or b.get("request_id")) or None
+            except Exception:
+                if body and "-2010" in body:
+                    out["binance_code"] = -2010
+            if out["request_id"] is None and hasattr(resp, "headers"):
+                out["request_id"] = (resp.headers.get("X-MBX-REQUEST-ID") or resp.headers.get("x-request-id")) or None
+        code = out["binance_code"]
+        if code == -2010:
+            out["skip_reason"] = "INSUFFICIENT_BALANCE"
+        elif code in (-1013, -1111, -1016):
+            out["skip_reason"] = "LOT_SIZE"
+        if out["binance_msg"]:
+            out["error"] = str(out["binance_msg"])[:500]
+    except Exception:
+        pass
+    return out
 
 
 def _sync_initial_done_from_db(state: Dict[str, Any], db: "Session", bot_id: int) -> bool:
@@ -312,7 +359,9 @@ async def run_actions(
                                         cum_quote = _num(existing_order.get("cummulativeQuoteQty"))
                                         fill_price_raw = (cum_quote / exec_qty) if exec_qty else _num((existing_order.get("fills") or [{}])[0].get("price"))
                                         fill_price = round(float(fill_price_raw), 4)
-                                        fee = sum(_num(f.get("commission")) for f in (existing_order.get("fills") or []))
+                                        fee_raw, fee_asset, fee = parse_fill_commission(
+                                            existing_order.get("fills") or [], symbol, fill_price,
+                                        )
                                         _is_trdca_or_multi = (reason == "trdca_batch" or getattr(config, "symbol", None) == "MULTI")
                                         if not _is_trdca_or_multi:
                                             apply_fill_to_state(state, side, exec_qty, fill_price, fee, grid_index=a.get("grid_index"), reason=reason, execution_price=a.get("execution_price"))
@@ -325,13 +374,13 @@ async def run_actions(
                                                 ledger = cycle_ledger_from_state(state, symbol)
                                                 if ledger.get("cycle_id") != state.get("cycle_id"):
                                                     ledger = build_cycle_ledger_empty(int(state.get("cycle_id") or 1), symbol)
-                                                cycle_ledger_add_fill(ledger, ts=datetime.now(timezone.utc).isoformat(), order_id=str(existing_order.get("orderId")), client_order_id=coid_repair, side=side, qty=exec_qty, price=fill_price, fee=fee, fee_asset="USDT", reason=reason)
+                                                cycle_ledger_add_fill(ledger, ts=datetime.now(timezone.utc).isoformat(), order_id=str(existing_order.get("orderId")), client_order_id=coid_repair, side=side, qty=exec_qty, price=fill_price, fee=fee, fee_asset=fee_asset, reason=reason, slot_id=a.get("grid_index"), fee_raw=fee_raw)
                                                 state["cycle_ledger_current"] = ledger
                                             save_state(db, bot_id, account_id, state)
                                         if db is not None:
                                             try:
                                                 Ledger.record_trade(
-                                                    db, bot_id, account_id, side, exec_qty, fill_price, fee=fee, fee_asset="USDT",
+                                                    db, bot_id, account_id, side, exec_qty, fill_price, fee=fee, fee_asset=fee_asset,
                                                     slot_id=a.get("grid_index"), order_id=str(order_id_repair), client_order_id=coid_repair, symbol=symbol,
                                                     cycle_id=int(state.get("cycle_id") or 1),
                                                 )
@@ -374,7 +423,9 @@ async def run_actions(
                                     cum_quote = _num(existing_order.get("cummulativeQuoteQty"))
                                     fill_price_raw = (cum_quote / exec_qty) if exec_qty else _num((existing_order.get("fills") or [{}])[0].get("price"))
                                     fill_price = round(float(fill_price_raw), 4)
-                                    fee = sum(_num(f.get("commission")) for f in (existing_order.get("fills") or []))
+                                    fee_raw, fee_asset, fee = parse_fill_commission(
+                                        existing_order.get("fills") or [], symbol, fill_price,
+                                    )
                                     update_intent_filled(db, intent_id, order_id_ex)
                                     _is_trdca_or_multi = (reason == "trdca_batch" or getattr(config, "symbol", None) == "MULTI")
                                     if not _is_trdca_or_multi:
@@ -383,12 +434,12 @@ async def run_actions(
                                             ledger = cycle_ledger_from_state(state, symbol)
                                             if ledger.get("cycle_id") != state.get("cycle_id"):
                                                 ledger = build_cycle_ledger_empty(int(state.get("cycle_id") or 1), symbol)
-                                            cycle_ledger_add_fill(ledger, ts=datetime.now(timezone.utc).isoformat(), order_id=str(order_id_ex), client_order_id=client_order_id, side=side, qty=exec_qty, price=fill_price, fee=fee, fee_asset="USDT", reason=reason)
+                                            cycle_ledger_add_fill(ledger, ts=datetime.now(timezone.utc).isoformat(), order_id=str(order_id_ex), client_order_id=client_order_id, side=side, qty=exec_qty, price=fill_price, fee=fee, fee_asset=fee_asset, reason=reason, slot_id=a.get("grid_index"), fee_raw=fee_raw)
                                             state["cycle_ledger_current"] = ledger
                                         save_state(db, bot_id, account_id, state)
                                         if db is not None:
                                             try:
-                                                Ledger.record_trade(db, bot_id, account_id, side, exec_qty, fill_price, fee=fee, fee_asset="USDT", slot_id=a.get("grid_index"), order_id=str(order_id_ex), client_order_id=client_order_id, symbol=symbol, cycle_id=int(state.get("cycle_id") or 1))
+                                                Ledger.record_trade(db, bot_id, account_id, side, exec_qty, fill_price, fee=fee, fee_asset=fee_asset, slot_id=a.get("grid_index"), order_id=str(order_id_ex), client_order_id=client_order_id, symbol=symbol, cycle_id=int(state.get("cycle_id") or 1))
                                             except Exception:
                                                 pass
                                             append_event(db, bot_id, account_id, "ORDER_FILLED", f"repaired=true orderId={order_id_ex} trades_match={trades_match_count}", {"repaired": True, "orderId": order_id_ex, "trades_match_count": trades_match_count})
@@ -604,7 +655,14 @@ async def run_actions(
                         base_bal = balances.get(base_asset) or {}
                         free_base = float(base_bal.get("free") or 0)
                         base_buffer = 0.001
-                        if qty > free_base * (1.0 - base_buffer) and free_base >= 0:
+                        max_qty = free_base * (1.0 - base_buffer) if free_base >= 0 else 0.0
+                        if qty > max_qty and max_qty > 0:
+                            logger.info(
+                                "BOT_EXECUTION_CAP_BASE bot_id=%s reason=%s qty=%.8f -> max_qty=%.8f free_base=%.8f",
+                                bot_id, reason, qty, max_qty, free_base,
+                            )
+                            qty = max_qty
+                        elif qty > max_qty:
                             logger.warning(
                                 "BOT_EXECUTION_SKIP error_code=BINANCE_FREE_BASE_INSUFFICIENT bot_id=%s reason=%s qty=%.6f free_base=%.6f (virtual>real)",
                                 bot_id, reason, qty, free_base,
@@ -703,35 +761,9 @@ async def run_actions(
                         update_intent_sent(db, intent_id)
                 except Exception as e:
                     error_id = str(uuid.uuid4())
-                    insufficient = False
-                    request_id = None
-                    try:
-                        import httpx
-                        import json as _json
-                        from app.services.binance_spot import BinanceSignedError
-                        if isinstance(e, BinanceSignedError):
-                            if getattr(e, "code", None) == -2010:
-                                insufficient = True
-                            request_id = None
-                            if isinstance(getattr(e, "data", None), dict):
-                                request_id = (e.data.get("requestId") or e.data.get("request_id")) or None
-                        elif isinstance(e, httpx.HTTPStatusError) and getattr(e, "response", None):
-                            resp = e.response
-                            body = (getattr(resp, "text", None) or "")[:500]
-                            try:
-                                b = _json.loads(body) if body else {}
-                                if isinstance(b, dict) and b.get("code") == -2010:
-                                    insufficient = True
-                                request_id = (b.get("requestId") or b.get("request_id")) if isinstance(b, dict) else None
-                            except Exception:
-                                if body and "-2010" in body:
-                                    insufficient = True
-                            if getattr(resp, "status_code", None) == 400 and not insufficient and body and "-2010" in body:
-                                insufficient = True
-                            if request_id is None and hasattr(resp, "headers"):
-                                request_id = (resp.headers.get("X-MBX-REQUEST-ID") or resp.headers.get("x-request-id")) or None
-                    except Exception:
-                        pass
+                    parsed_err = _parse_binance_order_error(e)
+                    insufficient = parsed_err["skip_reason"] == "INSUFFICIENT_BALANCE"
+                    request_id = parsed_err.get("request_id")
                     if insufficient and db is not None:
                         from app.db.models import Bot
                         bot_row = db.query(Bot).filter(Bot.id == bot_id).first()
@@ -766,10 +798,28 @@ async def run_actions(
                         else:
                             logger.warning("BOT_EXECUTION_SKIP bot_id=%s reason=%s skip_reason=API_401 Unauthorized – bot paused_error, API key/IP/izinleri kontrol edin", bot_id, reason)
                         continue
-                    logger.warning("BOT_EXECUTION_SKIP bot_id=%s reason=%s skip_reason=ORDER_FAILED err=%s", bot_id, reason, e)
-                    state["last_error_code"] = "ORDER_FAILED"
+                    skip_reason = parsed_err["skip_reason"]
+                    logger.warning(
+                        "BOT_EXECUTION_SKIP bot_id=%s reason=%s skip_reason=%s err=%s binance_code=%s",
+                        bot_id, reason, skip_reason, e, parsed_err.get("binance_code"),
+                    )
+                    state["last_error_code"] = skip_reason
+                    state["health_error_since"] = int(time.time())
                     if db is not None:
-                        append_event(db, bot_id, account_id, "SKIP_REASON", f"ORDER_FAILED err={str(e)}", {"reason": reason, "skip_reason": "ORDER_FAILED", "error": str(e), "error_id": error_id})
+                        append_event(
+                            db, bot_id, account_id, "SKIP_REASON",
+                            f"{skip_reason} err={parsed_err.get('error') or e}",
+                            {
+                                "reason": reason,
+                                "skip_reason": skip_reason,
+                                "error": parsed_err.get("error") or str(e),
+                                "error_id": error_id,
+                                "binance_code": parsed_err.get("binance_code"),
+                                "binance_msg": parsed_err.get("binance_msg"),
+                                "side": side,
+                                "grid_index": a.get("grid_index"),
+                            },
+                        )
                     continue
                 # Persist intent FILLED (idempotency: state saved AFTER intent persisted)
                 if db is not None and intent_id:
@@ -777,24 +827,13 @@ async def run_actions(
                 # Parse fill
                 fills = res.get("fills") or []
                 exec_qty = _num(res.get("executedQty"))
+                if exec_qty > 0:
+                    state.pop("last_error_code", None)
+                    state.pop("health_error_since", None)
                 cum_quote = _num(res.get("cummulativeQuoteQty"))
                 fill_price_raw = (cum_quote / exec_qty) if exec_qty else _num(fills[0].get("price")) if fills else 0
                 fill_price = round(float(fill_price_raw), 4)
-                fee = sum(_num(f.get("commission")) for f in fills)
-                fee_asset = (fills[0].get("commissionAsset") or "").strip() if fills else ""
-                if fee_asset and fee_asset != "USDT" and fee > 0:
-                    # Komisyon USDT değilse (örn. BNB) USDT karşılığına çevir; böylece Trade.fee ve performans toplamı anlamlı olur
-                    try:
-                        from app.services.price_hub import price_hub
-                        p = price_hub.get_price(fee_asset + "USDT") or price_hub.get_price("USDT" + fee_asset)
-                        if p is not None and float(p) > 0:
-                            fee = fee * float(p)
-                            fee_asset = "USDT"
-                        else:
-                            fee = 0
-                    except Exception as _ex:
-                        logger.debug("fee_convert %s->USDT failed: %s", fee_asset, _ex)
-                        fee = 0
+                fee_raw, fee_asset, fee = parse_fill_commission(fills, symbol, fill_price)
                 is_multi_rebalance = (
                     getattr(config, "symbol", None) == "MULTI"
                     or ((getattr(config, "strategy_id", "") or "").strip().lower() == "multi_asset_rebalance")
@@ -850,8 +889,10 @@ async def run_actions(
                         qty=exec_qty,
                         price=fill_price,
                         fee=fee,
-                        fee_asset="USDT",
+                        fee_asset=fee_asset,
                         reason=reason,
+                        slot_id=a.get("grid_index"),
+                        fee_raw=fee_raw,
                     )
                     state["cycle_ledger_current"] = ledger
                 # initial_allocation: ia_done ONLY when order really filled (exec_qty > 0)
@@ -997,6 +1038,29 @@ async def run_actions(
                         "ts": ts_iso,
                     }
                     cycle_entry["pnl_usdt"] = pnl  # backward compat
+                    if close_reason in ("trail_profit_sell", "trail_reentry_buy"):
+                        close_fill: Dict[str, Any] = {
+                            "qty": round(float(exec_qty), 10),
+                            "price": round(float(fill_price), 8),
+                            "execution_price": round(float(a.get("execution_price") or fill_price), 8),
+                            "tepe_price": round(float(state.get("trail_anchor_price")), 8)
+                            if close_reason == "trail_profit_sell" and state.get("trail_anchor_price") is not None
+                            else None,
+                            "dip_price": round(float(state.get("trail_anchor_price")), 8)
+                            if close_reason == "trail_reentry_buy" and state.get("trail_anchor_price") is not None
+                            else None,
+                        }
+                        if close_reason == "trail_profit_sell":
+                            if ledger and ledger.get("avg_cost_quote_per_base") is not None:
+                                close_fill["avg_cost_quote_per_base"] = round(
+                                    float(ledger.get("avg_cost_quote_per_base")), 8
+                                )
+                        else:
+                            from app.botengine.strategies.dca_grid_trailing import _avg_sell_grid_from_history
+                            avg_sell = _avg_sell_grid_from_history(state.get("sell_history") or [])
+                            if avg_sell is not None:
+                                close_fill["avg_sell_grid_quote_per_base"] = round(float(avg_sell), 8)
+                        cycle_entry["close_fill"] = close_fill
                     state.setdefault("cycle_pnls", []).append(cycle_entry)
                     state["realized_pnl_usdt_cycle"] = 0.0
                     state["fees_paid_usdt_cycle"] = 0.0
@@ -1059,6 +1123,7 @@ async def run_actions(
                         "cash_fees_usdt": round(cash_fees, 8),
                         "inventory_coin_adv_qty": round(inv_qty, 12),
                         "inventory_fees_usdt": round(inv_fees, 8),
+                        "started_at": ledger.get("started_at"),
                         "completed_at": last_fill_ts_iso,
                         "completed_reason": reason,
                     })
@@ -1115,7 +1180,7 @@ async def run_actions(
                             exec_qty,
                             fill_price,
                             fee=fee,
-                            fee_asset="USDT",
+                            fee_asset=fee_asset,
                             slot_id=a.get("grid_index"),
                             reference_price=ref_float,
                             order_id=str(oid) if oid is not None else None,

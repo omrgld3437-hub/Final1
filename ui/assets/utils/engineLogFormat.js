@@ -54,7 +54,8 @@
         reference_price: 1, equity_usdt: 1, carry_over: 1, prev_close_reason: 1,
         base_balance: 1, quote_balance: 1, event_logged: 1, equity_usd: 1, last_price: 1,
         capped_quote_qty: 1, old_qty: 1, virtual_quote: 1, free_quote: 1,
-        command_id: 1, command: 1, paper: 1, synthetic: 1, repaired: 1,
+        command_id: 1, command: 1, paper: 1, synthetic: 1, synthetic_live: 1, repaired: 1,
+        source: 1, health_code: 1, healthCode: 1,
         slip_pct: 1, trigger_price: 1, action_key: 1, account_id: 1, bot_id: 1,
         pnl_primary_mode: 1, pnl_mode: 1, status: 1, trades_match_count: 1,
         realized_pnl_cycle_net: 1, fee_totals_quote: 1, inventory_fees_usdt: 1
@@ -78,6 +79,23 @@
         if (n >= 1) return n.toFixed(4);
         var s = n.toFixed(8);
         return s.replace(/(\.\d*?[1-9])0+$/, '$1').replace(/\.0+$/, '');
+    }
+
+    function fmtPrice(v) {
+        var n = num(v);
+        if (n == null) return '';
+        return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+
+    function formatCycleOpenPrice(meta) {
+        meta = meta || {};
+        var price = num(meta.reference_price);
+        if (price == null) price = num(meta.fill_price);
+        if (price == null) price = num(meta.last_price);
+        if (price == null || price <= 0) return null;
+        var coin = coinFromSymbol(meta.symbol);
+        if (!coin) return fmtPrice(price);
+        return coin + ' ' + fmtPrice(price);
     }
 
     function sideTr(s) {
@@ -140,6 +158,32 @@
         return (parts || []).filter(function (p) { return p != null && String(p).trim() !== ''; }).join(' · ');
     }
 
+    function formatBalanceLine(meta, equityOverride) {
+        meta = meta || {};
+        var eq = num(equityOverride);
+        if (eq == null) eq = num(meta.equity_usdt);
+        if (eq == null) eq = num(meta.equity_usd);
+        var coin = coinFromSymbol(meta.symbol);
+        var baseBal = num(meta.base_balance);
+        if (baseBal == null) baseBal = num(meta.base_qty);
+        var quoteBal = num(meta.quote_balance);
+        var iaDone = meta.initial_allocation_done === true;
+        var preAlloc = (baseBal == null || baseBal === 0) && (quoteBal == null || quoteBal === 0) && !iaDone;
+        if (preAlloc) {
+            var ic = num(meta.initial_capital_usdt);
+            if ((ic == null || ic <= 0) && _logContext.initialCapital > 0) ic = num(_logContext.initialCapital);
+            if (ic != null && ic > 0) quoteBal = ic;
+        }
+        var balanceDetail = [];
+        if (baseBal != null) balanceDetail.push('base: ' + fmtQty(baseBal) + (coin ? ' ' + coin : ''));
+        if (quoteBal != null) balanceDetail.push('quote: ' + fmtUsd(quoteBal, false));
+        if (eq != null && eq > 0) {
+            return 'Bakiye: ' + fmtUsd(eq, false) + (balanceDetail.length ? ' (' + balanceDetail.join(' · ') + ')' : '');
+        }
+        if (balanceDetail.length) return 'Bakiye (' + balanceDetail.join(' · ') + ')';
+        return null;
+    }
+
     function parseFillFromRaw(raw) {
         var m = String(raw || '').match(/(BUY|SELL)\s+([\d.eE+-]+)\s+@\s+([\d.eE+-]+)/i);
         if (!m) return null;
@@ -152,13 +196,22 @@
         return { notional: m ? num(m[1]) : null, min_notional: mn ? num(mn[1]) : null };
     }
 
+    var META_LABEL_TR = {
+        synthetic_live: 'Canlı durum özeti'
+    };
+
+    function metaLabelTr(key) {
+        if (META_LABEL_TR[key]) return META_LABEL_TR[key];
+        return String(key || '').replace(/_/g, ' ');
+    }
+
     function appendMetaExtras(meta, used, parts) {
         if (!meta || typeof meta !== 'object') return;
         Object.keys(meta).forEach(function (k) {
             if (used[k] || META_SKIP_KEYS[k]) return;
             var v = meta[k];
             if (v == null || v === '' || v === false || typeof v === 'object') return;
-            parts.push(k.replace(/_/g, ' ') + ': ' + (v === true ? 'evet' : String(v)));
+            parts.push(metaLabelTr(k) + ': ' + (v === true ? 'evet' : String(v)));
         });
     }
 
@@ -195,6 +248,17 @@
             var gridFee = num(meta.fee);
             if (gridFee != null && gridFee > 0) gridParts.push('komisyon ' + fmtUsd(gridFee, false));
             return joinParts(gridParts);
+        }
+
+        if (reason === 'trail_profit_sell') {
+            var profitParts = [meta.repaired ? 'Kayıt onarıldı' : null, 'Kar satışı gerçekleşti'];
+            if (qty != null && price != null) {
+                profitParts.push(fmtQty(qty) + ' @ $' + price.toFixed(2));
+                profitParts.push('tutar ' + fmtUsd(qty * price, false));
+            }
+            var profitFee = num(meta.fee);
+            if (profitFee != null && profitFee > 0) profitParts.push('komisyon ' + fmtUsd(profitFee, false));
+            return joinParts(profitParts);
         }
 
         var used = { side: 1, fill_qty: 1, fill_price: 1, fee: 1, reason: 1, grid_index: 1, symbol: 1, cycle_id: 1, order_id: 1, client_order_id: 1, status: 1 };
@@ -238,7 +302,8 @@
 
     function formatCycleEnd(meta) {
         meta = meta || {};
-        var parts = ['tamamlandı'];
+        var cycleNum = meta.cycle_id != null ? meta.cycle_id : '?';
+        var parts = ['Tur ' + cycleNum + ' tamamlandı'];
         var pnlPart = formatCycleEndPnl(meta);
         if (pnlPart) parts.push(pnlPart);
         var mode = String(meta.pnl_primary_mode || meta.cycle_type || '').toUpperCase();
@@ -251,14 +316,12 @@
 
     function formatCycleStart(meta) {
         meta = meta || {};
-        var parts = ['Bismillahirrahmanirrahim.', 'Tur açıldı'];
-        if (meta.carry_over) {
-            var prev = reasonTr(meta.prev_close_reason);
-            if (prev) parts.push(prev + ' sonrası');
-        }
-        var eq = num(meta.equity_usdt);
-        if (eq == null) eq = num(meta.equity_usd);
-        if (eq != null && eq > 0) parts.push('Bakiye: ' + fmtUsd(eq, false));
+        var cycleNum = meta.cycle_id != null ? meta.cycle_id : '?';
+        var parts = ['Bismillahirrahmanirrahim.', 'Tur ' + cycleNum + ' açıldı'];
+        var priceLine = formatCycleOpenPrice(meta);
+        if (priceLine) parts.push(priceLine);
+        var balLine = formatBalanceLine(meta);
+        if (balLine) parts.push(balLine);
         if (meta.synthetic) parts.push('(kayıt)');
         return joinParts(parts);
     }
@@ -338,10 +401,21 @@
             }
             var rd2 = reasonDetail(meta);
             if (rd2) parts.push(rd2);
+        } else if (skip === 'LOT_SIZE') {
+            severity = 'critical';
+            parts.push('Lot boyutu hatası — miktar borsa filtresine uymuyor');
+            if (meta.binance_msg) parts.push(String(meta.binance_msg).slice(0, 120));
+            else if (meta.error) parts.push(String(meta.error).slice(0, 100));
+            if (meta.binance_code != null) parts.push('kod ' + meta.binance_code);
+            if (meta.error_id) parts.push('id ' + String(meta.error_id).slice(0, 8));
+            var rdLot = reasonDetail(meta);
+            if (rdLot) parts.push(rdLot);
         } else if (skip === 'ORDER_FAILED') {
             severity = 'critical';
             parts.push('Emir gönderilemedi — borsa veya ağ hatası');
-            if (meta.error) parts.push(String(meta.error).slice(0, 100));
+            if (meta.binance_msg) parts.push(String(meta.binance_msg).slice(0, 120));
+            else if (meta.error) parts.push(String(meta.error).slice(0, 100));
+            if (meta.binance_code != null) parts.push('kod ' + meta.binance_code);
             if (meta.error_id) parts.push('id ' + String(meta.error_id).slice(0, 8));
             var rd3 = reasonDetail(meta);
             if (rd3) parts.push(rd3);
@@ -419,9 +493,8 @@
         if (/COMMAND_EXECUTED.*START/i.test(raw)) {
             var startParts = ['Bismillahirrahmanirrahim.', 'Bot başlatıldı'];
             var startBal = resolveBotStartBalance(meta);
-            if (startBal != null && startBal > 0) {
-                startParts.push('Bakiye: ' + fmtUsd(startBal, false));
-            }
+            var startBalLine = formatBalanceLine(meta, startBal);
+            if (startBalLine) startParts.push(startBalLine);
             return joinParts(startParts);
         }
         if (/COMMAND_EXECUTED.*STOP/i.test(raw)) {
@@ -451,6 +524,7 @@
         var ec = String(meta.error_code || '').trim();
         var parts = [];
         if (ec === 'ACCOUNT_KEYS_MISSING') parts.push('API anahtarı eksik — bot işlem yapamaz');
+        else if (ec === 'BINANCE_UNREACHABLE') parts.push('Binance bağlantı hatası — bakiye/veri alınamadı');
         else if (/401|Unauthorized|API anahtarı/i.test(raw)) parts.push('Binance API geçersiz — anahtar, IP veya Spot izni kontrol edin');
         else if (/INSUFFICIENT_BALANCE/i.test(raw)) parts.push('Yetersiz bakiye — emir reddedildi');
         else if (/SAFE_STOP|paused/i.test(raw) || ec === 'SAFE_STOP') parts.push('Güvenlik durdurması — bot durduruldu');
@@ -483,7 +557,8 @@
         return joinParts(parts);
     }
 
-    function formatEngineEvent(ev) {
+    function formatEngineEvent(ev, options) {
+        options = options || {};
         var ty = String(ev.type || '').trim();
         var meta = ev.meta && typeof ev.meta === 'object' ? Object.assign({}, ev.meta) : {};
         var raw = cleanRaw(ev.message);
@@ -498,6 +573,10 @@
         // Başarılı emir gönderimi gürültü — dolunca ORDER_FILLED; hata SKIP_REASON/ERROR ile yazılır
         if (ty === 'ORDER_ATTEMPT') return { hidden: true };
         if ((ty === 'HEALTH_WARN' || ty === 'HEALTH_CRITICAL') && (meta.test === true || /^TEST_UI_/i.test(String(meta.health_code || '')))) {
+            return { hidden: true };
+        }
+        if (!options.forExport && _logContext.botId && global.BotHealthAlerts && global.BotHealthAlerts.shouldHideResetLogEvent
+            && global.BotHealthAlerts.shouldHideResetLogEvent(ev, _logContext.botId)) {
             return { hidden: true };
         }
 
@@ -530,7 +609,7 @@
             }
         } else if (ty === 'CYCLE_END') {
             message = formatCycleEnd(meta);
-            typeLabel = 'Tur ' + (meta.cycle_id != null ? meta.cycle_id : '?');
+            typeLabel = 'Kapanış';
         } else if (ty === 'CYCLE_START') {
             if (meta.reason === 'initial_allocation') {
                 return { hidden: true };
@@ -577,7 +656,14 @@
         (events || []).forEach(function (ev) {
             var fmt = formatEngineEvent(ev);
             if (fmt.hidden) return;
-            var key = (ev.type || '') + '\0' + fmt.message + '\0' + fmt.severity;
+            var meta = ev.meta || {};
+            var ec = String(meta.error_code || meta.health_code || '').toUpperCase();
+            var key;
+            if (ec && /API_UNAUTHORIZED|BINANCE_UNREACHABLE|BINANCE_RATE|ACCOUNT_KEYS/.test(ec)) {
+                key = ec + '\0' + fmt.severity;
+            } else {
+                key = (ev.type || '') + '\0' + fmt.message + '\0' + fmt.severity;
+            }
             if (prev && prev.key === key) {
                 prev.count++;
                 prev.lastTs = ev.ts;
@@ -620,7 +706,11 @@
     }
 
     function setLogContext(ctx) {
-        _logContext = ctx && typeof ctx === 'object' ? ctx : {};
+        if (ctx && typeof ctx === 'object') {
+            _logContext = Object.assign({}, _logContext, ctx);
+        } else {
+            _logContext = {};
+        }
     }
 
     global.EngineLogFormat = {

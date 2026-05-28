@@ -75,6 +75,152 @@ def _ensure_sell_buy_lists(state: Dict[str, Any], cfg: DcaGridTrailingConfig) ->
         state["buy_history"] = []
 
 
+def get_cycle_grid_side(state: Dict[str, Any]) -> Optional[str]:
+    """Tur yönü: None (ilk grid fill öncesi iki yön) | SELL | BUY."""
+    side = state.get("cycle_grid_side")
+    if side in ("SELL", "BUY"):
+        return side
+    return None
+
+
+def _sell_grids_enabled(state: Dict[str, Any]) -> bool:
+    side = get_cycle_grid_side(state)
+    return side != "BUY"
+
+
+def _buy_grids_enabled(state: Dict[str, Any]) -> bool:
+    side = get_cycle_grid_side(state)
+    return side != "SELL"
+
+
+def _lock_cycle_grid_side(state: Dict[str, Any], side: str) -> None:
+    """İlk başarılı grid fill sonrası tur yönünü kilitle; karşı yöndeki bekleyen tetikleri temizle."""
+    if side not in ("SELL", "BUY") or state.get("cycle_grid_side"):
+        return
+    state["cycle_grid_side"] = side
+    if side == "SELL":
+        triggers = list(state.get("buy_grid_trigger_price") or [])
+        troughs = list(state.get("buy_grid_trough_price") or [])
+        fired = state.get("buy_grid_fired") or []
+        for j in range(max(len(triggers), len(troughs))):
+            if j < len(fired) and fired[j]:
+                continue
+            if j < len(triggers):
+                triggers[j] = None
+            if j < len(troughs):
+                troughs[j] = None
+        state["buy_grid_trigger_price"] = triggers
+        state["buy_grid_trough_price"] = troughs
+    else:
+        triggers = list(state.get("sell_grid_trigger_price") or [])
+        peaks = list(state.get("sell_grid_peak_price") or [])
+        fired = state.get("sell_grid_fired") or []
+        for i in range(max(len(triggers), len(peaks))):
+            if i < len(fired) and fired[i]:
+                continue
+            if i < len(triggers):
+                triggers[i] = None
+            if i < len(peaks):
+                peaks[i] = None
+        state["sell_grid_trigger_price"] = triggers
+        state["sell_grid_peak_price"] = peaks
+    logger.info(
+        "BOT_CYCLE_SIDE_LOCKED bot_id=%s cycle_id=%s side=%s",
+        state.get("bot_id"), state.get("cycle_id"), side,
+    )
+
+
+def _heal_cycle_grid_side(state: Dict[str, Any]) -> None:
+    """Mevcut turda grid fill var ama cycle_grid_side yoksa yönü geçmiş fill'lerden çıkar (migrate)."""
+    if state.get("cycle_grid_side"):
+        return
+    sell_fired = state.get("sell_grid_fired") or []
+    buy_fired = state.get("buy_grid_fired") or []
+    sell_h = [h for h in (state.get("sell_history") or []) if isinstance(h, dict) and h.get("grid_index") is not None]
+    buy_h = [h for h in (state.get("buy_history") or []) if isinstance(h, dict) and h.get("grid_index") is not None]
+    sell_any = any(sell_fired) or bool(sell_h)
+    buy_any = any(buy_fired) or bool(buy_h)
+    if not sell_any and not buy_any:
+        return
+    if sell_any and not buy_any:
+        state["cycle_grid_side"] = "SELL"
+    elif buy_any and not sell_any:
+        state["cycle_grid_side"] = "BUY"
+    else:
+        first_sell_i = next((i for i, f in enumerate(sell_fired) if f), 999)
+        first_buy_j = next((j for j, f in enumerate(buy_fired) if f), 999)
+        if first_sell_i == 999 and sell_h:
+            first_sell_i = int(sell_h[0].get("grid_index") or 0)
+        if first_buy_j == 999 and buy_h:
+            first_buy_j = int(buy_h[0].get("grid_index") or 0)
+        state["cycle_grid_side"] = "SELL" if first_sell_i <= first_buy_j else "BUY"
+    logger.info(
+        "BOT_CYCLE_SIDE_HEALED bot_id=%s cycle_id=%s side=%s",
+        state.get("bot_id"), state.get("cycle_id"), state.get("cycle_grid_side"),
+    )
+
+
+def _try_trigger_sell_grid(
+    state: Dict[str, Any],
+    idx: int,
+    P: float,
+    s_i: float,
+    *,
+    base_balance: float = 0.0,
+) -> bool:
+    """Satış gridini tetikle; aynı tick'te birden fazla grid aynı canlı tepe (P) ile başlayabilir."""
+    fired = state.get("sell_grid_fired") or []
+    triggers = state.get("sell_grid_trigger_price") or []
+    if idx < len(fired) and fired[idx]:
+        return False
+    if idx < len(triggers) and triggers[idx] is not None:
+        return False
+    if P < s_i:
+        return False
+    while len(triggers) <= idx:
+        triggers.append(None)
+    triggers[idx] = s_i
+    state["sell_grid_trigger_price"] = triggers
+    peaks = state.get("sell_grid_peak_price") or []
+    while len(peaks) <= idx:
+        peaks.append(None)
+    peaks[idx] = P
+    state["sell_grid_peak_price"] = peaks
+    if (_f(state.get("grid_reference_base") or 0) <= 0 and base_balance > 0):
+        state["grid_reference_base"] = base_balance
+    logger.info(
+        "BOT_GRID_SELL_TRIGGER bot_id=%s grid=%s price=%.4f trigger=%.4f",
+        state.get("bot_id"), idx, P, s_i,
+    )
+    return True
+
+
+def _try_trigger_buy_grid(state: Dict[str, Any], idx: int, P: float, b_j: float) -> bool:
+    """Alım gridini tetikle; aynı tick'te birden fazla grid aynı canlı dip (P) ile başlayabilir."""
+    fired = state.get("buy_grid_fired") or []
+    triggers = state.get("buy_grid_trigger_price") or []
+    if idx < len(fired) and fired[idx]:
+        return False
+    if idx < len(triggers) and triggers[idx] is not None:
+        return False
+    if P > b_j:
+        return False
+    while len(triggers) <= idx:
+        triggers.append(None)
+    triggers[idx] = b_j
+    state["buy_grid_trigger_price"] = triggers
+    troughs = state.get("buy_grid_trough_price") or []
+    while len(troughs) <= idx:
+        troughs.append(None)
+    troughs[idx] = P
+    state["buy_grid_trough_price"] = troughs
+    logger.info(
+        "BOT_GRID_BUY_TRIGGER bot_id=%s grid=%s price=%.4f trigger=%.4f",
+        state.get("bot_id"), idx, P, b_j,
+    )
+    return True
+
+
 def _sync_trailing_mode(state: Dict[str, Any], n: int, m: int) -> None:
     """Legacy mode/index for logging and UI; grids trail in parallel via per-grid arrays."""
     sell_trailing: List[int] = []
@@ -116,6 +262,7 @@ def tick_dca_grid_trailing(
     One strategy tick. Mutates state. Returns (actions, next_wakeup_sec).
     """
     _ensure_sell_buy_lists(state, config)
+    _heal_cycle_grid_side(state)
     P = _f(price)
     if P is None or P <= 0:
         logger.warning("BOT_STRATEGY_PRICE_INVALID bot_id=%s price=%s", state.get("bot_id", 0), price)
@@ -152,6 +299,18 @@ def tick_dca_grid_trailing(
         "BOT_STRATEGY_TICK bot_id=%s price=%.2f ref=%s ia_done=%s mode=%s base_bal=%.4f quote_bal=%.2f",
         state.get("bot_id", 0), P, ref, initial_done, state.get("mode", "IDLE"), base_balance, quote_balance
     )
+    from app.botengine.strategies.grid_outage_recovery import (
+        apply_grid_outage_recovery,
+        should_apply_outage_recovery,
+    )
+    apply_recovery, gap_sec = should_apply_outage_recovery(state, config)
+    if apply_recovery:
+        apply_grid_outage_recovery(state, config, P, gap_sec=gap_sec)
+
+    favorable_sell = set(state.get("_outage_favorable_sell") or [])
+    favorable_buy = set(state.get("_outage_favorable_buy") or [])
+    force_profit_sell = bool(state.get("_outage_force_profit_sell"))
+    force_reentry_buy = bool(state.get("_outage_force_reentry_buy"))
     mode = state.get("mode") or BotEngineMode.IDLE.value
     cycle = int(state.get("cycle_id") or 1)
     n = len(config.sell_grids)
@@ -195,8 +354,8 @@ def tick_dca_grid_trailing(
         state["trail_anchor_price"] = _f(min(anchor, P)) or P
         thr = state["trail_anchor_price"] * (1 + config.profit_reentry_rise_pct / 100.0)
         max_buy = _f(state.get("_reentry_max_buy_price"))
-        if P >= thr:
-            if max_buy is not None and max_buy > 0 and P > max_buy:
+        if P >= thr or force_reentry_buy:
+            if max_buy is not None and max_buy > 0 and P > max_buy and not force_reentry_buy:
                 logger.info(
                     "BOT_REENTRY_HOLD bot_id=%s cycle_id=%s price=%.4f max_buy=%.4f decision=HOLD reason=buy_above_sell_basis",
                     state.get("bot_id"), state.get("cycle_id"), P, max_buy,
@@ -219,6 +378,7 @@ def tick_dca_grid_trailing(
                 state["_cycle_complete"] = True
                 state.pop("_reentry_avg_sell", None)
                 state.pop("_reentry_max_buy_price", None)
+                state.pop("_outage_force_reentry_buy", None)
         return actions, next_wake
 
     if mode == BotEngineMode.TRAIL_PROFIT_SELL.value:
@@ -228,8 +388,8 @@ def tick_dca_grid_trailing(
         breakeven_floor = _f(state.get("_profit_exit_breakeven"))
         if breakeven_floor is not None and breakeven_floor > 0:
             thr = max(thr, breakeven_floor)
-        if P <= thr:
-            if breakeven_floor is not None and P < breakeven_floor:
+        if P <= thr or force_profit_sell:
+            if breakeven_floor is not None and P < breakeven_floor and not force_profit_sell:
                 logger.info(
                     "BOT_PROFIT_EXIT_HOLD bot_id=%s cycle_id=%s price=%.4f breakeven=%.4f decision=HOLD reason=trail_would_sell_below_breakeven",
                     state.get("bot_id"), state.get("cycle_id"), P, breakeven_floor,
@@ -252,6 +412,7 @@ def tick_dca_grid_trailing(
                 state["_cycle_complete"] = True
                 state.pop("_profit_exit_breakeven", None)
                 state.pop("_profit_exit_trigger_price", None)
+                state.pop("_outage_force_profit_sell", None)
         return actions, next_wake
 
     # ---- Per-grid parallel trailing (each grid independent) ----
@@ -276,139 +437,139 @@ def tick_dca_grid_trailing(
 
     sell_trail_pct = config.sell_trigger_trailing_pct
     buy_trail_pct = config.buy_trigger_trailing_pct
+    sell_enabled = _sell_grids_enabled(state)
+    buy_enabled = _buy_grids_enabled(state)
+    cycle_side = get_cycle_grid_side(state)
+    base_reserved = 0.0
+    quote_reserved = 0.0
 
     # Active sell trails: update per-grid peak, execute when price retraces
-    for idx in range(n):
-        if idx < len(state["sell_grid_fired"]) and state["sell_grid_fired"][idx]:
-            continue
-        trigger_hit = state["sell_grid_trigger_price"][idx] if idx < len(state["sell_grid_trigger_price"]) else None
-        if trigger_hit is None:
-            continue
-        th_num = _f(trigger_hit) or P
-        peaks = state["sell_grid_peak_price"]
-        while len(peaks) <= idx:
-            peaks.append(None)
-        cur_peak = _f(peaks[idx]) if peaks[idx] is not None else th_num
-        cur_peak = max(cur_peak, P)
-        peaks[idx] = cur_peak
-        state["sell_grid_peak_price"] = peaks
-        exec_thr = cur_peak * (1 - sell_trail_pct / 100.0)
-        if P <= exec_thr:
-            qty = _sell_qty_for_grid(state, config, idx, base_balance, price=P)
-            if qty and qty > 0:
-                if not _meets_min_notional(config, "SELL", P, qty=qty):
-                    logger.debug(
-                        "BOT_STRATEGY_GRID_SKIP bot_id=%s skip_reason=MIN_NOTIONAL side=SELL grid=%s notional=%.2f min=%.2f",
-                        state.get("bot_id", 0), idx, qty * P, getattr(config, "min_notional_guard", 5.0),
-                    )
-                    _queue_grid_skip(state, side="SELL", grid_index=idx, notional=qty * P, config=config, reason="trail_sell_grid")
-                    continue
-                actions.append({
-                    "type": "place",
-                    "side": "SELL",
-                    "symbol": config.symbol,
-                    "quantity": qty,
-                    "client_order_id": _action_id(state, "sell_grid", idx),
-                    "grid_index": idx,
-                    "reason": "trail_sell_grid",
-                    "trigger_price": P,
-                    "execution_price": exec_thr,
-                    "trail_anchor_price": cur_peak,
-                })
+    if sell_enabled:
+        for idx in range(n):
+            if idx < len(state["sell_grid_fired"]) and state["sell_grid_fired"][idx]:
+                continue
+            trigger_hit = state["sell_grid_trigger_price"][idx] if idx < len(state["sell_grid_trigger_price"]) else None
+            if trigger_hit is None:
+                continue
+            th_num = _f(trigger_hit) or P
+            peaks = state["sell_grid_peak_price"]
+            while len(peaks) <= idx:
+                peaks.append(None)
+            cur_peak = _f(peaks[idx]) if peaks[idx] is not None else th_num
+            cur_peak = max(cur_peak, P)
+            peaks[idx] = cur_peak
+            state["sell_grid_peak_price"] = peaks
+            exec_thr = cur_peak * (1 - sell_trail_pct / 100.0)
+            if P <= exec_thr or idx in favorable_sell:
+                avail_base = max(0.0, (_f(base_balance) or 0.0) - base_reserved)
+                qty = _sell_qty_for_grid(state, config, idx, avail_base, price=P)
+                if qty and qty > 0:
+                    if not _meets_min_notional(config, "SELL", P, qty=qty):
+                        logger.debug(
+                            "BOT_STRATEGY_GRID_SKIP bot_id=%s skip_reason=MIN_NOTIONAL side=SELL grid=%s notional=%.2f min=%.2f",
+                            state.get("bot_id", 0), idx, qty * P, getattr(config, "min_notional_guard", 5.0),
+                        )
+                        _queue_grid_skip(state, side="SELL", grid_index=idx, notional=qty * P, config=config, reason="trail_sell_grid")
+                        continue
+                    base_reserved += qty
+                    actions.append({
+                        "type": "place",
+                        "side": "SELL",
+                        "symbol": config.symbol,
+                        "quantity": qty,
+                        "client_order_id": _action_id(state, "sell_grid", idx),
+                        "grid_index": idx,
+                        "reason": "trail_sell_grid",
+                        "trigger_price": P,
+                        "execution_price": exec_thr,
+                        "trail_anchor_price": cur_peak,
+                    })
 
     # Active buy trails: update per-grid trough, execute when price rises
-    for idx in range(m):
-        if idx < len(state["buy_grid_fired"]) and state["buy_grid_fired"][idx]:
-            continue
-        trigger_hit = state["buy_grid_trigger_price"][idx] if idx < len(state["buy_grid_trigger_price"]) else None
-        if trigger_hit is None:
-            continue
-        th_num = _f(trigger_hit) or P
-        troughs = state["buy_grid_trough_price"]
-        while len(troughs) <= idx:
-            troughs.append(None)
-        cur_trough = _f(troughs[idx]) if troughs[idx] is not None else th_num
-        cur_trough = min(cur_trough, P)
-        troughs[idx] = cur_trough
-        state["buy_grid_trough_price"] = troughs
-        exec_thr = cur_trough * (1 + buy_trail_pct / 100.0)
-        if P >= exec_thr:
-            quote_q = _buy_qty_for_grid(state, config, idx, quote_balance, price=P)
-            if quote_q and quote_q > 0:
-                if not _meets_min_notional(config, "BUY", P, quote_qty=quote_q):
-                    logger.debug(
-                        "BOT_STRATEGY_GRID_SKIP bot_id=%s skip_reason=MIN_NOTIONAL side=BUY grid=%s notional=%.2f min=%.2f",
-                        state.get("bot_id", 0), idx, quote_q, getattr(config, "min_notional_guard", 5.0),
+    if buy_enabled:
+        for idx in range(m):
+            if idx < len(state["buy_grid_fired"]) and state["buy_grid_fired"][idx]:
+                continue
+            trigger_hit = state["buy_grid_trigger_price"][idx] if idx < len(state["buy_grid_trigger_price"]) else None
+            if trigger_hit is None:
+                continue
+            th_num = _f(trigger_hit) or P
+            troughs = state["buy_grid_trough_price"]
+            while len(troughs) <= idx:
+                troughs.append(None)
+            cur_trough = _f(troughs[idx]) if troughs[idx] is not None else th_num
+            cur_trough = min(cur_trough, P)
+            troughs[idx] = cur_trough
+            state["buy_grid_trough_price"] = troughs
+            exec_thr = cur_trough * (1 + buy_trail_pct / 100.0)
+            if P >= exec_thr or idx in favorable_buy:
+                avail_quote = max(0.0, (_f(quote_balance) or 0.0) - quote_reserved)
+                quote_q = _buy_qty_for_grid(state, config, idx, avail_quote, price=P)
+                if quote_q and quote_q > 0:
+                    if not _meets_min_notional(config, "BUY", P, quote_qty=quote_q):
+                        logger.debug(
+                            "BOT_STRATEGY_GRID_SKIP bot_id=%s skip_reason=MIN_NOTIONAL side=BUY grid=%s notional=%.2f min=%.2f",
+                            state.get("bot_id", 0), idx, quote_q, getattr(config, "min_notional_guard", 5.0),
+                        )
+                        _queue_grid_skip(state, side="BUY", grid_index=idx, notional=quote_q, config=config, reason="trail_buy_grid")
+                        continue
+                    quote_reserved += quote_q
+                    actions.append({
+                        "type": "place",
+                        "side": "BUY",
+                        "symbol": config.symbol,
+                        "quote_qty": quote_q,
+                        "client_order_id": _action_id(state, "buy_grid", idx),
+                        "grid_index": idx,
+                        "reason": "trail_buy_grid",
+                        "trigger_price": P,
+                        "execution_price": exec_thr,
+                        "trail_anchor_price": cur_trough,
+                    })
+                else:
+                    logger.warning(
+                        "BOT_STRATEGY_TRAIL_BUY_SKIP bot_id=%s grid_idx=%s price=%.2f thr=%.2f quote_balance=%.2f quote_q=%.2f",
+                        state.get("bot_id", 0), idx, P, exec_thr, quote_balance, quote_q or 0.0,
                     )
-                    _queue_grid_skip(state, side="BUY", grid_index=idx, notional=quote_q, config=config, reason="trail_buy_grid")
-                    continue
-                actions.append({
-                    "type": "place",
-                    "side": "BUY",
-                    "symbol": config.symbol,
-                    "quote_qty": quote_q,
-                    "client_order_id": _action_id(state, "buy_grid", idx),
-                    "grid_index": idx,
-                    "reason": "trail_buy_grid",
-                    "trigger_price": P,
-                    "execution_price": exec_thr,
-                    "trail_anchor_price": cur_trough,
-                })
-            else:
-                logger.warning(
-                    "BOT_STRATEGY_TRAIL_BUY_SKIP bot_id=%s grid_idx=%s price=%.2f thr=%.2f quote_balance=%.2f quote_q=%.2f",
-                    state.get("bot_id", 0), idx, P, exec_thr, quote_balance, quote_q or 0.0,
-                )
 
-    # New sell grid triggers (parallel — do not block on other open grids)
-    for i in range(n):
-        if state["sell_grid_fired"][i]:
-            continue
-        if state["sell_grid_trigger_price"][i] is not None:
-            continue
-        g = config.sell_grids[i] if i < len(config.sell_grids) else {}
-        pct = _float(g.get("sell_grid_pct") or g.get("trigger_pct"), 0)
-        s_i = ref * (1 + pct / 100.0)
-        if P >= s_i:
-            state["sell_grid_trigger_price"][i] = P
-            peaks = state["sell_grid_peak_price"]
-            while len(peaks) <= i:
-                peaks.append(None)
-            peaks[i] = P
-            state["sell_grid_peak_price"] = peaks
-            if (_f(state.get("grid_reference_base") or 0) <= 0 and base_balance > 0):
-                state["grid_reference_base"] = base_balance
+    state.pop("_outage_favorable_buy", None)
+    state.pop("_outage_favorable_sell", None)
+
+    # New sell grid triggers (parallel — aynı tick'te birden fazla seviye tetiklenebilir)
+    if sell_enabled:
+        batch_sell = 0
+        for i in range(n):
+            g = config.sell_grids[i] if i < len(config.sell_grids) else {}
+            pct = _float(g.get("sell_grid_pct") or g.get("trigger_pct"), 0)
+            s_i = ref * (1 + pct / 100.0)
+            if _try_trigger_sell_grid(state, i, P, s_i, base_balance=base_balance):
+                batch_sell += 1
+        if batch_sell > 1:
             logger.info(
-                "BOT_GRID_SELL_TRIGGER bot_id=%s grid=%s price=%.4f trigger=%.4f ref=%.4f",
-                state.get("bot_id", 0), i, P, s_i, ref,
+                "BOT_GRID_PARALLEL_TRIGGER bot_id=%s side=SELL count=%s price=%.4f",
+                state.get("bot_id"), batch_sell, P,
             )
 
-    # New buy grid triggers
-    for j in range(m):
-        if state["buy_grid_fired"][j]:
-            continue
-        if state["buy_grid_trigger_price"][j] is not None:
-            continue
-        g = config.buy_grids[j] if j < len(config.buy_grids) else {}
-        pct = _float(g.get("buy_grid_pct") or g.get("trigger_pct"), 0)
-        b_j = ref * (1 - pct / 100.0)
-        if P <= b_j:
-            state["buy_grid_trigger_price"][j] = P
-            troughs = state["buy_grid_trough_price"]
-            while len(troughs) <= j:
-                troughs.append(None)
-            troughs[j] = P
-            state["buy_grid_trough_price"] = troughs
+    # New buy grid triggers (parallel)
+    if buy_enabled:
+        batch_buy = 0
+        for j in range(m):
+            g = config.buy_grids[j] if j < len(config.buy_grids) else {}
+            pct = _float(g.get("buy_grid_pct") or g.get("trigger_pct"), 0)
+            b_j = ref * (1 - pct / 100.0)
+            if _try_trigger_buy_grid(state, j, P, b_j):
+                batch_buy += 1
+        if batch_buy > 1:
             logger.info(
-                "BOT_GRID_BUY_TRIGGER bot_id=%s grid=%s price=%.4f trigger=%.4f ref=%.4f",
-                state.get("bot_id", 0), j, P, b_j, ref,
+                "BOT_GRID_PARALLEL_TRIGGER bot_id=%s side=BUY count=%s price=%.4f",
+                state.get("bot_id"), batch_buy, P,
             )
 
     _sync_trailing_mode(state, n, m)
 
-    # ---- Re-entry / profit exit arming (only closed grid fills in history) ----
+    # ---- Re-entry / profit exit arming (tur yönü kilitli olunca ilgili kar gridi) ----
     sell_hist = state.get("sell_history") or []
-    if sell_hist and not state.get("_reentry_done"):
+    if cycle_side == "SELL" and sell_hist and not state.get("_reentry_done"):
         pnl_mode = getattr(config, "pnl_mode", "legacy") or "legacy"
         symbol = (config.symbol or "").upper().strip() or "BTCUSDT"
         buy_fee = getattr(config, "buy_fee_rate", 0.001) or 0.001
@@ -450,7 +611,7 @@ def tick_dca_grid_trailing(
     buy_hist = state.get("buy_history") or []
     init_q = _float(state.get("initial_alloc_base_qty"), 0)
     has_basis = bool(buy_hist or (init_q > 0 and state.get("initial_allocation_done")))
-    if has_basis and not state.get("_profit_exit_done"):
+    if cycle_side == "BUY" and has_basis and not state.get("_profit_exit_done"):
         pnl_mode = getattr(config, "pnl_mode", "legacy") or "legacy"
         symbol = (config.symbol or "").upper().strip() or "BTCUSDT"
         if pnl_mode == "cycle_only_fee_aware_v1":
@@ -695,6 +856,7 @@ def apply_fill_to_state(
     fee_val = _f(fee) or 0.0
     exec_p = _f(execution_price) if execution_price is not None else None
     state["fees_paid_usdt_cycle"] = (_f(state.get("fees_paid_usdt_cycle") or 0) or 0.0) + fee_val
+    r = (reason or "").strip()
     if side == "SELL":
         state["base_balance"] = (_f(state.get("base_balance") or 0) or 0.0) - q
         state["quote_balance"] = (_f(state.get("quote_balance") or 0) or 0.0) + q * p - fee_val
@@ -702,6 +864,8 @@ def apply_fill_to_state(
         if exec_p is not None:
             entry["execution_price"] = exec_p
         state.setdefault("sell_history", []).append(entry)
+        if r == "trail_sell_grid":
+            _lock_cycle_grid_side(state, "SELL")
         avg_buy = _avg_buy_price(state)
         cost = q * (_f(avg_buy or p) or p)
         state["realized_pnl_usdt_cycle"] = (_f(state.get("realized_pnl_usdt_cycle") or 0) or 0.0) + (q * p - fee_val - cost)
@@ -714,6 +878,8 @@ def apply_fill_to_state(
             if exec_p is not None:
                 entry["execution_price"] = exec_p
             state.setdefault("buy_history", []).append(entry)
+            if r == "trail_buy_grid":
+                _lock_cycle_grid_side(state, "BUY")
 
 
 class DcaGridTrailingStrategy(Strategy):
@@ -800,12 +966,104 @@ def _archive_cycle_grid_fills(state: Dict[str, Any], cycle_id: int) -> None:
         state["cycle_grid_fills_archive"] = archive[-500:]
 
 
+def _avg_buy_grid_from_history(buy_hist: list) -> Optional[float]:
+    grid_h = [x for x in buy_hist if isinstance(x, dict) and x.get("grid_index") is not None]
+    if not grid_h:
+        return None
+    tq = sum(_f(x.get("qty")) for x in grid_h)
+    if tq <= 0:
+        return None
+    tv = sum(_f(x.get("qty")) * _f(x.get("execution_price") or x.get("price")) for x in grid_h)
+    return tv / tq
+
+
+def _avg_sell_grid_from_history(sell_hist: list) -> Optional[float]:
+    grid_h = [x for x in sell_hist if isinstance(x, dict) and x.get("grid_index") is not None]
+    if not grid_h:
+        return None
+    tq = sum(_f(x.get("qty")) for x in grid_h)
+    if tq <= 0:
+        return None
+    tv = sum(_f(x.get("qty")) * _f(x.get("execution_price") or x.get("price")) for x in grid_h)
+    return tv / tq
+
+
+def _archive_cycle_close_trade(state: Dict[str, Any], cycle_id: int) -> None:
+    """Tur kapanış işlemi (kar satışı / kar alımı) detaylarını arşivle."""
+    if not state.get("_profit_exit_done") and not state.get("_reentry_done"):
+        return
+    archive = state.setdefault("cycle_close_trades_archive", [])
+    anchor = _f(state.get("trail_anchor_price"))
+    ledger = state.get("cycle_ledger_current") or {}
+    avg_ledger = ledger.get("avg_cost_quote_per_base")
+    try:
+        avg_ledger_f = float(avg_ledger) if avg_ledger is not None else None
+    except (TypeError, ValueError):
+        avg_ledger_f = None
+
+    if state.get("_profit_exit_done"):
+        reason = "trail_profit_sell"
+        side = "SELL"
+        hist = state.get("sell_history") or []
+        row: Dict[str, Any] = {}
+        for x in reversed(hist):
+            if isinstance(x, dict) and x.get("grid_index") is None:
+                row = x
+                break
+        if not row and hist:
+            row = hist[-1] if isinstance(hist[-1], dict) else {}
+        avg_cost = _avg_buy_grid_from_history(state.get("buy_history") or []) or avg_ledger_f
+        archive.append({
+            "cycle_id": cycle_id,
+            "reason": reason,
+            "side": side,
+            "qty": _f(row.get("qty")) or None,
+            "fill_price": _f(row.get("price")) or None,
+            "execution_price": _f(row.get("execution_price") or row.get("price")) or None,
+            "tepe_price": anchor if anchor > 0 else None,
+            "dip_price": None,
+            "average_cost": round(avg_cost, 8) if avg_cost else None,
+            "breakeven_price": _f(state.get("_profit_exit_breakeven")) if state.get("_profit_exit_breakeven") is not None else None,
+            "trigger_price": _f(state.get("_profit_exit_trigger_price")) if state.get("_profit_exit_trigger_price") is not None else None,
+        })
+    elif state.get("_reentry_done"):
+        reason = "trail_reentry_buy"
+        side = "BUY"
+        hist = state.get("buy_history") or []
+        row = {}
+        for x in reversed(hist):
+            if isinstance(x, dict) and x.get("grid_index") is None:
+                row = x
+                break
+        if not row and hist:
+            row = hist[-1] if isinstance(hist[-1], dict) else {}
+        avg_cost = _avg_sell_grid_from_history(state.get("sell_history") or [])
+        archive.append({
+            "cycle_id": cycle_id,
+            "reason": reason,
+            "side": side,
+            "qty": _f(row.get("qty")) or None,
+            "fill_price": _f(row.get("price")) or None,
+            "execution_price": _f(row.get("execution_price") or row.get("price")) or None,
+            "tepe_price": None,
+            "dip_price": anchor if anchor > 0 else None,
+            "average_cost": round(avg_cost, 8) if avg_cost else None,
+            "breakeven_price": None,
+            "trigger_price": None,
+        })
+    if len(archive) > 200:
+        state["cycle_close_trades_archive"] = archive[-200:]
+
+
 def cycle_reset_after_fill(
     state: Dict[str, Any], new_reference_price: float, n: int, m: int, symbol: Optional[str] = None
 ) -> None:
     """After re-entry or profit-exit fill: tur karı hesaplanır, cycle_id++, reference_price, grid referansları bileşik bakiyeye güncellenir."""
     old_cycle_id = int(state.get("cycle_id") or 1)
+    from app.botengine.cycle_ledger import archive_cycle_ledger_fills
+    archive_cycle_ledger_fills(state, old_cycle_id)
     _archive_cycle_grid_fills(state, old_cycle_id)
+    _archive_cycle_close_trade(state, old_cycle_id)
     quote_bal = _f(state.get("quote_balance") or 0) or 0.0
     base_bal = _f(state.get("base_balance") or 0) or 0.0
     price = _f(new_reference_price) or new_reference_price
@@ -831,6 +1089,7 @@ def cycle_reset_after_fill(
     state.pop("_reentry_done", None)
     state.pop("_profit_exit_done", None)
     state.pop("_cycle_complete", None)
+    state.pop("cycle_grid_side", None)
     if symbol:
         from app.botengine.cycle_ledger import build_cycle_ledger_empty
         state["cycle_ledger_current"] = build_cycle_ledger_empty(new_cycle_id, symbol)

@@ -186,15 +186,20 @@
             }
             renderHome.showUpdatingBadge(false);
             if (data.wallet_live) {
-                renderHome.walletCachedToAssetsState(data.wallet_live, data.wallet_live_at);
+                renderHome.walletCachedToAssetsState(data.wallet_live, data.wallet_live_at, { live: true });
                 storageCache.mergeSaved(accountId, {
                     wallet_cached: data.wallet_live,
                     wallet_cached_at: data.wallet_live_at
                 });
+            } else if (data.wallet_error || (data.error && data.error.error_code)) {
+                if (typeof window.markWalletLiveFetchFailed === 'function') window.markWalletLiveFetchFailed();
+                if (typeof window.updateKpiCuzdanLiveStatus === 'function') window.updateKpiCuzdanLiveStatus();
             }
         }).catch(function () {
             clearRefreshLock(accountId);
             renderHome.showUpdatingBadge(false);
+            if (typeof window.markWalletLiveFetchFailed === 'function') window.markWalletLiveFetchFailed();
+            if (typeof window.updateKpiCuzdanLiveStatus === 'function') window.updateKpiCuzdanLiveStatus();
         });
     }
 

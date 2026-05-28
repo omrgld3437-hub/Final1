@@ -126,6 +126,44 @@ def _get_price_from_datahub(sym_pair: str) -> Optional[float]:
     return None
 
 
+def _resolve_bot_live_price(
+    sym: str,
+    state: Optional[Dict[str, Any]] = None,
+    *,
+    pnl_price: Optional[float] = None,
+) -> float:
+    """Hub → DataHub → PnL → reference_price. Grid UI ile aynı sıra."""
+    sym_u = (sym or "").strip().upper()
+    live = 0.0
+    try:
+        p = price_hub.get_price(sym_u)
+        if p is not None and float(p) > 0:
+            live = float(p)
+    except Exception:
+        pass
+    if live <= 0 and sym_u:
+        hub_p = _get_price_from_datahub(sym_u)
+        if hub_p is not None and float(hub_p) > 0:
+            live = float(hub_p)
+    if live <= 0 and pnl_price is not None:
+        try:
+            pp = float(pnl_price)
+            if pp > 0:
+                live = pp
+        except (TypeError, ValueError):
+            pass
+    if live <= 0 and state:
+        ref = state.get("reference_price")
+        if ref is not None:
+            try:
+                rp = float(ref)
+                if rp > 0:
+                    live = rp
+            except (TypeError, ValueError):
+                pass
+    return live
+
+
 async def _fetch_prices_parallel(assets: List[str], quote_asset: str) -> Dict[str, float]:
     """Asset listesi için fiyatları DataHub'dan al (bulk-only, no per-symbol REST)."""
     out: Dict[str, float] = {}
@@ -380,7 +418,7 @@ async def bots_detail(
         raise HTTPException(status_code=404, detail=_detail_err("NOT_FOUND", "Bot not found", rid))
     state = load_state(db, bot.id)
     raw = json.loads(bot.config_json or "{}")
-    price = float((state or {}).get("reference_price") or 0)
+    sym = (bot.symbol or "").strip().upper()
 
     # PnL + live price for UI (current_price, current_usd, daily_pnl_*, price_24h)
     pnl_data: Dict[str, Any] = {}
@@ -390,18 +428,11 @@ async def bots_detail(
         logger.debug("bots_detail pnl failed bot_id=%s: %s", bot.id, e)
     if pnl_data.get("error"):
         pnl_data = {}
-    live_price = float(pnl_data.get("current_price") or 0)
-    if live_price <= 0:
-        try:
-            hub_p = price_hub.get_price(bot.symbol or "")
-            if hub_p is not None and float(hub_p) > 0:
-                live_price = float(hub_p)
-        except Exception:
-            pass
+    pnl_price = float(pnl_data.get("current_price") or 0) or None
+    live_price = _resolve_bot_live_price(sym, state, pnl_price=pnl_price)
 
     # 24h ticker: paralel başlat, MULTI/TRDCA işlemleriyle birlikte çalışsın
     price_24h_change_pct = None
-    sym = (bot.symbol or "").strip().upper()
     async def _fetch_24h_ticker():
         out = {}
         if not sym or sym == "MULTI":
@@ -420,8 +451,11 @@ async def bots_detail(
         return out
     t24 = asyncio.create_task(_fetch_24h_ticker()) if sym else None
 
+    price = float((state or {}).get("reference_price") or 0)
     if price <= 0 and live_price > 0:
         price = live_price
+    if live_price <= 0 and price > 0:
+        live_price = price
     current_usd = float(pnl_data.get("total_usd") or 0)
     daily_usd = float(pnl_data.get("daily") or 0)
     daily_pnl_pct = pnl_data.get("daily_pnl_pct")
@@ -883,14 +917,115 @@ def _ledger_fills_to_trade_dicts(
             "side": f.get("side"),
             "qty": f.get("qty"),
             "price": f.get("price"),
-            "fee": f.get("fee"),
+            "fee": f.get("fee_usdt") if f.get("fee_usdt") is not None else f.get("fee"),
+            "fee_raw": f.get("fee_raw"),
+            "fee_usdt": f.get("fee_usdt") if f.get("fee_usdt") is not None else f.get("fee"),
             "fee_asset": f.get("fee_asset"),
             "order_id": f.get("order_id"),
             "client_order_id": f.get("client_order_id"),
             "symbol": sym,
             "cycle_id": cycle_id,
+            "reason": f.get("reason"),
+            "slot_id": f.get("slot_id"),
         })
     return out
+
+
+def _trade_fee_usdt(
+    t: Dict[str, Any],
+    symbol: str,
+    config_raw: Optional[Dict[str, Any]] = None,
+) -> Optional[float]:
+    """Komisyon USDT karşılığı. Binance: alışta base coin, satışta USDT."""
+    if t.get("fee_usdt") is not None:
+        try:
+            v = float(t["fee_usdt"])
+            return v if v > 0 else None
+        except (TypeError, ValueError):
+            pass
+    try:
+        fee = float(t.get("fee") or 0)
+    except (TypeError, ValueError):
+        fee = 0.0
+    if fee <= 0:
+        fee = 0.0
+    fee_asset = (t.get("fee_asset") or "USDT").strip().upper()
+    try:
+        price = float(t.get("price") or 0)
+    except (TypeError, ValueError):
+        price = 0.0
+    from app.botengine.fee_utils import commission_to_usdt, symbol_base_asset
+
+    base = symbol_base_asset(symbol)
+    qty = float(t.get("qty") or 0) if t.get("qty") is not None else 0.0
+    notional = qty * price if qty > 0 and price > 0 else 0.0
+    if fee > 0:
+        if fee_asset == "USDT":
+            return fee
+        if notional > 0 and fee <= notional * 0.02:
+            return fee
+        usdt = commission_to_usdt(fee, fee_asset, symbol, price)
+        if usdt > 0:
+            return usdt
+    if qty > 0 and price > 0 and config_raw:
+        side = (t.get("side") or "").upper()
+        rate = float(
+            config_raw.get("sell_fee_rate" if side == "SELL" else "buy_fee_rate")
+            or config_raw.get("fee_rate")
+            or 0.001
+        )
+        est = qty * price * rate
+        return est if est > 0 else None
+    return None
+
+
+def _enrich_trades_fee(
+    trades: List[Dict[str, Any]],
+    symbol: str,
+    config_raw: Optional[Dict[str, Any]] = None,
+) -> None:
+    """fee_usdt / fee_raw alanlarını trade dict'lerine ekle (UI komisyon satırı)."""
+    from app.botengine.fee_utils import symbol_base_asset
+
+    base = symbol_base_asset(symbol)
+    for t in trades:
+        if not isinstance(t, dict):
+            continue
+        fee_usdt = _trade_fee_usdt(t, symbol, config_raw)
+        if fee_usdt is not None:
+            t["fee_usdt"] = round(fee_usdt, 6)
+        fee_asset = (t.get("fee_asset") or "USDT").strip().upper()
+        try:
+            px = float(t.get("price") or 0)
+            qty = float(t.get("qty") or 0)
+        except (TypeError, ValueError):
+            px = qty = 0.0
+        notional = qty * px if qty > 0 and px > 0 else 0.0
+        if t.get("fee_raw") is None and fee_asset != "USDT":
+            try:
+                raw = float(t.get("fee") or 0)
+            except (TypeError, ValueError):
+                raw = 0.0
+            if raw > 0 and (notional <= 0 or raw > notional * 0.02):
+                t["fee_raw"] = raw
+        elif t.get("fee_raw") is not None:
+            try:
+                t["fee_raw"] = float(t["fee_raw"])
+            except (TypeError, ValueError):
+                pass
+        if (
+            t.get("fee_raw") is None
+            and fee_usdt
+            and fee_asset != "USDT"
+            and base
+            and fee_asset == base
+        ):
+            try:
+                px = float(t.get("price") or 0)
+                if px > 0:
+                    t["fee_raw"] = round(fee_usdt / px, 10)
+            except (TypeError, ValueError):
+                pass
 
 
 def _trade_dedupe_key(t: Dict[str, Any]) -> str:
@@ -911,11 +1046,23 @@ def _trade_richness(t: Dict[str, Any]) -> int:
     score = 0
     if t.get("slot_id") is not None:
         score += 4
+    if t.get("reason"):
+        score += 2
     if t.get("reference_price") is not None:
         score += 2
     if t.get("order_id"):
         score += 1
     return score
+
+
+def _merge_trade_dict(a: Dict[str, Any], b: Dict[str, Any]) -> Dict[str, Any]:
+    """Aynı işlemin iki temsilini birleştir; boş alanları doldur."""
+    primary, secondary = (a, b) if _trade_richness(a) >= _trade_richness(b) else (b, a)
+    out = dict(primary)
+    for k, v in secondary.items():
+        if v is not None and out.get(k) is None:
+            out[k] = v
+    return out
 
 
 def _trade_alias_keys(t: Dict[str, Any]) -> List[str]:
@@ -954,8 +1101,7 @@ def _merge_cycle_trades(*groups: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 continue
             pk = _primary_for(t)
             if pk in merged:
-                if _trade_richness(t) > _trade_richness(merged[pk]):
-                    merged[pk] = t
+                merged[pk] = _merge_trade_dict(merged[pk], t)
             else:
                 merged[pk] = t
                 order.append(pk)
@@ -964,6 +1110,129 @@ def _merge_cycle_trades(*groups: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     out = [merged[k] for k in order]
     out.sort(key=lambda x: str(x.get("ts") or ""))
     return out
+
+
+def _hydrate_trades_from_cycle_ledger(
+    trades: List[Dict[str, Any]],
+    state: Optional[Dict[str, Any]],
+    cycle_id: int,
+) -> None:
+    """Ledger fill alanlarını (reason, slot_id) DB satırlarına tamamla."""
+    if not state or not trades:
+        return
+    cur_cid = int(state.get("cycle_id") or 1)
+    fills: List[Dict[str, Any]] = []
+    if cur_cid == int(cycle_id):
+        ledger = state.get("cycle_ledger_current") or {}
+        if isinstance(ledger, dict):
+            fills.extend(ledger.get("fills") or [])
+    for block in state.get("cycle_ledger_fills_archive") or []:
+        if not isinstance(block, dict):
+            continue
+        if int(block.get("cycle_id") or 0) == int(cycle_id):
+            fills.extend(block.get("fills") or [])
+            break
+    by_oid: Dict[str, Dict[str, Any]] = {}
+    by_cid: Dict[str, Dict[str, Any]] = {}
+    for f in fills:
+        if not isinstance(f, dict):
+            continue
+        oid = f.get("order_id")
+        if oid is not None and str(oid).strip():
+            by_oid[str(oid)] = f
+        cid = f.get("client_order_id")
+        if cid:
+            by_cid[str(cid)] = f
+    for t in trades:
+        f = None
+        oid = t.get("order_id")
+        if oid is not None and str(oid).strip():
+            f = by_oid.get(str(oid))
+        if f is None:
+            cid = t.get("client_order_id")
+            if cid:
+                f = by_cid.get(str(cid))
+        if not f:
+            continue
+        if not t.get("reason") and f.get("reason"):
+            t["reason"] = f.get("reason")
+        if t.get("slot_id") is None and f.get("slot_id") is not None:
+            t["slot_id"] = f.get("slot_id")
+
+
+def _cycle_pnl_entry(state: Optional[Dict[str, Any]], cycle_id: int) -> Optional[Dict[str, Any]]:
+    if not state:
+        return None
+    for row in state.get("cycle_pnls") or []:
+        if isinstance(row, dict) and int(row.get("cycle_id") or 0) == int(cycle_id):
+            return row
+    return None
+
+
+def _trade_has_grid_slot(t: Dict[str, Any]) -> bool:
+    slot = t.get("slot_id")
+    if slot is None:
+        return False
+    try:
+        return int(slot) >= 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _tag_cycle_close_trades(
+    trades: List[Dict[str, Any]],
+    state: Optional[Dict[str, Any]],
+    cycle_id: int,
+) -> None:
+    """Tamamlanmış tur kapanış işlemini cycle_pnls ile eşleştir; reason alanını doldur."""
+    if not state or not trades:
+        return
+    entry = _cycle_pnl_entry(state, cycle_id)
+    if not entry:
+        return
+    close_reason = (entry.get("close_reason") or "").strip()
+    if close_reason not in ("trail_profit_sell", "trail_reentry_buy"):
+        return
+    close_side = (entry.get("close_side") or ("SELL" if close_reason == "trail_profit_sell" else "BUY")).upper()
+    close_fill = entry.get("close_fill") if isinstance(entry.get("close_fill"), dict) else {}
+
+    def _matches_close_fill(t: Dict[str, Any]) -> bool:
+        if (t.get("side") or "").upper() != close_side:
+            return False
+        try:
+            tq = float(t.get("qty") or 0)
+            tp = float(t.get("price") or 0)
+            cq = float(close_fill.get("qty") or 0)
+            cp = float(close_fill.get("price") or 0)
+        except (TypeError, ValueError):
+            return False
+        if cq <= 0 or cp <= 0:
+            return False
+        return abs(tq - cq) <= max(1e-6, cq * 1e-4) and abs(tp - cp) <= max(0.5, cp * 0.02)
+
+    target: Optional[Dict[str, Any]] = None
+    if close_fill:
+        for t in trades:
+            if _matches_close_fill(t):
+                target = t
+                break
+
+    if target is None:
+        side_trades = sorted(
+            [t for t in trades if (t.get("side") or "").upper() == close_side],
+            key=lambda x: str(x.get("ts") or ""),
+        )
+        non_grid = [t for t in side_trades if not _trade_has_grid_slot(t)]
+        if non_grid:
+            target = non_grid[-1]
+        elif side_trades:
+            target = side_trades[-1]
+
+    if target is None:
+        return
+    if not target.get("reason"):
+        target["reason"] = close_reason
+    target["is_cycle_close"] = True
 
 
 def _cycle_open_to_trade_dicts(
@@ -1161,17 +1430,7 @@ async def bots_grid_points(
     sym = (bot.symbol or "").strip().upper()
     is_trdca = strategy_id == "trdca_pro" or sym == "MULTI"
 
-    live_price = 0.0
-    try:
-        hub_p = price_hub.get_price(bot.symbol or "")
-        if hub_p is not None and float(hub_p) > 0:
-            live_price = float(hub_p)
-    except Exception:
-        pass
-    if live_price <= 0 and sym:
-        hub_p = _get_price_from_datahub(sym)
-        if hub_p is not None and float(hub_p) > 0:
-            live_price = float(hub_p)
+    live_price = _resolve_bot_live_price(sym, state)
 
     config_for_grid = _config_for_grid_view(raw)
     grid_points: List[Dict[str, Any]] = []
@@ -1229,6 +1488,7 @@ async def bots_grid_points(
             "sell_history": state.get("sell_history"),
             "buy_history": state.get("buy_history"),
             "mode": state.get("mode"),
+            "cycle_id": state.get("cycle_id"),
         },
         "config": config_for_grid,
         "request_id": rid,
@@ -2010,6 +2270,11 @@ async def bots_health(
     if not bot:
         raise HTTPException(status_code=404, detail=_detail_err("NOT_FOUND", "Bot not found", rid))
     from app.botengine.health_watch import evaluate_bot_health, _expected_tick_interval_sec, _parse_last_tick_ts
+    try:
+        from app.services.binance_connectivity import sync_bot_connectivity_on_view
+        await sync_bot_connectivity_on_view(db, bot, source="health_poll")
+    except Exception as e:
+        logger.debug("bots_health connectivity probe bot_id=%s: %s", bot.id, e)
     state = load_state(db, bot.id) or {}
     alerts = evaluate_bot_health(bot, state, db)
     now_ts = int(datetime.now(timezone.utc).timestamp())
@@ -2025,6 +2290,39 @@ async def bots_health(
         "tick_age_s": round(tick_age, 1) if tick_age is not None else None,
         "tick_interval_s": interval_s,
         "last_error_code": state.get("last_error_code"),
+        "request_id": rid,
+    }
+
+
+@router.post("/{bot_id}/health/ack")
+async def bots_health_ack(
+    request: Request,
+    bot_id: int,
+    account_id: Optional[int] = Query(None),
+    account_code: Optional[str] = Query(None),
+    current: dict = Depends(require_auth),
+    db: Session = Depends(get_db),
+):
+    """Operator acknowledged health banner: clear last_error_code and stamp health_ack_at."""
+    rid = _request_id(request)
+    resolved_account_id = _resolve_account_id(account_id, account_code, db)
+    bot = _resolve_bot(bot_id, resolved_account_id, current, db)
+    if not bot:
+        raise HTTPException(status_code=404, detail=_detail_err("NOT_FOUND", "Bot not found", rid))
+    state = load_state(db, bot.id) or {}
+    now_ts = int(datetime.now(timezone.utc).timestamp())
+    prev_err = (state.pop("last_error_code", None) or "")
+    prev_err = str(prev_err).strip() or None
+    state["health_ack_at"] = now_ts
+    if prev_err:
+        state["health_ack_error"] = prev_err
+    state.pop("health_error_since", None)
+    save_state(db, bot.id, bot.account_id, state)
+    return {
+        "ok": True,
+        "bot_id": bot.id,
+        "cleared_error": prev_err,
+        "health_ack_at": now_ts,
         "request_id": rid,
     }
 
@@ -2046,11 +2344,33 @@ async def bots_events(
     bot = _resolve_bot(bot_id, resolved_account_id, current, db)
     if not bot:
         raise HTTPException(status_code=404, detail=_detail_err("NOT_FOUND", "Bot not found", rid))
+    try:
+        from app.services.binance_connectivity import sync_bot_connectivity_on_view
+        await sync_bot_connectivity_on_view(
+            db,
+            bot,
+            source="events_load" if after_id is None else "events_poll",
+            force_probe=(after_id is None),
+        )
+    except Exception as e:
+        logger.debug("bots_events connectivity probe bot_id=%s: %s", bot.id, e)
     events = list_events(db, bot.id, limit=limit, after_id=after_id)
     state = load_state(db, bot.id)
     events = _enrich_command_start_events(events, bot, state)
     events = _merge_synthetic_cycle_start_events(events, state)[:limit]
-    return {"events": events, "request_id": rid}
+    conn_fail = None
+    try:
+        from app.services.binance_connectivity import active_failure
+        rec = active_failure(bot.account_id)
+        if rec:
+            conn_fail = {
+                "error_code": rec.get("error_code"),
+                "message": rec.get("message"),
+                "source": rec.get("source"),
+            }
+    except Exception:
+        pass
+    return {"events": events, "connectivity_failure": conn_fail, "request_id": rid}
 
 
 @router.get("/{bot_id}/cycles")
@@ -2103,6 +2423,14 @@ def _grid_pct_from_config(g: Dict[str, Any], side: str) -> Optional[float]:
 
 
 def _is_grid_trade_row(t: Dict[str, Any]) -> bool:
+    cid = (t.get("client_order_id") or "").lower()
+    if cid.startswith("cycle_open_") or "init_" in cid or cid.startswith("init"):
+        return False
+    reason = (t.get("reason") or "").lower()
+    if reason in ("initial_allocation", "trail_reentry_buy", "trail_profit_sell", "reentry", "profit_exit"):
+        return False
+    if "reentry" in cid or "profit_exit" in cid:
+        return False
     slot = t.get("slot_id")
     if slot is not None:
         try:
@@ -2110,10 +2438,133 @@ def _is_grid_trade_row(t: Dict[str, Any]) -> bool:
                 return True
         except (TypeError, ValueError):
             pass
-    cid = (t.get("client_order_id") or "").lower()
-    if "grid" in cid and "init_" not in cid and "cycle_open" not in cid:
+    if reason in ("trail_sell_grid", "trail_buy_grid"):
+        return True
+    if t.get("grid_detail"):
         return True
     return False
+
+
+def _trail_pct_for_side(cfg: Dict[str, Any], side: str) -> Optional[float]:
+    try:
+        if side == "SELL":
+            v = cfg.get("sell_trigger_trailing_pct")
+            if v is None:
+                v = (cfg.get("up") or {}).get("trail_pct")
+        else:
+            v = cfg.get("buy_trigger_trailing_pct")
+            if v is None:
+                v = (cfg.get("down") or {}).get("trail_pct")
+        return round(float(v), 4) if v is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _archive_lookup_trade(
+    state: Optional[Dict[str, Any]],
+    cycle_id: int,
+    side: str,
+    qty: Any,
+    price: Any,
+) -> Optional[Dict[str, Any]]:
+    if not state:
+        return None
+    try:
+        qf = float(qty or 0)
+        pf = float(price or 0)
+    except (TypeError, ValueError):
+        return None
+    if qf <= 0 or pf <= 0:
+        return None
+    side_u = (side or "").upper()
+    best: Optional[Dict[str, Any]] = None
+    best_score = float("inf")
+    for row in state.get("cycle_grid_fills_archive") or []:
+        if not isinstance(row, dict):
+            continue
+        if int(row.get("cycle_id") or 0) != int(cycle_id):
+            continue
+        if (row.get("side") or "").upper() != side_u:
+            continue
+        try:
+            rq = float(row.get("qty") or 0)
+            rp = float(row.get("fill_price") or row.get("execution_price") or 0)
+        except (TypeError, ValueError):
+            continue
+        if abs(rq - qf) > max(1e-6, qf * 1e-4):
+            continue
+        score = abs(rp - pf) if rp > 0 else 0.0
+        if score < best_score:
+            best_score = score
+            best = row
+    return best if best_score <= max(0.5, pf * 0.02) else None
+
+
+def _resolve_trade_grid_index(
+    t: Dict[str, Any],
+    trades: List[Dict[str, Any]],
+    state: Optional[Dict[str, Any]],
+    cycle_id: int,
+    side: str,
+) -> int:
+    try:
+        if t.get("slot_id") is not None:
+            idx = int(t.get("slot_id"))
+            if idx >= 0:
+                return idx
+    except (TypeError, ValueError):
+        pass
+    archived = _archive_lookup_trade(state, cycle_id, side, t.get("qty"), t.get("price"))
+    if archived and archived.get("grid_index") is not None:
+        return int(archived["grid_index"])
+    if state:
+        hist_key = "sell_history" if side == "SELL" else "buy_history"
+        try:
+            tq = float(t.get("qty") or 0)
+            tp = float(t.get("price") or 0)
+        except (TypeError, ValueError):
+            tq = tp = 0.0
+        for h in reversed(state.get(hist_key) or []):
+            if not isinstance(h, dict):
+                continue
+            gi = h.get("grid_index")
+            if gi is None:
+                continue
+            try:
+                if abs(float(h.get("qty") or 0) - tq) <= max(1e-6, tq * 1e-4):
+                    return int(gi)
+            except (TypeError, ValueError):
+                continue
+    peers = [
+        x for x in trades
+        if (x.get("side") or "").upper() == side and _is_grid_trade_row(x)
+    ]
+    peers.sort(key=lambda x: str(x.get("ts") or ""))
+    for i, p in enumerate(peers):
+        if p is t or (
+            p.get("id") is not None and p.get("id") == t.get("id")
+        ) or (
+            p.get("order_id") and p.get("order_id") == t.get("order_id")
+        ):
+            try:
+                if p.get("slot_id") is not None and int(p.get("slot_id")) >= 0:
+                    return int(p.get("slot_id"))
+            except (TypeError, ValueError):
+                pass
+            return i
+    return -1
+
+
+def _extreme_from_execution(side: str, exec_p: float, trail_pct: float) -> Optional[float]:
+    if exec_p <= 0 or trail_pct <= 0:
+        return None
+    try:
+        if side == "SELL":
+            denom = 1.0 - trail_pct / 100.0
+            return exec_p / denom if denom > 0 else None
+        return exec_p / (1.0 + trail_pct / 100.0)
+    except (ZeroDivisionError, ValueError):
+        return None
 
 
 def _archive_lookup(state: Optional[Dict[str, Any]], cycle_id: int, grid_index: int, side: str) -> Optional[Dict[str, Any]]:
@@ -2160,18 +2611,19 @@ def _enrich_trades_grid_detail(
     cfg = _config_for_grid_view(config_raw)
     sell_grids = cfg.get("sell_grids") or (cfg.get("up") or {}).get("grids") or []
     buy_grids = cfg.get("buy_grids") or (cfg.get("down") or {}).get("grids") or []
+    trail_sell = _trail_pct_for_side(cfg, "SELL")
+    trail_buy = _trail_pct_for_side(cfg, "BUY")
     cur_cid = int(state.get("cycle_id") or 1) if state else None
     cycle_ref: Optional[float] = None
     for t in trades:
         if not _is_grid_trade_row(t):
             continue
         side = (t.get("side") or "").upper()
-        try:
-            idx = int(t.get("slot_id")) if t.get("slot_id") is not None else -1
-        except (TypeError, ValueError):
-            idx = -1
+        idx = _resolve_trade_grid_index(t, trades, state, cycle_id, side)
         if idx < 0:
             continue
+        if t.get("slot_id") is None:
+            t["slot_id"] = idx
         grids = sell_grids if side == "SELL" else buy_grids
         gcfg = grids[idx] if idx < len(grids) and isinstance(grids[idx], dict) else {}
         grid_pct = _grid_pct_from_config(gcfg, side)
@@ -2179,10 +2631,13 @@ def _enrich_trades_grid_detail(
             qty_pct = _grid_qty_pct_display(gcfg.get("sell_qty_pct_of_base") or gcfg.get("qty_pct"))
         else:
             qty_pct = _grid_qty_pct_display(gcfg.get("buy_qty_pct_of_quote") or gcfg.get("qty_pct"))
+        trail_pct = trail_sell if side == "SELL" else trail_buy
         trig: Optional[float] = None
         extreme: Optional[float] = None
         exec_p: Optional[float] = None
-        archived = _archive_lookup(state, cycle_id, idx, side)
+        archived = _archive_lookup(state, cycle_id, idx, side) or _archive_lookup_trade(
+            state, cycle_id, side, t.get("qty"), t.get("price")
+        )
         if archived:
             trig = archived.get("trigger_price")
             extreme = archived.get("extreme_price")
@@ -2214,8 +2669,29 @@ def _enrich_trades_grid_detail(
                 cycle_ref = float(t.get("reference_price") or 0) or None
             except (TypeError, ValueError):
                 cycle_ref = None
+        ref_p = cycle_ref
+        if ref_p is None:
+            try:
+                ref_p = float(t.get("reference_price") or 0) or None
+            except (TypeError, ValueError):
+                ref_p = None
         if trig is None and grid_pct is not None and cycle_ref and cycle_ref > 0:
             trig = cycle_ref * (1 + grid_pct / 100.0) if side == "SELL" else cycle_ref * (1 - grid_pct / 100.0)
+        if ref_p is None and state and int(state.get("cycle_id") or 0) == int(cycle_id):
+            try:
+                ref_p = float(state.get("reference_price") or 0) or None
+            except (TypeError, ValueError):
+                ref_p = None
+        trigger_level: Optional[float] = None
+        if ref_p and ref_p > 0 and grid_pct is not None:
+            trigger_level = (
+                ref_p * (1 + float(grid_pct) / 100.0)
+                if side == "SELL"
+                else ref_p * (1 - float(grid_pct) / 100.0)
+            )
+        if trigger_level is not None:
+            trig = trigger_level
+        trigger_hit: Optional[float] = None
         fill_p = t.get("price")
         try:
             fill_f = float(fill_p) if fill_p is not None else None
@@ -2223,6 +2699,15 @@ def _enrich_trades_grid_detail(
             fill_f = None
         if exec_p is None and fill_f is not None:
             exec_p = fill_f
+        if extreme is None and exec_p is not None and trail_pct is not None:
+            extreme = _extreme_from_execution(side, float(exec_p), float(trail_pct))
+        avg_buy_p: Optional[float] = None
+        avg_buy_quote: Optional[float] = None
+        if side == "SELL":
+            avg_buy_p, avg_buy_quote = _avg_buy_price_for_grid_sell(state, cycle_id, trades)
+        elif side == "BUY" and fill_f is not None:
+            avg_buy_p = fill_f
+            avg_buy_quote = (fill_f * float(t.get("qty") or 0)) if t.get("qty") is not None else None
         t["grid_detail"] = {
             "grid_index": idx,
             "grid_label": f"Grid #{idx + 1}",
@@ -2230,11 +2715,392 @@ def _enrich_trades_grid_detail(
             "side": side,
             "grid_pct": grid_pct,
             "qty_pct": qty_pct,
+            "trailing_pct": trail_pct,
             "trigger_price": round(trig, 8) if trig is not None else None,
+            "trigger_level_price": round(trigger_level, 8) if trigger_level is not None else None,
+            "trigger_hit_price": round(trigger_hit, 8) if trigger_hit is not None else None,
+            "trigger_pct_basis": "reference_price",
             "extreme_price": round(extreme, 8) if extreme is not None else None,
             "execution_price": round(exec_p, 8) if exec_p is not None else None,
-            "fill_price": round(fill_f, 8) if fill_f is not None else None,
+            "reference_price": round(ref_p, 8) if ref_p is not None else None,
+            "average_buy_price": round(avg_buy_p, 8) if avg_buy_p is not None else None,
+            "average_buy_quote_usdt": round(float(avg_buy_quote), 2) if avg_buy_quote is not None else None,
             "extreme_label": "Tepe fiyat" if side == "SELL" else "Dip fiyat",
+        }
+
+
+def _resolve_trade_reason(t: Dict[str, Any]) -> str:
+    reason = (t.get("reason") or "").strip().lower()
+    if reason:
+        return reason
+    cid = (t.get("client_order_id") or "").lower()
+    if "profit_exit" in cid:
+        return "trail_profit_sell"
+    if "reentry" in cid:
+        return "trail_reentry_buy"
+    return reason
+
+
+def _is_cycle_close_trade_row(t: Dict[str, Any]) -> bool:
+    if t.get("trade_detail"):
+        return True
+    if t.get("is_cycle_close"):
+        return True
+    reason = _resolve_trade_reason(t)
+    return reason in ("trail_profit_sell", "trail_reentry_buy")
+
+
+def _profit_params_from_config(cfg: Dict[str, Any], trade_type: str) -> Tuple[Optional[float], Optional[float]]:
+    profit = cfg.get("profit") or {}
+    try:
+        if trade_type == "profit_exit":
+            rise = cfg.get("profit_exit_rise_pct") or profit.get("resell_trigger_pct")
+            drop = cfg.get("profit_exit_drop_pct") or profit.get("resell_trail_pct")
+        else:
+            rise = cfg.get("profit_reentry_drop_pct") or profit.get("rebuy_trigger_pct")
+            drop = cfg.get("profit_reentry_rise_pct") or profit.get("rebuy_trail_pct")
+        return (
+            round(float(rise), 4) if rise is not None else None,
+            round(float(drop), 4) if drop is not None else None,
+        )
+    except (TypeError, ValueError):
+        return None, None
+
+
+def _ledger_archive_block(state: Optional[Dict[str, Any]], cycle_id: int) -> Optional[Dict[str, Any]]:
+    if not state:
+        return None
+    for block in state.get("cycle_ledger_fills_archive") or []:
+        if isinstance(block, dict) and int(block.get("cycle_id") or 0) == int(cycle_id):
+            return block
+    return None
+
+
+def _grid_cost_totals(rows: List[Dict[str, Any]]) -> Tuple[Optional[float], Optional[float]]:
+    """(ortalama fiyat, toplam quote USDT)"""
+    if not rows:
+        return None, None
+    try:
+        tq = sum(float(r.get("qty") or 0) for r in rows)
+        if tq <= 0:
+            return None, None
+        tv = sum(float(r.get("qty") or 0) * float(r.get("price") or 0) for r in rows)
+        return tv / tq, tv
+    except (TypeError, ValueError):
+        return None, None
+
+
+def _avg_buy_price_for_grid_sell(
+    state: Optional[Dict[str, Any]],
+    cycle_id: int,
+    trades: Optional[List[Dict[str, Any]]] = None,
+) -> Tuple[Optional[float], Optional[float]]:
+    """Satış gridi modalı: tur içi ortalama alım maliyeti (USDT/base)."""
+    if state:
+        cid = int(cycle_id)
+        ledger = None
+        if int(state.get("cycle_id") or 0) == cid:
+            ledger = state.get("cycle_ledger_current")
+        if not ledger:
+            ledger = _ledger_archive_block(state, cid)
+        if isinstance(ledger, dict):
+            try:
+                avg = ledger.get("avg_cost_quote_per_base")
+                if avg is not None and float(avg) > 0:
+                    bq = ledger.get("buy_quote_total")
+                    return float(avg), (float(bq) if bq is not None else None)
+            except (TypeError, ValueError):
+                pass
+        try:
+            init_q = float(state.get("initial_alloc_base_qty") or 0)
+            init_p = float(state.get("initial_alloc_price") or 0)
+            if init_q > 0 and init_p > 0:
+                return init_p, init_q * init_p
+        except (TypeError, ValueError):
+            pass
+    avg, quote = _cost_basis_for_close_trade(state, cycle_id, "profit_exit", trades)
+    return avg, quote
+
+
+def _avg_grid_cost_from_ledger_fills(fills: List[Dict[str, Any]], trade_type: str) -> Optional[float]:
+    avg, _ = _grid_cost_totals_from_ledger_fills(fills, trade_type)
+    return avg
+
+
+def _grid_cost_totals_from_ledger_fills(
+    fills: List[Dict[str, Any]], trade_type: str,
+) -> Tuple[Optional[float], Optional[float]]:
+    if trade_type == "profit_exit":
+        reason, side = "trail_buy_grid", "BUY"
+    else:
+        reason, side = "trail_sell_grid", "SELL"
+    rows = [
+        f for f in fills
+        if isinstance(f, dict)
+        and (f.get("reason") or "") == reason
+        and (f.get("side") or "").upper() == side
+    ]
+    return _grid_cost_totals(rows)
+
+
+def _cost_basis_for_close_trade(
+    state: Optional[Dict[str, Any]],
+    cycle_id: int,
+    trade_type: str,
+    trades: Optional[List[Dict[str, Any]]] = None,
+) -> Tuple[Optional[float], Optional[float]]:
+    """Ortalama maliyet ve grid bazlı toplam harcanan/kazanılan quote (USDT)."""
+    if state:
+        from app.botengine.strategies.dca_grid_trailing import (
+            _avg_buy_grid_from_history,
+            _avg_sell_grid_from_history,
+        )
+        if trade_type == "profit_exit":
+            hist = [
+                h for h in (state.get("buy_history") or [])
+                if isinstance(h, dict) and h.get("grid_index") is not None
+            ]
+        else:
+            hist = [
+                h for h in (state.get("sell_history") or [])
+                if isinstance(h, dict) and h.get("grid_index") is not None
+            ]
+        avg, quote = _grid_cost_totals(hist)
+        if avg is not None:
+            return avg, quote
+        block = _ledger_archive_block(state, cycle_id)
+        if block:
+            fills = block.get("fills") or []
+            avg, quote = _grid_cost_totals_from_ledger_fills(fills, trade_type)
+            if avg is not None:
+                return avg, quote
+            try:
+                stored = block.get("avg_cost_quote_per_base")
+                if trade_type == "profit_exit":
+                    quote_key = "buy_quote_total"
+                else:
+                    quote_key = "sell_quote_total"
+                buy_quote = block.get(quote_key)
+                if stored is not None and float(stored) > 0 and buy_quote is not None:
+                    return float(stored), float(buy_quote)
+            except (TypeError, ValueError):
+                pass
+    if trades:
+        grid_side = "BUY" if trade_type == "profit_exit" else "SELL"
+        grid_rows = [
+            x for x in trades
+            if (x.get("side") or "").upper() == grid_side and _trade_has_grid_slot(x)
+        ]
+        avg, quote = _grid_cost_totals(grid_rows)
+        if avg is not None:
+            return avg, quote
+    return None, None
+
+
+def _avg_cost_for_close_trade(
+    state: Optional[Dict[str, Any]],
+    cycle_id: int,
+    trade_type: str,
+) -> Optional[float]:
+    if not state:
+        return None
+    from app.botengine.strategies.dca_grid_trailing import (
+        _avg_buy_grid_from_history,
+        _avg_sell_grid_from_history,
+    )
+    if trade_type == "profit_exit":
+        avg = _avg_buy_grid_from_history(state.get("buy_history") or [])
+    else:
+        avg = _avg_sell_grid_from_history(state.get("sell_history") or [])
+    if avg is not None:
+        return float(avg)
+    block = _ledger_archive_block(state, cycle_id)
+    if not block:
+        return None
+    try:
+        stored = block.get("avg_cost_quote_per_base")
+        if stored is not None and float(stored) > 0:
+            return float(stored)
+    except (TypeError, ValueError):
+        pass
+    fills = block.get("fills") or []
+    avg = _avg_grid_cost_from_ledger_fills(fills, trade_type)
+    if avg is not None:
+        return avg
+    return None
+
+
+def _lookup_close_archive(
+    state: Optional[Dict[str, Any]],
+    cycle_id: int,
+    reason: str,
+    side: str,
+    qty: Any,
+    price: Any,
+) -> Optional[Dict[str, Any]]:
+    if not state:
+        return None
+    try:
+        qf = float(qty or 0)
+        pf = float(price or 0)
+    except (TypeError, ValueError):
+        return None
+    side_u = (side or "").upper()
+    reason_l = (reason or "").lower()
+    best: Optional[Dict[str, Any]] = None
+    best_score = float("inf")
+    for row in state.get("cycle_close_trades_archive") or []:
+        if not isinstance(row, dict):
+            continue
+        if int(row.get("cycle_id") or 0) != int(cycle_id):
+            continue
+        if (row.get("reason") or "").lower() != reason_l:
+            continue
+        if (row.get("side") or "").upper() != side_u:
+            continue
+        rq = float(row.get("qty") or 0)
+        rp = float(row.get("fill_price") or row.get("execution_price") or 0)
+        if qf > 0 and abs(rq - qf) > max(1e-6, qf * 1e-4):
+            continue
+        score = abs(rp - pf) if rp > 0 and pf > 0 else 0.0
+        if score < best_score:
+            best_score = score
+            best = row
+    if best is None:
+        matches = [
+            row for row in (state.get("cycle_close_trades_archive") or [])
+            if isinstance(row, dict)
+            and int(row.get("cycle_id") or 0) == int(cycle_id)
+            and (row.get("reason") or "").lower() == reason_l
+        ]
+        if len(matches) == 1:
+            return matches[0]
+    if best is None:
+        return None
+    if pf <= 0 or best_score <= max(0.5, pf * 0.02):
+        return best
+    return None
+
+
+def _breakeven_from_avg(avg_cost: Optional[float], cfg: Dict[str, Any]) -> Optional[float]:
+    if avg_cost is None or avg_cost <= 0:
+        return None
+    try:
+        buy_fee = float(cfg.get("buy_fee_rate") or 0.001)
+        sell_fee = float(cfg.get("sell_fee_rate") or 0.001)
+        denom = 1.0 - sell_fee
+        if denom <= 0:
+            return None
+        return round(avg_cost * (1.0 + buy_fee) / denom, 8)
+    except (TypeError, ValueError):
+        return None
+
+
+def _enrich_trades_close_detail(
+    trades: List[Dict[str, Any]],
+    config_raw: Dict[str, Any],
+    state: Optional[Dict[str, Any]],
+    cycle_id: int,
+) -> None:
+    """Kar satışı / kar alımı işlemlerine modal alanları ekle."""
+    cfg = _config_for_grid_view(config_raw)
+    for t in trades:
+        if not _is_cycle_close_trade_row(t):
+            continue
+        reason = _resolve_trade_reason(t)
+        if reason not in ("trail_profit_sell", "trail_reentry_buy"):
+            continue
+        trade_type = "profit_exit" if reason == "trail_profit_sell" else "reentry"
+        side = (t.get("side") or ("SELL" if trade_type == "profit_exit" else "BUY")).upper()
+        trigger_pct, trailing_pct = _profit_params_from_config(cfg, trade_type)
+        pnl_entry = _cycle_pnl_entry(state, cycle_id)
+        close_fill = (pnl_entry or {}).get("close_fill") if isinstance((pnl_entry or {}).get("close_fill"), dict) else {}
+        archived = _lookup_close_archive(state, cycle_id, reason, side, t.get("qty"), t.get("price"))
+        avg_cost = archived.get("average_cost") if archived else None
+        avg_quote: Optional[float] = None
+        trigger = archived.get("trigger_price") if archived else None
+        tepe = archived.get("tepe_price") if archived else None
+        dip = archived.get("dip_price") if archived else None
+        exec_p = archived.get("execution_price") if archived else None
+        if close_fill:
+            if trade_type == "profit_exit" and avg_cost is None and close_fill.get("avg_cost_quote_per_base") is not None:
+                try:
+                    avg_cost = float(close_fill["avg_cost_quote_per_base"])
+                except (TypeError, ValueError):
+                    pass
+            if trade_type == "reentry" and avg_cost is None and close_fill.get("avg_sell_grid_quote_per_base") is not None:
+                try:
+                    avg_cost = float(close_fill["avg_sell_grid_quote_per_base"])
+                except (TypeError, ValueError):
+                    pass
+            if tepe is None and close_fill.get("tepe_price") is not None:
+                try:
+                    tepe = float(close_fill["tepe_price"])
+                except (TypeError, ValueError):
+                    pass
+            if dip is None and close_fill.get("dip_price") is not None:
+                try:
+                    dip = float(close_fill["dip_price"])
+                except (TypeError, ValueError):
+                    pass
+            if exec_p is None and close_fill.get("execution_price") is not None:
+                try:
+                    exec_p = float(close_fill["execution_price"])
+                except (TypeError, ValueError):
+                    pass
+        if exec_p is None:
+            try:
+                exec_p = float(t.get("price")) if t.get("price") is not None else None
+            except (TypeError, ValueError):
+                exec_p = None
+        if state and int(state.get("cycle_id") or 1) == int(cycle_id):
+            if trade_type == "profit_exit" and state.get("_profit_exit_done"):
+                anchor = state.get("trail_anchor_price")
+                if tepe is None and anchor is not None:
+                    try:
+                        tepe = float(anchor)
+                    except (TypeError, ValueError):
+                        pass
+            if trade_type == "reentry" and state.get("_reentry_done"):
+                anchor = state.get("trail_anchor_price")
+                if dip is None and anchor is not None:
+                    try:
+                        dip = float(anchor)
+                    except (TypeError, ValueError):
+                        pass
+        basis_avg, basis_quote = _cost_basis_for_close_trade(state, cycle_id, trade_type, trades)
+        if avg_cost is None and basis_avg is not None:
+            avg_cost = basis_avg
+        if avg_quote is None and basis_quote is not None:
+            avg_quote = basis_quote
+        if avg_cost is not None and trigger_pct is not None:
+            if trade_type == "profit_exit":
+                trigger = float(avg_cost) * (1.0 + float(trigger_pct) / 100.0)
+            else:
+                trigger = float(avg_cost) * (1.0 - float(trigger_pct) / 100.0)
+        if trade_type == "profit_exit":
+            if tepe is None and exec_p is not None and trailing_pct is not None and trailing_pct > 0:
+                tepe = _extreme_from_execution("SELL", float(exec_p), float(trailing_pct))
+        else:
+            if dip is None and exec_p is not None and trailing_pct is not None and trailing_pct > 0:
+                dip = _extreme_from_execution("BUY", float(exec_p), float(trailing_pct))
+        label = "Kar satışı" if trade_type == "profit_exit" else "Kar alımı"
+        pnl_net = (pnl_entry or {}).get("pnl_usdt_net")
+        inv_adv = (pnl_entry or {}).get("inventory_coin_adv_qty")
+        t["trade_detail"] = {
+            "trade_type": trade_type,
+            "label": label,
+            "side": side,
+            "trigger_pct": trigger_pct,
+            "trailing_pct": trailing_pct,
+            "average_cost": round(float(avg_cost), 8) if avg_cost is not None else None,
+            "average_cost_quote_usdt": round(float(avg_quote), 2) if avg_quote is not None else None,
+            "trigger_price": round(float(trigger), 8) if trigger is not None else None,
+            "tepe_price": round(float(tepe), 8) if tepe is not None else None,
+            "dip_price": round(float(dip), 8) if dip is not None else None,
+            "execution_price": round(float(exec_p), 8) if exec_p is not None else None,
+            "realized_profit_usdt": round(float(pnl_net), 4) if pnl_net is not None else None,
+            "inventory_coin_adv_qty": round(float(inv_adv), 8) if inv_adv is not None else None,
         }
 
 
@@ -2267,7 +3133,6 @@ async def bots_trades(
     sym = (bot.symbol or "").upper()
     extra: List[Dict[str, Any]] = []
     if cycle_id is not None and ct != "trb" and state:
-        extra.extend(_cycle_open_to_trade_dicts(state, int(cycle_id), sym))
         cur_cid = int(state.get("cycle_id") or 1)
         if cur_cid == int(cycle_id):
             ledger = state.get("cycle_ledger_current") or {}
@@ -2283,18 +3148,37 @@ async def bots_trades(
             dt = _parse_ts_utc(t.get("ts"))
             if dt is not None:
                 ts_list.append(dt)
+        is_open_cycle = state is not None and int(state.get("cycle_id") or 1) == int(cycle_id)
         duration_sec = 0.0
-        if len(ts_list) >= 2:
+        started_at_iso: Optional[str] = None
+        completed_snapshot: Optional[Dict[str, Any]] = None
+        if state and isinstance(state.get("completed_cycle_dual_pnls"), list):
+            for c in state["completed_cycle_dual_pnls"]:
+                if isinstance(c, dict) and int(c.get("cycle_id") or 0) == int(cycle_id):
+                    completed_snapshot = c
+                    break
+        if is_open_cycle:
+            ledger = state.get("cycle_ledger_current") or {}
+            started_at_iso = ledger.get("started_at") if isinstance(ledger, dict) else None
+            start_dt = _parse_ts_utc(started_at_iso)
+            if start_dt is not None:
+                duration_sec = max(0.0, (datetime.now(timezone.utc) - start_dt).total_seconds())
+        elif completed_snapshot:
+            started_at_iso = completed_snapshot.get("started_at")
+            start_dt = _parse_ts_utc(started_at_iso)
+            end_dt = _parse_ts_utc(completed_snapshot.get("completed_at"))
+            if start_dt is not None and end_dt is not None:
+                duration_sec = max(0.0, (end_dt - start_dt).total_seconds())
+            elif len(ts_list) >= 2:
+                try:
+                    duration_sec = (max(ts_list) - min(ts_list)).total_seconds()
+                except Exception as e:
+                    logger.warning("bots_trades duration_sec failed bot_id=%s cycle_id=%s: %s", bot.id, cycle_id, e)
+        elif len(ts_list) >= 2:
             try:
                 duration_sec = (max(ts_list) - min(ts_list)).total_seconds()
             except Exception as e:
                 logger.warning("bots_trades duration_sec failed bot_id=%s cycle_id=%s: %s", bot.id, cycle_id, e)
-        elif state and int(state.get("cycle_id") or 1) == int(cycle_id):
-            ledger = state.get("cycle_ledger_current") or {}
-            started_at = ledger.get("started_at") if isinstance(ledger, dict) else None
-            start_dt = _parse_ts_utc(started_at)
-            if start_dt is not None:
-                duration_sec = max(0.0, (datetime.now(timezone.utc) - start_dt).total_seconds())
         pnl_usdt = None
         cycle_entry = None
         if state and isinstance(state.get("cycle_pnls"), list):
@@ -2305,7 +3189,6 @@ async def bots_trades(
                     pnl_usdt = c.get("pnl_usdt")
                     cycle_entry = c
                     break
-        is_open_cycle = state is not None and int(state.get("cycle_id") or 1) == int(cycle_id)
 
         def _safe_float(v: Any) -> Optional[float]:
             if v is None:
@@ -2322,6 +3205,8 @@ async def bots_trades(
             "trade_count": len(trades),
             "pnl_usdt": round(pnl_f, 2) if pnl_f is not None else None,
         }
+        if started_at_iso:
+            cycle_summary["started_at"] = started_at_iso
         if cycle_entry is not None:
             cycle_summary["cycle_type"] = cycle_entry.get("cycle_type") or "dca"
             cycle_summary["pnl_primary_mode"] = cycle_entry.get("pnl_primary_mode")
@@ -2339,7 +3224,12 @@ async def bots_trades(
                 cycle_summary["inventory_fees_usdt"] = ledger.get("inventory_fees_usdt")
     if cycle_id is not None and ct != "trb" and trades:
         cfg_raw = json.loads(bot.config_json or "{}")
+        _tag_cycle_close_trades(trades, state, int(cycle_id))
+        _hydrate_trades_from_cycle_ledger(trades, state, int(cycle_id))
+        _tag_cycle_close_trades(trades, state, int(cycle_id))
+        _enrich_trades_fee(trades, sym, cfg_raw)
         _enrich_trades_grid_detail(trades, cfg_raw, state, int(cycle_id))
+        _enrich_trades_close_detail(trades, cfg_raw, state, int(cycle_id))
     return {"trades": trades, "cycle_summary": cycle_summary, "cycle_type": ct, "request_id": rid}
 
 

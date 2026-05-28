@@ -35,13 +35,16 @@
         .status-badge { display: inline-flex; align-items: center; padding: 0 10px; min-height: 36px; border-radius: 6px; font-size: 0.8rem; font-weight: 600; box-sizing: border-box; }
         .status-running { background: rgba(14, 203, 129, 0.15); color: #0ecb81; }
         .status-stopped { background: rgba(108, 117, 125, 0.2); color: #6c757d; }
-        .status-error { background: rgba(246, 70, 93, 0.15); color: #f6465d; }
+        .status-error { background: rgba(246, 70, 93, 0.15); color: #f6465d; animation: status-error-blink 0.85s ease-in-out infinite; }
+        @keyframes status-error-blink { 0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(246, 70, 93, 0.35); } 50% { opacity: 0.45; box-shadow: 0 0 8px 2px rgba(246, 70, 93, 0.4); } }
         .health-alert-badge { display: none; align-items: center; padding: 0 10px; min-height: 36px; border-radius: 6px; font-size: 0.78rem; font-weight: 700; box-sizing: border-box; cursor: default; }
         .health-alert-warn { background: rgba(240, 185, 11, 0.2); color: #f0b90b; border: 1px solid rgba(240, 185, 11, 0.45); animation: health-warn-blink 2.2s ease-in-out infinite; }
         .health-alert-critical { background: rgba(246, 70, 93, 0.22); color: #f6465d; border: 1px solid rgba(246, 70, 93, 0.5); animation: health-crit-blink 0.65s ease-in-out infinite; }
         @keyframes health-warn-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
         @keyframes health-crit-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
         .panel-health-critical { animation: panel-crit-border 0.65s ease-in-out infinite; border: 2px solid rgba(246, 70, 93, 0.7); border-radius: 8px; }
+        .panel-health-warn { animation: panel-warn-border 2.2s ease-in-out infinite; border: 2px solid rgba(240, 185, 11, 0.55); border-radius: 8px; }
+        @keyframes panel-warn-border { 0%, 100% { box-shadow: 0 0 0 1px rgba(240, 185, 11, 0.25); } 50% { box-shadow: 0 0 10px 2px rgba(240, 185, 11, 0.15); } }
         @keyframes panel-crit-border { 0%, 100% { box-shadow: 0 0 0 1px rgba(246, 70, 93, 0.35); } 50% { box-shadow: 0 0 12px 2px rgba(246, 70, 93, 0.2); } }
         @keyframes page-crit-frame {
             0%, 100% {
@@ -282,6 +285,9 @@
             font-weight: 700;
         }
         #engineLogList .log-repeat-badge { font-size: 0.65rem; color: var(--ds-text-tertiary); font-weight: 600; white-space: nowrap; }
+        #engineLogPanel .engine-log-actions { display: flex; justify-content: flex-end; gap: 0.35rem; margin-bottom: 0.5rem; flex-wrap: wrap; }
+        #engineLogPanel #btnEngineLogReset,
+        #engineLogPanel #btnEngineLogExport { min-height: 28px; height: 28px; padding: 0 0.65rem; font-size: 0.72rem; border-radius: 6px; }
         .trade-side-buy { color: #0ecb81; }
         .trade-side-sell { color: #f6465d; }
         .loading { text-align: center; padding: 2rem; color: var(--ds-text-secondary); }
@@ -462,7 +468,9 @@
             /* Loglar: mesaj sütunu taşmasın, iç içe girmesin; mesajlar alt alta; sadece masaüstü */
             #engineLogPanel { overflow: hidden; max-width: 100%; }
             #engineLogPanel .btn, #engineLogPanel .btn-secondary { min-height: 48px; height: 48px; padding: 0 1.25rem; border-radius: 10px; }
-            #engineLogPanel #btnEngineLogReset { min-height: 28px; height: 28px; padding: 0 0.5rem; font-size: 0.72rem; border-radius: 6px; }
+            #engineLogPanel #btnEngineLogReset,
+            #engineLogPanel #btnEngineLogExport { min-height: 28px; height: 28px; padding: 0 0.5rem; font-size: 0.72rem; border-radius: 6px; }
+            #engineLogPanel .engine-log-actions { display: flex; justify-content: flex-end; gap: 0.35rem; margin-bottom: 0.5rem; flex-wrap: wrap; }
             @media (max-width: 768px) {
                 #engineLogPanel { display: none !important; }
             }
@@ -579,6 +587,7 @@
 
         <div class="panel" id="gridPointsPanel" style="display: none;">
             <h2>Grid alım satım noktaları</h2>
+            <p id="gridPointsRefPrice" class="muted poll-note grid-points-ref-price" style="font-size: 0.85rem; margin-top: -0.35rem; margin-bottom: 0.75rem;"></p>
             <p class="muted poll-note" style="font-size: 0.85rem; margin-bottom: 1rem;">Tepe/dip noktası grid tetiklendikten sonra aktif olur; anlık en tepe veya en dip her yakalandığında güncellenir, gerçekleşme fiyatı da belirlenen yüzdeliğe göre anlık güncellenir.</p>
             <div class="grid-section-title grid-section-title first">Satış gridleri</div>
             <div style="overflow-x: auto;">
@@ -668,9 +677,10 @@
 
         <div class="panel" id="engineLogPanel" style="display: none;">
             <h2>Bot Logları</h2>
-            <p class="muted poll-note" style="font-size: 0.85rem; margin-bottom: 0.75rem;">En son 500 kayıt listelenir. Bütün hareketler gösterilir. Uyarı alarmlarını kapatmak için Resetle butonuna basın.</p>
-            <div style="display: flex; justify-content: flex-end; margin-bottom: 0.5rem;">
-                <button type="button" class="btn btn-sm btn-secondary" id="btnEngineLogReset" title="Uyarı alarmlarını sıfırla (loglar kalır)">Resetle</button>
+            <p class="muted poll-note" style="font-size: 0.85rem; margin-bottom: 0.75rem;">Tabloda son 500 kayıt gösterilir. Oturum arşivi sayfa açıldığından beri tüm işlem/uyarı/hata kayıtlarını tutar (Resetle arşivi silmez). Dışarı aktar ile .txt ve .json indirirsiniz.</p>
+            <div class="engine-log-actions">
+                <button type="button" class="btn btn-sm btn-secondary" id="btnEngineLogExport" title="Bu oturumdaki tüm logları okunabilir dosya olarak indir">Dışarı aktar</button>
+                <button type="button" class="btn btn-sm btn-secondary" id="btnEngineLogReset" title="Banner, yanıp sönme ve tekrarlayan bağlantı loglarını sıfırla">Resetle</button>
             </div>
             <div id="engineLogList" style="max-height: 420px; overflow: auto; font-family: monospace; font-size: 0.8rem; border: 1px solid var(--ds-border, #2b3139); border-radius: 8px; padding: 0.5rem;"></div>
         </div>
@@ -732,9 +742,11 @@
     </div>
     <script src="/ui/assets/utils/coinLogo.js?v=1"></script>
     <script src="/ui/assets/core/apiClient.js?v=refactor1"></script>
-    <script src="/ui/assets/utils/engineLogFormat.js?v=23"></script>
-    <script src="/ui/assets/utils/botHealthAlerts.js?v=8"></script>
-    <script src="/ui/assets/utils/engineLogLive.js?v=4"></script>
+    <script src="/ui/assets/utils/gridTrailEnvelope.js?v=2"></script>
+    <script src="/ui/assets/utils/engineLogArchive.js?v=1"></script>
+    <script src="/ui/assets/utils/engineLogFormat.js?v=29"></script>
+    <script src="/ui/assets/utils/botHealthAlerts.js?v=18"></script>
+    <script src="/ui/assets/utils/engineLogLive.js?v=11"></script>
     <script src="/ui/vendor/lightweight-charts.standalone.production.js"></script>
     <script src="/ui/assets/perf_chart_tv.js?v=1"></script>
     <script>
@@ -1116,6 +1128,9 @@
             var q = accountCode ? '?account_code=' + encodeURIComponent(accountCode) : '?account_id=' + (accountId || '');
             window.apiClient.get('/api/bots-engine/' + botId + '/health' + q).then(function (res) {
                 window._lastHealthData = res || { alerts: [] };
+                if (window.EngineLogLive && _engineLogLiveOpts) {
+                    window.EngineLogLive.renderDisplayEvents(_engineLogLiveOpts);
+                }
                 syncHealthFromState();
             }).catch(function () {});
         }
@@ -1141,7 +1156,18 @@
             container: engineLogList,
             apiClient: window.apiClient,
             state: { events: [], lastId: 0 },
-            onAfterRender: onEngineEventsForHealth
+            getHealthData: function () { return window._lastHealthData || null; },
+            onAfterRender: onEngineEventsForHealth,
+            onPollError: function (failCount) {
+                if (typeof fetchBotHealth === 'function') fetchBotHealth();
+                if (failCount >= 3 && engineLogList && !engineLogList.querySelector('.engine-log-poll-error')) {
+                    var note = document.createElement('div');
+                    note.className = 'muted engine-log-poll-error';
+                    note.style.cssText = 'padding:0.5rem 0.75rem;color:#f6465d;font-size:0.8rem;';
+                    note.textContent = 'Log güncellenemedi — bağlantıyı kontrol edin.';
+                    engineLogList.insertBefore(note, engineLogList.firstChild);
+                }
+            }
         };
 
         function loadEngineEvents(bid, incremental) {
@@ -1166,18 +1192,87 @@
         }
 
         /** Grid alım/satım noktaları tablolarını günceller (tepe/dip, gerçekleşme fiyatı anlık). */
-        function renderGridPointsPanel(data) {
+        var _gridPointsRefCtx = null;
+        function setGridPointsRefContext(refD, cycleNum, baseAsset) {
+            _gridPointsRefCtx = { refD: refD, cycleNum: cycleNum, baseAsset: baseAsset || '' };
+        }
+        function formatPctFromRef(refPrice, livePrice) {
+            if (refPrice == null || refPrice <= 0 || livePrice == null || livePrice <= 0) return '';
+            var pct = (Number(livePrice) - Number(refPrice)) / Number(refPrice) * 100;
+            return ' · ' + (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%';
+        }
+        function gridTrailPct(side, cfg) {
+            cfg = cfg || {};
+            if (side === 'buy') {
+                var v = cfg.buy_trigger_trailing_pct;
+                if (v == null && cfg.down) v = cfg.down.trail_pct;
+                return v != null && !isNaN(Number(v)) ? Number(v) : 0.3;
+            }
+            var sv = cfg.sell_trigger_trailing_pct;
+            if (sv == null && cfg.up) sv = cfg.up.trail_pct;
+            return sv != null && !isNaN(Number(sv)) ? Number(sv) : 0.3;
+        }
+        function gridTrailLivePrice(data, opts) {
+            opts = opts || {};
+            if (opts.livePrice != null && Number(opts.livePrice) > 0) return Number(opts.livePrice);
+            if (lastBotDetail && lastBotDetail.lastLivePrice != null && lastBotDetail.lastLivePrice > 0) return lastBotDetail.lastLivePrice;
+            if (data && data.current_price != null && !isNaN(Number(data.current_price)) && Number(data.current_price) > 0) {
+                return Number(data.current_price);
+            }
+            return null;
+        }
+        function refreshGridPointsLivePrice(livePrice) {
+            updateGridPointsRefPriceLine(livePrice);
+            if (!lastBotDetail || !gridPointsPanel || gridPointsPanel.style.display === 'none') return;
+            if (!botDetailGridTrailActive(lastBotDetail)) return;
+            if (livePrice != null && Number(livePrice) > 0) lastBotDetail.lastLivePrice = Number(livePrice);
+            var merged = Object.assign({}, lastBotDetail);
+            renderGridPointsPanel(merged, { livePrice: livePrice, applyLive: true });
+            if (typeof renderProfitPointsPanel === 'function') {
+                renderProfitPointsPanel(merged, { livePrice: livePrice, applyLive: true });
+            }
+        }
+        function updateGridPointsRefPriceLine(livePrice) {
+            var refEl = document.getElementById('gridPointsRefPrice');
+            var ctx = _gridPointsRefCtx;
+            if (!refEl || !ctx) return;
+            if (ctx.refD != null && ctx.refD > 0) {
+                refEl.textContent = 'Tur ' + ctx.cycleNum + ' referans fiyatı: ' + (ctx.baseAsset ? ctx.baseAsset + ' ' : '') + fmtNum(ctx.refD, 4) + formatPctFromRef(ctx.refD, livePrice);
+            } else {
+                refEl.textContent = 'Tur ' + ctx.cycleNum + ' referans fiyatı: —';
+            }
+        }
+        function renderGridPointsPanel(data, opts) {
             if (!gridSellBody || !gridBuyBody) return;
+            opts = opts || {};
             var gps = data.grid_points || [];
             var sellPoints = gps.filter(function(p) { return p.type === 'sell'; });
             var buyPoints = gps.filter(function(p) { return p.type === 'buy'; });
             var st = data.state || {};
             var symbol = data.symbol || lastBotDetail.symbol || '?';
             var baseBal = st.base_balance != null ? Number(st.base_balance) : 0;
+            var refBaseBal = st.grid_reference_base != null && !isNaN(Number(st.grid_reference_base)) && Number(st.grid_reference_base) > 0
+                ? Number(st.grid_reference_base) : baseBal;
             var quoteBal = st.quote_balance != null ? Number(st.quote_balance) : 0;
             var baseAsset = baseFromSymbol(symbol) || '';
             var refD = data.reference_display != null && !isNaN(data.reference_display) ? Number(data.reference_display) : null;
+            if (refD == null && st.reference_price != null && !isNaN(Number(st.reference_price))) refD = Number(st.reference_price);
+            var cycleNum = st.cycle_id != null ? st.cycle_id : '?';
+            setGridPointsRefContext(refD, cycleNum, baseAsset);
+            var livePrice = gridTrailLivePrice(data, opts);
+            var cycleId = st.cycle_id != null ? st.cycle_id : 0;
+            if (window.GridTrailEnvelope) {
+                window.GridTrailEnvelope.syncGridTrailEnvelope(
+                    botId, cycleId, sellPoints, buyPoints,
+                    opts.applyLive ? livePrice : null,
+                    opts.applyLive === true
+                );
+            }
+            updateGridPointsRefPriceLine(livePrice);
             gridPointsPanel.style.display = 'block';
+            var cfg = data.config || {};
+            var sellTrailPct = gridTrailPct('sell', cfg);
+            var buyTrailPct = gridTrailPct('buy', cfg);
             gridSellBody.innerHTML = '';
             sellPoints.forEach(function (p) {
                 var tr = document.createElement('tr');
@@ -1188,12 +1283,19 @@
                 var statusText = p.fired ? 'Tamamlandı' : ((p.anchor != null || (p.trigger_hit_price != null)) ? 'Tetiklendi' : 'Bekliyor');
                 var statusClass = p.fired ? 'grid-status-tamamlandi' : ((p.anchor != null || (p.trigger_hit_price != null)) ? 'grid-status-tetiklendi' : 'grid-status-bekliyor');
                 var trigger = (p.trigger_price != null && !isNaN(p.trigger_price)) ? fmtNum(p.trigger_price, 4) : '—';
-                var anchor = p.anchor != null ? fmtNum(p.anchor, 4) : '—';
-                var exec = p.execution_price != null ? fmtNum(p.execution_price, 4) : '—';
+                var liveTrailS = window.GridTrailEnvelope
+                    ? window.GridTrailEnvelope.trailDisplayFromEnvelope(p, 'sell', sellTrailPct)
+                    : { anchor: p.anchor, exec: p.execution_price };
+                var anchorVal = liveTrailS.anchor != null ? liveTrailS.anchor : p.anchor;
+                var execVal = liveTrailS.exec != null ? liveTrailS.exec : p.execution_price;
+                var anchor = anchorVal != null ? fmtNum(anchorVal, 4) : '—';
+                var exec = execVal != null ? fmtNum(execVal, 4) : '—';
                 var miktar = '—';
-                if (p.qty_pct != null && !isNaN(p.qty_pct)) {
-                    if (baseBal > 0) {
-                        var sellQty = baseBal * (Number(p.qty_pct) / 100);
+                if (p.planned_base_qty != null && !isNaN(p.planned_base_qty) && p.planned_base_qty > 0) {
+                    miktar = fmtBaseCompact(Number(p.planned_base_qty)) + (baseAsset ? ' ' + baseAsset : '');
+                } else if (p.qty_pct != null && !isNaN(p.qty_pct)) {
+                    if (refBaseBal > 0) {
+                        var sellQty = refBaseBal * (Number(p.qty_pct) / 100);
                         miktar = fmtBaseCompact(sellQty) + (baseAsset ? ' ' + baseAsset : '');
                     } else {
                         miktar = Number(p.qty_pct) + '%';
@@ -1217,8 +1319,13 @@
                 var statusText = p.fired ? 'Tamamlandı' : ((p.anchor != null || (p.trigger_hit_price != null)) ? 'Tetiklendi' : 'Bekliyor');
                 var statusClass = p.fired ? 'grid-status-tamamlandi' : ((p.anchor != null || (p.trigger_hit_price != null)) ? 'grid-status-tetiklendi' : 'grid-status-bekliyor');
                 var trigger = (p.trigger_price != null && !isNaN(p.trigger_price)) ? fmtNum(p.trigger_price, 4) : '—';
-                var anchor = p.anchor != null ? fmtNum(p.anchor, 4) : '—';
-                var exec = p.execution_price != null ? fmtNum(p.execution_price, 4) : '—';
+                var liveTrailB = window.GridTrailEnvelope
+                    ? window.GridTrailEnvelope.trailDisplayFromEnvelope(p, 'buy', buyTrailPct)
+                    : { anchor: p.anchor, exec: p.execution_price };
+                var anchorValB = liveTrailB.anchor != null ? liveTrailB.anchor : p.anchor;
+                var execValB = liveTrailB.exec != null ? liveTrailB.exec : p.execution_price;
+                var anchor = anchorValB != null ? fmtNum(anchorValB, 4) : '—';
+                var exec = execValB != null ? fmtNum(execValB, 4) : '—';
                 var tutar = '—';
                 if (p.qty_pct != null && !isNaN(p.qty_pct)) {
                     if (quoteBal > 0) {
@@ -1239,22 +1346,28 @@
         }
 
         /** Kar alım/satım noktaları tablosunu günceller (ortalama maliyet, tepe/dip, gerçekleşme anlık). */
-        function renderProfitPointsPanel(data) {
+        function renderProfitPointsPanel(data, opts) {
             if (!profitPointsBody) return;
+            opts = opts || {};
             var st = data.state || {};
             var sellHist = st.sell_history || [];
             var buyHist = st.buy_history || [];
             var cfg = data.config || {};
+            function gridHistPrice(x) {
+                if (x.execution_price != null && !isNaN(Number(x.execution_price))) return Number(x.execution_price);
+                return Number(x.price) || 0;
+            }
             function avgFromHist(hist, gridOnly) {
-                var h = gridOnly && Array.isArray(hist) ? hist.filter(function(x) { return x != null && (x.grid_index != null || x.slot_id != null); }) : (hist || []);
+                var h = gridOnly && Array.isArray(hist) ? hist.filter(function(x) { return x != null && x.grid_index != null; }) : (hist || []);
                 if (!h.length) return null;
                 var tq = h.reduce(function(s, x) { return s + (Number(x.qty) || 0); }, 0);
                 if (tq <= 0) return null;
-                var tv = h.reduce(function(s, x) { return s + (Number(x.qty) || 0) * (Number(x.price) || 0); }, 0);
+                var tv = h.reduce(function(s, x) { return s + (Number(x.qty) || 0) * gridHistPrice(x); }, 0);
                 return (tv / tq).toFixed(4);
             }
-            var avgSellGrid = avgFromHist(sellHist, true);
-            var avgBuyGrid = avgFromHist(buyHist, true);
+            var gm = data.grid_meta || {};
+            var avgSellGrid = gm.avg_sell_grid != null ? String(gm.avg_sell_grid) : avgFromHist(sellHist, true);
+            var avgBuyGrid = gm.avg_buy_grid != null ? String(gm.avg_buy_grid) : avgFromHist(buyHist, true);
             profitPointsPanel.style.display = 'block';
             if (profitAvgCostNote) {
                 profitAvgCostNote.textContent = (avgSellGrid != null || avgBuyGrid != null) ? ('Ortalama maliyet (sadece grid): Satış bazı ' + (avgSellGrid || '—') + ', Alım bazı ' + (avgBuyGrid || '—') + '.') : '';
@@ -1262,7 +1375,18 @@
             var pr = cfg.profit || {};
             var profitExitPctConfig = cfg.profit_exit_rise_pct != null ? cfg.profit_exit_rise_pct : pr.resell_trigger_pct;
             var reentryPctConfig = cfg.profit_reentry_drop_pct != null ? cfg.profit_reentry_drop_pct : pr.rebuy_trigger_pct;
+            var sellTrailPctProfit = gridTrailPct('sell', cfg);
+            var buyTrailPctProfit = gridTrailPct('buy', cfg);
+            var livePriceProfit = gridTrailLivePrice(data, opts);
             var pps = data.profit_points || [];
+            var cycleIdProfit = (data.state || {}).cycle_id != null ? (data.state || {}).cycle_id : 0;
+            if (window.GridTrailEnvelope) {
+                window.GridTrailEnvelope.syncProfitTrailEnvelope(
+                    botId, cycleIdProfit, pps,
+                    opts.applyLive ? livePriceProfit : null,
+                    opts.applyLive === true
+                );
+            }
             profitPointsBody.innerHTML = '';
             pps.forEach(function (p) {
                 var tr = document.createElement('tr');
@@ -1274,9 +1398,37 @@
                 var triggerStr = (p.trigger_price != null && !isNaN(p.trigger_price)) ? fmtNum(p.trigger_price, 4) : '—';
                 var avgCostStr = (p.average_cost != null && !isNaN(p.average_cost)) ? fmtNum(p.average_cost, 4) : (p.type === 'profit_exit' && avgBuyGrid ? fmtNum(avgBuyGrid, 4) : (p.type === 'reentry' && avgSellGrid ? fmtNum(avgSellGrid, 4) : '—'));
                 var tepeDipLabel = p.type === 'reentry' ? 'Dip' : 'Tepe';
-                var tepeDipVal = (p.trigger_hit && (p.type === 'reentry' ? p.dip : p.tepe) != null) ? fmtNum(p.type === 'reentry' ? p.dip : p.tepe, 4) : '—';
+                var tepeDipVal = '—';
+                if (p.trigger_hit) {
+                    if (p.type === 'reentry' && p.dip != null) {
+                        var liveD = window.GridTrailEnvelope
+                            ? window.GridTrailEnvelope.profitTrailDisplay(p, 'buy', buyTrailPctProfit)
+                            : { anchor: p.dip, exec: p.execution_price };
+                        tepeDipVal = liveD.anchor != null ? fmtNum(liveD.anchor, 4) : fmtNum(p.dip, 4);
+                    } else if (p.type !== 'reentry' && p.tepe != null) {
+                        var liveT = window.GridTrailEnvelope
+                            ? window.GridTrailEnvelope.profitTrailDisplay(p, 'sell', sellTrailPctProfit)
+                            : { anchor: p.tepe, exec: p.execution_price };
+                        tepeDipVal = liveT.anchor != null ? fmtNum(liveT.anchor, 4) : fmtNum(p.tepe, 4);
+                    }
+                }
                 var tepeDipStr = tepeDipLabel + ': ' + tepeDipVal;
-                var execStr = (p.trigger_hit && p.execution_price != null && !isNaN(p.execution_price)) ? fmtNum(p.execution_price, 4) : '—';
+                var execStr = '—';
+                if (p.trigger_hit) {
+                    if (p.type === 'reentry' && p.dip != null) {
+                        var liveExecD = window.GridTrailEnvelope
+                            ? window.GridTrailEnvelope.profitTrailDisplay(p, 'buy', buyTrailPctProfit)
+                            : { anchor: p.dip, exec: p.execution_price };
+                        execStr = liveExecD.exec != null ? fmtNum(liveExecD.exec, 4) : ((p.execution_price != null && !isNaN(p.execution_price)) ? fmtNum(p.execution_price, 4) : '—');
+                    } else if (p.type !== 'reentry' && p.tepe != null) {
+                        var liveExecT = window.GridTrailEnvelope
+                            ? window.GridTrailEnvelope.profitTrailDisplay(p, 'sell', sellTrailPctProfit)
+                            : { anchor: p.tepe, exec: p.execution_price };
+                        execStr = liveExecT.exec != null ? fmtNum(liveExecT.exec, 4) : ((p.execution_price != null && !isNaN(p.execution_price)) ? fmtNum(p.execution_price, 4) : '—');
+                    } else if (p.execution_price != null && !isNaN(p.execution_price)) {
+                        execStr = fmtNum(p.execution_price, 4);
+                    }
+                }
                 var statusKey = (p.status || '').toLowerCase();
                 var statusText = statusKey === 'tamamlandi' ? 'Tamamlandı' : (statusKey === 'tetiklendi' ? 'Tetiklendi' : 'Bekliyor');
                 var statusClass = statusKey === 'tamamlandi' ? 'grid-status-tamamlandi' : (statusKey === 'tetiklendi' ? 'grid-status-tetiklendi' : 'grid-status-bekliyor');
@@ -1318,6 +1470,7 @@
                 profit_points: res.profit_points || [],
                 reference_display: res.reference_display != null ? res.reference_display : (base && base.reference_display),
                 symbol: res.symbol || (base && base.symbol),
+                current_price: res.current_price != null ? res.current_price : (base && base.current_price),
                 state: st,
                 config: res.config || (base && base.config) || {}
             });
@@ -1336,8 +1489,9 @@
                     lastBotDetail.grid_points = merged.grid_points;
                     lastBotDetail.profit_points = merged.profit_points;
                     lastBotDetail.state = merged.state;
-                    renderGridPointsPanel(merged);
-                    renderProfitPointsPanel(merged);
+                    if (merged.current_price != null) lastBotDetail.current_price = merged.current_price;
+                    renderGridPointsPanel(merged, { applyLive: false });
+                    renderProfitPointsPanel(merged, { applyLive: false });
                     if (!botDetailGridTrailActive(merged)) syncGridPointsPoll();
                 })
                 .catch(function () {})
@@ -1350,6 +1504,7 @@
                 gridPointsPollTimer = null;
             }
             if (botDetailGridTrailActive(lastBotDetail)) {
+                fetchGridPointsLive();
                 gridPointsPollTimer = setInterval(fetchGridPointsLive, gridPointsPollMs);
             }
         }
@@ -1360,7 +1515,7 @@
             if (document.hidden || !botId || !window.apiClient) return;
             var sel = window._botDetailSelectedCycleId;
             if (typeof window._botDetailLoadCycleTrades !== 'function' || sel == null) return;
-            window._botDetailLoadCycleTrades(Number(sel));
+            window._botDetailLoadCycleTrades(Number(sel), { silent: true });
         }
         function syncTradesPanelPoll() {
             if (tradesPanelPollTimer) {
@@ -1410,12 +1565,14 @@
             if (btnStart) btnStart.style.display = status !== 'running' ? 'flex' : 'none';
             if (btnStopAndDelete) btnStopAndDelete.style.display = 'inline-block';
             lastBotDetail.symbol = symbol || '';
+            lastBotDetail.botCode = code || String(botId);
             lastBotDetail.baseBalance = Number((data.state || {}).base_balance) || 0;
             lastBotDetail.quoteAsset = (symbol || '').toUpperCase() === 'MULTI' ? ((cfg.quote_asset || 'USDT').toString().trim().toUpperCase()) : ((symbol || '').match(/USDT|FDUSD|BUSD$/i) ? (symbol.match(/USDT|FDUSD|BUSD$/i)[0] || 'USDT') : 'USDT');
             lastBotDetail.multiCoins = multiCoins;
 
             var st = data.state || {};
             var priceForBot = data.current_price != null && !isNaN(data.current_price) ? Number(data.current_price) : null;
+            lastBotDetail.lastLivePrice = (priceForBot != null && priceForBot > 0) ? priceForBot : null;
             var baseValueUsd = data.base_value_usd != null && !isNaN(data.base_value_usd) ? Number(data.base_value_usd) : null;
             var quoteBalanceUsd = data.quote_balance_usd != null && !isNaN(data.quote_balance_usd) ? Number(data.quote_balance_usd) : null;
             var baseBal = st.base_balance != null ? Number(st.base_balance) : 0;
@@ -1475,8 +1632,8 @@
             var refPrice = data.reference_display != null && !isNaN(data.reference_display) ? Number(data.reference_display) : (data.state && data.state.reference_price != null ? Number(data.state.reference_price) : null);
             renderConfig(data.config || {}, symbol, refPrice);
 
-            renderGridPointsPanel(data);
-            renderProfitPointsPanel(data);
+            renderGridPointsPanel(data, { applyLive: false });
+            renderProfitPointsPanel(data, { applyLive: false });
             lastBotDetail.state = st;
             lastBotDetail.config = data.config || {};
             lastBotDetail.grid_points = data.grid_points || [];
@@ -1569,16 +1726,20 @@
                     '<div class="cycle-report-item"><span class="cycle-report-label">Kar satışından kar</span><span class="cycle-report-value ' + pnlCl + '">' + pnl + '</span></div>';
                 cycleReportEl.style.display = 'flex';
             }
-            function loadCycleTrades(cycleId) {
+            function loadCycleTrades(cycleId, opts) {
+                opts = opts || {};
+                var silent = opts.silent === true;
                 selectedCycleId = cycleId;
                 window._botDetailSelectedCycleId = cycleId;
                 window._botDetailLoadCycleTrades = loadCycleTrades;
                 cycleTradesTurButtons.querySelectorAll('button[data-cycle]').forEach(function(btn) {
                     btn.classList.toggle('active', Number(btn.getAttribute('data-cycle')) === cycleId);
                 });
-                cycleTradesList.innerHTML = '<div class="cycle-pnl-item muted">Yükleniyor…</div>';
                 var cycleReportEl = document.getElementById('cycleReport');
-                if (cycleReportEl) cycleReportEl.style.display = 'none';
+                if (!silent) {
+                    cycleTradesList.innerHTML = '<div class="cycle-pnl-item muted">Yükleniyor…</div>';
+                    if (cycleReportEl) cycleReportEl.style.display = 'none';
+                }
                 var q = 'account_id=' + (accountId || '') + '&limit=100&cycle_id=' + cycleId;
                 window.apiClient.get('/api/bots-engine/' + botId + '/trades?' + q)
                     .then(function(res) {
@@ -1586,8 +1747,10 @@
                         renderCycleReport(res.cycle_summary, cycleId);
                     })
                     .catch(function() {
-                        cycleTradesList.innerHTML = '<div class="cycle-pnl-item muted">İşlemler yüklenemedi.</div>';
-                        if (cycleReportEl) cycleReportEl.style.display = 'none';
+                        if (!silent) {
+                            cycleTradesList.innerHTML = '<div class="cycle-pnl-item muted">İşlemler yüklenemedi.</div>';
+                            if (cycleReportEl) cycleReportEl.style.display = 'none';
+                        }
                     });
             }
             cycleTradesTurButtons.innerHTML = '';
@@ -1681,6 +1844,7 @@
             if (window.innerWidth > 768) { engineLogPanel.style.display = 'block'; } else { engineLogPanel.style.display = 'none'; }
             if (window.EngineLogFormat && window.EngineLogFormat.setLogContext) {
                 window.EngineLogFormat.setLogContext({
+                    botId: botId,
                     initialCapital: initialCapital,
                     cycleStartEquity: st.cycle_start_equity != null ? Number(st.cycle_start_equity) : null
                 });
@@ -1986,16 +2150,53 @@
                 .catch(function () {});
         }
 
+        function exportEngineLogArchive() {
+            if (!window.EngineLogArchive || !botId) return;
+            var count = window.EngineLogArchive.countEvents(botId);
+            if (count <= 0) {
+                alert('Dışa aktarılacak log yok. Bot sayfası açıkken kayıtlar oturum arşivine eklenir.');
+                return;
+            }
+            var res = window.EngineLogArchive.exportSession(botId, {
+                symbol: lastBotDetail.symbol || '',
+                botCode: lastBotDetail.botCode || String(botId),
+                accountCode: accountCode || ''
+            });
+            if (!res || !res.ok) {
+                alert('Log dosyası indirilemedi.');
+            }
+        }
+
         function resetHealthAlerts() {
             if (!window.BotHealthAlerts || !botId) return;
-            window.BotHealthAlerts.resetUi(
-                botId,
-                (window._lastHealthData && window._lastHealthData.alerts) || []
-            );
+            var alerts = (window._lastHealthData && window._lastHealthData.alerts) || [];
+            var q = accountCode ? '?account_code=' + encodeURIComponent(accountCode) : '?account_id=' + (accountId || '');
+            var finish = function () {
+                var events = window._lastEngineEvents
+                    || (_engineLogLiveOpts && _engineLogLiveOpts.state && _engineLogLiveOpts.state.events)
+                    || [];
+                window.BotHealthAlerts.resetUi(botId, alerts, events);
+                if (window.EngineLogFormat && window.EngineLogFormat.setLogContext) {
+                    window.EngineLogFormat.setLogContext({ botId: botId });
+                }
+                if (window.EngineLogLive && _engineLogLiveOpts) {
+                    window.EngineLogLive.renderDisplayEvents(_engineLogLiveOpts);
+                }
+                syncHealthFromState();
+            };
+            if (window.apiClient) {
+                window.apiClient.post('/api/bots-engine/' + botId + '/health/ack' + q, {})
+                    .catch(function () {})
+                    .finally(finish);
+            } else {
+                finish();
+            }
         }
 
         var btnEngineLogReset = document.getElementById('btnEngineLogReset');
         if (btnEngineLogReset) btnEngineLogReset.addEventListener('click', resetHealthAlerts);
+        var btnEngineLogExport = document.getElementById('btnEngineLogExport');
+        if (btnEngineLogExport) btnEngineLogExport.addEventListener('click', exportEngineLogArchive);
         document.addEventListener('bot-health-reset', resetHealthAlerts);
         /* Başlat butonu kaldırıldı; bot oluşturulunca otomatik başlar */
 
@@ -2183,6 +2384,7 @@
                     }
                     var pariteGuncelEl = document.getElementById('perfReportPariteGuncel');
                     if (pariteGuncelEl && liveP > 0) pariteGuncelEl.textContent = fmtNum(liveP, 4);
+                    if (liveP > 0) refreshGridPointsLivePrice(liveP);
                     var pariteDegisimEl = document.getElementById('perfReportPariteDegisim');
                     if (pariteDegisimEl && lastRefPriceForPerf != null && lastRefPriceForPerf > 0 && liveP > 0) {
                         var diff = liveP - lastRefPriceForPerf;

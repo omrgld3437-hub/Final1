@@ -10,13 +10,17 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 
-def _fmt_qty(x: float, step_size: float) -> str:
-    """Round to step_size, format as string (no scientific)."""
+def _fmt_qty(x: float, step_size: float, *, floor: bool = False) -> str:
+    """Round (or floor for sells) to step_size, format as string (no scientific)."""
     if x <= 0:
         return "0"
     import math
     precision = max(0, -int(round(math.log10(step_size)))) if step_size > 0 else 8
-    q = round(round(x / step_size) * step_size, precision)
+    if floor and step_size > 0:
+        q = math.floor(x / step_size) * step_size
+    else:
+        q = round(round(x / step_size) * step_size, precision)
+    q = round(q, precision)
     s = f"{q:.15f}".rstrip("0").rstrip(".")
     return s or "0"
 
@@ -165,9 +169,10 @@ class BinanceAdapter:
             return self._simulate_fill(symbol, "SELL", base_qty=quantity, client_order_id=client_order_id)
         filters = await self.get_symbol_filters(symbol)
         step = filters.get("step_size") or 0.00001
-        qty_str = _fmt_qty(quantity, step)
+        qty_str = _fmt_qty(quantity, step, floor=True)
+        qty_floored = float(qty_str) if qty_str and qty_str != "0" else 0.0
         price = self.get_price(symbol) or 0.0
-        notional = quantity * price if price else 0
+        notional = qty_floored * price if price else 0
         min_notional = filters.get("min_notional") or 5.0
         if notional < min_notional:
             raise ValueError(f"notional {notional} < min_notional {min_notional}")

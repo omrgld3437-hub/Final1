@@ -667,9 +667,8 @@ async function updateBinanceConnectionNotice() {
         }
         var kpiLive = document.getElementById('kpiCuzdanLive');
         var kpiBotPct = document.getElementById('kpiBotBakiyePct');
-        var liveLabel = (typeof State !== 'undefined' && State.isTestAccount) ? 'Test' : (data.has_binance_keys ? 'Canlı' : 'Bağlı değil');
-        if (kpiLive) kpiLive.textContent = liveLabel;
-        if (kpiBotPct) kpiBotPct.textContent = liveLabel;
+        applyWalletLiveStatusEl(kpiLive);
+        applyWalletLiveStatusEl(kpiBotPct);
     } catch (_) {
         assetsState.wallet.keys_configured = false;
         notice.classList.remove('binance-connection-notice--hidden');
@@ -677,6 +676,8 @@ async function updateBinanceConnectionNotice() {
         var fallbackLabel = (typeof State !== 'undefined' && State.isTestAccount) ? 'Test' : 'Bağlı değil';
         patchText('kpiCuzdanLive', fallbackLabel);
         patchText('kpiBotBakiyePct', fallbackLabel);
+        applyWalletLiveStatusEl(document.getElementById('kpiCuzdanLive'));
+        applyWalletLiveStatusEl(document.getElementById('kpiBotBakiyePct'));
     }
 }
 
@@ -2072,6 +2073,102 @@ function triggerValueBlink(el, newNum) {
 window.triggerValueBlink = triggerValueBlink;
 
 var lastSpotUpdateTs = 0;
+var _walletLiveOkAt = 0;
+var _walletLiveFailedAt = 0;
+var _kpiCuzdanPnlDisplay = { pnlUsd: null, pnlPct: null };
+
+function markWalletLiveFetchOk() {
+    _walletLiveOkAt = Date.now();
+    _walletLiveFailedAt = 0;
+}
+window.markWalletLiveFetchOk = markWalletLiveFetchOk;
+
+function markWalletLiveFetchFailed() {
+    _walletLiveFailedAt = Date.now();
+}
+window.markWalletLiveFetchFailed = markWalletLiveFetchFailed;
+
+function _isLiveWalletSource(source) {
+    return /binance_wallet|wallet_refresh|wallet_live|homeFlash_live/i.test(String(source || ''));
+}
+
+/** Cüzdan KPI canlılık etiketi — yalnızca son başarılı canlı cüzdan çekiminde "Canlı". */
+function walletLiveStatusLabel() {
+    if (typeof State !== 'undefined' && State.isTestAccount) return 'Test';
+    if (assetsState.wallet.keys_configured !== true) return 'Bağlı değil';
+    if (assetsState.wallet.error || assetsState.wallet.status === 'error') return 'Güncel değil';
+    var ds = assetsState.wallet.data_status;
+    if (ds === 'stale' || ds === 'error' || ds === 'cached' || ds === 'empty') return 'Güncel değil';
+    if (_walletLiveFailedAt && (!_walletLiveOkAt || _walletLiveFailedAt >= _walletLiveOkAt)) return 'Güncel değil';
+    if (!_walletLiveOkAt || (Date.now() - _walletLiveOkAt) > 90000) return 'Güncel değil';
+    return 'Canlı';
+}
+window.walletLiveStatusLabel = walletLiveStatusLabel;
+
+function applyWalletLiveStatusEl(el) {
+    if (!el) return;
+    var label = walletLiveStatusLabel();
+    if (el.textContent !== label) el.textContent = label;
+    el.classList.toggle('kpi-spot-status--live', label === 'Canlı');
+    el.classList.toggle('kpi-spot-status--stale', label === 'Güncel değil');
+    el.classList.toggle('kpi-spot-status--offline', label === 'Bağlı değil');
+    el.classList.toggle('kpi-spot-status--test', label === 'Test');
+}
+window.applyWalletLiveStatusEl = applyWalletLiveStatusEl;
+
+function updateCuzdanPnlKpi(dailyWalletPnl, account, data) {
+    var spotUsd = (account && account.spot_balance_usd != null) ? Number(account.spot_balance_usd)
+        : (data && data.spot_balance_usd != null) ? Number(data.spot_balance_usd)
+        : (assetsState.wallet && typeof assetsState.wallet.total_usd === 'number') ? assetsState.wallet.total_usd : 0;
+    var hasDaily = (account && account.daily_wallet_pnl_usd !== undefined && account.daily_wallet_pnl_usd !== null)
+        || (data && data.daily_wallet_pnl_usd !== undefined && data.daily_wallet_pnl_usd !== null);
+    if (!hasDaily) return;
+    var liveOk = walletLiveStatusLabel() === 'Canlı';
+    var pctCuzdan = (account && account.daily_wallet_pnl_pct != null && Number.isFinite(Number(account.daily_wallet_pnl_pct)))
+        ? Number(account.daily_wallet_pnl_pct).toFixed(2)
+        : ((data && data.daily_wallet_pnl_pct != null && Number.isFinite(Number(data.daily_wallet_pnl_pct)))
+            ? Number(data.daily_wallet_pnl_pct).toFixed(2)
+            : ((spotUsd || 1) !== 0 ? ((dailyWalletPnl / Math.max(spotUsd || 1, 0.01)) * 100).toFixed(2) : '0.00'));
+    var bogusZeroSpot = spotUsd <= 0 && dailyWalletPnl < -0.001;
+    if (liveOk && !bogusZeroSpot) {
+        _kpiCuzdanPnlDisplay.pnlUsd = dailyWalletPnl;
+        _kpiCuzdanPnlDisplay.pnlPct = pctCuzdan;
+    } else if (_kpiCuzdanPnlDisplay.pnlUsd == null) {
+        return;
+    }
+    var pnlShow = (liveOk && !bogusZeroSpot) ? dailyWalletPnl : _kpiCuzdanPnlDisplay.pnlUsd;
+    var pctShow = (liveOk && !bogusZeroSpot) ? pctCuzdan : _kpiCuzdanPnlDisplay.pnlPct;
+    if (pnlShow == null) return;
+    var cuzdanPnlEl = document.getElementById('kpiCuzdanPnl');
+    if (cuzdanPnlEl) {
+        var textChanged = setTextIfChanged(cuzdanPnlEl, fmtUsd(pnlShow));
+        var newColor = pnlShow >= 0 ? '#0ecb81' : '#f6465d';
+        if (cuzdanPnlEl.style.color !== newColor) cuzdanPnlEl.style.color = newColor;
+        if (textChanged && liveOk && !bogusZeroSpot) triggerValueBlink(cuzdanPnlEl, pnlShow);
+    }
+    var pctNum = parseFloat(pctShow);
+    patchText('kpiCuzdanPnlPct', (pctNum >= 0 ? '+' : '') + pctShow + '%');
+    var pe = document.getElementById('kpiCuzdanPnlPct');
+    if (pe) {
+        var ec = pnlShow >= 0 ? '#0ecb81' : '#f6465d';
+        if (pe.style.color !== ec) pe.style.color = ec;
+    }
+}
+window.updateCuzdanPnlKpi = updateCuzdanPnlKpi;
+
+function updateKpiCuzdanBalance(el, walletTotal) {
+    if (!el) return;
+    var prev = parseFloat(String(el.textContent).replace(/[^0-9.-]/g, '')) || 0;
+    var next = walletTotal != null && Number.isFinite(Number(walletTotal)) ? Number(walletTotal) : null;
+    if (next != null && next < 0) return;
+    if ((next == null || next <= 0) && prev > 0) return;
+    if (next == null || next <= 0) {
+        if (prev <= 0) setTextIfChanged(el, fmtUsd(0));
+        return;
+    }
+    setTextIfChanged(el, fmtUsd(next));
+    if (prev > 0) triggerValueBlink(el, next);
+}
 
 function updateDatahubWsIndicator() {
     var el = document.getElementById('datahubWsIndicator');
@@ -2094,29 +2191,8 @@ function updateDatahubWsIndicator() {
 }
 
 function updateKpiCuzdanLiveStatus() {
-    var el = document.getElementById("kpiCuzdanLive");
-    if (!el) return;
-    if (typeof State !== 'undefined' && State.isTestAccount) {
-        if (el.textContent !== "Test") el.textContent = "Test";
-        return;
-    }
-    if (assetsState.wallet.keys_configured !== true) {
-        if (el.textContent !== "Bağlı değil") el.textContent = "Bağlı değil";
-        return;
-    }
-    if (lastSpotUpdateTs <= 0) {
-        if (el.textContent !== "—") el.textContent = "—";
-        return;
-    }
-    var age = Date.now() - lastSpotUpdateTs;
-    var THRESHOLD_MS = 30000;
-    if (age < THRESHOLD_MS) {
-        if (el.textContent !== "Canlı") el.textContent = "Canlı";
-    } else {
-        var d = new Date(lastSpotUpdateTs);
-        var str = "Son: " + d.toLocaleString("tr-TR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" });
-        if (el.textContent !== str) el.textContent = str;
-    }
+    applyWalletLiveStatusEl(document.getElementById('kpiCuzdanLive'));
+    applyWalletLiveStatusEl(document.getElementById('bnWalletLiveBadge'));
 }
 
 function updateKPIs(data) {
@@ -2130,29 +2206,20 @@ function updateKPIs(data) {
         if (sum > 0) botsTotal = sum;
     }
     const dailyBotPnl = data.daily_bot_pnl_usd ?? data.daily_pnl_usd ?? 0;
-    const dailyWalletPnl = data.daily_wallet_pnl_usd ?? 0;
+    const dailyWalletPnl = account.daily_wallet_pnl_usd ?? data.daily_wallet_pnl_usd ?? 0;
     const hasDaily = (account.daily_wallet_pnl_usd !== undefined && account.daily_wallet_pnl_usd !== null) || (account.daily_bot_pnl_usd !== undefined && account.daily_bot_pnl_usd !== null);
     // Avoid flashing to 0 when Binance/wallet temporarily fails: use last-known spot from state
     const walletTotal = (account.spot_balance_usd != null && Number(account.spot_balance_usd) > 0) ? Number(account.spot_balance_usd) : (typeof (assetsState && assetsState.wallet && assetsState.wallet.total_usd) === 'number' ? assetsState.wallet.total_usd : 0);
 
     var walletEl = document.getElementById("kpiCuzdan");
-    if (walletEl) { setTextIfChanged(walletEl, fmtUsd(walletTotal)); triggerValueBlink(walletEl, walletTotal); }
-    lastSpotUpdateTs = Date.now();
-    var liveLabel = (typeof State !== 'undefined' && State.isTestAccount) ? "Test" : (assetsState.wallet.keys_configured === true ? "Canlı" : "Bağlı değil");
-    if (assetsState.wallet && (assetsState.wallet.data_status === 'stale' || assetsState.wallet.error)) liveLabel = "Güncel değil";
-    patchText("kpiCuzdanLive", liveLabel);
+    updateKpiCuzdanBalance(walletEl, walletTotal);
+    if (assetsState.wallet && assetsState.wallet.data_status !== 'stale' && !assetsState.wallet.error) {
+        lastSpotUpdateTs = Date.now();
+    }
+    patchText("kpiCuzdanLive", walletLiveStatusLabel());
+    applyWalletLiveStatusEl(document.getElementById('kpiCuzdanLive'));
+    updateCuzdanPnlKpi(dailyWalletPnl, account, data);
     if (hasDaily) {
-        var cuzdanPnlEl = document.getElementById("kpiCuzdanPnl");
-        if (cuzdanPnlEl) {
-            var textChanged = setTextIfChanged(cuzdanPnlEl, fmtUsd(dailyWalletPnl));
-            var newColor = dailyWalletPnl >= 0 ? '#0ecb81' : '#f6465d';
-            if (cuzdanPnlEl.style.color !== newColor) cuzdanPnlEl.style.color = newColor;
-            if (textChanged) triggerValueBlink(cuzdanPnlEl, dailyWalletPnl);
-        }
-        var pctCuzdan = (account.daily_wallet_pnl_pct != null && Number.isFinite(account.daily_wallet_pnl_pct))
-            ? Number(account.daily_wallet_pnl_pct).toFixed(2) : ((account.spot_balance_usd || 1) !== 0 ? ((dailyWalletPnl / Math.max(account.spot_balance_usd || 1, 0.01)) * 100).toFixed(2) : '0.00');
-        patchText("kpiCuzdanPnlPct", (parseFloat(pctCuzdan) >= 0 ? '+' : '') + pctCuzdan + '%');
-        var e = document.getElementById("kpiCuzdanPnlPct"); if (e) { var ec = dailyWalletPnl >= 0 ? '#0ecb81' : '#f6465d'; if (e.style.color !== ec) e.style.color = ec; }
         var botPnlEl = document.getElementById("kpiBotPnl");
         if (botPnlEl) {
             var botTextChanged = setTextIfChanged(botPnlEl, fmtUsd(dailyBotPnl));
@@ -2163,7 +2230,8 @@ function updateKPIs(data) {
         var pctBot = (account.daily_bot_pnl_pct != null && Number.isFinite(account.daily_bot_pnl_pct))
             ? Number(account.daily_bot_pnl_pct).toFixed(2) : ((account.bots_initial_usd || account.bots_balance_usd || 1) > 0 ? ((dailyBotPnl / (account.bots_initial_usd || account.bots_balance_usd || 1)) * 100).toFixed(2) : '0.00');
         patchText("kpiBotPnlPct", (parseFloat(pctBot) >= 0 ? '+' : '') + pctBot + '%');
-        e = document.getElementById("kpiBotPnlPct"); if (e) { var botPctC = parseFloat(pctBot) >= 0 ? '#0ecb81' : '#f6465d'; if (e.style.color !== botPctC) e.style.color = botPctC; }
+        var botPctEl = document.getElementById("kpiBotPnlPct");
+        if (botPctEl) { var botPctC = parseFloat(pctBot) >= 0 ? '#0ecb81' : '#f6465d'; if (botPctEl.style.color !== botPctC) botPctEl.style.color = botPctC; }
     }
     // Tek kaynak: account.bots_balance_usd veya botların current_usd toplamı (bot detay state panel ile aynı)
     var botBakiyeEls = document.querySelectorAll("#kpiBotBakiye");
@@ -2171,7 +2239,8 @@ function updateKPIs(data) {
         el.textContent = fmtUsd(botsTotal);
         triggerValueBlink(el, botsTotal);
     });
-    patchText("kpiBotBakiyePct", (typeof State !== 'undefined' && State.isTestAccount) ? "Test" : (assetsState.wallet.keys_configured === true ? "Canlı" : "Bağlı değil"));
+    patchText("kpiBotBakiyePct", walletLiveStatusLabel());
+    applyWalletLiveStatusEl(document.getElementById('kpiBotBakiyePct'));
 }
 
 function patchText(id, text) {
@@ -5710,10 +5779,16 @@ function normalizeAndApplyWallet(payload, meta) {
     assetsState.wallet.keys_configured = keysConfigured;
     assetsState.wallet.assets = assets;
     assetsState.wallet.error = err || null;
-    assetsState.wallet.data_status = payload.data_status || (err ? 'error' : 'fresh');
+    assetsState.wallet.data_status = payload.data_status || (err ? 'error' : (_isLiveWalletSource(source) ? 'fresh' : 'cached'));
     assetsState.wallet.keysMessage = payload.message || null;
     assetsState.wallet.unpriced_assets = Array.isArray(payload.unpriced_assets) ? payload.unpriced_assets : [];
+    if (err) {
+        if (_isLiveWalletSource(source) || keysConfigured) markWalletLiveFetchFailed();
+    } else if (_isLiveWalletSource(source) && keysConfigured && (totalUsd != null || assets.length > 0)) {
+        markWalletLiveFetchOk();
+    }
     pushWalletEvent({ source: source, status: status, total_usd: totalUsd, asset_count: assets.length, request_id: meta.request_id, note: meta.note });
+    if (typeof updateKpiCuzdanLiveStatus === 'function') updateKpiCuzdanLiveStatus();
     if (window.BinanceAssetsPanel?.render) window.BinanceAssetsPanel.render();
     if (typeof renderVarliklarList === 'function') renderVarliklarList();
     if (typeof updateDcaBudgetPlaceholder === 'function') updateDcaBudgetPlaceholder();
@@ -5877,6 +5952,7 @@ async function pollWallet(isManualRefresh = false) {
         if (window.errorReporter) window.errorReporter.report(error, { tab: 'binance', account_id: State.accountId, action: 'pollWallet' });
         var is429 = error && (error.status === 429 || (error.error_code && String(error.error_code).indexOf('429') !== -1));
         assetsState.wallet.error = { message: error?.message || 'Bilinmeyen hata', error_code: error?.error_code || null, error_id: error?.error_id || null, request_id: error?.request_id || null };
+        markWalletLiveFetchFailed();
         walletBackoffMs = Math.min(WALLET_BACKOFF_MAX, Math.max(WALLET_BACKOFF_MIN, (walletBackoffMs || WALLET_BACKOFF_MIN) * 2));
         if (is429) {
             var retrySec = (error.retry_after != null) ? Number(error.retry_after) : 10;
@@ -5976,7 +6052,7 @@ function renderAssetsSummary() {
         if (stripBotLocked) { stripBotLocked.textContent = loadingText; stripBotLocked.classList.add('binance-assets-strip-value--loading'); }
         if (stripLocked) { stripLocked.textContent = loadingText; stripLocked.classList.add('binance-assets-strip-value--loading'); }
         if (lastEl) lastEl.textContent = '—';
-        if (staleEl) staleEl.style.display = 'none';
+        if (staleEl) staleEl.hidden = true;
         return;
     }
     const totalUsd = typeof assetsState.wallet.total_usd === 'number' ? assetsState.wallet.total_usd : (() => {
@@ -6021,9 +6097,15 @@ function renderAssetsSummary() {
     if (stripBotLocked) { stripBotLocked.classList.remove('binance-assets-strip-value--loading'); stripBotLocked.textContent = fmtUsd(botLockedUsd != null ? botLockedUsd : 0); triggerValueBlink(stripBotLocked, botLockedUsd != null ? botLockedUsd : 0); }
     if (stripLocked) { stripLocked.classList.remove('binance-assets-strip-value--loading'); stripLocked.textContent = fmtUsd(lockedUsd); triggerValueBlink(stripLocked, lockedUsd); }
     if (lastEl) lastEl.textContent = assetsState.wallet.ts ? new Date(assetsState.wallet.ts).toLocaleTimeString('tr-TR') : '—';
+    var walletLiveEl = document.getElementById('bnWalletLiveBadge');
+    applyWalletLiveStatusEl(walletLiveEl);
+    var liveLabel = walletLiveStatusLabel();
     if (staleEl) {
-        staleEl.style.display = assetsState.prices.data_status === 'stale' ? 'inline' : 'none';
-        staleEl.textContent = 'Güncel değil';
+        var showStale = assetsState.wallet.data_status === 'stale'
+            || assetsState.wallet.error
+            || assetsState.prices.data_status === 'stale';
+        staleEl.hidden = !showStale;
+        staleEl.textContent = liveLabel === 'Bağlı değil' ? 'Bağlı değil' : 'Güncel değil';
     }
 }
 
@@ -10506,6 +10588,7 @@ async function initDashboard() {
             if (w.status === 'idle' || w.status === 'loading') {
                 w.status = 'error';
                 w.error = { error_code: 'WALLET_TIMEOUT_NO_SOURCE', message: 'Cüzdan verisi 10 saniye içinde yüklenemedi.' };
+                markWalletLiveFetchFailed();
                 if (window.BinanceAssetsPanel?.render) window.BinanceAssetsPanel.render();
                 if (typeof renderVarliklarList === 'function') renderVarliklarList();
             }
@@ -11952,22 +12035,11 @@ function updateFinanceKPIs(data) {
 
     // Ortak KPI şeridi (tek kaynak): Cüzdan, Cüzdan PnL, Botlar Bakiye, Botlar PnL
     var walletEl = document.getElementById('kpiCuzdan');
-    if (walletEl) { setTextIfChanged(walletEl, fmtUsd(balance)); triggerValueBlink(walletEl, balance); }
-    lastSpotUpdateTs = Date.now();
-    var cuzdanLiveLabel = (typeof State !== 'undefined' && State.isTestAccount) ? 'Test' : (assetsState.wallet.keys_configured === true ? 'Canlı' : 'Bağlı değil');
-    patchText('kpiCuzdanLive', cuzdanLiveLabel);
+    updateKpiCuzdanBalance(walletEl, balance);
+    patchText('kpiCuzdanLive', walletLiveStatusLabel());
+    applyWalletLiveStatusEl(document.getElementById('kpiCuzdanLive'));
+    updateCuzdanPnlKpi(dailyWalletPnl, account, data);
     if (hasDailyKpi) {
-        var cuzdanPnlEl = document.getElementById('kpiCuzdanPnl');
-        if (cuzdanPnlEl) {
-            var textChanged = setTextIfChanged(cuzdanPnlEl, fmtUsd(dailyWalletPnl));
-            var newColor = dailyWalletPnl >= 0 ? '#0ecb81' : '#f6465d';
-            if (cuzdanPnlEl.style.color !== newColor) cuzdanPnlEl.style.color = newColor;
-            if (textChanged) triggerValueBlink(cuzdanPnlEl, dailyWalletPnl);
-        }
-        var pctCuzdan = (account.daily_wallet_pnl_pct != null && Number.isFinite(account.daily_wallet_pnl_pct)) || (data.daily_wallet_pnl_pct != null && Number.isFinite(data.daily_wallet_pnl_pct))
-            ? Number(account.daily_wallet_pnl_pct ?? data.daily_wallet_pnl_pct).toFixed(2) : ((data.total_usd_value || 1) > 0 ? ((dailyWalletPnl / (data.total_usd_value || 1)) * 100).toFixed(2) : '0.00');
-        patchText('kpiCuzdanPnlPct', (parseFloat(pctCuzdan) >= 0 ? '+' : '') + pctCuzdan + '%');
-        var pe = document.getElementById('kpiCuzdanPnlPct'); if (pe) { var ec = dailyWalletPnl >= 0 ? '#0ecb81' : '#f6465d'; if (pe.style.color !== ec) pe.style.color = ec; }
         var botPnlEl = document.getElementById('kpiBotPnl');
         if (botPnlEl) {
             var botTextChanged = setTextIfChanged(botPnlEl, fmtUsd(dailyBotPnl));
@@ -11986,7 +12058,8 @@ function updateFinanceKPIs(data) {
         el.textContent = fmtUsd(totalBotBalance);
         triggerValueBlink(el, totalBotBalance);
     });
-    patchText('kpiBotBakiyePct', cuzdanLiveLabel);
+    patchText('kpiBotBakiyePct', walletLiveStatusLabel());
+    applyWalletLiveStatusEl(document.getElementById('kpiBotBakiyePct'));
 
     // Binance varlık strip tek kaynak: assetsState.wallet -> renderAssetsSummary (flicker önleme). Burada DOM güncellemesi yapılmaz.
 }
@@ -12025,6 +12098,7 @@ function getFinanceBotStatusMeta(bot) {
         running: 'ÇALIŞIYOR',
         stopped: 'DURDURULDU',
         paused: 'DURAKLATILDI',
+        paused_error: 'Hata (duraklatıldı)',
         paused_insufficient_balance: 'Yetersiz bakiye',
         waiting: 'BEKLİYOR',
         starting: 'BAŞLATILIYOR',

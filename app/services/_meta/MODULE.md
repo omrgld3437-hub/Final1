@@ -21,6 +21,7 @@ Paylaşılan iş mantığı: Binance, fiyat, PnL, şifreleme, audit.
 | `encryption.py` | Fernet (`BINANCE_MASTER_KEY`) |
 | `pnl_service.py` | Bot PnL, daily_ref |
 | `spot_engine.py` | UI manuel al/sat |
+| `binance_connectivity.py` | Binance upstream hata izleme → bot_engine_events |
 | `dashboard_snapshot.py` | Snapshot builder |
 | `finance_snapshot.py` | Finans snapshot |
 | `audit.py` | Audit log |

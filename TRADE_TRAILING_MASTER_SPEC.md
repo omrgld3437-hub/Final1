@@ -1165,7 +1165,8 @@ Snapshot wallet is cache-only; "[snapshot] wallet timeout" no longer occurs. Liv
 | app/botengine/state_store.py | State persistence | load_state, save_state, append_event | — | bot_engine_state, bot_engine_events | — | Sync | — |
 | app/botengine/execution.py | Strategy → order execution | run_actions | Binance (adapter) | Ledger, Trade | — | Async | Duplicate order risk |
 | app/botengine/adapters/binance_adapter.py | Adapter over binance_spot + data_hub | get_price, place_market_buy | DataHub, binance_spot | — | — | Async | Stale check |
-| app/botengine/strategies/dca_grid_trailing.py | DCA/Grid/Trailing strategy | strategy_tick | — | — | — | Sync | — |
+| `strategies/dca_grid_trailing.py` | DCA/Grid/Trailing strategy | strategy_tick | — | — | — | Sync | — |
+| `strategies/grid_outage_recovery.py` | Kopma sonrası grid/kar-alım state düzeltmesi | apply_grid_outage_recovery | — | — | — | Sync | — |
 | app/botengine/strategies/trdca_pro.py | TRDCA PRO strategy | trdca_strategy_tick | — | — | — | Sync | — |
 | app/botengine/strategies/multi_asset_rebalance.py | Multi-asset rebalance | — | — | — | — | Sync | — |
 | app/botengine/risk.py | Lock, idempotency, min notional | acquire_bot_lock, check_idempotency | — | — | — | Sync | — |
@@ -1903,7 +1904,9 @@ tail -5 logs/ram_snapshots.log | jq -c '{ts, component, rss_mb, tracemalloc_peak
 | GET /api/bots-engine/{id} | GET | require_auth, get_account_or_403 | Bot, state, PnlService, grid_view, Binance | Sayfa yükleme; poll | 8s (UI) |
 | GET /api/bots/{id}/detail | GET | require_auth | dashboard_bot_detail wrapper | Dashboard "Düzenle" | 8s |
 | GET /api/dashboard/bot_detail | GET | require_auth | Bot, Ledger, PnlService, Trade | Legacy | 8s |
-| GET /api/bots-engine/{id}/events | GET | require_auth | bot_engine_events | Events sekmesi; limit=500 | — |
+| GET /api/bots-engine/{id}/events | GET | require_auth | bot_engine_events, binance_connectivity probe | Events sekmesi; limit=500; ilk yüklemede Binance probe → ERROR/HEALTH_CRITICAL yazar | — |
+| GET /api/bots-engine/{id}/health | GET | require_auth | evaluate_bot_health, state, binance_connectivity probe | Sağlık uyarıları; `/health` ve `/events` görüntülemede Binance probe (30s throttle) | 8s poll |
+| POST /api/bots-engine/{id}/health/ack | POST | require_auth | state_store | Uyarı sıfırla: `last_error_code` temizlenir, `health_ack_at` yazılır | — |
 | GET /api/bots-engine/{id}/trades | GET | require_auth | Ledger.get_trades_dict | İşlemler sekmesi | — |
 | GET /api/bots-engine/{id}/cycles | GET | require_auth | Ledger.get_cycle_ids | Döngüler sekmesi | — |
 | GET /api/bots-engine/{id}/performance | GET | require_auth | PnlService, Ledger | Performans sekmesi | — |
@@ -4273,6 +4276,29 @@ register(strategy_cls): decorator; _strategy_classes[sid] = cls; _strategies[sid
 
 Sıra: Önce TRAIL_REENTRY_BUY / TRAIL_PROFIT_SELL (tur düzeyi, tek aktif). Sonra tüm açık sell/buy grid trail'leri paralel işlenir; ardından yeni grid tetikleri (return etmeden, paralel). Ortalama maliyet yalnızca kapanmış (fired) grid fill'lerinden (`sell_history` / `buy_history`). Reentry/profit exit arming en sonda.
 
+## Mevcut — DCA Grid: Tur yön kilidi (`cycle_grid_side`)
+
+| Alan | Değer |
+|------|--------|
+| `cycle_grid_side` | `null` (ilk grid fill öncesi iki yön) · `SELL` · `BUY` |
+| Kilitleme | İlk **başarılı** `trail_sell_grid` veya `trail_buy_grid` fill'i; tetiklenme yeterli değil |
+| SELL kilidi | Yalnız satış gridleri + kar **alım** (TRAIL_REENTRY_BUY); alım gridleri devre dışı, bekleyen alım tetikleri temizlenir |
+| BUY kilidi | Yalnız alım gridleri + kar **satış** (TRAIL_PROFIT_SELL); satış gridleri devre dışı |
+| Tur sonu | `cycle_reset_after_fill` → `cycle_grid_side` sıfırlanır; yeni turda yine iki yön |
+| UI | `grid_points[].disabled`, `grid_meta.cycle_grid_side`; kar paneli yön belirlenene kadar bekler |
+
+## Mevcut — DCA Grid: Paralel çoklu seviye
+
+| Kural | Davranış |
+|-------|----------|
+| Tetik | Aynı tick veya kopma dönüşünde fiyat birden fazla eşiği geçerse **tüm uygun seviyeler** tetiklenir (`_try_trigger_buy_grid` / `_try_trigger_sell_grid`) |
+| Dip / tepe / gerçekleşme | Aynı canlı fiyattan tetiklenen seviyelerde **aynı dip/tepe ve gerçekleşme** normaldir (trailing % aynı) |
+| UI dip/tepe | `grid_view` yalnızca state `buy_grid_trough_price` / `sell_grid_peak_price` gösterir. Motor tick: dip `min(trough,P)`, tepe `max(peak,P)` — canlı yükselince dip/tepe sabit kalır. UI fiyat poll'u client-side zarf (min/max) ile anlık genişletir; grid poll state ile zarfı sıfırlar. Outage recovery reanchor: dip `min(trough,P)`, tepe `max(peak,P)` (asla ters yönde sıfırlama). |
+| Miktar | Her seviye kendi `qty_pct` payıyla **bağımsız** place action üretir; referans havuzdan ayrı hesaplanır |
+| Aynı tick yürütme | Satışta `base_reserved`, alımda `quote_reserved` — paralel emirler bakiyeyi ikiye katlamaz |
+| Tur yönü | İlk **fill** yönü kilitler; aynı yöndeki diğer tetikli seviyeler paralel devam eder |
+| Kopma | `apply_grid_outage_recovery` tüm uygun bekleyen seviyeleri aynı mantıkla tetikler |
+
 ## Mevcut — DCA Grid: İlk Tahsis (Initial Allocation)
 
 | Koşul | Davranış |
@@ -4292,6 +4318,21 @@ Sıra: Önce TRAIL_REENTRY_BUY / TRAIL_PROFIT_SELL (tur düzeyi, tek aktif). Son
 
 _ensure_sell_buy_lists: sell_grid_fired, sell_grid_trigger_price, sell_grid_peak_price, buy_grid_fired, buy_grid_trigger_price, buy_grid_trough_price listeleri config grid sayısına göre state'te tutulur.
 
+## Mevcut — DCA Grid: Bağlantı kopması / tick boşluğu (outage recovery)
+
+Modül: `app/botengine/strategies/grid_outage_recovery.py` — `tick_dca_grid_trailing` başında `last_tick_at` ile boşluk ≥ max(30s, 3×tick_interval) ise çalışır.
+
+| Senaryo | Koşul (kopma sonrası ilk canlı fiyat P) | Davranış |
+|---------|----------------------------------------|----------|
+| 1 Gri bölge | Hiç grid tetiklenmemiş; P hâlâ tetik aralığında | State değişmez; bot kaldığı yerden devam |
+| 2 Uygun fiyat | Tetikli grid, henüz fill yok: alımda P &lt; gerçekleşme; satışta P &gt; gerçekleşme | Anında place (favorable bayrak); kar alım/satımda kaçırılmış eşik veya yeni tepe/dip |
+| 3 Kaçırılmış gerçekleşme (ters) | Tetikli grid: alımda P &gt; gerçekleşme ve P ≤ tetik; satışta P &lt; gerçekleşme ve P ≥ tetik | Tepe/dip P'den yeniden; yeni gerçekleşme fiyatı hesaplanır, bekleme |
+| 4 Grid kaçtı | Tetikli alım: P &gt; tetik fiyatı; tetikli satış: P &lt; tetik fiyatı | Tetik sıfırlanır (bekleme modu); işlem yok |
+| 5 Kısmi tur | Bir grid fill, diğerleri tetikli + kar alım aktif | Her açık grid ve TRAIL_PROFIT_SELL / TRAIL_REENTRY_BUY için yukarı kurallar bağımsız uygulanır |
+| Kopma sırasında tetiksiz grid | P tetik seviyesini geçmiş (ör. alım tetik altında) | Tetik + dip/tepe canlı P ile kaydedilir; uygunsa favorable execute |
+
+Bayraklar (tek tick): `_outage_favorable_buy`, `_outage_favorable_sell`, `_outage_force_profit_sell`, `_outage_force_reentry_buy` — tick sonunda temizlenir.
+
 ## Mevcut — DCA Grid: apply_fill_to_state
 
 | Fill | Güncelleme |
@@ -4299,6 +4340,8 @@ _ensure_sell_buy_lists: sell_grid_fired, sell_grid_trigger_price, sell_grid_peak
 | SELL | base_balance -= qty; quote_balance += (qty*price - fee); sell_history.append(...); realized_pnl_usdt_cycle += (qty*price - fee - cost); fees_paid_usdt_cycle += fee. Fee alıcıdan kesilir (quote girişi net). |
 | BUY (initial_allocation değilse) | base_balance += qty; quote_balance -= (qty*price + fee); buy_history.append({...}). Fee quote (USDT) cinsinden: toplam quote çıkışı cost+fee. (Kod: quote_balance - q*p - fee_val) |
 | execution_price | Ortalama maliyet/tetik hesaplarında execution_price kullanılır (yoksa fill price) |
+| Komisyon (Binance) | `fills[].commission` + `commissionAsset`: alış gridinde genelde **base coin** (ETH), satış gridinde **USDT**. Engine USDT karşılığını `fee_utils` ile hesaplar; UI `fee_raw` + `fee_usdt` gösterir. Grid detay modalında Kar yalnızca kar alım/satış (tur kapanış) satırlarında. |
+| grid_meta.avg_sell_grid / avg_buy_grid | Bot detail yanıtında; yalnız `grid_index` olan kapanmış grid fill'lerinden qty-ağırlıklı ortalama (execution_price öncelikli). UI not satırı ve profit_points tablosu aynı kaynak. |
 
 cost = qty * avg_buy (satışta maliyet). execution.py içinde apply_fill_to_state çağrılır; sonra cycle_ledger_add_fill, cycle_reset_after_fill (gerekirse).
 
@@ -4673,6 +4716,7 @@ Orchestrator ve execution yolları E.6'da; bu tablo sadece strateji ve config ka
 |-------|-------------------------------|
 | Sell grid i | P >= ref * (1 + sell_grid_pct_i/100) → TRAIL_SELL_GRID; action: P <= anchor * (1 - sell_trigger_trailing_pct/100) |
 | Buy grid j | P <= ref * (1 - buy_grid_pct_j/100) → TRAIL_BUY_GRID; action: P >= anchor * (1 + buy_trigger_trailing_pct/100) |
+| Grid tetik kaydı | `sell_grid_trigger_price[i]` / `buy_grid_trigger_price[j]` = **eşik fiyatı** (ref×(1±pct)); tepe/dip (`sell_grid_peak_price` / `buy_grid_trough_price`) = tetik tick'indeki **canlı P** (trailing başlangıcı). UI tetik seviyesi yalnızca eşik fiyatını gösterir. |
 | Reentry | P <= avg_sell * (1 - profit_reentry_drop_pct/100) → TRAIL_REENTRY_BUY; action: P >= trough * (1 + profit_reentry_rise_pct/100) |
 | Profit exit | trigger = cycle_ledger_trigger (fee-aware) veya avg_buy * (1 + profit_exit_rise_pct/100); P >= trigger → SELL |
 
