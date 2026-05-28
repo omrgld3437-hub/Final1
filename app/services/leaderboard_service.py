@@ -15,7 +15,6 @@ logger = logging.getLogger(__name__)
 # Map backend strategy_id -> frontend structure_id
 STRUCTURE_ID_MAP = {
     "dca_grid_trailing": "trailing_dca",
-    "trdca_pro": "trdca_pro",
 }
 
 

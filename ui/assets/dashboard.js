@@ -667,17 +667,17 @@ async function updateBinanceConnectionNotice() {
         }
         var kpiLive = document.getElementById('kpiCuzdanLive');
         var kpiBotPct = document.getElementById('kpiBotBakiyePct');
-        applyWalletLiveStatusEl(kpiLive);
-        applyWalletLiveStatusEl(kpiBotPct);
+        applyWalletStaleWarningEl(kpiLive);
+        applyWalletStaleWarningEl(kpiBotPct);
     } catch (_) {
         assetsState.wallet.keys_configured = false;
         notice.classList.remove('binance-connection-notice--hidden');
         notice.style.display = 'block';
         var fallbackLabel = (typeof State !== 'undefined' && State.isTestAccount) ? 'Test' : 'Bağlı değil';
-        patchText('kpiCuzdanLive', fallbackLabel);
-        patchText('kpiBotBakiyePct', fallbackLabel);
-        applyWalletLiveStatusEl(document.getElementById('kpiCuzdanLive'));
-        applyWalletLiveStatusEl(document.getElementById('kpiBotBakiyePct'));
+        patchText('kpiCuzdanLive', '');
+        patchText('kpiBotBakiyePct', '');
+        applyWalletStaleWarningEl(document.getElementById('kpiCuzdanLive'));
+        applyWalletStaleWarningEl(document.getElementById('kpiBotBakiyePct'));
     }
 }
 
@@ -837,45 +837,207 @@ async function fetchSnapshot() {
 }
 
 var _botPerformanceLoaded = false;
-var _botPerformanceLastPnl = null;
-var _botPerformanceLastRange = '';
 var _botPerformanceLastPeriod = null;
+var _botPerformanceLastSig = '';
+
+function _fmtPerfUsdt(v) {
+    var n = Number(v);
+    if (!Number.isFinite(n)) return '—';
+    var sign = n >= 0 ? '+' : '';
+    return sign + n.toFixed(2) + ' USDT';
+}
+
+function _fmtPerfCoin(v, asset) {
+    var n = Number(v);
+    if (!Number.isFinite(n)) return '—';
+    var sign = n >= 0 ? '+' : '';
+    var abs = Math.abs(n);
+    var txt = abs >= 1 ? abs.toFixed(4) : abs.toFixed(8);
+    return sign + txt + ' ' + (asset || '');
+}
+
+function _perfColorClass(v) {
+    var n = Number(v);
+    if (!Number.isFinite(n) || Math.abs(n) < 1e-12) return '';
+    return n >= 0 ? ' positive' : ' negative';
+}
+
+function _fmtPerfInvByBase(byBase) {
+    if (!byBase || typeof byBase !== 'object') return '—';
+    var keys = Object.keys(byBase);
+    if (!keys.length) return '+0';
+    return keys.map(function (k) {
+        return _fmtPerfCoin(byBase[k], k);
+    }).join(' · ');
+}
+
+function _fmtPerfDateOnly(raw) {
+    if (raw == null || raw === '') return '';
+    var s = String(raw).trim().replace(/\s*UTC\s*$/i, '').trim();
+    var m = s.match(/^(\d{4}-\d{2}-\d{2})/);
+    if (m) return m[1];
+    try {
+        var d = new Date(s.indexOf('T') >= 0 || s.indexOf(' ') >= 0 ? s : s + 'T12:00:00');
+        if (!isNaN(d.getTime())) {
+            var y = d.getFullYear();
+            var mo = String(d.getMonth() + 1).padStart(2, '0');
+            var da = String(d.getDate()).padStart(2, '0');
+            return y + '-' + mo + '-' + da;
+        }
+    } catch (e) { /* ignore */ }
+    return s;
+}
+
+function _clientPerfDateRange(period) {
+    var p = (period || 'all').toLowerCase();
+    var parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Istanbul', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date());
+    var y = '', m = '', d = '';
+    parts.forEach(function (pt) {
+        if (pt.type === 'year') y = pt.value;
+        if (pt.type === 'month') m = pt.value;
+        if (pt.type === 'day') d = pt.value;
+    });
+    var today = y + '-' + m + '-' + d;
+    if (p === 'daily' || p === 'day') return { from: today, to: today };
+    if (p === 'weekly' || p === 'week') {
+        var dt = new Date(today + 'T12:00:00');
+        dt.setDate(dt.getDate() - 6);
+        var f = dt.toISOString().slice(0, 10);
+        return { from: f, to: today };
+    }
+    if (p === 'monthly' || p === 'month') {
+        var dt2 = new Date(today + 'T12:00:00');
+        dt2.setDate(dt2.getDate() - 29);
+        return { from: dt2.toISOString().slice(0, 10), to: today };
+    }
+    var dt3 = new Date(today + 'T12:00:00');
+    dt3.setDate(dt3.getDate() - 365);
+    return { from: dt3.toISOString().slice(0, 10), to: today };
+}
+
+function _fmtBotPerfRange(data, forPeriod) {
+    if (!data) return '';
+    var from = _fmtPerfDateOnly(data.date_from);
+    var to = _fmtPerfDateOnly(data.date_to);
+    if (!from || !to) {
+        var fallback = _clientPerfDateRange(forPeriod || (data && data.period_api) || (data && data.period));
+        from = fallback.from;
+        to = fallback.to;
+    }
+    if (from && to) {
+        return 'Başlangıç: ' + from + ' · Bitiş: ' + to;
+    }
+    return '';
+}
+
+function _sumPerfHourly(series) {
+    var pnl = 0;
+    var fees = 0;
+    (series || []).forEach(function (h) {
+        pnl += Number(h.pnl_usd) || 0;
+        fees += Number(h.fees_usd) || 0;
+    });
+    return { pnl_usd: pnl, fees_usd: fees };
+}
+
+function _sumPerfDaily(series) {
+    var pnl = 0;
+    var fees = 0;
+    (series || []).forEach(function (d) {
+        pnl += Number(d.pnl_usd) || 0;
+        fees += Number(d.fees_usd) || 0;
+    });
+    return { pnl_usd: pnl, fees_usd: fees };
+}
+
+function renderBotPerformancePanel(data, forPeriod) {
+    if (forPeriod !== State.botPerformancePeriod) return;
+    var rangeEl = document.getElementById('botPerformanceRange');
+    var pnlEl = document.getElementById('botPerfTotalPnl');
+    var feesEl = document.getElementById('botPerfTotalFees');
+    var dailyEl = document.getElementById('botPerformanceDaily');
+    if (!dailyEl) return;
+
+    var hourlySeries = (data && Array.isArray(data.hourly_series)) ? data.hourly_series : [];
+    var dailySeries = (data && Array.isArray(data.daily_series)) ? data.daily_series : [];
+
+    var totalPnl = 0;
+    var totalFees = 0;
+    if (forPeriod === 'daily' && hourlySeries.length) {
+        var hourTotals = _sumPerfHourly(hourlySeries);
+        totalPnl = hourTotals.pnl_usd;
+        totalFees = hourTotals.fees_usd;
+    } else if (dailySeries.length) {
+        var dayTotals = _sumPerfDaily(dailySeries);
+        totalPnl = dayTotals.pnl_usd;
+        totalFees = dayTotals.fees_usd;
+    } else {
+        var totals = (data && data.totals) || {};
+        totalPnl = totals.pnl_usd != null ? Number(totals.pnl_usd) : (data && data.pnl_usd != null ? Number(data.pnl_usd) : 0);
+        totalFees = totals.fees_usd != null ? Number(totals.fees_usd) : 0;
+    }
+
+    if (rangeEl) {
+        rangeEl.textContent = _fmtBotPerfRange(data, forPeriod);
+    }
+    if (pnlEl) {
+        pnlEl.textContent = _fmtPerfUsdt(totalPnl);
+        pnlEl.className = 'bot-perf-summary-value' + _perfColorClass(totalPnl);
+    }
+    if (feesEl) {
+        feesEl.textContent = Number.isFinite(totalFees) ? totalFees.toFixed(2) : '0.00';
+        feesEl.className = 'bot-perf-summary-value bot-perf-summary-value--muted';
+    }
+
+    if (dailySeries.length > 1) {
+        var dailyRows = dailySeries.map(function (d) {
+            var pnl = Number(d.pnl_usd) || 0;
+            return '<tr>' +
+                '<td>' + (d.date_tr || '—') + '</td>' +
+                '<td class="bot-perf-pnl-cell' + _perfColorClass(pnl) + '">' + _fmtPerfUsdt(pnl) + '</td>' +
+                '<td>' + (Number(d.fees_usd) || 0).toFixed(2) + '</td>' +
+                '</tr>';
+        }).join('');
+        dailyEl.style.display = 'block';
+        dailyEl.innerHTML =
+            '<div class="bot-perf-daily-title">Günlük dağılım</div>' +
+            '<table class="bot-perf-table bot-perf-table--daily">' +
+            '<thead><tr><th>Tarih</th><th>K/Z (USDT)</th><th>Komisyon</th></tr></thead>' +
+            '<tbody>' + dailyRows + '</tbody></table>';
+        return;
+    }
+
+    dailyEl.innerHTML = '';
+    dailyEl.style.display = 'none';
+}
+
 async function loadBotPerformance(period) {
     if (!State.accountId || !window.apiClient) return;
     period = (period || 'all').toLowerCase();
     if (!['daily', 'weekly', 'monthly', 'all'].includes(period)) period = 'all';
     State.botPerformancePeriod = period;
     var requestedPeriod = period;
-    var pnlEl = document.getElementById('botPerformancePnl');
-    var rangeEl = document.getElementById('botPerformanceRange');
-    var pnlElBots = document.getElementById('botPerformancePnlBots');
-    var rangeElBots = document.getElementById('botPerformanceRangeBots');
-    var updateEls = function (pnlUsd, dateFrom, dateTo, isTotal, forPeriod) {
-        if (forPeriod !== State.botPerformancePeriod) return; /* race: sadece seçili periyotun yanıtını uygula */
-        var s = (pnlUsd >= 0 ? '+' : '') + '$' + (typeof pnlUsd === 'number' ? pnlUsd.toFixed(2) : '0.00');
-        var range = (dateFrom && dateTo && dateFrom !== '—') ? (dateFrom + ' – ' + dateTo) : '';
-        var periodChanged = _botPerformanceLastPeriod !== forPeriod;
-        if (!periodChanged && _botPerformanceLastPnl === pnlUsd && _botPerformanceLastRange === range) return; /* flicker önle: periyot aynı ve değer aynıysa DOM güncelleme */
-        var rangeToShow = (range && range.length) ? range : _botPerformanceLastRange;
-        _botPerformanceLastPnl = pnlUsd;
-        _botPerformanceLastRange = range;
-        _botPerformanceLastPeriod = forPeriod;
-        if (pnlEl) { pnlEl.textContent = s; pnlEl.className = 'bot-perf-pnl' + (pnlUsd >= 0 ? ' positive' : ' negative'); }
-        if (rangeEl) rangeEl.textContent = rangeToShow;
-        if (pnlElBots) { pnlElBots.textContent = s; pnlElBots.className = 'bot-perf-pnl' + (pnlUsd >= 0 ? ' positive' : ' negative'); }
-        if (rangeElBots) rangeElBots.textContent = rangeToShow;
-    };
+    var dailyEl = document.getElementById('botPerformanceDaily');
+    if (dailyEl && !_botPerformanceLoaded) {
+        dailyEl.innerHTML = '<div class="bot-performance-loading">Yükleniyor…</div>';
+        dailyEl.style.display = 'block';
+    }
     try {
         var res = await window.apiClient.get('/api/accounts/' + State.accountId + '/bot-performance?period=' + encodeURIComponent(period));
-        var d = (res && (res.data || typeof res.pnl_usd === 'number')) ? (res.data || res) : null;
-        if (d && typeof d.pnl_usd === 'number') {
-            updateEls(d.pnl_usd, d.date_from || '', d.date_to || '', false, requestedPeriod);
-        } else {
-            updateEls(0, '', '', false, requestedPeriod);
+        var d = (res && (res.data || res.pnl_usd != null)) ? (res.data || res) : null;
+        if (!d) {
+            renderBotPerformancePanel({ totals: {} }, requestedPeriod);
+            return;
         }
+        var sig = requestedPeriod + '|' + (d.pnl_usd != null ? d.pnl_usd : '') + '|' + (d.hourly_series ? d.hourly_series.length : 0) + '|' + (d.daily_series ? d.daily_series.length : 0);
+        if (sig === _botPerformanceLastSig && requestedPeriod === _botPerformanceLastPeriod) return;
+        _botPerformanceLastSig = sig;
+        _botPerformanceLastPeriod = requestedPeriod;
+        renderBotPerformancePanel(d, requestedPeriod);
     } catch (e) {
         if (window.errorReporter) window.errorReporter.report(e, { tab: 'dashboard', account_id: State.accountId, action: 'loadBotPerformance' });
-        updateEls(0, '', '', false, requestedPeriod);
+        renderBotPerformancePanel({ totals: {} }, requestedPeriod);
+        if (dailyEl) dailyEl.innerHTML = '<div class="bot-performance-empty">Performans yüklenemedi.</div>';
     }
     _botPerformanceLoaded = true;
 }
@@ -1467,27 +1629,119 @@ window.loadGlobalLeaderboard = loadGlobalLeaderboard;
 State.txHistoryPeriod = State.txHistoryPeriod || 'daily';
 State.txHistoryType = State.txHistoryType || 'buysell';
 State.txHistoryPage = State.txHistoryPage || 1;
+var _txHistoryRevision = '';
+var _txHistoryLastSig = '';
+var _txHistoryPollInFlight = false;
+var _txHistoryLoaded = false;
+const TX_HISTORY_POLL_MS = 3500;
 
-async function loadTransactionHistory(period, typeFilter, page, sync) {
+var _txHistoryInitialSyncDone = false;
+
+function resetTxHistoryClientState() {
+    _txHistoryRevision = '';
+    _txHistoryLastSig = '';
+    _txHistoryLoaded = false;
+    _txHistoryInitialSyncDone = false;
+}
+window.resetTxHistoryClientState = resetTxHistoryClientState;
+
+function _txHistoryPayload(res) {
+    if (!res) return null;
+    if (Array.isArray(res.items)) return res;
+    if (res.data && Array.isArray(res.data.items)) return res.data;
+    if (res.data && typeof res.data === 'object') return res.data;
+    return res;
+}
+
+function _txEncodeAttr(tx) {
+    try {
+        return encodeURIComponent(JSON.stringify(tx));
+    } catch (e) {
+        return '';
+    }
+}
+function _txPlatformLabel(tx) {
+    var p = (tx && tx.platform && String(tx.platform)) || (tx && (tx.bot_id || tx.source === 'bot') ? 'TraderTrailing' : 'Binance');
+    return p === 'TradeTrailing' ? 'TraderTrailing' : p;
+}
+
+function isTransactionHistoryPanelVisible() {
+    var panel = document.getElementById('transactionHistoryPanel');
+    if (!panel || panel.style.display === 'none') return false;
+    var tab = document.querySelector('.dm-tab.is-active');
+    var tabName = tab && tab.getAttribute('data-tab');
+    return tabName === 'binance' || tabName === 'varliklar' || !tabName;
+}
+
+function _txHistoryItemsSig(d) {
+    if (!d || !Array.isArray(d.items)) return '';
+    return String(d.revision || '') + '|' + (d.total || 0) + '|' + d.items.map(function (tx) {
+        return (tx.id || '') + ':' + (tx.time || '') + ':' + (tx.qty || '');
+    }).join(';');
+}
+
+async function pollTransactionHistoryRevision() {
+    if (!State.accountId || !window.apiClient || _txHistoryPollInFlight) return;
+    if (!isTransactionHistoryPanelVisible()) return;
+    _txHistoryPollInFlight = true;
+    try {
+        var res = await window.apiClient.get(
+            '/api/accounts/' + State.accountId + '/transaction-history/revision',
+            { timeout: 6000 }
+        );
+        var body = res && (res.data || res);
+        var rev = body && body.revision != null ? String(body.revision) : '';
+        if (!rev) return;
+        if (!_txHistoryLoaded || rev !== _txHistoryRevision) {
+            _txHistoryRevision = rev;
+            await loadTransactionHistory(
+                State.txHistoryPeriod || 'daily',
+                State.txHistoryType || 'buysell',
+                State.txHistoryPage || 1,
+                false,
+                { silent: _txHistoryLoaded }
+            );
+        }
+    } catch (e) {
+        /* poll hatası — sessiz */
+    } finally {
+        _txHistoryPollInFlight = false;
+    }
+}
+
+async function loadTransactionHistory(period, typeFilter, page, sync, opts) {
+    opts = opts || {};
+    var silent = !!opts.silent;
     if (!State.accountId || !window.apiClient) return;
     var listEl = document.getElementById('txHistoryList');
     var paginationEl = document.getElementById('txHistoryPagination');
     if (!listEl) return;
+    if (!silent) _txHistoryLastSig = '';
+    var doSync = !!sync || (!_txHistoryInitialSyncDone && (typeFilter || 'buysell') === 'buysell');
+    if (doSync) _txHistoryInitialSyncDone = true;
     var txHistoryRequestDone = false;
-    var loadingTimer = setTimeout(function () {
-        if (txHistoryRequestDone) return;
-        listEl.innerHTML = '<div class="tx-history-loading" style="text-align:center;padding:2rem;color:var(--ds-text-secondary);">Yükleniyor...</div>';
-    }, 200);
-    if (paginationEl) paginationEl.innerHTML = '';
+    var loadingTimer = null;
+    if (!silent) {
+        loadingTimer = setTimeout(function () {
+            if (txHistoryRequestDone) return;
+            listEl.innerHTML = '<div class="tx-history-loading" style="text-align:center;padding:2rem;color:var(--ds-text-secondary);">Yükleniyor...</div>';
+        }, 200);
+        if (paginationEl) paginationEl.innerHTML = '';
+    }
     State.txHistoryPeriod = period;
     State.txHistoryType = typeFilter;
     State.txHistoryPage = page;
-    var q = '/api/accounts/' + State.accountId + '/transaction-history?period=' + encodeURIComponent(period) + '&type_filter=' + encodeURIComponent(typeFilter) + '&page=' + page + (sync ? '&sync=1' : '');
+    var q = '/api/accounts/' + State.accountId + '/transaction-history?period=' + encodeURIComponent(period) + '&type_filter=' + encodeURIComponent(typeFilter) + '&page=' + page + (doSync ? '&sync=1' : '');
     try {
         var res = await window.apiClient.get(q);
         txHistoryRequestDone = true;
-        clearTimeout(loadingTimer);
-        var d = res && (res.data || res);
+        if (loadingTimer) clearTimeout(loadingTimer);
+        var d = _txHistoryPayload(res);
+        if (d && d.revision != null) _txHistoryRevision = String(d.revision);
+        var sig = _txHistoryItemsSig(d);
+        if (silent && sig && sig === _txHistoryLastSig) return;
+        _txHistoryLastSig = sig;
+        _txHistoryLoaded = true;
         if (!d || !Array.isArray(d.items)) {
             listEl.innerHTML = '<div class="tx-history-empty" style="text-align:center;padding:2rem;color:var(--ds-text-secondary);">İşlem bulunamadı.</div>';
             return;
@@ -1507,13 +1761,16 @@ async function loadTransactionHistory(period, typeFilter, page, sync) {
                 var timeStr = tx.time ? new Date(tx.time).toLocaleString('tr-TR', { dateStyle: 'short', timeStyle: 'short' }) : '—';
                 var typeLabel = tx.type_label || (tx.type === 'buy' ? 'Alım' : tx.type === 'sell' ? 'Satım' : tx.type === 'deposit' ? 'Yatırım' : tx.type === 'withdraw' ? 'Çekim' : '—');
                 var typeClass = tx.type === 'buy' ? 'tx-type-buy' : tx.type === 'sell' ? 'tx-type-sell' : tx.type === 'deposit' ? 'tx-type-deposit' : tx.type === 'withdraw' ? 'tx-type-withdraw' : '';
-                var qtyStr = fmtQtyShort(tx.qty);
-                var priceStr = tx.price != null && tx.price > 0 ? (typeof fmtCoinPrice === 'function' ? fmtCoinPrice(tx.price) : '$' + Number(tx.price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 8 })) : '—';
-                var totalVal = tx.quote_qty != null && tx.quote_qty > 0 ? (typeof fmtUsd === 'function' ? fmtUsd(tx.quote_qty) : '$' + tx.quote_qty) : (tx.type === 'deposit' || tx.type === 'withdraw' ? qtyStr + ' ' + (tx.symbol || '') : '—');
+                var amtRow = _txDisplayAmounts(tx);
+                var qtyStr = fmtQtyShort(amtRow.qty);
+                var priceStr = amtRow.price > 0 ? (typeof fmtCoinPrice === 'function' ? fmtCoinPrice(amtRow.price) : '$' + Number(amtRow.price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 8 })) : '—';
+                var totalVal = (tx.type === 'deposit' || tx.type === 'withdraw')
+                    ? (qtyStr + ' ' + (tx.symbol || ''))
+                    : (amtRow.notional > 0 ? (typeof fmtUsd === 'function' ? fmtUsd(amtRow.notional) : '$' + amtRow.notional) : '—');
                 var sourceLabel = tx.source_label || (tx.source === 'bot' ? 'Bot' : tx.source === 'spot' ? 'Spot' : '—');
-                var platformLabel = (tx.platform && String(tx.platform)) || (tx.bot_id || tx.source === 'bot' ? 'TradeTrailing' : 'Binance');
+                var platformLabel = _txPlatformLabel(tx);
                 var metaRight = (tx.type === 'buy' || tx.type === 'sell') ? ('Miktar ' + qtyStr + ' · Fiyat ' + priceStr) : (qtyStr + (tx.symbol ? ' ' + tx.symbol : ''));
-                return '<div class="tx-history-item" data-tx=\'' + JSON.stringify(tx).replace(/'/g, "\\'") + '\' role="button" tabindex="0">' +
+                return '<div class="tx-history-item" data-tx="' + _txEncodeAttr(tx) + '" role="button" tabindex="0">' +
                     '<div class="tx-history-item-left">' +
                     '<div class="tx-history-item-title"><span class="' + typeClass + '">' + typeLabel + '</span> ' + (tx.symbol || '') + '</div>' +
                     '<div class="tx-history-item-meta">' + timeStr + ' · ' + sourceLabel + ' · ' + platformLabel + (tx.bot_name ? ' · ' + tx.bot_name : '') + '</div>' +
@@ -1527,8 +1784,9 @@ async function loadTransactionHistory(period, typeFilter, page, sync) {
             listEl.querySelectorAll('.tx-history-item').forEach(function (el) {
                 el.onclick = function () {
                     try {
-                        var tx = JSON.parse(el.getAttribute('data-tx'));
-                        if (typeof openTxDetailModal === 'function') openTxDetailModal(tx);
+                        var raw = el.getAttribute('data-tx');
+                        var tx = raw ? JSON.parse(decodeURIComponent(raw)) : null;
+                        if (tx && typeof openTxDetailModal === 'function') openTxDetailModal(tx);
                     } catch (e) {}
                 };
             });
@@ -1550,21 +1808,43 @@ async function loadTransactionHistory(period, typeFilter, page, sync) {
         document.querySelectorAll('.tx-type-btn').forEach(function (b) { b.classList.toggle('active', b.getAttribute('data-type') === typeFilter); });
     } catch (e) {
         txHistoryRequestDone = true;
-        clearTimeout(loadingTimer);
-        if (window.errorReporter) window.errorReporter.report(e, { account_id: State.accountId, action: 'loadTransactionHistory' });
-        listEl.innerHTML = '<div class="tx-history-error" style="text-align:center;padding:2rem;color:var(--ds-loss,#f6465d);">Yüklenemedi.</div>';
+        if (loadingTimer) clearTimeout(loadingTimer);
+        if (!silent) {
+            if (window.errorReporter) window.errorReporter.report(e, { account_id: State.accountId, action: 'loadTransactionHistory' });
+            listEl.innerHTML = '<div class="tx-history-error" style="text-align:center;padding:2rem;color:var(--ds-loss,#f6465d);">Yüklenemedi.</div>';
+        }
     }
 }
 window.loadTransactionHistory = loadTransactionHistory;
+window.pollTransactionHistoryRevision = pollTransactionHistoryRevision;
+
+function _txDisplayAmounts(tx) {
+    if (!tx) return { qty: 0, price: 0, notional: 0 };
+    var qty = Number(tx.qty) || 0;
+    var quote = Number(tx.quote_qty) || 0;
+    var price = Number(tx.price) || 0;
+    if (tx.type === 'buy' || tx.type === 'sell') {
+        if (quote > 0 && qty > 0) {
+            return { qty: qty, price: quote / qty, notional: quote };
+        }
+        if (qty > 0 && price > 0) {
+            return { qty: qty, price: price, notional: qty * price };
+        }
+    }
+    return { qty: qty, price: price, notional: quote };
+}
 
 function openTxDetailModal(tx) {
     var modal = document.getElementById('txDetailModal');
     if (!modal) return;
     var timeStr = tx.time ? new Date(tx.time).toLocaleString('tr-TR', { dateStyle: 'medium', timeStyle: 'medium' }) : '—';
     var typeLabel = tx.type_label || (tx.type === 'buy' ? 'Alım' : tx.type === 'sell' ? 'Satım' : tx.type === 'deposit' ? 'Yatırım' : tx.type === 'withdraw' ? 'Çekim' : '—');
-    var qty = tx.qty != null ? (typeof fmtNum === 'function' ? fmtNum(tx.qty, 8) : Number(tx.qty).toFixed(4)) : '—';
-    var price = tx.price != null && tx.price > 0 ? (typeof fmtCoinPrice === 'function' ? fmtCoinPrice(tx.price) : '$' + tx.price) : '—';
-    var totalVal = tx.quote_qty != null && tx.quote_qty > 0 ? (typeof fmtUsd === 'function' ? fmtUsd(tx.quote_qty) : '$' + tx.quote_qty) : (tx.type === 'deposit' || tx.type === 'withdraw' ? qty + ' ' + (tx.symbol || '') : '—');
+    var amt = _txDisplayAmounts(tx);
+    var qty = amt.qty > 0 ? (typeof fmtNum === 'function' ? fmtNum(amt.qty, 8) : Number(amt.qty).toFixed(4)) : '—';
+    var price = amt.price > 0 ? (typeof fmtCoinPrice === 'function' ? fmtCoinPrice(amt.price) : '$' + amt.price) : '—';
+    var totalVal = (tx.type === 'deposit' || tx.type === 'withdraw')
+        ? (qty + ' ' + (tx.symbol || ''))
+        : (amt.notional > 0 ? (typeof fmtUsd === 'function' ? fmtUsd(amt.notional) : '$' + amt.notional) : '—');
     var comm = tx.commission != null && tx.commission > 0 ? (tx.commission_asset ? (typeof fmtNum === 'function' ? fmtNum(tx.commission, 8) : tx.commission) + ' ' + tx.commission_asset : (typeof fmtUsd === 'function' ? fmtUsd(tx.commission) : tx.commission)) : '0';
     patchText('txDetailTime', timeStr);
     patchText('txDetailType', typeLabel);
@@ -1574,7 +1854,7 @@ function openTxDetailModal(tx) {
     patchText('txDetailTotal', totalVal);
     patchText('txDetailCommission', comm);
     patchText('txDetailSource', tx.source_label || (tx.source === 'bot' ? 'Bot' : tx.source === 'spot' ? 'Spot' : '—'));
-    patchText('txDetailPlatform', tx.platform || (tx.bot_id || tx.source === 'bot' ? 'TradeTrailing' : 'Binance'));
+    patchText('txDetailPlatform', _txPlatformLabel(tx));
     modal.style.display = 'flex';
     modal.setAttribute('aria-hidden', 'false');
 }
@@ -1596,7 +1876,9 @@ function applySnapshotToUI(data) {
             if (d && typeof d === 'object') {
                 const p = d.price;
                 if (p != null && Number.isFinite(p)) priceMap[sym] = p;
-                miniData[sym] = { last: p || 0, open: p || 0, changePct: d.change24h || 0, volume: d.volume24h || 0, quoteVolume: (d.volume24h || 0) * (p || 0), marketCap: 0 };
+                const mini = { last: p || 0, open: p || 0, volume: d.volume24h || 0, quoteVolume: (d.volume24h || 0) * (p || 0), marketCap: 0 };
+                if (d.change24h != null && Number.isFinite(Number(d.change24h))) mini.changePct = Number(d.change24h);
+                miniData[sym] = mini;
             }
         }
         if (window.marketStore && Object.keys(priceMap).length) {
@@ -1619,38 +1901,41 @@ function applySnapshotToUI(data) {
     }
     if (data.pnl && typeof data.pnl === 'object' && !data.pnl._error) {
         var spotUsd = (data.wallet && typeof data.wallet.total_usd === 'number' && data.wallet.total_usd >= 0) ? data.wallet.total_usd : (State.summary && State.summary.account && typeof State.summary.account.spot_balance_usd === 'number' ? State.summary.account.spot_balance_usd : (typeof (assetsState && assetsState.wallet && assetsState.wallet.total_usd) === 'number' ? assetsState.wallet.total_usd : 0));
-        if (data.bots && Array.isArray(data.bots)) {
+        if (data.bots && Array.isArray(data.bots) && data.bots.length > 0) {
             State.bots = hydrateBotsWithMetricsCache(data.bots);
             resetFinanceBotsLiveCache(State.bots);
         }
-        const merged = { ...data.pnl, binance_balance_usd: spotUsd, spot_balance_usd: spotUsd, free_usd: data.wallet?.free_usd ?? 0, locked_usd: data.wallet?.locked_usd ?? 0, available_usd: data.wallet?.available_usd ?? 0, bot_locked_usd: data.wallet?.bot_locked_usd ?? 0, account: data.account || {}, bots: data.bots || State.bots, bot_summary: data.pnl.bot_summary || [] };
+        const merged = { ...data.pnl, binance_balance_usd: spotUsd, spot_balance_usd: spotUsd, free_usd: data.wallet?.free_usd ?? 0, locked_usd: data.wallet?.locked_usd ?? 0, available_usd: data.wallet?.available_usd ?? 0, bot_locked_usd: data.wallet?.bot_locked_usd ?? 0, account: data.account || {}, bots: (data.bots && data.bots.length > 0) ? data.bots : (State.bots || []), bot_summary: data.pnl.bot_summary || [] };
         if (typeof updateFinanceKPIs === 'function') updateFinanceKPIs(merged);
     }
     if (data.bots && Array.isArray(data.bots) && data.account) {
-        State.bots = hydrateBotsWithMetricsCache(data.bots);
-        resetFinanceBotsLiveCache(State.bots);
-        State.isTestAccount = !!(data.account.is_test_account);
-        const summaryShape = {
-            account: data.account,
-            bots: State.bots,
-            account_name: data.account.name,
-            user_name: data.account.user_name,
-            user_surname: data.account.user_surname,
-            total_bots: data.account.total_bots,
-            active_bots: data.account.active_bots,
-            daily_bot_pnl_usd: data.account.daily_bot_pnl_usd,
-            daily_wallet_pnl_usd: data.account.daily_wallet_pnl_usd,
-            total_pnl_usd: data.account.total_pnl_usd,
-            is_test_account: State.isTestAccount
-        };
-        State.summary = summaryShape;
-        State.lastSummaryHash = computeHash(summaryShape);
-        if (typeof renderBotsList === 'function') renderBotsList(State.bots);
-        if (typeof updateKPIs === 'function') updateKPIs(summaryShape);
-        if (typeof updateAccountName === 'function') updateAccountName(data.account.name || "Hesap Dashboard");
-        if (typeof setAppbarAccountHolderName === 'function') setAppbarAccountHolderName(summaryShape);
-        hideError();
-        if (State.isTestAccount && typeof renderPageErrorLog === 'function') renderPageErrorLog();
+        var incomingBots = data.bots;
+        if (!(incomingBots.length === 0 && State.bots && State.bots.length > 0)) {
+            State.bots = hydrateBotsWithMetricsCache(incomingBots);
+            resetFinanceBotsLiveCache(State.bots);
+            State.isTestAccount = !!(data.account.is_test_account);
+            const summaryShape = {
+                account: data.account,
+                bots: State.bots,
+                account_name: data.account.name,
+                user_name: data.account.user_name,
+                user_surname: data.account.user_surname,
+                total_bots: data.account.total_bots,
+                active_bots: data.account.active_bots,
+                daily_bot_pnl_usd: data.account.daily_bot_pnl_usd,
+                daily_wallet_pnl_usd: data.account.daily_wallet_pnl_usd,
+                total_pnl_usd: data.account.total_pnl_usd,
+                is_test_account: State.isTestAccount
+            };
+            State.summary = summaryShape;
+            State.lastSummaryHash = computeHash(summaryShape);
+            if (typeof renderBotsList === 'function') renderBotsList(State.bots);
+            if (typeof updateKPIs === 'function') updateKPIs(summaryShape);
+            if (typeof updateAccountName === 'function') updateAccountName(data.account.name || "Hesap Dashboard");
+            if (typeof setAppbarAccountHolderName === 'function') setAppbarAccountHolderName(summaryShape);
+            hideError();
+            if (State.isTestAccount && typeof renderPageErrorLog === 'function') renderPageErrorLog();
+        }
     }
     if (State.accountId && typeof loadBotPerformance === 'function') {
         loadBotPerformance(State.botPerformancePeriod || 'all');
@@ -1863,9 +2148,9 @@ function loadBotsListFast(accountId) {
             renderBotsList(State.bots);
         })
         .catch(function() {
-            State.bots = [];
+            if (State.bots && State.bots.length) return;
+            if (_financeBotsTableHasRows()) return;
             renderBotsList([]);
-            renderFinanceBots([]);
         });
 }
 
@@ -2076,10 +2361,15 @@ var lastSpotUpdateTs = 0;
 var _walletLiveOkAt = 0;
 var _walletLiveFailedAt = 0;
 var _kpiCuzdanPnlDisplay = { pnlUsd: null, pnlPct: null };
+var _walletStaleUi = { wasStale: false, liveSince: null };
+var WALLET_LIVE_OK_TTL_MS = 60000;
+var WALLET_STALE_HIDE_AFTER_LIVE_MS = 15000;
 
 function markWalletLiveFetchOk() {
     _walletLiveOkAt = Date.now();
     _walletLiveFailedAt = 0;
+    _walletStaleUi.wasStale = false;
+    _walletStaleUi.liveSince = null;
 }
 window.markWalletLiveFetchOk = markWalletLiveFetchOk;
 
@@ -2092,29 +2382,111 @@ function _isLiveWalletSource(source) {
     return /binance_wallet|wallet_refresh|wallet_live|homeFlash_live/i.test(String(source || ''));
 }
 
-/** Cüzdan KPI canlılık etiketi — yalnızca son başarılı canlı cüzdan çekiminde "Canlı". */
+function _walletLiveFailedAfterOk() {
+    return _walletLiveFailedAt > 0 && (!_walletLiveOkAt || _walletLiveFailedAt > _walletLiveOkAt);
+}
+
+/** Gerçek canlı Binance cüzdan verisi (KPI/PnL iç mantığı). */
+function isWalletDataLive() {
+    if (typeof State !== 'undefined' && State.isTestAccount) return true;
+    if (assetsState.wallet.keys_configured !== true) return false;
+    if (assetsState.wallet.error || assetsState.wallet.status === 'error') return false;
+    if (assetsState.wallet.data_status === 'stale') return false;
+    if (_walletLiveFailedAfterOk()) return false;
+    if (_walletLiveOkAt && (Date.now() - _walletLiveOkAt) <= WALLET_LIVE_OK_TTL_MS) return true;
+    return assetsState.wallet.data_status === 'fresh';
+}
+window.isWalletDataLive = isWalletDataLive;
+
+/** Cüzdan durum etiketi (iç mantık; UI'da Canlı gösterilmez). */
 function walletLiveStatusLabel() {
     if (typeof State !== 'undefined' && State.isTestAccount) return 'Test';
     if (assetsState.wallet.keys_configured !== true) return 'Bağlı değil';
-    if (assetsState.wallet.error || assetsState.wallet.status === 'error') return 'Güncel değil';
-    var ds = assetsState.wallet.data_status;
-    if (ds === 'stale' || ds === 'error' || ds === 'cached' || ds === 'empty') return 'Güncel değil';
-    if (_walletLiveFailedAt && (!_walletLiveOkAt || _walletLiveFailedAt >= _walletLiveOkAt)) return 'Güncel değil';
-    if (!_walletLiveOkAt || (Date.now() - _walletLiveOkAt) > 90000) return 'Güncel değil';
-    return 'Canlı';
+    if (isWalletDataLive()) return 'Canlı';
+    return 'Güncel değil';
 }
 window.walletLiveStatusLabel = walletLiveStatusLabel;
 
-function applyWalletLiveStatusEl(el) {
-    if (!el) return;
-    var label = walletLiveStatusLabel();
-    if (el.textContent !== label) el.textContent = label;
-    el.classList.toggle('kpi-spot-status--live', label === 'Canlı');
-    el.classList.toggle('kpi-spot-status--stale', label === 'Güncel değil');
-    el.classList.toggle('kpi-spot-status--offline', label === 'Bağlı değil');
-    el.classList.toggle('kpi-spot-status--test', label === 'Test');
+/** KPI stale uyarısı — canlıyken gizle; yalnızca gerçekten eski/hatalı veride göster. */
+function shouldShowWalletStaleWarning() {
+    if (typeof State !== 'undefined' && State.isTestAccount) return false;
+    if (assetsState.wallet.keys_configured !== true) {
+        _walletStaleUi.wasStale = false;
+        _walletStaleUi.liveSince = null;
+        return false;
+    }
+    if (isWalletDataLive()) {
+        _walletStaleUi.wasStale = false;
+        _walletStaleUi.liveSince = null;
+        return false;
+    }
+    _walletStaleUi.liveSince = null;
+    _walletStaleUi.wasStale = true;
+    return true;
 }
-window.applyWalletLiveStatusEl = applyWalletLiveStatusEl;
+window.shouldShowWalletStaleWarning = shouldShowWalletStaleWarning;
+
+/** KPI/Binance rozeti: canlı → Canlı; değilse Güncel değil (kpiBotBakiyePct yalnızca uyarı). */
+function applyWalletStaleWarningEl(el) {
+    if (!el) return;
+    var warnOnly = el.id === 'kpiBotBakiyePct' || el.id === 'bnWalletLiveBadge';
+    if (typeof State !== 'undefined' && State.isTestAccount) {
+        if (warnOnly) {
+            el.hidden = true;
+            el.textContent = '';
+            el.classList.remove('kpi-spot-status--live', 'kpi-spot-status--stale', 'kpi-spot-status--offline', 'kpi-spot-status--test');
+            return;
+        }
+        el.hidden = false;
+        el.textContent = 'Test';
+        el.classList.toggle('kpi-spot-status--test', true);
+        el.classList.toggle('kpi-spot-status--live', false);
+        el.classList.toggle('kpi-spot-status--stale', false);
+        el.classList.toggle('kpi-spot-status--offline', false);
+        return;
+    }
+    if (assetsState.wallet.keys_configured !== true) {
+        el.hidden = true;
+        el.textContent = '';
+        el.classList.remove('kpi-spot-status--live', 'kpi-spot-status--stale', 'kpi-spot-status--offline', 'kpi-spot-status--test');
+        return;
+    }
+    if (isWalletDataLive()) {
+        if (warnOnly) {
+            el.hidden = true;
+            el.textContent = '';
+            el.classList.remove('kpi-spot-status--live', 'kpi-spot-status--stale', 'kpi-spot-status--offline');
+            return;
+        }
+        el.hidden = false;
+        el.textContent = 'Canlı';
+        el.classList.toggle('kpi-spot-status--live', true);
+        el.classList.toggle('kpi-spot-status--stale', false);
+        el.classList.toggle('kpi-spot-status--offline', false);
+        el.classList.toggle('kpi-spot-status--test', false);
+        return;
+    }
+    var showStale = shouldShowWalletStaleWarning();
+    if (!showStale && warnOnly) {
+        el.hidden = true;
+        el.textContent = '';
+        el.classList.remove('kpi-spot-status--live', 'kpi-spot-status--stale', 'kpi-spot-status--offline');
+        return;
+    }
+    if (!showStale) {
+        el.hidden = true;
+        el.textContent = '';
+        el.classList.remove('kpi-spot-status--live', 'kpi-spot-status--stale', 'kpi-spot-status--offline');
+        return;
+    }
+    el.hidden = false;
+    el.textContent = 'Güncel değil';
+    el.classList.toggle('kpi-spot-status--stale', true);
+    el.classList.toggle('kpi-spot-status--live', false);
+    el.classList.toggle('kpi-spot-status--offline', false);
+    el.classList.toggle('kpi-spot-status--test', false);
+}
+window.applyWalletStaleWarningEl = applyWalletStaleWarningEl;
 
 function updateCuzdanPnlKpi(dailyWalletPnl, account, data) {
     var spotUsd = (account && account.spot_balance_usd != null) ? Number(account.spot_balance_usd)
@@ -2122,22 +2494,22 @@ function updateCuzdanPnlKpi(dailyWalletPnl, account, data) {
         : (assetsState.wallet && typeof assetsState.wallet.total_usd === 'number') ? assetsState.wallet.total_usd : 0;
     var hasDaily = (account && account.daily_wallet_pnl_usd !== undefined && account.daily_wallet_pnl_usd !== null)
         || (data && data.daily_wallet_pnl_usd !== undefined && data.daily_wallet_pnl_usd !== null);
-    if (!hasDaily) return;
-    var liveOk = walletLiveStatusLabel() === 'Canlı';
+    if (!hasDaily && _kpiCuzdanPnlDisplay.pnlUsd == null) return;
+    var liveOk = isWalletDataLive();
     var pctCuzdan = (account && account.daily_wallet_pnl_pct != null && Number.isFinite(Number(account.daily_wallet_pnl_pct)))
         ? Number(account.daily_wallet_pnl_pct).toFixed(2)
         : ((data && data.daily_wallet_pnl_pct != null && Number.isFinite(Number(data.daily_wallet_pnl_pct)))
             ? Number(data.daily_wallet_pnl_pct).toFixed(2)
             : ((spotUsd || 1) !== 0 ? ((dailyWalletPnl / Math.max(spotUsd || 1, 0.01)) * 100).toFixed(2) : '0.00'));
     var bogusZeroSpot = spotUsd <= 0 && dailyWalletPnl < -0.001;
-    if (liveOk && !bogusZeroSpot) {
-        _kpiCuzdanPnlDisplay.pnlUsd = dailyWalletPnl;
+    if (hasDaily && !bogusZeroSpot) {
+        _kpiCuzdanPnlDisplay.pnlUsd = Number(dailyWalletPnl);
         _kpiCuzdanPnlDisplay.pnlPct = pctCuzdan;
     } else if (_kpiCuzdanPnlDisplay.pnlUsd == null) {
         return;
     }
-    var pnlShow = (liveOk && !bogusZeroSpot) ? dailyWalletPnl : _kpiCuzdanPnlDisplay.pnlUsd;
-    var pctShow = (liveOk && !bogusZeroSpot) ? pctCuzdan : _kpiCuzdanPnlDisplay.pnlPct;
+    var pnlShow = _kpiCuzdanPnlDisplay.pnlUsd;
+    var pctShow = _kpiCuzdanPnlDisplay.pnlPct;
     if (pnlShow == null) return;
     var cuzdanPnlEl = document.getElementById('kpiCuzdanPnl');
     if (cuzdanPnlEl) {
@@ -2191,8 +2563,9 @@ function updateDatahubWsIndicator() {
 }
 
 function updateKpiCuzdanLiveStatus() {
-    applyWalletLiveStatusEl(document.getElementById('kpiCuzdanLive'));
-    applyWalletLiveStatusEl(document.getElementById('bnWalletLiveBadge'));
+    applyWalletStaleWarningEl(document.getElementById('kpiCuzdanLive'));
+    applyWalletStaleWarningEl(document.getElementById('bnWalletLiveBadge'));
+    applyWalletStaleWarningEl(document.getElementById('kpiBotBakiyePct'));
 }
 
 function updateKPIs(data) {
@@ -2216,8 +2589,7 @@ function updateKPIs(data) {
     if (assetsState.wallet && assetsState.wallet.data_status !== 'stale' && !assetsState.wallet.error) {
         lastSpotUpdateTs = Date.now();
     }
-    patchText("kpiCuzdanLive", walletLiveStatusLabel());
-    applyWalletLiveStatusEl(document.getElementById('kpiCuzdanLive'));
+    applyWalletStaleWarningEl(document.getElementById('kpiCuzdanLive'));
     updateCuzdanPnlKpi(dailyWalletPnl, account, data);
     if (hasDaily) {
         var botPnlEl = document.getElementById("kpiBotPnl");
@@ -2239,9 +2611,55 @@ function updateKPIs(data) {
         el.textContent = fmtUsd(botsTotal);
         triggerValueBlink(el, botsTotal);
     });
-    patchText("kpiBotBakiyePct", walletLiveStatusLabel());
-    applyWalletLiveStatusEl(document.getElementById('kpiBotBakiyePct'));
+    applyWalletStaleWarningEl(document.getElementById('kpiBotBakiyePct'));
+    _persistKpisStorageCache(account, data);
 }
+
+function _persistKpisStorageCache(account, data) {
+    if (!State.accountId || !window.storageCache) return;
+    account = account || {};
+    data = data || {};
+    var spot = account.spot_balance_usd ?? data.spot_balance_usd ?? assetsState.wallet?.total_usd;
+    if (account.daily_wallet_pnl_usd == null && data.daily_wallet_pnl_usd == null && spot == null) return;
+    try {
+        window.storageCache.mergeSaved(State.accountId, {
+            kpis: Object.assign({}, account, {
+                spot_balance_usd: spot,
+                daily_wallet_pnl_usd: account.daily_wallet_pnl_usd ?? data.daily_wallet_pnl_usd,
+                daily_wallet_pnl_pct: account.daily_wallet_pnl_pct ?? data.daily_wallet_pnl_pct,
+                daily_bot_pnl_usd: account.daily_bot_pnl_usd ?? data.daily_bot_pnl_usd,
+                daily_bot_pnl_pct: account.daily_bot_pnl_pct ?? data.daily_bot_pnl_pct,
+                bots_balance_usd: account.bots_balance_usd ?? data.bots_balance_usd,
+                total_bots: account.total_bots ?? data.total_bots,
+                active_bots: account.active_bots ?? data.active_bots
+            })
+        });
+    } catch (e) { /* ignore */ }
+}
+
+function hydrateKpisFromStorageCache(accountId) {
+    if (!accountId || !window.storageCache) return false;
+    var cached = window.storageCache.load(accountId);
+    if (!cached || !cached.kpis || typeof cached.kpis !== 'object') return false;
+    var k = cached.kpis;
+    if (k.daily_wallet_pnl_usd != null && Number.isFinite(Number(k.daily_wallet_pnl_usd))) {
+        _kpiCuzdanPnlDisplay.pnlUsd = Number(k.daily_wallet_pnl_usd);
+        if (k.daily_wallet_pnl_pct != null && Number.isFinite(Number(k.daily_wallet_pnl_pct))) {
+            _kpiCuzdanPnlDisplay.pnlPct = Number(k.daily_wallet_pnl_pct).toFixed(2);
+        }
+    }
+    if (typeof updateKPIs === 'function') {
+        updateKPIs({
+            account: k,
+            total_bots: k.total_bots,
+            active_bots: k.active_bots,
+            daily_bot_pnl_usd: k.daily_bot_pnl_usd,
+            total_pnl_usd: k.total_pnl_usd
+        });
+    }
+    return true;
+}
+window.hydrateKpisFromStorageCache = hydrateKpisFromStorageCache;
 
 function patchText(id, text) {
     const el = document.getElementById(id);
@@ -2315,48 +2733,7 @@ const BOT_STRUCTURES = [
                 resell_trail_pct: 1.0
             }
         }
-    },
-    {
-        id: 'trdca_pro',
-        name: 'TRDCA Pro+ (Trailing Rebalancing DCA)',
-        description: 'Trailing Rebalancing + Trailing DCA/Grid. Aynı coin setinde iki motor: TRB (ağırlık sapması) ve DCA (sepet fiyatı grid). Tek tick\'te 0/1 batch intent.',
-        defaultConfig: {
-            strategy_id: 'trdca_pro',
-            quote_asset: 'USDT',
-            tick_interval_ms: 1000,
-            execution: { ack_timeout_sec: 5 },
-            dca: {
-                enabled: true,
-                coin_weights: { BTC: 0.30, ETH: 0.30, SOL: 0.20, AVAX: 0.20 },
-                grid_up_levels_pct: [1.0, 2.0, 3.0],
-                grid_down_levels_pct: [1.0, 2.0, 3.0],
-                grid_up_notional_usdt: [200, 200, 200],
-                grid_down_notional_usdt: [200, 200, 200],
-                sell_trail_back_pct: 0.8,
-                buy_trail_up_pct: 0.8,
-                buy_buffer_pct: 0.2,
-                post_sell: { dip_trigger_pct: 2.0, dip_trail_up_pct: 0.8, dip_buy_notional_usdt: 200 },
-                post_buy: { profit_trigger_pct: 2.0, profit_sell_trail_back_pct: 0.8, profit_sell_notional_usdt: 200 }
-            },
-            trb: {
-                enabled: true,
-                target_weights_all: { BTC: 0.30, ETH: 0.30, SOL: 0.20, USDT: 0.20 },
-                small_eps_pct: 0.8,
-                min_leg_notional_usdt: 10,
-                gap_arm_pct: 3.0,
-                trail_back_pct: 0.6,
-                max_batch_legs: 8,
-                sell_first: true,
-                step_mode: 'SELL_ONLY_THEN_BUY',
-                batch_atomicity: 'SOFT',
-                partial_fill_behavior: 'SAFE_STOP',
-                max_exec_delay_sec: 15,
-                ts_bucket_sec: 5,
-                gap_peak_bucket_dp: 2
-            }
-        }
-    }
-];
+    }];
 
 /**
  * Open bot structure selection modal
@@ -2506,64 +2883,52 @@ function renderBotStructures() {
     container.innerHTML = "";
     
     BOT_STRUCTURES.forEach(structure => {
-        const isTrdcaPro = structure.id === 'trdca_pro';
-        const isTestAccount = typeof State !== 'undefined' && State.isTestAccount === true;
-        const trdcaProDisabled = isTrdcaPro && !isTestAccount;
-
+        if (!structure || structure.id === 'trdca_pro') return;
         const card = document.createElement("div");
         card.style.cssText = `
             background: var(--ds-bg-secondary, #1e2329);
             border: 1px solid var(--ds-border, #2b3139);
             border-radius: 8px;
             padding: 20px 24px;
-            cursor: ${trdcaProDisabled ? 'default' : 'pointer'};
+            cursor: pointer;
             transition: all 0.2s ease;
             width: 100%;
-            ${trdcaProDisabled ? 'opacity: 0.88;' : ''}
+            
         `;
         card.dataset.structureId = structure.id;
-        card.className = "bot-structure-card" + (trdcaProDisabled ? " bot-structure-card--coming-soon" : "");
-        const badgeHtml = trdcaProDisabled ? '<span class="bot-structure-card__badge" style="display: inline-block; margin-bottom: 8px; padding: 4px 10px; border-radius: 6px; font-size: 0.75rem; font-weight: 600; background: var(--ds-accent, #f0b90b); color: #000;">Çok yakında</span>' : '';
-        const btnLabel = trdcaProDisabled ? 'Çok yakında' : 'Devam Et →';
-        const btnDisabled = trdcaProDisabled ? ' disabled' : '';
+        card.className = "bot-structure-card";
+        const btnLabel = 'Devam Et →';
+        const btnDisabled = '';
         card.innerHTML = `
             <div class="bot-structure-card__inner">
                 <div class="bot-structure-card__text">
-                    ${badgeHtml}
-                    <h3 style="margin: 0 0 6px 0; font-size: 1.1rem; font-weight: 600; color: var(--ds-text-primary);">${structure.name}</h3>
+<h3 style="margin: 0 0 6px 0; font-size: 1.1rem; font-weight: 600; color: var(--ds-text-primary);">${structure.name}</h3>
                     <p style="margin: 0; font-size: 0.9rem; color: var(--ds-text-secondary); line-height: 1.4;">${structure.description}</p>
                 </div>
                 <div style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center;">
                     <button class="btn btn-primary-gold bot-structure-card__btn" style="padding: 10px 24px; font-weight: 600; white-space: nowrap;" data-action="select" data-structure-id="${structure.id}"${btnDisabled}>
                         ${btnLabel}
                     </button>
-                    ${!trdcaProDisabled ? '<button type="button" class="btn bot-structure-card__btn-copy" style="padding: 10px 16px; font-weight: 600; white-space: nowrap; background: var(--ds-bg-tertiary); color: var(--ds-text-primary); border: 1px solid var(--ds-border);" data-action="copy-trading" data-structure-id="' + structure.id + '">Copy Trading</button>' : ''}
+                    ${'<button type="button" class="btn bot-structure-card__btn-copy" style="padding: 10px 16px; font-weight: 600; white-space: nowrap; background: var(--ds-bg-tertiary); color: var(--ds-text-primary); border: 1px solid var(--ds-border);" data-action="copy-trading" data-structure-id="' + structure.id + '">Copy Trading</button>'}
                 </div>
             </div>
             <div class="bot-structure-card__copy-drawer" data-copy-drawer="${structure.id}" style="display: none; margin-top: 12px; padding: 12px; background: var(--ds-bg-tertiary); border-radius: 8px; border: 1px solid var(--ds-border);"></div>
         `;
         
-        // Hover effect only when not disabled
-        if (!trdcaProDisabled) {
-            card.onmouseenter = () => {
-                card.style.borderColor = 'var(--ds-accent, #f0b90b)';
-                card.style.backgroundColor = 'var(--ds-bg-hover, rgba(240, 185, 11, 0.05))';
-            };
-            card.onmouseleave = () => {
-                card.style.borderColor = 'var(--ds-border, #2b3139)';
-                card.style.backgroundColor = 'var(--ds-bg-secondary, #1e2329)';
-            };
-        }
-        
+        card.onmouseenter = () => {
+            card.style.borderColor = 'var(--ds-accent, #f0b90b)';
+            card.style.backgroundColor = 'var(--ds-bg-hover, rgba(240, 185, 11, 0.05))';
+        };
+        card.onmouseleave = () => {
+            card.style.borderColor = 'var(--ds-border, #2b3139)';
+            card.style.backgroundColor = 'var(--ds-bg-secondary, #1e2329)';
+        };
+
         // Select button
         const selectBtn = card.querySelector('[data-action="select"]');
         if (selectBtn) {
             selectBtn.onclick = (e) => {
                 e.stopPropagation();
-                if (trdcaProDisabled) {
-                    if (window.Toast) window.Toast.info('TRDCA Pro+ çok yakında. Şu an sadece test hesabında kullanılabilir.');
-                    return;
-                }
                 selectBotStructure(structure);
             };
         }
@@ -2577,10 +2942,6 @@ function renderBotStructures() {
         
         // Card click
         card.onclick = (e) => {
-            if (trdcaProDisabled) {
-                if (!e.target.closest('button') && window.Toast) window.Toast.info('TRDCA Pro+ çok yakında. Şu an sadece test hesabında kullanılabilir.');
-                return;
-            }
             if (!e.target.closest('button')) {
                 selectBotStructure(structure);
             }
@@ -2594,11 +2955,6 @@ function renderBotStructures() {
  * Select bot structure and open parameter modal
  */
 function selectBotStructure(structure) {
-    // TRDCA Pro+ sadece test hesabında aktif (geliştirme için)
-    if (structure.id === 'trdca_pro' && (typeof State === 'undefined' || !State.isTestAccount)) {
-        if (window.Toast) window.Toast.info('TRDCA Pro+ çok yakında. Şu an sadece test hesabında kullanılabilir.');
-        return;
-    }
     console.log("[dashboard] Selected bot structure:", structure.id);
     
     // Store selected structure
@@ -2620,40 +2976,17 @@ function selectBotStructure(structure) {
 function setCreateBotModalWizard(templateId) {
     const dca = document.getElementById("dmWizardDca");
     const multi = document.getElementById("dmWizardMulti");
-    const trdca = document.getElementById("dmWizardTrdca");
     const pairStrip = document.getElementById("dmSelectedPairStrip");
     const tahminStrip = document.getElementById("dmTahminStrip");
-    if (templateId === "trdca_pro") {
-        if (dmModalMultiPreviewIntervalId) {
-            clearInterval(dmModalMultiPreviewIntervalId);
-            dmModalMultiPreviewIntervalId = null;
-        }
-        if (dca) dca.style.display = "none";
-        if (multi) multi.style.display = "none";
-        if (trdca) trdca.style.display = "block";
-        if (pairStrip) pairStrip.style.display = "none";
-        if (tahminStrip) tahminStrip.style.display = "none";
-        hideMultiSymbolSearchDropdown();
-        var n = parseInt(document.getElementById("fTrdcaCoinCount")?.value || "4", 10);
-        buildTrdcaRebalanceRows(n);
-        var gridUpCount = parseInt(document.getElementById("fTrdcaGridUpCount")?.value || "3", 10);
-        var gridDownCount = parseInt(document.getElementById("fTrdcaGridDownCount")?.value || "3", 10);
-        buildTrdcaGridUpRows(gridUpCount);
-        buildTrdcaGridDownRows(gridDownCount);
-        updateTrdcaBalancePlaceholder();
-        updateTrdcaQuoteName();
-    } else {
-        if (dmModalMultiPreviewIntervalId) {
-            clearInterval(dmModalMultiPreviewIntervalId);
-            dmModalMultiPreviewIntervalId = null;
-        }
-        if (dca) dca.style.display = "block";
-        if (multi) multi.style.display = "none";
-        if (trdca) trdca.style.display = "none";
-        hideMultiSymbolSearchDropdown();
-        if (pairStrip) pairStrip.style.display = "none";
-        if (tahminStrip) tahminStrip.style.display = "none";
+    if (dmModalMultiPreviewIntervalId) {
+        clearInterval(dmModalMultiPreviewIntervalId);
+        dmModalMultiPreviewIntervalId = null;
     }
+    if (dca) dca.style.display = "block";
+    if (multi) multi.style.display = "none";
+    hideMultiSymbolSearchDropdown();
+    if (pairStrip) pairStrip.style.display = "none";
+    if (tahminStrip) tahminStrip.style.display = "none";
 }
 
 /**
@@ -2731,139 +3064,6 @@ function updateMultiPctTotal() {
     }
 }
 
-// --- TRDCA Pro+ wizard: rebalance rows + preview ---
-function buildTrdcaRebalanceRows(count) {
-    count = Math.min(10, Math.max(2, parseInt(count, 10) || 2));
-    var container = document.getElementById("trdcaRebalanceRows");
-    if (!container) return;
-    container.innerHTML = "";
-    for (var i = 0; i < count; i++) {
-        var row = document.createElement("div");
-        row.className = "trdca-rebalance-row";
-        row.setAttribute("data-idx", String(i));
-        row.style.marginBottom = "12px";
-        var defaultPct = count > 0 ? Math.round((100 / count) * 100) / 100 : 0;
-        var lastPct = (i === count - 1 && count > 1) ? (100 - defaultPct * (count - 1)).toFixed(1) : defaultPct;
-        row.innerHTML = '<div class="grid-2" style="gap:8px; align-items: end;"><div class="form-group"><label>Coin ' + (i + 1) + '</label><input type="text" class="form-input trdca-rebalance-symbol" data-idx="' + i + '" placeholder="Sembol (BTC, ETH…)" maxlength="12" style="text-transform:uppercase;width:100%;padding:0.6rem 1rem;" autocomplete="off" /></div><div class="form-group"><label>Dağılım %</label><input type="number" class="form-input trdca-rebalance-pct" data-idx="' + i + '" min="0" max="100" step="0.5" placeholder="' + (count === 2 ? '50' : count === 3 ? '33.3' : '25') + '" value="' + lastPct + '" style="width:100%;padding:0.6rem 1rem;" /></div></div><div class="trdca-rebalance-preview" data-idx="' + i + '" style="margin-top:6px;padding:6px 10px;font-size:0.8rem;background:var(--ds-bg-tertiary);border-radius:6px;color:var(--ds-text-secondary);">—</div>';
-        container.appendChild(row);
-        var symInput = row.querySelector(".trdca-rebalance-symbol");
-        if (symInput) symInput.addEventListener("input", function () { updateTrdcaPreviews(); });
-    }
-    updateTrdcaPctTotal();
-    updateTrdcaPreviews();
-}
-
-function buildTrdcaGridUpRows(count) {
-    count = Math.min(10, Math.max(1, parseInt(count, 10) || 3));
-    var container = document.getElementById("trdcaGridUpRows");
-    if (!container) return;
-    container.innerHTML = "";
-    for (var i = 0; i < count; i++) {
-        var row = document.createElement("div");
-        row.className = "trdca-grid-up-row";
-        row.setAttribute("data-idx", String(i));
-        row.style.marginBottom = "8px";
-        row.innerHTML = '<div class="grid-2" style="gap:8px;"><div class="form-group"><label>Seviye ' + (i + 1) + ' — Tetik %</label><input type="number" class="form-input trdca-grid-up-pos" data-idx="' + i + '" min="0" max="100" step="0.5" placeholder="" style="width:100%;padding:0.6rem 1rem;" /></div><div class="form-group"><label>Satım %</label><input type="number" class="form-input trdca-grid-up-amt" data-idx="' + i + '" min="0" max="100" step="0.5" placeholder="" style="width:100%;padding:0.6rem 1rem;" /></div></div>';
-        container.appendChild(row);
-    }
-}
-
-function buildTrdcaGridDownRows(count) {
-    count = Math.min(10, Math.max(1, parseInt(count, 10) || 3));
-    var container = document.getElementById("trdcaGridDownRows");
-    if (!container) return;
-    container.innerHTML = "";
-    for (var i = 0; i < count; i++) {
-        var row = document.createElement("div");
-        row.className = "trdca-grid-down-row";
-        row.setAttribute("data-idx", String(i));
-        row.style.marginBottom = "8px";
-        row.innerHTML = '<div class="grid-2" style="gap:8px;"><div class="form-group"><label>Seviye ' + (i + 1) + ' — Tetik %</label><input type="number" class="form-input trdca-grid-down-pos" data-idx="' + i + '" min="0" max="100" step="0.5" placeholder="" style="width:100%;padding:0.6rem 1rem;" /></div><div class="form-group"><label>Alım %</label><input type="number" class="form-input trdca-grid-down-amt" data-idx="' + i + '" min="0" max="100" step="0.5" placeholder="" style="width:100%;padding:0.6rem 1rem;" /></div></div>';
-        container.appendChild(row);
-    }
-}
-
-function updateTrdcaPctTotal() {
-    var total = 0;
-    document.querySelectorAll("#trdcaRebalanceRows .trdca-rebalance-pct").forEach(function (el) {
-        total += parseFloat(el.value) || 0;
-    });
-    var totalEl = document.getElementById("trdcaPctTotal");
-    var quoteEl = document.getElementById("trdcaQuotePct");
-    if (totalEl) {
-        totalEl.textContent = total.toFixed(1);
-        totalEl.style.color = total <= 100 && total >= 0 ? "var(--ds-text-primary)" : "var(--ds-text-error, #f6465d)";
-    }
-    if (quoteEl) {
-        var quotePct = Math.max(0, 100 - total);
-        quoteEl.textContent = quotePct.toFixed(1);
-    }
-    var baseEl = document.getElementById("fTrdcaBasePct");
-    var quoteBarEl = document.getElementById("fTrdcaQuotePctBar");
-    var quotePctVal = Math.max(0, 100 - total);
-    if (baseEl) baseEl.value = total === 0 && quotePctVal === 100 ? "" : total.toFixed(0);
-    if (quoteBarEl) quoteBarEl.value = total === 0 ? "" : quotePctVal.toFixed(0);
-}
-
-function getTrdcaBalanceForPreview() {
-    var balanceInput = document.getElementById("fTrdcaBotBalance");
-    if (balanceInput && balanceInput.value && Number.isFinite(parseFloat(balanceInput.value))) return parseFloat(balanceInput.value);
-    var quote = (document.getElementById("fTrdcaQuoteAsset") && document.getElementById("fTrdcaQuoteAsset").value) || "USDT";
-    var assets = (typeof assetsState !== "undefined" && assetsState.wallet && assetsState.wallet.assets) ? assetsState.wallet.assets : [];
-    for (var i = 0; i < assets.length; i++) {
-        if ((assets[i].asset || "").toUpperCase() === (quote || "USDT")) return parseFloat(assets[i].free) || 0;
-    }
-    return 0;
-}
-
-function getTrdcaSymbolPrice(sym, quote) {
-    if (!sym) return null;
-    var pair = (sym + (quote || "USDT")).toUpperCase();
-    var mini = window.marketStore && window.marketStore.getMini ? window.marketStore.getMini(pair) : null;
-    var price = (mini && mini.last != null) ? mini.last : (window.marketStore && window.marketStore.getPrice && window.marketStore.getPrice(pair));
-    return (price != null && Number.isFinite(Number(price))) ? Number(price) : null;
-}
-
-function updateTrdcaPreviews() {
-    var balance = getTrdcaBalanceForPreview();
-    var quote = (document.getElementById("fTrdcaQuoteAsset") && document.getElementById("fTrdcaQuoteAsset").value) || "USDT";
-    document.querySelectorAll("#trdcaRebalanceRows .trdca-rebalance-preview").forEach(function (previewEl) {
-        var idx = previewEl.getAttribute("data-idx");
-        var pctInput = document.querySelector('.trdca-rebalance-pct[data-idx="' + idx + '"]');
-        var symInput = document.querySelector('.trdca-rebalance-symbol[data-idx="' + idx + '"]');
-        var pct = pctInput ? (parseFloat(pctInput.value) || 0) : 0;
-        var sym = symInput ? (symInput.value || "").trim().toUpperCase() : "";
-        if (!sym && pct === 0) {
-            previewEl.textContent = "—";
-            return;
-        }
-        var estUsdt = balance > 0 && pct > 0 ? (balance * pct / 100) : 0;
-        if (estUsdt > 0) {
-            previewEl.textContent = "≈ " + (typeof fmtNum === "function" ? fmtNum(estUsdt, 2) : estUsdt.toFixed(2)) + " " + quote + (sym ? " (" + sym + " " + (pct.toFixed(1)) + "%)" : "");
-            return;
-        }
-        var price = getTrdcaSymbolPrice(sym, quote);
-        if (sym && price != null) previewEl.textContent = sym + " ≈ " + (typeof fmtNum === "function" ? fmtNum(price, 2) : price.toFixed(2)) + " " + quote + (pct > 0 ? " · " + pct.toFixed(1) + "%" : " — Dağılım % girin");
-        else previewEl.textContent = sym ? sym + (pct > 0 ? " " + pct.toFixed(1) + "%" : " — Dağılım % girin") : "—";
-    });
-}
-
-function updateTrdcaBalancePlaceholder() {
-    var wizard = document.getElementById("dmWizardTrdca");
-    if (!wizard || wizard.style.display !== "block") return;
-    var quote = (document.getElementById("fTrdcaQuoteAsset") && document.getElementById("fTrdcaQuoteAsset").value) || "USDT";
-    var el = document.getElementById("fTrdcaBotBalance");
-    if (el) el.placeholder = formatAvailableQuotePlaceholder(quote, getAvailableQuoteInWallet(quote));
-}
-
-function updateTrdcaQuoteName() {
-    var q = (document.getElementById("fTrdcaQuoteAsset") && document.getElementById("fTrdcaQuoteAsset").value) || "USDT";
-    var el = document.getElementById("dmTrdcaQuoteName");
-    if (el) el.textContent = q;
-    updateTrdcaBalancePlaceholder();
-    updateTrdcaPreviews();
-}
-
 /**
  * Fill modal with template default values
  */
@@ -2871,80 +3071,6 @@ function fillModalWithTemplate(template) {
     const config = template.defaultConfig || {};
     const fromLeaderboard = !!template.fromLeaderboardApply;
     setCreateBotModalWizard(template.id);
-
-    if (template.id === "trdca_pro") {
-        var c = config || {};
-        var el = function (id) { return document.getElementById(id); };
-        if (el("fTrdcaQuoteAsset")) el("fTrdcaQuoteAsset").value = c.quote_asset || "USDT";
-        if (el("fTrdcaBotBalance")) { el("fTrdcaBotBalance").value = fromLeaderboard ? "" : ((c.initial_capital_usdt || c.bot_budget_usdt) ? String(c.initial_capital_usdt || c.bot_budget_usdt) : ""); }
-        var trb = c.trb || {};
-        var targetAll = trb.target_weights_all || { BTC: 0.3, ETH: 0.3, SOL: 0.2, USDT: 0.2 };
-        var coins = [];
-        var quoteKey = (c.quote_asset || "USDT").toUpperCase();
-        Object.keys(targetAll).forEach(function (k) {
-            if (k && (k.toUpperCase() !== quoteKey)) coins.push({ symbol: k.toUpperCase().replace(quoteKey, ""), pct: (targetAll[k] || 0) * 100 });
-        });
-        if (coins.length === 0) coins = [{ symbol: "BTC", pct: 30 }, { symbol: "ETH", pct: 30 }, { symbol: "SOL", pct: 20 }, { symbol: "AVAX", pct: 20 }];
-        var countEl = el("fTrdcaCoinCount");
-        if (countEl) countEl.value = coins.length;
-        buildTrdcaRebalanceRows(coins.length);
-        setTimeout(function () {
-            coins.forEach(function (item, i) {
-                var symInput = document.querySelector('.trdca-rebalance-symbol[data-idx="' + i + '"]');
-                var pctInput = document.querySelector('.trdca-rebalance-pct[data-idx="' + i + '"]');
-                if (symInput) symInput.value = item.symbol;
-                if (pctInput) pctInput.value = item.pct;
-            });
-            updateTrdcaPctTotal();
-            updateTrdcaPreviews();
-        }, 0);
-        if (el("fTrdcaGapArmPct")) el("fTrdcaGapArmPct").value = trb.gap_arm_pct != null ? trb.gap_arm_pct : 3;
-        if (el("fTrdcaTrailBackPct")) el("fTrdcaTrailBackPct").value = trb.trail_back_pct != null ? trb.trail_back_pct : 0.6;
-        var dca = c.dca || {};
-        var upLevels = Array.isArray(dca.grid_up_levels_pct) ? dca.grid_up_levels_pct : [1, 2, 3];
-        var downLevels = Array.isArray(dca.grid_down_levels_pct) ? dca.grid_down_levels_pct : [1, 2, 3];
-        var upNotional = Array.isArray(dca.grid_up_notional_usdt) ? dca.grid_up_notional_usdt : [200, 200, 200];
-        var downNotional = Array.isArray(dca.grid_down_notional_usdt) ? dca.grid_down_notional_usdt : [200, 200, 200];
-        var upNotionalPct = Array.isArray(dca.grid_up_notional_pct) ? dca.grid_up_notional_pct : null;
-        var downNotionalPct = Array.isArray(dca.grid_down_notional_pct) ? dca.grid_down_notional_pct : null;
-        var balance = fromLeaderboard ? 0 : ((c.initial_capital_usdt || c.bot_budget_usdt) || 6000);
-        var upPos = upLevels.map(function (v) { return Number.isFinite(v) ? v : 0; });
-        var downPos = downLevels.map(function (v) { return Number.isFinite(v) ? v : 0; });
-        var upAmt = upNotionalPct && upNotionalPct.length ? upNotionalPct.map(function (p) { return Number.isFinite(p) ? p : 0; }) : upNotional.map(function (n) { return balance > 0 ? (n / balance * 100) : (100 / upNotional.length); });
-        var downAmt = downNotionalPct && downNotionalPct.length ? downNotionalPct.map(function (p) { return Number.isFinite(p) ? p : 0; }) : downNotional.map(function (n) { return balance > 0 ? (n / balance * 100) : (100 / downNotional.length); });
-        if (el("fTrdcaGridUpCount")) el("fTrdcaGridUpCount").value = upLevels.length;
-        if (el("fTrdcaGridDownCount")) el("fTrdcaGridDownCount").value = downLevels.length;
-        if (el("fTrdcaGridTrailPct")) el("fTrdcaGridTrailPct").value = dca.sell_trail_back_pct != null ? dca.sell_trail_back_pct : 0.8;
-        buildTrdcaGridUpRows(upLevels.length);
-        buildTrdcaGridDownRows(downLevels.length);
-        setTimeout(function () {
-            upPos.forEach(function (v, i) {
-                var inp = document.querySelector('.trdca-grid-up-pos[data-idx="' + i + '"]');
-                if (inp) inp.value = Number.isFinite(v) ? v : '';
-            });
-            upAmt.forEach(function (v, i) {
-                var inp = document.querySelector('.trdca-grid-up-amt[data-idx="' + i + '"]');
-                if (inp) inp.value = v.toFixed(1);
-            });
-            downPos.forEach(function (v, i) {
-                var inp = document.querySelector('.trdca-grid-down-pos[data-idx="' + i + '"]');
-                if (inp) inp.value = Number.isFinite(v) ? v : '';
-            });
-            downAmt.forEach(function (v, i) {
-                var inp = document.querySelector('.trdca-grid-down-amt[data-idx="' + i + '"]');
-                if (inp) inp.value = v.toFixed(1);
-            });
-        }, 0);
-        var ps = dca.post_sell || {};
-        var pb = dca.post_buy || {};
-        var karTetik = ps.dip_trigger_pct != null ? ps.dip_trigger_pct : (pb.profit_trigger_pct != null ? pb.profit_trigger_pct : 2);
-        var karTrail = ps.dip_trail_up_pct != null ? ps.dip_trail_up_pct : (pb.profit_sell_trail_back_pct != null ? pb.profit_sell_trail_back_pct : 0.8);
-        if (el("fTrdcaKarAlimTetikPct")) el("fTrdcaKarAlimTetikPct").value = karTetik;
-        if (el("fTrdcaKarAlimTrailPct")) el("fTrdcaKarAlimTrailPct").value = karTrail;
-        updateTrdcaQuoteName();
-        updateTrdcaBalancePlaceholder();
-        return;
-    }
 
     if (fromLeaderboard) {
         applyTrailingDcaConfigToForm(normalizeLeaderboardParamsToFormConfig(config), { clearBudget: true, symbolReadOnly: false });
@@ -3029,16 +3155,11 @@ async function createAndStartBot(template) {
 
     var requestedBudget = 0;
     var quoteAsset = "USDT";
-    if (payload.strategy_id === "trdca_pro") {
-        requestedBudget = Number(payload.initial_capital_usdt || payload.bot_budget_usdt) || 0;
-        quoteAsset = (payload.quote_asset || "USDT").toString().trim().toUpperCase() || "USDT";
-    } else {
-        requestedBudget = Number(payload.budget_usd) || 0;
-        try {
-            var pq = parseBaseQuote(payload.symbol || "");
-            quoteAsset = (pq && pq.quote) ? pq.quote : "USDT";
-        } catch (e) { quoteAsset = "USDT"; }
-    }
+    requestedBudget = Number(payload.budget_usd) || 0;
+    try {
+        var pq = parseBaseQuote(payload.symbol || "");
+        quoteAsset = (pq && pq.quote) ? pq.quote : "USDT";
+    } catch (e) { quoteAsset = "USDT"; }
     if (requestedBudget > 0) {
         var availableQuote = getAvailableQuoteInWallet(quoteAsset);
         if (availableQuote == null || availableQuote === undefined) {
@@ -3073,7 +3194,7 @@ async function createAndStartBot(template) {
             throw new Error("Bot oluşturuldu ancak bot ID alınamadı");
         }
         
-        var createLabel = (payload.strategy_id === 'trdca_pro') ? 'TRDCA Pro' : displayName;
+        var createLabel = displayName;
         if (window.Toast) {
             window.Toast.success('Bot ' + createLabel + ' oluşturuldu');
         }
@@ -3083,7 +3204,7 @@ async function createAndStartBot(template) {
         try {
             const startResp = await window.apiClient.post(`/api/bots-engine/${botId}/start?account_id=${State.accountId}`);
             
-            var startLabel = (payload.strategy_id === 'trdca_pro') ? 'TRDCA Pro' : createLabel;
+            var startLabel = createLabel;
             if (window.Toast) {
                 if (startResp && startResp.worker_alive === false) {
                     window.Toast.warning('Bot oluşturuldu ancak Engine worker çalışmıyor. Proje kökünden ./start.command çalıştırın.');
@@ -3109,7 +3230,7 @@ async function createAndStartBot(template) {
         
         // Yeni bot detayına git (eski bot ekranı / bfcache karışıklığını önler)
         var navQ = State.accountCode ? 'account_code=' + encodeURIComponent(State.accountCode) : 'account_id=' + (State.accountId || '');
-        var detailPage = (payload.strategy_id === 'trdca_pro' || payload.strategy_id === 'multi_asset_rebalance') ? '/ui/bot_multi.html' : '/ui/bot.html';
+        var detailPage = (payload.strategy_id === 'multi_asset_rebalance') ? '/ui/bot_multi.html' : '/ui/bot.html';
         window.location.assign(detailPage + '?bot_id=' + botId + '&' + navQ);
         return;
         
@@ -3242,8 +3363,7 @@ function renderCreateTabBotsList() {
                     return;
                 }
                 var cfg = bot.config || {};
-                var isTrdca = cfg.strategy_id === 'trdca_pro';
-                var dn = isTrdca ? ('TRDCA Pro #' + (bot.bot_code || botId)) : ((bot.bot_code ? '#' + bot.bot_code : null) || (symbol === 'MULTI' ? ('#' + botId) : symbol));
+                var dn = (bot.bot_code ? '#' + bot.bot_code : null) || (symbol === 'MULTI' ? ('#' + botId) : symbol);
                 await startBotFromCreateTab(botId, accountId, symbol, dn);
             };
         }
@@ -3412,83 +3532,6 @@ async function openBotParameterModal(botId, accountId) {
  * Fill create modal with existing bot config
  */
 function fillCreateModalWithBotConfig(botId, accountId, botDetail, config) {
-    if ((config.strategy_id || "").toLowerCase() === "trdca_pro") {
-        setCreateBotModalWizard("trdca_pro");
-        var c = config;
-        var el = function (id) { return document.getElementById(id); };
-        if (el("fTrdcaQuoteAsset")) el("fTrdcaQuoteAsset").value = c.quote_asset || "USDT";
-        if (el("fTrdcaBotBalance")) el("fTrdcaBotBalance").value = (c.initial_capital_usdt || c.bot_budget_usdt) ? String(c.initial_capital_usdt || c.bot_budget_usdt) : "";
-        var trb = c.trb || {};
-        var targetAll = trb.target_weights_all || {};
-        var quoteKey = (c.quote_asset || "USDT").toUpperCase();
-        var coins = [];
-        Object.keys(targetAll).forEach(function (k) {
-            if (k && k.toUpperCase() !== quoteKey) coins.push({ symbol: k.toUpperCase().replace(quoteKey, ""), pct: (targetAll[k] || 0) * 100 });
-        });
-        if (coins.length < 2) coins = [{ symbol: "BTC", pct: 30 }, { symbol: "ETH", pct: 30 }, { symbol: "SOL", pct: 20 }, { symbol: "AVAX", pct: 20 }];
-        if (el("fTrdcaCoinCount")) el("fTrdcaCoinCount").value = coins.length;
-        buildTrdcaRebalanceRows(coins.length);
-        setTimeout(function () {
-            coins.forEach(function (item, i) {
-                var symInput = document.querySelector('.trdca-rebalance-symbol[data-idx="' + i + '"]');
-                var pctInput = document.querySelector('.trdca-rebalance-pct[data-idx="' + i + '"]');
-                if (symInput) symInput.value = item.symbol;
-                if (pctInput) pctInput.value = item.pct;
-            });
-            updateTrdcaPctTotal();
-            updateTrdcaPreviews();
-        }, 0);
-        if (el("fTrdcaGapArmPct")) el("fTrdcaGapArmPct").value = trb.gap_arm_pct != null ? trb.gap_arm_pct : 3;
-        if (el("fTrdcaTrailBackPct")) el("fTrdcaTrailBackPct").value = trb.trail_back_pct != null ? trb.trail_back_pct : 0.6;
-        var dca = c.dca || {};
-        var upLevels = Array.isArray(dca.grid_up_levels_pct) ? dca.grid_up_levels_pct : [1, 2, 3];
-        var downLevels = Array.isArray(dca.grid_down_levels_pct) ? dca.grid_down_levels_pct : [1, 2, 3];
-        var upNotional = Array.isArray(dca.grid_up_notional_usdt) ? dca.grid_up_notional_usdt : [200, 200, 200];
-        var downNotional = Array.isArray(dca.grid_down_notional_usdt) ? dca.grid_down_notional_usdt : [200, 200, 200];
-        var upNotionalPct = Array.isArray(dca.grid_up_notional_pct) ? dca.grid_up_notional_pct : null;
-        var downNotionalPct = Array.isArray(dca.grid_down_notional_pct) ? dca.grid_down_notional_pct : null;
-        var balance = (c.initial_capital_usdt || c.bot_budget_usdt) || 6000;
-        var upPos = upLevels.map(function (v) { return Number.isFinite(v) ? v : 0; });
-        var downPos = downLevels.map(function (v) { return Number.isFinite(v) ? v : 0; });
-        var upAmt = upNotionalPct && upNotionalPct.length ? upNotionalPct.map(function (p) { return Number.isFinite(p) ? p : 0; }) : upNotional.map(function (n) { return balance > 0 ? (n / balance * 100) : (100 / upNotional.length); });
-        var downAmt = downNotionalPct && downNotionalPct.length ? downNotionalPct.map(function (p) { return Number.isFinite(p) ? p : 0; }) : downNotional.map(function (n) { return balance > 0 ? (n / balance * 100) : (100 / downNotional.length); });
-        if (el("fTrdcaGridUpCount")) el("fTrdcaGridUpCount").value = upLevels.length;
-        if (el("fTrdcaGridDownCount")) el("fTrdcaGridDownCount").value = downLevels.length;
-        if (el("fTrdcaGridTrailPct")) el("fTrdcaGridTrailPct").value = dca.sell_trail_back_pct != null ? dca.sell_trail_back_pct : 0.8;
-        buildTrdcaGridUpRows(upLevels.length);
-        buildTrdcaGridDownRows(downLevels.length);
-        setTimeout(function () {
-            upPos.forEach(function (v, i) {
-                var inp = document.querySelector('.trdca-grid-up-pos[data-idx="' + i + '"]');
-                if (inp) inp.value = Number.isFinite(v) ? v : '';
-            });
-            upAmt.forEach(function (v, i) {
-                var inp = document.querySelector('.trdca-grid-up-amt[data-idx="' + i + '"]');
-                if (inp) inp.value = v.toFixed(1);
-            });
-            downPos.forEach(function (v, i) {
-                var inp = document.querySelector('.trdca-grid-down-pos[data-idx="' + i + '"]');
-                if (inp) inp.value = Number.isFinite(v) ? v : '';
-            });
-            downAmt.forEach(function (v, i) {
-                var inp = document.querySelector('.trdca-grid-down-amt[data-idx="' + i + '"]');
-                if (inp) inp.value = v.toFixed(1);
-            });
-        }, 0);
-        var ps = dca.post_sell || {};
-        var pb = dca.post_buy || {};
-        var karTetik = ps.dip_trigger_pct != null ? ps.dip_trigger_pct : (pb.profit_trigger_pct != null ? pb.profit_trigger_pct : 2);
-        var karTrail = ps.dip_trail_up_pct != null ? ps.dip_trail_up_pct : (pb.profit_sell_trail_back_pct != null ? pb.profit_sell_trail_back_pct : 0.8);
-        if (el("fTrdcaKarAlimTetikPct")) el("fTrdcaKarAlimTetikPct").value = karTetik;
-        if (el("fTrdcaKarAlimTrailPct")) el("fTrdcaKarAlimTrailPct").value = karTrail;
-        updateTrdcaQuoteName();
-        updateTrdcaBalancePlaceholder();
-        var trdcaModalTitle = document.querySelector(".dm-modal__title");
-        if (trdcaModalTitle) trdcaModalTitle.textContent = "TRDCA Pro+ Parametreleri";
-        var errEl = document.getElementById("createBotErrorTrdca");
-        if (errEl) { errEl.style.display = "block"; errEl.style.color = "var(--ds-text-secondary)"; errEl.textContent = "Mevcut bot parametreleri. Değiştirmek için botu durdurup yeni bot oluşturabilirsiniz."; }
-        return;
-    }
     // Symbol
     const symbolEl = document.getElementById("fSymbol");
     if (symbolEl) {
@@ -4061,7 +4104,6 @@ function bindTabs() {
                 // Special handling for binance tab (varlıklar + coin listesi + wallet 2sn poll)
                 if (targetTab === "binance") {
                     updateBinanceConnectionNotice();
-                    showActiveOrdersPanel(); // Panel her zaman görünsün; sayfa yenileyince kaybolmasın
                     initVarliklarTab();
                     if (typeof initBinanceCoinList === 'function') initBinanceCoinList();
                     if (typeof updateActiveOrdersPanelPosition === 'function') updateActiveOrdersPanelPosition();
@@ -4249,8 +4291,47 @@ var dmModalOpenTs = 0;
 var dmModalLastChartSymbol = null;  // Grafik sadece sembol değişince yeniden yüklensin (flicker önleme)
 var dmModalLastTahminSymbol = null;
 var dmModalTahminFetchTs = 0;
+var dmModalTahminHigh = null;
+var dmModalTahminLow = null;
 var DM_MODAL_LIVE_PRICE_MS = 1500;
 var DM_MODAL_TAHMIN_MIN_MS = 30000;  // Tahmin (high/low) en fazla 30s'de bir yenilensin
+
+function resolveDmModalChangePct(mini) {
+    var raw = (mini && mini.changePct != null) ? Number(mini.changePct) : null;
+    if (raw != null && Number.isFinite(raw)) {
+        var bogusZero = raw === 0 && dmModalLastPct != null && Number.isFinite(dmModalLastPct) && Math.abs(dmModalLastPct) >= 0.005;
+        if (!bogusZero) return raw;
+    }
+    if (dmModalLastPct != null && Number.isFinite(dmModalLastPct)) return dmModalLastPct;
+    return (raw != null && Number.isFinite(raw)) ? raw : null;
+}
+
+function applyDmModalPctEl(el, pct) {
+    if (!el) return;
+    if (pct != null && Number.isFinite(pct)) {
+        var newPctStr = (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%';
+        var newColor = pct >= 0 ? '#0ecb81' : '#f6465d';
+        if (el.textContent !== newPctStr || el.style.color !== newColor) {
+            dmModalLastPct = pct;
+            el.textContent = newPctStr;
+            el.style.color = newColor;
+        }
+        return;
+    }
+    if (dmModalLastPct != null && Number.isFinite(dmModalLastPct)) {
+        var holdStr = (dmModalLastPct >= 0 ? '+' : '') + dmModalLastPct.toFixed(2) + '%';
+        var holdColor = dmModalLastPct >= 0 ? '#0ecb81' : '#f6465d';
+        if (el.textContent !== holdStr || el.style.color !== holdColor) {
+            el.textContent = holdStr;
+            el.style.color = holdColor;
+        }
+        return;
+    }
+    if (el.textContent !== '—') {
+        el.textContent = '—';
+        el.style.color = '';
+    }
+}
 var DASHBOARD_LAST_CREATE_BOT_PARAMS = "dashboard_last_create_bot_params";
 
 /** Son oluşturulan bot parametrelerini forma uygula (yeni bot açılırken önceki değerler girili olsun) */
@@ -4262,26 +4343,6 @@ function applyLastCreateParamsToForm() {
         if (!p || typeof p !== "object") return;
         var strategy = (p.strategy_id || "").trim().toLowerCase();
         var currentId = (currentSelectedTemplate && currentSelectedTemplate.id) ? currentSelectedTemplate.id : "trailing_dca";
-        if (strategy === "trdca_pro" && currentId !== "trdca_pro") return;
-        if (strategy !== "trdca_pro" && currentId === "trdca_pro") return;
-        if (strategy === "trdca_pro") {
-            var qEl = document.getElementById("fTrdcaQuoteAsset");
-            var bEl = document.getElementById("fTrdcaBotBalance");
-            if (qEl && p.quote_asset) qEl.value = p.quote_asset;
-            if (bEl && p.initial_capital_usdt != null) bEl.value = p.initial_capital_usdt;
-            var trb = p.trb || {};
-            var tw = trb.target_weights_all || {};
-            var rows = document.querySelectorAll("#trdcaRebalanceRows .trdca-rebalance-symbol");
-            rows.forEach(function (symEl, i) {
-                var idx = symEl.getAttribute("data-idx");
-                var pctEl = document.querySelector('.trdca-rebalance-pct[data-idx="' + idx + '"]');
-                if (!pctEl) return;
-                var keys = Object.keys(tw).filter(function (k) { return k && (k + "").toUpperCase() !== (p.quote_asset || "USDT"); });
-                var k = keys[i];
-                if (k != null && tw[k] != null) pctEl.value = (parseFloat(tw[k]) * 100).toFixed(1);
-            });
-            return;
-        }
         var symEl = document.getElementById("fSymbol");
         var budgetEl = document.getElementById("fBudget");
         var basePctEl = document.getElementById("fBasePct");
@@ -4460,6 +4521,8 @@ function closeCreateBotModal() {
     hideCreateModalSymbolDropdown();
     dmModalLastChartSymbol = null;
     dmModalLastTahminSymbol = null;
+    dmModalTahminHigh = null;
+    dmModalTahminLow = null;
     if (dmModalLivePriceIntervalId) {
         clearInterval(dmModalLivePriceIntervalId);
         dmModalLivePriceIntervalId = null;
@@ -4614,156 +4677,6 @@ function bindCreateBotModal() {
         buildMultiAssetRows(parseInt(e.target.value, 10) || 2);
     });
     document.getElementById("fMultiRebalanceMode")?.addEventListener("change", updateMultiRebalanceModeVisibility);
-    document.getElementById("fTrdcaCoinCount")?.addEventListener("input", function (e) {
-        buildTrdcaRebalanceRows(parseInt(e.target.value, 10) || 2);
-    });
-    document.getElementById("fTrdcaGridUpCount")?.addEventListener("input", function (e) {
-        buildTrdcaGridUpRows(parseInt(e.target.value, 10) || 3);
-    });
-    document.getElementById("fTrdcaGridDownCount")?.addEventListener("input", function (e) {
-        buildTrdcaGridDownRows(parseInt(e.target.value, 10) || 3);
-    });
-    function syncTrdcaGridLastRow(containerId, selector, excludeEl) {
-        var container = document.getElementById(containerId);
-        if (!container) return;
-        var all = Array.from(container.querySelectorAll(selector));
-        if (all.length < 2) return;
-        var lastEl = all[all.length - 1];
-        if (excludeEl === lastEl) return;
-        var sumOthers = 0;
-        for (var i = 0; i < all.length - 1; i++) sumOthers += parseFloat(all[i].value) || 0;
-        var remainder = Math.max(0, Math.min(100, 100 - sumOthers));
-        lastEl.value = remainder % 1 === 0 ? remainder.toFixed(0) : remainder.toFixed(1);
-    }
-    var trdcaGridUpEl = document.getElementById("trdcaGridUpRows");
-    if (trdcaGridUpEl) {
-        trdcaGridUpEl.addEventListener("input", function (e) {
-            var t = e.target;
-            if (t.classList.contains("trdca-grid-up-amt")) syncTrdcaGridLastRow("trdcaGridUpRows", ".trdca-grid-up-amt", t);
-        });
-    }
-    var trdcaGridDownEl = document.getElementById("trdcaGridDownRows");
-    if (trdcaGridDownEl) {
-        trdcaGridDownEl.addEventListener("input", function (e) {
-            var t = e.target;
-            if (t.classList.contains("trdca-grid-down-amt")) syncTrdcaGridLastRow("trdcaGridDownRows", ".trdca-grid-down-amt", t);
-        });
-    }
-    document.getElementById("fTrdcaQuoteAsset")?.addEventListener("change", updateTrdcaQuoteName);
-    document.getElementById("fTrdcaBotBalance")?.addEventListener("input", updateTrdcaPreviews);
-    (function () {
-        var baseEl = document.getElementById("fTrdcaBasePct");
-        var quoteEl = document.getElementById("fTrdcaQuotePctBar");
-        if (baseEl) baseEl.addEventListener("input", function () {
-            var v = parseFloat(baseEl.value);
-            if (Number.isFinite(v) && v >= 0 && v <= 100 && quoteEl) {
-                var other = Math.round(100 - v);
-                if (parseFloat(quoteEl.value) !== other) quoteEl.value = other;
-            }
-        });
-        if (quoteEl) quoteEl.addEventListener("input", function () {
-            var v = parseFloat(quoteEl.value);
-            if (Number.isFinite(v) && v >= 0 && v <= 100 && baseEl) {
-                var other = Math.round(100 - v);
-                if (parseFloat(baseEl.value) !== other) baseEl.value = other;
-            }
-        });
-    })();
-    var trdcaRowsEl = document.getElementById("trdcaRebalanceRows");
-    var dmTrdcaSymbolInputDebounce = null;
-    if (trdcaRowsEl) {
-        trdcaRowsEl.addEventListener("focusin", function (e) {
-            var input = e.target.closest(".trdca-rebalance-symbol");
-            if (!input) return;
-            if (currentSelectedTemplate && currentSelectedTemplate.id === "trdca_pro") {
-                ensureCoinListSearchSymbolsLoaded("all").then(function () { buildCoinListSearchSymbols(); });
-            }
-        });
-        trdcaRowsEl.addEventListener("input", function (e) {
-            var pctInput = e.target.closest(".trdca-rebalance-pct");
-            if (pctInput) {
-                var all = Array.from(document.querySelectorAll("#trdcaRebalanceRows .trdca-rebalance-pct"));
-                if (all.length >= 2) {
-                    var lastIdx = Math.max.apply(null, all.map(function (el) { return parseInt(el.getAttribute("data-idx") || "0", 10); }));
-                    var lastEl = all.find(function (el) { return parseInt(el.getAttribute("data-idx") || "0", 10) === lastIdx; }) || all[all.length - 1];
-                    if (pctInput !== lastEl) {
-                        var sumOthers = 0;
-                        all.forEach(function (el) {
-                            if (el !== lastEl) sumOthers += parseFloat(el.value) || 0;
-                        });
-                        var remainder = Math.max(0, Math.min(100, 100 - sumOthers));
-                        if (parseFloat(lastEl.value) !== remainder) lastEl.value = remainder % 1 === 0 ? remainder.toFixed(0) : remainder.toFixed(1);
-                    }
-                }
-                updateTrdcaPctTotal();
-                updateTrdcaPreviews();
-                return;
-            }
-            var input = e.target.closest(".trdca-rebalance-symbol");
-            if (!input) return;
-            updateTrdcaPreviews();
-            var v = (input.value || "").trim();
-            clearTimeout(dmTrdcaSymbolInputDebounce);
-            if (v.length >= 2) {
-                dmTrdcaSymbolInputDebounce = setTimeout(function () {
-                    ensureCoinListSearchSymbolsLoaded("all").then(function () {
-                        buildCoinListSearchSymbols();
-                        showMultiSymbolSearchDropdown(v, input);
-                    });
-                }, 200);
-            } else {
-                hideMultiSymbolSearchDropdown();
-            }
-        });
-        trdcaRowsEl.addEventListener("change", function (e) {
-            var pctInput = e.target.closest(".trdca-rebalance-pct");
-            if (pctInput) {
-                var all = Array.from(document.querySelectorAll("#trdcaRebalanceRows .trdca-rebalance-pct"));
-                if (all.length >= 2) {
-                    var lastIdx = Math.max.apply(null, all.map(function (el) { return parseInt(el.getAttribute("data-idx") || "0", 10); }));
-                    var lastEl = all.find(function (el) { return parseInt(el.getAttribute("data-idx") || "0", 10) === lastIdx; }) || all[all.length - 1];
-                    if (pctInput !== lastEl) {
-                        var sumOthers = 0;
-                        all.forEach(function (el) {
-                            if (el !== lastEl) sumOthers += parseFloat(el.value) || 0;
-                        });
-                        var remainder = Math.max(0, Math.min(100, 100 - sumOthers));
-                        if (parseFloat(lastEl.value) !== remainder) lastEl.value = remainder % 1 === 0 ? remainder.toFixed(0) : remainder.toFixed(1);
-                    }
-                }
-            }
-            updateTrdcaPctTotal();
-            updateTrdcaPreviews();
-        });
-        trdcaRowsEl.addEventListener("focusout", function (e) {
-            if (e.relatedTarget && e.relatedTarget.closest && e.relatedTarget.closest("#dmMultiSymbolSearchDropdown")) return;
-            setTimeout(function () {
-                hideMultiSymbolSearchDropdown();
-                var input = e.target;
-                if (input && input.classList && input.classList.contains("trdca-rebalance-symbol")) {
-                    var v = (input.value || "").trim();
-                    if (v.length >= 2) updateTrdcaPreviews();
-                }
-            }, 180);
-        });
-        trdcaRowsEl.addEventListener("keydown", function (e) {
-            var input = e.target.closest(".trdca-rebalance-symbol");
-            if (!input || e.key !== "Enter") return;
-            var dropdown = document.getElementById("dmMultiSymbolSearchDropdown");
-            var firstItem = dropdown && dropdown.querySelector(".dm-multi-symbol-item, .coin-list-search-item");
-            if (firstItem && dropdown && dropdown.style.display !== "none") {
-                var symbol = firstItem.getAttribute("data-symbol");
-                if (symbol) {
-                    var base = symbol.replace(/USDT$/, "").replace(/FDUSD$/, "");
-                    input.value = base;
-                    hideMultiSymbolSearchDropdown();
-                    updateTrdcaPreviews();
-                    e.preventDefault();
-                }
-            }
-        });
-    }
-
     var dmMultiSymbolInputDebounce = null;
     var multiAssetRowsEl = document.getElementById("multiAssetRows");
     if (multiAssetRowsEl) {
@@ -4857,12 +4770,8 @@ function bindCreateBotModal() {
             var base = symbol.replace(/USDT$/, "").replace(/FDUSD$/, "");
             _dmMultiSearchTargetInput.value = base;
             hideMultiSymbolSearchDropdown();
-            if (_dmMultiSearchTargetInput.classList.contains("trdca-rebalance-symbol")) {
-                updateTrdcaPreviews();
-            } else {
-                var idx = _dmMultiSearchTargetIdx;
-                if (idx != null) updateMultiAssetPreview(idx, symbol);
-            }
+            var idx = _dmMultiSearchTargetIdx;
+            if (idx != null) updateMultiAssetPreview(idx, symbol);
         });
     }
     
@@ -4968,7 +4877,7 @@ function updateCreateBotModalPairStrip(symbol) {
     }
     const mini = window.marketStore && window.marketStore.getMini(sym);
     const price = (mini && mini.last != null) ? mini.last : (window.marketStore && window.marketStore.getPrice(sym));
-    const pct = mini && mini.changePct != null ? mini.changePct : null;
+    const pct = resolveDmModalChangePct(mini);
     if (priceEl) {
         if (price != null && Number.isFinite(price)) {
             const newText = (quote === 'USDT' || quote === 'FDUSD' ? fmtUsd(price) : fmtNum(price, 8) + ' ' + quote);
@@ -4987,23 +4896,7 @@ function updateCreateBotModalPairStrip(symbol) {
             }
         }
     }
-    if (changeEl) {
-        if (pct != null && Number.isFinite(pct)) {
-            var newPctStr = (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%';
-            var newColor = pct >= 0 ? '#0ecb81' : '#f6465d';
-            if (changeEl.textContent !== newPctStr || changeEl.style.color !== newColor) {
-                dmModalLastPct = pct;
-                changeEl.textContent = newPctStr;
-                changeEl.style.color = newColor;
-            }
-        } else {
-            if (changeEl.textContent !== '—') {
-                changeEl.textContent = '—';
-                changeEl.style.color = '';
-                dmModalLastPct = null;
-            }
-        }
-    }
+    if (changeEl) applyDmModalPctEl(changeEl, pct);
     // Grafik sadece sembol değiştiğinde yeniden yüklensin (her tick'te yüklemek flicker yapıyor)
     if (sym !== dmModalLastChartSymbol) {
         dmModalLastChartSymbol = sym;
@@ -5028,29 +4921,28 @@ function updateCreateBotModalTahmin(symbol, mini, quoteAsset) {
     const highEl = document.getElementById('dmTahminHigh');
     const lowEl = document.getElementById('dmTahminLow');
     const formatPrice = (v) => (v != null && Number.isFinite(v) && v > 0) ? (quoteAsset === 'USDT' ? fmtUsd(v) : fmtNum(v, 8)) : '—';
-    if (changeEl) {
-        const pct = mini && mini.changePct != null ? mini.changePct : null;
-        if (pct != null && Number.isFinite(pct)) {
-            changeEl.textContent = (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%';
-            changeEl.style.color = pct >= 0 ? '#0ecb81' : '#f6465d';
-        } else {
-            changeEl.textContent = '—';
-            changeEl.style.color = '';
-        }
-    }
+    if (changeEl) applyDmModalPctEl(changeEl, resolveDmModalChangePct(mini));
     if (!symbol) return;
     var now = Date.now();
     var symbolChanged = symbol !== dmModalLastTahminSymbol;
     var stale = (now - dmModalTahminFetchTs) >= DM_MODAL_TAHMIN_MIN_MS;
     if (!symbolChanged && !stale) return;
-    dmModalLastTahminSymbol = symbol;
+    if (symbolChanged) {
+        dmModalLastTahminSymbol = symbol;
+        dmModalTahminHigh = null;
+        dmModalTahminLow = null;
+        if (highEl) highEl.textContent = '—';
+        if (lowEl) lowEl.textContent = '—';
+    }
     dmModalTahminFetchTs = now;
-    if (highEl) highEl.textContent = '—';
-    if (lowEl) lowEl.textContent = '—';
+    var fetchSymbol = symbol;
     window.apiClient.get('/api/spot/klines?symbol=' + encodeURIComponent(symbol) + '&interval=5m&limit=288').then(function (data) {
+        if (fetchSymbol !== dmModalLastTahminSymbol) return;
         if (Array.isArray(data) && data.length > 0) {
             const low = Math.min(...data.map(k => Number(k.l)));
             const high = Math.max(...data.map(k => Number(k.h)));
+            dmModalTahminHigh = high;
+            dmModalTahminLow = low;
             if (highEl) highEl.textContent = formatPrice(high);
             if (lowEl) lowEl.textContent = formatPrice(low);
         }
@@ -5259,121 +5151,6 @@ function updateMultiAssetPreview(idx, symbol, liveOnly) {
 }
 
 function collectForm() {
-    if (currentSelectedTemplate && currentSelectedTemplate.id === "trdca_pro") {
-        var quote_asset = (document.getElementById("fTrdcaQuoteAsset") && document.getElementById("fTrdcaQuoteAsset").value || "USDT").trim().toUpperCase();
-        var tick_interval_ms = 1000;
-        var botBalance = parseFloat(document.getElementById("fTrdcaBotBalance") && document.getElementById("fTrdcaBotBalance").value);
-        var initial_capital_usdt = Number.isFinite(botBalance) && botBalance > 0 ? botBalance : 0;
-
-        var target_weights_all = {};
-        var basePctSum = 0;
-        var baseCoins = [];
-        document.querySelectorAll("#trdcaRebalanceRows .trdca-rebalance-symbol").forEach(function (symEl) {
-            var idx = symEl.getAttribute("data-idx");
-            var pctEl = document.querySelector('.trdca-rebalance-pct[data-idx="' + idx + '"]');
-            var sym = (symEl.value || "").trim().toUpperCase().replace(quote_asset, "") || null;
-            var pct = pctEl ? (parseFloat(pctEl.value) || 0) : 0;
-            if (sym && sym.length >= 2) {
-                target_weights_all[sym] = pct / 100;
-                basePctSum += pct;
-                baseCoins.push({ symbol: sym, pct: pct });
-            }
-        });
-        var trdcaQuotePct = Math.max(0, 100 - basePctSum);
-        target_weights_all[quote_asset] = trdcaQuotePct / 100;
-
-        var coin_weights = {};
-        if (basePctSum > 0) {
-            baseCoins.forEach(function (c) {
-                coin_weights[c.symbol] = c.pct / basePctSum;
-            });
-        }
-        if (Object.keys(coin_weights).length === 0) coin_weights = { BTC: 0.3, ETH: 0.3, SOL: 0.2, AVAX: 0.2 };
-
-        var upPos = [], upAmt = [], downPos = [], downAmt = [];
-        var trdcaUpCount = document.querySelectorAll("#trdcaGridUpRows .trdca-grid-up-pos").length || 3;
-        var trdcaDownCount = document.querySelectorAll("#trdcaGridDownRows .trdca-grid-down-pos").length || 3;
-        var defUpPct = 100 / trdcaUpCount;
-        var defDownPct = 100 / trdcaDownCount;
-        document.querySelectorAll("#trdcaGridUpRows .trdca-grid-up-pos").forEach(function (el, i) {
-            var v = parseFloat(el.value);
-            upPos.push(Number.isFinite(v) && v >= 0 ? v : (i + 1));
-        });
-        document.querySelectorAll("#trdcaGridUpRows .trdca-grid-up-amt").forEach(function (el) {
-            var v = parseFloat(el.value);
-            upAmt.push(Number.isFinite(v) && v >= 0 ? v : defUpPct);
-        });
-        document.querySelectorAll("#trdcaGridDownRows .trdca-grid-down-pos").forEach(function (el, i) {
-            var v = parseFloat(el.value);
-            downPos.push(Number.isFinite(v) && v >= 0 ? v : (i + 1));
-        });
-        document.querySelectorAll("#trdcaGridDownRows .trdca-grid-down-amt").forEach(function (el) {
-            var v = parseFloat(el.value);
-            downAmt.push(Number.isFinite(v) && v >= 0 ? v : defDownPct);
-        });
-        var grid_up_levels_pct = upPos.map(function (p) { return Number.isFinite(p) && p >= 0 ? p : 0; });
-        var grid_down_levels_pct = downPos.map(function (p) { return Number.isFinite(p) && p >= 0 ? p : 0; });
-        var balanceForGrid = initial_capital_usdt > 0 ? initial_capital_usdt : 10000;
-        var grid_up_notional_usdt = upAmt.map(function (p) { return Math.max(10, balanceForGrid * p / 100); });
-        var grid_down_notional_usdt = downAmt.map(function (p) { return Math.max(10, balanceForGrid * p / 100); });
-        if (!grid_up_levels_pct.length) grid_up_levels_pct = [1, 2, 3];
-        if (!grid_down_levels_pct.length) grid_down_levels_pct = [1, 2, 3];
-        if (!grid_up_notional_usdt.length) grid_up_notional_usdt = [200, 200, 200];
-        if (!grid_down_notional_usdt.length) grid_down_notional_usdt = [200, 200, 200];
-
-        var gridTrailPct = parseFloat(document.getElementById("fTrdcaGridTrailPct") && document.getElementById("fTrdcaGridTrailPct").value) || 0.8;
-        var sell_trail_back_pct = gridTrailPct;
-        var buy_trail_up_pct = gridTrailPct;
-        var buy_buffer_pct = 0.2;
-        var kar_alim_tetik_pct = parseFloat(document.getElementById("fTrdcaKarAlimTetikPct") && document.getElementById("fTrdcaKarAlimTetikPct").value) || 2;
-        var kar_alim_trail_pct = parseFloat(document.getElementById("fTrdcaKarAlimTrailPct") && document.getElementById("fTrdcaKarAlimTrailPct").value) || 0.8;
-
-        var gap_arm_pct = parseFloat(document.getElementById("fTrdcaGapArmPct") && document.getElementById("fTrdcaGapArmPct").value) || 3;
-        var trail_back_pct = parseFloat(document.getElementById("fTrdcaTrailBackPct") && document.getElementById("fTrdcaTrailBackPct").value) || 0.6;
-        var min_leg_notional_usdt = 10;
-
-        return {
-            account_id: State.accountId,
-            symbol: "MULTI",
-            strategy_id: "trdca_pro",
-            quote_asset: quote_asset,
-            initial_capital_usdt: initial_capital_usdt,
-            bot_budget_usdt: initial_capital_usdt,
-            tick_interval_ms: tick_interval_ms,
-            execution: { ack_timeout_sec: 5 },
-            dca: {
-                enabled: true,
-                coin_weights: coin_weights,
-                grid_up_levels_pct: grid_up_levels_pct.length ? grid_up_levels_pct : [1, 2, 3],
-                grid_down_levels_pct: grid_down_levels_pct.length ? grid_down_levels_pct : [1, 2, 3],
-                grid_up_notional_usdt: grid_up_notional_usdt,
-                grid_down_notional_usdt: grid_down_notional_usdt,
-                grid_up_notional_pct: upAmt,
-                grid_down_notional_pct: downAmt,
-                sell_trail_back_pct: sell_trail_back_pct,
-                buy_trail_up_pct: buy_trail_up_pct,
-                buy_buffer_pct: buy_buffer_pct,
-                post_sell: { dip_trigger_pct: kar_alim_tetik_pct, dip_trail_up_pct: kar_alim_trail_pct, dip_buy_notional_usdt: 200 },
-                post_buy: { profit_trigger_pct: kar_alim_tetik_pct, profit_sell_trail_back_pct: kar_alim_trail_pct, profit_sell_notional_usdt: 200 }
-            },
-            trb: {
-                enabled: true,
-                target_weights_all: target_weights_all,
-                small_eps_pct: 0.8,
-                min_leg_notional_usdt: min_leg_notional_usdt,
-                gap_arm_pct: gap_arm_pct,
-                trail_back_pct: trail_back_pct,
-                max_batch_legs: 8,
-                sell_first: true,
-                step_mode: "SELL_ONLY_THEN_BUY",
-                batch_atomicity: "SOFT",
-                partial_fill_behavior: "SAFE_STOP",
-                max_exec_delay_sec: 15,
-                ts_bucket_sec: 5,
-                gap_peak_bucket_dp: 2
-            }
-        };
-    }
     const symbol = normalizeSymbol(document.getElementById("fSymbol").value);
     const budget = parseFloat(document.getElementById("fBudget").value);
     const basePct = parseFloat(document.getElementById("fBasePct").value);
@@ -5474,22 +5251,6 @@ function updateDcaBudgetPlaceholder() {
 }
 
 function validateForm(payload) {
-    if (payload.strategy_id === "trdca_pro") {
-        if (!payload.quote_asset || payload.quote_asset.length < 2) return "Quote varlık seçin";
-        var trb = payload.trb || {};
-        var tw2 = trb.target_weights_all || {};
-        var sum2 = Object.keys(tw2).reduce(function (s, k) { return s + (parseFloat(tw2[k]) || 0); }, 0);
-        if (Math.abs(sum2 - 1) > 0.02) return "Rebalancing dağılımı toplamı %100 olmalı (coinler + kalan quote).";
-        var baseKeys = Object.keys(tw2).filter(function (k) { return k && (k.toUpperCase() !== (payload.quote_asset || "USDT")); });
-        if (baseKeys.length < 2) return "En az 2 coin girin ve dağılım % girin.";
-        var baseSum = baseKeys.reduce(function (s, k) { return s + (parseFloat(tw2[k]) || 0); }, 0);
-        if (baseSum <= 0) return "En az bir base coin için hedef dağılım % girin (0'dan büyük). Aksi halde bot alım yapmaz.";
-        var dca = payload.dca || {};
-        var cw = dca.coin_weights || {};
-        var sumDca = Object.keys(cw).reduce(function (s, k) { return s + (parseFloat(cw[k]) || 0); }, 0);
-        if (Math.abs(sumDca - 1) > 0.02 && Object.keys(cw).length > 0) return "DCA coin ağırlıkları (otomatik) toplamı 1 olmalı.";
-        return null;
-    }
     if (!payload.symbol || !/^[A-Z0-9]+$/.test(payload.symbol)) {
         return "Geçersiz parite formatı";
     }
@@ -5565,8 +5326,7 @@ function validateDcaGridNotionals(payload) {
 }
 
 async function createBot() {
-    const isTrdca = currentSelectedTemplate && currentSelectedTemplate.id === "trdca_pro";
-    const errorEl = isTrdca ? document.getElementById("createBotErrorTrdca") : document.getElementById("createBotError");
+    const errorEl = document.getElementById("createBotError");
     if (errorEl) errorEl.style.display = "none";
     
     const payload = collectForm();
@@ -5579,16 +5339,11 @@ async function createBot() {
 
     var requestedBudget = 0;
     var quoteAsset = "USDT";
-    if (payload.strategy_id === "trdca_pro") {
-        requestedBudget = Number(payload.initial_capital_usdt || payload.bot_budget_usdt) || 0;
-        quoteAsset = (payload.quote_asset || "USDT").toString().trim().toUpperCase() || "USDT";
-    } else {
-        requestedBudget = Number(payload.budget_usd) || 0;
-        try {
-            var pq = parseBaseQuote(payload.symbol || "");
-            quoteAsset = (pq && pq.quote) ? pq.quote : "USDT";
-        } catch (e) { quoteAsset = "USDT"; }
-    }
+    requestedBudget = Number(payload.budget_usd) || 0;
+    try {
+        var pq = parseBaseQuote(payload.symbol || "");
+        quoteAsset = (pq && pq.quote) ? pq.quote : "USDT";
+    } catch (e) { quoteAsset = "USDT"; }
     if (requestedBudget > 0) {
         var availableQuote = getAvailableQuoteInWallet(quoteAsset);
         if (availableQuote == null || availableQuote === undefined) {
@@ -5779,15 +5534,28 @@ function normalizeAndApplyWallet(payload, meta) {
     assetsState.wallet.keys_configured = keysConfigured;
     assetsState.wallet.assets = assets;
     assetsState.wallet.error = err || null;
-    assetsState.wallet.data_status = payload.data_status || (err ? 'error' : (_isLiveWalletSource(source) ? 'fresh' : 'cached'));
+    var explicitStatus = payload.data_status;
+    var inferredLive = _isLiveWalletSource(source) && !meta.skipped && !meta.stale;
+    var newDataStatus = explicitStatus || (err ? 'error' : (inferredLive ? 'fresh' : 'cached'));
+    if (!err && explicitStatus !== 'stale' && explicitStatus !== 'error'
+        && _walletLiveOkAt && (Date.now() - _walletLiveOkAt) <= WALLET_LIVE_OK_TTL_MS
+        && !_walletLiveFailedAfterOk()) {
+        newDataStatus = 'fresh';
+    }
+    assetsState.wallet.data_status = newDataStatus;
     assetsState.wallet.keysMessage = payload.message || null;
     assetsState.wallet.unpriced_assets = Array.isArray(payload.unpriced_assets) ? payload.unpriced_assets : [];
-    if (err) {
-        if (_isLiveWalletSource(source) || keysConfigured) markWalletLiveFetchFailed();
-    } else if (_isLiveWalletSource(source) && keysConfigured && (totalUsd != null || assets.length > 0)) {
-        markWalletLiveFetchOk();
+    if (err && _isLiveWalletSource(source)) {
+        markWalletLiveFetchFailed();
+    } else if (_isLiveWalletSource(source) && keysConfigured && !err) {
+        if (explicitStatus === 'stale' || meta.stale) {
+            markWalletLiveFetchFailed();
+        } else if (!meta.skipped && (totalUsd != null || assets.length > 0)) {
+            markWalletLiveFetchOk();
+        }
     }
     pushWalletEvent({ source: source, status: status, total_usd: totalUsd, asset_count: assets.length, request_id: meta.request_id, note: meta.note });
+    if (!err && assets.length) _persistWalletStorageCache();
     if (typeof updateKpiCuzdanLiveStatus === 'function') updateKpiCuzdanLiveStatus();
     if (window.BinanceAssetsPanel?.render) window.BinanceAssetsPanel.render();
     if (typeof renderVarliklarList === 'function') renderVarliklarList();
@@ -5867,6 +5635,54 @@ let walletPollInflight = false;
 let walletBackoffMs = WALLET_BACKOFF_MIN;
 let lastWalletHash = null;
 let assetsPanelRenderCount = 0;
+var _varliklarHasRenderedRows = false;
+
+function hydrateWalletFromStorageCache(accountId) {
+    if (!accountId || !window.storageCache) return false;
+    if (assetsState.wallet.assets && assetsState.wallet.assets.length) return false;
+    var cached = window.storageCache.load(accountId);
+    if (!cached || !cached.wallet_cached || !Array.isArray(cached.wallet_cached.assets) || !cached.wallet_cached.assets.length) return false;
+    if (window.renderHome && typeof window.renderHome.walletCachedToAssetsState === 'function') {
+        window.renderHome.walletCachedToAssetsState(cached.wallet_cached, cached.wallet_cached_at);
+    } else if (typeof normalizeAndApplyWallet === 'function') {
+        normalizeAndApplyWallet(Object.assign({}, cached.wallet_cached, {
+            ts: cached.wallet_cached_at ? new Date(cached.wallet_cached_at).getTime() : Date.now(),
+            data_status: 'cached'
+        }), { source: 'storage_cache_hydrate' });
+    }
+    assetsState.wallet.status = 'ready';
+    if (typeof renderVarliklarList === 'function') renderVarliklarList();
+    if (window.renderHome && typeof window.renderHome.hideSkeleton === 'function') window.renderHome.hideSkeleton();
+    return true;
+}
+window.hydrateWalletFromStorageCache = hydrateWalletFromStorageCache;
+
+function _persistWalletStorageCache() {
+    if (!State.accountId || !window.storageCache || !assetsState.wallet.assets || !assetsState.wallet.assets.length) return;
+    try {
+        window.storageCache.mergeSaved(State.accountId, {
+            wallet_cached: {
+                assets: assetsState.wallet.assets,
+                total_usd: assetsState.wallet.total_usd,
+                free_usd: assetsState.wallet.free_usd,
+                locked_usd: assetsState.wallet.locked_usd,
+                bot_locked_usd: assetsState.wallet.bot_locked_usd,
+                available_usd: assetsState.wallet.available_usd,
+                keys_configured: assetsState.wallet.keys_configured !== false
+            },
+            wallet_cached_at: assetsState.wallet.ts ? new Date(assetsState.wallet.ts).toISOString() : new Date().toISOString()
+        });
+    } catch (e) { /* ignore */ }
+}
+
+function _varliklarTableHasRows() {
+    var body = document.getElementById('varliklarTableBody');
+    return !!(body && body.querySelector('tr[data-asset]'));
+}
+
+function _walletHasDisplayableAssets() {
+    return !!(assetsState.wallet.assets && assetsState.wallet.assets.length) || _varliklarTableHasRows();
+}
 
 function hashWalletAssets(assets) {
     if (!Array.isArray(assets)) return '';
@@ -5897,11 +5713,25 @@ function binanceRefresh() {
 }
 window.binanceRefresh = binanceRefresh;
 
+/** TEK KAYNAK: marketStore prices map (mini ile senkron). */
+function resolveMarketLivePrice(sym) {
+    if (!sym) return null;
+    var s = String(sym).toUpperCase();
+    var store = window.marketStore;
+    if (!store) return null;
+    var p = store.getPrice(s);
+    if (p == null || !Number.isFinite(p) || p <= 0) {
+        var mini = store.getMini(s);
+        p = mini && mini.last;
+    }
+    return (p != null && Number.isFinite(p) && p > 0) ? p : null;
+}
+
 /** TEK KAYNAK: marketStore. dataHub kullanılmaz. */
 function getAssetPrice(asset) {
     const symbol = normalizeAssetToSymbol(asset, QUOTE);
     if (asset === 'USDT' || asset === 'USDC' || asset === 'FDUSD' || asset === 'BUSD' || asset === 'TUSD' || asset === 'DAI') return 1;
-    return window.marketStore?.getPrice(symbol) ?? null;
+    return resolveMarketLivePrice(symbol);
 }
 
 async function pollWallet(isManualRefresh = false) {
@@ -5913,10 +5743,11 @@ async function pollWallet(isManualRefresh = false) {
     const body = document.getElementById("varliklarTableBody");
     const empty = document.getElementById("varliklarEmpty");
     let didUpdateBody = false;
-    const isFirst = assetsState.wallet.status === 'idle' || isManualRefresh;
+    const hasExisting = _walletHasDisplayableAssets();
+    const isFirst = (assetsState.wallet.status === 'idle' || isManualRefresh) && !hasExisting;
     if (body && isFirst) { body.innerHTML = LOADING_HTML_VARLIKLAR; didUpdateBody = true; }
     if (empty) empty.style.display = 'none';
-    if (isFirst) assetsState.wallet.status = 'loading';
+    if (isFirst && !hasExisting) assetsState.wallet.status = 'loading';
     if (typeof window.__DEBUG_BINANCE__ !== 'undefined' && window.__DEBUG_BINANCE__) console.count('walletFetch');
 
     const loadingGuard = setTimeout(() => {
@@ -6042,7 +5873,7 @@ function renderAssetsSummary() {
     const stripAvailable = document.getElementById('binanceAvailableAssets');
     const stripBotLocked = document.getElementById('binanceBotLockedAssets');
     const stripLocked = document.getElementById('binanceLockedAssets');
-    const walletLoading = assetsState.wallet.status === 'idle' || assetsState.wallet.status === 'loading';
+    const walletLoading = (assetsState.wallet.status === 'idle' || assetsState.wallet.status === 'loading') && !_walletHasDisplayableAssets();
     if (walletLoading) {
         const loadingText = 'Yükleniyor…';
         if (totalEl) totalEl.textContent = loadingText;
@@ -6098,12 +5929,12 @@ function renderAssetsSummary() {
     if (stripLocked) { stripLocked.classList.remove('binance-assets-strip-value--loading'); stripLocked.textContent = fmtUsd(lockedUsd); triggerValueBlink(stripLocked, lockedUsd); }
     if (lastEl) lastEl.textContent = assetsState.wallet.ts ? new Date(assetsState.wallet.ts).toLocaleTimeString('tr-TR') : '—';
     var walletLiveEl = document.getElementById('bnWalletLiveBadge');
-    applyWalletLiveStatusEl(walletLiveEl);
+    applyWalletStaleWarningEl(walletLiveEl);
     var liveLabel = walletLiveStatusLabel();
     if (staleEl) {
-        var showStale = assetsState.wallet.data_status === 'stale'
-            || assetsState.wallet.error
-            || assetsState.prices.data_status === 'stale';
+        var showStale = typeof shouldShowWalletStaleWarning === 'function'
+            ? shouldShowWalletStaleWarning()
+            : (assetsState.wallet.data_status === 'stale' || assetsState.wallet.error);
         staleEl.hidden = !showStale;
         staleEl.textContent = liveLabel === 'Bağlı değil' ? 'Bağlı değil' : 'Güncel değil';
     }
@@ -6192,51 +6023,25 @@ function tickAssetsPrices() {
     if (window.BinanceUI && document.getElementById("tabBinance")?.classList.contains("is-active")) {
         return;
     }
-    const body = document.getElementById("varliklarTableBody");
-    if (!body) return;
-    const rows = body.querySelectorAll('tr[data-asset]');
-    if (!window.binancePriceCache) window.binancePriceCache = {};
-    requestAnimationFrame(() => {
-        rows.forEach(row => {
-            const asset = row.getAttribute('data-asset');
-            const symbol = row.getAttribute('data-symbol');
-            const priceCell = row.querySelector('.price-cell');
-            const valueCell = row.querySelector('.value-cell');
-            if (!priceCell || !valueCell) return;
-            const price = getAssetPrice(asset);
-            const oldPrice = parseFloat(priceCell.getAttribute('data-price') || '') || 0;
-            if (price == null || !Number.isFinite(price)) {
-                if (priceCell.textContent !== '…') priceCell.textContent = '…';
-                return;
-            }
-            const samePrice = Number.isFinite(oldPrice) && Math.abs(oldPrice - price) < 1e-9;
-            if (!samePrice && Math.abs(oldPrice - price) > 0.0001 && typeof triggerValueBlink === 'function') {
-                triggerValueBlink(priceCell, price);
-            }
-            priceCell.setAttribute('data-price', price);
-            priceCell.textContent = fmtCoinPrice(price);
-            // Value cell: do NOT recalculate (stays from backend); avoids USD valuation drift
-            if (!samePrice && Math.abs(oldPrice - price) > 0.0001) {
-                priceCell.classList.remove('price-up', 'price-down', 'price-neutral');
-                priceCell.classList.add(price > oldPrice ? 'price-up' : 'price-down');
-                setTimeout(() => { priceCell.classList.remove('price-up', 'price-down'); priceCell.classList.add('price-neutral'); }, 600);
-            }
-            window.binancePriceCache[asset] = price;
-        });
-        renderAssetsSummary();
-    });
+    renderAssetsSummary();
 }
 
 const BinanceAssetsPanel = {
     render() {
         renderAssetsSummary();
-        if (assetsState.wallet.status === 'loading' || assetsState.wallet.status === 'idle') return;
-        if (assetsState.wallet.status === 'error' && !(assetsState.wallet.assets?.length)) {
+        var hasAssets = !!(assetsState.wallet.assets && assetsState.wallet.assets.length);
+        if ((assetsState.wallet.status === 'loading' || assetsState.wallet.status === 'idle') && !hasAssets && !_varliklarTableHasRows()) return;
+        if (assetsState.wallet.status === 'error' && !hasAssets && !_varliklarTableHasRows()) {
             if (typeof renderVarliklarList === 'function') renderVarliklarList();
             return;
         }
         const h = hashWalletAssets(assetsState.wallet.assets);
-        if (h !== lastWalletHash) { lastWalletHash = h; if (typeof renderVarliklarList === 'function') renderVarliklarList(); }
+        if (h !== lastWalletHash) {
+            lastWalletHash = h;
+            if (typeof renderVarliklarList === 'function') renderVarliklarList();
+        } else if (hasAssets && !_varliklarTableHasRows() && typeof renderVarliklarList === 'function') {
+            renderVarliklarList();
+        }
     },
     tickPrices() { tickAssetsPrices(); },
     refresh() {
@@ -6390,6 +6195,10 @@ function renderVarliklarList() {
     const totalPortfolio = typeof assetsState.wallet.total_usd === 'number' ? assetsState.wallet.total_usd : list.reduce((sum, x) => sum + (x._valueUsd || 0), 0);
 
     if (list.length === 0) {
+        var hasRenderedRows = _varliklarTableHasRows();
+        var walletPending = assetsState.wallet.status === 'loading' || assetsState.wallet.status === 'idle'
+            || _varliklarWalletRefreshInflight;
+        if (hasRenderedRows && walletPending) return;
         var msg;
         if (assetsState.wallet.status === 'error' && assetsState.wallet.error) {
             var e = assetsState.wallet.error;
@@ -6483,6 +6292,8 @@ function renderVarliklarList() {
                     '<button type="button" class="btn-sat"' + d.sellDisabled + ' onclick="event.stopPropagation(); ' + (d.canSell ? "openSpotTradeModal('" + d.symbol + "', 'SELL')" : '') + '" title="' + d.sellTitle + '">Satış</button></div>';
             }
         });
+        lastWalletHash = hashWalletAssets(assetsState.wallet.assets);
+        _varliklarHasRenderedRows = true;
     } else {
         tbody.innerHTML = list.map(function(a) {
             var d = rowData(a);
@@ -6506,15 +6317,15 @@ function renderVarliklarList() {
                 '<button type="button" class="btn-sat"' + d.sellDisabled + ' onclick="event.stopPropagation(); ' + (d.canSell ? "openSpotTradeModal('" + d.symbol + "', 'SELL')" : '') + '" title="' + d.sellTitle + '">Satış</button></div></td></tr>';
         }).join('');
     }
+    _varliklarHasRenderedRows = list.length > 0;
+    lastWalletHash = hashWalletAssets(assetsState.wallet.assets);
     var unpricedEl = document.getElementById('varliklarUnpricedNotice');
     if (unpricedEl) unpricedEl.style.display = 'none';
 }
 
 function tickVarliklarPrices() {
-    const tab = document.getElementById('tabBinance');
-    if (!tab?.classList.contains('is-active')) return;
     const tbody = document.getElementById('varliklarTableBody');
-    if (!tbody) return;
+    if (!tbody || !tbody.querySelector('tr[data-asset]')) return;
     const rows = tbody.querySelectorAll('tr[data-asset]');
     const symbolAttr = row => row.getAttribute('data-symbol') || normalizeAssetToSymbol(row.getAttribute('data-asset') || '', QUOTE);
     rows.forEach(row => {
@@ -6589,8 +6400,11 @@ function triggerWalletRefreshForVarliklar(accountId, opts) {
         .then(function (res) {
             _varliklarWalletRefreshLastAt = Date.now();
             if (res && res.ok && res.data && res.data.wallet_live && assetsState && assetsState.wallet) {
+                var d = res.data;
                 normalizeAndApplyWallet(res.data.wallet_live, {
                     source: force ? 'wallet_refresh_varliklar_force' : 'wallet_refresh_varliklar',
+                    skipped: !!d.skipped,
+                    stale: !!d.stale
                 });
             }
             if (window.__walletDebugMeta) {
@@ -6601,6 +6415,43 @@ function triggerWalletRefreshForVarliklar(accountId, opts) {
         .finally(function () { _varliklarWalletRefreshInflight = false; });
 }
 window.triggerWalletRefreshForVarliklar = triggerWalletRefreshForVarliklar;
+
+/** Bot silme / spot trade sonrası cüzdan tablosunu kademeli yenile (Binance settlement gecikmesi). */
+function scheduleWalletRefreshAfterTrade(accountId, opts) {
+    opts = opts || {};
+    if (!accountId) return;
+    var delays = Array.isArray(opts.delays) ? opts.delays : [0, 700, 2000, 5000];
+    delays.forEach(function (ms) {
+        setTimeout(function () {
+            if (Number(window.__ACTIVE_ACCOUNT_ID || State.accountId) !== Number(accountId)) return;
+            if (typeof triggerWalletRefreshForVarliklar === 'function') {
+                triggerWalletRefreshForVarliklar(accountId, { force: true });
+            } else if (window.homeFlash && typeof window.homeFlash.triggerRefresh === 'function') {
+                window.homeFlash.triggerRefresh(accountId, true);
+            } else if (typeof pollWallet === 'function') {
+                pollWallet(true);
+            }
+            if (typeof fetchSnapshot === 'function') fetchSnapshot();
+            if (typeof loadBotsListFast === 'function') loadBotsListFast(accountId);
+        }, ms);
+    });
+}
+window.scheduleWalletRefreshAfterTrade = scheduleWalletRefreshAfterTrade;
+
+function consumePendingWalletRefreshAfterBot(accountId) {
+    if (!accountId) return;
+    try {
+        var raw = sessionStorage.getItem('tt_wallet_refresh_after_bot');
+        if (!raw) return;
+        var pending = JSON.parse(raw);
+        sessionStorage.removeItem('tt_wallet_refresh_after_bot');
+        if (!pending || Number(pending.accountId) !== Number(accountId)) return;
+        if (Date.now() - (pending.at || 0) > 120000) return;
+        var delays = pending.convert ? [300, 900, 2500, 6000] : [300, 1500];
+        scheduleWalletRefreshAfterTrade(accountId, { delays: delays });
+    } catch (e) { /* ignore */ }
+}
+window.consumePendingWalletRefreshAfterBot = consumePendingWalletRefreshAfterBot;
 
 /** Anasayfa açıkken periyodik cüzdan yenileme (backend TTL ile hafif; sekme gizliyken çalışmaz) */
 function startVarliklarPeriodicRefresh() {
@@ -6624,7 +6475,6 @@ function initVarliklarTab() {
     }
     // pollWallet startBinanceTabPolling tarafından tek seferde çağrılıyor; burada çağırma (429 önlemek için)
     renderVarliklarList();
-    window.intervalRegistry.start('tab.varliklar.prices', () => { tickVarliklarPrices(); }, 2000, 'tab.varliklar');
 }
 
 // --- Coin Listesi (Binance sekmesi): sabit liste + arama ile tüm çiftler ---
@@ -8535,12 +8385,9 @@ async function submitSpotTrade() {
             
             // If LIMIT order, show active orders panel and start tracking
             if (spotTradeState.type === 'LIMIT') {
-                showActiveOrdersPanel();
-                // Wait a bit for Binance to process the order, then load
-                setTimeout(() => {
+                setTimeout(function () {
                     loadActiveOrders();
-                    startActiveOrdersTracking();
-                }, 1000); // 1 second delay to ensure order is registered
+                }, 1000);
             } else {
                 // For MARKET orders, also check if there are any pending orders
                 setTimeout(() => {
@@ -8553,9 +8400,7 @@ async function submitSpotTrade() {
             
             // Refresh wallet table (TTL-aware; force after trade)
             if (State.accountId && typeof triggerWalletRefreshForVarliklar === 'function') {
-                setTimeout(function () {
-                    triggerWalletRefreshForVarliklar(State.accountId, { force: true });
-                }, spotTradeState.type === 'LIMIT' ? 1200 : 600);
+                scheduleWalletRefreshAfterTrade(State.accountId, { delays: [600, 2000, 5000] });
             } else if (State.accountId && window.BinanceAssetsPanel) {
                 BinanceAssetsPanel.refresh();
             }
@@ -8608,13 +8453,15 @@ async function submitSpotTrade() {
 let activeOrders = [];
 
 function showActiveOrdersPanel() {
-    // Aktif Emirler sadece Anasayfa (binance) sekmesinde gösterilir
     var activeTab = document.querySelector(".dm-tab.is-active");
     if (!activeTab || activeTab.getAttribute("data-tab") !== "binance") return;
     const panel = document.getElementById("bnActiveOrdersPanel");
-    if (panel) {
-        panel.style.display = "block";
+    if (!panel) return;
+    if (!activeOrders || activeOrders.length === 0) {
+        panel.style.display = "none";
+        return;
     }
+    panel.style.display = "block";
 }
 
 /** Aktif emir varken panel üstte (varlık strip altı); yoksa her zaman İşlem Geçmişi panelinin hemen altında. */
@@ -8681,13 +8528,12 @@ async function loadActiveOrders() {
         }
         
         if (activeOrders.length === 0) {
-            showActiveOrdersPanel(); // Panel her zaman görünsün; liste "Aktif emir yok" gösterir
+            hideActiveOrdersPanel();
             stopActiveOrdersTracking();
-            updateActiveOrdersPanelPosition(); // Cüzdan Varlıkları altına taşı
         } else {
             showActiveOrdersPanel();
             startActiveOrdersTracking();
-            updateActiveOrdersPanelPosition(); // Varlık strip altına taşı
+            updateActiveOrdersPanelPosition();
         }
     } catch (error) {
         var is429 = error && (error.status === 429 || (error.error_code && String(error.error_code).indexOf('429') !== -1));
@@ -8716,8 +8562,7 @@ async function loadActiveOrders() {
             console.warn("[dashboard] Error loading active orders:", em || error);
         }
         activeOrders = [];
-        showActiveOrdersPanel();
-        renderActiveOrders();
+        hideActiveOrdersPanel();
         stopActiveOrdersTracking();
     } finally {
         loadActiveOrders._running = false;
@@ -8732,8 +8577,8 @@ function renderActiveOrders() {
     }
     
     if (activeOrders.length === 0) {
-        list.innerHTML = '<div style="text-align: center; padding: 1rem; color: var(--ds-text-secondary);">Aktif emir yok</div>';
-        updateActiveOrdersPanelPosition();
+        list.innerHTML = '';
+        hideActiveOrdersPanel();
         return;
     }
     
@@ -10362,6 +10207,9 @@ async function initDashboard() {
     State.accountId = accountId;
     State.accountCode = accountCode;
     window.__ACTIVE_ACCOUNT_ID = accountId;
+    if (typeof resetTxHistoryClientState === 'function') resetTxHistoryClientState();
+    if (typeof hydrateWalletFromStorageCache === 'function') hydrateWalletFromStorageCache(accountId);
+    if (typeof hydrateKpisFromStorageCache === 'function') hydrateKpisFromStorageCache(accountId);
     var showFirstLoginModal = isFirstLogin;
     if (isFirstLogin && accountId) {
         showFirstLoginModal = await shouldShowFirstLoginModal(accountId, true);
@@ -10391,16 +10239,15 @@ async function initDashboard() {
     // Mobilde de Binance içeriği (varlık şeridi, cüzdan paneli, aktif emirler) veri alsın; sekme is-active olmasa bile
     var binanceTabActive = document.getElementById('tabBinance')?.classList.contains('is-active');
     if (binanceTabActive || isMobileView()) {
-        showActiveOrdersPanel();
         initVarliklarTab();
         if (typeof initBinanceCoinList === 'function') initBinanceCoinList();
         if (typeof updateActiveOrdersPanelPosition === 'function') updateActiveOrdersPanelPosition();
         if (typeof startBinanceTabPolling === 'function') startBinanceTabPolling();
         if (accountId && typeof loadFinanceTrades === 'function') loadFinanceTrades();
     }
-    // İşlem geçmişi: sayfa açılır açılmaz Günlük + Alım/Satım yükle (snapshot beklemeden)
+    // İşlem geçmişi: ilk yüklemede sync=1 (Binance geçmişi → dosya)
     if (accountId && typeof loadTransactionHistory === 'function') {
-        loadTransactionHistory(State.txHistoryPeriod || 'daily', State.txHistoryType || 'buysell', 1, false);
+        loadTransactionHistory(State.txHistoryPeriod || 'daily', State.txHistoryType || 'buysell', 1, true);
     }
 
     // Keep URL with account, tab, first_login/from_admin – yenilemede sayfa ve sekme aynı kalsın
@@ -10487,7 +10334,6 @@ async function initDashboard() {
             if (savedTabButton && savedTabButton.classList.contains('is-active')) {
                 // Trigger tab-specific handlers
                 if (savedTab === "binance") {
-                    showActiveOrdersPanel();
                     initVarliklarTab();
                     if (typeof initBinanceCoinList === 'function') initBinanceCoinList();
                     if (typeof startBinanceTabPolling === 'function') startBinanceTabPolling();
@@ -10523,6 +10369,7 @@ async function initDashboard() {
     
     loadAccountMeta(accountId);
     loadBotsListFast(accountId);
+    consumePendingWalletRefreshAfterBot(accountId);
     // Flash Home (Patch H): when enabled, use /api/home/fast + wallet/refresh; no Binance on critical path
     window.FLASH_HOME_ENABLED = typeof window.FLASH_HOME_ENABLED !== 'undefined' ? window.FLASH_HOME_ENABLED : true;
     var _binanceWalletIdleCycles = 0;
@@ -10545,6 +10392,7 @@ async function initDashboard() {
             if (window.homeFlash && typeof window.homeFlash.loadFast === 'function') {
                 window.homeFlash.loadFast(State.accountId);
             }
+            if (typeof loadBotsListFast === 'function') loadBotsListFast(State.accountId);
             return;
         }
         _binanceWalletIdleCycles = 0;
@@ -10556,6 +10404,7 @@ async function initDashboard() {
         }
         window.intervalRegistry.stop('dashboard.summary');
         window.intervalRegistry.start('dashboard_snapshot', dashboardDataRefresh, SNAPSHOT_POLL_MS, 'dashboard');
+        window.intervalRegistry.start('dashboard.tx-history', pollTransactionHistoryRevision, TX_HISTORY_POLL_MS, 'dashboard');
         if (window.FLASH_HOME_ENABLED && window.homeFlash && typeof window.homeFlash.init === 'function') {
             window.homeFlash.init();
             fetchSnapshot();
@@ -10681,7 +10530,8 @@ async function initDashboard() {
     window.intervalRegistry.start('kpi.spot-status', updateKpiCuzdanLiveStatus, 5000, 'dashboard');
     window.intervalRegistry.start('datahub.ws-status', updateDatahubWsIndicator, 5000, 'dashboard');
     updateDatahubWsIndicator();
-    window.intervalRegistry.start('finance.bots.prices', updateFinanceBotsLivePrices, 1500, 'dashboard');
+    ensureDashboardMarketPriceSubscriber();
+    window.intervalRegistry.start('dashboard.market.prices', tickDashboardLiveMarketPrices, PRICE_UI_TICK_MS, 'dashboard');
     window.intervalRegistry.start('finance.bots.live', function () {
         if (typeof pollFinanceBotsLiveEquity === 'function') pollFinanceBotsLiveEquity();
     }, 2500, 'dashboard');
@@ -11988,13 +11838,15 @@ async function loadFinanceSummary() {
         // Update KPI cards
         updateFinanceKPIs(data);
         
-        // Mevcut Botlar: snapshot/API bot listesi öncelikli (session cache hayalet satır üretmesin)
-        if (State.summary && Array.isArray(State.summary.bots)) {
+        // Mevcut Botlar: dolu bot listesi öncelikli (boş State.summary.bots tabloyu silmesin)
+        if (State.summary && Array.isArray(State.summary.bots) && State.summary.bots.length > 0) {
             renderFinanceBots(State.summary.bots);
         } else if (data.bots && Array.isArray(data.bots) && data.bots.length) {
             renderFinanceBots(data.bots);
         } else if (State.bots && State.bots.length) {
             renderFinanceBots(State.bots);
+        } else if (State.summary && Array.isArray(State.summary.bots)) {
+            renderFinanceBots(State.summary.bots);
         } else {
             renderFinanceBots(data.bot_summary || []);
         }
@@ -12036,8 +11888,7 @@ function updateFinanceKPIs(data) {
     // Ortak KPI şeridi (tek kaynak): Cüzdan, Cüzdan PnL, Botlar Bakiye, Botlar PnL
     var walletEl = document.getElementById('kpiCuzdan');
     updateKpiCuzdanBalance(walletEl, balance);
-    patchText('kpiCuzdanLive', walletLiveStatusLabel());
-    applyWalletLiveStatusEl(document.getElementById('kpiCuzdanLive'));
+    applyWalletStaleWarningEl(document.getElementById('kpiCuzdanLive'));
     updateCuzdanPnlKpi(dailyWalletPnl, account, data);
     if (hasDailyKpi) {
         var botPnlEl = document.getElementById('kpiBotPnl');
@@ -12058,10 +11909,10 @@ function updateFinanceKPIs(data) {
         el.textContent = fmtUsd(totalBotBalance);
         triggerValueBlink(el, totalBotBalance);
     });
-    patchText('kpiBotBakiyePct', walletLiveStatusLabel());
-    applyWalletLiveStatusEl(document.getElementById('kpiBotBakiyePct'));
+    applyWalletStaleWarningEl(document.getElementById('kpiBotBakiyePct'));
 
     // Binance varlık strip tek kaynak: assetsState.wallet -> renderAssetsSummary (flicker önleme). Burada DOM güncellemesi yapılmaz.
+    _persistKpisStorageCache(account, data);
 }
 
 function fmtSignedUsdOrDash(v) {
@@ -12114,6 +11965,7 @@ function getFinanceBotStatusMeta(bot) {
 
 // Anasayfa + Botlar sekmesi Mevcut Botlar: aynı tablo; financeBotsList (Anasayfa) ve financeBotsListBots (Botlar) birlikte güncellenir
 var _financeBotsStructureSignature = null;
+var _financeBotsIdsSignature = null;
 var _financeBotsLiveHydrated = false;
 var _financeBotsLivePollPromise = null;
 var _financeBotsLiveSig = '';
@@ -12217,14 +12069,28 @@ function restoreFinanceBotsFromSessionCache(accountId) {
         var raw = sessionStorage.getItem(financeBotsSessionCacheKey(accountId));
         if (!raw) return false;
         var data = JSON.parse(raw);
-        if (!data || !data.metrics || typeof data.metrics !== 'object') return false;
+        if (!data || typeof data !== 'object') return false;
         if (data.ts && Date.now() - data.ts > 86400000) return false;
-        // Yalnızca metrik cache (flicker önleme); bot listesi API'den gelene kadar gösterilmez — silinen bot hayalet satır olmasın
-        _financeBotsMetricsCache = data.metrics;
-        return true;
+        if (data.metrics && typeof data.metrics === 'object') {
+            _financeBotsMetricsCache = data.metrics;
+        }
+        if (data.bots && Array.isArray(data.bots) && data.bots.length) {
+            State.bots = hydrateBotsWithMetricsCache(data.bots);
+            if (Object.keys(_financeBotsMetricsCache).length > 0) _financeBotsLiveHydrated = true;
+            if (typeof renderFinanceBots === 'function') renderFinanceBots(State.bots);
+            return true;
+        }
+        return !!(data.metrics && typeof data.metrics === 'object');
     } catch (e) {
         return false;
     }
+}
+
+function _financeBotsTableHasRows() {
+    var c = document.getElementById('financeBotsList');
+    if (c && (c.querySelector('tr[data-bot-id]') || c.querySelector('.mevcut-botlar-mobile-card[data-bot-id]'))) return true;
+    var tab = document.getElementById('financeBotsListBots');
+    return !!(tab && (tab.querySelector('tr[data-bot-id]') || tab.querySelector('.mevcut-botlar-mobile-card[data-bot-id]')));
 }
 
 function clearFinanceBotsSessionCache(accountId) {
@@ -12234,24 +12100,21 @@ function clearFinanceBotsSessionCache(accountId) {
     } catch (e) {}
     _financeBotsMetricsCache = {};
     _financeBotsStructureSignature = null;
+    _financeBotsIdsSignature = null;
 }
 window.clearFinanceBotsSessionCache = clearFinanceBotsSessionCache;
 
 function resetFinanceBotsLiveCache(bots) {
     var sig = (bots || []).map(function (b) { return String(b.bot_id || b.id || ''); }).join(',');
-    if (sig === _financeBotsLiveSig && _financeBotsLiveHydrated) return;
+    if (sig === _financeBotsLiveSig) return;
     _financeBotsLiveSig = sig;
     State.botLiveEquity = {};
-    _financeBotsLiveHydrated = false;
+    _financeBotsLiveHydrated = Object.keys(_financeBotsMetricsCache).length > 0;
     _financeBotsLivePollPromise = null;
 }
 
 function resolveBotLivePrice(sym) {
-    if (!sym) return null;
-    var s = (sym || '').toUpperCase();
-    var mini = window.marketStore && window.marketStore.getMini(s);
-    var p = (mini && mini.last != null) ? mini.last : (window.marketStore && window.marketStore.getPrice && window.marketStore.getPrice(s));
-    return (p != null && Number.isFinite(p) && p > 0) ? p : null;
+    return resolveMarketLivePrice(sym);
 }
 
 function botNeedsLiveEquity(bot) {
@@ -12444,7 +12307,9 @@ function renderFinanceBots(bots) {
 
     var emptyHtml = '<div style="color: var(--ds-text-secondary); padding: 2rem; text-align: center;">Bot bulunamadı</div>';
     if (!bots || bots.length === 0) {
+        if (_financeBotsTableHasRows() || (State.bots && State.bots.length)) return;
         _financeBotsStructureSignature = null;
+        _financeBotsIdsSignature = null;
         if (containerAnasayfa) containerAnasayfa.innerHTML = emptyHtml;
         if (containerBotsTab) containerBotsTab.innerHTML = emptyHtml;
         _bindFinanceBotsSortButtons();
@@ -12453,13 +12318,24 @@ function renderFinanceBots(bots) {
 
     var sortBy = (typeof financeBotsSortBy !== 'undefined' ? financeBotsSortBy : 'pct');
     var structureSig = financeBotsStructureSignature(bots, sortBy);
-    if (_financeBotsStructureSignature === structureSig) {
+    var idsSig = bots.map(function (b) { return String(b.bot_id || b.id || ''); }).sort().join(',');
+    if (idsSig === _financeBotsIdsSignature && _financeBotsTableHasRows()) {
+        State.bots = bots;
+        _financeBotsStructureSignature = structureSig;
+        updateFinanceBotsLivePrices();
+        applyFinanceBotsLiveEquityToDom();
+        patchFinanceBotsMetrics(bots);
+        if (!_financeBotsLiveHydrated) ensureFinanceBotsLiveEquity();
+        return;
+    }
+    if (_financeBotsStructureSignature === structureSig && _financeBotsTableHasRows()) {
         updateFinanceBotsLivePrices();
         patchFinanceBotsMetrics(bots);
         if (!_financeBotsLiveHydrated) ensureFinanceBotsLiveEquity();
         return;
     }
     _financeBotsStructureSignature = structureSig;
+    _financeBotsIdsSignature = idsSig;
 
     const normalized = bots.map(bot => {
         const budget = bot.budget_usd || bot.initial_usd || 0;
@@ -12497,21 +12373,7 @@ function renderFinanceBots(bots) {
     var getMultiBotCoins = function (bot) {
         var cfg = getBotConfig(bot);
         var coins = [];
-        var quoteKey = (cfg.quote_asset || 'USDT').toUpperCase();
-        if (cfg.strategy_id === 'trdca_pro') {
-            if (cfg.trb && cfg.trb.target_weights_all) {
-                Object.keys(cfg.trb.target_weights_all).forEach(function (k) {
-                    var s = (k || '').toUpperCase().replace(/USDT$|FDUSD$|BUSD$/i, '').trim();
-                    if (s && s !== quoteKey && s !== 'USDT' && coins.indexOf(s) < 0) coins.push(s);
-                });
-            }
-            if (coins.length === 0 && cfg.dca && cfg.dca.coin_weights) {
-                Object.keys(cfg.dca.coin_weights).forEach(function (k) {
-                    var s = (k || '').toUpperCase().replace(/USDT$|FDUSD$|BUSD$/i, '').trim();
-                    if (s && s !== quoteKey && s !== 'USDT' && coins.indexOf(s) < 0) coins.push(s);
-                });
-            }
-        } else if (cfg.strategy_id === 'multi_asset_rebalance') {
+        if (cfg.strategy_id === 'multi_asset_rebalance') {
             if (Array.isArray(cfg.assets)) {
                 cfg.assets.forEach(function (a) {
                     var s = (a.symbol || '').toUpperCase().replace(/USDT$|FDUSD$|BUSD$/i, '');
@@ -12525,7 +12387,7 @@ function renderFinanceBots(bots) {
                 });
             }
         }
-        if (coins.length === 0 && cfg.strategy_id !== 'trdca_pro' && (cfg.dca && cfg.dca.coin_weights)) {
+        if (coins.length === 0 && (cfg.dca && cfg.dca.coin_weights)) {
             Object.keys(cfg.dca.coin_weights).forEach(function (k) {
                 var s = (k || '').toUpperCase();
                 if (s && s !== 'USDT' && coins.indexOf(s) < 0) coins.push(s);
@@ -12549,16 +12411,14 @@ function renderFinanceBots(bots) {
         }).join('') + '</span>';
     };
     var getLivePrice = function (sym) {
-        var mini = window.marketStore && window.marketStore.getMini(sym);
-        var p = (mini && mini.last != null) ? mini.last : (window.marketStore && window.marketStore.getPrice && window.marketStore.getPrice(sym));
-        return (p != null && Number.isFinite(p)) ? p : null;
+        return resolveMarketLivePrice(sym);
     };
     const thead = '<thead><tr><th style="text-align:left">Sembol</th><th style="text-align:right">FİYAT</th><th style="text-align:center">Durum</th><th style="text-align:right">Bütçe</th><th style="text-align:right">Bot Bakiyesi</th><th style="text-align:right">Toplam K/Z</th><th style="text-align:center">Tur</th><th style="text-align:center">İşlem</th></tr></thead>';
     const rows = sorted.map(bot => {
         const botId = bot.bot_id || bot.id;
         const sym = (bot.symbol || 'N/A').toUpperCase();
         const cfg = getBotConfig(bot);
-        const isMulti = sym === 'MULTI' || cfg.strategy_id === 'multi_asset_rebalance' || cfg.strategy_id === 'trdca_pro';
+        const isMulti = sym === 'MULTI' || cfg.strategy_id === 'multi_asset_rebalance';
         const detailPage = isMulti ? '/ui/bot_multi.html' : '/ui/bot.html';
         const base = parseBaseQuote(sym).base || sym.replace(/USDT|FDUSD|BUSD$/i, '') || sym;
         const multiCoins = isMulti ? getMultiBotCoins(bot) : [];
@@ -12578,7 +12438,7 @@ function renderFinanceBots(bots) {
         var livePrice = isMulti ? null : getLivePrice(sym);
         var priceCell = isMulti
             ? '<span class="mevcut-bot-portfolio-balance" title="Çoklu sembol">—</span>'
-            : '<span class="finance-bot-live-price mevcut-bot-portfolio-balance" data-symbol="' + sym + '" data-bot-id="' + botId + '" title="Sembol canlı fiyatı">' + (livePrice != null ? fmtUsd(livePrice) : '—') + '</span>';
+            : '<span class="finance-bot-live-price mevcut-bot-portfolio-balance" data-symbol="' + sym + '" data-bot-id="' + botId + '" title="Sembol canlı fiyatı">' + (livePrice != null ? fmtCoinPrice(livePrice) : '—') + '</span>';
         return '<tr style="cursor:pointer" data-bot-id="' + botId + '" data-symbol="' + sym + '" data-detail-page="' + detailPage + '">' +
             '<td style="font-weight:600">' + symbolCell + '</td>' +
             '<td class="mevcut-botlar-price-cell" style="text-align:right">' + priceCell + '</td>' +
@@ -12595,7 +12455,7 @@ function renderFinanceBots(bots) {
         const botId = bot.bot_id || bot.id;
         const sym = (bot.symbol || 'N/A').toUpperCase();
         const cfg = getBotConfig(bot);
-        const isMulti = sym === 'MULTI' || cfg.strategy_id === 'multi_asset_rebalance' || cfg.strategy_id === 'trdca_pro';
+        const isMulti = sym === 'MULTI' || cfg.strategy_id === 'multi_asset_rebalance';
         const detailPage = isMulti ? '/ui/bot_multi.html' : '/ui/bot.html';
         const base = parseBaseQuote(sym).base || sym.replace(/USDT|FDUSD|BUSD$/i, '') || sym;
         const multiCoins = isMulti ? getMultiBotCoins(bot) : [];
@@ -12610,7 +12470,7 @@ function renderFinanceBots(bots) {
         const rowPnl = resolveBotRowPnl(bot, currentUsd);
         const sc = rowPnl != null && rowPnl >= 0 ? '#0ecb81' : (rowPnl != null ? '#f6465d' : 'var(--ds-text-secondary)');
         // Mobil: tek sembolde FİYAT = canlı sembol fiyatı; çoklu botta —
-        var mobilePriceDisplay = isMulti ? '—' : (getLivePrice(sym) != null ? fmtUsd(getLivePrice(sym)) : '—');
+        var mobilePriceDisplay = isMulti ? '—' : (getLivePrice(sym) != null ? fmtCoinPrice(getLivePrice(sym)) : '—');
         var mobilePriceSpan = isMulti
             ? '<span class="mevcut-botlar-mobile-price" title="Çoklu sembol">—</span>'
             : '<span class="finance-bot-live-price mevcut-botlar-mobile-price" data-symbol="' + sym + '" data-bot-id="' + botId + '" title="Sembol canlı fiyatı">' + mobilePriceDisplay + '</span>';
@@ -12671,6 +12531,30 @@ function renderFinanceBots(bots) {
 }
 
 var financeBotLastPrices = {};
+var _dashboardMarketPriceRaf = 0;
+var _dashboardMarketUnsub = null;
+
+function tickDashboardLiveMarketPrices() {
+    if (typeof tickVarliklarPrices === 'function') tickVarliklarPrices();
+    if (typeof updateFinanceBotsLivePrices === 'function') updateFinanceBotsLivePrices();
+}
+
+function scheduleDashboardLiveMarketPrices() {
+    if (_dashboardMarketPriceRaf) return;
+    _dashboardMarketPriceRaf = requestAnimationFrame(function () {
+        _dashboardMarketPriceRaf = 0;
+        tickDashboardLiveMarketPrices();
+    });
+}
+
+function ensureDashboardMarketPriceSubscriber() {
+    var store = window.marketStore;
+    if (!store || typeof store.subscribe !== 'function' || _dashboardMarketUnsub) return;
+    _dashboardMarketUnsub = store.subscribe(function () {
+        scheduleDashboardLiveMarketPrices();
+    });
+}
+
 function updateFinanceBotsLivePrices() {
     document.querySelectorAll('.finance-bot-live-price').forEach(function (span) {
         var sym = span.getAttribute('data-symbol');
@@ -12678,7 +12562,7 @@ function updateFinanceBotsLivePrices() {
         if (!sym || !botId) return;
         var price = resolveBotLivePrice(sym);
         if (price == null) return;
-        var newText = fmtUsd(price);
+        var newText = fmtCoinPrice(price);
         var prev = financeBotLastPrices[botId];
         if (span.textContent !== newText) {
             if (prev != null && Number.isFinite(prev) && Math.abs(price - prev) > 1e-10) {

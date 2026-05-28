@@ -22,7 +22,12 @@ logger = logging.getLogger(__name__)
 
 from app.db.session import get_db
 from app.db.models import Account, Bot, Trade, PnlSnapshot, User, ChatThread, ErrorLog, AssetSnapshot
-from app.services.encryption import encrypt_text, decrypt_text
+from app.services.encryption import (
+    encrypt_account_api_key,
+    encrypt_account_api_secret,
+    encrypt_account_ip_whitelist,
+    encrypt_text,
+)
 from app.api.auth import require_auth, require_account_access, get_client_ip, verify_password
 from app.services import audit as audit_svc
 from app.utils.account_code import generate_account_code
@@ -387,9 +392,9 @@ async def update_account_settings(
     require_account_access(current, account_id)
     try:
         if body.api_key is not None:
-            account.api_key_enc = encrypt_text(body.api_key or "")
+            account.api_key_enc = encrypt_account_api_key(account_id, body.api_key or "")
         if body.api_secret is not None:
-            account.api_secret_enc = encrypt_text(body.api_secret or "")
+            account.api_secret_enc = encrypt_account_api_secret(account_id, body.api_secret or "")
     except ValueError as e:
         msg = str(e)
         if "BINANCE_MASTER_KEY" in msg or "environment" in msg.lower():
@@ -405,13 +410,15 @@ async def update_account_settings(
     if body.name is not None and body.name.strip():
         account.name = body.name.strip()
     if body.api_ip_whitelist is not None:
-        account.api_ip_whitelist = (body.api_ip_whitelist or "").strip()
+        raw_wl = (body.api_ip_whitelist or "").strip()
+        account.api_ip_whitelist = encrypt_account_ip_whitelist(account_id, raw_wl) if raw_wl else ""
     if body.is_first_login is not None:
         account.is_first_login = body.is_first_login
     if body.isolate_from_admin is not None:
         val = bool(body.isolate_from_admin)
         db.execute(update(Account).where(Account.id == account_id).values(isolate_from_admin=val))
     from app.services.test_account import account_has_binance_keys
+    keys_updated = body.api_key is not None or body.api_secret is not None
     if account_has_binance_keys(account):
         account.is_first_login = False
     try:
@@ -425,6 +432,26 @@ async def update_account_settings(
             status_code=500,
             detail={"error_code": "SAVE_FAILED", "message": "Ayarlar kaydedilirken veritabanı hatası oluştu."},
         )
+    if keys_updated and account_has_binance_keys(account):
+        try:
+            from app.services.transaction_history_file_store import clear_tx_history_bootstrap
+            import asyncio
+            from app.db.base import SessionLocal
+
+            clear_tx_history_bootstrap(account_id)
+
+            async def _bootstrap_tx_after_keys() -> None:
+                db_bg = SessionLocal()
+                try:
+                    from app.services.transaction_history_file_store import bootstrap_tx_history_from_binance
+
+                    await bootstrap_tx_history_from_binance(db_bg, account_id, force=True)
+                finally:
+                    db_bg.close()
+
+            asyncio.create_task(_bootstrap_tx_after_keys())
+        except Exception as boot_ex:
+            logger.warning("tx_history bootstrap after keys account_id=%s: %s", account_id, boot_ex)
     return {"ok": True, "message": "Ayarlar güncellendi."}
 
 
@@ -469,40 +496,49 @@ def _get_account_bot_total_equity_initial(db: Session, account_id: int) -> tuple
 @router.get("/accounts/{account_id}/bot-performance")
 async def get_bot_performance(
     account_id: int,
-    period: str = Query("total", description="total | daily | weekly | monthly | all"),
+    period: str = Query("all", description="daily | weekly | monthly | all"),
+    refresh: int = Query(0, description="1 = cache atla, store'dan yeniden hesapla"),
     db: Session = Depends(get_db),
     current: dict = Depends(require_auth),
 ):
-    """Bot performans: total = anlık toplam K/Z (mevcut bakiye − başlangıç sermayesi); diğerleri dönem gerçekleşen PnL."""
+    """Bot performans: hesap geneli günlük K/Z toplamı (bot_daily_pnl); mevcut + silinen botlar."""
     account = db.query(Account).filter(Account.id == account_id).first()
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
     require_account_access(current, account_id)
-    p = (period or "total").strip().lower()
+    p = (period or "all").strip().lower()
     if p == "total":
-        try:
-            total_equity, total_initial = _get_account_bot_total_equity_initial(db, account_id)
-            pnl_usd = round(total_equity - total_initial, 2)
-            return {
-                "pnl_usd": pnl_usd,
-                "bots_balance_usd": total_equity,
-                "bots_initial_usd": total_initial,
-                "period": "total",
-                "period_label": "Toplam K/Z",
-                "date_from": None,
-                "date_to": None,
-            }
-        except Exception as e:
-            logger.exception("bot-performance total error: %s", e)
-            raise HTTPException(status_code=500, detail="Performans hesaplanamadı.")
-    if p not in ("daily", "weekly", "monthly", "all"):
-        p = "daily"
+        p = "all"
     try:
-        result = PnlService.get_aggregated_pnl(db, account_id, p)
-        return result
+        from app.services.bot_performance_service import get_account_performance_breakdown
+        return get_account_performance_breakdown(db, account_id, p, force_refresh=bool(refresh))
     except Exception as e:
         logger.exception("bot-performance error: %s", e)
         raise HTTPException(status_code=500, detail="Performans hesaplanamadı.")
+
+
+@router.get("/accounts/{account_id}/transaction-history/revision")
+async def get_transaction_history_revision(
+    account_id: int,
+    db: Session = Depends(get_db),
+    current: dict = Depends(require_auth),
+):
+    """İşlem geçmişi sürümü — hafif poll (şifreli dosya açılmaz)."""
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+    require_account_access(current, account_id)
+    try:
+        from app.services.transaction_history_file_store import (
+            ensure_tx_history_fresh_from_db,
+            get_public_revision,
+        )
+
+        ensure_tx_history_fresh_from_db(db, account_id)
+        return get_public_revision(account_id)
+    except Exception as e:
+        logger.debug("transaction-history revision account_id=%s: %s", account_id, e)
+        return {"revision": "0", "latest_time": "", "count": 0}
 
 
 @router.get("/accounts/{account_id}/transaction-history")
@@ -521,13 +557,21 @@ async def get_transaction_history(
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
     require_account_access(current, account_id)
-    if sync:
-        try:
-            from app.services.finance_trade_sync import TradeSyncService
-            svc = TradeSyncService(db)
-            await svc.sync_account_trades(account_id)
-        except Exception as e:
-            logger.warning("transaction-history sync failed: %s", e)
+    try:
+        from app.services.transaction_history_file_store import (
+            bootstrap_tx_history_from_binance,
+            ensure_tx_history_fresh_from_db,
+            is_tx_history_bootstrapped,
+        )
+
+        ensure_tx_history_fresh_from_db(db, account_id)
+        if sync or not is_tx_history_bootstrapped(account_id):
+            try:
+                await bootstrap_tx_history_from_binance(db, account_id, force=bool(sync))
+            except Exception as e:
+                logger.warning("transaction-history bootstrap failed: %s", e)
+    except Exception:
+        pass
     from app.services.transaction_history_service import TransactionHistoryService
     p = (period or "weekly").strip().lower()
     tf = (type_filter or "all").strip().lower()
@@ -535,40 +579,58 @@ async def get_transaction_history(
     if p not in ("daily", "weekly", "monthly", "all"):
         p = "weekly"
     if tf in ("deposit", "withdraw", "depositwithdraw"):
-        from app.api.finance_reports import _fetch_deposit_withdraw, _normalize_deposit, _normalize_withdraw
-        from datetime import timezone
-        start_time, end_time = TransactionHistoryService.get_date_range(p)
-        deposits, withdrawals = await _fetch_deposit_withdraw(account_id, start_time, end_time, None, db)
-        dep_rows = []
-        for d in deposits:
-            insert_ms = d.get("insertTime")
-            if insert_ms is not None:
-                t = __import__("datetime").datetime.fromtimestamp(insert_ms / 1000.0, tz=timezone.utc).replace(tzinfo=None)
-                dep_rows.append(_normalize_deposit(d, t))
-        wd_rows = []
-        for w in withdrawals:
-            apply_raw = w.get("applyTime") or w.get("completeTime")
-            if apply_raw is not None:
-                t = __import__("datetime").datetime.fromtimestamp(apply_raw / 1000.0, tz=timezone.utc).replace(tzinfo=None)
-                wd_rows.append(_normalize_withdraw(w, t))
-        if tf == "deposit":
-            rows = dep_rows
-        elif tf == "withdraw":
-            rows = wd_rows
-        else:
-            rows = dep_rows + wd_rows
-        rows.sort(key=lambda x: x["time"], reverse=True)
-        per_page = TransactionHistoryService.PER_PAGE
-        total = len(rows)
-        offset = max(0, page - 1) * per_page
-        paginated = rows[offset:offset + per_page]
+        from app.services.transaction_history_file_store import (
+            ledger_has_deposit_withdraw,
+            query_transactions,
+            upsert_deposit_withdraw,
+        )
 
-        def _row_to_item(r):
-            side = r.get("side", "")
-            t = "deposit" if side == "DEPOSIT" else "withdraw"
-            return {"id": r.get("order_id", ""), "time": r["time"], "type": t, "type_label": "Yatırım" if side == "DEPOSIT" else "Çekim", "symbol": r.get("symbol", ""), "qty": r.get("executed_qty", 0), "source_label": "Binance", "platform": "Binance"}
-        items = [_row_to_item(r) for r in paginated]
-        return {"items": items, "total": total, "page": page, "per_page": per_page, "total_pages": (total + per_page - 1) // per_page if total else 0, "period": p, "date_from": start_time.strftime("%Y-%m-%d") if start_time else None, "date_to": end_time.strftime("%Y-%m-%d")}
+        if sync or not ledger_has_deposit_withdraw(account_id):
+            from app.api.finance_reports import _fetch_deposit_withdraw, _normalize_deposit, _normalize_withdraw
+            from app.utils.tz_utils import parse_binance_ms_to_utc_naive
+
+            start_time, end_time = TransactionHistoryService.get_date_range(p)
+            try:
+                deposits, withdrawals = await _fetch_deposit_withdraw(account_id, start_time, end_time, None, db)
+            except Exception as e:
+                logger.warning("transaction-history deposit/withdraw fetch failed: %s", e)
+                deposits, withdrawals = [], []
+            for d in deposits:
+                t = parse_binance_ms_to_utc_naive(d.get("insertTime"))
+                if t is None:
+                    continue
+                row = _normalize_deposit(d, t)
+                upsert_deposit_withdraw(
+                    account_id,
+                    order_id=str(row.get("order_id") or row.get("symbol") or d.get("insertTime") or ""),
+                    time=t,
+                    side="DEPOSIT",
+                    symbol=row.get("symbol") or "",
+                    qty=float(row.get("executed_qty") or 0),
+                )
+            for w in withdrawals:
+                t = parse_binance_ms_to_utc_naive(w.get("applyTime") or w.get("completeTime"))
+                if t is None:
+                    continue
+                row = _normalize_withdraw(w, t)
+                upsert_deposit_withdraw(
+                    account_id,
+                    order_id=str(row.get("order_id") or row.get("symbol") or w.get("applyTime") or w.get("completeTime") or ""),
+                    time=t,
+                    side="WITHDRAW",
+                    symbol=row.get("symbol") or "",
+                    qty=float(row.get("executed_qty") or 0),
+                )
+
+        eff_tf = tf if tf != "depositwithdraw" else "depositwithdraw"
+        return query_transactions(
+            account_id,
+            period=p,
+            type_filter=eff_tf,
+            source_filter=sf,
+            page=page,
+            per_page=TransactionHistoryService.PER_PAGE,
+        )
     return TransactionHistoryService.get_transactions(db, account_id, period=p, type_filter=tf, source_filter=sf, page=page)
 
 
@@ -1036,13 +1098,7 @@ async def create_bot_with_config(
     
     symbol = (config_data.get("symbol") or "").upper().strip()
     if strategy_id == "trdca_pro":
-        from app.botengine.models import config_trdca_pro_from_payload
-        try:
-            trdca_cfg = config_trdca_pro_from_payload(config_data)
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=f"Invalid trdca_pro config: {e}")
-        symbol = "MULTI"
-        config_json = json.dumps(trdca_cfg.to_dict(), ensure_ascii=False)
+        raise HTTPException(status_code=400, detail="TRDCA Pro+ strategy is no longer available. Use Trailing DCA Bot.")
     elif strategy_id == "multi_asset_rebalance":
         # Multi-asset rebalance: symbol = MULTI, validate assets
         from app.botengine.models import config_multi_asset_from_payload
@@ -1152,6 +1208,13 @@ async def delete_bot(
         logger = logging.getLogger(__name__)
         logger.warning(f"Error stopping bot before delete: {e}")
         db.rollback()
+    
+    try:
+        from app.services.bot_performance_service import archive_bot_performance
+        archive_bot_performance(db, bot_id, account_id)
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning("delete_bot archive bot_id=%s: %s", bot_id, e)
     
     # Delete related trades (cascade should handle this, but be explicit)
     try:
@@ -1315,12 +1378,21 @@ async def resume_bot(
     bot = db.query(Bot).filter(Bot.id == bot_id, Bot.account_id == account_id).first()
     if not bot:
         raise HTTPException(status_code=404, detail="Bot not found")
-    if bot.status != "paused":
+    if bot.status not in ("paused", "paused_error"):
         return {"message": "Bot is not paused", "status": bot.status}
     try:
+        from app.botengine.state_store import load_state, save_state
+        from app.api.bots_engine import _insert_engine_command
+
+        state = load_state(db, bot.id) or {}
+        state.pop("last_error_code", None)
+        state.pop("health_error_since", None)
+        state.pop("backoff_until", None)
+        save_state(db, bot.id, account_id, state)
         bot.status = "running"
         db.commit()
-        return {"message": "Bot resumed", "status": "running"}
+        cmd_id = _insert_engine_command(db, account_id, bot.id, "START")
+        return {"message": "Bot resumed", "status": "running", "command_id": cmd_id}
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
@@ -2005,6 +2077,11 @@ async def invalidate_wallet_cache(account_id: int) -> None:
         _wallet_response_cache.pop(account_id, None)
         _wallet_total_cache.pop(account_id, None)
         _wallet_inflight.pop(account_id, None)
+    try:
+        from app.api.routes.home import invalidate_home_wallet_cache
+        invalidate_home_wallet_cache(account_id)
+    except Exception:
+        pass
 
 
 async def invalidate_open_orders_cache(account_id: int) -> None:
@@ -2917,6 +2994,7 @@ def _wallet_response(
         "unpriced_assets": unpriced_assets,
         "ts": ts_iso,
         "ts_ms": ts_ms,
+        "data_status": "fresh",
     }
 
 

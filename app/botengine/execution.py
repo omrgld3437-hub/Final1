@@ -35,6 +35,7 @@ from app.botengine.cycle_ledger import (
     PNL_MODE_CASH,
     PNL_MODE_INVENTORY,
     build_cycle_ledger_empty,
+    ensure_cycle_ledger,
     cycle_ledger_add_fill,
     cycle_ledger_from_state,
     get_cycle_type_and_base_delta,
@@ -371,9 +372,9 @@ async def run_actions(
                                                     state["reference_price"] = fill_price
                                                 logger.info("BOT_EXECUTION_REPAIR bot_id=%s initial_allocation_done=True base_balance=%.4f quote_balance=%.2f", bot_id, state.get("base_balance"), state.get("quote_balance"))
                                             if reason in CYCLE_FILL_REASONS:
-                                                ledger = cycle_ledger_from_state(state, symbol)
-                                                if ledger.get("cycle_id") != state.get("cycle_id"):
-                                                    ledger = build_cycle_ledger_empty(int(state.get("cycle_id") or 1), symbol)
+                                                ledger = ensure_cycle_ledger(
+                                                    state, symbol, int(state.get("cycle_id") or 1),
+                                                )
                                                 cycle_ledger_add_fill(ledger, ts=datetime.now(timezone.utc).isoformat(), order_id=str(existing_order.get("orderId")), client_order_id=coid_repair, side=side, qty=exec_qty, price=fill_price, fee=fee, fee_asset=fee_asset, reason=reason, slot_id=a.get("grid_index"), fee_raw=fee_raw)
                                                 state["cycle_ledger_current"] = ledger
                                             save_state(db, bot_id, account_id, state)
@@ -431,9 +432,9 @@ async def run_actions(
                                     if not _is_trdca_or_multi:
                                         apply_fill_to_state(state, side, exec_qty, fill_price, fee, grid_index=a.get("grid_index"), reason=reason, execution_price=a.get("execution_price"))
                                         if reason in CYCLE_FILL_REASONS:
-                                            ledger = cycle_ledger_from_state(state, symbol)
-                                            if ledger.get("cycle_id") != state.get("cycle_id"):
-                                                ledger = build_cycle_ledger_empty(int(state.get("cycle_id") or 1), symbol)
+                                            ledger = ensure_cycle_ledger(
+                                                state, symbol, int(state.get("cycle_id") or 1),
+                                            )
                                             cycle_ledger_add_fill(ledger, ts=datetime.now(timezone.utc).isoformat(), order_id=str(order_id_ex), client_order_id=client_order_id, side=side, qty=exec_qty, price=fill_price, fee=fee, fee_asset=fee_asset, reason=reason, slot_id=a.get("grid_index"), fee_raw=fee_raw)
                                             state["cycle_ledger_current"] = ledger
                                         save_state(db, bot_id, account_id, state)
@@ -691,6 +692,64 @@ async def run_actions(
                                 logger.warning("BOT_EXECUTION_BALANCE_CHECK_FAIL bot_id=%s SELL err=401 Unauthorized (tekrar 10 dk içinde loglanmayacak)", bot_id)
                         else:
                             logger.warning("BOT_EXECUTION_BALANCE_CHECK_FAIL bot_id=%s SELL err=%s (proceeding)", bot_id, bal_err)
+                    if qty > 0:
+                        try:
+                            from app.botengine.order_qty import validate_market_sell_qty
+
+                            sell_filters = await adapter.get_symbol_filters(symbol)
+                            sell_price = adapter.get_price(symbol) or price or 0.0
+                            lot_skip, qty_adj, _qty_str = validate_market_sell_qty(
+                                qty, sell_filters, sell_price,
+                            )
+                            if lot_skip:
+                                logger.info(
+                                    "BOT_EXECUTION_SKIP bot_id=%s reason=%s skip_reason=%s qty=%.8f min_qty=%s step=%s (preflight)",
+                                    bot_id, reason, lot_skip, qty,
+                                    sell_filters.get("min_qty"),
+                                    sell_filters.get("step_size_str"),
+                                )
+                                if state.get("last_error_code") in (
+                                    "LOT_SIZE", "MIN_NOTIONAL", "MIN_NOTIONAL_AFTER_CAP",
+                                ):
+                                    state.pop("last_error_code", None)
+                                    state.pop("health_error_since", None)
+                                _append_skip(
+                                    db, bot_id, account_id, lot_skip,
+                                    f"{lot_skip} qty={qty:.8f} adj={qty_adj:.8f} symbol={symbol}",
+                                    {
+                                        "reason": reason,
+                                        "skip_reason": lot_skip,
+                                        "error_code": lot_skip,
+                                        "preflight": True,
+                                        "qty": qty,
+                                        "qty_adjusted": qty_adj,
+                                        "min_qty": sell_filters.get("min_qty"),
+                                        "step_size": sell_filters.get("step_size_str"),
+                                        "side": side,
+                                        "symbol": symbol,
+                                        "grid_index": a.get("grid_index"),
+                                    },
+                                )
+                                continue
+                            qty = qty_adj
+                        except Exception as filt_err:
+                            logger.warning(
+                                "BOT_EXECUTION_SELL_FILTER_CHECK_FAIL bot_id=%s err=%s",
+                                bot_id, filt_err,
+                            )
+                            _append_skip(
+                                db, bot_id, account_id, "ORDER_FAILED",
+                                f"SELL filter check failed: {filt_err}",
+                                {
+                                    "reason": reason,
+                                    "skip_reason": "ORDER_FAILED",
+                                    "preflight": True,
+                                    "side": side,
+                                    "symbol": symbol,
+                                    "grid_index": a.get("grid_index"),
+                                },
+                            )
+                            continue
                 if db is not None:
                     lock_sym = trade_lock_symbol(account_id, symbol)
                     if not lease_still_valid(db, account_id, lock_sym, bot_id):
@@ -761,7 +820,28 @@ async def run_actions(
                         update_intent_sent(db, intent_id)
                 except Exception as e:
                     error_id = str(uuid.uuid4())
-                    parsed_err = _parse_binance_order_error(e)
+                    if isinstance(e, ValueError):
+                        msg = str(e).lower()
+                        if "lot_size" in msg or "min_qty" in msg:
+                            parsed_err = {
+                                "skip_reason": "LOT_SIZE",
+                                "error": str(e)[:500],
+                                "binance_code": -1013,
+                                "binance_msg": str(e)[:200],
+                                "request_id": None,
+                            }
+                        elif "min_notional" in msg or "notional" in msg:
+                            parsed_err = {
+                                "skip_reason": "MIN_NOTIONAL",
+                                "error": str(e)[:500],
+                                "binance_code": None,
+                                "binance_msg": str(e)[:200],
+                                "request_id": None,
+                            }
+                        else:
+                            parsed_err = _parse_binance_order_error(e)
+                    else:
+                        parsed_err = _parse_binance_order_error(e)
                     insufficient = parsed_err["skip_reason"] == "INSUFFICIENT_BALANCE"
                     request_id = parsed_err.get("request_id")
                     if insufficient and db is not None:
@@ -783,12 +863,38 @@ async def run_actions(
                     if _is_401_unauthorized(e):
                         state["backoff_until"] = time.time() + _EXEC_401_BACKOFF_SEC
                         state["last_error_code"] = "API_UNAUTHORIZED"
+                        state["health_error_since"] = int(time.time())
                         if db is not None:
                             from app.db.models import Bot
                             bot_row = db.query(Bot).filter(Bot.id == bot_id).first()
                             if bot_row:
                                 bot_row.status = "paused_error"
                                 db.commit()
+                            try:
+                                from app.services.binance_connectivity import emit_tur_connectivity_paused_info
+
+                                emit_tur_connectivity_paused_info(db, bot_id, account_id, "API_UNAUTHORIZED")
+                            except Exception:
+                                pass
+                            cycle_id = int(state.get("cycle_id") or 1)
+                            warn_meta = {
+                                "error_code": "API_UNAUTHORIZED",
+                                "health_code": "CONNECTIVITY_LOST",
+                                "title": "Bağlantı kesildi",
+                                "cause": "API anahtarı veya IP beyaz listesi",
+                                "cycle_id": cycle_id,
+                                "severity": "warn",
+                                "error_id": error_id,
+                                "action_key": key,
+                            }
+                            append_event(
+                                db,
+                                bot_id,
+                                account_id,
+                                "HEALTH_WARN",
+                                "Binance API geçersiz — bot beklemeye alındı",
+                                warn_meta,
+                            )
                             append_event(db, bot_id, account_id, "ERROR", "Binance 401 Unauthorized – API anahtarı geçersiz, IP beyaz listesi veya Spot izinlerini kontrol edin.", {
                                 "error_code": "API_UNAUTHORIZED", "error_id": error_id, "bot_id": bot_id, "account_id": account_id, "action_key": key, "loop_id": loop_id,
                             })
@@ -876,9 +982,7 @@ async def run_actions(
                 )
                 # Cycle ledger: record only cycle-scoped fills (single source of truth for cycle PnL)
                 if reason in CYCLE_FILL_REASONS:
-                    ledger = cycle_ledger_from_state(state, symbol)
-                    if ledger.get("cycle_id") != state.get("cycle_id"):
-                        ledger = build_cycle_ledger_empty(int(state.get("cycle_id") or 1), symbol)
+                    ledger = ensure_cycle_ledger(state, symbol, int(state.get("cycle_id") or 1))
                     ts_iso = datetime.now(timezone.utc).isoformat()
                     cycle_ledger_add_fill(
                         ledger,
@@ -895,6 +999,7 @@ async def run_actions(
                         fee_raw=fee_raw,
                     )
                     state["cycle_ledger_current"] = ledger
+                fill_ts_utc = datetime.now(timezone.utc)
                 # initial_allocation: ia_done ONLY when order really filled (exec_qty > 0)
                 if reason == "initial_allocation":
                     if exec_qty <= 0:
@@ -906,6 +1011,8 @@ async def run_actions(
                         state["initial_allocation_done"] = True
                         state["reference_price"] = fill_price
                         state["cycle_id"] = 1
+                        _ts_open = fill_ts_utc.isoformat()
+                        state["cycle_opened_at"] = _ts_open
                         state["initial_alloc_base_qty"] = round(float(exec_qty), 10)
                         state["initial_alloc_price"] = round(float(fill_price), 10)
                         C = _num(getattr(config, "initial_capital_usdt", 0))
@@ -920,7 +1027,7 @@ async def run_actions(
                             "equity_usdt": equity_usdt,
                             "target_quote_usdt": round(equity_usdt * quote_alloc, 2),
                             "target_base_usdt": round(equity_usdt * base_alloc, 2),
-                            "ts": datetime.now(timezone.utc).isoformat(),
+                            "ts": _ts_open,
                         }
                         _initial_alloc_skip_count.pop((bot_id, key), None)
                 if reason == "trail_sell_grid":
@@ -975,11 +1082,35 @@ async def run_actions(
                         db, bot_id, account_id, "ORDER_FILLED",
                         f"{side} {exec_qty} @ {fill_price}",
                         fill_evt,
+                        ts=fill_ts_utc,
                     )
                 fill_evt["event_logged"] = True
                 results.append(fill_evt)
                 if reason == "initial_allocation" and exec_qty > 0 and db is not None:
                     save_state(db, bot_id, account_id, state)
+                    cid_ia = int(state.get("cycle_id") or 1)
+                    from datetime import timedelta
+
+                    tur_ts = fill_ts_utc + timedelta(seconds=1)
+                    append_event(
+                        db,
+                        bot_id,
+                        account_id,
+                        "CYCLE_START",
+                        "Tur başladı",
+                        {
+                            "cycle_id": cid_ia,
+                            "reason": "initial_allocation",
+                            "first_tur": True,
+                            "reference_price": round(float(fill_price), 10),
+                            "base_qty": round(float(exec_qty), 10),
+                            "base_balance": round(float(state.get("base_balance") or 0), 10),
+                            "quote_balance": round(float(state.get("quote_balance") or 0), 2),
+                            "equity_usdt": round(float(state.get("cycle_start_equity") or 0), 2),
+                            "symbol": symbol,
+                        },
+                        ts=tur_ts,
+                    )
                 # Cycle reset MUST run before any load_state: in-memory state has _cycle_complete and updated balances.
                 ref_price_for_ledger = state.get("reference_price")  # referansı reset'ten önce al (gerçekleşme % doğru kalsın)
                 if state.get("_cycle_complete") or reason in ("trail_reentry_buy", "trail_profit_sell"):
@@ -1128,6 +1259,21 @@ async def run_actions(
                         "completed_reason": reason,
                     })
                     state["completed_cycle_dual_pnls"] = completed_list[-200:]  # cap at 200
+                    if db is not None:
+                        try:
+                            from app.services.bot_performance_service import (
+                                record_bot_daily_cycle_pnl,
+                                sync_bot_perf_store_from_state,
+                            )
+                            cycle_snapshot = completed_list[-1]
+                            record_bot_daily_cycle_pnl(
+                                db, account_id, bot_id, symbol, cycle_snapshot, invalidate_cache=True
+                            )
+                            sync_bot_perf_store_from_state(
+                                db, bot_id, account_id, state, invalidate_cache=False
+                            )
+                        except Exception as perf_ex:
+                            logger.debug("sync_bot_perf_store bot_id=%s: %s", bot_id, perf_ex)
                     n = len(config.sell_grids)
                     m = len(config.buy_grids)
                     cycle_reset_after_fill(state, fill_price, n, m, symbol=symbol)
@@ -1172,7 +1318,7 @@ async def run_actions(
                     try:
                         oid = res.get("orderId")
                         ref_float = float(ref_price_for_ledger) if ref_price_for_ledger is not None else None
-                        _, inserted = Ledger.record_trade(
+                        trade_row, inserted = Ledger.record_trade(
                             db,
                             bot_id,
                             account_id,
@@ -1193,6 +1339,14 @@ async def run_actions(
                                 "BOT_TRADE_RECORDED bot_id=%s side=%s qty=%s price=%s fee=%s order_id=%s request_id=-",
                                 bot_id, side, exec_qty, fill_price, fee, oid,
                             )
+                            try:
+                                from app.services.transaction_history_file_store import record_bot_trade_fill
+
+                                record_bot_trade_fill(
+                                    db, account_id, bot_id, trade_row, symbol, quote_qty=cum_quote
+                                )
+                            except Exception as tx_ex:
+                                logger.debug("tx_history record_bot_trade_fill bot_id=%s: %s", bot_id, tx_ex)
                     except Exception as ex:
                         logger.warning("bot_engine execution record_trade failed bot_id=%s order_id=%s err=%s", bot_id, res.get("orderId"), ex)
                     try:
@@ -1224,8 +1378,16 @@ async def run_actions(
                     append_event(db, bot_id, account_id, "ERROR", f"RUN_ACTION_EXCEPTION {error_id} {e!s}", {
                         "error_code": "RUN_ACTION_EXCEPTION", "error_id": error_id, "bot_id": bot_id, "account_id": account_id, "action_key": key, "loop_id": loop_id,
                     })
-                # state mutation must persist to state_store (orchestrator saves at tick end)
+                    try:
+                        from app.botengine.health_watch import emit_resilience_continue
+                        emit_resilience_continue(
+                            db, bot_id, account_id, "RUN_ACTION_EXCEPTION", str(e),
+                            error_id=error_id, loop_id=loop_id,
+                        )
+                    except Exception:
+                        pass
                 state["last_error_code"] = "RUN_ACTION_EXCEPTION"
+                state["health_error_since"] = int(time.time())
                 continue
     duration_ms = (time.perf_counter() - t0) * 1000
     logger.info("run_actions end bot_id=%s duration_ms=%.0f", bot_id, duration_ms)

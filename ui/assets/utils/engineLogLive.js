@@ -26,7 +26,11 @@
             if (e && e.id != null) byId[String(e.id)] = e;
         });
         var merged = Object.keys(byId).map(function (k) { return byId[k]; });
-        merged.sort(function (a, b) { return Number(b.id || 0) - Number(a.id || 0); });
+        if (global.EngineLogFormat && global.EngineLogFormat.sortEngineEventsDesc) {
+            merged = global.EngineLogFormat.sortEngineEventsDesc(merged);
+        } else {
+            merged.sort(function (a, b) { return Number(b.id || 0) - Number(a.id || 0); });
+        }
         if (merged.length > limit) merged = merged.slice(0, limit);
         return merged;
     }
@@ -137,29 +141,40 @@
         });
     }
 
+    function mergeHealthForDisplay(botId, events, healthData, opts) {
+        var running = typeof opts.isBotRunning === 'function' ? !!opts.isBotRunning() : true;
+        if (global.BotHealthAlerts && global.BotHealthAlerts.mergeHealthDisplayEvents) {
+            return global.BotHealthAlerts.mergeHealthDisplayEvents(botId, events, healthData, running);
+        }
+        return events;
+    }
+
     function renderDisplayEvents(opts) {
         if (!opts || !opts.container) return;
         var state = opts.state || { events: [], lastId: 0 };
         var fmtApi = global.EngineLogFormat;
-        if (opts.botId && fmtApi && fmtApi.setLogContext) {
-            fmtApi.setLogContext({ botId: opts.botId });
-        }
         var healthData = typeof opts.getHealthData === 'function' ? opts.getHealthData() : opts.healthData;
         var connFail = opts.connectivityFailure || null;
         var displayEvents = injectConnectivityFromHealth(state.events, healthData, fmtApi, opts.botId, connFail);
+        displayEvents = mergeHealthForDisplay(opts.botId, displayEvents, healthData, opts);
         archiveDisplayEvents(opts, displayEvents, state.events);
-        renderTable(opts.container, enrichStartEvents(displayEvents, opts), fmtApi);
+        renderTable(opts.container, enrichStartEvents(displayEvents, opts), fmtApi, opts.botId);
         if (typeof opts.onAfterRender === 'function') {
             opts.onAfterRender(state.events);
         }
     }
 
-    function renderTable(container, events, fmtApi) {
+    function renderTable(container, events, fmtApi, botId) {
         if (!container) return { rendered: false, events: events || [] };
         fmtApi = fmtApi || global.EngineLogFormat;
-        var list = (events || []).slice().sort(function (a, b) {
-            return Number(b.id || 0) - Number(a.id || 0);
-        });
+        var list = (global.EngineLogFormat && global.EngineLogFormat.sortEngineEventsDesc)
+            ? global.EngineLogFormat.sortEngineEventsDesc(events || [])
+            : (events || []).slice().sort(function (a, b) {
+                return Number(b.id || 0) - Number(a.id || 0);
+            });
+        if (fmtApi && fmtApi.setLogContext) {
+            fmtApi.setLogContext({ botId: botId, events: list });
+        }
         if (!list.length) {
             container.innerHTML = '<div class="muted" style="padding: 0.75rem;">Henüz event yok.</div>';
             return { rendered: false, events: list };
@@ -182,6 +197,9 @@
             var ty = (item.typeLabel || '—').replace(/</g, '&lt;');
             var msg = (item.message || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
             var rowCl = fmtApi && fmtApi.rowClass ? fmtApi.rowClass(item.severity) : 'log-row-info';
+            if (item.healthActive) {
+                rowCl += item.severity === 'critical' ? ' log-row-health-active-crit' : ' log-row-health-active-warn';
+            }
             html += '<tr class="' + rowCl + '"><td>' + ts + '</td><td>' + ty + '</td><td>' + msg + '</td></tr>';
         });
         html += '</tbody></table>';
@@ -211,7 +229,7 @@
             url = '/api/bots-engine/' + opts.botId + '/events' + qBase +
                 (qBase ? '&' : '?') + 'limit=100&after_id=' + encodeURIComponent(state.lastId);
         } else {
-            if (!incremental) {
+            if (!incremental && !(state.events && state.events.length)) {
                 opts.container.innerHTML = '<div class="muted" style="padding: 0.75rem;">Yükleniyor…</div>';
             }
             url = '/api/bots-engine/' + opts.botId + '/events' + qBase +
@@ -239,8 +257,9 @@
             var healthData = typeof opts.getHealthData === 'function' ? opts.getHealthData() : opts.healthData;
             var connFail = opts.connectivityFailure || null;
             var displayEvents = injectConnectivityFromHealth(state.events, healthData, fmtApi, opts.botId, connFail);
+            displayEvents = mergeHealthForDisplay(opts.botId, displayEvents, healthData, opts);
             archiveDisplayEvents(opts, displayEvents, state.events);
-            renderTable(opts.container, enrichStartEvents(displayEvents, opts), fmtApi);
+            renderTable(opts.container, enrichStartEvents(displayEvents, opts), fmtApi, opts.botId);
             if (typeof opts.onAfterRender === 'function') {
                 opts.onAfterRender(state.events);
             }

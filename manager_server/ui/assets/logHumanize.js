@@ -635,6 +635,17 @@
       }
     },
     {
+      test: function (msg) { return /deque mutated during iteration/i.test(msg); },
+      apply: function () {
+        return {
+          konu: 'Yönetici paneli log eşzamanlılık hatası',
+          sebep: 'Log halkası okunurken arka planda yeni satır eklendi (thread yarışı). Düzeltme: log ring kilidi.',
+          etki: 'WebSocket anlık log akışı bir tick atlayabilir; servisler çalışmaya devam eder.',
+          oneri: 'Manager servisini yeniden başlatın; güncel sürümde kilit ile giderilmiş olmalı.'
+        };
+      }
+    },
+    {
       test: function (msg) { return /ValueError|TypeError|AttributeError|KeyError|IndexError|RuntimeError/i.test(msg); },
       apply: function (ctx) {
         var msg = ctx.message || ctx.raw || '';

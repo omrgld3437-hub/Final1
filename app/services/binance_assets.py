@@ -6,7 +6,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-from app.services.encryption import decrypt_text
+from app.services.encryption import (
+    decrypt_account_api_key,
+    decrypt_account_api_secret,
+    maybe_upgrade_account_secrets,
+)
 
 # Error codes for API response (global standard)
 ACCOUNT_NOT_FOUND = "ACCOUNT_NOT_FOUND"
@@ -47,12 +51,16 @@ async def get_account_keys(account_id: int, db) -> BinanceKeys:
     if (isinstance(enc_key, str) and not enc_key.strip()) or (isinstance(enc_secret, str) and not enc_secret.strip()):
         raise ValueError(ACCOUNT_KEYS_EMPTY)
     try:
-        api_key = decrypt_text(account.api_key_enc).strip()
-        api_secret = decrypt_text(account.api_secret_enc).strip()
+        api_key = decrypt_account_api_key(account_id, account.api_key_enc).strip()
+        api_secret = decrypt_account_api_secret(account_id, account.api_secret_enc).strip()
     except Exception:
         raise ValueError(ACCOUNT_KEYS_DECRYPT_FAIL)
     if not api_key or not api_secret:
         raise ValueError(ACCOUNT_KEYS_DECRYPT_FAIL)
+    try:
+        maybe_upgrade_account_secrets(db, account_id, api_key, api_secret)
+    except Exception:
+        pass
     mode = (getattr(account, "mode", None) or "live").strip().lower()
     testnet = mode == "testnet"
     # Gerçek hesaplar (test kullanıcı değil) her zaman mainnet kullanır; yanlışlıkla testnet seçilse bile

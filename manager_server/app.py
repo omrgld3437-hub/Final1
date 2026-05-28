@@ -87,6 +87,8 @@ class _WebSocketCloseSuppressMiddleware:
             _name = type(exc).__name__
             if _name in ("ConnectionClosedError", "ConnectionClosedOK", "IncompleteReadError", "CancelledError"):
                 return
+            if _name == "RuntimeError" and "deque mutated during iteration" in str(exc):
+                return
             cause = getattr(exc, "__cause__", None)
             if cause and type(cause).__name__ in ("IncompleteReadError", "ConnectionClosedError"):
                 return

@@ -100,6 +100,11 @@ def _reset_buy_grid_trigger(state: Dict[str, Any], idx: int) -> None:
     state["buy_grid_trough_price"] = troughs
 
 
+def _log_note(log_notes: Optional[List[str]], text: str) -> None:
+    if log_notes is not None and text:
+        log_notes.append(text)
+
+
 def _recover_sell_grid(
     state: Dict[str, Any],
     idx: int,
@@ -107,6 +112,7 @@ def _recover_sell_grid(
     trigger: float,
     sell_trail_pct: float,
     favorable: List[int],
+    log_notes: Optional[List[str]] = None,
 ) -> None:
     peaks = state.get("sell_grid_peak_price") or []
     while len(peaks) <= idx:
@@ -117,6 +123,11 @@ def _recover_sell_grid(
 
     if P < trigger:
         _reset_sell_grid_trigger(state, idx)
+        _log_note(
+            log_notes,
+            f"Üst satış grid #{idx + 1}: fiyat tetik altına indi ({P:.2f} < {trigger:.2f}); "
+            "kesinti sırasındaki tetik geçersiz sayıldı, grid yeniden bekliyor (tur aynı).",
+        )
         logger.info(
             "BOT_OUTAGE_RECOVERY bot_id=%s grid=sell idx=%s action=RESET reason=price_below_trigger price=%.4f trigger=%.4f",
             state.get("bot_id"), idx, P, trigger,
@@ -127,6 +138,10 @@ def _recover_sell_grid(
         peaks[idx] = peak
         state["sell_grid_peak_price"] = peaks
         favorable.append(idx)
+        _log_note(
+            log_notes,
+            f"Üst satış grid #{idx + 1}: kopma sonrası uygun fiyat; kaçırılan satış işlenecek.",
+        )
         logger.info(
             "BOT_OUTAGE_RECOVERY bot_id=%s grid=sell idx=%s action=EXEC_FAVORABLE price=%.4f exec=%.4f peak=%.4f",
             state.get("bot_id"), idx, P, exec_thr, peak,
@@ -159,6 +174,7 @@ def _recover_buy_grid(
     trigger: float,
     buy_trail_pct: float,
     favorable: List[int],
+    log_notes: Optional[List[str]] = None,
 ) -> None:
     troughs = state.get("buy_grid_trough_price") or []
     while len(troughs) <= idx:
@@ -169,6 +185,11 @@ def _recover_buy_grid(
 
     if P > trigger:
         _reset_buy_grid_trigger(state, idx)
+        _log_note(
+            log_notes,
+            f"Alt alım grid #{idx + 1}: kesinti sırasında tetik vardı; fiyat tetik üstüne çıktı "
+            f"({P:.2f} > {trigger:.2f}), tetik sıfırlandı — tur yeniden başlamaz, grid yeniden bekler.",
+        )
         logger.info(
             "BOT_OUTAGE_RECOVERY bot_id=%s grid=buy idx=%s action=RESET reason=price_above_trigger price=%.4f trigger=%.4f",
             state.get("bot_id"), idx, P, trigger,
@@ -179,6 +200,10 @@ def _recover_buy_grid(
         troughs[idx] = trough
         state["buy_grid_trough_price"] = troughs
         favorable.append(idx)
+        _log_note(
+            log_notes,
+            f"Alt alım grid #{idx + 1}: kopma sonrası uygun fiyat; kaçırılan alım işlenecek.",
+        )
         logger.info(
             "BOT_OUTAGE_RECOVERY bot_id=%s grid=buy idx=%s action=EXEC_FAVORABLE price=%.4f exec=%.4f trough=%.4f",
             state.get("bot_id"), idx, P, exec_thr, trough,
@@ -292,6 +317,26 @@ def _recover_reentry_buy(state: Dict[str, Any], config: DcaGridTrailingConfig, P
         )
 
 
+def flush_outage_recovery_log_to_events(db: Any, bot_id: int, account_id: int, state: Dict[str, Any]) -> None:
+    """tick sonrası kopma değerlendirme notunu bot_engine_events'e yaz."""
+    log = state.pop("_outage_recovery_log", None)
+    if not log or db is None:
+        return
+    try:
+        from app.botengine.state_store import append_event
+
+        append_event(
+            db,
+            bot_id,
+            account_id,
+            "INFO",
+            log.get("message") or "Kopma sonrası grid değerlendirmesi",
+            log.get("meta") or {},
+        )
+    except Exception as e:
+        logger.debug("flush_outage_recovery_log bot_id=%s: %s", bot_id, e)
+
+
 def apply_grid_outage_recovery(
     state: Dict[str, Any],
     config: DcaGridTrailingConfig,
@@ -314,6 +359,7 @@ def apply_grid_outage_recovery(
     _clear_outage_flags(state)
     favorable_buy: List[int] = []
     favorable_sell: List[int] = []
+    log_notes: List[str] = []
 
     ref = _f(state.get("reference_price"))
     if ref is None or ref <= 0:
@@ -351,7 +397,7 @@ def apply_grid_outage_recovery(
         trig = sell_triggers[i] if i < len(sell_triggers) else None
         trig_f = _f(trig)
         if trig_f is not None:
-            _recover_sell_grid(state, i, P, trig_f, sell_trail, favorable_sell)
+            _recover_sell_grid(state, i, P, trig_f, sell_trail, favorable_sell, log_notes)
         else:
             g = config.sell_grids[i] if i < len(config.sell_grids) else {}
             pct = _float(g.get("sell_grid_pct") or g.get("trigger_pct"), 0)
@@ -370,7 +416,7 @@ def apply_grid_outage_recovery(
         trig = buy_triggers[j] if j < len(buy_triggers) else None
         trig_f = _f(trig)
         if trig_f is not None:
-            _recover_buy_grid(state, j, P, trig_f, buy_trail, favorable_buy)
+            _recover_buy_grid(state, j, P, trig_f, buy_trail, favorable_buy, log_notes)
         else:
             g = config.buy_grids[j] if j < len(config.buy_grids) else {}
             pct = _float(g.get("buy_grid_pct") or g.get("trigger_pct"), 0)
@@ -390,8 +436,33 @@ def apply_grid_outage_recovery(
     state["_outage_favorable_buy"] = favorable_buy
     state["_outage_favorable_sell"] = favorable_sell
     state["_outage_recovery_at"] = datetime.now(timezone.utc).isoformat()
+
+    cycle_id = int(state.get("cycle_id") or 1)
+    summary_lines: List[str] = []
+    if gap_sec is not None:
+        summary_lines.append(
+            f"Bağlantı/tick boşluğu {gap_sec:.0f} sn — Tur {cycle_id} devam ediyor (yeni tur açılmadı)."
+        )
+    if log_notes:
+        summary_lines.extend(log_notes)
+    elif gap_sec is not None:
+        summary_lines.append("Aktif grid tetikleri geçerli; ek sıfırlama gerekmedi.")
+    if summary_lines:
+        state["_outage_recovery_log"] = {
+            "message": "Kopma sonrası grid değerlendirmesi",
+            "meta": {
+                "health_code": "OUTAGE_RECOVERY",
+                "gap_sec": gap_sec,
+                "cycle_id": cycle_id,
+                "price": P,
+                "tur_restarted": False,
+                "actions": log_notes,
+                "summary": " ".join(summary_lines),
+            },
+        }
+
     if gap_sec is not None:
         logger.info(
-            "BOT_OUTAGE_RECOVERY bot_id=%s gap_sec=%.1f price=%.4f favorable_buy=%s favorable_sell=%s",
-            state.get("bot_id"), gap_sec, P, favorable_buy, favorable_sell,
+            "BOT_OUTAGE_RECOVERY bot_id=%s gap_sec=%.1f price=%.4f favorable_buy=%s favorable_sell=%s notes=%s",
+            state.get("bot_id"), gap_sec, P, favorable_buy, favorable_sell, len(log_notes),
         )

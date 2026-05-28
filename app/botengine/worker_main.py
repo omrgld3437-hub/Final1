@@ -185,9 +185,19 @@ def mark_command_done(db, cmd_id: int, error_code: Optional[str] = None, error_i
 
 async def process_command(cmd: Dict[str, Any], db, v5_scheduler=None) -> None:
     """Process one command: assert account, then start_bot or stop_bot (or v5: register/unregister with scheduler)."""
+    import json as _json
+
     from app.botengine.state_store import append_event, load_state
     from app.botengine.orchestrator import start_bot, stop_bot
     from app.db.models import Bot
+
+    cmd_payload: Dict[str, Any] = {}
+    try:
+        raw_pl = cmd.get("payload_json")
+        if raw_pl:
+            cmd_payload = _json.loads(raw_pl) if isinstance(raw_pl, str) else dict(raw_pl)
+    except Exception:
+        cmd_payload = {}
 
     def _command_event_meta(bot_id: int) -> Dict[str, Any]:
         state = load_state(db, bot_id) or {}
@@ -221,6 +231,10 @@ async def process_command(cmd: Dict[str, Any], db, v5_scheduler=None) -> None:
             )
             if ic > 0:
                 meta["initial_capital_usdt"] = round(ic, 2)
+            if command == "START" and not cmd_payload.get("connectivity_resume"):
+                from app.botengine.start_log_brief import merge_cold_start_brief_into_meta
+
+                merge_cold_start_brief_into_meta(meta, raw_cfg)
         except Exception:
             pass
         try:
@@ -236,6 +250,24 @@ async def process_command(cmd: Dict[str, Any], db, v5_scheduler=None) -> None:
                 ref = float(state.get("reference_price") or 0)
                 if ref > 0:
                     meta["equity_usd"] = round(base_b * ref + quote_b, 2)
+        if cmd_payload.get("connectivity_resume"):
+            meta["connectivity_resume"] = True
+            rr = (cmd_payload.get("resume_reason") or "").strip()
+            if rr:
+                meta["resume_reason"] = rr
+            if cmd_payload.get("cycle_id") is not None:
+                meta["cycle_id"] = int(cmd_payload["cycle_id"])
+        resume_reason = (state.get("_connectivity_resume_reason") or "").strip()
+        if resume_reason:
+            meta["connectivity_resume"] = True
+            meta["resume_reason"] = resume_reason
+            try:
+                from app.botengine.state_store import save_state
+
+                state.pop("_connectivity_resume_reason", None)
+                save_state(db, bot_id, int(bot.account_id), state)
+            except Exception:
+                pass
         return meta
 
     cmd_id = cmd["id"]
@@ -270,32 +302,49 @@ async def process_command(cmd: Dict[str, Any], db, v5_scheduler=None) -> None:
                 v5_scheduler.register_bot(bot_id, time.monotonic())
                 mark_command_done(db, cmd_id)
                 logger.info("WORKER_COMMAND_EXECUTED command_id=%s bot_id=%s command=START (v5 registered)", cmd_id, bot_id)
-                try:
-                    append_event(db, bot_id, account_id, "INFO", f"COMMAND_EXECUTED command_id={cmd_id} START", _command_event_meta(bot_id))
-                except Exception:
-                    pass
-                # İlk alımı hemen yap: ilk tick'i komut işlerken çalıştır (kullanıcı "Oluştur" deyince anında market alım)
-                try:
-                    from app.botengine.bot_run import run_one_bot_tick
-                    await run_one_bot_tick(bot_id, f"cmd{cmd_id}_immediate")
-                    logger.info("WORKER_FIRST_TICK_EXECUTED bot_id=%s (initial allocation submitted)", bot_id)
-                except Exception as tick_err:
-                    logger.warning("WORKER_FIRST_TICK_FAILED bot_id=%s err=%s (scheduler will retry)", bot_id, tick_err)
+                start_meta = _command_event_meta(bot_id)
+                is_conn_resume = bool(start_meta.get("connectivity_resume"))
+                if not is_conn_resume:
+                    try:
+                        append_event(
+                            db, bot_id, account_id, "INFO",
+                            f"COMMAND_EXECUTED command_id={cmd_id} START", start_meta,
+                        )
+                    except Exception:
+                        pass
+                # İlk alımı hemen yap: soğuk başlatmada anında tick; bağlantı devamında atla (tur/grid korunur)
+                st = load_state(db, bot_id) or {}
+                skip_immediate = is_conn_resume and bool(st.get("initial_allocation_done"))
+                if not skip_immediate:
+                    try:
+                        from app.botengine.bot_run import run_one_bot_tick
+                        await run_one_bot_tick(bot_id, f"cmd{cmd_id}_immediate")
+                        logger.info("WORKER_FIRST_TICK_EXECUTED bot_id=%s (initial allocation submitted)", bot_id)
+                    except Exception as tick_err:
+                        logger.warning("WORKER_FIRST_TICK_FAILED bot_id=%s err=%s (scheduler will retry)", bot_id, tick_err)
             else:
                 await start_bot(bot_id, db)
                 mark_command_done(db, cmd_id)
                 logger.info("WORKER_COMMAND_EXECUTED command_id=%s bot_id=%s command=START", cmd_id, bot_id)
-                try:
-                    append_event(db, bot_id, account_id, "INFO", f"COMMAND_EXECUTED command_id={cmd_id} START", _command_event_meta(bot_id))
-                except Exception:
-                    pass
-                # İlk alımı hemen yap: ilk tick'i komut işlerken çalıştır
-                try:
-                    from app.botengine.bot_run import run_one_bot_tick
-                    await run_one_bot_tick(bot_id, f"cmd{cmd_id}_immediate")
-                    logger.info("WORKER_FIRST_TICK_EXECUTED bot_id=%s (initial allocation submitted)", bot_id)
-                except Exception as tick_err:
-                    logger.warning("WORKER_FIRST_TICK_FAILED bot_id=%s err=%s (loop will retry)", bot_id, tick_err)
+                start_meta = _command_event_meta(bot_id)
+                is_conn_resume = bool(start_meta.get("connectivity_resume"))
+                if not is_conn_resume:
+                    try:
+                        append_event(
+                            db, bot_id, account_id, "INFO",
+                            f"COMMAND_EXECUTED command_id={cmd_id} START", start_meta,
+                        )
+                    except Exception:
+                        pass
+                st = load_state(db, bot_id) or {}
+                skip_immediate = is_conn_resume and bool(st.get("initial_allocation_done"))
+                if not skip_immediate:
+                    try:
+                        from app.botengine.bot_run import run_one_bot_tick
+                        await run_one_bot_tick(bot_id, f"cmd{cmd_id}_immediate")
+                        logger.info("WORKER_FIRST_TICK_EXECUTED bot_id=%s (initial allocation submitted)", bot_id)
+                    except Exception as tick_err:
+                        logger.warning("WORKER_FIRST_TICK_FAILED bot_id=%s err=%s (loop will retry)", bot_id, tick_err)
         elif command == "STOP":
             if v5_scheduler:
                 v5_scheduler.unregister_bot(bot_id)
@@ -517,6 +566,18 @@ async def worker_loop():
                             db2.close()
                     else:
                         await ensure_running_bots(db)
+
+                # IP/API düzelince paused_error botları otomatik devam (probe + START)
+                auto_resume_interval = max(30, int(60 / command_poll_interval))
+                if loop_count % auto_resume_interval == 0 and loop_count > 0:
+                    try:
+                        from app.services.binance_connectivity import run_connectivity_auto_resume_pass
+
+                        n_ar = await run_connectivity_auto_resume_pass(db)
+                        if n_ar:
+                            logger.info("WORKER_CONNECTIVITY_AUTO_RESUME resumed=%s", n_ar)
+                    except Exception as ar_err:
+                        logger.debug("WORKER_CONNECTIVITY_AUTO_RESUME: %s", ar_err)
 
                 # Grafik: bot detay sayfası kapalıyken de çalışan botlar için periyodik örnek (worker'da yazılsın)
                 perf_sample_interval = 60  # saniyede bir döngü, 60 döngüde bir = ~60 sn

@@ -79,6 +79,8 @@ WS_BATCH_MAX = 40
 TAIL_READ_BYTES = 256_000
 ARCHIVE_QUERY_SCAN = 2500
 JSONL_COUNT_CACHE_TTL = 60.0
+
+# Issues persist debounce (legacy; dosya deposu anında yazar)
 ISSUE_PERSIST_DELAY_SEC = 20.0
 
 # Metrics list caps (no unbounded growth)
@@ -238,6 +240,7 @@ warns_ring: dict = {}  # key -> deque of str
 locks: dict = {}  # key -> bool (persisted to _LOCKS_FILE)
 _ws_batch: dict = {}  # key -> list of { ts, level, text }
 _batch_lock = threading.Lock()
+_rings_lock = threading.Lock()  # logs_ring / errors_ring / warns_ring (tail thread vs WS/API)
 _tail_threads: dict = {}
 _tail_stop: dict = {}  # key -> event to stop thread
 
@@ -247,20 +250,12 @@ _metrics_lock = threading.Lock()
 _metrics_thread: Optional[threading.Thread] = None
 _metrics_stop = threading.Event()
 
-# Issues (Sentry-style, bounded): fingerprint -> issue dict. LRU evict when > MAX_ISSUES
+# Issues — dosya tabanlı depo (manager_server/issue_file_store.py); RAM havuzu yok
 MAX_ISSUES = 300
 MAX_ISSUE_SAMPLES = 3
 ISSUE_COMMENT_MAX = 15
 ISSUE_STATUS_HIST_MAX = 15
 MAX_ISSUES_ARCHIVE = 10000
-_ISSUES_ACTIVE_FILE = _RUN_DIR / "issues_active.json"
-_ISSUES_ARCHIVE_FILE = _RUN_DIR / "issues_archive.jsonl"
-ISSUE_ID_COUNTER = [0]  # list to allow mutability in nested fn
-_issues: dict = {}  # fingerprint -> { id, fingerprint, severity, status, first_seen, last_seen, count, samples, tags }
-_issues_lock = threading.Lock()
-_issues_order: deque = deque()  # insertion order; evicted manually at MAX_ISSUES
-_issues_persist_timer: Optional[threading.Timer] = None
-_issues_persist_lock = threading.Lock()
 
 # Audit events (bounded, persisted to .run/audit.json)
 MAX_AUDIT = 300
@@ -591,7 +586,9 @@ def save_locks(l: dict) -> None:
 def init_state() -> None:
     global status, logs_ring, errors_ring, warns_ring, locks
     _load_audit()
-    _load_active_issues()
+    from manager_server import issue_file_store
+
+    issue_file_store.init_store()
     _load_diagnosis()
     locks = load_locks()
     for key in ("web", "engine"):
@@ -752,318 +749,6 @@ def _fingerprint_line(line: str) -> str:
     return hashlib.sha256(norm.encode()).hexdigest()[:20]
 
 
-def _issue_from_disk(raw: dict) -> dict:
-    i = dict(raw)
-    if not isinstance(i.get("comments"), deque):
-        i["comments"] = deque(i.get("comments") or [], maxlen=ISSUE_COMMENT_MAX)
-    if not isinstance(i.get("status_history"), deque):
-        i["status_history"] = deque(i.get("status_history") or [], maxlen=ISSUE_STATUS_HIST_MAX)
-    i.setdefault("assignee", None)
-    i.setdefault("labels", [])
-    i.setdefault("sla_note", None)
-    return i
-
-
-def _parse_issue_id_num(issue_id: Optional[str]) -> int:
-    if not issue_id or not str(issue_id).startswith("ISS-"):
-        return 0
-    try:
-        return int(str(issue_id)[4:])
-    except ValueError:
-        return 0
-
-
-def _sync_issue_counter_from_records(records: list) -> None:
-    max_id = ISSUE_ID_COUNTER[0]
-    for rec in records:
-        max_id = max(max_id, _parse_issue_id_num(rec.get("id")))
-    ISSUE_ID_COUNTER[0] = max_id
-
-
-def _append_issue_archive(issue: dict, reason: str = "capacity") -> None:
-    """Evicted issues → local jsonl backup under .run/issues_archive.jsonl."""
-    try:
-        _RUN_DIR.mkdir(parents=True, exist_ok=True)
-        record = _issue_to_dict(issue)
-        record["_backup_reason"] = reason
-        record["_backup_at"] = _now_tr_iso()
-        with open(_ISSUES_ARCHIVE_FILE, "a", encoding="utf-8") as f:
-            f.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
-        _invalidate_jsonl_count_cache(_ISSUES_ARCHIVE_FILE)
-        _trim_jsonl_file(_ISSUES_ARCHIVE_FILE, MAX_ISSUES_ARCHIVE)
-    except Exception:
-        pass
-
-
-def _trim_issues_archive_file() -> None:
-    _trim_jsonl_file(_ISSUES_ARCHIVE_FILE, MAX_ISSUES_ARCHIVE)
-
-
-def _pick_eviction_fingerprint() -> Optional[str]:
-    """Evict archived/resolved before open; oldest last_seen within tier."""
-    if not _issues:
-        return None
-    rank = {"ARCHIVED": 0, "RESOLVED": 1, "ACK": 2, "OPEN": 3}
-    candidates: list[tuple] = []
-    for fp in list(_issues_order):
-        i = _issues.get(fp)
-        if not i:
-            continue
-        st = (i.get("status") or "OPEN").upper()
-        candidates.append((rank.get(st, 9), i.get("last_seen") or "", fp))
-    if not candidates:
-        return None
-    candidates.sort()
-    return candidates[0][2]
-
-
-def _evict_issue_for_capacity() -> None:
-    fp = _pick_eviction_fingerprint()
-    if not fp:
-        return
-    try:
-        _issues_order.remove(fp)
-    except ValueError:
-        pass
-    old = _issues.pop(fp, None)
-    if old:
-        _append_issue_archive(old, "capacity")
-
-
-def _persist_active_issues() -> None:
-    with _issues_lock:
-        payload = {
-            "counter": ISSUE_ID_COUNTER[0],
-            "order": list(_issues_order),
-            "issues": {fp: _issue_to_dict(i) for fp, i in _issues.items()},
-            "saved_at": _now_tr_iso(),
-        }
-    try:
-        _RUN_DIR.mkdir(parents=True, exist_ok=True)
-        tmp = _ISSUES_ACTIVE_FILE.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
-        tmp.replace(_ISSUES_ACTIVE_FILE)
-    except Exception:
-        pass
-
-
-def _schedule_persist_active_issues(delay_sec: float = ISSUE_PERSIST_DELAY_SEC) -> None:
-    global _issues_persist_timer
-    with _issues_persist_lock:
-
-        def _run() -> None:
-            _persist_active_issues()
-
-        if _issues_persist_timer is not None:
-            _issues_persist_timer.cancel()
-        _issues_persist_timer = threading.Timer(delay_sec, _run)
-        _issues_persist_timer.daemon = True
-        _issues_persist_timer.start()
-
-
-def _load_active_issues() -> None:
-    global _issues, _issues_order
-    if _ISSUES_ACTIVE_FILE.exists():
-        try:
-            data = json.loads(_ISSUES_ACTIVE_FILE.read_text(encoding="utf-8"))
-            if isinstance(data, dict):
-                ISSUE_ID_COUNTER[0] = int(data.get("counter") or 0)
-                order = data.get("order") or []
-                raw_issues = data.get("issues") or {}
-                if isinstance(raw_issues, dict):
-                    _issues.clear()
-                    _issues_order.clear()
-                    for fp in order:
-                        if fp in raw_issues:
-                            _issues[fp] = _issue_from_disk(raw_issues[fp])
-                            _issues_order.append(fp)
-                    for fp, raw in raw_issues.items():
-                        if fp not in _issues:
-                            _issues[fp] = _issue_from_disk(raw)
-                            _issues_order.append(fp)
-        except Exception:
-            pass
-    max_id = ISSUE_ID_COUNTER[0]
-    for i in _issues.values():
-        max_id = max(max_id, _parse_issue_id_num(i.get("id")))
-    for line in _read_file_tail_lines(_ISSUES_ARCHIVE_FILE, 32):
-        try:
-            rec = json.loads(line)
-            max_id = max(max_id, _parse_issue_id_num(rec.get("id")))
-        except json.JSONDecodeError:
-            continue
-    ISSUE_ID_COUNTER[0] = max_id
-
-
-def _count_issues_archive() -> int:
-    return _count_jsonl_lines_cached(_ISSUES_ARCHIVE_FILE)
-
-
-def get_issues_archive(limit: int = 100, q: Optional[str] = None, offset: int = 0, service: Optional[str] = None) -> dict:
-    """Read backed-up issues from local jsonl tail (bounded RAM)."""
-    limit = max(1, min(500, limit))
-    offset = max(0, offset)
-    needle = (q or "").strip().lower()
-
-    def _match(rec: dict) -> bool:
-        if service and (rec.get("tags") or {}).get("service") != service:
-            return False
-        if needle:
-            hay = " ".join([
-                str(rec.get("id") or ""),
-                str(rec.get("status") or ""),
-                str(rec.get("severity") or ""),
-                str((rec.get("tags") or {}).get("service") or ""),
-                " ".join(str(s) for s in (rec.get("samples") or [])[:2]),
-            ]).lower()
-            if needle not in hay:
-                return False
-        return True
-
-    items, scanned_total = _query_jsonl_archive(_ISSUES_ARCHIVE_FILE, limit, offset, _match)
-    return {
-        "items": items,
-        "total": _count_jsonl_lines_cached(_ISSUES_ARCHIVE_FILE) if not needle and not service else scanned_total,
-        "limit": limit,
-        "offset": offset,
-        "path": str(_ISSUES_ARCHIVE_FILE),
-    }
-
-
-def _ingest_issue(key: str, line: str, level: str) -> None:
-    """Register or update an issue from a log line. Bounded: max 300 active; overflow → local jsonl."""
-    fp = _fingerprint_line(line)
-    now_iso = _now_tr_iso()
-    with _issues_lock:
-        if fp in _issues:
-            i = _issues[fp]
-            i["last_seen"] = now_iso
-            i["count"] = i.get("count", 0) + 1
-            if i.get("status") == "ARCHIVED":
-                i["status"] = "OPEN"
-                i.pop("archived_at", None)
-                _push_status_history(i, "REOPENED")
-            samples = i.get("samples", [])
-            if line not in samples[-MAX_ISSUE_SAMPLES:]:
-                samples.append(_truncate_line(line, LOG_LINE_MAX))
-                i["samples"] = samples[-MAX_ISSUE_SAMPLES:]
-        else:
-            while len(_issues) >= MAX_ISSUES:
-                _evict_issue_for_capacity()
-            ISSUE_ID_COUNTER[0] += 1
-            iid = "ISS-%06d" % ISSUE_ID_COUNTER[0]
-            _issues_order.append(fp)
-            _issues[fp] = {
-                "id": iid,
-                "fingerprint": fp,
-                "severity": level,
-                "status": "OPEN",
-                "first_seen": now_iso,
-                "last_seen": now_iso,
-                "count": 1,
-                "samples": [_truncate_line(line, LOG_LINE_MAX)],
-                "tags": {"service": key},
-                "assignee": None,
-                "labels": [],
-                "sla_note": None,
-                "comments": deque(maxlen=ISSUE_COMMENT_MAX),
-                "status_history": deque(maxlen=ISSUE_STATUS_HIST_MAX),
-            }
-            _issues[fp]["status_history"].append({"ts": now_iso, "status": "OPEN"})
-            if level == "ERROR":
-                add_alert("CRIT", "error_issue", _truncate_line(line, 200), {"issue_id": iid, "service": key})
-            _schedule_persist_active_issues()
-
-
-def _issue_to_dict(i: dict) -> dict:
-    """Copy issue for API; ensure assignee/labels/sla_note/comments/status_history present and deques as lists."""
-    out = dict(i)
-    out.setdefault("assignee", None)
-    out.setdefault("labels", [])
-    out.setdefault("sla_note", None)
-    if isinstance(out.get("comments"), deque):
-        out["comments"] = list(out["comments"])
-    else:
-        out.setdefault("comments", [])
-    if isinstance(out.get("status_history"), deque):
-        out["status_history"] = list(out["status_history"])
-    else:
-        out.setdefault("status_history", [])
-    if isinstance(out.get("labels"), list) and len(out["labels"]) > 10:
-        out["labels"] = out["labels"][:10]
-    return out
-
-
-def get_issue_stats() -> dict:
-    """Counts by status for incidents dashboard."""
-    counts = {"open": 0, "ack": 0, "resolved": 0, "archived": 0, "total": 0}
-    with _issues_lock:
-        for i in _issues.values():
-            counts["total"] += 1
-            st = (i.get("status") or "OPEN").upper()
-            if st == "OPEN":
-                counts["open"] += 1
-            elif st == "ACK":
-                counts["ack"] += 1
-            elif st == "RESOLVED":
-                counts["resolved"] += 1
-            elif st == "ARCHIVED":
-                counts["archived"] += 1
-    counts["active"] = counts["open"] + counts["ack"] + counts["resolved"]
-    counts["backup"] = _count_issues_archive()
-    counts["max_active"] = MAX_ISSUES
-    return counts
-
-
-def get_issues(
-    service: Optional[str] = None,
-    status_filter: Optional[str] = None,
-    limit: int = 50,
-    q: Optional[str] = None,
-) -> list:
-    """Return list of issues (open first, then by last_seen). Capped by limit (max 200)."""
-    limit = max(1, min(200, limit))
-    with _issues_lock:
-        out = [_issue_to_dict(i) for i in _issues.values()]
-    if service:
-        out = [i for i in out if i.get("tags", {}).get("service") == service]
-    sf = (status_filter or "").strip().upper()
-    if sf == "ACTIVE":
-        out = [i for i in out if (i.get("status") or "OPEN").upper() != "ARCHIVED"]
-    elif sf:
-        out = [i for i in out if (i.get("status") or "").upper() == sf]
-    if q:
-        needle = q.strip().lower()
-        if needle:
-
-            def _match(issue: dict) -> bool:
-                parts = [
-                    str(issue.get("id") or ""),
-                    str(issue.get("status") or ""),
-                    str(issue.get("severity") or ""),
-                    str(issue.get("assignee") or ""),
-                    " ".join(issue.get("labels") or []),
-                    str((issue.get("tags") or {}).get("service") or ""),
-                ]
-                parts.extend(str(s) for s in (issue.get("samples") or [])[:3])
-                return needle in " ".join(parts).lower()
-
-            out = [i for i in out if _match(i)]
-    status_rank = {"OPEN": 0, "ACK": 1, "RESOLVED": 2, "ARCHIVED": 3}
-    out.sort(key=lambda x: x.get("last_seen") or "", reverse=True)
-    out.sort(key=lambda x: status_rank.get((x.get("status") or "OPEN").upper(), 9))
-    return out[:limit]
-
-
-def get_issue_by_id(issue_id: str) -> Optional[dict]:
-    """Return single issue by id or None."""
-    with _issues_lock:
-        for i in _issues.values():
-            if i.get("id") == issue_id:
-                return _issue_to_dict(i)
-    return None
-
-
 def _push_status_history(issue: dict, new_status: str) -> None:
     hist = issue.get("status_history")
     if not isinstance(hist, deque):
@@ -1072,139 +757,114 @@ def _push_status_history(issue: dict, new_status: str) -> None:
     hist.append({"ts": _now_tr_iso(), "status": new_status})
 
 
+def _ingest_issue(key: str, line: str, level: str) -> None:
+    """Register or update an issue from a log line (dosya deposu)."""
+    from manager_server import issue_file_store
+
+    def _on_new(iid: str, svc: str, msg: str) -> None:
+        add_alert("CRIT", "error_issue", _truncate_line(msg, 200), {"issue_id": iid, "service": svc})
+
+    issue_file_store.ingest_issue(key, line, level, on_new_error=_on_new)
+
+
+def get_issue_stats() -> dict:
+    from manager_server import issue_file_store
+
+    return issue_file_store.get_issue_stats()
+
+
+def get_issues(
+    service: Optional[str] = None,
+    status_filter: Optional[str] = None,
+    limit: int = 50,
+    q: Optional[str] = None,
+) -> list:
+    from manager_server import issue_file_store
+
+    return issue_file_store.get_issues(service=service, status_filter=status_filter, limit=limit, q=q)
+
+
+def get_issues_archive(limit: int = 100, q: Optional[str] = None, offset: int = 0, service: Optional[str] = None) -> dict:
+    from manager_server import issue_file_store
+
+    return issue_file_store.get_issues_archive(limit=limit, offset=offset, q=q, service=service)
+
+
+def get_issue_by_id(issue_id: str) -> Optional[dict]:
+    from manager_server import issue_file_store
+
+    return issue_file_store.get_issue_by_id(issue_id)
+
+
 def issue_ack(issue_id: str) -> Optional[dict]:
-    with _issues_lock:
-        for i in _issues.values():
-            if i.get("id") == issue_id:
-                i["status"] = "ACK"
-                _push_status_history(i, "ACK")
-                out = _issue_to_dict(i)
-                break
-        else:
-            out = None
+    from manager_server import issue_file_store
+
+    out = issue_file_store.issue_ack(issue_id)
     if out:
         audit_event("issue_ack", {"issue_id": issue_id})
-        _schedule_persist_active_issues()
     return out
 
 
 def issue_resolve(issue_id: str) -> Optional[dict]:
-    with _issues_lock:
-        for i in _issues.values():
-            if i.get("id") == issue_id:
-                i["status"] = "RESOLVED"
-                _push_status_history(i, "RESOLVED")
-                out = _issue_to_dict(i)
-                break
-        else:
-            out = None
+    from manager_server import issue_file_store
+
+    out = issue_file_store.issue_resolve(issue_id)
     if out:
         audit_event("issue_resolve", {"issue_id": issue_id})
-        _schedule_persist_active_issues()
     return out
 
 
 def issue_archive(issue_id: str) -> Optional[dict]:
-    with _issues_lock:
-        for i in _issues.values():
-            if i.get("id") == issue_id:
-                i["status"] = "ARCHIVED"
-                i["archived_at"] = _now_tr_iso()
-                _push_status_history(i, "ARCHIVED")
-                out = _issue_to_dict(i)
-                break
-        else:
-            out = None
+    from manager_server import issue_file_store
+
+    out = issue_file_store.issue_archive(issue_id)
     if out:
         audit_event("issue_archive", {"issue_id": issue_id})
-        _schedule_persist_active_issues()
     return out
 
 
 def issue_reopen(issue_id: str) -> Optional[dict]:
-    with _issues_lock:
-        for i in _issues.values():
-            if i.get("id") == issue_id:
-                i["status"] = "OPEN"
-                i.pop("archived_at", None)
-                _push_status_history(i, "REOPENED")
-                out = _issue_to_dict(i)
-                break
-        else:
-            out = None
+    from manager_server import issue_file_store
+
+    out = issue_file_store.issue_reopen(issue_id)
     if out:
         audit_event("issue_reopen", {"issue_id": issue_id})
-        _schedule_persist_active_issues()
     return out
 
 
 def issue_assign(issue_id: str, assignee: Optional[str]) -> Optional[dict]:
-    with _issues_lock:
-        for i in _issues.values():
-            if i.get("id") == issue_id:
-                i["assignee"] = (assignee or "").strip() or None
-                out = _issue_to_dict(i)
-                break
-        else:
-            out = None
+    from manager_server import issue_file_store
+
+    out = issue_file_store.issue_assign(issue_id, assignee)
     if out:
         audit_event("issue_assign", {"issue_id": issue_id, "assignee": assignee})
-        _schedule_persist_active_issues()
     return out
 
 
 def issue_labels(issue_id: str, labels: list) -> Optional[dict]:
-    labels = [str(x).strip()[:64] for x in (labels or [])[:10]]
-    with _issues_lock:
-        for i in _issues.values():
-            if i.get("id") == issue_id:
-                i["labels"] = labels
-                out = _issue_to_dict(i)
-                break
-        else:
-            out = None
+    from manager_server import issue_file_store
+
+    out = issue_file_store.issue_labels(issue_id, labels)
     if out:
         audit_event("issue_labels", {"issue_id": issue_id, "labels": labels})
-        _schedule_persist_active_issues()
     return out
 
 
 def issue_comment(issue_id: str, text: str, author: str = "local") -> Optional[dict]:
-    text = (text or "").strip()[:500]
-    if not text:
-        return get_issue_by_id(issue_id)
-    now_iso = _now_tr_iso()
-    entry = {"ts": now_iso, "author": (author or "local")[:64], "text": text}
-    with _issues_lock:
-        for i in _issues.values():
-            if i.get("id") == issue_id:
-                comm = i.get("comments")
-                if not isinstance(comm, deque):
-                    i["comments"] = deque(maxlen=ISSUE_COMMENT_MAX)
-                    comm = i["comments"]
-                comm.append(entry)
-                out = _issue_to_dict(i)
-                break
-        else:
-            out = None
-    if out:
+    from manager_server import issue_file_store
+
+    out = issue_file_store.issue_comment(issue_id, text, author=author)
+    if out and (text or "").strip():
         audit_event("issue_comment", {"issue_id": issue_id})
-        _schedule_persist_active_issues()
     return out
 
 
 def issue_sla(issue_id: str, sla_note: Optional[str]) -> Optional[dict]:
-    with _issues_lock:
-        for i in _issues.values():
-            if i.get("id") == issue_id:
-                i["sla_note"] = (sla_note or "").strip() or None
-                out = _issue_to_dict(i)
-                break
-        else:
-            out = None
+    from manager_server import issue_file_store
+
+    out = issue_file_store.issue_sla(issue_id, sla_note)
     if out:
         audit_event("issue_sla", {"issue_id": issue_id})
-        _schedule_persist_active_issues()
     return out
 
 
@@ -1555,10 +1215,30 @@ def _should_skip_html_stats_duplicate(key: str, line: str) -> bool:
     """HTML logunda ardışık aynı Günlük|Aylık|Toplam satırını atla."""
     if not _HTML_STATS_RE.search(line):
         return False
-    ring = logs_ring.get(key)
-    if not ring or len(ring) == 0:
-        return False
-    return ring[-1] == line
+    with _rings_lock:
+        ring = logs_ring.get(key)
+        if not ring or len(ring) == 0:
+            return False
+        return ring[-1] == line
+
+
+def _rings_append_line(key: str, line: str, level: str) -> None:
+    """Thread-safe append to log rings; issue ingest outside lock."""
+    ingest: Optional[tuple] = None
+    with _rings_lock:
+        if key not in logs_ring:
+            return
+        logs_ring[key].append(line)
+        if level == "ERROR":
+            if not _is_noise_line(line, "ERROR"):
+                errors_ring[key].append(line)
+                ingest = (key, line, "ERROR")
+        elif level == "WARN":
+            if not _is_noise_line(line, "WARN"):
+                warns_ring[key].append(line)
+                ingest = (key, line, "WARN")
+    if ingest:
+        _ingest_issue(ingest[0], ingest[1], ingest[2])
 
 
 def _tail_loop(key: str) -> None:
@@ -1576,16 +1256,10 @@ def _tail_loop(key: str) -> None:
                     continue
                 if key == "html" and _should_skip_html_stats_duplicate(key, line):
                     continue
-                logs_ring[key].append(line)
                 level = classify_line(line)
-                if level == "ERROR":
-                    if not _is_noise_line(line, "ERROR"):
-                        errors_ring[key].append(line)
-                        _ingest_issue(key, line, "ERROR")
-                elif level == "WARN":
-                    if not _is_noise_line(line, "WARN") and not _backfill_should_skip_401_warn(key, line):
-                        warns_ring[key].append(line)
-                        _ingest_issue(key, line, "WARN")
+                if level == "WARN" and _backfill_should_skip_401_warn(key, line):
+                    continue
+                _rings_append_line(key, line, level)
             f.seek(0, 2)
             while stop and not stop.is_set():
                 line = f.readline()
@@ -1597,16 +1271,10 @@ def _tail_loop(key: str) -> None:
                     continue
                 if key == "html" and _should_skip_html_stats_duplicate(key, line):
                     continue
-                logs_ring[key].append(line)
                 level = classify_line(line)
-                if level == "ERROR":
-                    if not _is_noise_line(line, "ERROR"):
-                        errors_ring[key].append(line)
-                        _ingest_issue(key, line, "ERROR")
-                elif level == "WARN":
-                    if not _is_noise_line(line, "WARN") and not _should_throttle_401_warn(key, line):
-                        warns_ring[key].append(line)
-                        _ingest_issue(key, line, "WARN")
+                if level == "WARN" and _should_throttle_401_warn(key, line):
+                    continue
+                _rings_append_line(key, line, level)
                 ts = _now_tr_time()
                 with _batch_lock:
                     batch = _ws_batch[key]
@@ -2052,16 +1720,19 @@ def reset_logs(key: str) -> None:
     audit_event("reset", {"key": key})
     if key == "all":
         for k in ("web", "engine", "manager", "html"):
-            if k in logs_ring:
-                logs_ring[k].clear()
-                errors_ring[k].clear()
-                warns_ring[k].clear()
-                with _batch_lock:
+            with _rings_lock:
+                if k in logs_ring:
+                    logs_ring[k].clear()
+                    errors_ring[k].clear()
+                    warns_ring[k].clear()
+            with _batch_lock:
+                if k in _ws_batch:
                     _ws_batch[k].clear()
     elif key in ("web", "engine", "manager", "html") and key in logs_ring:
-        logs_ring[key].clear()
-        errors_ring[key].clear()
-        warns_ring[key].clear()
+        with _rings_lock:
+            logs_ring[key].clear()
+            errors_ring[key].clear()
+            warns_ring[key].clear()
         with _batch_lock:
             _ws_batch[key].clear()
 
@@ -2070,15 +1741,20 @@ def get_logs(key: str, tail: int = 300) -> dict:
     if key not in ("web", "engine", "manager", "html"):
         return {"lines": [], "errors": [], "warns": []}
     tail = max(1, min(RING_LINES, tail))
-    ring = logs_ring[key]
-    if key == "web":
-        lines = [l for l in ring if not _is_web_access_200_line(l)]
-    else:
-        lines = list(ring)
+    with _rings_lock:
+        ring = logs_ring.get(key)
+        if not ring:
+            return {"lines": [], "errors": [], "warns": []}
+        if key == "web":
+            lines = [l for l in ring if not _is_web_access_200_line(l)]
+        else:
+            lines = list(ring)
+        errors = list(errors_ring.get(key, ()))
+        warns = list(warns_ring.get(key, ()))
     return {
         "lines": lines[-tail:] if len(lines) > tail else lines,
-        "errors": list(errors_ring[key]),
-        "warns": list(warns_ring[key]),
+        "errors": errors,
+        "warns": warns,
     }
 
 

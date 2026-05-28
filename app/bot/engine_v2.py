@@ -13,7 +13,7 @@ from app.bot.models_v2 import (
     BotV2, BotBalanceV2, BotGridV2, BotCycleV2, BotTradeV2, BotStateV2
 )
 from app.bot.binance_adapter_v2 import BinanceSpotAdapterV2
-from app.services.encryption import decrypt_key
+from app.services.encryption import decrypt_account_api_key, decrypt_account_api_secret
 from app.services import audit as audit_svc
 from app.db.models import Account
 
@@ -62,8 +62,8 @@ class BotEngineV2:
             from app.db.models import Account
             account = self.db.query(Account).filter(Account.id == self.bot.account_id).first()
             if account:
-                api_key = decrypt_key(account.api_key_enc)
-                api_secret = decrypt_key(account.api_secret_enc)
+                api_key = decrypt_account_api_key(account.id, account.api_key_enc)
+                api_secret = decrypt_account_api_secret(account.id, account.api_secret_enc)
                 self.adapter = BinanceSpotAdapterV2(
                     self.bot.account_id, "live", api_key, api_secret
                 )

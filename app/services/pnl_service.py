@@ -11,7 +11,7 @@ from typing import Dict, List, Optional
 from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 from app.db.models import Trade, PnlSnapshot, Bot
-from app.utils.tz_utils import turkey_today_start_utc, turkey_day_start_utc_for_date, turkey_day_end_utc_for_date
+from app.utils.tz_utils import turkey_today_start_utc, turkey_day_start_utc_for_date, turkey_day_end_utc_for_date, bot_started_on_tr_date
 from sqlalchemy import text
 from app.services.price_hub import price_hub
 
@@ -132,6 +132,49 @@ def _apply_stale_return(
         out["daily"] = float(last_row.daily or 0)
         out["daily_pnl_pct"] = round((out["daily"] / float(last_row.total_usd or 1) * 100.0), 2) if last_row.total_usd else 0.0
         out["monthly"] = float(last_row.monthly or 0)
+
+
+def ensure_daily_ref_and_compute(
+    state: dict,
+    total_usd: float,
+    initial_capital: float,
+    bot_started_at,
+    db: Optional[Session] = None,
+    bot_id: Optional[int] = None,
+    account_id: Optional[int] = None,
+    persist: bool = True,
+) -> tuple[float, float]:
+    """
+    Günlük K/Z: gece 00:00 TR'de equity referansı; bot aynı gün açıldıysa initial_capital
+    (toplam K/Z ile aynı baz — gün içi tutarlılık).
+    """
+    if not state.get("initial_allocation_done"):
+        return 0.0, 0.0
+    from app.botengine.state_store import save_state
+
+    today_date = turkey_today_start_utc().strftime("%Y-%m-%d")
+    started_today = bot_started_on_tr_date(bot_started_at, today_date)
+    daily_ref_date = state.get("daily_ref_date")
+    daily_ref_usd = float(state.get("daily_ref_usd") or 0)
+    changed = False
+
+    if daily_ref_date != today_date:
+        new_ref = float(initial_capital) if (started_today and initial_capital > 0) else float(total_usd)
+        state["daily_ref_usd"] = new_ref
+        state["daily_ref_date"] = today_date
+        daily_ref_usd = new_ref
+        changed = True
+    elif started_today and initial_capital > 0 and abs(daily_ref_usd - initial_capital) > 1e-6:
+        state["daily_ref_usd"] = float(initial_capital)
+        daily_ref_usd = float(initial_capital)
+        changed = True
+
+    if changed and persist and db is not None and bot_id is not None and account_id is not None:
+        save_state(db, bot_id, account_id, state)
+
+    daily = float(total_usd) - daily_ref_usd
+    pct = (daily / daily_ref_usd * 100.0) if daily_ref_usd > 0 else 0.0
+    return daily, pct
 
 
 class PnlService:
@@ -289,13 +332,16 @@ class PnlService:
             _apply_stale_return(db, bot_id, account_id, state, out, initial_capital)
             return out
         if state.get("initial_allocation_done"):
-            if state.get("daily_ref_date") != today_date:
-                state["daily_ref_usd"] = total_usd
-                state["daily_ref_date"] = today_date
-                save_state(db, bot_id, account_id, state)
-            daily_ref_usd = float(state.get("daily_ref_usd") or 0)
-            daily = total_usd - daily_ref_usd
-            daily_pnl_pct = (daily / daily_ref_usd * 100.0) if daily_ref_usd > 0 else 0.0
+            daily, daily_pnl_pct = ensure_daily_ref_and_compute(
+                state,
+                total_usd,
+                initial_capital,
+                getattr(bot, "started_at", None),
+                db=db,
+                bot_id=bot_id,
+                account_id=account_id,
+                persist=True,
+            )
         else:
             daily = 0.0
             daily_pnl_pct = 0.0

@@ -15,10 +15,15 @@ python -m app.botengine.worker_main
 | Dosya | Görev |
 |-------|--------|
 | `worker_main.py` | Komut poll, scheduler / ensure_running_bots |
+| `start_log_brief.py` | İlk START log meta — kısa grid/alloc özet |
 | `orchestrator.py` | Legacy `_bot_loop` |
 | `bot_run.py` | v5 tek tick |
 | `scheduler.py` | v5 heap (`BOT_ENGINE_V5_SCHEDULER=1`) |
-| `execution.py` | `run_actions` → Binance |
+| `execution.py` | `run_actions` → Binance; 401 → `paused_error`; SELL LOT_SIZE preflight; `RUN_ACTION_EXCEPTION` → resilience log |
+| `health_watch.py` | `evaluate_bot_health`, `emit_resilience_continue`, `emit_loop_auto_restart`; worker ~60s emit |
+| `orchestrator.py` | Tick hatalarında running kalır; döngü crash → auto-restart; `ensure_running_bots` |
+| `order_qty.py` | Decimal `stepSize` floor + `validate_market_sell_qty` |
+| `health_watch.py` | Sağlık uyarıları (otomatik durdurmaz) |
 | `intent_ledger.py` | Exactly-once intent |
 | `locks.py` | Hesap kilidi, lease 10s |
 | `reconcile.py` | Binance truth |
@@ -53,6 +58,7 @@ bot_run.py
 cycle_ledger.py
 errors.py
 execution.py
+order_qty.py
 grid_view.py
 intent_ledger.py
 kill_switch.py

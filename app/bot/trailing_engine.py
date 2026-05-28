@@ -18,7 +18,6 @@ try:
     from app.services.binance_client import BinanceClient
 except ImportError:
     BinanceClient = None
-from app.services.encryption import decrypt_text
 from app.bot.ledger import Ledger
 from sqlalchemy.orm import Session
 
@@ -100,9 +99,9 @@ class TrailingGridEngine:
         if self.account.mode == "live":
             # Decrypt and create client
             try:
-                from app.services.encryption import decrypt_text
-                api_key = decrypt_text(self.account.api_key_enc)
-                api_secret = decrypt_text(self.account.api_secret_enc)
+                from app.services.encryption import decrypt_account_api_key, decrypt_account_api_secret
+                api_key = decrypt_account_api_key(self.account_id, self.account.api_key_enc)
+                api_secret = decrypt_account_api_secret(self.account_id, self.account.api_secret_enc)
                 self.binance_client = BinanceClient(api_key, api_secret, testnet=False)
                 return self.binance_client
             except Exception as e:

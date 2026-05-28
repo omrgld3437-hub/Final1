@@ -21,7 +21,7 @@ import re
 import random
 from app.db.session import get_db
 from app.db.models import User, Account, PendingRegistration, BannedIP, PasswordResetRequest, ContactMessage, ChatThread, ChatMessage, ChatRating, AuditEvent, AdminPopup, AdminPopupDismissal
-from app.services.encryption import encrypt_text, decrypt_text
+from app.services.encryption import encrypt_text
 from app.services import audit as audit_svc
 from app.core.auth.token_utils import hash_token, short_session_id
 import logging

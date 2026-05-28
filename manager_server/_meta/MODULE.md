@@ -17,7 +17,8 @@ python -m manager_server
 | Dosya | Görev |
 |-------|--------|
 | `app.py` | FastAPI, API, WS |
-| `state.py` | PID, log ring, helper spawn |
+| `state.py` | PID, log ring, helper spawn; olaylar → dosya |
+| `issue_file_store.py` | Olay Merkezi dosya deposu (`.run/issues/`) |
 | `reason_engine.py` | Durum açıklama |
 | `ui/` | manager.js, logHumanize.js, index.html — canlı log paneli hata/uyarı ring’ini birleştirir |
 
@@ -33,6 +34,7 @@ python -m manager_server
 __init__.py
 __main__.py
 app.py
+issue_file_store.py
 reason_engine.py
 state.py
 ```

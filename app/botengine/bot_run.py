@@ -161,6 +161,12 @@ async def run_one_bot_tick(bot_id: int, tick_id: str) -> float:
         base_balance, quote_balance = vb, vq
         strategy = get_strategy_safe(raw)
         actions, next_wake_sec = strategy.tick(state, cfg, price or 0, base_balance, quote_balance)
+        try:
+            from app.botengine.strategies.grid_outage_recovery import flush_outage_recovery_log_to_events
+
+            flush_outage_recovery_log_to_events(db, bot_id, account_id, state)
+        except Exception as olog_ex:
+            logger.debug("outage_recovery_log bot_id=%s: %s", bot_id, olog_ex)
         state["last_tick_at"] = datetime.utcnow()
         interval_sec = getattr(cfg, "interval_sec", 3600) if is_multi else (getattr(cfg, "tick_interval_ms", 5000) / 1000.0)
         next_wake = time.monotonic() + max(0.5, next_wake_sec if next_wake_sec is not None else interval_sec)

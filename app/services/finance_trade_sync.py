@@ -15,7 +15,6 @@ import httpx
 import json
 
 from app.db.models import Account, TradeNormalized, Bot
-from app.services.encryption import decrypt_text
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +69,7 @@ class TradeSyncService:
             # Process and save trades with dedupe
             new_count = 0
             skipped_count = 0
+            added_trades: List[TradeNormalized] = []
             
             for trade_data in trades_data:
                 trade_id = str(trade_data.get("id", ""))
@@ -95,6 +95,7 @@ class TradeSyncService:
                     try:
                         self.db.add(normalized_trade)
                         self.db.flush()  # Flush to catch unique constraint violations early
+                        added_trades.append(normalized_trade)
                         new_count += 1
                     except Exception as e:
                         # Handle unique constraint violation gracefully
@@ -106,7 +107,48 @@ class TradeSyncService:
                             raise
             
             self.db.commit()
-            
+
+            try:
+                from app.services.transaction_history_file_store import (
+                    is_tx_history_bootstrapped,
+                    ledger_has_buysell,
+                    rebuild_from_db,
+                    upsert_trade_fill,
+                )
+                import json as _json
+
+                if added_trades:
+                    bot_names: Dict[int, str] = {}
+                    bot_ids = {t.bot_id for t in added_trades if t.bot_id}
+                    if bot_ids:
+                        for b in self.db.query(Bot).filter(Bot.id.in_(bot_ids)).all():
+                            try:
+                                cfg = _json.loads(b.config_json or "{}")
+                                bot_names[b.id] = (b.name or cfg.get("name") or f"Bot #{b.id}")[:32]
+                            except Exception:
+                                bot_names[b.id] = f"Bot #{b.id}"
+                    for t in added_trades:
+                        upsert_trade_fill(
+                            account_id,
+                            trade_id=str(t.trade_id),
+                            order_id=t.order_id,
+                            time=t.time,
+                            side=t.side or "",
+                            symbol=t.symbol or "",
+                            qty=float(t.qty or 0),
+                            price=float(t.price or 0),
+                            quote_qty=float(t.quote_qty or 0),
+                            commission=float(t.commission or 0),
+                            commission_asset=t.commission_asset or "USDT",
+                            is_maker=bool(t.is_maker),
+                            bot_id=t.bot_id,
+                            bot_name=bot_names.get(t.bot_id) if t.bot_id else None,
+                        )
+                if not is_tx_history_bootstrapped(account_id) or not ledger_has_buysell(account_id):
+                    rebuild_from_db(self.db, account_id, days=365)
+            except Exception as file_ex:
+                logger.debug("[TradeSync] tx file store account_id=%s: %s", account_id, file_ex)
+
             return {
                 "synced_count": len(trades_data),
                 "new_count": new_count,

@@ -1,13 +1,37 @@
 /**
- * Per-bot health alert UI — sticky top banner, badges, panel/frame blink, reset.
- * Active alerts always show (incl. page refresh). Resetle silences until same code re-fires.
+ * Per-bot health UI — page frame blink, status badges, engine-log rows (no top banner).
+ * Critical / warn classes; deduped log rows; reset clears until re-fire; resolved rows stay in log.
  */
 (function (global) {
     'use strict';
 
     var _lastDomSyncKey = '';
-    var _lastBannerHtml = '';
-    var _lastBannerVisible = false;
+    var LOG_REGISTRY_PREFIX = 'botHealthLogRegistry_';
+
+    var ALERT_PRIORITY = {
+        LOOP_TASK_MISSING: 1000,
+        TICK_STALE_CRIT: 950,
+        BINANCE_UNREACHABLE: 900,
+        STATE_ERROR: 880,
+        REPEATED_ORDER_FAIL: 850,
+        TICK_STALE_WARN: 500,
+        STATE_ERROR_WARN: 480,
+        FIRST_BUY_STUCK: 450,
+        NO_TICK_YET: 400,
+        LOT_SIZE: 300,
+        MIN_NOTIONAL: 290,
+        MIN_NOTIONAL_AFTER_CAP: 285,
+        ORDER_FAILED: 200,
+        INSUFFICIENT_QUOTE: 180,
+        ORDER_TIMEOUT: 170,
+        BOT_CONTINUES_ON_ERROR: 920,
+        BOT_LOOP_AUTO_RESTART: 910,
+        LOOP_TASK_MISSING: 905,
+        PRICE_STALE_OR_MISSING: 420,
+        REPEATED_LOCK_BUSY: 410,
+        REPEATED_SLIPPAGE: 400,
+        CONNECTIVITY_DEGRADED: 390
+    };
 
     function storageGet(key) {
         try {
@@ -42,6 +66,51 @@
 
     function resetKey(botId) {
         return 'botHealthDismiss_' + String(botId || '');
+    }
+
+    function logRegistryKey(botId) {
+        return LOG_REGISTRY_PREFIX + String(botId || '');
+    }
+
+    function loadLogRegistry(botId) {
+        try {
+            var raw = storageGet(logRegistryKey(botId));
+            if (!raw) return { entries: {} };
+            var data = JSON.parse(raw);
+            return data && typeof data.entries === 'object' ? data : { entries: {} };
+        } catch (e) {
+            return { entries: {} };
+        }
+    }
+
+    function saveLogRegistry(botId, reg) {
+        try {
+            storageSet(logRegistryKey(botId), JSON.stringify(reg || { entries: {} }));
+        } catch (e) {}
+    }
+
+    function clearLogRegistry(botId) {
+        storageRemove(logRegistryKey(botId));
+    }
+
+    function nextSyntheticId(reg) {
+        var min = 0;
+        Object.keys((reg && reg.entries) || {}).forEach(function (k) {
+            var id = reg.entries[k].syntheticId;
+            if (typeof id === 'number' && id < min) min = id;
+        });
+        return min - 1;
+    }
+
+    function alertLevel(a) {
+        return String((a && a.level) || '').toLowerCase();
+    }
+
+    function alertSortKey(a) {
+        var lv = alertLevel(a);
+        var base = ALERT_PRIORITY[a && a.code] || (lv === 'critical' ? 600 : 300);
+        if (lv === 'critical') base += 50;
+        return base;
     }
 
     function getDismissInfo(botId) {
@@ -96,7 +165,11 @@
     var KNOWN_HEALTH_CODES = [
         'STATE_ERROR_WARN', 'STATE_ERROR', 'REPEATED_ORDER_FAIL',
         'TICK_STALE_WARN', 'TICK_STALE_CRIT', 'NO_TICK_YET',
-        'FIRST_BUY_STUCK', 'LOOP_TASK_MISSING', 'BINANCE_UNREACHABLE'
+        'FIRST_BUY_STUCK', 'LOOP_TASK_MISSING', 'BINANCE_UNREACHABLE',
+        'LOT_SIZE', 'MIN_NOTIONAL', 'MIN_NOTIONAL_AFTER_CAP', 'ORDER_FAILED',
+        'INSUFFICIENT_QUOTE', 'ORDER_TIMEOUT',
+        'BOT_CONTINUES_ON_ERROR', 'BOT_LOOP_AUTO_RESTART', 'PRICE_STALE_OR_MISSING',
+        'REPEATED_LOCK_BUSY', 'REPEATED_SLIPPAGE', 'CONNECTIVITY_DEGRADED'
     ];
 
     var RESETTABLE_SKIP = {
@@ -112,26 +185,28 @@
         INVALID_ACTION: 1
     };
 
-    function maxEventIdAll(events) {
-        var max = 0;
-        (events || []).forEach(function (ev) {
-            var id = ev && ev.id != null ? Number(ev.id) : 0;
-            if (id > max) max = id;
-        });
-        return max;
-    }
-
     function isConnectivityLogEvent(ev) {
         if (!ev) return false;
         var meta = (ev && ev.meta) || {};
         var code = String(meta.error_code || meta.health_code || '').toUpperCase();
-        if (/API_UNAUTHORIZED|BINANCE_UNREACHABLE|BINANCE_RATE|ACCOUNT_KEYS/.test(code)) return true;
-        return /binance|beyaz liste|401|-2015|ulaşılamıyor|api anahtar/i.test(String(ev.message || ''));
+        if (/API_UNAUTHORIZED|BINANCE_UNREACHABLE|BINANCE_RATE|ACCOUNT_KEYS|CONNECTIVITY_RECOVERED|CONNECTIVITY_PAUSED/.test(code)) {
+            return true;
+        }
+        return /binance|beyaz liste|401|-2015|ulaşılamıyor|api anahtar|tekrar aktif edildi|beklemeye alındı/i.test(String(ev.message || ''));
+    }
+
+    function isReconnectLogEvent(ev) {
+        if (!ev) return false;
+        var meta = ev.meta || {};
+        var code = String(meta.error_code || '').toUpperCase();
+        if (code === 'CONNECTIVITY_RECOVERED' || code === 'CONNECTIVITY_PAUSED') return true;
+        return /tekrar aktif edildi|beklemeye alındı/i.test(String(ev.message || ''));
     }
 
     function isResettableLogEvent(ev) {
         if (!ev) return false;
         var ty = (ev.type || '').toUpperCase();
+        if (ty === 'INFO' && isReconnectLogEvent(ev)) return true;
         if (ty === 'ERROR' && isConnectivityLogEvent(ev)) return true;
         if (ty === 'HEALTH_WARN' || ty === 'HEALTH_CRITICAL') return true;
         if (ty === 'SLIPPAGE_WARN') return true;
@@ -143,12 +218,6 @@
             return /ORDER_FAILED|MIN_NOTIONAL|LOT_SIZE|INSUFFICIENT_QUOTE|ORDER_TIMEOUT/i.test(raw);
         }
         return false;
-    }
-
-    function clearDismiss(botId) {
-        try {
-            storageRemove(resetKey(botId));
-        } catch (e) {}
     }
 
     function isHealthEventType(ty) {
@@ -242,7 +311,6 @@
         if (hasHealthEventForCodeAfterTs(recentEvents, alert.code, dts)) {
             return false;
         }
-        // Tick stale: koşul sürerse yeni log satırı olmasa da tekrar göster
         if (healthSnapshot && (healthSnapshot.alerts || []).some(function (a) {
             return a && a.code === alert.code;
         })) {
@@ -253,43 +321,153 @@
         return true;
     }
 
-    function pickTop(alerts) {
-        var warn = null;
-        var critical = null;
-        (alerts || []).forEach(function (a) {
-            if (!a || !a.level) return;
-            var lv = String(a.level).toLowerCase();
-            if (lv === 'critical' && !critical) critical = a;
-            if (lv === 'warn' && !warn) warn = a;
+    function pickAllAlerts(alerts) {
+        var sorted = (alerts || []).slice().sort(function (x, y) {
+            return alertSortKey(y) - alertSortKey(x);
         });
-        return { warn: warn, critical: critical };
-    }
-
-    function alertHasLogEvidence(alert, events) {
-        if (!alert || !alert.code) return false;
-        for (var i = 0; i < (events || []).length; i++) {
-            var ev = events[i];
-            if (!isHealthEventType(ev && ev.type)) continue;
-            if (eventHealthCode(ev) === alert.code) return true;
-        }
-        return false;
+        var warns = [];
+        var criticals = [];
+        sorted.forEach(function (a) {
+            if (!a) return;
+            var lv = alertLevel(a);
+            if (lv === 'critical') criticals.push(a);
+            else if (lv === 'warn') warns.push(a);
+        });
+        return { warns: warns, criticals: criticals };
     }
 
     function filterAlertsForUi(alerts, dismissInfo, recentEvents, healthSnapshot) {
-        if (!alerts || !alerts.length) return { warn: null, critical: null };
-        if (!dismissInfo) return pickTop(alerts);
+        if (!alerts || !alerts.length) return { warns: [], criticals: [] };
+        if (!dismissInfo) return pickAllAlerts(alerts);
         var filtered = alerts.filter(function (a) {
             return a && !isAlertSuppressed(a, dismissInfo, recentEvents, healthSnapshot);
         });
-        if (!filtered.length) return { warn: null, critical: null };
-        return pickTop(filtered);
+        if (!filtered.length) return { warns: [], criticals: [] };
+        return pickAllAlerts(filtered);
     }
 
-    function escHtml(s) {
-        return String(s || '')
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;');
+    function topAlertMessage(list) {
+        var a = list && list[0];
+        if (!a) return '';
+        return (a.message || a.title || '') + (a.cause ? '\n' + a.cause : '');
+    }
+
+    function entryKey(entry) {
+        return String(entry.code || '') + '#' + String(entry.syntheticId != null ? entry.syntheticId : '');
+    }
+
+    function findActiveEntry(reg, code) {
+        var found = null;
+        Object.keys(reg.entries || {}).forEach(function (k) {
+            var e = reg.entries[k];
+            if (!e || e.code !== code || !e.active || e.dismissed) return;
+            found = e;
+        });
+        return found;
+    }
+
+    function syncLogRegistry(botId, alerts, dismissInfo, recentEvents, healthSnapshot) {
+        var reg = loadLogRegistry(botId);
+        if (!reg.entries) reg.entries = {};
+
+        var activeList = (alerts || []).filter(function (a) {
+            return a && a.code && !isAlertSuppressed(a, dismissInfo, recentEvents, healthSnapshot);
+        });
+        var activeCodes = {};
+        activeList.forEach(function (a) {
+            activeCodes[a.code] = a;
+        });
+
+        var now = Date.now();
+
+        Object.keys(reg.entries).forEach(function (k) {
+            var e = reg.entries[k];
+            if (!e || e.dismissed || !e.active) return;
+            if (!activeCodes[e.code]) {
+                e.active = false;
+                e.resolvedAt = now;
+            }
+        });
+
+        activeList.forEach(function (a) {
+            var code = a.code;
+            var e = findActiveEntry(reg, code);
+            if (!e) {
+                var neu = {
+                    code: code,
+                    level: alertLevel(a) || 'warn',
+                    message: a.message || a.title || code,
+                    cause: a.cause || '',
+                    active: true,
+                    resolvedAt: null,
+                    firstSeen: now,
+                    syntheticId: nextSyntheticId(reg)
+                };
+                reg.entries[entryKey(neu)] = neu;
+                return;
+            }
+            e.active = true;
+            e.resolvedAt = null;
+            e.message = a.message || a.title || e.message;
+            e.cause = a.cause || e.cause;
+            e.level = alertLevel(a) || e.level;
+        });
+
+        saveLogRegistry(botId, reg);
+        return reg;
+    }
+
+    function buildRegistrySynthetic(entry) {
+        var ty = entry.level === 'critical' ? 'HEALTH_CRITICAL' : 'HEALTH_WARN';
+        var ts = entry.resolvedAt
+            ? new Date(entry.resolvedAt).toISOString()
+            : new Date(entry.firstSeen || Date.now()).toISOString();
+        return {
+            id: entry.syntheticId,
+            type: ty,
+            ts: ts,
+            message: entry.message,
+            meta: {
+                health_code: entry.code,
+                health_ui_track: true,
+                health_resolved: !entry.active,
+                health_resolved_at: entry.resolvedAt || null,
+                cause: entry.cause,
+                title: entry.message
+            }
+        };
+    }
+
+    function mergeHealthDisplayEvents(botId, events, healthData, running) {
+        events = events || [];
+        if (!botId) return events;
+
+        var alerts = (healthData && healthData.alerts) ? healthData.alerts : [];
+        var dismiss = getDismissInfo(botId);
+        var reg = syncLogRegistry(botId, alerts, dismiss, events, healthData);
+
+        var trackedCodes = {};
+        Object.keys(reg.entries || {}).forEach(function (k) {
+            var e = reg.entries[k];
+            if (e && !e.dismissed && e.code) trackedCodes[e.code] = true;
+        });
+
+        var out = events.filter(function (ev) {
+            if (!isHealthEventType(ev && ev.type)) return true;
+            var code = eventHealthCode(ev);
+            if (code && trackedCodes[code]) return false;
+            return true;
+        });
+
+        var synthetics = [];
+        Object.keys(reg.entries || {}).forEach(function (k) {
+            var e = reg.entries[k];
+            if (!e || e.dismissed) return;
+            if (!e.active && !e.resolvedAt) return;
+            synthetics.push(buildRegistrySynthetic(e));
+        });
+
+        return synthetics.concat(out);
     }
 
     function ensureShell() {
@@ -298,181 +476,99 @@
         shell = document.createElement('div');
         shell.id = 'healthAlertShell';
         shell.className = 'health-alert-shell';
-        var frame = document.createElement('div');
-        frame.id = 'healthCritPageFrame';
-        frame.className = 'health-crit-page-frame';
-        frame.setAttribute('aria-hidden', 'true');
-        shell.appendChild(frame);
+        var critFrame = document.createElement('div');
+        critFrame.id = 'healthCritPageFrame';
+        critFrame.className = 'health-crit-page-frame';
+        critFrame.setAttribute('aria-hidden', 'true');
+        var warnFrame = document.createElement('div');
+        warnFrame.id = 'healthWarnPageFrame';
+        warnFrame.className = 'health-warn-page-frame';
+        warnFrame.setAttribute('aria-hidden', 'true');
+        shell.appendChild(critFrame);
+        shell.appendChild(warnFrame);
         document.body.insertBefore(shell, document.body.firstChild);
         return shell;
     }
 
-    function ensureBanner() {
-        ensureShell();
-        var shell = document.getElementById('healthAlertShell');
+    function hideBanner() {
         var banner = document.getElementById('healthAlertBanner');
-        if (banner && shell && banner.parentNode !== shell) {
-            shell.insertBefore(banner, shell.firstChild);
-        }
-        if (banner) return banner;
-        banner = document.createElement('div');
-        banner.id = 'healthAlertBanner';
-        banner.className = 'health-alert-banner';
-        banner.setAttribute('role', 'alert');
-        banner.setAttribute('aria-live', 'assertive');
-        banner.innerHTML = '<div class="health-alert-banner-inner"><div class="health-alert-banner-body"></div></div>';
-        banner.addEventListener('click', function (e) {
-            if (e.target.closest('.health-alert-banner-reset-btn')) {
-                e.preventDefault();
-                document.dispatchEvent(new CustomEvent('bot-health-reset', { bubbles: true }));
-            }
-        });
-        shell.insertBefore(banner, shell.firstChild);
-        return banner;
-    }
-
-    function buildBannerBody(showCrit, showWarn, critical, warn) {
-        var primary = showCrit ? critical : warn;
-        var icon = showCrit ? '!' : '⚠';
-        var label = showCrit ? 'Kritik uyarı' : 'Uyarı';
-        var html = '';
-        html += '<div class="health-alert-banner-icon" aria-hidden="true">' + icon + '</div>';
-        html += '<div class="health-alert-banner-label">' + label + '</div>';
-        html += '<div class="health-alert-banner-msg">' + escHtml(primary.message || primary.title || label) + '</div>';
-        if (primary.cause) {
-            html += '<div class="health-alert-banner-cause">' + escHtml(primary.cause) + '</div>';
-        }
-        if (showCrit && showWarn) {
-            html += '<div class="health-alert-banner-sub"><span class="health-alert-banner-sub-tag">Uyarı</span> ' +
-                escHtml(warn.message || warn.title || 'Uyarı') + '</div>';
-        }
-        html += '<button type="button" class="health-alert-banner-reset-btn" title="Uyarı alarmlarını sıfırla">Resetle</button>';
-        return html;
-    }
-
-    function syncShellState(bannerVisible, critActive) {
-        var shell = document.getElementById('healthAlertShell');
-        var frame = document.getElementById('healthCritPageFrame');
-        if (frame) frame.classList.toggle('is-visible', !!critActive);
-        if (shell) shell.classList.toggle('is-active', !!(bannerVisible || critActive));
-    }
-
-    function syncBanner(warn, critical, running) {
-        var banner = ensureBanner();
-        var bodyEl = banner.querySelector('.health-alert-banner-body');
-        var showCrit = running && !!critical;
-        var showWarn = running && !!warn;
-        var wantVisible = showCrit || showWarn;
-
-        if (!wantVisible) {
-            if (!_lastBannerVisible) {
-                return;
-            }
+        if (banner) {
             banner.classList.remove('is-visible', 'health-alert-banner--critical', 'health-alert-banner--warn');
-            if (bodyEl) bodyEl.innerHTML = '';
-            syncBannerPadding(banner, false);
-            syncShellState(false, false);
-            _lastBannerHtml = '';
-            _lastBannerVisible = false;
-            return;
+            banner.style.display = 'none';
         }
-
-        var newHtml = buildBannerBody(showCrit, showWarn, critical, warn);
-        var sameHtml = newHtml === _lastBannerHtml;
-        var alreadyVisible = banner.classList.contains('is-visible');
-
-        banner.classList.toggle('health-alert-banner--critical', showCrit);
-        banner.classList.toggle('health-alert-banner--warn', !showCrit && showWarn);
-        if (bodyEl && !sameHtml) {
-            bodyEl.innerHTML = newHtml;
-        }
-        _lastBannerHtml = newHtml;
-
-        if (alreadyVisible && sameHtml) {
-            syncShellState(true, showCrit);
-            _lastBannerVisible = true;
-            return;
-        }
-
-        requestAnimationFrame(function () {
-            banner.classList.add('is-visible');
-            syncBannerPadding(banner, true);
-            syncShellState(true, showCrit);
-            _lastBannerVisible = true;
-        });
-    }
-
-    function syncBannerPadding(banner, visible) {
-        if (!document.body) return;
-        if (!visible) {
+        if (document.body) {
             document.body.classList.remove('has-health-alert-banner');
             document.body.style.paddingTop = '';
-            return;
         }
-        document.body.classList.add('has-health-alert-banner');
-        var h = banner ? banner.offsetHeight : 0;
-        document.body.style.paddingTop = h > 0 ? (h + 'px') : '';
+    }
+
+    function syncShellState(warnActive, critActive) {
+        ensureShell();
+        var shell = document.getElementById('healthAlertShell');
+        var critFrame = document.getElementById('healthCritPageFrame');
+        var warnFrame = document.getElementById('healthWarnPageFrame');
+        if (critFrame) critFrame.classList.toggle('is-visible', !!critActive);
+        if (warnFrame) warnFrame.classList.toggle('is-visible', !!(warnActive && !critActive));
+        if (shell) shell.classList.toggle('is-active', !!(warnActive || critActive));
     }
 
     function syncDom(opts) {
         opts = opts || {};
+        hideBanner();
+        ensureShell();
+
         var warnBadge = document.getElementById('healthWarnBadge');
         var critBadge = document.getElementById('healthCriticalBadge');
-        var headerPanel = document.getElementById('headerPanel');
-        var engineLogPanel = document.getElementById('engineLogPanel');
         var running = !!opts.running;
-        var warn = opts.warn;
-        var critical = opts.critical;
+        var warns = opts.warns || [];
+        var criticals = opts.criticals || [];
+
+        var hasCrit = running && criticals.length > 0;
+        var hasWarn = running && warns.length > 0;
 
         if (warnBadge) {
-            if (running && warn) {
+            if (hasWarn) {
                 warnBadge.style.display = 'inline-flex';
                 warnBadge.textContent = 'Uyarı';
-                warnBadge.title = (warn.message || warn.title || '') + (warn.cause ? '\n' + warn.cause : '');
+                warnBadge.title = topAlertMessage(warns);
             } else {
                 warnBadge.style.display = 'none';
+                warnBadge.title = '';
             }
         }
         if (critBadge) {
-            if (running && critical) {
+            if (hasCrit) {
                 critBadge.style.display = 'inline-flex';
                 critBadge.textContent = 'Kritik';
-                critBadge.title = (critical.message || critical.title || '') + (critical.cause ? '\n' + critical.cause : '');
+                critBadge.title = topAlertMessage(criticals);
             } else {
                 critBadge.style.display = 'none';
+                critBadge.title = '';
             }
         }
 
-        syncBanner(warn, critical, running);
-
         var liveProblem = !!(global._botLiveProblem) && !opts.suppressLiveProblem;
-        var warnActive = running && (!!warn || (liveProblem && !critical));
-        var critActive = running && !!critical;
+        var warnActive = hasWarn || (running && liveProblem && !hasCrit);
+        var critActive = hasCrit;
+
         var syncKey = [
             running ? '1' : '0',
             critActive ? '1' : '0',
             warnActive ? '1' : '0',
             liveProblem ? '1' : '0',
-            (warn && warn.code) || '',
-            (critical && critical.code) || ''
+            warns.map(function (w) { return w.code; }).join(','),
+            criticals.map(function (c) { return c.code; }).join(',')
         ].join('|');
         if (syncKey === _lastDomSyncKey) {
             return;
         }
         _lastDomSyncKey = syncKey;
 
-        if (headerPanel) {
-            headerPanel.classList.toggle('panel-health-critical', critActive);
-            headerPanel.classList.toggle('panel-health-warn', warnActive && !critActive);
-        }
-        if (engineLogPanel) {
-            engineLogPanel.classList.toggle('panel-health-critical', critActive);
-            engineLogPanel.classList.toggle('panel-health-warn', warnActive && !critActive);
-        }
+        syncShellState(warnActive, critActive);
 
-        var hero = document.getElementById('stateHeroTitle');
-        if (hero) {
-            hero.classList.toggle('hero-alert-blink', critActive || warnActive || (running && liveProblem));
+        var engineLogPanel = document.getElementById('engineLogPanel');
+        if (engineLogPanel) {
+            engineLogPanel.classList.toggle('panel-health-log-active', warnActive || critActive);
         }
     }
 
@@ -485,14 +581,15 @@
         var statusDismissed = !!(dismiss && dismiss.codes.indexOf('STATE_ERROR') >= 0);
         syncDom({
             running: running,
-            warn: picked.warn,
-            critical: picked.critical,
+            warns: picked.warns,
+            criticals: picked.criticals,
             suppressLiveProblem: connDismissed || statusDismissed
         });
         return picked;
     }
 
     function resetUi(botId, currentAlerts, recentEvents) {
+        clearLogRegistry(botId);
         var alerts = currentAlerts || [];
         var codes = {};
         var now = Date.now();
@@ -502,13 +599,16 @@
         KNOWN_HEALTH_CODES.forEach(function (code) {
             codes[code] = true;
         });
+        ['CONNECTIVITY_RECOVERED', 'CONNECTIVITY_PAUSED', 'LOT_SIZE', 'MIN_NOTIONAL',
+            'ORDER_FAILED', 'INSUFFICIENT_QUOTE'].forEach(function (code) {
+            codes[code] = true;
+        });
         var synthetic = Object.keys(codes).map(function (code) {
             return { code: code };
         });
         setDismiss(botId, synthetic.length ? synthetic : alerts, recentEvents);
         _lastDomSyncKey = '';
-        _lastBannerHtml = '';
-        syncDom({ running: true, warn: null, critical: null, suppressLiveProblem: true });
+        syncDom({ running: true, warns: [], criticals: [], suppressLiveProblem: true });
     }
 
     function isConnectivityLogSuppressed(botId, events) {
@@ -531,6 +631,7 @@
         if (ev.meta && ev.meta.synthetic_live) {
             return isConnectivityLogEvent(ev) && isConnectivityLogSuppressed(botId, events);
         }
+        if (ev.meta && ev.meta.health_ui_track) return false;
         if ((ev.type || '').toUpperCase() === 'ERROR' && isConnectivityLogEvent(ev)) {
             if (isConnectivityLogSuppressed(botId, events)) return true;
         }
@@ -556,6 +657,7 @@
         resetUi: resetUi,
         applyHealth: applyHealth,
         syncDom: syncDom,
+        mergeHealthDisplayEvents: mergeHealthDisplayEvents,
         maxHealthEventId: maxHealthEventId,
         maxResettableEventId: maxResettableEventId,
         maxDismissAnchorEventId: maxDismissAnchorEventId,

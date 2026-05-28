@@ -15,7 +15,7 @@ import time
 
 from app.db.session import get_db
 from app.db.models import Account, TradeNormalized, AssetSnapshot, PnlRealized, Bot
-from app.utils.tz_utils import turkey_today_start_utc
+from app.utils.tz_utils import turkey_today_start_utc, parse_binance_ms_to_utc_naive
 from app.services.finance_trade_sync import TradeSyncService
 from app.services.finance_snapshot import SnapshotService
 from app.services.finance_pnl_calculator import FinancePnlCalculator
@@ -624,30 +624,19 @@ async def get_finance_trades(
             end_naive = end_time
             dep_rows = []
             for d in deposits:
-                insert_time_ms = d.get("insertTime")
-                if insert_time_ms is not None:
-                    insert_time = datetime.fromtimestamp(insert_time_ms / 1000.0, tz=timezone.utc).replace(tzinfo=None)
-                    if start_naive and insert_time < start_naive:
-                        continue
-                    if end_naive and insert_time > end_naive:
-                        continue
-                    dep_rows.append(_normalize_deposit(d, insert_time))
+                insert_time = parse_binance_ms_to_utc_naive(d.get("insertTime"))
+                if insert_time is None:
+                    continue
+                if start_naive and insert_time < start_naive:
+                    continue
+                if end_naive and insert_time > end_naive:
+                    continue
+                dep_rows.append(_normalize_deposit(d, insert_time))
             withdraw_rows = []
             for w in withdrawals:
-                apply_time_raw = w.get("applyTime") or w.get("completeTime")
-                if apply_time_raw is None:
+                apply_time = parse_binance_ms_to_utc_naive(w.get("applyTime") or w.get("completeTime"))
+                if apply_time is None:
                     continue
-                if isinstance(apply_time_raw, (int, float)):
-                    apply_time = datetime.fromtimestamp(apply_time_raw / 1000.0, tz=timezone.utc).replace(tzinfo=None)
-                else:
-                    try:
-                        apply_time = datetime.fromisoformat(
-                            str(apply_time_raw).replace("Z", "+00:00").replace(" ", "T")[:26].rstrip("Z")
-                        )
-                        if apply_time.tzinfo:
-                            apply_time = apply_time.replace(tzinfo=None)
-                    except Exception:
-                        continue
                 if start_naive and apply_time < start_naive:
                     continue
                 if end_naive and apply_time > end_naive:
@@ -916,30 +905,19 @@ async def get_finance_trades(
             end_naive = end_time
             dep_rows = []
             for d in deposits:
-                insert_time_ms = d.get("insertTime")
-                if insert_time_ms is not None:
-                    insert_time = datetime.fromtimestamp(insert_time_ms / 1000.0, tz=timezone.utc).replace(tzinfo=None)
-                    if start_naive and insert_time < start_naive:
-                        continue
-                    if end_naive and insert_time > end_naive:
-                        continue
-                    dep_rows.append(_normalize_deposit(d, insert_time))
+                insert_time = parse_binance_ms_to_utc_naive(d.get("insertTime"))
+                if insert_time is None:
+                    continue
+                if start_naive and insert_time < start_naive:
+                    continue
+                if end_naive and insert_time > end_naive:
+                    continue
+                dep_rows.append(_normalize_deposit(d, insert_time))
             withdraw_rows = []
             for w in withdrawals:
-                apply_time_raw = w.get("applyTime") or w.get("completeTime")
-                if apply_time_raw is None:
+                apply_time = parse_binance_ms_to_utc_naive(w.get("applyTime") or w.get("completeTime"))
+                if apply_time is None:
                     continue
-                if isinstance(apply_time_raw, (int, float)):
-                    apply_time = datetime.fromtimestamp(apply_time_raw / 1000.0, tz=timezone.utc).replace(tzinfo=None)
-                else:
-                    try:
-                        apply_time = datetime.fromisoformat(
-                            str(apply_time_raw).replace("Z", "+00:00").replace(" ", "T")[:26].rstrip("Z")
-                        )
-                        if apply_time.tzinfo:
-                            apply_time = apply_time.replace(tzinfo=None)
-                    except Exception:
-                        continue
                 if start_naive and apply_time < start_naive:
                     continue
                 if end_naive and apply_time > end_naive:

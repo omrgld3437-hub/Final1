@@ -36,7 +36,7 @@ Trade Trailing (TraderTrailing) is a Binance Spot bot platform that:
 | S6 Weight near limit => SAFE MODE | Deny new submits; allow reconcile | scheduler, execution |
 | S7 Locks released in finally; lease + heartbeat | symbol_lock_with_heartbeat; release in finally | locks.py |
 | S8 Deterministic intents (no restart collision) | intent_id and client_order_id include run_id (e.g. cmd{command_id}); run_id set on START | intent_ledger.build_intent_id, build_client_order_id; bots_engine.bots_start |
-| Never expose API secret in logs | Fernet-encrypted at rest | `app/services/encryption.py` |
+| Never expose API secret in logs | AES-256-GCM (v2) at rest; legacy Fernet okunur | `app/services/encryption.py` |
 | Never allow cross-account bot execution | `assert_bot_belongs_to_account` | `app/botengine/worker_main.py`, routes |
 
 ## Data Loss Definitions
@@ -956,7 +956,7 @@ DataHub:
 
 - Attacker can place orders, read wallet
 - Max damage: Full wallet for that account
-- Mitigation: Fernet at rest; rotate in Binance
+- Mitigation: AES-256-GCM v2 at rest (legacy Fernet okunur); rotate in Binance
 
 ## Session Hijack
 
@@ -1124,7 +1124,7 @@ Snapshot wallet is cache-only; "[snapshot] wallet timeout" no longer occurs. Liv
 | POST | /api/auth/logout | Yes | No | No | Logout |
 | GET | /api/accounts | Yes | Yes | No | List accounts |
 | POST | /api/accounts/{id}/delete | Yes | Yes | No | Hesap sil (body: password). Şifre zorunlu; log/işlem geçmişi silinmez; aynı tel ile yeniden kayıt sıfırdan yeni hesap açar. |
-| GET | /api/accounts/{id}/bot-performance | Yes | Yes | No | Bot performans: günlük/haftalık/aylık/genel toplam PnL (silinen botlar dahil) |
+| GET | /api/accounts/{id}/bot-performance | Yes | Yes | No | Saatlik/günlük dosya + `bot_daily_pnl` yedek; günlük filtre cache yok |
 | GET | /api/leaderboard/structures/{structure_id}/top | Yes | Yes | No | Copy Trading: structure bazlı top 5 (profit_pct + `params`; stale cache varsa `config_json`'dan re-sanitize; username/bakiye yok) |
 | GET | /api/leaderboard/global/top | Yes | Yes | No | Global En İyi Bot (limit varsayılan 5): çalışan botlar, `profit_pct_all >= 0`; `structure_id`, `profit_pct`, `total_pnl_usd` (mevcut−başlangıç, USD), `running_since_iso` (UTC Z), `reference_price`, `params` (grid/trail/allocation + `initial_capital_usdt` görüntüleme; stale cache → `config_json` re-sanitize); username/bot_id/bakiye yok. UI: K/Z 5s poll + süre 1s yerel tick; **Parametreleri görüntüle** → bot detay `#parametrelerModal` ile aynı modal/render; **Uygula** → oluştur modalı (bütçe boş, odak Bot Bakiyesi). |
 | GET | /api/bots-engine | Yes | Yes | No | List bots |
@@ -1151,7 +1151,7 @@ Snapshot wallet is cache-only; "[snapshot] wallet timeout" no longer occurs. Liv
 | app/services/binance_spot.py | Binance REST gateway | public_get_json, signed_json, place_order | Binance API | — | CircuitBreaker, _binance_time_cache | Async | Circuit global |
 | app/services/dashboard_snapshot.py | Snapshot sub-tasks | fetch_prices, fetch_bots_and_account_kpis | DataHub, Binance | Account, Bot, Trade | — | Async | 3s timeout each |
 | app/services/binance_client.py | Binance client wrapper | — | Binance | — | — | Async | — |
-| app/services/encryption.py | Fernet encrypt/decrypt | encrypt_text, decrypt_text | — | — | — | Sync | BINANCE_MASTER_KEY |
+| app/services/encryption.py | AES-256-GCM v2 + legacy Fernet | encrypt_text, decrypt_text, encrypt_account_* | — | — | — | Sync | BINANCE_MASTER_KEY, ENCRYPTION_SALT |
 | app/db/base.py | Engine, WAL init | _create_engine_for_role | — | — | engine | Sync | — |
 | app/db/session.py | get_db | get_db | — | — | — | Sync | — |
 | app/db/models.py | SQLAlchemy models | — | — | — | — | — | — |
@@ -1219,7 +1219,7 @@ _bot_loop (orchestrator.py)
 |--------|---------|--------------|----------|-----|--------|-------|
 | app/services/pnl_service.py | PnL calculation | PnlService.calculate_bot_pnl | DataHub (price) | Ledger, Trade | — | — |
 | app/services/finance_pnl_calculator.py | Finance PnL | — | — | TradeNormalized, etc. | — | — |
-| app/services/encryption.py | Fernet encrypt/decrypt | encrypt_text, decrypt_text | — | — | — | BINANCE_MASTER_KEY |
+| app/services/encryption.py | AES-256-GCM v2 + legacy Fernet | encrypt_text, decrypt_text, encrypt_account_* | — | — | — | BINANCE_MASTER_KEY, ENCRYPTION_SALT |
 | app/services/test_account.py | Test account detection | is_test_account | — | — | — | — |
 | app/services/binance_assets.py | Account keys resolution | get_account_keys | — | Account | — | ACCOUNT_KEYS_EMPTY, ACCOUNT_KEYS_DECRYPT_FAIL |
 | app/services/finance_trade_sync.py | Trade sync (myTrades) | TradeSyncService | — | — | — | ACCOUNT_KEYS_EMPTY/MISSING => INFO, skip sync (ERROR değil) |
@@ -1472,6 +1472,83 @@ _bot_loop (orchestrator.py)
 | date_tr | TEXT | No | — | PK | — |
 | amount_usd | REAL | No | 0 | — | — |
 | updated_at | TEXT | No | — | — | — |
+
+## bot_perf_archive
+
+| Field | Type | Nullable | Default | Index | Growth |
+|-------|------|----------|---------|-------|--------|
+| id | INTEGER | PK | — | — | — |
+| account_id | INTEGER | No | — | ix_account | — |
+| bot_id | INTEGER | No | — | UNIQUE | — |
+| symbol | TEXT | No | — | — | — |
+| strategy_id | TEXT | Yes | — | — | — |
+| base_asset | TEXT | Yes | — | — | — |
+| initial_capital_usd | REAL | No | 0 | — | — |
+| completed_cycles_json | TEXT | No | [] | — | — |
+| bot_status | TEXT | Yes | — | — | — |
+| archived_at | TEXT | No | — | — | — |
+| deleted | INTEGER | No | 1 | — | — |
+
+Bot silinmeden önce `completed_cycle_dual_pnls` buraya yazılır; aktif botlar tur kapanışında güncellenir.
+
+## bot_perf_file_store (disk)
+
+| Path | TTL | İçerik |
+|------|-----|--------|
+| `.run/bot_perf/hourly/{account_id}_{date_tr}.json` | Gün başına yeni dosya (00:00 TR) | 24 saat `[pnl_usd, fees_usd]` |
+| `.run/bot_perf/daily/{account_id}.json` | Kalıcı | `days[date_tr]` hesap + bot günlük K/Z |
+
+Tur kapanışında saatlik + kalıcı dosya güncellenir. Panel: günlük filtre → `hourly_series[]` (24 saat); **Toplam K/Z ve Komisyon = saatlik satırların toplamı**; haftalık/aylık/genel → `daily_series[]` toplamı. Saatlik dosya boşsa arşiv/DB'den backfill. `bots[]` API'de yok.
+
+## bot_daily_pnl
+
+| Field | Type | Nullable | Default | Index | Growth |
+|-------|------|----------|---------|-------|--------|
+| bot_id | INTEGER | No | — | PK | — |
+| date_tr | TEXT | No | — | PK | TR takvim günü YYYY-MM-DD |
+| account_id | INTEGER | No | — | ix_account_date | — |
+| symbol | TEXT | Yes | — | — | — |
+| pnl_usd | REAL | No | 0 | — | Nakit tur USDT K/Z |
+| fees_usd | REAL | No | 0 | — | Tur komisyonu (USDT) |
+| cycle_count | INTEGER | No | 0 | — | O gün kapanan tur sayısı |
+| bot_deleted | INTEGER | No | 0 | — | 1 = silinmiş bot |
+| updated_at | TEXT | No | — | — | — |
+
+Tur kapanışında `record_bot_daily_cycle_pnl` (DB yedek); silme/arşivde `rebuild_bot_daily_from_cycles`. Okuma önceliği: disk dosyaları.
+
+## transaction_history_file_store (disk, şifreli)
+
+| Path | Şifreleme | İçerik |
+|------|-----------|--------|
+| `.run/tx_history/{account_id}.enc` | AES-256-GCM v2 (`BINANCE_MASTER_KEY` + `ENCRYPTION_SALT` + `file:tx_history:{id}`) | Kompakt emir kayıtları + `dates` indeksi |
+| `.run/tx_history/{account_id}.rev` | Düz metin (0600) | Sürüm sayacı — hafif poll (`revision` endpoint) |
+
+**Bağlantı düzelince otomatik devam:** `API_UNAUTHORIZED` / `BINANCE_UNREACHABLE` ile `paused_error` olan bot; cüzdan probe başarılı olunca veya worker ~60s geçişinde `try_auto_resume_paused_bots` → `status=running` + `bot_engine_commands` START. Bot sayfası health/events probe da tetikler.
+
+Tur sync / yeni fill → dosyaya ekle; bot fill `record_bot_trade_fill` ile anında (`quote_qty` = Binance `cummulativeQuoteQty`). Alım/satım **Toplam** = USDT notional (`quote_qty`); fiyat = notional/miktar. Bot kaydı + Binance fill birleşiminde çift sayım önlenir (Binance gelince bot satırı yerine geçer). **İlk açılış / API anahtarı kaydı:** `bootstrap_tx_history_from_binance` — Binance `myTrades` → `TradeNormalized` → `rebuild_from_db` (365 gün) → `.enc`; `{id}.rev` içinde `bootstrapped: true`. `GET .../transaction-history` bootstrap bitmeden dosyadan filtreler; `sync=1` zorla yeniler. `GET .../transaction-history/revision` ~3.5s poll; değişince panel sessiz yenilenir.
+
+## encryption (at-rest, v2)
+
+| Veri | Depolama | Şifreleme | Bağlam (HKDF info) |
+|------|----------|-----------|---------------------|
+| API key | `accounts.api_key_enc` | AES-256-GCM v2 (`v2:` prefix) | `account:{id}:api_key` |
+| API secret | `accounts.api_secret_enc` | AES-256-GCM v2 | `account:{id}:api_secret` |
+| IP whitelist | `accounts.api_ip_whitelist` | AES-256-GCM v2 (düz metin legacy → lazy upgrade) | `account:{id}:ip_whitelist` |
+| İşlem geçmişi dosyası | `.run/tx_history/{id}.enc` | AES-256-GCM v2 (bytes `v2b:`) | `file:tx_history:{id}` |
+| Kullanıcı parolası | `users.password_hash` | bcrypt hash (şifreleme değil) | — |
+
+Anahtar türetme: `HKDF-SHA256(BINANCE_MASTER_KEY, salt=ENCRYPTION_SALT|default, info=tt-aes256:{context})`. Legacy `v1` Fernet kayıtları okunur; API key kullanımında veya PATCH ile `maybe_upgrade_account_secrets` v2'ye yükseltir.
+
+## account_performance_cache
+
+| Field | Type | Nullable | Default | Index | Growth |
+|-------|------|----------|---------|-------|--------|
+| account_id | INTEGER | PK | — | — | — |
+| period | TEXT | PK | — | — | day/week/month/all |
+| payload_json | TEXT | No | — | — | — |
+| updated_at | TEXT | No | — | — | — |
+
+Hesap + dönem bazlı önceden hesaplanmış panel yanıtı (`totals`, `daily_series`); günlük (day) filtre cache'lenmez; tur kapanışı/silme ile invalidasyon.
 
 ## Scripts (Non-App)
 
@@ -1923,6 +2000,21 @@ tail -5 logs/ram_snapshots.log | jq -c '{ts, component, rss_mb, tracemalloc_peak
 | Bot detay (multi-asset) | ui/bot_multi.html | TRDCA, Multi-Asset Rebalance | symbol == MULTI |
 | Dashboard bot listesi | ui/dashboard.html | — | "Düzenle" tıklanınca bot detaya yönlendirir |
 
+### Bot detay — sağlık uyarıları (UI, `botHealthAlerts.js`)
+
+- Üst banner **yok**; kritik/uyarı `#statusBadge` yanında rozet (`#healthCriticalBadge`, `#healthWarnBadge`).
+- Sayfa çerçevesi: yalnız kritik → kırmızı yanıp sönme; yalnız uyarı → sarı; ikisi birden → kırmızı çerçeve + her iki rozet yanıp söner.
+- Tüm aktif/çözülmüş uyarı-kritik satırları motor log tablosunda (`#engineLogList`); aynı `health_code` için tek satır (registry dedupe). Çözülünce satır kalır, mesaja `· çözüldü` eklenir; aktif yanıp sönme kalkar.
+- **Resetle** (`#btnEngineLogReset`): çerçeve/rozet sıfır, registry temiz, dismiss anchor; aynı kod tekrar tetiklenince yeniden listelenir. `POST /health/ack` ile backend ack.
+
+### Bot engine — dayanıklılık ve sağlık logları (`health_watch.py`, `orchestrator.py`)
+
+- **Kritik ≠ durdur:** `BOT_TICK_EXCEPTION`, `BOT_LOOP_TRDCA_EXCEPTION`, `RUN_ACTION_EXCEPTION` → `HEALTH_CRITICAL` + `INFO` (`event_kind=BOT_RESILIENCE`); `Bot.status` **running** kalır, döngü devam eder.
+- **Döngü çökmesi:** `_bot_loop` `finally` → `_try_restart_bot_loop`; `ensure_running_bots` (~10s worker + ~60s engine tick) eksik task'ı açar → `BOT_LOOP_AUTO_RESTART` logu.
+- **Gerçek durdurma:** `API_UNAUTHORIZED`, `ACCOUNT_KEYS_MISSING`, `INSUFFICIENT_BALANCE`, `SAFE_STOP` → `paused_error` / `paused_insufficient_balance` (mevcut).
+- **Ek sağlık kodları (evaluate, throttled emit):** `PRICE_STALE_OR_MISSING`, `REPEATED_LOCK_BUSY`, `REPEATED_SLIPPAGE`, `CONNECTIVITY_DEGRADED`, `BOT_CONTINUES_ON_ERROR`, `LOOP_TASK_MISSING` (kurtarma metni).
+- **Hayalet önleme:** SKIP/ERROR ile aynı kod için HEALTH tekrarlanmaz; `FIRST_BUY_STUCK` son `initial_allocation` fill varsa atlanır; emit throttle (`_health_last_emit`, `_resilience_last_emit`).
+
 ## Mevcut — Bot Oluştur Akışı (Tek tık)
 
 | Adım | Açıklama |
@@ -1933,12 +2025,11 @@ tail -5 logs/ram_snapshots.log | jq -c '{ts, component, rss_mb, tracemalloc_peak
 
 ## Mevcut — Bot Yapısı Seçimi (Bot Oluştur modal)
 
-| Yapı | Normal hesap | Test hesabı |
-|------|----------------|-------------|
-| Trailing DCA / Grid | Aktif | Aktif |
-| TRDCA Pro+ (Trailing Rebalancing DCA) | Pasif: "Çok yakında" rozeti, Devam Et tıklanamaz; toast: "Şu an sadece test hesabında kullanılabilir" | Aktif (geliştirme için) |
+| Yapı | Durum |
+|------|--------|
+| Trailing DCA / Grid | Aktif (tek desteklenen bot tipi) |
 
-UI: `renderBotStructures()` (dashboard.js) `State.isTestAccount` ile TRDCA Pro+ kartını devre dışı gösterir; `selectBotStructure()` aynı kontrolü yapar.
+TRDCA Pro+ (trdca_pro) kaldırıldı; yeni bot oluşturulamaz. UI: yalnızca `trailing_dca` kartı (`BOT_STRUCTURES`, dashboard.js).
 
 ## Mevcut — Veri Akışı (bots_detail)
 
@@ -3368,9 +3459,11 @@ run_actions sıralı; her action için lock, idempotency, adapter çağrı, stat
 | cycle_ledger_breakeven_price | avg_cost * (1+buy_fee_rate)/(1-sell_fee_rate) |
 | cycle_ledger_trigger_price | breakeven * (1 + max(min_net_profit_rate, profit_exit_rise_pct/100)) |
 | cycle_ledger_from_state | state.cycle_ledger_current veya build_cycle_ledger_empty |
+| cycle_opened_at | Tur açılış ISO zamanı (initial_allocation veya cycle_reset); **açık tur süresi** bununla ölçülür — `cycle_ledger_current.started_at` ilk grid fill'de sıfırlanmaz |
+| ensure_cycle_ledger / heal_cycle_opened_at | Ledger yoksa `cycle_opened_at` korunur; heal yalnız `target_budgets.ts` / tur devri (grid fill değil); geç kalmış `cycle_opened_at` düzeltilir |
 | get_cycle_type_and_base_delta | close_reason trail_profit_sell → LONG_SCALP; trail_reentry_buy → INVENTORY_REBALANCE, base_delta |
 
-**Dual PnL (Inventory vs Cash):** Tek USDT metrik yanıltıcı olabildiği için iki ayrı ledger tutulur. (A) **InventoryPnL**: trail_sell_grid (SELL) + trail_reentry_buy (BUY) → FIFO eşleşme; metrik: **inventory_coin_adv_qty** (base qty) = (sell_proceeds_net / buy_price) - qty_sold; inventory_fees_usdt ayrı. (B) **CashPnL**: trail_buy_grid (BUY) + trail_profit_sell (SELL) → FIFO eşleşme; metrik: **cash_pnl_usdt** = gross - fee_alloc (USDT). Cycle kapanışında pnl_primary_mode: close_reason=trail_profit_sell → CASH_USDT_V1 (Cash öne çıkar); trail_reentry_buy → INVENTORY_QTY_V1 (Envanter öne çıkar). cycle_entry ve API cycle_summary: inventory_coin_adv_qty, inventory_fees_usdt, cash_pnl_usdt, cash_fees_usdt, pnl_primary_mode. UI (Bot tur işlemleri): Envanter K/Z (coin) ve Nakit K/Z (USDT) ayrı satırlarda gösterilir.
+**Dual PnL (Inventory vs Cash):** Tek USDT metrik yanıltıcı olabildiği için iki ayrı ledger tutulur. (A) **InventoryPnL**: trail_sell_grid (SELL) + trail_reentry_buy (BUY) → FIFO eşleşme; metrik: **inventory_coin_adv_qty** (base qty) = (sell_proceeds_net / buy_price) - qty_sold; inventory_fees_usdt ayrı. (B) **CashPnL**: trail_buy_grid (BUY) + trail_profit_sell (SELL) → FIFO eşleşme; metrik: **cash_pnl_usdt** = gross - fee_alloc (USDT). Cycle kapanışında pnl_primary_mode: close_reason=trail_profit_sell → CASH_USDT_V1 (Cash öne çıkar); trail_reentry_buy → INVENTORY_QTY_V1 (Envanter öne çıkar). cycle_entry ve API cycle_summary: inventory_coin_adv_qty, inventory_fees_usdt, cash_pnl_usdt, cash_fees_usdt, pnl_primary_mode, cycle_grid_side (açık tur). Kapanış snapshot: `state.completed_cycle_dual_pnls[]` (`cycle_type` CASH|INVENTORY, `completed_at`). UI `#cycleReport`: CSS grid; açık turda **Tur karı** yok; kapalı turda yön `BUY` → USDT, `SELL` → coin adet. Yön kilidi gelene kadar yalnızca süre/işlem/yön (Belirlenmedi). **`GET /performance` `dual_perf`:** yalnızca kapanmış turlar — `cash_*` = aşağı alım (BUY) toplamı; `inventory_*` = yukarı satış (SELL) coin adet toplamı; açık tur dahil değil. `#perfMetrics` iki satır (nakit / envanter).
 
 Ledger bellekte state içinde; fill sonrası cycle_reset_after_fill ile yeni cycle; Ledger.record_cycle_end (app/bot/ledger) DB'ye yansır.
 
@@ -3769,6 +3862,9 @@ get_strategy_safe(raw): config.strategy_id veya raw["strategy_id"]; registry'den
 | check_virtual_budget | DCA: virtual quote/base yetersiz | SKIP_REASON VIRTUAL_BUDGET_INSUFFICIENT |
 | BINANCE_FREE_QUOTE_INSUFFICIENT | !paper_mode BUY: quote_qty + buffer > free_usdt | SKIP_REASON; continue |
 | BINANCE_FREE_BASE_INSUFFICIENT | !paper_mode SELL: qty > free_base * (1 - buffer) | SKIP_REASON; continue |
+| SELL LOT_SIZE preflight | `order_qty.validate_market_sell_qty`: qty `stepSize` aşağı yuvarlanır; `qty < minQty` veya exchange `minNotional` altı | SKIP_REASON `LOT_SIZE` / `MIN_NOTIONAL`, `preflight: true` (Binance -1013 gönderilmez; `REPEATED_ORDER_FAIL` sayılmaz) |
+| REPEATED_ORDER_FAIL | Son 15 dk SKIP_REASON | Yalnızca borsa reddi (`binance_code` veya `ORDER_FAILED` / `ORDER_TIMEOUT`); `preflight` skip'ler hariç |
+| get_symbol_filters fallback | data_hub cache boşsa worker adapter `fetch_exchange_info` ile gerçek `stepSize`/`minQty` | Yanlış varsayılan `0.00001` ile fazla hassasiyet hatası önlenir |
 | INSUFFICIENT_BALANCE (Binance -2010) | place_* exception code -2010 | Bot paused_insufficient_balance; backoff_until; append_event ERROR |
 | 401 Unauthorized | _is_401_unauthorized; log throttle 10 dk; state backoff_until 300 s | continue (emir atılmaz); backoff süresince order denemesi skip |
 
@@ -4081,7 +4177,7 @@ action_key: reason + grid_index + client_order_id; idempotency bu key'e göre.
 | cycle_pnls | Tamamlanan turların kar listesi [{cycle_id, pnl_usdt, fees_usdt, ...}] |
 | sell_grids_filled_qty, buy_grids_filled_qty | Grid doluluk (veya benzeri alanlar) |
 | trail_anchor_price, _trail_sell_grid_index, _trail_buy_grid_index | Trailing state |
-| daily_ref_usd, daily_ref_date | Günlük K/Z referansı |
+| daily_ref_usd, daily_ref_date | Günlük K/Z referansı; bot açılış gününde (TR) `initial_capital`, sonraki günlerde gece 00:00 equity |
 | last_tick_at, last_error_code, retry_at | Meta |
 | last_fill_snapshot | Son fill sonrası snapshot (free_quote, base_qty, avg_cost, realized_pnl, fees_total) |
 
@@ -4285,7 +4381,7 @@ Sıra: Önce TRAIL_REENTRY_BUY / TRAIL_PROFIT_SELL (tur düzeyi, tek aktif). Son
 | SELL kilidi | Yalnız satış gridleri + kar **alım** (TRAIL_REENTRY_BUY); alım gridleri devre dışı, bekleyen alım tetikleri temizlenir |
 | BUY kilidi | Yalnız alım gridleri + kar **satış** (TRAIL_PROFIT_SELL); satış gridleri devre dışı |
 | Tur sonu | `cycle_reset_after_fill` → `cycle_grid_side` sıfırlanır; yeni turda yine iki yön |
-| UI | `grid_points[].disabled`, `grid_meta.cycle_grid_side`; kar paneli yön belirlenene kadar bekler |
+| UI | `grid_points[].disabled`, `grid_meta.cycle_grid_side`; `#cycleReport` Tur karı yalnız kapalı tur |
 
 ## Mevcut — DCA Grid: Paralel çoklu seviye
 
@@ -4329,6 +4425,8 @@ Modül: `app/botengine/strategies/grid_outage_recovery.py` — `tick_dca_grid_tr
 | 3 Kaçırılmış gerçekleşme (ters) | Tetikli grid: alımda P &gt; gerçekleşme ve P ≤ tetik; satışta P &lt; gerçekleşme ve P ≥ tetik | Tepe/dip P'den yeniden; yeni gerçekleşme fiyatı hesaplanır, bekleme |
 | 4 Grid kaçtı | Tetikli alım: P &gt; tetik fiyatı; tetikli satış: P &lt; tetik fiyatı | Tetik sıfırlanır (bekleme modu); işlem yok |
 | 5 Kısmi tur | Bir grid fill, diğerleri tetikli + kar alım aktif | Her açık grid ve TRAIL_PROFIT_SELL / TRAIL_REENTRY_BUY için yukarı kurallar bağımsız uygulanır |
+
+**Engine log (bot_engine_events):** Soğuk başlatma `COMMAND START` (Tür: **Start**) → Bismillah + bakiye + kısa config (`Base/Quote %`, Yukarı/Aşağı grid adet, `Y#n`/`A#n` seviye, trail, KA/KS); yalnızca `initial_allocation_done=false` (`start_log_brief.py`). İlk tur: **iki satır** — `ORDER_FILLED` `initial_allocation` → `İlk base alımı · …` (üstte), `CYCLE_START` → `Tur n başlatıldı · Base · Quote · Bakiye` (hemen altında; fill +1sn, aynı 8sn küme). Sentetik `CYCLE_START` yoksa backfill `id=fill_id+1`. Kesinti: `CONNECTIVITY_PAUSED` / `CONNECTIVITY_RECOVERED`. `OUTAGE_RECOVERY` — grid özeti.
 | Kopma sırasında tetiksiz grid | P tetik seviyesini geçmiş (ör. alım tetik altında) | Tetik + dip/tepe canlı P ile kaydedilir; uygunsa favorable execute |
 
 Bayraklar (tek tick): `_outage_favorable_buy`, `_outage_favorable_sell`, `_outage_force_profit_sell`, `_outage_force_reentry_buy` — tick sonunda temizlenir.
@@ -4341,7 +4439,7 @@ Bayraklar (tek tick): `_outage_favorable_buy`, `_outage_favorable_sell`, `_outag
 | BUY (initial_allocation değilse) | base_balance += qty; quote_balance -= (qty*price + fee); buy_history.append({...}). Fee quote (USDT) cinsinden: toplam quote çıkışı cost+fee. (Kod: quote_balance - q*p - fee_val) |
 | execution_price | Ortalama maliyet/tetik hesaplarında execution_price kullanılır (yoksa fill price) |
 | Komisyon (Binance) | `fills[].commission` + `commissionAsset`: alış gridinde genelde **base coin** (ETH), satış gridinde **USDT**. Engine USDT karşılığını `fee_utils` ile hesaplar; UI `fee_raw` + `fee_usdt` gösterir. Grid detay modalında Kar yalnızca kar alım/satış (tur kapanış) satırlarında. |
-| grid_meta.avg_sell_grid / avg_buy_grid | Bot detail yanıtında; yalnız `grid_index` olan kapanmış grid fill'lerinden qty-ağırlıklı ortalama (execution_price öncelikli). UI not satırı ve profit_points tablosu aynı kaynak. |
+| grid_meta.avg_sell_grid / avg_buy_grid | Bot detail yanıtında; yalnız `grid_index` olan kapanmış grid fill'lerinden qty-ağırlıklı VWAP (**`price` = Binance dolum**). `execution_price` trail eşiğidir; ortalamaya dahil edilmez. UI not satırı ve profit_points tablosu aynı kaynak. |
 
 cost = qty * avg_buy (satışta maliyet). execution.py içinde apply_fill_to_state çağrılır; sonra cycle_ledger_add_fill, cycle_reset_after_fill (gerekirse).
 
@@ -5583,7 +5681,8 @@ Step-by-step migration path for horizontal scaling. No code; design only.
 |----------|---------|---------|-------------------|
 | DATABASE_URL | sqlite:///~/.trader/dca.db | DB path | Uses default |
 | DATABASE_ROLE | web | web or worker | Engine role |
-| BINANCE_MASTER_KEY | — | Fernet decrypt API secrets | Cannot decrypt keys |
+| BINANCE_MASTER_KEY | — | HKDF kaynağı; AES-256-GCM v2 + legacy Fernet çözüm | Cannot decrypt keys |
+| ENCRYPTION_SALT | tradetrailing-at-rest-v2 | HKDF tuzu (v2 bağlam türetimi) | Varsayılan tuz kullanılır |
 | ENV | — | dev/prod | Log level; debug routes |
 | DEBUG_METRICS | 0 | Enable /debug/metrics | 404 if 0 |
 | BREACH_SHUTDOWN | 0 | Lockdown mode | Normal operation |

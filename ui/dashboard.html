@@ -245,7 +245,7 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
                 <div class="kpi-block-row kpi-block-row-with-status">
                     <div class="kpi-label-small">TOPLAM SPOT BAKİYESİ</div>
                     <div id="kpiCuzdan" class="kpi-value-small value-blink">$0.00</div>
-                    <div id="kpiCuzdanLive" class="kpi-value-sub kpi-spot-status">—</div>
+                    <div id="kpiCuzdanLive" class="kpi-value-sub kpi-spot-status" hidden></div>
                 </div>
                 <div class="kpi-block-divider"></div>
                 <div class="kpi-block-row">
@@ -258,7 +258,7 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
                 <div class="kpi-block-row">
                     <div class="kpi-label-small">BOTLAR BAKİYE</div>
                     <div id="kpiBotBakiye" class="kpi-value-small value-blink">$0.00</div>
-                    <div id="kpiBotBakiyePct" class="kpi-value-sub">—</div>
+                    <div id="kpiBotBakiyePct" class="kpi-value-sub kpi-spot-status" hidden></div>
                 </div>
                 <div class="kpi-block-divider"></div>
                 <div class="kpi-block-row">
@@ -294,7 +294,7 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
                 <h3 class="binance-varliklar-panel__title">
                     <span class="binance-varliklar-panel__title-text">Cüzdan Varlıkları</span>
                     <span class="binance-varliklar-panel__title-meta">
-                        <span id="bnWalletLiveBadge" class="kpi-value-sub kpi-spot-status">—</span>
+                        <span id="bnWalletLiveBadge" class="kpi-value-sub kpi-spot-status" hidden></span>
                         <span id="bnAssetsStaleBadge" class="binance-varliklar-panel__badge binance-varliklar-panel__badge--stale" hidden>Güncel değil</span>
                         <span id="flashHomeUpdatingBadge" class="binance-varliklar-panel__badge binance-varliklar-panel__badge--updating" hidden aria-hidden="true">Güncelleniyor…</span>
                     </span>
@@ -316,7 +316,6 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
                         </tr>
                     </thead>
                     <tbody id="varliklarTableBody">
-                        <tr><td colspan="10" style="padding: 2rem; text-align: center; color: var(--ds-text-secondary);">Yükleniyor...</td></tr>
                     </tbody>
                 </table>
                 </div>
@@ -336,32 +335,41 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
                         <span id="btnSortBotsByIcon" aria-hidden="true">⇅</span>
                     </button>
                 </div>
-                <div id="financeBotsList" class="mevcut-botlar-list" style="display: flex; flex-direction: column; gap: 0; width: 100%;">
-                    <div style="text-align: center; padding: 2rem; color: var(--ds-text-secondary);">Yükleniyor...</div>
-                </div>
+                <div id="financeBotsList" class="mevcut-botlar-list" style="display: flex; flex-direction: column; gap: 0; width: 100%;"></div>
             </div>
 
             <!-- En İyi 5 Bot: tüm kullanıcılar, yalnızca aktif (running) kârdaki botlar -->
             <div id="globalLeaderboardPanel" class="panel global-leaderboard-panel" style="margin-top: 2rem; margin-bottom: 0; width: 100%; max-width: 100%; display: none;">
                 <h3 style="margin: 0 0 1rem 0; font-size: 1.2rem; font-weight: 600; color: var(--ds-text-primary);">En İyi 5 Bot</h3>
-                <p style="margin: 0 0 1rem 0; font-size: 0.85rem; color: var(--ds-text-secondary);">Tüm kullanıcılar arasında çalışan botlar, toplam K/Z (mevcut bakiye − başlangıç bakiyesi) değerine göre sıralanır. K/Z ve süre 5 saniyede bir güncellenir.</p>
                 <div id="globalLeaderboardList" class="global-leaderboard-list" style="display: flex; flex-direction: column; gap: 0.75rem;">
                     <div style="text-align: center; color: var(--ds-text-secondary); padding: 1rem;">Yükleniyor…</div>
                 </div>
             </div>
-            <!-- Bot Performans: varsayılan Toplam K/Z (mevcut bakiye − başlangıç sermayesi); isteğe bağlı dönem gerçekleşen PnL -->
+            <!-- Bot Performans: hesap geneli günlük K/Z toplamı (tüm botlar, silinen dahil) -->
             <div id="botPerformancePanel" class="panel bot-performance-panel" style="margin-top: 2rem; margin-bottom: 2rem; width: 100%; max-width: 100%;">
-                <h3 style="margin: 0 0 1rem 0; font-size: 1.2rem; font-weight: 600; color: var(--ds-text-primary);">Bot Performansı</h3>
-                <p style="margin: 0 0 1rem 0; font-size: 0.9rem; color: var(--ds-text-secondary);">Filtrelere göre botlardan elde edilen toplam karınız listelenir.</p>
-                <div class="bot-performance-buttons" style="display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1rem;">
+                <div class="bot-performance-header">
+                    <h3 class="bot-performance-title">Bot Performansı</h3>
+                    <span id="botPerformanceRange" class="bot-performance-range"></span>
+                </div>
+                <div class="bot-performance-buttons">
                     <button type="button" class="btn bot-perf-btn" data-period="daily">Günlük</button>
                     <button type="button" class="btn bot-perf-btn" data-period="weekly">Haftalık</button>
                     <button type="button" class="btn bot-perf-btn" data-period="monthly">Aylık</button>
                     <button type="button" class="btn bot-perf-btn active" data-period="all">Genel</button>
                 </div>
-                <div class="bot-performance-value" style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
-                    <span id="botPerformancePnl" class="bot-perf-pnl">$0.00</span>
+                <div id="botPerformanceSummary" class="bot-performance-summary">
+                    <div class="bot-perf-summary-row bot-perf-summary-row--single">
+                        <div class="bot-perf-summary-card bot-perf-summary-card--primary">
+                            <div class="bot-perf-summary-label">Toplam K/Z (USDT)</div>
+                            <div id="botPerfTotalPnl" class="bot-perf-summary-value">—</div>
+                        </div>
+                        <div class="bot-perf-summary-card">
+                            <div class="bot-perf-summary-label">Komisyon (USDT)</div>
+                            <div id="botPerfTotalFees" class="bot-perf-summary-value bot-perf-summary-value--muted">—</div>
+                        </div>
+                    </div>
                 </div>
+                <div id="botPerformanceDaily" class="bot-performance-daily"></div>
             </div>
 
             <!-- İşlem Geçmişi – alım/satım/yatırım/çekim, Spot vs Bot (Anasayfada her zaman görünür) -->
@@ -1016,123 +1024,6 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
                 </div>
 
                 <div id="createBotError" class="form-error" style="display: none;"></div>
-                </div>
-                <!-- TRDCA Pro+ (Trailing Rebalancing DCA) parametre ekranı -->
-                <div id="dmWizardTrdca" style="display: none;">
-                    <div class="section-title">TRDCA Pro+ — Genel</div>
-                    <div class="grid-2">
-                        <div class="form-group">
-                            <label class="label-with-tooltip" for="fTrdcaQuoteAsset">
-                                Quote varlık
-                                <span class="tooltip-icon">ℹ</span>
-                                <span class="tooltip-text">Tüm fiyat ve işlemler bu para birimi cinsinden. Değişim SAFE_STOP tetikler.</span>
-                            </label>
-                            <select id="fTrdcaQuoteAsset" class="form-input" style="width:100%;padding:0.6rem 1rem;">
-                                <option value="USDT" selected>USDT</option>
-                                <option value="FDUSD">FDUSD</option>
-                            </select>
-                        </div>
-                        <div class="form-group">
-                            <label class="label-with-tooltip" for="fTrdcaBotBalance">
-                                Bot bakiyesi (<span id="dmTrdcaQuoteName">USDT</span>)
-                                <span class="tooltip-icon">ℹ</span>
-                                <span class="tooltip-text">Bot için kullanılacak bakiye (isteğe bağlı). Boş bırakırsanız tüm kullanılabilir bakiye kullanılır. Test/paper’da üst sınır olarak uygulanır.</span>
-                            </label>
-                            <input id="fTrdcaBotBalance" type="number" min="0" step="any" placeholder="Kullanılabilir: —" class="form-input" style="width:100%;padding:0.6rem 1rem;" />
-                        </div>
-                    </div>
-                    <div class="grid-2" style="margin-top:12px;">
-                        <div class="form-group">
-                            <label for="fTrdcaBasePct">Base (coinler) %</label>
-                            <input id="fTrdcaBasePct" type="number" min="0" max="100" step="1" class="form-input" style="width:100%;padding:0.6rem 1rem;" placeholder="0" />
-                        </div>
-                        <div class="form-group">
-                            <label for="fTrdcaQuotePctBar">Quote %</label>
-                            <input id="fTrdcaQuotePctBar" type="number" min="0" max="100" step="1" class="form-input" style="width:100%;padding:0.6rem 1rem;" placeholder="0" />
-                        </div>
-                    </div>
-                    <div class="section-title" style="margin-top:1rem;">Rebalancing — Coin dağılımı</div>
-                    <div class="form-group">
-                        <label class="label-with-tooltip" for="fTrdcaCoinCount">
-                            Coin sayısı (2–10)
-                            <span class="tooltip-icon">ℹ</span>
-                            <span class="tooltip-text">Portföyde hedef oran gireceğiniz coin adedi. Her biri için sembol ve hedef % gireceksiniz; kalan otomatik quote (USDT) olur.</span>
-                        </label>
-                        <input id="fTrdcaCoinCount" type="number" min="2" max="10" step="1" value="4" class="form-input" style="width:100%;padding:0.6rem 1rem;" />
-                    </div>
-                    <div id="trdcaRebalanceRows" class="rows" style="margin-top:12px;"></div>
-                    <div class="hint" style="margin-top:8px;">Hedef % toplamı 100 olmalı (coinler + kalan = quote). <strong>Toplam: <span id="trdcaPctTotal">0</span>% — Kalan (quote): <span id="trdcaQuotePct">100</span>%</strong></div>
-                    <div class="grid-2" style="margin-top:1rem;">
-                        <div class="form-group">
-                            <label class="label-with-tooltip" for="fTrdcaGapArmPct">
-                                Rebalancing sapma %
-                                <span class="tooltip-icon">ℹ</span>
-                                <span class="tooltip-text">Hedef orandan bu kadar sapma olunca rebalance tetiklenir. Örn: 3 = %3 sapmada dengeleme.</span>
-                            </label>
-                            <input id="fTrdcaGapArmPct" type="number" step="0.1" min="0.5" value="3" class="form-input" style="width:100%;padding:0.6rem 1rem;" />
-                        </div>
-                        <div class="form-group">
-                            <label class="label-with-tooltip" for="fTrdcaTrailBackPct">
-                                Trailing %
-                                <span class="tooltip-icon">ℹ</span>
-                                <span class="tooltip-text">Sapma bu yüzde geri çekilince rebalance emri gönderilir.</span>
-                            </label>
-                            <input id="fTrdcaTrailBackPct" type="number" step="0.1" value="0.6" class="form-input" style="width:100%;padding:0.6rem 1rem;" />
-                        </div>
-                    </div>
-                    <div class="section-title" style="margin-top:1.25rem;">DCA (Trailing DCA / Grid)</div>
-                    <div class="grid-2">
-                        <div class="form-group">
-                            <label class="label-with-tooltip" for="fTrdcaGridUpCount">
-                                Yukarı grid sayısı
-                                <span class="tooltip-icon">ℹ</span>
-                                <span class="tooltip-text">Anchor üstü satış seviye adedi.</span>
-                            </label>
-                            <input id="fTrdcaGridUpCount" type="number" min="1" max="10" step="1" value="3" class="form-input" style="width:100%;padding:0.6rem 1rem;" />
-                        </div>
-                        <div class="form-group">
-                            <label class="label-with-tooltip" for="fTrdcaGridDownCount">
-                                Aşağı grid sayısı
-                                <span class="tooltip-icon">ℹ</span>
-                                <span class="tooltip-text">Anchor altı alış seviye adedi.</span>
-                            </label>
-                            <input id="fTrdcaGridDownCount" type="number" min="1" max="10" step="1" value="3" class="form-input" style="width:100%;padding:0.6rem 1rem;" />
-                        </div>
-                    </div>
-                    <div class="form-group">
-                        <label class="label-with-tooltip" for="fTrdcaGridTrailPct">
-                            Grid trailing % (tüm seviyelerde geçerli)
-                            <span class="tooltip-icon">ℹ</span>
-                            <span class="tooltip-text">Tepe/dipten bu yüzde geri çekilince emir tetiklenir. Satış ve alış için aynı değer kullanılır.</span>
-                        </label>
-                        <input id="fTrdcaGridTrailPct" type="number" step="0.1" min="0.1" value="0.8" class="form-input" style="width:100%;padding:0.6rem 1rem;" />
-                    </div>
-                    <div class="section-title" style="margin-top:0.75rem;">Yukarı grid — Tetik % + Satım %</div>
-                    <div id="trdcaGridUpRows" class="rows" style="margin-top:8px;"></div>
-                    <div class="hint" style="margin-top:4px;">Tetik %: fiyat referanstan bu kadar yukarı gidince satış tetiklenir (örn: 2 = %2). Satım: her seviyede ne kadar varlık satılacak.</div>
-                    <div class="section-title" style="margin-top:1rem;">Aşağı grid — Tetik % + Alım %</div>
-                    <div id="trdcaGridDownRows" class="rows" style="margin-top:8px;"></div>
-                    <div class="section-title" style="margin-top:0.75rem;">DCA kar alımı</div>
-                    <div class="hint" style="margin-bottom:8px;">Yukarı ve aşağı gridde satış/alış sonrası kar alımı için ortak parametreler.</div>
-                    <div class="grid-2">
-                        <div class="form-group">
-                            <label class="label-with-tooltip" for="fTrdcaKarAlimTetikPct">
-                                Kar alım tetik %
-                                <span class="tooltip-icon">ℹ</span>
-                                <span class="tooltip-text">Fiyat bu yüzde hareket edince kar alım modu tetiklenir (satış sonrası dip veya alış sonrası tepe).</span>
-                            </label>
-                            <input id="fTrdcaKarAlimTetikPct" type="number" step="0.1" value="2" class="form-input" style="width:100%;padding:0.6rem 1rem;" />
-                        </div>
-                        <div class="form-group">
-                            <label class="label-with-tooltip" for="fTrdcaKarAlimTrailPct">
-                                Kar alım trailing %
-                                <span class="tooltip-icon">ℹ</span>
-                                <span class="tooltip-text">Tepe/dipten bu yüzde geri çekilince kar alım emri gönderilir.</span>
-                            </label>
-                            <input id="fTrdcaKarAlimTrailPct" type="number" step="0.1" value="0.8" class="form-input" style="width:100%;padding:0.6rem 1rem;" />
-                        </div>
-                    </div>
-                    <div id="createBotErrorTrdca" class="form-error" style="display: none;"></div>
                 </div>
             </div>
 
@@ -1849,7 +1740,7 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
     <script src="/ui/assets/core/errorReporter.js?v=refactor1"></script>
     <script src="/ui/assets/core/intervalRegistry.js?v=refactor1"></script>
     <!-- Stores -->
-    <script src="/ui/assets/stores/marketStore.js?v=refactor1"></script>
+    <script src="/ui/assets/stores/marketStore.js?v=refactor2"></script>
     <script src="/ui/assets/stores/financeStore.js?v=refactor1"></script>
     <script src="/ui/assets/stores/botStore.js?v=refactor1"></script>
     <script src="/ui/assets/stores/dashboardStore.js?v=boot1"></script>
@@ -1867,10 +1758,10 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
     <script src="/ui/assets/utils/coinLogo.js?v=1"></script>
     <!-- Flash Home (Patch H). Deploy ui/assets/ so storageCache, renderHome, homeFlash exist (else 404). -->
     <script src="/ui/assets/storageCache.js?v=flash1"></script>
-    <script src="/ui/assets/renderHome.js?v=wallet-live-kpi1"></script>
-    <script src="/ui/assets/homeFlash.js?v=wallet-live-kpi1"></script>
+    <script src="/ui/assets/renderHome.js?v=wallet-stable6"></script>
+    <script src="/ui/assets/homeFlash.js?v=wallet-stable4"></script>
     <!-- Main dashboard (refactored) -->
-    <script src="/ui/assets/dashboard.js?v=wallet-live-kpi1"></script>
+    <script src="/ui/assets/dashboard.js?v=wallet-stable8"></script>
     <script src="/ui/assets/ticker.js?v=mobile1" defer></script>
 </body>
 </html>

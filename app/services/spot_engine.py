@@ -83,6 +83,10 @@ class SpotCache:
         """LOT_SIZE vb. hatalarda eski/yanlış filtre cache'ini temizle."""
         self.filters.pop((symbol or "").upper(), None)
 
+    def invalidate_balance(self, account_id: int) -> None:
+        """Emir/convert sonrası eski bakiye cache'ini temizle."""
+        self.balances.pop(int(account_id), None)
+
 # Global cache instance
 spot_cache = SpotCache()
 

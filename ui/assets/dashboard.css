@@ -208,13 +208,39 @@ h1, h2, h3, h4 {
     display: none;
 }
 
-/* Bot Performansı paneli – günlük/haftalık/aylık/genel toplam PnL */
+/* Bot Performansı paneli – dual PnL özet + bot listesi */
 .page-dashboard .bot-performance-panel {
     box-sizing: border-box;
     padding: 1.25rem 1.5rem;
     background: var(--ds-bg-secondary, #1e2329);
     border: 1px solid var(--ds-border, #2b3139);
     border-radius: var(--ds-radius-md, 12px);
+}
+.page-dashboard .bot-performance-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+}
+.page-dashboard .bot-performance-title {
+    margin: 0;
+    font-size: 1.2rem;
+    font-weight: 600;
+    color: var(--ds-text-primary);
+}
+.page-dashboard .bot-performance-range {
+    font-size: 0.8rem;
+    color: var(--ds-text-secondary);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+.page-dashboard .bot-performance-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
 }
 .page-dashboard .bot-performance-buttons .bot-perf-btn {
     padding: 0.5rem 1rem;
@@ -248,17 +274,155 @@ h1, h2, h3, h4 {
 .page-dashboard .bot-perf-pnl.negative {
     color: var(--ds-loss, #f6465d);
 }
-/* Flicker önle: yükseklik sabit kalsın, metin değişince sıçrama olmasın */
+.page-dashboard .bot-performance-summary {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    margin-bottom: 1.25rem;
+}
+.page-dashboard .bot-perf-summary-row {
+    display: grid;
+    grid-template-columns: auto 1fr 1fr;
+    gap: 0.75rem;
+    align-items: stretch;
+}
+.page-dashboard .bot-perf-summary-row-label {
+    font-size: 0.78rem;
+    font-weight: 700;
+    color: var(--ds-text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    writing-mode: horizontal-tb;
+    align-self: center;
+    min-width: 5.5rem;
+    padding-right: 0.25rem;
+}
+@media (max-width: 640px) {
+    .page-dashboard .bot-perf-summary-row {
+        grid-template-columns: 1fr 1fr;
+    }
+    .page-dashboard .bot-perf-summary-row-label {
+        grid-column: 1 / -1;
+        min-width: 0;
+    }
+}
+.page-dashboard .bot-perf-summary-card {
+    background: var(--ds-bg-tertiary, rgba(255,255,255,0.03));
+    border: 1px solid var(--ds-border, #2b3139);
+    border-radius: 10px;
+    padding: 0.85rem 1rem;
+}
+.page-dashboard .bot-perf-summary-label {
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--ds-text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 0.35rem;
+}
+.page-dashboard .bot-perf-summary-value {
+    font-size: 1.25rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    color: var(--ds-text-primary);
+}
+.page-dashboard .bot-perf-summary-value.positive { color: var(--ds-profit, #0ecb81); }
+.page-dashboard .bot-perf-summary-value.negative { color: var(--ds-loss, #f6465d); }
+.page-dashboard .bot-perf-summary-value--muted { color: var(--ds-text-secondary); font-size: 1.05rem; }
+.page-dashboard .bot-perf-summary-row--single {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+}
+.page-dashboard .bot-perf-summary-card--primary .bot-perf-summary-value {
+    font-size: 1.65rem;
+}
+.page-dashboard .bot-performance-daily {
+    margin-bottom: 1.25rem;
+}
+.page-dashboard .bot-perf-daily-title,
+.page-dashboard .bot-perf-bots-title {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--ds-text-secondary);
+    margin: 0 0 0.5rem 0;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+.page-dashboard .bot-perf-table--daily {
+    margin-bottom: 0.5rem;
+}
+@media (max-width: 640px) {
+    .page-dashboard .bot-perf-summary-row--single {
+        grid-template-columns: 1fr;
+    }
+}
+.page-dashboard .bot-performance-list {
+    overflow-x: auto;
+}
+.page-dashboard .bot-perf-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.88rem;
+}
+.page-dashboard .bot-perf-table th,
+.page-dashboard .bot-perf-table td {
+    padding: 0.65rem 0.75rem;
+    border-bottom: 1px solid var(--ds-border, #2b3139);
+    text-align: right;
+    vertical-align: middle;
+}
+.page-dashboard .bot-perf-table th:first-child,
+.page-dashboard .bot-perf-table td:first-child {
+    text-align: left;
+}
+.page-dashboard .bot-perf-table th {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--ds-text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+.page-dashboard .bot-perf-table tbody tr:hover {
+    background: rgba(255,255,255,0.02);
+}
+.page-dashboard .bot-perf-status {
+    display: inline-block;
+    font-size: 0.75rem;
+    padding: 0.15rem 0.45rem;
+    border-radius: 4px;
+    background: var(--ds-bg-tertiary);
+    color: var(--ds-text-secondary);
+}
+.page-dashboard .bot-perf-status.is-running { color: #0ecb81; }
+.page-dashboard .bot-perf-status.is-deleted { color: #848e9c; font-style: italic; }
+.page-dashboard .bot-perf-pnl-cell {
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+}
+.page-dashboard .bot-performance-loading,
+.page-dashboard .bot-performance-empty {
+    text-align: center;
+    padding: 1.5rem;
+    color: var(--ds-text-secondary);
+    font-size: 0.9rem;
+}
+/* Flicker önle: yükseklik sabit kalsın */
 .page-dashboard .bot-performance-value {
     min-height: 1.75rem;
 }
-.page-dashboard .bot-perf-pnl {
-    display: inline-block;
-    min-width: 5.5rem;
-    text-align: left;
-}
 
 /* İşlem Geçmişi paneli */
+.page-dashboard .tx-history-list {
+    max-height: min(420px, 50vh);
+    overflow-y: auto;
+    overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
+}
+.page-dashboard .tx-history-items {
+    display: flex;
+    flex-direction: column;
+}
 .page-dashboard .transaction-history-panel {
     box-sizing: border-box;
     padding: 1.25rem 1.5rem;
@@ -1307,11 +1471,28 @@ h1, h2, h3, h4 {
     font-size: 0.8rem;
     color: var(--ds-text-secondary);
 }
+.page-dashboard .varliklar-table .varlik-fiyat-cell {
+    box-sizing: border-box;
+    min-width: 7.25rem;
+    width: 7.25rem;
+    white-space: nowrap;
+    vertical-align: middle;
+}
 .page-dashboard .varliklar-table .price-cell {
     font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum";
+    min-height: 1.25em;
+    line-height: 1.25;
 }
 .page-dashboard .varliklar-table .change-pct {
     font-size: 0.8rem;
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum";
+    min-width: 4.75rem;
+    min-height: 1em;
+    line-height: 1.2;
+    text-align: right;
 }
 
 /* Cüzdan varlıkları – logo hücresi (ikon veya baş harfler) */

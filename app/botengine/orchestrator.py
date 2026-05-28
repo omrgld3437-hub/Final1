@@ -67,6 +67,7 @@ from app.botengine.state_store import append_event, ensure_state_row, get_events
 from app.botengine.strategies.registry import get_strategy_safe
 from app.botengine.strategies.trdca_pro import strategy_tick as trdca_strategy_tick
 from app.botengine.virtual_wallet import ensure_virtual_wallet, get_virtual_wallet, sync_virtual_wallet_from_state
+from app.services.pnl_service import ensure_daily_ref_and_compute
 from app.utils.tz_utils import turkey_today_start_utc
 
 logger = logging.getLogger(__name__)
@@ -89,13 +90,22 @@ _STALE_EVENT_THROTTLE_SEC = 300
 
 
 async def _engine_tick_loop() -> None:
-    """Heartbeat only: log ENGINE_TICK once when 0 bots; when bots > 0, log at most once per 60s. Does not affect bot loops."""
+    """Heartbeat + per ~60s ensure running bots (restart crashed loops while DB status=running)."""
     tick_count = 0
     logged_zero_once = False
     while True:
         await asyncio.sleep(5)
         n = len(_tasks)
         tick_count += 1
+        if tick_count % 12 == 0:
+            try:
+                db = _get_db()
+                try:
+                    await ensure_running_bots(db, recovery_source="engine_tick")
+                except Exception as tick_err:
+                    logger.debug("ENGINE_TICK ensure_running_bots: %s", tick_err)
+            except Exception:
+                pass
         if n > 0:
             logged_zero_once = False
             if tick_count % 12 == 0:
@@ -468,16 +478,20 @@ async def _bot_loop(bot_id: int) -> None:
                     except Exception as tick_err:
                         error_id = str(uuid.uuid4())
                         logger.exception("BOT_LOOP_TRDCA_EXCEPTION error_id=%s bot_id=%s %s", error_id, bot_id, tick_err)
+                        state["last_error_code"] = "BOT_LOOP_TRDCA_EXCEPTION"
+                        state["health_error_since"] = int(time.time())
+                        save_state(db, bot_id, account_id, state)
+                        append_event(db, bot_id, account_id, "ERROR", f"BOT_LOOP_TRDCA_EXCEPTION {error_id} {tick_err}", {
+                            "error_code": "BOT_LOOP_TRDCA_EXCEPTION", "error_id": error_id, "loop_id": loop_instance_id,
+                        })
                         try:
-                            row_err = db.query(Bot).filter(Bot.id == bot_id).first()
-                            if row_err:
-                                row_err.status = "paused_error"
-                                db.commit()
+                            from app.botengine.health_watch import emit_resilience_continue
+                            emit_resilience_continue(
+                                db, bot_id, account_id, "BOT_LOOP_TRDCA_EXCEPTION", str(tick_err),
+                                error_id=error_id, loop_id=loop_instance_id,
+                            )
                         except Exception:
                             pass
-                        state["last_error_code"] = "BOT_LOOP_TRDCA_EXCEPTION"
-                        save_state(db, bot_id, account_id, state)
-                        append_event(db, bot_id, account_id, "ERROR", f"BOT_LOOP_TRDCA_EXCEPTION {error_id} {tick_err}", {"error_code": "BOT_LOOP_TRDCA_EXCEPTION", "error_id": error_id})
                     await asyncio.sleep(max(0.5, next_wake))
                     continue
                 if is_multi or symbol == "MULTI":
@@ -497,10 +511,20 @@ async def _bot_loop(bot_id: int) -> None:
                             bot_id, loop_instance_id, tick_count, symbol, price, next_wake,
                         )
                         now_ts = time.time()
+                        if not state.get("price_stale_since"):
+                            state["price_stale_since"] = int(now_ts)
+                            save_state(db, bot_id, account_id, state)
                         if (now_ts - _last_stale_event_ts.get(bot_id, 0)) >= _STALE_EVENT_THROTTLE_SEC:
                             _last_stale_event_ts[bot_id] = now_ts
+                            try:
+                                from app.botengine.health_watch import emit_price_stale
+                                emit_price_stale(db, bot_id, account_id, symbol)
+                            except Exception:
+                                pass
                         await asyncio.sleep(max(0.5, next_wake))
                         continue
+                    if state.pop("price_stale_since", None):
+                        save_state(db, bot_id, account_id, state)
                     logger.debug("BOT_PRICE bot_id=%s loop=%s tick=%s status=OK price=%.2f symbol=%s", bot_id, loop_instance_id, tick_count, price, symbol)
                     init_quote = float(getattr(cfg, "initial_capital_usdt", 0) or getattr(cfg, "bot_budget_usdt", 0) or 0)
                     if init_quote <= 0 and paper_mode:
@@ -527,6 +551,12 @@ async def _bot_loop(bot_id: int) -> None:
                     strategy = get_strategy_safe(raw)
                     t0 = time.perf_counter()
                     actions, next_wake = strategy.tick(state, cfg, price, base_balance, quote_balance)
+                    try:
+                        from app.botengine.strategies.grid_outage_recovery import flush_outage_recovery_log_to_events
+
+                        flush_outage_recovery_log_to_events(db, bot_id, account_id, state)
+                    except Exception as olog_ex:
+                        logger.debug("outage_recovery_log bot_id=%s: %s", bot_id, olog_ex)
                     flush_queued_events(db, bot_id, account_id, state)
                     elapsed_ms = (time.perf_counter() - t0) * 1000
 
@@ -618,14 +648,22 @@ async def _bot_loop(bot_id: int) -> None:
                         )
                     except Exception as sync_err:
                         logger.warning("bot_engine sync_virtual_wallet_from_state failed bot_id=%s err=%s", bot_id, sync_err)
-                    # Günlük K/Z referansı: gece 00:00 (Türkiye) geçişinde bot bakiyesini referans al
-                    today_start = turkey_today_start_utc()
-                    today_date = today_start.strftime("%Y-%m-%d")
-                    if state.get("initial_allocation_done") and state.get("daily_ref_date") != today_date:
+                    # Günlük K/Z referansı: gece 00:00 (Türkiye) veya bot açılış gününde initial_capital
+                    if state.get("initial_allocation_done"):
                         equity = float(state.get("base_balance") or 0) * float(price or 0) + float(state.get("quote_balance") or 0)
-                        state["daily_ref_usd"] = equity
-                        state["daily_ref_date"] = today_date
-                        save_state(db, bot_id, account_id, state)
+                        init_cap_tick = float(
+                            raw.get("initial_capital_usdt") or raw.get("budget_usd") or raw.get("bot_budget_quote") or 0
+                        )
+                        ensure_daily_ref_and_compute(
+                            state,
+                            equity,
+                            init_cap_tick,
+                            getattr(row, "started_at", None),
+                            db,
+                            bot_id,
+                            account_id,
+                            True,
+                        )
                     # Skip routine TICK log (elapsed_ms/actions) to reduce noise; only errors/skips/fills are logged
 
                     tick_count += 1
@@ -640,26 +678,28 @@ async def _bot_loop(bot_id: int) -> None:
                 except Exception as tick_err:
                     error_id = str(uuid.uuid4())
                     logger.exception(
-                        "BOT_LOOP_TOPLEVEL_EXCEPTION error_code=BOT_LOOP_TOPLEVEL_EXCEPTION error_id=%s bot_id=%s account_id=%s loop_id=%s error=%s",
+                        "BOT_LOOP_TOPLEVEL_EXCEPTION error_id=%s bot_id=%s account_id=%s loop_id=%s error=%s",
                         error_id, bot_id, account_id or 0, loop_instance_id, tick_err,
                     )
                     try:
-                        row_err = db.query(Bot).filter(Bot.id == bot_id).first()
-                        if row_err:
-                            row_err.status = "paused_error"
-                            db.commit()
-                    except Exception:
-                        pass
-                    try:
                         state_err = load_state(db, bot_id) or {}
-                        state_err["last_error_code"] = "BOT_LOOP_TOPLEVEL_EXCEPTION"
+                        state_err["last_error_code"] = "BOT_TICK_EXCEPTION"
+                        state_err["health_error_since"] = int(time.time())
                         save_state(db, bot_id, account_id, state_err)
                     except Exception:
                         pass
-                    append_event(db, bot_id, account_id, "ERROR", f"BOT_LOOP_TOPLEVEL_EXCEPTION {error_id} {tick_err}", {
-                        "error_code": "BOT_LOOP_TOPLEVEL_EXCEPTION", "error_id": error_id, "bot_id": bot_id, "account_id": account_id or 0, "loop_id": loop_instance_id,
+                    append_event(db, bot_id, account_id, "ERROR", f"BOT_TICK_EXCEPTION {error_id} {tick_err}", {
+                        "error_code": "BOT_TICK_EXCEPTION", "error_id": error_id, "bot_id": bot_id,
+                        "account_id": account_id or 0, "loop_id": loop_instance_id,
                     })
-                    # Loop continues: status=paused_error so UI shows error; active_bots unchanged
+                    try:
+                        from app.botengine.health_watch import emit_resilience_continue
+                        emit_resilience_continue(
+                            db, bot_id, account_id, "BOT_TICK_EXCEPTION", str(tick_err),
+                            error_id=error_id, loop_id=loop_instance_id,
+                        )
+                    except Exception:
+                        pass
             finally:
                 db.close()
 
@@ -669,37 +709,61 @@ async def _bot_loop(bot_id: int) -> None:
     except Exception as e:
         error_id = str(uuid.uuid4())
         logger.exception(
-            "BOT_LOOP_TOPLEVEL_EXCEPTION error_code=BOT_LOOP_TOPLEVEL_EXCEPTION error_id=%s bot_id=%s account_id=%s loop_id=%s error=%s",
+            "BOT_LOOP_FATAL error_id=%s bot_id=%s account_id=%s loop_id=%s error=%s",
             error_id, bot_id, account_id or 0, loop_instance_id, e,
         )
         try:
             d = _get_db()
             try:
-                from app.db.models import Bot
-                bot_row = d.query(Bot).filter(Bot.id == bot_id).first()
-                if bot_row:
-                    bot_row.status = "paused_error"
-                    d.commit()
-            except Exception:
-                pass
-            try:
                 state = load_state(d, bot_id) or {}
                 state["last_error_code"] = "BOT_LOOP_TOPLEVEL_EXCEPTION"
+                state["health_error_since"] = int(time.time())
                 save_state(d, bot_id, account_id or 0, state)
             except Exception:
                 pass
             append_event(d, bot_id, account_id or 0, "ERROR", f"BOT_LOOP_TOPLEVEL_EXCEPTION {error_id} {e}", {
-                "error_code": "BOT_LOOP_TOPLEVEL_EXCEPTION", "error_id": error_id, "bot_id": bot_id, "account_id": account_id or 0, "loop_id": loop_instance_id,
+                "error_code": "BOT_LOOP_TOPLEVEL_EXCEPTION", "error_id": error_id, "bot_id": bot_id,
+                "account_id": account_id or 0, "loop_id": loop_instance_id,
             })
             d.close()
         except Exception:
             pass
-        await asyncio.sleep(5)
+        await asyncio.sleep(2)
     finally:
+        cancelled = bot_id in _stop_requested
         _stop_requested.discard(bot_id)
         _tasks.pop(bot_id, None)
         _loop_instances.pop(bot_id, None)
-        logger.info("BOT_LOOP_END bot_id=%s loop=%s", bot_id, loop_instance_id)
+        logger.info("BOT_LOOP_END bot_id=%s loop=%s cancelled=%s", bot_id, loop_instance_id, cancelled)
+        if not cancelled:
+            await _try_restart_bot_loop(bot_id, loop_instance_id, "loop_exit")
+
+
+async def _try_restart_bot_loop(bot_id: int, loop_instance_id: str, reason: str) -> bool:
+    """Restart asyncio loop when DB status is still running (crash recovery)."""
+    if bot_id in _stop_requested:
+        return False
+    db = _get_db()
+    account_id = 0
+    try:
+        from app.db.models import Bot
+        bot = db.query(Bot).filter(Bot.id == bot_id).first()
+        if not bot or (bot.status or "").lower() != "running":
+            return False
+        account_id = bot.account_id
+        try:
+            from app.botengine.health_watch import emit_loop_auto_restart
+            emit_loop_auto_restart(db, bot_id, account_id, reason, loop_id=loop_instance_id)
+        except Exception:
+            pass
+    finally:
+        db.close()
+    async with _task_create_lock:
+        if bot_id in _tasks and not _tasks[bot_id].done():
+            return False
+        _tasks[bot_id] = asyncio.create_task(_bot_loop(bot_id))
+        logger.info("BOT_LOOP_RESTART bot_id=%s reason=%s prev_loop=%s", bot_id, reason, loop_instance_id)
+    return True
 
 
 async def start_bot(bot_id: int, db: Session) -> bool:
@@ -772,7 +836,7 @@ async def stop_bot(bot_id: int, db: Session) -> bool:
 _ensure_running_bots_first_run = True
 
 
-async def ensure_running_bots(db: Session) -> None:
+async def ensure_running_bots(db: Session, recovery_source: str = "worker_poll") -> None:
     """Start loops for all DB bots with status=running (crash recovery)."""
     global _ensure_running_bots_first_run
     from app.db.models import Bot
@@ -798,11 +862,22 @@ async def ensure_running_bots(db: Session) -> None:
                 bot.started_at = datetime.now(timezone.utc)
                 db.commit()
                 seed_perf_chart_state_on_bot_start(db, bot.id)
+            try:
+                from app.botengine.health_watch import emit_loop_auto_restart
+                emit_loop_auto_restart(
+                    db, bot.id, bot.account_id,
+                    f"ensure_running_bots ({recovery_source})",
+                )
+            except Exception:
+                pass
             t = asyncio.create_task(_bot_loop(bot.id))
             _tasks[bot.id] = t
             recovered.append(bot.id)
     if recovered:
-        logger.info("bot_engine ensure_running_bots recovered %s bots bot_ids=%s", len(recovered), recovered)
+        logger.info(
+            "bot_engine ensure_running_bots recovered %s bots bot_ids=%s source=%s",
+            len(recovered), recovered, recovery_source,
+        )
     else:
         logger.debug("bot_engine ensure_running_bots recovered 0 bots bot_ids=[]")
     db.close()
@@ -819,7 +894,12 @@ async def delete_bot_fully(bot_id: int, db: Session) -> None:
             release_symbol_lock(db, bot.account_id, trade_lock_symbol(bot.account_id), bot_id)
         except Exception:
             pass
-        # Günlük KPI: Bot silinince bugünkü gerçekleşen PnL kaybolmasın diye cache'e yaz
+        # Performans arşivi + günlük KPI cache
+        try:
+            from app.services.bot_performance_service import archive_bot_performance
+            archive_bot_performance(db, bot_id, bot.account_id)
+        except Exception as e:
+            logger.warning("delete_bot_fully archive bot_id=%s: %s", bot_id, e)
         today_str = turkey_today_start_utc().strftime("%Y-%m-%d")
         bot_today_realized = PnlService._daily_realized_for_bot_trades(db, bot_id, bot.account_id)
         if bot_today_realized != 0:

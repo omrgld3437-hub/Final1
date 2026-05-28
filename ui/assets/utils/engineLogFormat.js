@@ -158,6 +158,52 @@
         return (parts || []).filter(function (p) { return p != null && String(p).trim() !== ''; }).join(' · ');
     }
 
+    function formatTurReconnectMessage(meta) {
+        meta = meta || {};
+        var tur = meta.cycle_id != null ? meta.cycle_id : 1;
+        return 'Tur ' + tur + ' tekrar aktif edildi. Bot sorunsuz çalışmaya devam ediyor.';
+    }
+
+    function appendColdStartConfigBrief(meta, parts) {
+        if (!meta || !meta.cold_start_config) return;
+        var bp = num(meta.base_alloc_pct);
+        var qp = num(meta.quote_alloc_pct);
+        if (bp != null) parts.push('Base %' + bp);
+        if (qp != null) parts.push('Quote %' + qp);
+        var ns = num(meta.sell_grid_count);
+        var nb = num(meta.buy_grid_count);
+        if (ns != null && ns > 0) parts.push('Yukarı grid ' + ns + ' adet');
+        if (nb != null && nb > 0) parts.push('Aşağı grid ' + nb + ' adet');
+        var st = num(meta.sell_trail_pct);
+        var bt = num(meta.buy_trail_pct);
+        if (st != null || bt != null) {
+            var tr = [];
+            if (st != null) tr.push('sat trail %' + st);
+            if (bt != null) tr.push('al trail %' + bt);
+            if (tr.length) parts.push(tr.join(' · '));
+        }
+        var pre = num(meta.profit_reentry_pct);
+        var pex = num(meta.profit_exit_pct);
+        if (pre != null || pex != null) {
+            var pr = [];
+            if (pre != null) pr.push('KA %' + pre);
+            if (pex != null) pr.push('KS %' + pex);
+            if (pr.length) parts.push(pr.join(' · '));
+        }
+        (meta.sell_grids_brief || []).forEach(function (line) {
+            if (line) parts.push(String(line));
+        });
+        (meta.buy_grids_brief || []).forEach(function (line) {
+            if (line) parts.push(String(line));
+        });
+    }
+
+    function formatTurPauseMessage(meta) {
+        meta = meta || {};
+        var tur = meta.cycle_id != null ? meta.cycle_id : 1;
+        return 'Tur ' + tur + ' beklemeye alındı. Bağlantı yok';
+    }
+
     function formatBalanceLine(meta, equityOverride) {
         meta = meta || {};
         var eq = num(equityOverride);
@@ -212,6 +258,73 @@
             var v = meta[k];
             if (v == null || v === '' || v === false || typeof v === 'object') return;
             parts.push(metaLabelTr(k) + ': ' + (v === true ? 'evet' : String(v)));
+        });
+    }
+
+    function findInitialAllocFill(events, cycleId) {
+        var cid = cycleId != null ? Number(cycleId) : 1;
+        var found = null;
+        (events || []).forEach(function (e) {
+            if (!e || e.type !== 'ORDER_FILLED') return;
+            var m = e.meta || {};
+            if (String(m.reason || '').trim() !== 'initial_allocation') return;
+            if (Number(m.cycle_id) !== cid) return;
+            var id = Number(e.id || 0);
+            if (!found || id > Number(found.id || 0)) found = e;
+        });
+        return found;
+    }
+
+    function isFirstTurCycleStart(ev) {
+        if (!ev || ev.type !== 'CYCLE_START') return false;
+        var m = ev.meta || {};
+        return !!(m.first_tur || String(m.reason || '').trim() === 'initial_allocation');
+    }
+
+    /** Tur 1 (+1sn) ile ilk base aynı kümede; listede önce base, hemen altında tur başlatıldı. */
+    function eventSortTimestamp(ev, events) {
+        var ts = parseEventTsMs(ev.ts);
+        if (!isFirstTurCycleStart(ev)) return ts;
+        var fill = findInitialAllocFill(events, (ev.meta || {}).cycle_id);
+        if (!fill) return ts;
+        var fts = parseEventTsMs(fill.ts);
+        if (fts <= 0) return ts;
+        if (ts >= fts && ts - fts <= 8000) return fts;
+        return ts;
+    }
+
+    function parseEventTsMs(ts) {
+        if (!ts) return 0;
+        var s = String(ts).trim();
+        if (s && s.indexOf('T') < 0 && s.indexOf(' ') > 0) {
+            s = s.replace(' ', 'T');
+        }
+        var d = new Date(s);
+        if (isNaN(d.getTime())) return 0;
+        return d.getTime();
+    }
+
+    function eventDisplayRank(ev) {
+        var meta = ev.meta || {};
+        if (ev.type === 'ORDER_FILLED' && String(meta.reason || '').trim() === 'initial_allocation') {
+            return 2;
+        }
+        if (ev.type === 'CYCLE_START' && (meta.first_tur || String(meta.reason || '').trim() === 'initial_allocation')) {
+            return 1;
+        }
+        return 0;
+    }
+
+    function sortEngineEventsDesc(events) {
+        var list = events || [];
+        return list.slice().sort(function (a, b) {
+            var ta = eventSortTimestamp(a, list);
+            var tb = eventSortTimestamp(b, list);
+            if (tb !== ta) return tb - ta;
+            var ra = eventDisplayRank(a);
+            var rb = eventDisplayRank(b);
+            if (rb !== ra) return rb - ra;
+            return Number(b.id || 0) - Number(a.id || 0);
         });
     }
 
@@ -314,16 +427,73 @@
         return joinParts(parts);
     }
 
-    function formatCycleStart(meta) {
+    function enrichFirstTurStartMeta(meta) {
         meta = meta || {};
+        var isFirst = meta.first_tur || String(meta.reason || '').trim() === 'initial_allocation';
+        if (!isFirst) return meta;
+        var fill = findInitialAllocFill(_logContext.events || [], meta.cycle_id);
+        if (!fill || !fill.meta) return meta;
+        var fm = fill.meta;
+        var out = Object.assign({}, meta);
+        if (out.symbol == null && fm.symbol) out.symbol = fm.symbol;
+        var fq = num(fm.fill_qty);
+        var fp = num(fm.fill_price);
+        if (out.base_balance == null && fq != null) {
+            out.base_balance = fq;
+            out.base_qty = fq;
+        }
+        if (out.quote_balance == null && fp != null && fq != null) {
+            var eq = num(out.equity_usdt);
+            if (eq == null) eq = num(out.equity_usd);
+            if (eq != null && eq > 0) {
+                out.quote_balance = Math.max(0, eq - fq * fp);
+            }
+        }
+        if ((out.equity_usdt == null && out.equity_usd == null) && fq != null && fp != null) {
+            var q2 = num(out.quote_balance) || 0;
+            out.equity_usdt = q2 + fq * fp;
+        }
+        return out;
+    }
+
+    function formatCycleStart(meta) {
+        meta = enrichFirstTurStartMeta(meta || {});
         var cycleNum = meta.cycle_id != null ? meta.cycle_id : '?';
-        var parts = ['Bismillahirrahmanirrahim.', 'Tur ' + cycleNum + ' açıldı'];
-        var priceLine = formatCycleOpenPrice(meta);
-        if (priceLine) parts.push(priceLine);
-        var balLine = formatBalanceLine(meta);
-        if (balLine) parts.push(balLine);
-        if (meta.synthetic) parts.push('(kayıt)');
+        var isFirst = meta.first_tur || String(meta.reason || '').trim() === 'initial_allocation';
+        var parts = ['Tur ' + cycleNum + (isFirst ? ' başlatıldı' : ' açıldı')];
+        var coin = coinFromSymbol(meta.symbol);
+        var baseBal = num(meta.base_balance);
+        if (baseBal == null) baseBal = num(meta.base_qty);
+        var quoteBal = num(meta.quote_balance);
+        if (baseBal != null && baseBal > 0) {
+            parts.push('Base ' + fmtQty(baseBal) + (coin ? ' ' + coin : ''));
+        }
+        if (quoteBal != null) parts.push('Quote ' + fmtUsd(quoteBal, false));
+        var eq = num(meta.equity_usdt);
+        if (eq == null) eq = num(meta.equity_usd);
+        if (eq != null && eq > 0) parts.push('Bakiye ' + fmtUsd(eq, false));
         return joinParts(parts);
+    }
+
+    /** Bağlantı sonrası ikinci START veya connectivity START — üstteki yinelenen Bot başlatıldı. */
+    function shouldHideDuplicateBotStart(ev, meta, raw) {
+        if (!/COMMAND_EXECUTED.*START/i.test(String(raw || ''))) return false;
+        if (meta.connectivity_resume === true) return true;
+        var events = _logContext.events || [];
+        var id = Number(ev.id || 0);
+        if (!id || !events.length) return false;
+        var olderStart = false;
+        var recoveryBefore = false;
+        for (var i = 0; i < events.length; i++) {
+            var e = events[i];
+            var eid = Number(e.id || 0);
+            if (!eid || eid >= id) continue;
+            var em = e.meta || {};
+            var msg = e.message || '';
+            if (msg.indexOf('COMMAND_EXECUTED') >= 0 && msg.indexOf('START') >= 0) olderStart = true;
+            if (em.error_code === 'CONNECTIVITY_RECOVERED' || /tekrar aktif edildi/i.test(msg)) recoveryBefore = true;
+        }
+        return olderStart && (recoveryBefore || meta.initial_allocation_done === true);
     }
 
     function formatOrderAttempt(meta) {
@@ -472,6 +642,13 @@
 
     function formatInfo(meta, raw) {
         meta = meta || {};
+        if (meta.event_kind === 'BOT_RESILIENCE' || /Dayanıklılık:/i.test(raw || '')) {
+            var rp = [raw.replace(/^Dayanıklılık:\s*/i, '').trim() || 'Bot çalışmaya devam ediyor'];
+            if (meta.restart_reason) rp.push('neden: ' + meta.restart_reason);
+            if (meta.error_code) rp.push('kod ' + meta.error_code);
+            if (meta.continues_running) rp.push('döngü aktif');
+            return { message: joinParts(rp), severity: meta.health_code === 'BOT_LOOP_AUTO_RESTART' ? 'warn' : 'info' };
+        }
         if (raw.indexOf('İlk alım miktarı') >= 0) {
             var cap = num(meta.capped_quote_qty);
             var av = num(meta.available);
@@ -493,9 +670,45 @@
         if (/COMMAND_EXECUTED.*START/i.test(raw)) {
             var startParts = ['Bismillahirrahmanirrahim.', 'Bot başlatıldı'];
             var startBal = resolveBotStartBalance(meta);
-            var startBalLine = formatBalanceLine(meta, startBal);
-            if (startBalLine) startParts.push(startBalLine);
-            return joinParts(startParts);
+            if (meta.cold_start_config) {
+                var ic = num(meta.initial_capital_usdt);
+                if (ic != null && ic > 0) startParts.push('Bakiye: ' + fmtUsd(ic, false));
+                else if (startBal != null && startBal > 0) startParts.push('Bakiye: ' + fmtUsd(startBal, false));
+                appendColdStartConfigBrief(meta, startParts);
+            } else {
+                var startBalLine = formatBalanceLine(meta, startBal);
+                if (startBalLine) startParts.push(startBalLine);
+            }
+            return { message: joinParts(startParts), severity: 'info' };
+        }
+        if (meta.health_code === 'OUTAGE_RECOVERY' || /kopma sonrası grid/i.test(raw)) {
+            var outParts = [];
+            var turNum = meta.cycle_id != null ? meta.cycle_id : '?';
+            if (meta.tur_restarted === true) {
+                outParts.push('Tur ' + turNum + ' yeniden başlatıldı');
+            } else {
+                outParts.push('Tur ' + turNum + ' devam ediyor — kopma sonrası grid değerlendirmesi');
+            }
+            var gapS = num(meta.gap_sec);
+            if (gapS != null) outParts.push('boşluk ' + gapS.toFixed(0) + ' sn');
+            if (meta.summary) {
+                outParts.push(String(meta.summary));
+            } else if (Array.isArray(meta.actions) && meta.actions.length) {
+                outParts.push(meta.actions.join(' '));
+            }
+            return { message: joinParts(outParts), severity: 'warn' };
+        }
+        if (meta.error_code === 'CONNECTIVITY_PAUSED' || meta.connectivity_pause) {
+            return { message: formatTurPauseMessage(meta), severity: 'info' };
+        }
+        if (meta.error_code === 'CONNECTIVITY_RECOVERED' || (meta.connectivity_resume === true && /tekrar aktif/i.test(raw))) {
+            return { message: formatTurReconnectMessage(meta), severity: 'warn' };
+        }
+        if (/tekrar aktif edildi/i.test(raw)) {
+            return { message: formatTurReconnectMessage(meta), severity: 'warn' };
+        }
+        if (/beklemeye alındı/i.test(raw)) {
+            return { message: formatTurPauseMessage(meta), severity: 'info' };
         }
         if (/COMMAND_EXECUTED.*STOP/i.test(raw)) {
             var stopTur = meta.cycle_id != null ? meta.cycle_id : 1;
@@ -524,6 +737,7 @@
         var ec = String(meta.error_code || '').trim();
         var parts = [];
         if (ec === 'ACCOUNT_KEYS_MISSING') parts.push('API anahtarı eksik — bot işlem yapamaz');
+        else if (ec === 'LOT_SIZE') parts.push('Lot boyutu hatası — miktar borsa filtresine uymuyor');
         else if (ec === 'BINANCE_UNREACHABLE') parts.push('Binance bağlantı hatası — bakiye/veri alınamadı');
         else if (/401|Unauthorized|API anahtarı/i.test(raw)) parts.push('Binance API geçersiz — anahtar, IP veya Spot izni kontrol edin');
         else if (/INSUFFICIENT_BALANCE/i.test(raw)) parts.push('Yetersiz bakiye — emir reddedildi');
@@ -539,11 +753,62 @@
         return joinParts(parts);
     }
 
+    function hasRecentSkipOrErrorForCode(code) {
+        var c = String(code || '').toUpperCase();
+        if (!c) return false;
+        var events = _logContext.events || [];
+        for (var i = 0; i < events.length; i++) {
+            var ev = events[i];
+            var ty = String(ev.type || '').toUpperCase();
+            var em = ev.meta || {};
+            if (ty === 'SKIP_REASON' && String(em.skip_reason || '').toUpperCase() === c) return true;
+            if (ty === 'ERROR' && String(em.error_code || '').toUpperCase() === c) return true;
+        }
+        return false;
+    }
+
+    function shouldHideRedundantStateHealth(ev, meta) {
+        if (!ev || (ev.type !== 'HEALTH_WARN' && ev.type !== 'HEALTH_CRITICAL')) return false;
+        meta = meta || {};
+        var hc = String(meta.health_code || '');
+        var ec = String(meta.error_code || '').toUpperCase();
+        if (hc === 'STATE_ERROR_WARN' && ec) {
+            return hasRecentSkipOrErrorForCode(ec);
+        }
+        if (hc === ec && /^(LOT_SIZE|MIN_NOTIONAL|ORDER_FAILED|INSUFFICIENT_QUOTE|ORDER_TIMEOUT)/.test(ec)) {
+            return hasRecentSkipOrErrorForCode(ec);
+        }
+        return false;
+    }
+
     function formatHealth(meta, raw, isCritical) {
         meta = meta || {};
         var parts = [];
+        if (meta.health_code === 'CONNECTIVITY_LOST' || meta.error_code === 'CONNECTIVITY_LOST') {
+            parts.push('Binance bağlantısı yok');
+            if (meta.cause) parts.push(String(meta.cause));
+            else if (raw && raw.indexOf('Binance') >= 0) parts.push(cleanRaw(raw).replace(/^Binance bağlantısı yok\s*[—-]\s*/i, ''));
+            return joinParts(parts);
+        }
+        var skCode = String(meta.error_code || meta.health_code || '').toUpperCase();
+        if (skCode === 'LOT_SIZE') {
+            parts.push('Lot / step filtresi — miktar borsa kuralına uymuyor');
+            if (meta.cause) parts.push(String(meta.cause));
+            var acts = meta.actions;
+            if (Array.isArray(acts) && acts.length) parts.push('Çözüm: ' + acts[0]);
+            return joinParts(parts);
+        }
+        if (skCode === 'MIN_NOTIONAL' || skCode === 'MIN_NOTIONAL_AFTER_CAP') {
+            parts.push('Minimum işlem tutarı altında');
+            if (meta.cause) parts.push(String(meta.cause));
+            if (Array.isArray(meta.actions) && meta.actions.length) parts.push('Çözüm: ' + meta.actions[0]);
+            return joinParts(parts);
+        }
         var title = meta.title || (isCritical ? 'Kritik durum' : 'Uyarı');
         parts.push(title);
+        if (meta.continues_running) {
+            parts.push('Bot durdurulmadı — çalışmaya devam ediyor');
+        }
         if (meta.cause) parts.push('Sebep: ' + meta.cause);
         else if (raw && raw !== title) parts.push(raw);
         var tickAge = num(meta.tick_age_s);
@@ -579,6 +844,12 @@
             && global.BotHealthAlerts.shouldHideResetLogEvent(ev, _logContext.botId)) {
             return { hidden: true };
         }
+        if (!options.forExport && ty === 'INFO' && shouldHideDuplicateBotStart(ev, meta, raw)) {
+            return { hidden: true };
+        }
+        if (!options.forExport && shouldHideRedundantStateHealth(ev, meta)) {
+            return { hidden: true };
+        }
 
         var typeLabel = TYPE_TR[ty] || ty || '—';
         var severity = 'info';
@@ -611,20 +882,26 @@
             message = formatCycleEnd(meta);
             typeLabel = 'Kapanış';
         } else if (ty === 'CYCLE_START') {
-            if (meta.reason === 'initial_allocation') {
-                return { hidden: true };
-            }
             message = formatCycleStart(meta);
             typeLabel = 'Tur ' + (meta.cycle_id != null ? meta.cycle_id : '?');
         } else if (ty === 'HEALTH_CRITICAL') {
             severity = 'critical';
             message = formatHealth(meta, raw, true);
             typeLabel = 'Kritik';
+            if (meta.health_resolved) {
+                message = (message || '—') + ' · çözüldü';
+            }
         } else if (ty === 'HEALTH_WARN') {
             severity = 'warn';
             message = formatHealth(meta, raw, false);
             typeLabel = 'Uyarı';
+            if (meta.health_resolved) {
+                message = (message || '—') + ' · çözüldü';
+            }
         } else if (ty === 'INFO') {
+            if (/COMMAND_EXECUTED.*START/i.test(raw) && meta.connectivity_resume === true) {
+                return { hidden: true };
+            }
             var infoRes = formatInfo(meta, raw);
             if (infoRes && typeof infoRes === 'object') {
                 message = infoRes.message;
@@ -633,8 +910,22 @@
                 message = infoRes || raw;
             }
             if (/quote_qty_capped/i.test(raw)) severity = 'warn';
-            if (/COMMAND_EXECUTED/i.test(raw)) {
+            if (/COMMAND_EXECUTED.*START/i.test(raw) && meta.connectivity_resume !== true) {
+                typeLabel = 'Start';
+            } else if (
+                meta.error_code === 'CONNECTIVITY_RECOVERED'
+                || /tekrar aktif edildi/i.test(message || '')
+            ) {
+                severity = 'warn';
+                typeLabel = 'Uyarı';
+            } else if (/COMMAND_EXECUTED/i.test(raw)) {
                 typeLabel = 'Tur ' + (meta.cycle_id != null ? meta.cycle_id : 1);
+            } else if (
+                meta.error_code === 'CONNECTIVITY_PAUSED'
+                || meta.connectivity_pause
+                || /beklemeye alındı/i.test(raw)
+            ) {
+                typeLabel = 'Bilgi';
             } else if (meta.cycle_id != null) {
                 typeLabel = 'Tur ' + meta.cycle_id;
             }
@@ -650,6 +941,11 @@
         };
     }
 
+    function isHealthEventType(ty) {
+        ty = (ty || '').toUpperCase();
+        return ty === 'HEALTH_WARN' || ty === 'HEALTH_CRITICAL';
+    }
+
     function collapseEngineEvents(events) {
         var collapsed = [];
         var prev = null;
@@ -659,10 +955,14 @@
             var meta = ev.meta || {};
             var ec = String(meta.error_code || meta.health_code || '').toUpperCase();
             var key;
-            if (ec && /API_UNAUTHORIZED|BINANCE_UNREACHABLE|BINANCE_RATE|ACCOUNT_KEYS/.test(ec)) {
+            if (meta.health_ui_track && ec) {
+                key = 'HEALTH_TRACK\0' + ec + '\0' + (meta.health_resolved ? 'resolved' : 'active');
+            } else if (ec && /API_UNAUTHORIZED|BINANCE_UNREACHABLE|BINANCE_RATE|ACCOUNT_KEYS|CONNECTIVITY_RECOVERED|CONNECTIVITY_PAUSED/.test(ec)) {
                 key = ec + '\0' + fmt.severity;
+            } else if (isHealthEventType(ev.type) && ec) {
+                key = (ev.type || '') + '\0' + ec + '\0' + fmt.severity;
             } else {
-                key = (ev.type || '') + '\0' + fmt.message + '\0' + fmt.severity;
+                key = (ev.type || '') + '\0' + (meta.error_code || '') + '\0' + fmt.message + '\0' + fmt.severity;
             }
             if (prev && prev.key === key) {
                 prev.count++;
@@ -675,7 +975,9 @@
                     ts: ev.ts,
                     key: key,
                     count: 1,
-                    lastTs: ev.ts
+                    lastTs: ev.ts,
+                    healthActive: !!(meta.health_ui_track && !meta.health_resolved),
+                    healthCode: ec || ''
                 });
                 prev = collapsed[collapsed.length - 1];
             }
@@ -718,6 +1020,7 @@
         collapseEngineEvents: collapseEngineEvents,
         hasRecentCritical: hasRecentCritical,
         rowClass: rowClass,
-        setLogContext: setLogContext
+        setLogContext: setLogContext,
+        sortEngineEventsDesc: sortEngineEventsDesc
     };
 })(typeof window !== 'undefined' ? window : globalThis);

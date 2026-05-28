@@ -118,6 +118,27 @@
     if (el.textContent !== s) el.textContent = s;
   }
 
+  /** PID null geldiğinde çalışan serviste son bilinen değeri koru (flicker önleme). */
+  var overviewPidCache = { manager: null, engine: null, html: null };
+
+  function stickyServicePid(key, status, proc) {
+    var st = status || {};
+    var pr = proc || {};
+    var pid = st.pid != null ? st.pid : (pr.pid != null ? pr.pid : null);
+    if (pid != null) {
+      overviewPidCache[key] = pid;
+      return pid;
+    }
+    if (st.running && overviewPidCache[key] != null) return overviewPidCache[key];
+    if (!st.running) overviewPidCache[key] = null;
+    return null;
+  }
+
+  function setOverviewPid(key, status, proc) {
+    var pid = stickyServicePid(key, status, proc);
+    setTextIfChanged(qs("#overview-" + key + "-pid"), pid != null ? String(pid) : "—");
+  }
+
   function setHealthBadgeIfChanged(el, text, className) {
     if (!el) return;
     var s = (text == null || text === undefined) ? "" : String(text);
@@ -127,8 +148,10 @@
 
   function setOverviewStatusChip(el, running) {
     if (!el) return;
-    el.textContent = running ? "ÇALIŞIYOR" : "DURDURULDU";
-    el.className = "status-chip service-status " + (running ? "running" : "stopped");
+    var text = running ? "ÇALIŞIYOR" : "DURDURULDU";
+    var cls = "status-chip service-status " + (running ? "running" : "stopped");
+    setTextIfChanged(el, text);
+    if (el.className !== cls) el.className = cls;
   }
 
   function setProgressBar(el, pct) {
@@ -251,8 +274,8 @@
     setOverviewStatusChip(mgrStatus, mgrRunning);
     var d = m.status && m.status.manager ? m.status.manager : {};
     var liveMgrUptime = (d.running && m.manager) ? getLiveUptime("manager") : (m.manager ? m.manager.uptime_s : null);
-    el("#overview-manager-pid", d.pid != null ? String(d.pid) : "—");
-    el("#overview-manager-uptime", formatUptime(liveMgrUptime) || "—");
+    setOverviewPid("manager", d, m.manager);
+    setTextIfChanged(qs("#overview-manager-uptime"), formatUptime(liveMgrUptime) || "—");
     el("#overview-manager-resource", formatResource(m.manager));
     setTextIfChanged(qs("#overview-manager-err-wrn"), errMgr.length + " / " + wrnMgr.length);
 
@@ -271,8 +294,7 @@
     const engApp = m.engine_app || {};
     const engStatus = m.status && m.status.engine ? m.status.engine : {};
     const engRunning = !!engStatus.running;
-    const engPid = engStatus.pid != null ? engStatus.pid : engProc.pid;
-    el("#overview-engine-pid", engPid != null ? String(engPid) : "—");
+    setOverviewPid("engine", engStatus, engProc);
     const overviewEngChip = qs("#overview-engine-status");
     setOverviewStatusChip(overviewEngChip, engRunning);
     el("#overview-engine-bots", engApp.active_bots != null ? engApp.active_bots : "—");
@@ -285,12 +307,11 @@
     var htmlChip = qs("#overview-html-status");
     setOverviewStatusChip(htmlChip, !!htmlStatus.running);
     setTextIfChanged(qs("#overview-html-port"), "8080");
-    var htmlPid = htmlStatus.pid != null ? htmlStatus.pid : htmlProc.pid;
-    el("#overview-html-pid", htmlPid != null ? String(htmlPid) : "—");
+    setOverviewPid("html", htmlStatus, htmlProc);
     var htmlUptime = (typeof htmlStatus.started_at === "number")
       ? Math.max(0, Math.floor(Date.now() / 1000 - htmlStatus.started_at))
       : (htmlProc.uptime_s != null ? htmlProc.uptime_s : null);
-    el("#overview-html-uptime", formatUptime(htmlUptime) || "—");
+    setTextIfChanged(qs("#overview-html-uptime"), formatUptime(htmlUptime) || "—");
     var errHtml = (m.errors_ring && m.errors_ring.html) ? m.errors_ring.html : [];
     var wrnHtml = (m.warns_ring && m.warns_ring.html) ? m.warns_ring.html : [];
     el("#overview-html-resource", formatResource(htmlProc));
@@ -949,9 +970,9 @@
         setStatus("html", s.html);
         var chip = qs("#overview-html-status");
         setOverviewStatusChip(chip, !!s.html.running);
-        var pidEl = qs("#overview-html-pid"); if (pidEl) pidEl.textContent = s.html.pid != null ? String(s.html.pid) : "—";
+        setOverviewPid("html", s.html, null);
         var htmlUptime = (typeof s.html.started_at === "number") ? Math.max(0, Math.floor(Date.now() / 1000 - s.html.started_at)) : null;
-        var uptimeEl = qs("#overview-html-uptime"); if (uptimeEl) uptimeEl.textContent = formatUptime(htmlUptime) || "—";
+        setTextIfChanged(qs("#overview-html-uptime"), formatUptime(htmlUptime) || "—");
       }
       const locks = await api("GET", "/api/locks");
       keys.forEach(k => {
@@ -1903,28 +1924,18 @@
   setInterval(refreshStatus, 5000);
   metricsIntervalId = setInterval(refreshMetrics, pollIntervalMs);
   setInterval(function () {
-    if (lastMetrics && lastMetrics.status) {
-      keys.forEach(k => setStatus(k, lastMetrics.status[k] || {}));
-      if (lastMetrics.status.html) {
-        var h = lastMetrics.status.html;
-        setStatus("html", h);
-        var chip = qs("#overview-html-status");
-        setOverviewStatusChip(chip, !!h.running);
-        var pidEl = qs("#overview-html-pid"); if (pidEl) pidEl.textContent = h.pid != null ? String(h.pid) : "—";
-        var htmlUptime = (typeof h.started_at === "number") ? Math.max(0, Math.floor(Date.now() / 1000 - h.started_at)) : null;
-        var uptimeEl = qs("#overview-html-uptime"); if (uptimeEl) uptimeEl.textContent = formatUptime(htmlUptime) || "—";
-      }
-      if (lastMetrics.status.manager) {
-        const mgrStat = qs("#overview-manager-stat");
-        if (mgrStat && lastMetrics.manager) {
-          const d = lastMetrics.status.manager;
-          const liveUptime = d.running ? getLiveUptime("manager") : null;
-          const parts = ["PID " + (d.pid || "—"), "Çalışma süresi: " + formatUptime(liveUptime)];
-          if (lastMetrics.manager.cpu_pct != null) parts.push(lastMetrics.manager.cpu_pct + "% CPU");
-          if (lastMetrics.manager.rss_mb != null) parts.push(lastMetrics.manager.rss_mb + " MB");
-          mgrStat.textContent = parts.join(" · ");
-        }
-      }
+    if (!lastMetrics || !lastMetrics.status) return;
+    keys.forEach(function (k) {
+      setStatus(k, lastMetrics.status[k] || {});
+    });
+    var h = lastMetrics.status.html;
+    if (h && h.running && typeof h.started_at === "number") {
+      var htmlUptime = Math.max(0, Math.floor(Date.now() / 1000 - h.started_at));
+      setTextIfChanged(qs("#overview-html-uptime"), formatUptime(htmlUptime) || "—");
+    }
+    var mgr = lastMetrics.status.manager;
+    if (mgr && mgr.running) {
+      setTextIfChanged(qs("#overview-manager-uptime"), formatUptime(getLiveUptime("manager")) || "—");
     }
   }, 1000);
 })();

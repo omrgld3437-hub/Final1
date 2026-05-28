@@ -42,9 +42,118 @@ PNL_MODE_INVENTORY = "INVENTORY_QTY_V1"
 PNL_MODE_CASH = "CASH_USDT_V1"
 
 
-def build_cycle_ledger_empty(cycle_id: int, symbol: str) -> Dict[str, Any]:
+def _parse_iso_ts_ms(ts: Any) -> int:
+    if not ts:
+        return 0
+    try:
+        s = str(ts).strip().replace(" ", "T")
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        elif "+" not in s[10:] and s.count("-") <= 2:
+            s = s + "+00:00"
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return int(dt.timestamp() * 1000)
+    except Exception:
+        return 0
+
+
+def _cycle_open_ts_candidates(state: Dict[str, Any], cycle_id: int) -> List[str]:
+    """Tur açılış adayları — grid fill zamanları hariç (yalnızca initial / tur devri)."""
+    candidates: List[str] = []
+    tb = state.get("target_budgets")
+    if isinstance(tb, dict) and tb.get("ts"):
+        candidates.append(str(tb["ts"]))
+    for cot in state.get("cycle_open_trades") or []:
+        if not isinstance(cot, dict) or int(cot.get("cycle_id") or 0) != cycle_id:
+            continue
+        if cot.get("ts"):
+            candidates.append(str(cot["ts"]))
+    ledger = state.get("cycle_ledger_current")
+    if isinstance(ledger, dict) and int(ledger.get("cycle_id") or 0) == cycle_id:
+        sa = ledger.get("started_at")
+        if sa:
+            candidates.append(str(sa))
+    return candidates
+
+
+def resolve_cycle_opened_at(
+    state: Dict[str, Any],
+    ledger: Optional[Dict[str, Any]] = None,
+) -> Optional[str]:
+    """Tur açılış zamanı — initial_allocation / cycle_reset; ledger.created_at değil."""
+    co = state.get("cycle_opened_at")
+    if isinstance(co, str) and co.strip():
+        return co.strip()
+    cid = int(state.get("cycle_id") or 1)
+    candidates = _cycle_open_ts_candidates(state, cid)
+    if candidates:
+        return min(candidates)
+    if isinstance(ledger, dict):
+        sa = ledger.get("started_at")
+        if isinstance(sa, str) and sa.strip():
+            return sa.strip()
+    return None
+
+
+def heal_cycle_opened_at(state: Dict[str, Any]) -> None:
+    """cycle_opened_at eksik veya ilk grid zamanına kaymışsa düzelt (target_budgets / tur devri)."""
+    cid = int(state.get("cycle_id") or 1)
+    candidates = _cycle_open_ts_candidates(state, cid)
+    if not candidates:
+        return
+    best = min(candidates)
+    current = state.get("cycle_opened_at")
+    if not isinstance(current, str) or not str(current).strip():
+        state["cycle_opened_at"] = best
+        return
+    if not state.get("initial_allocation_done"):
+        return
+    cur_ms = _parse_iso_ts_ms(current)
+    best_ms = _parse_iso_ts_ms(best)
+    if best_ms > 0 and cur_ms > 0 and cur_ms > best_ms + 60_000:
+        state["cycle_opened_at"] = best
+
+
+def sync_ledger_started_at(state: Dict[str, Any], ledger: Dict[str, Any]) -> None:
+    """Ledger started_at ile state.cycle_opened_at hizala (açık tur süresi)."""
+    opened = resolve_cycle_opened_at(state, ledger)
+    if opened:
+        ledger["started_at"] = opened
+        if not state.get("cycle_opened_at"):
+            state["cycle_opened_at"] = opened
+
+
+def ensure_cycle_ledger(state: Dict[str, Any], symbol: str, cycle_id: int) -> Dict[str, Any]:
+    """Mevcut ledger veya yeni; started_at tur açılışından, ilk grid fill anından değil."""
+    heal_cycle_opened_at(state)
+    sym = (symbol or "").upper().strip()
+    cid = int(cycle_id or 1)
+    current = state.get("cycle_ledger_current")
+    if (
+        isinstance(current, dict)
+        and (current.get("symbol") or "").upper() == sym
+        and int(current.get("cycle_id") or 0) == cid
+    ):
+        sync_ledger_started_at(state, current)
+        return current
+    opened = resolve_cycle_opened_at(state, None)
+    ledger = build_cycle_ledger_empty(cid, sym, started_at=opened)
+    state["cycle_ledger_current"] = ledger
+    if not state.get("cycle_opened_at") and ledger.get("started_at"):
+        state["cycle_opened_at"] = ledger["started_at"]
+    return ledger
+
+
+def build_cycle_ledger_empty(
+    cycle_id: int,
+    symbol: str,
+    started_at: Optional[str] = None,
+) -> Dict[str, Any]:
     """Empty cycle ledger snapshot for a new cycle."""
     base_asset, quote_asset = _symbol_to_base_quote(symbol)
+    ts = started_at if isinstance(started_at, str) and started_at.strip() else datetime.now(timezone.utc).isoformat()
     return {
         "cycle_id": cycle_id,
         "symbol": symbol,
@@ -61,7 +170,7 @@ def build_cycle_ledger_empty(cycle_id: int, symbol: str) -> Dict[str, Any]:
         "realized_pnl_quote": 0.0,
         "breakeven_price": None,
         "matched_qty": 0.0,
-        "started_at": datetime.now(timezone.utc).isoformat(),
+        "started_at": ts,
         # Dual PnL: Inventory (coin qty) + Cash (USDT)
         "inventory_coin_adv_qty": 0.0,
         "inventory_fees_usdt": 0.0,

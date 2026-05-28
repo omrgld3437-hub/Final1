@@ -100,22 +100,26 @@ const marketStore = {
         }
 
         const upperSymbol = symbol.toUpperCase();
-        this.mini.set(upperSymbol, {
-            last: data.last || data.price || 0,
-            open: data.open || 0,
-            changePct: data.changePct || data.change24h || 0,
-            volume: data.volume || data.volume24h || 0,
-            quoteVolume: data.quoteVolume || data.quoteVolume24h || 0,
-            marketCap: data.marketCap || 0
-        });
+        const prev = this.mini.get(upperSymbol);
+        const changeRaw = data.changePct ?? data.change24h;
+        const hasChange = changeRaw != null && Number.isFinite(Number(changeRaw));
+        const next = {
+            last: data.last ?? data.price ?? prev?.last ?? 0,
+            open: data.open ?? prev?.open ?? 0,
+            changePct: hasChange ? Number(changeRaw) : (prev?.changePct ?? 0),
+            volume: data.volume ?? data.volume24h ?? prev?.volume ?? 0,
+            quoteVolume: data.quoteVolume ?? data.quoteVolume24h ?? prev?.quoteVolume ?? 0,
+            marketCap: data.marketCap ?? prev?.marketCap ?? 0
+        };
+        this.mini.set(upperSymbol, next);
 
         // Also update price if available
-        if (data.last || data.price) {
-            this.updatePrice(upperSymbol, data.last || data.price);
+        if (next.last) {
+            this.updatePrice(upperSymbol, next.last);
+        } else {
+            this.lastUpdateTs = Date.now();
+            this._notify();
         }
-
-        this.lastUpdateTs = Date.now();
-        this._notify();
     },
 
     /**
@@ -251,6 +255,10 @@ const marketStore = {
             if (!s) continue;
             if (data.price != null && Number.isFinite(data.price)) {
                 this.prices.set(s, data.price);
+                const prev = this.mini.get(s);
+                if (prev) {
+                    this.mini.set(s, { ...prev, last: data.price });
+                }
                 updated = true;
             }
             if (data.change24h != null || data.volume24h != null || data.quoteVolume24h != null || data.marketCap != null) {

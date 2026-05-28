@@ -182,6 +182,7 @@ def append_event(
     event_type: str,
     message: str = "",
     meta: Optional[Dict[str, Any]] = None,
+    ts: Optional[datetime] = None,
 ) -> None:
     """Append one event to bot_engine_events. Only important types are stored (no TICK, no IDEMPOTENT_LOCK noise)."""
     import os
@@ -210,7 +211,7 @@ def append_event(
         {
             "bid": bot_id,
             "aid": account_id,
-            "ts": datetime.utcnow(),
+            "ts": ts if ts is not None else datetime.utcnow(),
             "ty": event_type[:64],
             "msg": (message or "")[:2000],
             "meta": meta_js,

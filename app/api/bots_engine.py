@@ -101,7 +101,7 @@ from app.botengine.state_store import append_event, ensure_state_row, list_event
 from app.botengine.grid_view import compute_grid_profit_view, compute_trdca_grid_view
 from app.db.session import get_db
 from app.db.models import Bot, Account, Trade, PnlSnapshot
-from app.services.pnl_service import PnlService
+from app.services.pnl_service import PnlService, ensure_daily_ref_and_compute
 from app.services.price_hub import price_hub
 from app.utils.tz_utils import turkey_today_start_utc
 from app.services.perf_chart_state import (
@@ -199,6 +199,90 @@ def _detail_err(code: str, message: str, request_id: str) -> dict:
     return {"error_code": code, "message": message, "request_id": request_id}
 
 
+def _parse_event_ts_ms(ts: Any) -> int:
+    """Event ts → UTC epoch ms (UI sıralama)."""
+    if ts is None:
+        return 0
+    try:
+        if isinstance(ts, datetime):
+            dt = ts
+        else:
+            s = str(ts).strip().replace(" ", "T")
+            if s.endswith("Z"):
+                s = s[:-1] + "+00:00"
+            elif "+" not in s[10:] and s.count("-") <= 2:
+                s = s + "+00:00"
+            dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return int(dt.timestamp() * 1000)
+    except Exception:
+        return 0
+
+
+def _is_first_tur_cycle_start(ev: Dict[str, Any]) -> bool:
+    if (ev.get("type") or "") != "CYCLE_START":
+        return False
+    meta = ev.get("meta") or {}
+    return bool(meta.get("first_tur") or (meta.get("reason") or "").strip() == "initial_allocation")
+
+
+def _find_initial_alloc_fill(events: List[Dict[str, Any]], cycle_id: int) -> Optional[Dict[str, Any]]:
+    found: Optional[Dict[str, Any]] = None
+    for ev in events:
+        if (ev.get("type") or "") != "ORDER_FILLED":
+            continue
+        meta = ev.get("meta") or {}
+        if (meta.get("reason") or "").strip() != "initial_allocation":
+            continue
+        if int(meta.get("cycle_id") or 0) != int(cycle_id):
+            continue
+        fid = int(ev.get("id") or 0)
+        if found is None or fid > int(found.get("id") or 0):
+            found = ev
+    return found
+
+
+def _event_sort_timestamp(ev: Dict[str, Any], events: List[Dict[str, Any]]) -> int:
+    """Tur 1 CYCLE_START (+1sn) ile ilk base aynı kümede; listede tur üstte."""
+    ts = _parse_event_ts_ms(ev.get("ts"))
+    if not _is_first_tur_cycle_start(ev):
+        return ts
+    meta = ev.get("meta") or {}
+    cid = int(meta.get("cycle_id") or 1)
+    fill = _find_initial_alloc_fill(events, cid)
+    if not fill:
+        return ts
+    fts = _parse_event_ts_ms(fill.get("ts"))
+    if fts <= 0:
+        return ts
+    if ts >= fts and (ts - fts) <= 8000:
+        return fts
+    return ts
+
+
+def _event_ui_sort_rank(ev: Dict[str, Any]) -> int:
+    """Aynı kümede: ilk base üstte, Tur başlatıldı hemen altında (yeniden→eskiye okununca)."""
+    meta = ev.get("meta") or {}
+    if (ev.get("type") or "") == "ORDER_FILLED" and (meta.get("reason") or "").strip() == "initial_allocation":
+        return 2
+    if _is_first_tur_cycle_start(ev):
+        return 1
+    return 0
+
+
+def _sort_engine_events_desc(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return sorted(
+        events,
+        key=lambda e: (
+            _event_sort_timestamp(e, events),
+            _event_ui_sort_rank(e),
+            int(e.get("id") or 0),
+        ),
+        reverse=True,
+    )
+
+
 def _merge_synthetic_cycle_start_events(events: List[Dict[str, Any]], state: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Backfill CYCLE_START from state when DB has no row (legacy bots / pre-logging)."""
     if not state:
@@ -242,8 +326,74 @@ def _merge_synthetic_cycle_start_events(events: List[Dict[str, Any]], state: Opt
     if not synthetic:
         return events
     merged = list(events) + synthetic
-    merged.sort(key=lambda e: str(e.get("ts") or ""), reverse=True)
-    return merged
+    return _sort_engine_events_desc(merged)
+
+
+def _merge_synthetic_tur_after_initial_fill(
+    events: List[Dict[str, Any]],
+    state: Optional[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """İlk base alımından sonra Tur açıldı satırı yoksa (eski botlar) UI için sentetik CYCLE_START."""
+    if not state or not state.get("initial_allocation_done"):
+        return events
+    for ev in events:
+        if (ev.get("type") or "") != "CYCLE_START":
+            continue
+        meta = ev.get("meta") or {}
+        if meta.get("reason") == "initial_allocation" or meta.get("first_tur"):
+            return events
+    fill_ev: Optional[Dict[str, Any]] = None
+    for ev in events:
+        if (ev.get("type") or "") != "ORDER_FILLED":
+            continue
+        meta = ev.get("meta") or {}
+        if (meta.get("reason") or "").strip() != "initial_allocation":
+            continue
+        fid = int(ev.get("id") or 0)
+        if fill_ev is None or fid > int(fill_ev.get("id") or 0):
+            fill_ev = ev
+    if not fill_ev:
+        return events
+    fm = fill_ev.get("meta") or {}
+    fid = int(fill_ev.get("id") or 0)
+    if fid <= 0:
+        return events
+    synth_id = fid + 1
+    if any(int(e.get("id") or 0) == synth_id for e in events):
+        return events
+    cid = int(fm.get("cycle_id") or state.get("cycle_id") or 1)
+    fill_price = float(fm.get("fill_price") or state.get("reference_price") or state.get("initial_alloc_price") or 0)
+    fill_qty = float(fm.get("fill_qty") or state.get("initial_alloc_base_qty") or state.get("base_balance") or 0)
+    fill_ts = fill_ev.get("ts")
+    tur_ts = fill_ts
+    try:
+        from datetime import timedelta
+
+        base_ms = _parse_event_ts_ms(fill_ts)
+        if base_ms > 0:
+            tur_ts = datetime.fromtimestamp((base_ms + 1000) / 1000.0, tz=timezone.utc).isoformat()
+    except Exception:
+        pass
+    synthetic = {
+        "id": synth_id,
+        "ts": tur_ts or fill_ts or state.get("last_tick_at"),
+        "type": "CYCLE_START",
+        "message": "Tur başladı",
+        "meta": {
+            "cycle_id": cid,
+            "reason": "initial_allocation",
+            "first_tur": True,
+            "synthetic": True,
+            "reference_price": round(fill_price, 10) if fill_price > 0 else None,
+            "base_qty": round(fill_qty, 10) if fill_qty > 0 else None,
+            "base_balance": round(float(state.get("base_balance") or fill_qty or 0), 10),
+            "quote_balance": round(float(state.get("quote_balance") or 0), 2),
+            "equity_usdt": round(float(state.get("cycle_start_equity") or 0), 2),
+            "symbol": fm.get("symbol") or state.get("symbol"),
+        },
+    }
+    merged = list(events) + [synthetic]
+    return _sort_engine_events_desc(merged)
 
 
 def _enrich_command_start_events(
@@ -281,6 +431,13 @@ def _enrich_command_start_events(
             meta["initial_allocation_done"] = False
         elif meta.get("initial_allocation_done") is None:
             meta["initial_allocation_done"] = bool(state.get("initial_allocation_done"))
+        if pre_alloc or not meta.get("initial_allocation_done"):
+            try:
+                from app.botengine.start_log_brief import merge_cold_start_brief_into_meta
+
+                merge_cold_start_brief_into_meta(meta, raw_cfg)
+            except Exception:
+                pass
         if not pre_alloc and meta.get("cycle_start_equity") is None:
             cse = float(state.get("cycle_start_equity") or 0)
             if cse > 0:
@@ -417,6 +574,7 @@ async def bots_detail(
     if not bot:
         raise HTTPException(status_code=404, detail=_detail_err("NOT_FOUND", "Bot not found", rid))
     state = load_state(db, bot.id)
+    _heal_cycle_opened_at_state(db, bot, state)
     raw = json.loads(bot.config_json or "{}")
     sym = (bot.symbol or "").strip().upper()
 
@@ -735,13 +893,18 @@ async def bots_detail(
         quote_b = float(state.get("quote_balance") or 0)
         equity_from_state = base_b * live_price + quote_b
         current_usd = equity_from_state
-        today_start = turkey_today_start_utc()
-        today_date = today_start.strftime("%Y-%m-%d")
-        daily_ref_date = state.get("daily_ref_date")
-        daily_ref_usd = float(state.get("daily_ref_usd") or 0)
-        if daily_ref_date == today_date and daily_ref_usd and daily_ref_usd > 0:
-            daily_usd = equity_from_state - daily_ref_usd
-            daily_pnl_pct = (daily_usd / daily_ref_usd) * 100.0
+        init_cap_detail = float(raw.get("initial_capital_usdt") or raw.get("budget_usd") or raw.get("bot_budget_quote") or 0)
+        if state.get("initial_allocation_done"):
+            daily_usd, daily_pnl_pct = ensure_daily_ref_and_compute(
+                state,
+                equity_from_state,
+                init_cap_detail,
+                getattr(bot, "started_at", None),
+                db=db,
+                bot_id=bot.id,
+                account_id=bot.account_id,
+                persist=True,
+            )
 
     _ia_done = bool(state and state.get("initial_allocation_done"))
     _st = (bot.status or "stopped").lower()
@@ -799,6 +962,8 @@ async def bots_detail(
     # Dual PNL (Cash vs Inventory) for Trailing DCA — perfPanel + tradesPanel
     if state and sym and sym != "MULTI" and strategy_id not in ("trdca_pro", "multi_asset_rebalance"):
         try:
+            from app.botengine.cycle_ledger import resolve_cycle_opened_at
+
             ledger = state.get("cycle_ledger_current")
             current_price = float(live_price or 0) if live_price else (float(pnl_data.get("current_price") or 0) if pnl_data else 0)
             cash_pnl_cur = 0.0
@@ -813,7 +978,7 @@ async def bots_detail(
                 inv_qty_cur = float(ledger.get("inventory_coin_adv_qty") or 0)
                 inv_fees_cur = float(ledger.get("inventory_fees_usdt") or 0)
                 fills_count = len(ledger.get("fills") or [])
-                started_at = ledger.get("started_at")
+                started_at = resolve_cycle_opened_at(state, ledger)
 
             completed = state.get("completed_cycle_dual_pnls") or []
             completed_sorted = sorted(completed, key=lambda x: int(x.get("cycle_id") or 0), reverse=True)
@@ -846,6 +1011,19 @@ async def bots_detail(
             }
         except Exception as e:
             logger.debug("bots_detail dual_pnl failed bot_id=%s: %s", bot.id, e)
+
+    if state and sym and sym != "MULTI" and strategy_id not in ("trdca_pro", "multi_asset_rebalance"):
+        try:
+            snap = _build_live_snapshot_from_state(bot, state, db)
+            if snap.get("stale"):
+                result["stale"] = True
+            if snap.get("equity_unavailable"):
+                result["equity_unavailable"] = True
+            lt_norm = snap.get("last_tick_at")
+            if lt_norm is not None and isinstance(result.get("state"), dict):
+                result["state"] = {**result["state"], "last_tick_at": lt_norm}
+        except Exception as e:
+            logger.debug("bots_detail live_snap merge failed bot_id=%s: %s", bot.id, e)
 
     return result
 
@@ -898,6 +1076,26 @@ def _parse_ts_utc(ts: Any) -> Optional[datetime]:
     if dt.tzinfo is None:
         return dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc)
+
+
+def _heal_cycle_opened_at_state(db: Session, bot: Any, state: Optional[Dict[str, Any]]) -> None:
+    """Tur süresi: cycle_opened_at eksikse heal et; ledger started_at ile hizala; gerekirse kaydet."""
+    if not state or not isinstance(state, dict):
+        return
+    from app.botengine.cycle_ledger import heal_cycle_opened_at, sync_ledger_started_at
+
+    before = state.get("cycle_opened_at")
+    heal_cycle_opened_at(state)
+    ledger = state.get("cycle_ledger_current")
+    if isinstance(ledger, dict):
+        sync_ledger_started_at(state, ledger)
+    if before != state.get("cycle_opened_at"):
+        try:
+            from app.botengine.state_store import save_state
+
+            save_state(db, bot.id, bot.account_id, state)
+        except Exception as e:
+            logger.debug("heal cycle_opened_at save failed bot_id=%s: %s", bot.id, e)
 
 
 def _ledger_fills_to_trade_dicts(
@@ -1362,17 +1560,20 @@ def _build_live_snapshot_from_state(bot: Bot, state: Optional[Dict[str, Any]], d
     if initial_capital > 0 and equity is not None and not equity_unavailable:
         pnl_pct = (equity - initial_capital) / initial_capital * 100.0
 
-    # Günlük K/Z: TR gece 00:00 referansı; bot aynı gün açıldıysa ilk tick'te ref set edilir
+    # Günlük K/Z: TR gece 00:00 veya bot açılış gününde initial_capital referansı
     daily_pnl_usd: Optional[float] = None
     daily_pnl_pct: Optional[float] = None
-    if state and equity is not None and not equity_unavailable:
-        today_start = turkey_today_start_utc()
-        today_date = today_start.strftime("%Y-%m-%d")
-        daily_ref_date = state.get("daily_ref_date")
-        daily_ref_usd = float(state.get("daily_ref_usd") or 0)
-        if daily_ref_date == today_date and daily_ref_usd and daily_ref_usd > 0:
-            daily_pnl_usd = equity - daily_ref_usd
-            daily_pnl_pct = (daily_pnl_usd / daily_ref_usd) * 100.0
+    if state and equity is not None and not equity_unavailable and state.get("initial_allocation_done"):
+        daily_pnl_usd, daily_pnl_pct = ensure_daily_ref_and_compute(
+            state,
+            equity,
+            initial_capital,
+            getattr(bot, "started_at", None),
+            db=db,
+            bot_id=bot.id,
+            account_id=bot.account_id,
+            persist=True,
+        )
 
     stale = False
     if last_tick_at is not None:
@@ -1381,6 +1582,7 @@ def _build_live_snapshot_from_state(bot: Bot, state: Optional[Dict[str, Any]], d
             stale = True
 
     base_balance = float(state.get("base_balance") or 0) if state else 0
+    quote_balance = float(state.get("quote_balance") or 0) if state else 0
     cycle_id = int(state.get("cycle_id") or 1) if state else 1
     initial_allocation_done = state.get("initial_allocation_done") is True if state else False
     first_buy_pending = status == "running" and not initial_allocation_done and base_balance <= 0
@@ -1398,7 +1600,9 @@ def _build_live_snapshot_from_state(bot: Bot, state: Optional[Dict[str, Any]], d
         "daily_pnl_usd": round(daily_pnl_usd, 2) if daily_pnl_usd is not None else None,
         "daily_pnl_pct": round(daily_pnl_pct, 2) if daily_pnl_pct is not None else None,
         "base_balance": base_balance,
+        "quote_balance": quote_balance,
         "first_buy_pending": first_buy_pending,
+        "initial_allocation_done": initial_allocation_done,
         "cycle_id": cycle_id,
     }
     if stale:
@@ -2122,9 +2326,10 @@ def _is_worker_only_order_error(e: Exception) -> bool:
 
 
 async def _sell_symbol_base_on_delete(db: Session, account_id: int, bot_id: int, symbol: str) -> None:
-    """Bot silinmeden önce Binance serbest base → quote (SpotEngine allow_web; worker gerekmez)."""
+    """Bot silinmeden önce Binance base → quote (açık emirleri iptal et, free+locked sat)."""
     from app.services.binance_assets import get_account_keys
-    from app.services.spot_engine import SpotEngine
+    from app.services.binance_spot import cancel_order, get_open_orders, get_wallet
+    from app.services.spot_engine import SpotEngine, spot_cache
 
     sym = (symbol or "").upper().strip()
     if not sym:
@@ -2132,16 +2337,47 @@ async def _sell_symbol_base_on_delete(db: Session, account_id: int, bot_id: int,
     keys = await get_account_keys(account_id, db)
     if not keys:
         raise ValueError("API anahtarı bulunamadı")
+
+    try:
+        open_orders = await get_open_orders(keys, symbol=sym)
+        for o in open_orders or []:
+            oid = o.get("orderId")
+            if oid is None:
+                continue
+            try:
+                await cancel_order(keys, sym, int(oid))
+            except Exception as ce:
+                logger.warning(
+                    "bots_delete convert cancel_order bot_id=%s symbol=%s order=%s err=%s",
+                    bot_id, sym, oid, ce,
+                )
+    except Exception as e:
+        logger.warning("bots_delete convert list_orders bot_id=%s symbol=%s err=%s", bot_id, sym, e)
+
+    spot_cache.invalidate_balance(account_id)
+
     async with SpotEngine(keys) as engine:
-        spot = await engine.get_quick_data(sym, account_id)
-        base_qty = float(spot.base_balance or 0)
+        flt = await engine._get_symbol_filters(sym)
+        base_asset = (flt.get("base_asset") or sym.replace("USDT", "")).upper()
+        wallet_data = await get_wallet(keys, tag="bot_delete_convert")
+        balances = wallet_data.get("balances") or []
+        base_qty = 0.0
+        for b in balances:
+            if (b.get("asset") or "").upper() == base_asset:
+                base_qty = float(b.get("free") or 0) + float(b.get("locked") or 0)
+                break
         if base_qty <= 0:
             return
-        min_notional = float(spot.min_notional or 5)
-        price = float(spot.price or 0)
-        if price <= 0:
+        min_notional = float(flt.get("min_notional") or 5)
+        price = 0.0
+        try:
             from app.services.market_data import get_price
             price = float(get_price(sym) or 0)
+        except Exception:
+            price = 0.0
+        if price <= 0:
+            spot = await engine.get_quick_data(sym, account_id)
+            price = float(spot.price or 0)
         notional = base_qty * price if price else 0
         if notional < min_notional:
             logger.info(
@@ -2150,6 +2386,7 @@ async def _sell_symbol_base_on_delete(db: Session, account_id: int, bot_id: int,
             )
             return
         await engine.place_order(sym, "SELL", "MARKET", quantity=base_qty, allow_web=True)
+        spot_cache.invalidate_balance(account_id)
         logger.info("bots_delete convert_base_to_quote bot_id=%s symbol=%s base_qty=%.8f", bot_id, sym, base_qty)
 
 
@@ -2228,6 +2465,12 @@ async def bots_delete(
             except Exception as e:
                 logger.warning("bots_delete convert_base_to_quote failed bot_id=%s err=%s", bot.id, e)
                 raise HTTPException(status_code=400, detail=_detail_err("CONVERT_FAILED", str(e), rid))
+        try:
+            from app.api.routes import invalidate_open_orders_cache, invalidate_wallet_cache
+            await invalidate_wallet_cache(bot.account_id)
+            await invalidate_open_orders_cache(bot.account_id)
+        except Exception:
+            pass
     _insert_engine_command(db, bot.account_id, bot.id, "STOP", request_id=rid)
     await delete_bot_fully(bot.id, db)
     return {"ok": True, "bot_id": bot_id, "request_id": rid}
@@ -2357,7 +2600,8 @@ async def bots_events(
     events = list_events(db, bot.id, limit=limit, after_id=after_id)
     state = load_state(db, bot.id)
     events = _enrich_command_start_events(events, bot, state)
-    events = _merge_synthetic_cycle_start_events(events, state)[:limit]
+    events = _merge_synthetic_cycle_start_events(events, state)
+    events = _merge_synthetic_tur_after_initial_fill(events, state)[:limit]
     conn_fail = None
     try:
         from app.services.binance_connectivity import active_failure
@@ -2420,6 +2664,18 @@ def _grid_pct_from_config(g: Dict[str, Any], side: str) -> Optional[float]:
         return round(float(v), 4) if v is not None else None
     except (TypeError, ValueError):
         return None
+
+
+def _is_cycle_trades_panel_row(t: Dict[str, Any]) -> bool:
+    """Tur işlemleri panelinde listelenen satırlar (ilk base / tur devri hariç)."""
+    cid = (t.get("client_order_id") or "").lower()
+    if cid.startswith("cycle_open_"):
+        return False
+    if cid.startswith("init_") or "c0i" in cid:
+        return False
+    if (t.get("reason") or "").lower() == "initial_allocation":
+        return False
+    return True
 
 
 def _is_grid_trade_row(t: Dict[str, Any]) -> bool:
@@ -3130,6 +3386,8 @@ async def bots_trades(
         trades = Ledger.get_trades_dict(db, bot.id, bot.account_id, limit=limit, cycle_id=cycle_id)
     cycle_summary: Optional[Dict[str, Any]] = None
     state = load_state(db, bot.id) if cycle_id is not None else None
+    if state:
+        _heal_cycle_opened_at_state(db, bot, state)
     sym = (bot.symbol or "").upper()
     extra: List[Dict[str, Any]] = []
     if cycle_id is not None and ct != "trb" and state:
@@ -3158,8 +3416,10 @@ async def bots_trades(
                     completed_snapshot = c
                     break
         if is_open_cycle:
+            from app.botengine.cycle_ledger import resolve_cycle_opened_at
+
             ledger = state.get("cycle_ledger_current") or {}
-            started_at_iso = ledger.get("started_at") if isinstance(ledger, dict) else None
+            started_at_iso = resolve_cycle_opened_at(state, ledger if isinstance(ledger, dict) else None)
             start_dt = _parse_ts_utc(started_at_iso)
             if start_dt is not None:
                 duration_sec = max(0.0, (datetime.now(timezone.utc) - start_dt).total_seconds())
@@ -3202,7 +3462,7 @@ async def bots_trades(
         cycle_summary = {
             "cycle_type": "Açık tur" if is_open_cycle and cycle_entry is None else "dca",
             "duration_sec": round(duration_sec, 1) if duration_sec else None,
-            "trade_count": len(trades),
+            "trade_count": sum(1 for t in trades if _is_cycle_trades_panel_row(t)),
             "pnl_usdt": round(pnl_f, 2) if pnl_f is not None else None,
         }
         if started_at_iso:
@@ -3222,6 +3482,15 @@ async def bots_trades(
                 cycle_summary["cash_fees_usdt"] = ledger.get("cash_fifo_fees_usdt") if ledger.get("cash_fifo_fees_usdt") is not None else ledger.get("cash_fees_usdt")
                 cycle_summary["inventory_coin_adv_qty"] = ledger.get("inventory_coin_adv_qty")
                 cycle_summary["inventory_fees_usdt"] = ledger.get("inventory_fees_usdt")
+            side = state.get("cycle_grid_side")
+            if side in ("SELL", "BUY"):
+                cycle_summary["cycle_grid_side"] = side
+        if cycle_entry is not None and not cycle_summary.get("cycle_grid_side"):
+            ct = cycle_entry.get("cycle_type") or ""
+            if ct == "LONG_SCALP":
+                cycle_summary["cycle_grid_side"] = "BUY"
+            elif ct == "INVENTORY_REBALANCE":
+                cycle_summary["cycle_grid_side"] = "SELL"
     if cycle_id is not None and ct != "trb" and trades:
         cfg_raw = json.loads(bot.config_json or "{}")
         _tag_cycle_close_trades(trades, state, int(cycle_id))
@@ -3233,16 +3502,30 @@ async def bots_trades(
     return {"trades": trades, "cycle_summary": cycle_summary, "cycle_type": ct, "request_id": rid}
 
 
+def _completed_cycle_side(entry: Dict[str, Any]) -> Optional[str]:
+    from app.services.bot_performance_service import _completed_cycle_side as _side
+    return _side(entry)
+
+
+def _completed_cycle_in_period(entry: Dict[str, Any], start_ts: Optional[datetime]) -> bool:
+    from app.services.bot_performance_service import _completed_cycle_in_period as _in_period
+    return _in_period(entry, start_ts)
+
+
+def _aggregate_dual_perf_closed_cycles(
+    state: Optional[Dict[str, Any]],
+    start_ts: Optional[datetime],
+    initial_capital: float,
+) -> Dict[str, Any]:
+    from app.services.bot_performance_service import aggregate_dual_perf_closed_cycles
+    completed = (state or {}).get("completed_cycle_dual_pnls") or []
+    return aggregate_dual_perf_closed_cycles(completed, start_ts, initial_capital)
+
+
 def _performance_period_range(period: str):
     """Return (start_ts, end_ts) for period. end_ts=None means now."""
-    now = datetime.now(timezone.utc)
-    if period == "day" or period == "1d":
-        return (now - timedelta(days=1), None)
-    if period == "week" or period == "7d":
-        return (now - timedelta(days=7), None)
-    if period == "month" or period == "30d":
-        return (now - timedelta(days=30), None)
-    return (None, None)  # all
+    from app.services.bot_performance_service import performance_period_start_ts
+    return (performance_period_start_ts(period), None)
 
 
 @router.get("/{bot_id}/performance")
@@ -3312,15 +3595,41 @@ async def bots_performance(
         if initial_usd <= 0:
             initial_usd = total_usd
         pnl_usd = total_usd - initial_usd
-    # PNL kartı: her tur tamamlandıkça eklenen kar toplamı. Önce state.cycle_pnls kullan (bu tur dahil anında yansır); yoksa CYCLE_END eventlerinden topla.
+    # PNL kartı: Trailing DCA — yalnızca kapanmış turlar, yön bazlı dual ledger toplamı.
     state_for_pnl = load_state(db, bot.id)
-    pnl_usd = 0.0
-    if state_for_pnl and state_for_pnl.get("cycle_pnls"):
+    sym_perf = (bot.symbol or "").strip().upper()
+    strategy_id_perf = (cfg_perf.get("strategy_id") or "").strip().lower()
+    is_trailing_dual_dca = sym_perf != "MULTI" and strategy_id_perf not in (
+        "trdca_pro", "multi_asset_rebalance",
+    )
+    dual_perf: Optional[Dict[str, Any]] = None
+    initial_for_pnl = config_initial if config_initial > 0 else (initial_usd or 0.0)
+    cur_px_perf = float(pnl_data.get("current_price") or 0)
+    if is_trailing_dual_dca and state_for_pnl:
+        dual_perf = _aggregate_dual_perf_closed_cycles(state_for_pnl, start_ts, initial_for_pnl)
+        dual_perf["current_cycle_id"] = int(state_for_pnl.get("cycle_id") or 1)
+        pnl_usd = float(dual_perf["cash_pnl_usdt"])
+        pnl_pct = float(dual_perf["cash_pnl_pct"] or 0.0)
+        fees_usd = float(dual_perf["cash_fees_usdt"])
+    elif is_trailing_dual_dca:
+        dual_perf = _aggregate_dual_perf_closed_cycles(None, start_ts, initial_for_pnl)
+        dual_perf["current_cycle_id"] = 1
+        pnl_usd = 0.0
+        pnl_pct = 0.0
+        fees_usd = 0.0
+    if dual_perf is not None and initial_for_pnl > 0 and cur_px_perf > 0:
+        inv_coin = float(dual_perf.get("inventory_pnl_coin") or 0)
+        dual_perf["inventory_pnl_pct"] = round(inv_coin * cur_px_perf / initial_for_pnl * 100.0, 2)
+    elif dual_perf is not None:
+        dual_perf["inventory_pnl_pct"] = None
+    elif state_for_pnl and state_for_pnl.get("cycle_pnls"):
+        pnl_usd = 0.0
         for c in state_for_pnl["cycle_pnls"]:
             p = c.get("pnl_usdt_net") or c.get("pnl_usdt")
             if p is not None:
                 pnl_usd += float(p)
     else:
+        pnl_usd = 0.0
         from sqlalchemy import text
         q_events = db.execute(
             text("""
@@ -3339,10 +3648,9 @@ async def bots_performance(
                         pnl_usd += float(p)
                 except Exception:
                     pass
-    # Yüzde her zaman başlangıç sermayesine göre (dönem değişince saçma değer çıkmaması için)
-    initial_for_pnl = config_initial if config_initial > 0 else (initial_usd or 1.0)
-    pnl_pct = (pnl_usd / initial_for_pnl * 100.0) if initial_for_pnl > 0 else 0.0
-    real_performance_pct = pnl_pct
+    if not is_trailing_dual_dca:
+        pnl_pct = (pnl_usd / initial_for_pnl * 100.0) if initial_for_pnl > 0 else 0.0
+    real_performance_pct = pnl_pct if is_trailing_dual_dca or initial_for_pnl > 0 else 0.0
 
     # Aktif tur: state + ledger birleşimi (/cycles ile aynı kaynak)
     merged_cycles = _merge_bot_cycle_ids(db, bot.id, bot.account_id)
@@ -3594,6 +3902,8 @@ async def bots_performance(
         "realized_pnl_total": round(realized, 2),
         "fees_total": round(fees_usd, 2),
     }
+    if dual_perf is not None:
+        result["dual_perf"] = dual_perf
 
     strategy_id = (cfg_perf.get("strategy_id") or "").strip().lower()
     if strategy_id == "trdca_pro":

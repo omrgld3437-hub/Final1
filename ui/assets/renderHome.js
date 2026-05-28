@@ -40,7 +40,11 @@
                 keys_configured: walletCached.keys_configured !== false,
                 data_status: meta.live ? 'fresh' : (walletCached.data_status || 'cached')
             });
-            window.normalizeAndApplyWallet(p, { source: meta.live ? 'wallet_refresh' : 'home_fast_cached' });
+            window.normalizeAndApplyWallet(p, {
+                source: meta.live ? 'wallet_refresh' : 'home_fast_cached',
+                skipped: meta.skipped === true,
+                stale: meta.stale === true
+            });
             return;
         }
         var assets = Array.isArray(walletCached.assets) ? walletCached.assets : [];
@@ -119,7 +123,9 @@
             if (d && typeof d === 'object') {
                 var p = d.price;
                 if (p != null && Number.isFinite(p)) priceMap[sym] = p;
-                miniData[sym] = { last: p || 0, open: p || 0, changePct: d.change24h || 0, volume: d.volume24h || 0, quoteVolume: (d.volume24h || 0) * (p || 0), marketCap: 0 };
+                var mini = { last: p || 0, open: p || 0, volume: d.volume24h || 0, quoteVolume: (d.volume24h || 0) * (p || 0), marketCap: 0 };
+                if (d.change24h != null && Number.isFinite(Number(d.change24h))) mini.changePct = Number(d.change24h);
+                miniData[sym] = mini;
             }
         }
         if (Object.keys(priceMap).length === 0) return;

@@ -1,6 +1,6 @@
 """
 Per-bot lightweight health checks (worker ~60s). Emits HEALTH_WARN / HEALTH_CRITICAL to bot_engine_events.
-Does not stop bots — alerts only.
+Does not stop bots for recoverable faults — alerts only; loop crashes are auto-restarted while status=running.
 """
 from __future__ import annotations
 
@@ -23,9 +23,23 @@ _CRITICAL_ERROR_CODES = frozenset({
     "API_UNAUTHORIZED",
     "BINANCE_UNREACHABLE",
     "SAFE_STOP",
-    "BOT_LOOP_TOPLEVEL_EXCEPTION",
     "ACCOUNT_KEYS_MISSING",
     "WORKER_ONLY_OPERATION",
+})
+
+# Tick/loop exceptions: kritik uyarı ama bot running kalır ve döngü devam eder / yeniden başlar
+_RECOVERABLE_LOOP_ERRORS = frozenset({
+    "BOT_LOOP_TOPLEVEL_EXCEPTION",
+    "BOT_LOOP_TRDCA_EXCEPTION",
+    "BOT_TICK_EXCEPTION",
+    "RUN_ACTION_EXCEPTION",
+})
+
+_FATAL_PAUSE_CODES = frozenset({
+    "API_UNAUTHORIZED",
+    "ACCOUNT_KEYS_MISSING",
+    "INSUFFICIENT_BALANCE",
+    "SAFE_STOP",
 })
 
 _HEALTH_MESSAGES: Dict[str, Dict[str, Any]] = {
@@ -89,21 +103,75 @@ _HEALTH_MESSAGES: Dict[str, Dict[str, Any]] = {
     },
     "LOOP_TASK_MISSING": {
         "severity": "critical",
-        "title": "Bot döngüsü yok",
-        "cause": "Veritabanında çalışıyor görünüyor ama engine içinde aktif bot task'ı bulunamadı.",
+        "title": "Bot döngüsü yok — kurtarma bekleniyor",
+        "cause": "Veritabanında çalışıyor görünüyor ama engine içinde aktif döngü yok; worker otomatik yeniden başlatmayı dener.",
         "actions": [
-            "Botu durdurup tekrar başlatın.",
-            "Worker sürecinin çalıştığından emin olun.",
-            "Sorun devam ederse sunucuyu yeniden başlatın.",
+            "10–60 sn bekleyin; BOT_LOOP_AUTO_RESTART logu gelmeli.",
+            "Gelmezse worker sürecini kontrol edin.",
         ],
     },
     "REPEATED_ORDER_FAIL": {
         "severity": "warn",
         "title": "Tekrarlayan emir hatası",
-        "cause": "Son dakikalarda birden fazla emir başarısız/atlandı.",
+        "cause": "Son 15 dakikada birden fazla Binance emir reddi veya ağ hatası.",
         "actions": [
-            "Bütçe, minimum tutar (10 USDT) ve bakiye yeterliliğini kontrol edin.",
-            "Grid yüzdelerini ve bütçeyi artırmayı düşünün.",
+            "Logda binance kodunu kontrol edin (LOT_SIZE / MIN_NOTIONAL / -2010).",
+            "Bütçe, grid yüzdesi ve min tutarı (≈10 USDT) artırın.",
+            "Worker yeniden başlatıldıysa Resetle ile uyarıyı temizleyin.",
+        ],
+    },
+    "LOT_SIZE": {
+        "severity": "warn",
+        "title": "Lot / step filtresi (LOT_SIZE)",
+        "cause": "Emir miktarı Binance lot step veya minimum adım kurallarına uymuyor (-1013).",
+        "actions": [
+            "Grid base/quote yüzdesini veya bot bütçesini artırın.",
+            "Sembol minQty ve stepSize değerine uygun miktar kullanın.",
+            "Logdaki ilgili grid satırını (Satış/Alım #n) kontrol edin.",
+        ],
+    },
+    "MIN_NOTIONAL": {
+        "severity": "warn",
+        "title": "Minimum tutar (MIN_NOTIONAL)",
+        "cause": "Emir notional değeri Binance minimum işlem tutarının altında.",
+        "actions": [
+            "Grid emir tutarını veya bütçeyi artırın (en az ~10 USDT önerilir).",
+            "İlk alım ve grid yüzdelerini gözden geçirin.",
+        ],
+    },
+    "MIN_NOTIONAL_AFTER_CAP": {
+        "severity": "warn",
+        "title": "Minimum tutar (cap sonrası)",
+        "cause": "Bakiye sınırına göre küçültülen emir yine de minimum tutarın altında kaldı.",
+        "actions": [
+            "Serbest USDT veya base bakiyesini artırın.",
+            "Grid yüzdesini düşürüp bütçeyi yükseltin.",
+        ],
+    },
+    "ORDER_FAILED": {
+        "severity": "warn",
+        "title": "Emir gönderilemedi",
+        "cause": "Binance emir isteği reddedildi veya ağ hatası oluştu.",
+        "actions": [
+            "Logdaki binance kod ve mesajına bakın.",
+            "API anahtarı, IP beyaz listesi ve Spot izinlerini doğrulayın.",
+        ],
+    },
+    "INSUFFICIENT_QUOTE": {
+        "severity": "warn",
+        "title": "Yetersiz USDT",
+        "cause": "Emir için yeterli serbest quote (USDT) yok.",
+        "actions": [
+            "Cüzdan USDT bakiyesini ve bot bütçesini kontrol edin.",
+            "Grid alım yüzdelerini düşürün.",
+        ],
+    },
+    "ORDER_TIMEOUT": {
+        "severity": "warn",
+        "title": "Emir zaman aşımı",
+        "cause": "Binance emir yanıtı zaman aşımına uğradı.",
+        "actions": [
+            "Ağ bağlantısını kontrol edin; birkaç dakika sonra tekrar denenecek.",
         ],
     },
     "BINANCE_UNREACHABLE": {
@@ -116,7 +184,283 @@ _HEALTH_MESSAGES: Dict[str, Dict[str, Any]] = {
             "Birkaç dakika bekleyip bot sayfasını yenileyin.",
         ],
     },
+    "BOT_CONTINUES_ON_ERROR": {
+        "severity": "critical",
+        "title": "Kritik tick hatası — bot çalışıyor",
+        "cause": "Tick sırasında kritik bir hata oluştu; bot durdurulmadı, döngü çalışmaya devam ediyor.",
+        "actions": [
+            "Logdaki hata detayına bakın.",
+            "Sorun sürerse grid bütçesi, API veya worker kaynağını kontrol edin.",
+        ],
+    },
+    "BOT_LOOP_AUTO_RESTART": {
+        "severity": "critical",
+        "title": "Bot döngüsü yeniden başlatılıyor",
+        "cause": "Engine döngüsü beklenmedik şekilde sonlandı; veritabanında çalışıyor görünüyor — worker döngüyü yeniden açıyor.",
+        "actions": [
+            "Birkaç saniye bekleyin; tick ve loglar devam etmeli.",
+            "Tekrarlanırsa worker sürecini ve Binance bağlantısını kontrol edin.",
+        ],
+    },
+    "PRICE_STALE_OR_MISSING": {
+        "severity": "warn",
+        "title": "Fiyat verisi yok / bayat",
+        "cause": "Piyasa fiyatı okunamadı; bu tick'te emir gönderilmedi, döngü bekleyerek devam ediyor.",
+        "actions": [
+            "Market data / worker WS bağlantısını kontrol edin.",
+            "Sembolün Binance'te aktif olduğundan emin olun.",
+        ],
+    },
+    "REPEATED_LOCK_BUSY": {
+        "severity": "warn",
+        "title": "Tekrarlayan kilit meşgul",
+        "cause": "Son 15 dakikada sembol kilidi nedeniyle birden fazla tick atlandı.",
+        "actions": [
+            "Aynı hesapta başka bot veya işlem kilidi tutuyor olabilir.",
+            "Gerekirse diğer botları durdurun veya kilidi serbest bırakın.",
+        ],
+    },
+    "REPEATED_SLIPPAGE": {
+        "severity": "warn",
+        "title": "Tekrarlayan kayma uyarısı",
+        "cause": "Son 15 dakikada birden fazla yüksek kayma (slippage) kaydı.",
+        "actions": [
+            "Volatil piyasa veya düşük likidite olabilir.",
+            "Grid aralığı veya bütçeyi gözden geçirin.",
+        ],
+    },
+    "CONNECTIVITY_DEGRADED": {
+        "severity": "warn",
+        "title": "Bağlantı zayıf (backoff)",
+        "cause": "Bot geçici backoff modunda; emirler sınırlı veya gecikmeli olabilir.",
+        "actions": [
+            "Binance API ve ağı kontrol edin.",
+            "Düzelince otomatik devam eder.",
+        ],
+    },
 }
+
+_STATE_SKIP_HEALTH_KEYS = frozenset({
+    "LOT_SIZE",
+    "MIN_NOTIONAL",
+    "MIN_NOTIONAL_AFTER_CAP",
+    "ORDER_FAILED",
+    "INSUFFICIENT_QUOTE",
+    "ORDER_TIMEOUT",
+})
+
+
+def _recent_event_with_code(db: Session, bot_id: int, code: str, within_sec: float = 900.0) -> bool:
+    """True if SKIP/ERROR log already documents this code (skip duplicate HEALTH emit)."""
+    try:
+        from app.botengine.state_store import list_events
+
+        c = (code or "").strip().upper()
+        if not c:
+            return False
+        cutoff = time.time() - within_sec
+        for ev in list_events(db, bot_id, limit=30):
+            ty = (ev.get("type") or "").upper()
+            if ty not in ("SKIP_REASON", "ERROR"):
+                continue
+            meta = ev.get("meta") or {}
+            ec = (meta.get("skip_reason") or meta.get("error_code") or "").strip().upper()
+            if ec != c:
+                continue
+            ts = ev.get("ts")
+            if not ts:
+                return True
+            try:
+                t = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+                if t.tzinfo is None:
+                    t = t.replace(tzinfo=timezone.utc)
+                if t.timestamp() >= cutoff:
+                    return True
+            except Exception:
+                return True
+        return False
+    except Exception:
+        return False
+
+
+def _count_recent_events(
+    db: Session,
+    bot_id: int,
+    *,
+    types: Optional[Tuple[str, ...]] = None,
+    message_contains: Optional[str] = None,
+    within_sec: float = 900.0,
+) -> int:
+    try:
+        from app.botengine.state_store import list_events
+
+        cutoff = time.time() - within_sec
+        n = 0
+        for ev in list_events(db, bot_id, limit=50):
+            ty = (ev.get("type") or "").upper()
+            if types and ty not in types:
+                continue
+            if message_contains and message_contains.lower() not in str(ev.get("message") or "").lower():
+                continue
+            ts = ev.get("ts")
+            if ts:
+                try:
+                    t = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+                    if t.tzinfo is None:
+                        t = t.replace(tzinfo=timezone.utc)
+                    if t.timestamp() < cutoff:
+                        continue
+                except Exception:
+                    pass
+            n += 1
+        return n
+    except Exception:
+        return 0
+
+
+def _recent_initial_fill(db: Session, bot_id: int, within_sec: float = 600.0) -> bool:
+    try:
+        from app.botengine.state_store import list_events
+
+        cutoff = time.time() - within_sec
+        for ev in list_events(db, bot_id, limit=25):
+            if (ev.get("type") or "").upper() != "ORDER_FILLED":
+                continue
+            meta = ev.get("meta") or {}
+            if meta.get("reason") != "initial_allocation":
+                continue
+            ts = ev.get("ts")
+            if not ts:
+                return True
+            try:
+                t = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+                if t.tzinfo is None:
+                    t = t.replace(tzinfo=timezone.utc)
+                if t.timestamp() >= cutoff:
+                    return True
+            except Exception:
+                return True
+        return False
+    except Exception:
+        return False
+
+
+def emit_resilience_continue(
+    db: Session,
+    bot_id: int,
+    account_id: int,
+    error_code: str,
+    detail: str,
+    *,
+    error_id: Optional[str] = None,
+    loop_id: Optional[str] = None,
+) -> None:
+    """Tick absorbed: kritik log + bot çalışmaya devam bilgisi (throttled)."""
+    from app.botengine.state_store import append_event, load_state, save_state
+
+    code = (error_code or "BOT_TICK_EXCEPTION").strip().upper()
+    state = load_state(db, bot_id) or {}
+    emit_map = state.setdefault("_resilience_last_emit", {})
+    if not isinstance(emit_map, dict):
+        emit_map = {}
+        state["_resilience_last_emit"] = emit_map
+    now = time.time()
+    if now - float(emit_map.get(code) or 0) < 90.0:
+        return
+    emit_map[code] = now
+    short = (detail or "")[:240]
+    meta = {
+        "health_code": "BOT_CONTINUES_ON_ERROR",
+        "error_code": code,
+        "continues_running": True,
+        "error_id": error_id,
+        "loop_id": loop_id,
+    }
+    append_event(
+        db,
+        bot_id,
+        account_id,
+        "HEALTH_CRITICAL",
+        f"Kritik tick hatası ({code}) — bot çalışmaya devam ediyor" + (f" · {short}" if short else ""),
+        meta,
+    )
+    append_event(
+        db,
+        bot_id,
+        account_id,
+        "INFO",
+        f"Dayanıklılık: {code} kaydedildi, döngü durmadan devam ediyor",
+        {"event_kind": "BOT_RESILIENCE", "error_code": code, **meta},
+    )
+    try:
+        save_state(db, bot_id, account_id, state)
+    except Exception:
+        pass
+
+
+def emit_loop_auto_restart(
+    db: Session,
+    bot_id: int,
+    account_id: int,
+    reason: str,
+    *,
+    loop_id: Optional[str] = None,
+) -> None:
+    """Loop crashed but DB still running — worker restarting task."""
+    from app.botengine.state_store import append_event, load_state, save_state
+
+    state = load_state(db, bot_id) or {}
+    emit_map = state.setdefault("_resilience_last_emit", {})
+    if not isinstance(emit_map, dict):
+        emit_map = {}
+        state["_resilience_last_emit"] = emit_map
+    now = time.time()
+    if now - float(emit_map.get("BOT_LOOP_AUTO_RESTART") or 0) < 60.0:
+        return
+    emit_map["BOT_LOOP_AUTO_RESTART"] = now
+    meta = {
+        "health_code": "BOT_LOOP_AUTO_RESTART",
+        "restart_reason": reason,
+        "loop_id": loop_id,
+        "continues_running": True,
+    }
+    append_event(
+        db,
+        bot_id,
+        account_id,
+        "HEALTH_CRITICAL",
+        "Bot döngüsü sonlandı — worker otomatik yeniden başlatıyor (çalışmaya devam)",
+        meta,
+    )
+    append_event(
+        db,
+        bot_id,
+        account_id,
+        "INFO",
+        f"Dayanıklılık: döngü yeniden başlatılıyor ({reason})",
+        {"event_kind": "BOT_RESILIENCE", **meta},
+    )
+    try:
+        save_state(db, bot_id, account_id, state)
+    except Exception:
+        pass
+
+
+def emit_price_stale(db: Session, bot_id: int, account_id: int, symbol: str) -> None:
+    from app.botengine.state_store import append_event
+
+    append_event(
+        db,
+        bot_id,
+        account_id,
+        "HEALTH_WARN",
+        f"Fiyat yok veya bayat — {symbol} tick atlandı, döngü devam ediyor",
+        {
+            "health_code": "PRICE_STALE_OR_MISSING",
+            "symbol": symbol,
+            "continues_running": True,
+        },
+    )
 
 
 def _expected_tick_interval_sec(bot) -> float:
@@ -253,15 +597,48 @@ def evaluate_bot_health(bot, state: Optional[Dict[str, Any]], db: Session) -> Li
     err_code = (state.get("last_error_code") or "").strip()
     ack_at = int(state.get("health_ack_at") or 0)
     err_since = int(state.get("health_error_since") or 0)
+    backoff_until = float(state.get("backoff_until") or 0)
+    if backoff_until > now and status == "running":
+        tmpl = _HEALTH_MESSAGES.get("CONNECTIVITY_DEGRADED")
+        if tmpl:
+            alerts.append(_alert_from_tmpl(
+                "CONNECTIVITY_DEGRADED", "warn", tmpl,
+                {"backoff_until": backoff_until},
+            ))
+
+    price_stale_since = int(state.get("price_stale_since") or 0)
+    if price_stale_since and (now - price_stale_since) >= 90:
+        tmpl = _HEALTH_MESSAGES["PRICE_STALE_OR_MISSING"]
+        alerts.append(_alert_from_tmpl(
+            "PRICE_STALE_OR_MISSING", "warn", tmpl,
+            {"price_stale_since": price_stale_since, "stale_s": now - price_stale_since},
+        ))
+
     if err_code:
         stale_after_ack = ack_at > 0 and (not err_since or err_since <= ack_at)
         if not stale_after_ack:
-            if err_code in _CRITICAL_ERROR_CODES:
+            if err_code in _RECOVERABLE_LOOP_ERRORS:
+                tmpl = _HEALTH_MESSAGES["BOT_CONTINUES_ON_ERROR"]
+                alerts.append(_alert_from_tmpl(
+                    "BOT_CONTINUES_ON_ERROR", "critical", tmpl,
+                    {"error_code": err_code, "continues_running": True},
+                    message=f"Kritik tick hatası ({err_code}) — bot çalışmaya devam ediyor",
+                ))
+            elif err_code in _CRITICAL_ERROR_CODES or err_code in _FATAL_PAUSE_CODES:
                 tmpl = _HEALTH_MESSAGES["STATE_ERROR"]
                 alerts.append(_alert_from_tmpl(
                     "STATE_ERROR", "critical", tmpl,
                     {"error_code": err_code},
-                    message=f"Kritik hata kodu: {err_code}",
+                    message=f"Kritik hata: {err_code}",
+                ))
+            elif err_code in _STATE_SKIP_HEALTH_KEYS:
+                tmpl = _HEALTH_MESSAGES[err_code]
+                alerts.append(_alert_from_tmpl(
+                    err_code,
+                    str(tmpl.get("severity") or "warn"),
+                    tmpl,
+                    {"error_code": err_code},
+                    message=str(tmpl.get("title") or err_code),
                 ))
             else:
                 tmpl = _HEALTH_MESSAGES["STATE_ERROR_WARN"]
@@ -275,7 +652,7 @@ def evaluate_bot_health(bot, state: Optional[Dict[str, Any]], db: Session) -> Li
     base_bal = float(state.get("base_balance") or 0)
     if not ia_done and base_bal <= 0:
         started = _bot_started_ts(bot)
-        if started and (now - started) > 120:
+        if started and (now - started) > 120 and not _recent_initial_fill(db, bot.id):
             tmpl = _HEALTH_MESSAGES["FIRST_BUY_STUCK"]
             alerts.append(_alert_from_tmpl("FIRST_BUY_STUCK", "warn", tmpl, {"initial_allocation_done": False}))
 
@@ -295,7 +672,12 @@ def evaluate_bot_health(bot, state: Optional[Dict[str, Any]], db: Session) -> Li
                 continue
             meta = ev.get("meta") or {}
             skip = (meta.get("skip_reason") or meta.get("error_code") or "").upper()
-            if skip not in ("ORDER_FAILED", "LOT_SIZE", "MIN_NOTIONAL", "MIN_NOTIONAL_AFTER_CAP", "INSUFFICIENT_QUOTE", "ORDER_TIMEOUT"):
+            if meta.get("preflight"):
+                continue
+            if skip in ("LOT_SIZE", "MIN_NOTIONAL", "MIN_NOTIONAL_AFTER_CAP"):
+                if not meta.get("binance_code"):
+                    continue
+            if skip not in ("ORDER_FAILED", "LOT_SIZE", "MIN_NOTIONAL", "INSUFFICIENT_QUOTE", "ORDER_TIMEOUT"):
                 continue
             ts = ev.get("ts")
             if ts:
@@ -319,6 +701,20 @@ def evaluate_bot_health(bot, state: Optional[Dict[str, Any]], db: Session) -> Li
             ))
     except Exception as e:
         logger.debug("health_watch recent skips bot_id=%s: %s", bot.id, e)
+
+    lock_busy_n = _count_recent_events(db, bot.id, types=("LOCK_BUSY", "LOCK_LEASE_EXPIRED"), within_sec=900.0)
+    if lock_busy_n >= 5:
+        tmpl = _HEALTH_MESSAGES["REPEATED_LOCK_BUSY"]
+        alerts.append(_alert_from_tmpl(
+            "REPEATED_LOCK_BUSY", "warn", tmpl, {"lock_skip_count": lock_busy_n, "window_min": 15},
+        ))
+
+    slip_n = _count_recent_events(db, bot.id, types=("SLIPPAGE_WARN",), within_sec=900.0)
+    if slip_n >= 3:
+        tmpl = _HEALTH_MESSAGES["REPEATED_SLIPPAGE"]
+        alerts.append(_alert_from_tmpl(
+            "REPEATED_SLIPPAGE", "warn", tmpl, {"slippage_count": slip_n, "window_min": 15},
+        ))
 
     return alerts
 
@@ -368,6 +764,9 @@ def emit_health_alerts(db: Session, bot, state: Dict[str, Any], alerts: List[Dic
     for a in alerts:
         code = a.get("code") or "HEALTH"
         level = a.get("level") or "warn"
+        ec = ((a.get("meta") or {}).get("error_code") or code or "").strip().upper()
+        if ec in _STATE_SKIP_HEALTH_KEYS and _recent_event_with_code(db, bot.id, ec):
+            continue
         if not _should_emit(state, code, level):
             continue
         event_type = "HEALTH_CRITICAL" if level == "critical" else "HEALTH_WARN"

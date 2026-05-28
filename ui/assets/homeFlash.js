@@ -67,9 +67,12 @@
         var storageCache = window.storageCache;
         if (!renderHome || !storageCache) return Promise.resolve();
 
-        renderHome.renderSkeleton();
-
         var cached = storageCache.load(accountId);
+        var hasCachedWallet = !!(cached && cached.wallet_cached && Array.isArray(cached.wallet_cached.assets) && cached.wallet_cached.assets.length);
+        if (!hasCachedWallet) {
+            renderHome.renderSkeleton();
+        }
+
         if (cached && cached.wallet_cached) {
             renderHome.walletCachedToAssetsState(cached.wallet_cached, cached.wallet_cached_at);
         }
@@ -186,7 +189,12 @@
             }
             renderHome.showUpdatingBadge(false);
             if (data.wallet_live) {
-                renderHome.walletCachedToAssetsState(data.wallet_live, data.wallet_live_at, { live: true });
+                var refreshLive = !data.skipped && !data.stale && !data.inflight;
+                renderHome.walletCachedToAssetsState(data.wallet_live, data.wallet_live_at, {
+                    live: refreshLive,
+                    skipped: !!data.skipped,
+                    stale: !!data.stale
+                });
                 storageCache.mergeSaved(accountId, {
                     wallet_cached: data.wallet_live,
                     wallet_cached_at: data.wallet_live_at

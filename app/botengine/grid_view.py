@@ -38,7 +38,7 @@ def _avg_buy_price(state: Dict) -> Optional[float]:
 
 
 def _avg_sell_price_grid_only(state: Dict) -> Optional[float]:
-    """Ortalama maliyet sadece grid satışlarıyla (reentry/profit_exit hariç). execution_price varsa onu kullan (gerçekleşme fiyatı)."""
+    """Ortalama satış: yalnız kapanmış grid fill fiyatları (qty-ağırlıklı VWAP). execution_price = trail eşiği, dahil edilmez."""
     h = state.get("sell_history") or []
     grid_h = [x for x in h if x.get("grid_index") is not None]
     if not grid_h:
@@ -46,14 +46,12 @@ def _avg_sell_price_grid_only(state: Dict) -> Optional[float]:
     tq = sum(_f(x.get("qty")) for x in grid_h)
     if tq <= 0:
         return None
-    tv = sum(
-        _f(x.get("qty")) * _f(x.get("execution_price") or x.get("price")) for x in grid_h
-    )
+    tv = sum(_f(x.get("qty")) * _f(x.get("price")) for x in grid_h)
     return tv / tq
 
 
 def _avg_buy_price_grid_only(state: Dict) -> Optional[float]:
-    """Ortalama maliyet sadece grid alışlarıyla (reentry/initial hariç). execution_price varsa onu kullan (gerçekleşme fiyatı)."""
+    """Ortalama alım: yalnız kapanmış grid fill fiyatları (qty-ağırlıklı VWAP)."""
     h = state.get("buy_history") or []
     grid_h = [x for x in h if x.get("grid_index") is not None]
     if not grid_h:
@@ -61,9 +59,7 @@ def _avg_buy_price_grid_only(state: Dict) -> Optional[float]:
     tq = sum(_f(x.get("qty")) for x in grid_h)
     if tq <= 0:
         return None
-    tv = sum(
-        _f(x.get("qty")) * _f(x.get("execution_price") or x.get("price")) for x in grid_h
-    )
+    tv = sum(_f(x.get("qty")) * _f(x.get("price")) for x in grid_h)
     return tv / tq
 
 

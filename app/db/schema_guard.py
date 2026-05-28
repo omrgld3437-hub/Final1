@@ -513,6 +513,107 @@ def ensure_account_daily_realized_pnl_table(engine):
         conn.commit()
 
 
+def ensure_bot_perf_archive_table(engine):
+    """Bot silindiğinde completed_cycle_dual_pnls arşivi — dashboard performans toplamı."""
+    with engine.connect() as conn:
+        r = conn.execute(text(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='bot_perf_archive'"
+        ))
+        if r.fetchone():
+            conn.commit()
+            return
+        try:
+            conn.execute(text("""
+                CREATE TABLE bot_perf_archive (
+                    id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                    account_id INTEGER NOT NULL,
+                    bot_id INTEGER NOT NULL UNIQUE,
+                    symbol TEXT NOT NULL,
+                    strategy_id TEXT,
+                    base_asset TEXT,
+                    initial_capital_usd REAL NOT NULL DEFAULT 0,
+                    completed_cycles_json TEXT NOT NULL DEFAULT '[]',
+                    bot_status TEXT,
+                    archived_at TEXT NOT NULL,
+                    deleted INTEGER NOT NULL DEFAULT 1
+                )
+            """))
+            conn.execute(text(
+                "CREATE INDEX ix_bot_perf_archive_account ON bot_perf_archive (account_id)"
+            ))
+            conn.commit()
+            logger.info("schema_guard: created table bot_perf_archive")
+        except Exception as e:
+            logger.warning("schema_guard: could not create bot_perf_archive: %s", e)
+            conn.rollback()
+        conn.commit()
+
+
+def ensure_bot_daily_pnl_table(engine):
+    """Bot başına TR takvim günü K/Z kaydı (mevcut + silinen botlar)."""
+    with engine.connect() as conn:
+        r = conn.execute(text(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='bot_daily_pnl'"
+        ))
+        if r.fetchone():
+            conn.commit()
+            return
+        try:
+            conn.execute(text("""
+                CREATE TABLE bot_daily_pnl (
+                    bot_id INTEGER NOT NULL,
+                    date_tr TEXT NOT NULL,
+                    account_id INTEGER NOT NULL,
+                    symbol TEXT,
+                    pnl_usd REAL NOT NULL DEFAULT 0,
+                    fees_usd REAL NOT NULL DEFAULT 0,
+                    cycle_count INTEGER NOT NULL DEFAULT 0,
+                    bot_deleted INTEGER NOT NULL DEFAULT 0,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (bot_id, date_tr)
+                )
+            """))
+            conn.execute(text(
+                "CREATE INDEX ix_bot_daily_pnl_account_date ON bot_daily_pnl (account_id, date_tr)"
+            ))
+            conn.commit()
+            logger.info("schema_guard: created table bot_daily_pnl")
+        except Exception as e:
+            logger.warning("schema_guard: could not create bot_daily_pnl: %s", e)
+            conn.rollback()
+        conn.commit()
+
+
+def ensure_account_performance_cache_table(engine):
+    """Hesap + dönem bazlı bot performans özeti (hızlı okuma)."""
+    with engine.connect() as conn:
+        r = conn.execute(text(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='account_performance_cache'"
+        ))
+        if r.fetchone():
+            conn.commit()
+            return
+        try:
+            conn.execute(text("""
+                CREATE TABLE account_performance_cache (
+                    account_id INTEGER NOT NULL,
+                    period TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (account_id, period)
+                )
+            """))
+            conn.execute(text(
+                "CREATE INDEX ix_account_performance_cache_account ON account_performance_cache (account_id)"
+            ))
+            conn.commit()
+            logger.info("schema_guard: created table account_performance_cache")
+        except Exception as e:
+            logger.warning("schema_guard: could not create account_performance_cache: %s", e)
+            conn.rollback()
+        conn.commit()
+
+
 def ensure_bot_virtual_wallet_table(engine):
     """Multi-bot: per-bot virtual base/quote sub-wallet for budget check and fill updates."""
     with engine.connect() as conn:
@@ -605,6 +706,9 @@ def run_schema_guard(engine):
         ensure_symbol_locks_table(engine)
         ensure_bot_virtual_wallet_table(engine)
         ensure_account_daily_realized_pnl_table(engine)
+        ensure_bot_perf_archive_table(engine)
+        ensure_bot_daily_pnl_table(engine)
+        ensure_account_performance_cache_table(engine)
         ensure_order_intents_table(engine)
         ensure_sessions_table(engine)
         ensure_admin_popups_table(engine)

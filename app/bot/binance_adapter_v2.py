@@ -13,7 +13,6 @@ try:
     from app.services.binance_client import BinanceClient
 except ImportError:
     BinanceClient = None
-from app.services.encryption import decrypt_key
 
 
 class BinanceSpotAdapterV2:

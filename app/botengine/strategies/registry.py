@@ -49,12 +49,6 @@ def _ensure_default():
             register(MultiAssetRebalanceStrategy)
         except Exception as e:
             logger.debug("registry multi_asset_rebalance: %s", e)
-    if "trdca_pro" not in _strategies and "trdca_pro" not in _strategy_classes:
-        try:
-            from app.botengine.strategies.trdca_pro import TrdcaProStrategy
-            register(TrdcaProStrategy)
-        except Exception as e:
-            logger.debug("registry trdca_pro: %s", e)
 
 
 def get_strategy_safe(strategy_id: Any) -> Strategy:

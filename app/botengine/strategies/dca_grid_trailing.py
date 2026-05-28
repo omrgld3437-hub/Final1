@@ -783,30 +783,26 @@ def _avg_buy_price(state: Dict) -> Optional[float]:
 
 
 def _avg_buy_price_for_trigger(state: Dict) -> Optional[float]:
-    """Grid alımları ortalama: execution_price varsa onu kullan (gerçekleşme fiyatı), yoksa fill. Tetik/UI ile uyumlu."""
+    """Grid alımları VWAP: yalnız Binance fill `price` (kar tetik / reentry ile uyumlu)."""
     h = state.get("buy_history") or []
     if not h:
         return None
     total_q = sum(_float(x.get("qty"), 0) for x in h)
     if total_q <= 0:
         return None
-    total_v = sum(
-        _float(x.get("qty"), 0) * _float(x.get("execution_price") or x.get("price"), 0) for x in h
-    )
+    total_v = sum(_float(x.get("qty"), 0) * _float(x.get("price"), 0) for x in h)
     return total_v / total_q if total_q else None
 
 
 def _avg_sell_price_for_trigger(state: Dict) -> Optional[float]:
-    """Grid satışları ortalama: execution_price varsa onu kullan, yoksa fill. Tetik/UI ile uyumlu."""
+    """Grid satışları VWAP: yalnız Binance fill `price` (kar alım tetik ile uyumlu)."""
     h = state.get("sell_history") or []
     if not h:
         return None
     total_q = sum(_float(x.get("qty"), 0) for x in h)
     if total_q <= 0:
         return None
-    total_v = sum(
-        _float(x.get("qty"), 0) * _float(x.get("execution_price") or x.get("price"), 0) for x in h
-    )
+    total_v = sum(_float(x.get("qty"), 0) * _float(x.get("price"), 0) for x in h)
     return total_v / total_q if total_q else None
 
 
@@ -850,7 +846,7 @@ def apply_fill_to_state(
     execution_price: Optional[float] = None,
 ) -> None:
     """Update state after a fill. Appends to sell_history/buy_history, updates balances, realized_pnl, fees.
-    execution_price: gerçekleşme fiyatı (tetik seviyesi); ortalama maliyet/tetik hesaplarında kullanılır, yoksa fill fiyatı kullanılır."""
+    execution_price: trail gerçekleşme eşiği (grid UI); ortalama maliyet yalnız fill `price` ile hesaplanır."""
     q = _f(executed_qty) or 0.0
     p = _f(executed_price) or 0.0
     fee_val = _f(fee) or 0.0
@@ -973,7 +969,7 @@ def _avg_buy_grid_from_history(buy_hist: list) -> Optional[float]:
     tq = sum(_f(x.get("qty")) for x in grid_h)
     if tq <= 0:
         return None
-    tv = sum(_f(x.get("qty")) * _f(x.get("execution_price") or x.get("price")) for x in grid_h)
+    tv = sum(_f(x.get("qty")) * _f(x.get("price")) for x in grid_h)
     return tv / tq
 
 
@@ -984,7 +980,7 @@ def _avg_sell_grid_from_history(sell_hist: list) -> Optional[float]:
     tq = sum(_f(x.get("qty")) for x in grid_h)
     if tq <= 0:
         return None
-    tv = sum(_f(x.get("qty")) * _f(x.get("execution_price") or x.get("price")) for x in grid_h)
+    tv = sum(_f(x.get("qty")) * _f(x.get("price")) for x in grid_h)
     return tv / tq
 
 
@@ -1091,9 +1087,12 @@ def cycle_reset_after_fill(
     state.pop("_cycle_complete", None)
     state.pop("cycle_grid_side", None)
     if symbol:
+        from datetime import datetime, timezone
         from app.botengine.cycle_ledger import build_cycle_ledger_empty
-        state["cycle_ledger_current"] = build_cycle_ledger_empty(new_cycle_id, symbol)
-        started_at = (state.get("cycle_ledger_current") or {}).get("started_at")
+
+        started_at = datetime.now(timezone.utc).isoformat()
+        state["cycle_opened_at"] = started_at
+        state["cycle_ledger_current"] = build_cycle_ledger_empty(new_cycle_id, symbol, started_at=started_at)
     else:
         started_at = None
     if new_cycle_id >= 2 and base_bal > 0 and price > 0:

@@ -4,6 +4,7 @@ Uygulama genelinde giriş/çıkış, işlemler, PnL bugün vb. tek saat (Türkiy
 """
 import logging
 from datetime import datetime, timezone, timedelta
+from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
 TR_TZ = ZoneInfo("Europe/Istanbul")
@@ -31,6 +32,33 @@ def turkey_today_start_utc() -> datetime:
     return midnight_tr.astimezone(timezone.utc).replace(tzinfo=None)
 
 
+def parse_binance_ms_to_utc_naive(raw: Any) -> Optional[datetime]:
+    """Binance zaman alanı (ms epoch int/float/str veya ISO) → naive UTC datetime."""
+    if raw is None:
+        return None
+    if isinstance(raw, (int, float)):
+        try:
+            return datetime.fromtimestamp(float(raw) / 1000.0, tz=timezone.utc).replace(tzinfo=None)
+        except (ValueError, OSError, OverflowError):
+            return None
+    if isinstance(raw, str):
+        s = raw.strip()
+        if not s:
+            return None
+        try:
+            return datetime.fromtimestamp(float(s) / 1000.0, tz=timezone.utc).replace(tzinfo=None)
+        except (ValueError, OSError, OverflowError):
+            pass
+        try:
+            dt = datetime.fromisoformat(s.replace("Z", "+00:00").replace(" ", "T")[:26].rstrip("Z"))
+            if dt.tzinfo:
+                dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+            return dt
+        except Exception:
+            return None
+    return None
+
+
 def turkey_day_start_utc_for_date(date_tr: str) -> datetime:
     """
     Given date_tr (YYYY-MM-DD), return that day's 00:00 in Turkey (Europe/Istanbul) as naive UTC.
@@ -49,3 +77,21 @@ def turkey_day_end_utc_for_date(date_tr: str) -> datetime:
     """Next day start (exclusive end for [day_start, day_end)). Naive UTC."""
     start = turkey_day_start_utc_for_date(date_tr)
     return start + timedelta(days=1)
+
+
+def bot_started_on_tr_date(started_at, date_tr: str) -> bool:
+    """Bot started_at falls on Turkey calendar date YYYY-MM-DD."""
+    if started_at is None or not date_tr:
+        return False
+    try:
+        if isinstance(started_at, str):
+            dt = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
+        elif isinstance(started_at, datetime):
+            dt = started_at
+        else:
+            return False
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(TR_TZ).strftime("%Y-%m-%d") == date_tr
+    except Exception:
+        return False

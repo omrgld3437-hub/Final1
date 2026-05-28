@@ -44,6 +44,13 @@ def _get_lock(account_id: int) -> asyncio.Lock:
     return _wallet_refresh_locks[account_id]
 
 
+def invalidate_home_wallet_cache(account_id: int) -> None:
+    """Bot silme / convert sonrası in-memory wallet TTL cache'ini sıfırla."""
+    _in_memory_wallet.pop(int(account_id), None)
+    _wallet_last_live_at.pop(int(account_id), None)
+    _wallet_last_live_at_iso.pop(int(account_id), None)
+
+
 def _sort_and_cap_assets(assets: List[Dict], max_n: int) -> List[Dict]:
     """Sort by value desc (usdt_value or total_usd or value_usd), cap to max_n. Put null at end."""
     def _val(a: Dict) -> float:

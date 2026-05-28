@@ -15,7 +15,7 @@ import random
 
 from app.db.session import get_db
 from app.db.models import Account, Bot, Trade, PnlSnapshot, User, PasswordResetRequest, AssetSnapshot, ErrorLog, AdminPopup, AdminPopupDismissal
-from app.services.encryption import encrypt_text, decrypt_text
+from app.services.encryption import encrypt_text
 from app.api.auth import hash_password, generate_password, require_auth, verify_password
 from app.services.pnl_service import PnlService
 from app.utils.account_code import generate_account_code

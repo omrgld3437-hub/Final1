@@ -24,7 +24,7 @@ except ImportError:
     InsufficientBalanceError = Exception
     InvalidAPIKeyError = Exception
     NetworkError = Exception
-from app.services.encryption import decrypt_text
+from app.services.encryption import decrypt_account_api_key, decrypt_account_api_secret
 from sqlalchemy.orm import Session
 from app.db.models import Account
 
@@ -99,8 +99,8 @@ class BotEngine:
         
         try:
             # Decrypt and create client
-            api_key = decrypt_text(self.account.api_key_enc)
-            api_secret = decrypt_text(self.account.api_secret_enc)
+            api_key = decrypt_account_api_key(self.account_id, self.account.api_key_enc)
+            api_secret = decrypt_account_api_secret(self.account_id, self.account.api_secret_enc)
             
             if not api_key or not api_secret:
                 logger.error(f"Bot {self.bot_id}: Failed to decrypt API keys")

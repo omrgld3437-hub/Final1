@@ -10,16 +10,20 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 
-def _fmt_qty(x: float, step_size: float, *, floor: bool = False) -> str:
-    """Round (or floor for sells) to step_size, format as string (no scientific)."""
+def _fmt_qty(x: float, step_size: float, *, floor: bool = False, step_str: Optional[str] = None) -> str:
+    """LOT_SIZE string for Binance API (sells: floor to step)."""
+    from app.botengine.order_qty import quantize_qty_down
+
+    step = step_str or (str(step_size) if step_size else "0.00001")
+    if floor:
+        _, s = quantize_qty_down(x, step)
+        return s
     if x <= 0:
         return "0"
     import math
+
     precision = max(0, -int(round(math.log10(step_size)))) if step_size > 0 else 8
-    if floor and step_size > 0:
-        q = math.floor(x / step_size) * step_size
-    else:
-        q = round(round(x / step_size) * step_size, precision)
+    q = round(round(x / step_size) * step_size, precision) if step_size > 0 else x
     q = round(q, precision)
     s = f"{q:.15f}".rstrip("0").rstrip(".")
     return s or "0"
@@ -59,7 +63,9 @@ class BinanceAdapter:
         return out
 
     async def get_symbol_filters(self, symbol: str) -> Dict[str, Any]:
-        """step_size, tick_size, min_notional (float)."""
+        """LOT_SIZE / PRICE_FILTER / MIN_NOTIONAL — data_hub cache, else exchangeInfo REST."""
+        from app.botengine.order_qty import normalize_symbol_filters
+
         symbol = symbol.upper()
         if symbol in self._filters_cache:
             return self._filters_cache[symbol]
@@ -67,22 +73,39 @@ class BinanceAdapter:
             from app.services.market_data import get_symbol_filters
             cached = get_symbol_filters(symbol)
             if cached:
-                out = {
-                    "step_size": cached.get("step_size", 0.00001),
-                    "min_qty": cached.get("min_qty", 0.00001),
-                    "tick_size": cached.get("tick_size", 0.01),
-                    "min_notional": cached.get("min_notional", 5.0),
-                }
+                out = normalize_symbol_filters(cached)
                 self._filters_cache[symbol] = out
                 return out
         except Exception:
             pass
-        out = {
-            "step_size": 0.00001,
-            "min_qty": 0.00001,
-            "tick_size": 0.01,
-            "min_notional": 5.0,
-        }
+        if not self.paper_mode and self.keys:
+            try:
+                from app.services.binance_spot import fetch_exchange_info
+                info = await fetch_exchange_info(
+                    testnet=getattr(self.keys, "testnet", False),
+                    force_refresh=False,
+                )
+                for s in info.get("symbols") or []:
+                    if (s.get("symbol") or "").upper() != symbol:
+                        continue
+                    raw: Dict[str, Any] = {"min_notional": 5.0}
+                    for f in s.get("filters") or []:
+                        t = f.get("filterType")
+                        if t == "LOT_SIZE":
+                            raw["step_size_str"] = str(f.get("stepSize") or "0.00001")
+                            raw["min_qty_str"] = str(f.get("minQty") or raw["step_size_str"])
+                        elif t == "PRICE_FILTER":
+                            raw["tick_size_str"] = str(f.get("tickSize") or "0.01")
+                        elif t in ("MIN_NOTIONAL", "NOTIONAL"):
+                            raw["min_notional"] = float(
+                                f.get("minNotional") or f.get("notional") or 5
+                            )
+                    out = normalize_symbol_filters(raw)
+                    self._filters_cache[symbol] = out
+                    return out
+            except Exception as e:
+                logger.warning("get_symbol_filters REST fallback %s: %s", symbol, e)
+        out = normalize_symbol_filters({})
         self._filters_cache[symbol] = out
         return out
 
@@ -167,15 +190,20 @@ class BinanceAdapter:
         symbol = symbol.upper()
         if self.paper_mode:
             return self._simulate_fill(symbol, "SELL", base_qty=quantity, client_order_id=client_order_id)
+        from app.botengine.order_qty import validate_market_sell_qty
+
         filters = await self.get_symbol_filters(symbol)
-        step = filters.get("step_size") or 0.00001
-        qty_str = _fmt_qty(quantity, step, floor=True)
-        qty_floored = float(qty_str) if qty_str and qty_str != "0" else 0.0
         price = self.get_price(symbol) or 0.0
-        notional = qty_floored * price if price else 0
-        min_notional = filters.get("min_notional") or 5.0
-        if notional < min_notional:
-            raise ValueError(f"notional {notional} < min_notional {min_notional}")
+        skip_reason, qty_floored, qty_str = validate_market_sell_qty(quantity, filters, price)
+        if skip_reason == "LOT_SIZE":
+            raise ValueError(
+                f"quantity {quantity} below LOT_SIZE min_qty={filters.get('min_qty')} step={filters.get('step_size_str')}"
+            )
+        if skip_reason == "MIN_NOTIONAL":
+            notional = qty_floored * price if price else 0
+            raise ValueError(
+                f"notional {notional} < min_notional {filters.get('min_notional')}"
+            )
         from app.services.binance_spot import place_order
         payload = {
             "symbol": symbol,

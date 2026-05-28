@@ -14,7 +14,7 @@
         }
     })();
     </script>
-    <title>TRDCA Pro+ / Multi-Asset Bot - TraderTrailing</title>
+    <title>Multi-Asset Bot - TraderTrailing</title>
     <link rel="stylesheet" href="/ui/assets/theme.css?v=1">
     <link rel="stylesheet" href="/ui/assets/design.css?v=1">
     <link rel="stylesheet" href="/ui/assets/blink.css?v=1">
@@ -80,6 +80,49 @@
         .health-crit-page-frame.is-visible {
             opacity: 1;
         }
+        @keyframes page-warn-frame {
+            0%, 100% {
+                border-color: rgba(240, 185, 11, 0.95);
+                box-shadow: inset 0 0 28px rgba(240, 185, 11, 0.14), 0 0 20px rgba(240, 185, 11, 0.1);
+            }
+            50% {
+                border-color: rgba(240, 185, 11, 0.28);
+                box-shadow: inset 0 0 10px rgba(240, 185, 11, 0.05), 0 0 8px rgba(240, 185, 11, 0.04);
+            }
+        }
+        .health-warn-page-frame {
+            position: absolute;
+            inset: 0;
+            z-index: 2;
+            pointer-events: none;
+            box-sizing: border-box;
+            border: 4px solid rgba(240, 185, 11, 0.88);
+            opacity: 0;
+            transition: opacity 0.25s ease;
+            animation: page-warn-frame 2.2s ease-in-out infinite;
+        }
+        .health-warn-page-frame.is-visible {
+            opacity: 1;
+        }
+        #engineLogPanel.panel-health-log-active {
+            outline: 1px solid rgba(240, 185, 11, 0.15);
+            border-radius: 8px;
+        }
+        .engine-log-table tr.log-row-health-active-crit td {
+            animation: log-health-crit-blink 0.65s ease-in-out infinite;
+        }
+        .engine-log-table tr.log-row-health-active-warn td {
+            animation: log-health-warn-blink 2.2s ease-in-out infinite;
+        }
+        @keyframes log-health-crit-blink {
+            0%, 100% { background: rgba(246, 70, 93, 0.12); }
+            50% { background: rgba(246, 70, 93, 0.03); }
+        }
+        @keyframes log-health-warn-blink {
+            0%, 100% { background: rgba(240, 185, 11, 0.1); }
+            50% { background: rgba(240, 185, 11, 0.02); }
+        }
+        #healthAlertBanner { display: none !important; }
         .health-alert-banner {
             position: absolute;
             top: 0;
@@ -245,17 +288,31 @@
         .btn-danger { background: rgba(246, 70, 93, 0.2); color: #f6465d; }
         .btn:disabled { opacity: 0.5; cursor: not-allowed; }
         .grid-points-table, .profit-points-table, .cycle-pnls-list { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
-        .grid-sell-table, .grid-buy-table { table-layout: fixed; width: 100%; min-width: 560px; }
-        .grid-sell-table th, .grid-sell-table td, .grid-buy-table th, .grid-buy-table td { padding: 10px 14px; border-bottom: 1px solid var(--ds-border, #2b3139); }
-        .grid-sell-table thead th, .grid-buy-table thead th { white-space: nowrap; min-width: 0; }
-        .grid-sell-table th, .grid-sell-table td, .grid-buy-table th, .grid-buy-table td { width: 16.666%; min-width: 90px; box-sizing: border-box; }
+        .grid-sell-table, .grid-buy-table, .profit-points-table { table-layout: fixed; width: 100%; min-width: 560px; }
+        .grid-sell-table th, .grid-sell-table td, .grid-buy-table th, .grid-buy-table td { padding: 10px 14px; border-bottom: 1px solid var(--ds-border, #2b3139); box-sizing: border-box; }
+        .grid-sell-table thead th, .grid-buy-table thead th, .profit-points-table thead th { white-space: nowrap; }
+        .grid-sell-table col.col-level, .grid-buy-table col.col-level, .profit-points-table col.col-type { width: 22%; }
+        .grid-sell-table col.col-qty, .grid-buy-table col.col-qty, .profit-points-table col.col-avg { width: 14%; }
+        .grid-sell-table col.col-trigger, .grid-buy-table col.col-trigger, .profit-points-table col.col-trigger { width: 15%; }
+        .grid-sell-table col.col-peak, .grid-buy-table col.col-peak, .profit-points-table col.col-peak { width: 21%; }
+        .grid-sell-table col.col-exec, .grid-buy-table col.col-exec, .profit-points-table col.col-exec { width: 15%; }
+        .grid-sell-table col.col-status, .grid-buy-table col.col-status, .profit-points-table col.col-status { width: 13%; }
+        .grid-tepe-dip-cell { display: inline-flex; flex-wrap: wrap; align-items: baseline; justify-content: flex-end; gap: 0.2rem 0.35rem; max-width: 100%; line-height: 1.35; }
+        .grid-tepe-dip-cell .grid-price-val { white-space: nowrap; }
+        .grid-price-pct { font-size: 0.82em; white-space: nowrap; opacity: 0.85; flex-shrink: 0; }
         .grid-sell-table th:nth-child(1), .grid-sell-table td:nth-child(1), .grid-buy-table th:nth-child(1), .grid-buy-table td:nth-child(1) { text-align: left; }
         .grid-sell-table th:nth-child(2), .grid-sell-table td:nth-child(2), .grid-buy-table th:nth-child(2), .grid-buy-table td:nth-child(2) { text-align: right; }
         .grid-sell-table th:nth-child(3), .grid-sell-table td:nth-child(3), .grid-buy-table th:nth-child(3), .grid-buy-table td:nth-child(3) { text-align: right; }
         .grid-sell-table th:nth-child(4), .grid-sell-table td:nth-child(4), .grid-buy-table th:nth-child(4), .grid-buy-table td:nth-child(4) { text-align: right; }
         .grid-sell-table th:nth-child(5), .grid-sell-table td:nth-child(5), .grid-buy-table th:nth-child(5), .grid-buy-table td:nth-child(5) { text-align: right; }
         .grid-sell-table th:nth-child(6), .grid-sell-table td:nth-child(6), .grid-buy-table th:nth-child(6), .grid-buy-table td:nth-child(6) { text-align: center; }
-        .grid-points-table th, .grid-points-table td, .profit-points-table th, .profit-points-table td { padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--ds-border, #2b3139); }
+        .profit-points-table th:nth-child(1), .profit-points-table td:nth-child(1) { text-align: left; }
+        .profit-points-table th:nth-child(2), .profit-points-table td:nth-child(2),
+        .profit-points-table th:nth-child(3), .profit-points-table td:nth-child(3),
+        .profit-points-table th:nth-child(4), .profit-points-table td:nth-child(4),
+        .profit-points-table th:nth-child(5), .profit-points-table td:nth-child(5) { text-align: right; }
+        .profit-points-table th:nth-child(6), .profit-points-table td:nth-child(6) { text-align: center; }
+        .grid-points-table th, .grid-points-table td, .profit-points-table th, .profit-points-table td { padding: 8px 12px; border-bottom: 1px solid var(--ds-border, #2b3139); }
         .grid-sell-table th, .grid-sell-table td, .grid-buy-table th, .grid-buy-table td { padding: 10px 14px; }
         .grid-points-table th, .profit-points-table th { color: var(--ds-text-secondary); font-weight: 500; }
         .cycle-pnls-list { max-height: 320px; overflow-y: auto; }
@@ -592,6 +649,7 @@
             <div class="grid-section-title grid-section-title first">Satış gridleri</div>
             <div style="overflow-x: auto;">
                 <table class="grid-points-table grid-sell-table" id="gridSellTable">
+                    <colgroup><col class="col-level"><col class="col-qty"><col class="col-trigger"><col class="col-peak"><col class="col-exec"><col class="col-status"></colgroup>
                     <thead><tr><th>Seviye</th><th>Miktar</th><th>Tetik fiyat</th><th>Tepe</th><th>Gerçekleşme fiyatı</th><th>Durum</th></tr></thead>
                     <tbody id="gridSellBody"></tbody>
                 </table>
@@ -600,6 +658,7 @@
             <p class="muted poll-note" style="font-size: 0.8rem; margin-bottom: 0.5rem;">Alım, fiyat <strong>Gerçekleşme fiyatı</strong>na (dip + trailing %) ulaşınca yapılır. Alış olmadıysa fiyat o seviyeye gelmemiştir veya bütçe/limit nedeniyle atlanmıştır.</p>
             <div style="overflow-x: auto;">
                 <table class="grid-points-table grid-buy-table" id="gridBuyTable">
+                    <colgroup><col class="col-level"><col class="col-qty"><col class="col-trigger"><col class="col-peak"><col class="col-exec"><col class="col-status"></colgroup>
                     <thead><tr><th>Seviye</th><th>Tutar</th><th>Tetik fiyat</th><th title="Tetik sonrası yakalanan en düşük fiyat">Dip</th><th title="Alış, piyasa fiyatı bu değere ulaştığında yapılır">Gerçekleşme fiyatı</th><th>Durum</th></tr></thead>
                     <tbody id="gridBuyBody"></tbody>
                 </table>
@@ -609,10 +668,10 @@
         <div class="panel" id="profitPointsPanel" style="display: none;">
             <h2>Kar alım satım noktaları</h2>
             <p class="muted poll-note" style="font-size: 0.85rem; margin-bottom: 1rem;">Kar alım satım noktaları ortalama maliyete göre hesaplanır. Her grid alış veya satışından sonra değişen maliyetle birlikte bu noktalar güncellenir.</p>
-            <p class="muted poll-note" style="font-size: 0.8rem; margin-bottom: 0.5rem;" id="profitAvgCostNote"></p>
             <div class="grid-section-title grid-section-title first">Kar noktaları</div>
             <div style="overflow-x: auto;">
                 <table class="grid-points-table profit-points-table" id="profitPointsTable">
+                    <colgroup><col class="col-type"><col class="col-avg"><col class="col-trigger"><col class="col-peak"><col class="col-exec"><col class="col-status"></colgroup>
                     <thead><tr><th>Tür</th><th>Ortalama maliyet</th><th>Tetik fiyat</th><th>Tepe / Dip</th><th>Gerçekleşme fiyatı</th><th>Durum</th></tr></thead>
                     <tbody id="profitPointsBody"></tbody>
                 </table>
@@ -677,10 +736,10 @@
 
         <div class="panel" id="engineLogPanel" style="display: none;">
             <h2>Bot Logları</h2>
-            <p class="muted poll-note" style="font-size: 0.85rem; margin-bottom: 0.75rem;">Tabloda son 500 kayıt gösterilir. Oturum arşivi sayfa açıldığından beri tüm işlem/uyarı/hata kayıtlarını tutar (Resetle arşivi silmez). Dışarı aktar ile .txt ve .json indirirsiniz.</p>
+            <p class="muted poll-note" style="font-size: 0.85rem; margin-bottom: 0.75rem;">Tabloda son 500 kayıt gösterilir. Dışarı aktar ile bütün log kayıtlarını .txt ve .json indirirsiniz.</p>
             <div class="engine-log-actions">
                 <button type="button" class="btn btn-sm btn-secondary" id="btnEngineLogExport" title="Bu oturumdaki tüm logları okunabilir dosya olarak indir">Dışarı aktar</button>
-                <button type="button" class="btn btn-sm btn-secondary" id="btnEngineLogReset" title="Banner, yanıp sönme ve tekrarlayan bağlantı loglarını sıfırla">Resetle</button>
+                <button type="button" class="btn btn-sm btn-secondary" id="btnEngineLogReset" title="Uyarı/kritik yanıp sönme ve log kayıtlarını sıfırla">Resetle</button>
             </div>
             <div id="engineLogList" style="max-height: 420px; overflow: auto; font-family: monospace; font-size: 0.8rem; border: 1px solid var(--ds-border, #2b3139); border-radius: 8px; padding: 0.5rem;"></div>
         </div>
@@ -744,9 +803,9 @@
     <script src="/ui/assets/core/apiClient.js?v=refactor1"></script>
     <script src="/ui/assets/utils/gridTrailEnvelope.js?v=2"></script>
     <script src="/ui/assets/utils/engineLogArchive.js?v=1"></script>
-    <script src="/ui/assets/utils/engineLogFormat.js?v=29"></script>
-    <script src="/ui/assets/utils/botHealthAlerts.js?v=18"></script>
-    <script src="/ui/assets/utils/engineLogLive.js?v=11"></script>
+    <script src="/ui/assets/utils/engineLogFormat.js?v=35"></script>
+    <script src="/ui/assets/utils/botHealthAlerts.js?v=20"></script>
+    <script src="/ui/assets/utils/engineLogLive.js?v=12"></script>
     <script src="/ui/vendor/lightweight-charts.standalone.production.js"></script>
     <script src="/ui/assets/perf_chart_tv.js?v=1"></script>
     <script>
@@ -774,7 +833,7 @@
         var stopDeleteModalConfirm = document.getElementById('stopDeleteModalConfirm');
         var stopDeleteConvertDetail = document.getElementById('stopDeleteConvertDetail');
         var lastBotDetail = { symbol: '', baseBalance: 0, quoteAsset: 'USDT' };
-        var STRUCTURE_NAMES = { trailing_dca: 'Trailing DCA Bot', trdca_pro: 'TRDCA Pro+ (Trailing Rebalancing DCA)', multi_asset_rebalance: 'Multi-Asset Rebalance Bot' };
+        var STRUCTURE_NAMES = { trailing_dca: 'Trailing DCA Bot', multi_asset_rebalance: 'Multi-Asset Rebalance Bot' };
         var configGrid = document.getElementById('configGrid');
         var btnParametreler = document.getElementById('btnParametreler');
         var statePanel = document.getElementById('statePanel');
@@ -784,7 +843,6 @@
         var gridBuyBody = document.getElementById('gridBuyBody');
         var profitPointsPanel = document.getElementById('profitPointsPanel');
         var profitPointsBody = document.getElementById('profitPointsBody');
-        var profitAvgCostNote = document.getElementById('profitAvgCostNote');
         var tradesPanel = document.getElementById('tradesPanel');
         var cycleTradesList = document.getElementById('cycleTradesList');
         var perfPanel = document.getElementById('perfPanel');
@@ -863,13 +921,7 @@
         function getMultiBotCoinsFromConfig(cfg) {
             if (!cfg) return [];
             var coins = [];
-            var quoteKey = (cfg.quote_asset || 'USDT').toUpperCase();
-            if (cfg.strategy_id === 'trdca_pro' && cfg.trb && cfg.trb.target_weights_all) {
-                Object.keys(cfg.trb.target_weights_all).forEach(function (k) {
-                    var s = (k || '').toUpperCase().replace(/USDT$|FDUSD$|BUSD$/i, '').trim();
-                    if (s && s !== quoteKey && s !== 'USDT' && coins.indexOf(s) < 0) coins.push(s);
-                });
-            } else if (cfg.strategy_id === 'multi_asset_rebalance') {
+            if (cfg.strategy_id === 'multi_asset_rebalance') {
                 if (Array.isArray(cfg.assets)) {
                     cfg.assets.forEach(function (a) {
                         var s = (a.symbol || '').toUpperCase().replace(/USDT$|FDUSD$|BUSD$/i, '');
@@ -883,7 +935,7 @@
                     });
                 }
             }
-            if (coins.length === 0 && cfg.strategy_id !== 'trdca_pro' && (cfg.dca && cfg.dca.coin_weights)) {
+            if (coins.length === 0 && (cfg.dca && cfg.dca.coin_weights)) {
                 Object.keys(cfg.dca.coin_weights).forEach(function (k) {
                     var s = (k || '').toUpperCase();
                     if (s && s !== 'USDT' && coins.indexOf(s) < 0) coins.push(s);
@@ -942,80 +994,7 @@
             var strategyId = (cfg.strategy_id || '').toLowerCase();
             var html = '';
 
-            if (strategyId === 'trdca_pro') {
-                var quoteAsset = (cfg.quote_asset || 'USDT').toUpperCase();
-                var budget = cfg.initial_capital_usdt != null ? cfg.initial_capital_usdt : (cfg.bot_budget_usdt != null ? cfg.bot_budget_usdt : 0);
-                html += '<div class="param-block"><div class="param-block-title">Genel</div>';
-                html += row('Sembol', symbol || cfg.symbol || 'MULTI');
-                html += row('Quote varlık', quoteAsset);
-                html += row('Bütçe (' + quoteAsset + ')', budget > 0 ? fmtUsd(budget) : '—');
-                html += '</div>';
-
-                var trb = cfg.trb || {};
-                var targetAll = trb.target_weights_all || {};
-                var quoteKey = quoteAsset;
-                var rebalCoins = [];
-                Object.keys(targetAll).forEach(function(k) {
-                    if (k && k.toUpperCase() !== quoteKey) rebalCoins.push({ sym: k.toUpperCase(), pct: (targetAll[k] || 0) * 100 });
-                });
-                html += '<div class="param-block"><div class="param-block-title">Rebalancing (hedef ağırlıklar)</div>';
-                if (rebalCoins.length) {
-                    html += '<table class="param-table"><thead><tr><th>Coin</th><th class="num">Hedef %</th></tr></thead><tbody>';
-                    rebalCoins.forEach(function(c) { html += '<tr><td>' + c.sym + '</td><td class="num">' + (c.pct != null ? c.pct.toFixed(1) : '—') + '%</td></tr>'; });
-                    var quotePct = (targetAll[quoteKey] || 0) * 100;
-                    if (quotePct > 0) html += '<tr><td>' + quoteKey + '</td><td class="num">' + quotePct.toFixed(1) + '%</td></tr>';
-                    html += '</tbody></table>';
-                } else {
-                    html += '<p class="param-hint">Tanımlı değil.</p>';
-                }
-                html += row('Gap arm %', trb.gap_arm_pct != null ? trb.gap_arm_pct + '%' : '—');
-                html += row('Trail back %', trb.trail_back_pct != null ? trb.trail_back_pct + '%' : '—');
-                html += row('Min işlem tutarı (USD)', trb.min_leg_notional_usdt != null ? fmtUsd(trb.min_leg_notional_usdt) : '—');
-                html += row('Max batch legs', trb.max_batch_legs != null ? trb.max_batch_legs : '—');
-                html += '</div>';
-
-                var dca = cfg.dca || {};
-                var upLevels = dca.grid_up_levels_pct || [];
-                var upNotional = dca.grid_up_notional_usdt || [];
-                var downLevels = dca.grid_down_levels_pct || [];
-                var downNotional = dca.grid_down_notional_usdt || [];
-                html += '<div class="param-block"><div class="param-block-title">DCA Satış gridi</div>';
-                html += row('Seviye sayısı', upLevels.length || 0);
-                html += row('Trailing % (tetik sonrası gerçekleşme)', dca.sell_trail_back_pct != null ? dca.sell_trail_back_pct + '%' : '—');
-                if (upLevels.length) {
-                    html += '<table class="param-table"><thead><tr><th>Seviye</th><th class="num">Tetik %</th><th class="num">Satım tutarı (USD)</th></tr></thead><tbody>';
-                    for (var i = 0; i < upLevels.length; i++) {
-                        html += '<tr><td>#' + (i + 1) + '</td><td class="num">' + (upLevels[i] != null ? upLevels[i] : '—') + '%</td><td class="num">' + (upNotional[i] != null ? fmtUsd(upNotional[i]) : '—') + '</td></tr>';
-                    }
-                    html += '</tbody></table>';
-                }
-                html += '</div>';
-
-                html += '<div class="param-block"><div class="param-block-title">DCA Alım gridi</div>';
-                html += row('Seviye sayısı', downLevels.length || 0);
-                html += row('Trailing % (tetik sonrası gerçekleşme)', dca.buy_trail_up_pct != null ? dca.buy_trail_up_pct + '%' : '—');
-                html += row('Alım buffer %', dca.buy_buffer_pct != null ? dca.buy_buffer_pct + '%' : '—');
-                if (downLevels.length) {
-                    html += '<table class="param-table"><thead><tr><th>Seviye</th><th class="num">Tetik %</th><th class="num">Alım tutarı (USD)</th></tr></thead><tbody>';
-                    for (var j = 0; j < downLevels.length; j++) {
-                        html += '<tr><td>#' + (j + 1) + '</td><td class="num">' + (downLevels[j] != null ? downLevels[j] : '—') + '%</td><td class="num">' + (downNotional[j] != null ? fmtUsd(downNotional[j]) : '—') + '</td></tr>';
-                    }
-                    html += '</tbody></table>';
-                }
-                html += '</div>';
-
-                var postSell = dca.post_sell || {};
-                var postBuy = dca.post_buy || {};
-                html += '<div class="param-block"><div class="param-block-title">Kar alım / kar satış</div>';
-                html += row('Kar alım tetik %', postSell.dip_trigger_pct != null ? postSell.dip_trigger_pct + '%' : '—');
-                html += row('Kar alım trailing %', postSell.dip_trail_up_pct != null ? postSell.dip_trail_up_pct + '%' : '—');
-                html += row('Kar alım tutarı (USD)', postSell.dip_buy_notional_usdt != null ? fmtUsd(postSell.dip_buy_notional_usdt) : '—');
-                html += row('Kar satış tetik %', postBuy.profit_trigger_pct != null ? postBuy.profit_trigger_pct + '%' : '—');
-                html += row('Kar satış trailing %', postBuy.profit_sell_trail_back_pct != null ? postBuy.profit_sell_trail_back_pct + '%' : '—');
-                html += row('Kar satış tutarı (USD)', postBuy.profit_sell_notional_usdt != null ? fmtUsd(postBuy.profit_sell_notional_usdt) : '—');
-                html += '<p class="param-hint">Kar alım: satış sonrası fiyat düşünce tekrar alım. Kar satış: alım sonrası fiyat yükselince kar realizasyonu.</p>';
-                html += '</div>';
-            } else if (strategyId === 'multi_asset_rebalance') {
+            if (strategyId === 'multi_asset_rebalance') {
                 html += '<div class="param-block"><div class="param-block-title">Genel</div>';
                 html += row('Sembol', symbol || cfg.symbol || 'MULTI');
                 html += row('Bütçe (USD)', cfg.budget_usdt != null ? fmtUsd(cfg.budget_usdt) : (cfg.budget_usd != null ? fmtUsd(cfg.budget_usd) : '—'));
@@ -1157,6 +1136,7 @@
             apiClient: window.apiClient,
             state: { events: [], lastId: 0 },
             getHealthData: function () { return window._lastHealthData || null; },
+            isBotRunning: isBotRunning,
             onAfterRender: onEngineEventsForHealth,
             onPollError: function (failCount) {
                 if (typeof fetchBotHealth === 'function') fetchBotHealth();
@@ -1200,6 +1180,29 @@
             if (refPrice == null || refPrice <= 0 || livePrice == null || livePrice <= 0) return '';
             var pct = (Number(livePrice) - Number(refPrice)) / Number(refPrice) * 100;
             return ' · ' + (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%';
+        }
+        function formatPctFromBase(cellPrice, basePrice) {
+            if (cellPrice == null || isNaN(cellPrice) || Number(cellPrice) <= 0 || basePrice == null || isNaN(basePrice) || Number(basePrice) <= 0) return '';
+            var pct = (Number(cellPrice) - Number(basePrice)) / Number(basePrice) * 100;
+            return '<span class="grid-price-pct muted">' + (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%</span>';
+        }
+        function gridPlainPriceHtml(priceVal, decimals) {
+            decimals = decimals != null ? decimals : 4;
+            if (priceVal == null || isNaN(priceVal)) return '—';
+            return fmtNum(priceVal, decimals);
+        }
+        function gridTepeDipCellHtml(priceVal, refPrice, decimals) {
+            decimals = decimals != null ? decimals : 4;
+            if (priceVal == null || isNaN(priceVal)) return '—';
+            return '<span class="grid-tepe-dip-cell"><span class="grid-price-val">' + fmtNum(priceVal, decimals) + '</span>' +
+                formatPctFromBase(priceVal, refPrice) + '</span>';
+        }
+        function profitRowAvgCost(p, avgBuyGrid, avgSellGrid) {
+            if (p.average_cost != null && !isNaN(p.average_cost)) return Number(p.average_cost);
+            if (p.type === 'reentry') {
+                return avgSellGrid != null && !isNaN(avgSellGrid) ? Number(avgSellGrid) : null;
+            }
+            return avgBuyGrid != null && !isNaN(avgBuyGrid) ? Number(avgBuyGrid) : null;
         }
         function gridTrailPct(side, cfg) {
             cfg = cfg || {};
@@ -1282,14 +1285,14 @@
                 if (p.qty_pct != null && !isNaN(p.qty_pct)) level += ' %' + Number(p.qty_pct);
                 var statusText = p.fired ? 'Tamamlandı' : ((p.anchor != null || (p.trigger_hit_price != null)) ? 'Tetiklendi' : 'Bekliyor');
                 var statusClass = p.fired ? 'grid-status-tamamlandi' : ((p.anchor != null || (p.trigger_hit_price != null)) ? 'grid-status-tetiklendi' : 'grid-status-bekliyor');
-                var trigger = (p.trigger_price != null && !isNaN(p.trigger_price)) ? fmtNum(p.trigger_price, 4) : '—';
+                var trigger = gridPlainPriceHtml(p.trigger_price, 4);
                 var liveTrailS = window.GridTrailEnvelope
                     ? window.GridTrailEnvelope.trailDisplayFromEnvelope(p, 'sell', sellTrailPct)
                     : { anchor: p.anchor, exec: p.execution_price };
                 var anchorVal = liveTrailS.anchor != null ? liveTrailS.anchor : p.anchor;
                 var execVal = liveTrailS.exec != null ? liveTrailS.exec : p.execution_price;
-                var anchor = anchorVal != null ? fmtNum(anchorVal, 4) : '—';
-                var exec = execVal != null ? fmtNum(execVal, 4) : '—';
+                var anchor = gridTepeDipCellHtml(anchorVal, refD, 4);
+                var exec = gridPlainPriceHtml(execVal, 4);
                 var miktar = '—';
                 if (p.planned_base_qty != null && !isNaN(p.planned_base_qty) && p.planned_base_qty > 0) {
                     miktar = fmtBaseCompact(Number(p.planned_base_qty)) + (baseAsset ? ' ' + baseAsset : '');
@@ -1318,14 +1321,14 @@
                 if (p.qty_pct != null && !isNaN(p.qty_pct)) level += ' %' + Number(p.qty_pct);
                 var statusText = p.fired ? 'Tamamlandı' : ((p.anchor != null || (p.trigger_hit_price != null)) ? 'Tetiklendi' : 'Bekliyor');
                 var statusClass = p.fired ? 'grid-status-tamamlandi' : ((p.anchor != null || (p.trigger_hit_price != null)) ? 'grid-status-tetiklendi' : 'grid-status-bekliyor');
-                var trigger = (p.trigger_price != null && !isNaN(p.trigger_price)) ? fmtNum(p.trigger_price, 4) : '—';
+                var trigger = gridPlainPriceHtml(p.trigger_price, 4);
                 var liveTrailB = window.GridTrailEnvelope
                     ? window.GridTrailEnvelope.trailDisplayFromEnvelope(p, 'buy', buyTrailPct)
                     : { anchor: p.anchor, exec: p.execution_price };
                 var anchorValB = liveTrailB.anchor != null ? liveTrailB.anchor : p.anchor;
                 var execValB = liveTrailB.exec != null ? liveTrailB.exec : p.execution_price;
-                var anchor = anchorValB != null ? fmtNum(anchorValB, 4) : '—';
-                var exec = execValB != null ? fmtNum(execValB, 4) : '—';
+                var anchor = gridTepeDipCellHtml(anchorValB, refD, 4);
+                var exec = gridPlainPriceHtml(execValB, 4);
                 var tutar = '—';
                 if (p.qty_pct != null && !isNaN(p.qty_pct)) {
                     if (quoteBal > 0) {
@@ -1354,7 +1357,6 @@
             var buyHist = st.buy_history || [];
             var cfg = data.config || {};
             function gridHistPrice(x) {
-                if (x.execution_price != null && !isNaN(Number(x.execution_price))) return Number(x.execution_price);
                 return Number(x.price) || 0;
             }
             function avgFromHist(hist, gridOnly) {
@@ -1369,9 +1371,6 @@
             var avgSellGrid = gm.avg_sell_grid != null ? String(gm.avg_sell_grid) : avgFromHist(sellHist, true);
             var avgBuyGrid = gm.avg_buy_grid != null ? String(gm.avg_buy_grid) : avgFromHist(buyHist, true);
             profitPointsPanel.style.display = 'block';
-            if (profitAvgCostNote) {
-                profitAvgCostNote.textContent = (avgSellGrid != null || avgBuyGrid != null) ? ('Ortalama maliyet (sadece grid): Satış bazı ' + (avgSellGrid || '—') + ', Alım bazı ' + (avgBuyGrid || '—') + '.') : '';
-            }
             var pr = cfg.profit || {};
             var profitExitPctConfig = cfg.profit_exit_rise_pct != null ? cfg.profit_exit_rise_pct : pr.resell_trigger_pct;
             var reentryPctConfig = cfg.profit_reentry_drop_pct != null ? cfg.profit_reentry_drop_pct : pr.rebuy_trigger_pct;
@@ -1395,40 +1394,30 @@
                 var karPctVal = (p.profit_pct != null && !isNaN(p.profit_pct)) ? Number(p.profit_pct) : (configPct != null && !isNaN(configPct) ? configPct : null);
                 var karPct = karPctVal != null ? ((p.type === 'reentry' ? '-' : '+') + karPctVal + '%') : '';
                 var labelCell = typ + (karPct ? ' <span class="muted" style="font-size:0.85em">' + karPct + '</span>' : '');
-                var triggerStr = (p.trigger_price != null && !isNaN(p.trigger_price)) ? fmtNum(p.trigger_price, 4) : '—';
-                var avgCostStr = (p.average_cost != null && !isNaN(p.average_cost)) ? fmtNum(p.average_cost, 4) : (p.type === 'profit_exit' && avgBuyGrid ? fmtNum(avgBuyGrid, 4) : (p.type === 'reentry' && avgSellGrid ? fmtNum(avgSellGrid, 4) : '—'));
-                var tepeDipLabel = p.type === 'reentry' ? 'Dip' : 'Tepe';
-                var tepeDipVal = '—';
+                var triggerStr = gridPlainPriceHtml(p.trigger_price, 4);
+                var avgBase = profitRowAvgCost(p, avgBuyGrid, avgSellGrid);
+                var avgCostStr = avgBase != null ? fmtNum(avgBase, 4) : '—';
+                var tepeDipNum = null;
+                var execNum = null;
                 if (p.trigger_hit) {
                     if (p.type === 'reentry' && p.dip != null) {
                         var liveD = window.GridTrailEnvelope
                             ? window.GridTrailEnvelope.profitTrailDisplay(p, 'buy', buyTrailPctProfit)
                             : { anchor: p.dip, exec: p.execution_price };
-                        tepeDipVal = liveD.anchor != null ? fmtNum(liveD.anchor, 4) : fmtNum(p.dip, 4);
+                        tepeDipNum = liveD.anchor != null ? liveD.anchor : p.dip;
+                        execNum = liveD.exec != null ? liveD.exec : p.execution_price;
                     } else if (p.type !== 'reentry' && p.tepe != null) {
                         var liveT = window.GridTrailEnvelope
                             ? window.GridTrailEnvelope.profitTrailDisplay(p, 'sell', sellTrailPctProfit)
                             : { anchor: p.tepe, exec: p.execution_price };
-                        tepeDipVal = liveT.anchor != null ? fmtNum(liveT.anchor, 4) : fmtNum(p.tepe, 4);
-                    }
-                }
-                var tepeDipStr = tepeDipLabel + ': ' + tepeDipVal;
-                var execStr = '—';
-                if (p.trigger_hit) {
-                    if (p.type === 'reentry' && p.dip != null) {
-                        var liveExecD = window.GridTrailEnvelope
-                            ? window.GridTrailEnvelope.profitTrailDisplay(p, 'buy', buyTrailPctProfit)
-                            : { anchor: p.dip, exec: p.execution_price };
-                        execStr = liveExecD.exec != null ? fmtNum(liveExecD.exec, 4) : ((p.execution_price != null && !isNaN(p.execution_price)) ? fmtNum(p.execution_price, 4) : '—');
-                    } else if (p.type !== 'reentry' && p.tepe != null) {
-                        var liveExecT = window.GridTrailEnvelope
-                            ? window.GridTrailEnvelope.profitTrailDisplay(p, 'sell', sellTrailPctProfit)
-                            : { anchor: p.tepe, exec: p.execution_price };
-                        execStr = liveExecT.exec != null ? fmtNum(liveExecT.exec, 4) : ((p.execution_price != null && !isNaN(p.execution_price)) ? fmtNum(p.execution_price, 4) : '—');
+                        tepeDipNum = liveT.anchor != null ? liveT.anchor : p.tepe;
+                        execNum = liveT.exec != null ? liveT.exec : p.execution_price;
                     } else if (p.execution_price != null && !isNaN(p.execution_price)) {
-                        execStr = fmtNum(p.execution_price, 4);
+                        execNum = p.execution_price;
                     }
                 }
+                var tepeDipStr = gridTepeDipCellHtml(tepeDipNum, avgBase, 4);
+                var execStr = gridPlainPriceHtml(execNum, 4);
                 var statusKey = (p.status || '').toLowerCase();
                 var statusText = statusKey === 'tamamlandi' ? 'Tamamlandı' : (statusKey === 'tetiklendi' ? 'Tetiklendi' : 'Bekliyor');
                 var statusClass = statusKey === 'tamamlandi' ? 'grid-status-tamamlandi' : (statusKey === 'tetiklendi' ? 'grid-status-tetiklendi' : 'grid-status-bekliyor');
@@ -1533,7 +1522,7 @@
             setError(null);
             var symbol = (data.symbol || '?').toString().toUpperCase();
             var cfg = data.config || {};
-            if (symbol !== 'MULTI' && cfg.strategy_id !== 'multi_asset_rebalance' && cfg.strategy_id !== 'trdca_pro') {
+            if (symbol !== 'MULTI' && cfg.strategy_id !== 'multi_asset_rebalance') {
                 var q = accountCode ? 'account_code=' + encodeURIComponent(accountCode) : 'account_id=' + (accountId || '');
                 window.location.replace('/ui/bot.html?bot_id=' + botId + '&' + q);
                 return;
@@ -1581,7 +1570,7 @@
             statePanel.style.display = 'block';
             var cfgForType = data.config || {};
             var structureId = (cfgForType.strategy_id || cfgForType.structure_id || cfgForType.bot_type || '').toLowerCase().replace(/\s+/g, '_');
-            var botTypeName = STRUCTURE_NAMES[structureId] || 'TRDCA Pro+ / Multi-Asset Bot';
+            var botTypeName = STRUCTURE_NAMES[structureId] || 'Multi-Asset Bot';
             var botTypeHeaderEl = document.getElementById('botTypeHeader');
             var botTypeHeaderNameEl = document.getElementById('botTypeHeaderName');
             if (botTypeHeaderEl && botTypeHeaderNameEl) {
@@ -2258,6 +2247,11 @@
                     .then(function () {
                         try {
                             sessionStorage.removeItem('financeBotsTable_' + (accountId || ''));
+                            sessionStorage.setItem('tt_wallet_refresh_after_bot', JSON.stringify({
+                                accountId: accountId,
+                                at: Date.now(),
+                                convert: !!convert
+                            }));
                         } catch (e) {}
                         if (window.Toast) window.Toast.success('Bot sonlandırıldı ve silindi');
                         window.location.href = backLink.href;
@@ -2274,7 +2268,7 @@
 
         if (!botId) {
             setError('Geçersiz sayfa. Lütfen dashboard üzerinden bot detayına gidin.');
-            if (typeof pageTitle !== 'undefined' && pageTitle) pageTitle.textContent = 'TRDCA Pro+ / Multi-Asset Bot';
+            if (typeof pageTitle !== 'undefined' && pageTitle) pageTitle.textContent = 'Multi-Asset Bot';
             if (typeof pageInfo !== 'undefined' && pageInfo) pageInfo.textContent = 'Bot ID bulunamadı.';
             return;
         }

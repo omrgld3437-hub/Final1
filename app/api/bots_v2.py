@@ -16,7 +16,7 @@ from app.bot.models_v2 import (
 )
 from app.bot.worker_v2 import get_worker
 from app.db.models import Account
-from app.services.encryption import decrypt_key
+from app.services.encryption import decrypt_account_api_key, decrypt_account_api_secret
 from app.services import audit as audit_svc
 from app.api.auth import require_auth, get_account_or_403, get_client_ip
 from app.bot.binance_adapter_v2 import BinanceSpotAdapterV2
@@ -62,8 +62,8 @@ async def create_bot_v2(
     if request_body.ref_price_mode == "market_now" or not ref_price:
         # Create adapter to get price
         if request_body.mode == "live":
-            api_key = decrypt_key(account.api_key_enc)
-            api_secret = decrypt_key(account.api_secret_enc)
+            api_key = decrypt_account_api_key(account.id, account.api_key_enc)
+            api_secret = decrypt_account_api_secret(account.id, account.api_secret_enc)
             adapter = BinanceSpotAdapterV2(request_body.account_id, "live", api_key, api_secret)
         else:
             adapter = BinanceSpotAdapterV2(request_body.account_id, "paper")

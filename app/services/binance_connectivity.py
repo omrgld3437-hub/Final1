@@ -10,7 +10,7 @@ import logging
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -28,6 +28,14 @@ _lock = threading.Lock()
 _by_account: Dict[int, Dict[str, Any]] = {}
 _last_emit_by_bot: Dict[int, float] = {}
 _last_probe_by_bot: Dict[int, float] = {}
+_last_auto_resume_by_account: Dict[int, float] = {}
+
+_AUTO_RESUME_THROTTLE_SEC = 45.0
+_AUTO_RESUME_ERROR_CODES = frozenset({
+    "API_UNAUTHORIZED",
+    "BINANCE_UNREACHABLE",
+    "BINANCE_RATE_LIMIT",
+})
 
 
 def _fail_path(account_id: int) -> Path:
@@ -113,13 +121,195 @@ def note_binance_failure(
         _emit_bot_events_async(aid, code, msg, source)
 
 
-def note_binance_success(account_id: int) -> None:
+def note_binance_success(account_id: int, *, schedule_resume: bool = True) -> None:
     if not account_id:
         return
     aid = int(account_id)
     with _lock:
         _by_account.pop(aid, None)
     _clear_persisted_failure(aid)
+    if schedule_resume:
+        _schedule_auto_resume_after_success(aid)
+
+
+def _schedule_auto_resume_after_success(account_id: int) -> None:
+    """Bağlantı düzelince paused_error (API) botlarını worker START komutu ile devam ettir."""
+    now = time.time()
+    with _lock:
+        if now - _last_auto_resume_by_account.get(account_id, 0.0) < _AUTO_RESUME_THROTTLE_SEC:
+            return
+        _last_auto_resume_by_account[account_id] = now
+
+    def _run() -> None:
+        try:
+            from app.db.session import SessionLocal
+
+            db = SessionLocal()
+            try:
+                n = try_auto_resume_paused_bots(db, account_id)
+                if n:
+                    logger.info(
+                        "connectivity auto-resume account_id=%s resumed=%s",
+                        account_id,
+                        n,
+                    )
+            finally:
+                db.close()
+        except Exception as e:
+            logger.warning("connectivity auto-resume account_id=%s: %s", account_id, e)
+
+    threading.Thread(
+        target=_run,
+        daemon=True,
+        name=f"binance-auto-resume-{account_id}",
+    ).start()
+
+
+def _connectivity_resume_reason(state: Dict[str, Any], previous_error: str) -> Tuple[str, Dict[str, Any]]:
+    """API düzelince bot logunda gösterilecek kısa açıklama."""
+    buy_triggers = state.get("buy_grid_trigger_price") or []
+    sell_triggers = state.get("sell_grid_trigger_price") or []
+    active_buy = [i + 1 for i, t in enumerate(buy_triggers) if t is not None]
+    active_sell = [i + 1 for i, t in enumerate(sell_triggers) if t is not None]
+    cycle_id = int(state.get("cycle_id") or 1)
+    ctx: Dict[str, Any] = {
+        "cycle_id": cycle_id,
+        "active_buy_grids": active_buy,
+        "active_sell_grids": active_sell,
+        "mode": state.get("mode"),
+        "previous_error": previous_error,
+    }
+    parts: List[str] = []
+    if previous_error == "API_UNAUTHORIZED":
+        parts.append("Binance API/IP kesintisi giderildi.")
+    elif previous_error:
+        parts.append(f"Önceki hata: {previous_error}.")
+    if active_buy:
+        grids = ", ".join(str(g) for g in active_buy)
+        parts.append(
+            f"Kesinti öncesi alt alım grid tetikteydi (seviye {grids}). "
+            "Bağlantı dönünce fiyat tetik üstüne çıkmış olabilir; bir sonraki tick'te grid yeniden değerlendirilir "
+            f"(Tur {cycle_id} aynı kalır, yeni tur açılmaz)."
+        )
+    elif active_sell:
+        grids = ", ".join(str(g) for g in active_sell)
+        parts.append(
+            f"Kesinti öncesi üst satış grid tetikteydi (seviye {grids}); "
+            f"Tur {cycle_id} devam edecek, kopma sonrası grid değerlendirmesi yapılır."
+        )
+    else:
+        parts.append(
+            f"Tur {cycle_id} ve grid durumu korunur; kopma sonrası değerlendirme bir sonraki tick'te yazılır."
+        )
+    return " ".join(parts), ctx
+
+
+def try_auto_resume_paused_bots(db: "Session", account_id: int) -> int:
+    """
+    Binance erişimi düzeldiğinde API_UNAUTHORIZED vb. ile durmuş botları running + START komutu.
+    """
+    from datetime import datetime, timezone
+
+    from app.db.models import Bot
+    from app.botengine.state_store import append_event, load_state, save_state
+
+    if not account_id:
+        return 0
+    aid = int(account_id)
+    bots = (
+        db.query(Bot)
+        .filter(Bot.account_id == aid, Bot.status == "paused_error")
+        .all()
+    )
+    if not bots:
+        return 0
+    resumed = 0
+    for bot in bots:
+        state = load_state(db, bot.id) or {}
+        err = (state.get("last_error_code") or "").strip()
+        if err not in _AUTO_RESUME_ERROR_CODES:
+            continue
+        last_ar = float(state.get("_connectivity_auto_resume_at") or 0)
+        if time.time() - last_ar < 90.0:
+            continue
+        if _recent_connectivity_recovered(db, bot.id):
+            continue
+        state.pop("last_error_code", None)
+        state.pop("health_error_since", None)
+        state.pop("backoff_until", None)
+        state["_connectivity_auto_resume_at"] = time.time()
+        resume_reason, grid_ctx = _connectivity_resume_reason(state, err)
+        state["_connectivity_resume_reason"] = resume_reason
+        save_state(db, bot.id, aid, state)
+        bot.status = "running"
+        if not getattr(bot, "started_at", None):
+            bot.started_at = datetime.now(timezone.utc)
+        db.commit()
+        conn_meta: Dict[str, Any] = {
+            "error_code": "CONNECTIVITY_RECOVERED",
+            "previous_error": err,
+            "connectivity_resume": True,
+            "resume_reason": resume_reason,
+            "cycle_id": grid_ctx.get("cycle_id"),
+            "active_buy_grids": grid_ctx.get("active_buy_grids"),
+            "active_sell_grids": grid_ctx.get("active_sell_grids"),
+            "symbol": state.get("symbol") or getattr(bot, "symbol", None),
+            "base_balance": round(float(state.get("base_balance") or 0), 10),
+            "quote_balance": round(float(state.get("quote_balance") or 0), 2),
+            "initial_allocation_done": bool(state.get("initial_allocation_done")),
+        }
+        cse = float(state.get("cycle_start_equity") or 0)
+        if cse > 0:
+            conn_meta["cycle_start_equity"] = round(cse, 2)
+        append_event(
+            db,
+            bot.id,
+            aid,
+            "INFO",
+            f"Tur {int(grid_ctx.get('cycle_id') or state.get('cycle_id') or 1)} tekrar aktif edildi — bot sorunsuz çalışmaya devam ediyor.",
+            conn_meta,
+        )
+        try:
+            from app.api.bots_engine import _insert_engine_command
+
+            start_payload = json.dumps(
+                {
+                    "connectivity_resume": True,
+                    "resume_reason": resume_reason,
+                    "cycle_id": grid_ctx.get("cycle_id"),
+                },
+                ensure_ascii=False,
+            )
+            _insert_engine_command(db, aid, bot.id, "START", payload_json=start_payload)
+        except Exception as cmd_ex:
+            logger.warning(
+                "connectivity auto-resume START cmd bot_id=%s: %s",
+                bot.id,
+                cmd_ex,
+            )
+        resumed += 1
+    return resumed
+
+
+async def run_connectivity_auto_resume_pass(db: "Session") -> int:
+    """Worker: paused_error hesaplarında probe OK ise otomatik devam."""
+    from app.db.models import Bot
+
+    rows = (
+        db.query(Bot.account_id)
+        .filter(Bot.status == "paused_error")
+        .distinct()
+        .all()
+    )
+    total = 0
+    for (aid,) in rows:
+        if not aid:
+            continue
+        ok, _, _ = await probe_account_binance(int(aid), db)
+        if ok:
+            note_binance_success(int(aid), schedule_resume=False)
+            total += try_auto_resume_paused_bots(db, int(aid))
+    return total
 
 
 def active_failure(account_id: int) -> Optional[Dict[str, Any]]:
@@ -141,6 +331,94 @@ def active_failure(account_id: int) -> Optional[Dict[str, Any]]:
     return dict(rec)
 
 
+def _recent_connectivity_pause_info(db: "Session", bot_id: int, within_sec: float = 300.0) -> bool:
+    """True if Tur beklemeye alındı INFO was logged recently."""
+    try:
+        from app.botengine.state_store import list_events
+
+        cutoff = time.time() - within_sec
+        for ev in list_events(db, bot_id, limit=40):
+            if (ev.get("type") or "") != "INFO":
+                continue
+            meta = ev.get("meta") or {}
+            if (meta.get("error_code") or "").strip() != "CONNECTIVITY_PAUSED":
+                continue
+            ts = ev.get("ts")
+            if not ts:
+                continue
+            try:
+                from datetime import datetime, timezone
+
+                t = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+                if t.tzinfo is None:
+                    t = t.replace(tzinfo=timezone.utc)
+                if t.timestamp() >= cutoff:
+                    return True
+            except Exception:
+                return True
+        return False
+    except Exception:
+        return False
+
+
+def _recent_connectivity_recovered(db: "Session", bot_id: int, within_sec: float = 120.0) -> bool:
+    try:
+        from app.botengine.state_store import list_events
+
+        cutoff = time.time() - within_sec
+        for ev in list_events(db, bot_id, limit=20):
+            if (ev.get("type") or "") != "INFO":
+                continue
+            meta = ev.get("meta") or {}
+            if (meta.get("error_code") or "").strip() != "CONNECTIVITY_RECOVERED":
+                continue
+            ts = ev.get("ts")
+            if not ts:
+                return True
+            try:
+                from datetime import datetime, timezone
+
+                t = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+                if t.tzinfo is None:
+                    t = t.replace(tzinfo=timezone.utc)
+                if t.timestamp() >= cutoff:
+                    return True
+            except Exception:
+                return True
+        return False
+    except Exception:
+        return False
+
+
+def emit_tur_connectivity_paused_info(
+    db: "Session",
+    bot_id: int,
+    account_id: int,
+    upstream_error: str = "",
+) -> bool:
+    """Engine log: Tur X beklemeye alındı (Bilgi) — uyarılardan önce yazılır."""
+    from app.botengine.state_store import append_event, load_state
+
+    if _recent_connectivity_pause_info(db, bot_id):
+        return False
+    state = load_state(db, bot_id) or {}
+    cycle_id = int(state.get("cycle_id") or 1)
+    append_event(
+        db,
+        bot_id,
+        account_id,
+        "INFO",
+        f"Tur {cycle_id} beklemeye alındı. Bağlantı yok",
+        {
+            "error_code": "CONNECTIVITY_PAUSED",
+            "connectivity_pause": True,
+            "cycle_id": cycle_id,
+            "upstream_error": (upstream_error or "BINANCE_UNREACHABLE").strip(),
+        },
+    )
+    return True
+
+
 def _recent_connectivity_event(db: "Session", bot_id: int, error_code: str, within_sec: float = 300.0) -> bool:
     """True if same connectivity error was logged recently (avoid log spam)."""
     try:
@@ -152,7 +430,8 @@ def _recent_connectivity_event(db: "Session", bot_id: int, error_code: str, with
             if (ev.get("type") or "") not in ("ERROR", "HEALTH_CRITICAL", "HEALTH_WARN"):
                 continue
             meta = ev.get("meta") or {}
-            if (meta.get("error_code") or "").strip() != code:
+            ec = (meta.get("error_code") or meta.get("health_code") or "").strip()
+            if ec not in (code, "CONNECTIVITY_LOST"):
                 continue
             ts = ev.get("ts")
             if not ts:
@@ -181,7 +460,7 @@ def emit_connectivity_events_for_bot(
     *,
     force: bool = False,
 ) -> bool:
-    """Write ERROR + HEALTH_CRITICAL to bot_engine_events (sync). Returns True if emitted."""
+    """Write INFO pause + HEALTH_WARN + ERROR to bot_engine_events (sync). Returns True if emitted."""
     from app.botengine.state_store import append_event, load_state, save_state
 
     bot_id = int(bot.id)
@@ -206,8 +485,25 @@ def emit_connectivity_events_for_bot(
         "error_code": code,
         "source": source or "upstream",
         "health_code": "BINANCE_UNREACHABLE",
+        "cycle_id": int((load_state(db, bot_id) or {}).get("cycle_id") or 1),
     }
     try:
+        emit_tur_connectivity_paused_info(db, bot_id, account_id, code)
+        warn_meta = {
+            **meta_base,
+            "health_code": "CONNECTIVITY_LOST",
+            "title": "Bağlantı kesildi",
+            "cause": short_msg,
+            "severity": "warn",
+        }
+        append_event(
+            db,
+            bot_id,
+            account_id,
+            "HEALTH_WARN",
+            f"Binance bağlantısı yok — {short_msg}",
+            warn_meta,
+        )
         append_event(db, bot_id, account_id, "ERROR", log_msg, meta_base)
         state = load_state(db, bot_id) or {}
         state["last_error_code"] = code
@@ -276,7 +572,11 @@ async def sync_bot_connectivity_on_view(
 
     ok, code, msg = await probe_account_binance(account_id, db)
     if ok:
-        note_binance_success(account_id)
+        note_binance_success(account_id, schedule_resume=False)
+        try:
+            try_auto_resume_paused_bots(db, account_id)
+        except Exception as ar_ex:
+            logger.debug("connectivity auto-resume on_view account_id=%s: %s", account_id, ar_ex)
         return None
 
     note_binance_failure(account_id, code, msg, source, emit_async=False)
