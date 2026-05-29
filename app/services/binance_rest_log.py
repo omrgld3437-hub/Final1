@@ -130,6 +130,10 @@ def should_allow_rest(
     src = source or get_rest_source()
     now = time.time()
 
+    # Signed-request timestamps depend on this (weight 1); never throttle or budget-block.
+    if "/api/v3/time" in path:
+        return True, "ok", weight
+
     try:
         from app.services.binance_spot import is_ip_banned
         if is_ip_banned():

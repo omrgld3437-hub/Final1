@@ -1013,9 +1013,9 @@
     <script src="/ui/assets/core/apiClient.js?v=refactor1"></script>
     <script src="/ui/assets/utils/gridTrailEnvelope.js?v=2"></script>
     <script src="/ui/assets/utils/engineLogArchive.js?v=1"></script>
-    <script src="/ui/assets/utils/botHealthAlerts.js?v=24"></script>
-<script src="/ui/assets/utils/engineLogFormat.js?v=54"></script>
-<script src="/ui/assets/utils/engineLogLive.js?v=27"></script>
+    <script src="/ui/assets/utils/botHealthAlerts.js?v=25"></script>
+<script src="/ui/assets/utils/engineLogFormat.js?v=58"></script>
+<script src="/ui/assets/utils/engineLogLive.js?v=28"></script>
     <script src="/ui/assets/core/intervalRegistry.js?v=1"></script>
     <script src="/ui/vendor/lightweight-charts.standalone.production.js"></script>
     <script src="/ui/assets/perf_chart_tv.js?v=1"></script>
@@ -1109,21 +1109,36 @@
         var lastKnownCycleId = null;
         var _botDetailHydrated = false;
         var _lastGridStructureFp = '';
+        var _lastGridDisplayFp = '';
         var _lastHealthLogRenderKey = '';
+        var _lastGridTrailActive = false;
+        function resetGridTrailUiSession() {
+            if (window.GridTrailEnvelope && typeof window.GridTrailEnvelope.resetSession === 'function') {
+                window.GridTrailEnvelope.resetSession();
+            }
+        }
         function onBotCycleChanged(newCid) {
             if (newCid == null || isNaN(newCid)) return;
             var cid = Number(newCid);
             if (lastKnownCycleId != null && cid <= lastKnownCycleId) return;
             lastKnownCycleId = cid;
             if (lastBotDetail) lastBotDetail.currentCycleId = cid;
+            window._cycleReportDurationCycleId = cid;
+            window._cycleReportStartedAt = null;
             var stateCycleEl = document.getElementById('stateCycleValue');
             if (stateCycleEl) stateCycleEl.textContent = String(cid);
+            resetGridTrailUiSession();
+            _lastGridStructureFp = '';
+            _lastGridDisplayFp = '';
+            if (typeof refreshAll === 'function') refreshAll();
             if (typeof window._botDetailRefreshTradesPanel === 'function') {
                 window._botDetailRefreshTradesPanel(cid);
             }
             if (typeof loadPerfMetrics === 'function') loadPerfMetrics();
         }
         var stripKlinesRefreshMs = 120000;
+        var _stripKlinesSymbol = '';
+        var _stripKlinesInflight = '';
         var lastRefPriceForPerf = null;
         var initialCapForPerf = null;
         var lastBotStartedAt = null;
@@ -1331,7 +1346,9 @@
                 window._cycleReportStartedAt = iso || null;
                 return;
             }
-            window._cycleReportStartedAt = iso || null;
+            if (iso) {
+                window._cycleReportStartedAt = pickEarlierStartedAt(window._cycleReportStartedAt, iso);
+            }
         }
         function resolveOpenCycleStartedAt(summary, cycleNum) {
             if (summary && summary.started_at) {
@@ -1344,6 +1361,10 @@
             var candidates = [];
             if (cid != null && curCid != null && cid === curCid) {
                 if (st.cycle_opened_at) candidates.push(st.cycle_opened_at);
+                var dp = lastBotDetail && lastBotDetail.dual_pnl && lastBotDetail.dual_pnl.current_cycle;
+                if (dp && dp.started_at && Number(dp.cycle_id || curCid) === cid) {
+                    candidates.push(dp.started_at);
+                }
                 var ledger = st.cycle_ledger_current;
                 if (ledger && Number(ledger.cycle_id) === cid && ledger.started_at) {
                     candidates.push(ledger.started_at);
@@ -1355,6 +1376,9 @@
                 (st.cycle_open_trades || []).forEach(function (row) {
                     if (row && Number(row.cycle_id) === cid && row.ts) candidates.push(row.ts);
                 });
+            }
+            if (cid === 1 && st.target_budgets && st.target_budgets.ts) {
+                candidates.push(st.target_budgets.ts);
             }
             (window._botDetailCycleTrades || []).forEach(function (t) {
                 if (!t || !t.ts) return;
@@ -1374,6 +1398,9 @@
                     best = iso;
                 }
             });
+            if (!best && cid === 1 && lastBotStartedAt && st.initial_allocation_done) {
+                return lastBotStartedAt;
+            }
             return best;
         }
         function updateCycleReportDurationLive() {
@@ -1382,9 +1409,27 @@
             var sel = window._botDetailSelectedCycleId;
             var cur = (lastBotDetail && lastBotDetail.currentCycleId != null) ? lastBotDetail.currentCycleId : lastKnownCycleId;
             if (sel == null || cur == null || Number(sel) !== Number(cur)) return;
-            var startedAt = window._cycleReportStartedAt || resolveOpenCycleStartedAt(null, sel);
+            var startedAt = window._cycleReportStartedAt;
+            if (!startedAt || parseUtcMs(startedAt) <= 0) {
+                startedAt = resolveOpenCycleStartedAt(null, sel);
+                if (startedAt) setCycleReportStartedAt(startedAt, sel);
+            }
             var v = formatDurationFromStartedAt(startedAt);
+            if (!v && startedAt) v = '0sn';
             if (v) durEl.textContent = v;
+        }
+        function syncCycleReportDurationPoll() {
+            if (!window.intervalRegistry) return;
+            var sel = window._botDetailSelectedCycleId;
+            var cur = (lastBotDetail && lastBotDetail.currentCycleId != null) ? Number(lastBotDetail.currentCycleId) : (lastKnownCycleId != null ? Number(lastKnownCycleId) : null);
+            var reportEl = document.getElementById('cycleReport');
+            var visible = reportEl && reportEl.style.display !== 'none';
+            if (visible && sel != null && cur != null && Number(sel) === Number(cur)) {
+                updateCycleReportDurationLive();
+                window.intervalRegistry.start('bot-cycle-report-duration', updateCycleReportDurationLive, 1000, 'bot-detail');
+            } else {
+                window.intervalRegistry.stop('bot-cycle-report-duration');
+            }
         }
         function isInitialAllocationTrade(t) {
             if (!t) return false;
@@ -1406,30 +1451,16 @@
             if (side === 'BUY') return 'cycle-report-chip--dir-buy';
             return 'cycle-report-chip--muted';
         }
-        function botStartedTodayTr(startedAtIso) {
-            if (!startedAtIso) return false;
-            var d = new Date(startedAtIso);
-            if (isNaN(d.getTime())) return false;
-            try {
-                var fmt = function(dt) {
-                    return new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Istanbul', year: 'numeric', month: '2-digit', day: '2-digit' }).format(dt);
-                };
-                return fmt(d) === fmt(new Date());
-            } catch (e) {
-                return false;
-            }
-        }
-        function resolveHeroKz(equity, initialCapital, startedAtIso, dailyUsdApi, dailyPctApi) {
+        function resolveHeroKz(equity, initialCapital, dailyRefUsd, startedAtIso) {
             var eq = equity != null && !isNaN(equity) ? Number(equity) : null;
             var ic = initialCapital > 0 ? Number(initialCapital) : 0;
             var totalPnl = (eq != null && ic > 0) ? (eq - ic) : null;
-            var dailyUsd = dailyUsdApi != null && !isNaN(dailyUsdApi) ? Number(dailyUsdApi) : null;
-            var dailyPct = dailyPctApi != null && !isNaN(dailyPctApi) ? Number(dailyPctApi) : null;
-            if (botStartedTodayTr(startedAtIso) && eq != null && ic > 0) {
-                dailyUsd = eq - ic;
-                dailyPct = (dailyUsd / ic) * 100;
-            }
-            return { totalPnlUsd: totalPnl, dailyUsd: dailyUsd, dailyPct: dailyPct };
+            var ref = dailyRefUsd != null && !isNaN(dailyRefUsd) && Number(dailyRefUsd) > 0
+                ? Number(dailyRefUsd)
+                : (ic > 0 ? ic : null);
+            var dailyUsd = (eq != null && ref != null) ? (eq - ref) : null;
+            var dailyPct = (dailyUsd != null && ref > 0) ? (dailyUsd / ref) * 100 : null;
+            return { totalPnlUsd: totalPnl, dailyUsd: dailyUsd, dailyPct: dailyPct, dailyRefUsd: ref };
         }
         function formatHeroKzStr(usd, pct, pctBase) {
             if (usd == null || isNaN(usd)) return '—';
@@ -1438,6 +1469,54 @@
             if ((p == null || isNaN(p)) && pctBase > 0) p = (usd / pctBase) * 100;
             if (p != null && !isNaN(p)) s += ' ' + (p >= 0 ? '+' : '') + p.toFixed(2) + '%';
             return s;
+        }
+        /** Çalışan botta K/Z yalnızca GET /live ile güncellenir — detail snapshot flicker önlenir. */
+        function shouldPaintHeroKzFromState(newState) {
+            var pollStatus = (newState && newState.status || lastBotDetail.status || 'stopped').toLowerCase();
+            if (pollStatus !== 'running') return true;
+            return !!(newState && newState._liveSnapshot);
+        }
+        function applyLiveHeroKz(newState) {
+            if (!shouldPaintHeroKzFromState(newState)) return;
+            var eq = newState.equity;
+            var initialCap = newState.initial_capital != null && !isNaN(newState.initial_capital) ? Number(newState.initial_capital) : 0;
+            var dailyRef = newState.daily_ref_usd != null && !isNaN(newState.daily_ref_usd) && Number(newState.daily_ref_usd) > 0
+                ? Number(newState.daily_ref_usd)
+                : initialCap;
+            var stateTotalKzEl = document.getElementById('stateTotalKzValue');
+            var stateDailyKzEl = document.getElementById('stateDailyKzValue');
+            var heroKzLive = resolveHeroKz(eq, initialCap, dailyRef, lastBotStartedAt);
+            if (stateTotalKzEl) {
+                var totalPnlUsd = null;
+                if (newState.first_buy_pending === true) {
+                    totalPnlUsd = 0;
+                } else if (heroKzLive.totalPnlUsd != null) {
+                    totalPnlUsd = heroKzLive.totalPnlUsd;
+                }
+                if (totalPnlUsd != null) {
+                    var totalKzStr = formatHeroKzStr(totalPnlUsd, null, initialCap);
+                    if (stateTotalKzEl.textContent !== totalKzStr) {
+                        stateTotalKzEl.textContent = totalKzStr;
+                        stateTotalKzEl.style.color = totalPnlUsd >= 0 ? '#0ecb81' : '#f6465d';
+                    }
+                }
+            }
+            if (stateDailyKzEl) {
+                var dailyUsdLive = heroKzLive.dailyUsd;
+                var dailyPctLive = heroKzLive.dailyPct;
+                if (newState.first_buy_pending === true) {
+                    dailyUsdLive = 0;
+                    dailyPctLive = 0;
+                }
+                if (dailyUsdLive != null && !isNaN(dailyUsdLive)) {
+                    var dailyPctBase = heroKzLive.dailyRefUsd > 0 ? heroKzLive.dailyRefUsd : initialCap;
+                    var dailyKzStr = formatHeroKzStr(dailyUsdLive, dailyPctLive, dailyPctBase);
+                    if (stateDailyKzEl.textContent !== dailyKzStr) {
+                        stateDailyKzEl.textContent = dailyKzStr;
+                        stateDailyKzEl.style.color = dailyUsdLive >= 0 ? '#0ecb81' : '#f6465d';
+                    }
+                }
+            }
         }
         function applyLiveHeroBalances(newState) {
             var sym = lastBotDetail.symbol || '';
@@ -1494,42 +1573,86 @@
             errorEl.style.display = msg ? 'block' : 'none';
             errorEl.textContent = msg || '';
         }
-        /** Strip mini chart: aynı veri kaynağı ile alım/satım modalındaki grafik (sembol 5m klines, son 24h). */
-        function loadStripKlinesChart(symbol) {
+        /** Strip mini chart: sembol 5m klines (son 24h); sessionStorage ile yenilemede anında gösterim. */
+        var STRIP_KLINES_INVALID = ['USDTUSDT', 'USDCUSDT', 'FDUSDUSDT', 'BUSDUSDT', 'TUSDUSDT', 'DAIUSDT'];
+        function stripKlinesStorageKey(sym) {
+            return 'botStripKlines_v1_' + sym;
+        }
+        function readStripKlinesCache(sym) {
+            try {
+                var raw = sessionStorage.getItem(stripKlinesStorageKey(sym));
+                if (!raw) return null;
+                var o = JSON.parse(raw);
+                if (o && Array.isArray(o.closes) && o.closes.length >= 2) return o;
+            } catch (e) { /* ignore */ }
+            return null;
+        }
+        function saveStripKlinesCache(sym, closes) {
+            try {
+                sessionStorage.setItem(stripKlinesStorageKey(sym), JSON.stringify({ ts: Date.now(), closes: closes }));
+            } catch (e) { /* ignore */ }
+        }
+        function buildStripKlinesSvgHtml(closes, sym) {
+            var points = closes.map(function (c) { return { c: Number(c) }; });
+            var w = 92, h = 28, pad = 2;
+            var dataMin = Math.min.apply(null, points.map(function (p) { return p.c; }));
+            var dataMax = Math.max.apply(null, points.map(function (p) { return p.c; }));
+            var range = dataMax - dataMin || 1;
+            var linePoints = points.map(function (p, i) {
+                var x = pad + (i / (points.length - 1 || 1)) * (w - 2 * pad);
+                var y = h - pad - ((p.c - dataMin) / range) * (h - 2 * pad);
+                return { x: x, y: y };
+            });
+            var pathD = linePoints.map(function (pt, i) { return (i === 0 ? 'M' : 'L') + ' ' + pt.x + ' ' + pt.y; }).join(' ');
+            var firstC = points[0].c, lastC = points[points.length - 1].c;
+            var isUp = lastC >= firstC;
+            var stroke = isUp ? '#0ecb81' : '#f6465d';
+            var gradId = 'stripChartGrad_' + (sym || 'x').replace(/[^a-z0-9]/gi, '_');
+            var closePath = ' L ' + linePoints[linePoints.length - 1].x + ' ' + (h - pad) + ' L ' + pad + ' ' + (h - pad) + ' Z';
+            return '<svg viewBox="0 0 ' + w + ' ' + h + '" preserveAspectRatio="none">' +
+                '<defs><linearGradient id="' + gradId + '" x1="0" y1="0" x2="0" y2="1">' +
+                '<stop offset="0" stop-color="' + stroke + '" stop-opacity="0.25"/>' +
+                '<stop offset="1" stop-color="' + stroke + '" stop-opacity="0"/></linearGradient></defs>' +
+                '<path d="' + pathD + closePath + '" fill="url(#' + gradId + ')" stroke="' + stroke + '" stroke-width="1.5" fill-opacity="1"/>' +
+                '</svg>';
+        }
+        function paintStripKlinesChart(wrap, closes, sym) {
+            if (!wrap || !closes || closes.length < 2) return;
+            wrap.innerHTML = buildStripKlinesSvgHtml(closes, sym);
+        }
+        function loadStripKlinesChart(symbol, opts) {
+            opts = opts || {};
             var wrap = document.getElementById('botStripMiniChartSvg');
             if (!wrap || !symbol || !window.apiClient) return;
             var sym = (symbol || '').toString().trim().toUpperCase();
-            var invalid = ['USDTUSDT', 'USDCUSDT', 'FDUSDUSDT', 'BUSDUSDT', 'TUSDUSDT', 'DAIUSDT'];
-            if (invalid.indexOf(sym) >= 0) { wrap.innerHTML = ''; return; }
-            var interval = '5m';
-            var limit = 288;
-            window.apiClient.get('/api/spot/klines?symbol=' + encodeURIComponent(sym) + '&interval=' + interval + '&limit=' + limit)
+            if (STRIP_KLINES_INVALID.indexOf(sym) >= 0) {
+                wrap.innerHTML = '';
+                _stripKlinesSymbol = '';
+                return;
+            }
+            var cached = readStripKlinesCache(sym);
+            var cacheFresh = !!(cached && (Date.now() - (cached.ts || 0) < stripKlinesRefreshMs));
+            if (cached && cached.closes && cached.closes.length >= 2) {
+                if (_stripKlinesSymbol !== sym || !wrap.querySelector('svg')) {
+                    paintStripKlinesChart(wrap, cached.closes, sym);
+                }
+            }
+            _stripKlinesSymbol = sym;
+            if (!opts.force && cacheFresh && wrap.querySelector('svg')) return;
+            if (_stripKlinesInflight === sym) return;
+            _stripKlinesInflight = sym;
+            window.apiClient.get('/api/spot/klines?symbol=' + encodeURIComponent(sym) + '&interval=5m&limit=288')
                 .then(function (data) {
-                    if (!Array.isArray(data) || data.length < 2) { if (wrap) wrap.innerHTML = ''; return; }
-                    var points = data.map(function (k) { return { c: Number(k.c) }; });
-                    var w = 92, h = 28, pad = 2;
-                    var dataMin = Math.min.apply(null, points.map(function (p) { return p.c; }));
-                    var dataMax = Math.max.apply(null, points.map(function (p) { return p.c; }));
-                    var range = dataMax - dataMin || 1;
-                    var linePoints = points.map(function (p, i) {
-                        var x = pad + (i / (points.length - 1 || 1)) * (w - 2 * pad);
-                        var y = h - pad - ((p.c - dataMin) / range) * (h - 2 * pad);
-                        return { x: x, y: y };
-                    });
-                    var pathD = linePoints.map(function (pt, i) { return (i === 0 ? 'M' : 'L') + ' ' + pt.x + ' ' + pt.y; }).join(' ');
-                    var firstC = points[0].c, lastC = points[points.length - 1].c;
-                    var isUp = lastC >= firstC;
-                    var stroke = isUp ? '#0ecb81' : '#f6465d';
-                    var gradId = 'stripChartGrad_' + (sym || 'x').replace(/[^a-z0-9]/gi, '_');
-                    var closePath = ' L ' + linePoints[linePoints.length - 1].x + ' ' + (h - pad) + ' L ' + pad + ' ' + (h - pad) + ' Z';
-                    wrap.innerHTML = '<svg viewBox="0 0 ' + w + ' ' + h + '" preserveAspectRatio="none">' +
-                        '<defs><linearGradient id="' + gradId + '" x1="0" y1="0" x2="0" y2="1">' +
-                        '<stop offset="0" stop-color="' + stroke + '" stop-opacity="0.25"/>' +
-                        '<stop offset="1" stop-color="' + stroke + '" stop-opacity="0"/></linearGradient></defs>' +
-                        '<path d="' + pathD + closePath + '" fill="url(#' + gradId + ')" stroke="' + stroke + '" stroke-width="1.5" fill-opacity="1"/>' +
-                        '</svg>';
+                    _stripKlinesInflight = '';
+                    if (_stripKlinesSymbol !== sym) return;
+                    if (!Array.isArray(data) || data.length < 2) return;
+                    var closes = data.map(function (k) { return Number(k.c); });
+                    saveStripKlinesCache(sym, closes);
+                    paintStripKlinesChart(wrap, closes, sym);
                 })
-                .catch(function () { if (wrap) wrap.innerHTML = ''; });
+                .catch(function () {
+                    _stripKlinesInflight = '';
+                });
         }
         function openPerfChartModal() {
             var series = window._lastPerfChartSeries || [];
@@ -1682,6 +1805,7 @@
             if (botTopStrip) botTopStrip.style.display = 'flex';
             renderBotLogo(cached.base);
             if (botSymbolEl && cached.symbol) botSymbolEl.textContent = cached.symbol;
+            if (cached.symbol) loadStripKlinesChart(cached.symbol);
         }
 
         window._lastEngineEvents = [];
@@ -1722,7 +1846,9 @@
                 }).join(',');
                 if (window.EngineLogLive && _engineLogLiveOpts && healthKey !== _lastHealthLogRenderKey) {
                     _lastHealthLogRenderKey = healthKey;
-                    window.EngineLogLive.renderDisplayEvents(_engineLogLiveOpts);
+                    if ((_engineLogLiveOpts.state.events || []).length > 0) {
+                        window.EngineLogLive.renderDisplayEvents(_engineLogLiveOpts);
+                    }
                 }
                 syncHealthFromState();
                 return res;
@@ -1775,12 +1901,18 @@
         function startEngineLogLive() {
             if (!window.EngineLogLive || !botId) return;
             stopEngineLogLive();
+            _engineLogLiveOpts._logBootstrapping = true;
+            _engineLogLiveOpts._lastLogRenderSig = null;
             var bootLogs = function () {
                 loadEngineEvents(botId, false).then(function (events) {
+                    _engineLogLiveOpts._logBootstrapping = false;
                     if (window.BotHealthAlerts) {
                         window._lastSeenHealthEventId = window.BotHealthAlerts.maxHealthEventId(events || window._lastEngineEvents);
                     }
-                    window.EngineLogLive.startPolling(_engineLogLiveOpts);
+                    if (window._lastHealthData && window.EngineLogLive) {
+                        window.EngineLogLive.renderDisplayEvents(_engineLogLiveOpts);
+                    }
+                    window.EngineLogLive.startPolling(_engineLogLiveOpts, true);
                 });
             };
             fetchBotHealth().finally(bootLogs);
@@ -1795,6 +1927,9 @@
             if (window.intervalRegistry) window.intervalRegistry.stopByOwner('bot-detail');
             _engineLogLiveOpts.state = { events: [], lastId: 0 };
             _engineLogLiveOpts.botId = botId;
+            _engineLogLiveOpts._logBootstrapping = true;
+            _engineLogLiveOpts._lastLogRenderSig = null;
+            _lastHealthLogRenderKey = '';
             window._lastEngineEvents = [];
             lastBotDetail = { symbol: '', baseBalance: 0, quoteAsset: 'USDT' };
             prevLiveState = null;
@@ -1808,10 +1943,11 @@
             _cycleTradesCache = {};
             _botDetailHydrated = false;
             _lastGridStructureFp = '';
+            _lastGridTrailActive = false;
             if (cycleTradesList) cycleTradesList.innerHTML = '<div class="cycle-pnl-item muted">Yükleniyor…</div>';
             var turBtns = document.getElementById('cycleTradesTurButtons');
             if (turBtns) turBtns.innerHTML = '';
-            if (engineLogList) engineLogList.innerHTML = '<div class="muted" style="padding: 0.75rem;">Yükleniyor…</div>';
+            if (engineLogList) engineLogList.innerHTML = '<div class="muted engine-log-loading" style="padding: 0.75rem;">Yükleniyor…</div>';
             if (configGrid) configGrid.innerHTML = '';
             var pModal = document.getElementById('parametrelerModal');
             if (pModal) pModal.style.display = 'none';
@@ -2115,6 +2251,51 @@
                 parts.push((p.type || '') + ':' + (p.trigger_hit ? 1 : 0) + ':' + (p.status || ''));
             });
             return parts.join('|');
+        }
+        function gridDisplayFingerprint(data) {
+            data = data || {};
+            var st = data.state || {};
+            var parts = [
+                String(data.reference_display != null ? data.reference_display : ''),
+                String(st.reference_price != null ? st.reference_price : ''),
+                String(st.base_balance != null ? st.base_balance : ''),
+                String(st.initial_allocation_done ? 1 : 0),
+                String(st.first_buy_pending ? 1 : 0)
+            ];
+            (data.grid_points || []).forEach(function (p) {
+                parts.push(
+                    String(p.trigger_price != null ? p.trigger_price : '') + ':' +
+                    String(p.qty_pct != null ? p.qty_pct : '') + ':' +
+                    String(p.qty != null ? p.qty : '')
+                );
+            });
+            return parts.join('|');
+        }
+        function botDetailGridNeedsWarmup(data) {
+            data = data || lastBotDetail || {};
+            if (!gridPointsPanel || gridPointsPanel.style.display === 'none') return false;
+            var status = (data.status || lastBotDetail.status || '').toLowerCase();
+            if (status !== 'running') return false;
+            var ref = data.reference_display != null ? data.reference_display : lastBotDetail.reference_display;
+            if (ref != null && !isNaN(Number(ref)) && Number(ref) > 0) return false;
+            var st = data.state || lastBotDetail.state || {};
+            if (st.reference_price != null && !isNaN(Number(st.reference_price)) && Number(st.reference_price) > 0) return false;
+            return true;
+        }
+        var gridWarmupPollMs = 4000;
+        function syncGridWarmupPoll() {
+            if (!window.intervalRegistry) return;
+            if (botDetailGridNeedsWarmup(lastBotDetail)) {
+                window.intervalRegistry.start('bot-detail-grid-warmup', function () {
+                    if (!botDetailGridNeedsWarmup(lastBotDetail)) {
+                        syncGridWarmupPoll();
+                        return;
+                    }
+                    if (typeof refreshAll === 'function') refreshAll();
+                }, gridWarmupPollMs, 'bot-detail');
+            } else {
+                window.intervalRegistry.stop('bot-detail-grid-warmup');
+            }
         }
         function patchGridTrailCells(data, livePrice) {
             if (!gridSellBody || !gridBuyBody || !data || livePrice == null || isNaN(livePrice)) return;
@@ -2507,8 +2688,10 @@
                     lastBotDetail.state = merged.state;
                     if (merged.current_price != null) lastBotDetail.current_price = merged.current_price;
                     var gridFpLive = gridStructureFingerprint(merged);
-                    if (gridFpLive !== _lastGridStructureFp) {
+                    var displayFpLive = gridDisplayFingerprint(merged);
+                    if (gridFpLive !== _lastGridStructureFp || displayFpLive !== _lastGridDisplayFp) {
                         _lastGridStructureFp = gridFpLive;
+                        _lastGridDisplayFp = displayFpLive;
                         renderGridPointsPanel(merged, { applyLive: false });
                         renderProfitPointsPanel(merged, { applyLive: false });
                     } else if (lastPriceForBlink != null && gridPointsPanel && gridPointsPanel.style.display !== 'none') {
@@ -2516,6 +2699,13 @@
                         patchProfitTrailCells(merged, lastPriceForBlink);
                     }
                     if (!botDetailGridTrailActive(merged)) syncGridPointsPoll();
+                    var trailAfter = botDetailGridTrailActive(merged);
+                    if (_lastGridTrailActive && !trailAfter) {
+                        resetGridTrailUiSession();
+                        _lastGridStructureFp = '';
+                        if (typeof refreshAll === 'function') refreshAll();
+                    }
+                    _lastGridTrailActive = trailAfter;
                 })
                 .catch(function () {})
                 .finally(function () { _gridPointsPollInFlight = false; });
@@ -2532,6 +2722,10 @@
         }
 
         var tradesPanelPollMs = 3000;
+        var tradesPanelPollMsTrail = 1500;
+        function tradesPanelPollIntervalMs() {
+            return botDetailGridTrailActive(lastBotDetail) ? tradesPanelPollMsTrail : tradesPanelPollMs;
+        }
         function refreshTradesPanelPoll() {
             if (document.hidden || !botId || !window.apiClient) return;
             var sel = window._botDetailSelectedCycleId;
@@ -2543,7 +2737,7 @@
             if (!window.intervalRegistry) return;
             var running = ((lastBotDetail.status || '').toLowerCase() === 'running');
             if (running && tradesPanel && tradesPanel.style.display !== 'none') {
-                window.intervalRegistry.start('bot-detail-trades', refreshTradesPanelPoll, tradesPanelPollMs, 'bot-detail');
+                window.intervalRegistry.start('bot-detail-trades', refreshTradesPanelPoll, tradesPanelPollIntervalMs(), 'bot-detail');
             } else {
                 window.intervalRegistry.stop('bot-detail-trades');
             }
@@ -2672,28 +2866,38 @@
                 botTypeHeaderNameEl.textContent = botTypeName;
                 botTypeHeaderEl.style.display = 'block';
             }
-            var dailyUsd = data.daily_pnl_usd;
-            if (dailyUsd == null || isNaN(dailyUsd)) dailyUsd = 0;
-            var dailyPct = data.daily_pnl_pct;
-            if (dailyPct == null || isNaN(dailyPct)) dailyPct = null;
             var cfg = data.config || {};
             var initialCapital = Number(cfg.initial_capital_usdt || cfg.budget_usd || cfg.bot_budget_quote || 0) || 0;
             var currentUsdNum = data.current_usd != null && !isNaN(data.current_usd) ? Number(data.current_usd) : (priceForBot != null && priceForBot > 0 ? baseBal * priceForBot + quoteBal : 0);
             var sellHist = st.sell_history || [];
             var buyHist = st.buy_history || [];
             var hasTradedOnce = iaDone || sellHist.length > 0 || buyHist.length > 0;
-            var heroKz = resolveHeroKz(currentUsdNum, initialCapital, data.started_at, dailyUsd, dailyPct);
-            var dailyKzStr = formatHeroKzStr(heroKz.dailyUsd, heroKz.dailyPct, initialCapital);
-            var dailyKzCl = (heroKz.dailyUsd != null && heroKz.dailyUsd >= 0) ? '#0ecb81' : '#f6465d';
-            /* Toplam K/Z: equity - initial_capital (günlük ile aynı baz bot açılış gününde) */
+            var dailyRefUsd = st.daily_ref_usd != null && !isNaN(st.daily_ref_usd) ? Number(st.daily_ref_usd) : initialCapital;
+            var heroKz = resolveHeroKz(currentUsdNum, initialCapital, dailyRefUsd, data.started_at);
+            if (waitingFirstBuy || !hasTradedOnce) {
+                heroKz.dailyUsd = 0;
+                heroKz.dailyPct = 0;
+            }
+            var deferHeroKz = botStatus === 'running';
+            var dailyKzStr = waitingFirstBuy
+                ? formatHeroKzStr(0, 0, heroKz.dailyRefUsd || initialCapital)
+                : (deferHeroKz ? '—' : formatHeroKzStr(heroKz.dailyUsd, heroKz.dailyPct, heroKz.dailyRefUsd || initialCapital));
+            var dailyKzCl = deferHeroKz && !waitingFirstBuy
+                ? 'var(--ds-text-secondary)'
+                : ((heroKz.dailyUsd != null && heroKz.dailyUsd >= 0) ? '#0ecb81' : '#f6465d');
+            /* Toplam K/Z: equity − initial_capital; günlük K/Z: bot bakiyesi (equity) − daily_ref_usd */
             var totalPnlUsd = null;
             if (waitingFirstBuy || !hasTradedOnce) {
                 totalPnlUsd = 0;
             } else {
                 totalPnlUsd = heroKz.totalPnlUsd;
             }
-            var totalKzStr = totalPnlUsd != null ? formatHeroKzStr(totalPnlUsd, null, initialCapital) : '—';
-            var totalKzCl = totalPnlUsd != null ? (totalPnlUsd >= 0 ? '#0ecb81' : '#f6465d') : 'var(--ds-text-secondary)';
+            var totalKzStr = waitingFirstBuy
+                ? formatHeroKzStr(0, null, initialCapital)
+                : (deferHeroKz ? '—' : (totalPnlUsd != null ? formatHeroKzStr(totalPnlUsd, null, initialCapital) : '—'));
+            var totalKzCl = deferHeroKz && !waitingFirstBuy
+                ? 'var(--ds-text-secondary)'
+                : (totalPnlUsd != null ? (totalPnlUsd >= 0 ? '#0ecb81' : '#f6465d') : 'var(--ds-text-secondary)');
             var cycleVal = st.cycle_id != null ? st.cycle_id : '—';
             var baseAsset = baseFromSymbol(symbol) || '';
             var baseVal = st.base_balance != null ? fmtBaseCompact(st.base_balance) + (baseAsset ? ' ' + baseAsset : '') : '—';
@@ -2727,6 +2931,7 @@
             renderGridPointsPanel(data, { applyLive: false });
             renderProfitPointsPanel(data, { applyLive: false });
             _lastGridStructureFp = gridStructureFingerprint(data);
+            _lastGridDisplayFp = gridDisplayFingerprint(data);
             lastBotDetail.state = st;
             lastBotDetail.config = data.config || {};
             lastBotDetail.grid_points = data.grid_points || [];
@@ -2734,7 +2939,9 @@
             lastBotDetail.reference_display = data.reference_display;
             lastBotDetail.status = data.status || '';
             syncGridPointsPoll();
+            syncGridWarmupPoll();
             syncTradesPanelPoll();
+            _lastGridTrailActive = botDetailGridTrailActive(lastBotDetail);
 
             tradesPanel.style.display = 'block';
             lastKnownCycleId = st.cycle_id != null ? st.cycle_id : 1;
@@ -2910,12 +3117,16 @@
                 var dur = '—';
                 if (isOpenCycle) {
                     var startedAt = resolveOpenCycleStartedAt(summary, cycleNum);
+                    if (!startedAt && summary && summary.duration_sec != null && Number(summary.duration_sec) > 0) {
+                        startedAt = new Date(Date.now() - Number(summary.duration_sec) * 1000).toISOString();
+                    }
                     setCycleReportStartedAt(startedAt, cycleNum);
                     dur = startedAt
                         ? formatDurationFromStartedAt(startedAt)
                         : formatDurationSec(summary && summary.duration_sec != null ? summary.duration_sec : null);
                 } else {
                     setCycleReportStartedAt(null, cycleNum);
+                    if (window.intervalRegistry) window.intervalRegistry.stop('bot-cycle-report-duration');
                     dur = formatDurationSec(summary && summary.duration_sec != null ? summary.duration_sec : null);
                 }
                 var count = summary && summary.trade_count != null ? summary.trade_count : '—';
@@ -2951,7 +3162,7 @@
                 cycleReportEl.innerHTML = parts.join('');
                 cycleReportEl.style.display = 'block';
                 if (isOpenCycle) {
-                    updateCycleReportDurationLive();
+                    syncCycleReportDurationPoll();
                 }
             }
             function renderCycleTradesFromCache(cycleId) {
@@ -3192,6 +3403,7 @@
         function liveStateFromDetail(data) {
             var st = data.state || {};
             var cfg = data.config || {};
+            var ic = Number(cfg.initial_capital_usdt || cfg.budget_usd || cfg.bot_budget_quote || 0) || 0;
             return {
                 status: data.status,
                 pnl_pct: data.pnl_pct,
@@ -3199,14 +3411,14 @@
                 last_price: data.current_price,
                 last_tick_at: st.last_tick_at != null ? parseLastTickTs(st.last_tick_at) : null,
                 last_error_code: st.last_error_code,
-                initial_capital: Number(cfg.initial_capital_usdt || cfg.budget_usd || cfg.bot_budget_quote || 0) || 0,
-                daily_pnl_usd: data.daily_pnl_usd,
-                daily_pnl_pct: data.daily_pnl_pct,
+                initial_capital: ic,
+                daily_ref_usd: st.daily_ref_usd != null && !isNaN(st.daily_ref_usd) ? Number(st.daily_ref_usd) : ic,
+                cycle_id: st.cycle_id != null ? Number(st.cycle_id) : null,
+                cycle_opened_at: st.cycle_opened_at || null,
                 first_buy_pending: data.first_buy_pending,
                 base_balance: st.base_balance,
                 quote_balance: st.quote_balance,
                 initial_allocation_done: st.initial_allocation_done,
-                cycle_id: st.cycle_id,
                 stale: data.stale,
                 equity_unavailable: data.equity_unavailable
             };
@@ -3236,9 +3448,16 @@
                 _engineLogLiveOpts.cycleOpenTrades = st.cycle_open_trades || _engineLogLiveOpts.cycleOpenTrades || [];
             }
             applyLive(liveStateFromDetail(data));
+            if (st.cycle_opened_at && st.cycle_id != null && Number(st.cycle_id) === Number(window._botDetailSelectedCycleId)) {
+                setCycleReportStartedAt(st.cycle_opened_at, st.cycle_id);
+                updateCycleReportDurationLive();
+                syncCycleReportDurationPoll();
+            }
             var gridFp = gridStructureFingerprint(data);
-            if (gridFp !== _lastGridStructureFp) {
+            var displayFp = gridDisplayFingerprint(data);
+            if (gridFp !== _lastGridStructureFp || displayFp !== _lastGridDisplayFp) {
                 _lastGridStructureFp = gridFp;
+                _lastGridDisplayFp = displayFp;
                 var merged = Object.assign({}, lastBotDetail, {
                     symbol: data.symbol || lastBotDetail.symbol,
                     grid_points: data.grid_points,
@@ -3253,10 +3472,17 @@
                     renderProfitPointsPanel(merged, { applyLive: false });
                 }
             }
+            syncGridWarmupPoll();
             var sel = window._botDetailSelectedCycleId;
             if (typeof window._botDetailLoadCycleTrades === 'function' && sel != null) {
                 window._botDetailLoadCycleTrades(Number(sel), { silent: true });
             }
+            var trailNow = botDetailGridTrailActive(lastBotDetail);
+            if (_lastGridTrailActive !== trailNow) {
+                syncTradesPanelPoll();
+                syncGridPointsPoll();
+            }
+            _lastGridTrailActive = trailNow;
         }
 
         function getPerfPeriod() {
@@ -3628,7 +3854,8 @@
             if (a === b) return true;
             if (!a || !b) return false;
             return a.status === b.status && a.pnl_pct === b.pnl_pct && a.equity === b.equity && a.last_price === b.last_price && a.last_tick_at === b.last_tick_at && a.last_error_code === b.last_error_code
-                && a.initial_capital === b.initial_capital && a.daily_pnl_usd === b.daily_pnl_usd && a.daily_pnl_pct === b.daily_pnl_pct
+                && a.initial_capital === b.initial_capital && a.daily_ref_usd === b.daily_ref_usd
+                && a.cycle_id === b.cycle_id && a.cycle_opened_at === b.cycle_opened_at
                 && a.first_buy_pending === b.first_buy_pending && a.base_balance === b.base_balance && a.quote_balance === b.quote_balance
                 && a.initial_allocation_done === b.initial_allocation_done
                 && a.cycle_id === b.cycle_id && a.stale === b.stale && a.equity_unavailable === b.equity_unavailable;
@@ -3721,40 +3948,15 @@
                 var botBalanceStr = fmtUsd(eq);
                 if (stateBotBalanceEl.textContent !== botBalanceStr) stateBotBalanceEl.textContent = botBalanceStr;
             }
-            var initialCap = newState.initial_capital != null && !isNaN(newState.initial_capital) ? Number(newState.initial_capital) : 0;
-            var stateTotalKzEl = document.getElementById('stateTotalKzValue');
-            var stateDailyKzEl = document.getElementById('stateDailyKzValue');
-            var heroKzLive = resolveHeroKz(
-                eq,
-                initialCap,
-                lastBotStartedAt,
-                newState.daily_pnl_usd,
-                newState.daily_pnl_pct
-            );
-            if (stateTotalKzEl) {
-                var totalPnlUsd = null;
-                if (newState.first_buy_pending === true) {
-                    totalPnlUsd = 0;
-                } else if (heroKzLive.totalPnlUsd != null) {
-                    totalPnlUsd = heroKzLive.totalPnlUsd;
-                }
-                if (totalPnlUsd != null) {
-                    var totalKzStr = formatHeroKzStr(totalPnlUsd, null, initialCap);
-                    if (stateTotalKzEl.textContent !== totalKzStr) {
-                        stateTotalKzEl.textContent = totalKzStr;
-                        stateTotalKzEl.style.color = totalPnlUsd >= 0 ? '#0ecb81' : '#f6465d';
-                    }
-                }
-            }
-            if (stateDailyKzEl && heroKzLive.dailyUsd != null && !isNaN(heroKzLive.dailyUsd)) {
-                var dailyKzStr = formatHeroKzStr(heroKzLive.dailyUsd, heroKzLive.dailyPct, initialCap);
-                if (stateDailyKzEl.textContent !== dailyKzStr) {
-                    stateDailyKzEl.textContent = dailyKzStr;
-                    stateDailyKzEl.style.color = heroKzLive.dailyUsd >= 0 ? '#0ecb81' : '#f6465d';
-                }
-            }
+            applyLiveHeroKz(newState);
             if (!(prevPending && newState.first_buy_pending === false) && !(newBase > 0 && prevBase <= 0)) {
                 applyLiveHeroBalances(newState);
+            }
+            if (newState.cycle_opened_at && newState.cycle_id != null
+                && Number(newState.cycle_id) === Number(window._botDetailSelectedCycleId)) {
+                setCycleReportStartedAt(newState.cycle_opened_at, newState.cycle_id);
+                updateCycleReportDurationLive();
+                syncCycleReportDurationPoll();
             }
         }
         function fetchLive() {
@@ -3762,6 +3964,7 @@
             var q = '?account_id=' + (accountId || '');
             window.apiClient.get('/api/bots-engine/' + botId + '/live' + q).then(function (data) {
                 _botLivePollSeen = true;
+                data._liveSnapshot = true;
                 applyLive(data);
             }).catch(function() {});
         }
@@ -4262,11 +4465,13 @@
                         try {
                             sessionStorage.removeItem('financeBotsTable_' + (accountId || ''));
                             clearBotLogoCache(botId);
-                            sessionStorage.setItem('tt_wallet_refresh_after_bot', JSON.stringify({
+                            var walletRefreshPayload = JSON.stringify({
                                 accountId: accountId,
                                 at: Date.now(),
                                 convert: !!convert
-                            }));
+                            });
+                            sessionStorage.setItem('tt_wallet_refresh_after_bot', walletRefreshPayload);
+                            try { localStorage.setItem('tt_wallet_refresh_after_bot_v1', walletRefreshPayload); } catch (e) {}
                         } catch (e) {}
                         if (window.Toast) window.Toast.success('Bot sonlandırıldı ve silindi');
                         window.location.href = backLink.href;

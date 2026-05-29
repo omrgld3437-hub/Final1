@@ -193,7 +193,7 @@ function fmtCoinPrice(v) {
     const n = Number(v);
     if (n == null || !Number.isFinite(n) || n < 0) return '—';
     if (n === 0) return '$0.00';
-    if (n >= 1000) return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    if (n >= 1000) return '$' + n.toFixed(2);
     if (n >= 1) return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 4 });
     if (n >= 0.1) return '$' + n.toFixed(4);
     if (n >= 0.01) return '$' + n.toFixed(5);
@@ -1908,6 +1908,22 @@ function _txDisplayAmounts(tx) {
     return { qty: qty, price: price, notional: quote };
 }
 
+function _txCommissionLabel(tx) {
+    if (!tx || tx.commission == null || Number(tx.commission) <= 0) return '0';
+    var raw = Number(tx.commission);
+    if (!Number.isFinite(raw)) return '0';
+    var asset = String(tx.commission_asset || 'USDT').toUpperCase();
+    var usdt = (tx.commission_usdt != null && Number.isFinite(Number(tx.commission_usdt)))
+        ? Number(tx.commission_usdt)
+        : ((asset === 'USDT' || asset === 'BUSD' || asset === 'FDUSD' || asset === 'USDC') ? raw : null);
+    var rawStr = typeof fmtNum === 'function' ? fmtNum(raw, 8) : String(raw);
+    if (usdt != null && asset !== 'USDT') {
+        var usdtStr = typeof fmtUsd === 'function' ? fmtUsd(usdt) : ('$' + usdt.toFixed(2));
+        return rawStr + ' ' + asset + ' (≈ ' + usdtStr + ')';
+    }
+    return rawStr + ' ' + asset;
+}
+
 function openTxDetailModal(tx) {
     var modal = document.getElementById('txDetailModal');
     if (!modal) return;
@@ -1919,7 +1935,7 @@ function openTxDetailModal(tx) {
     var totalVal = (tx.type === 'deposit' || tx.type === 'withdraw')
         ? (qty + ' ' + (tx.symbol || ''))
         : (amt.notional > 0 ? (typeof fmtUsd === 'function' ? fmtUsd(amt.notional) : '$' + amt.notional) : '—');
-    var comm = tx.commission != null && tx.commission > 0 ? (tx.commission_asset ? (typeof fmtNum === 'function' ? fmtNum(tx.commission, 8) : tx.commission) + ' ' + tx.commission_asset : (typeof fmtUsd === 'function' ? fmtUsd(tx.commission) : tx.commission)) : '0';
+    var comm = _txCommissionLabel(tx);
     patchText('txDetailTime', timeStr);
     patchText('txDetailType', typeLabel);
     patchText('txDetailSymbol', tx.symbol || '—');
@@ -2005,6 +2021,7 @@ function applySnapshotToUI(data) {
             State.lastSummaryHash = computeHash(summaryShape);
             if (typeof renderBotsList === 'function') renderBotsList(State.bots);
             if (typeof updateKPIs === 'function') updateKPIs(summaryShape);
+            if (typeof maybeRefreshWalletOnBotsChange === 'function') maybeRefreshWalletOnBotsChange(State.bots, data.account);
             if (typeof updateAccountName === 'function') updateAccountName(data.account.name || "Hesap Dashboard");
             if (typeof setAppbarAccountHolderName === 'function') setAppbarAccountHolderName(summaryShape);
             hideError();
@@ -2220,6 +2237,9 @@ function loadBotsListFast(accountId) {
             });
             State.bots = hydrateBotsWithMetricsCache(mapped);
             renderBotsList(State.bots);
+            if (typeof maybeRefreshWalletOnBotsChange === 'function') {
+                maybeRefreshWalletOnBotsChange(State.bots, State.summary && State.summary.account);
+            }
         })
         .catch(function() {
             if (State.bots && State.bots.length) return;
@@ -2687,6 +2707,86 @@ function updateKPIs(data) {
     });
     applyWalletStaleWarningEl(document.getElementById('kpiBotBakiyePct'));
     _persistKpisStorageCache(account, data);
+    if (typeof maybeRefreshWalletOnBotsChange === 'function') {
+        maybeRefreshWalletOnBotsChange(data.bots || State.bots, account);
+    }
+}
+
+/** Bot durdurma/silme sonrası cüzdan tablosunu canlı yenile (cached snapshot USDT toplamını güncellemez). */
+var _walletBotsWatch = { sig: '', activeBots: null, botsBalanceUsd: null, runningCount: null };
+
+function _botsWalletWatchSignature(bots, account) {
+    bots = bots || [];
+    var running = bots.filter(function (b) { return String(b.status || '').toLowerCase() === 'running'; });
+    var ids = running.map(function (b) { return String(b.bot_id || b.id); }).sort().join(',');
+    account = account || {};
+    return [
+        running.length,
+        ids,
+        account.active_bots,
+        account.bots_balance_usd,
+        account.total_bots
+    ].join('|');
+}
+
+function maybeRefreshWalletOnBotsChange(bots, account) {
+    if (!State.accountId) return;
+    account = account || (State.summary && State.summary.account) || {};
+    bots = bots || State.bots || [];
+    var sig = _botsWalletWatchSignature(bots, account);
+    var runningNow = bots.filter(function (b) { return String(b.status || '').toLowerCase() === 'running'; }).length;
+    if (!_walletBotsWatch.sig) {
+        _walletBotsWatch.sig = sig;
+        _walletBotsWatch.activeBots = account.active_bots;
+        _walletBotsWatch.botsBalanceUsd = account.bots_balance_usd;
+        _walletBotsWatch.runningCount = runningNow;
+        _walletBotsWatch.totalBots = account.total_bots;
+        return;
+    }
+    if (sig === _walletBotsWatch.sig) return;
+    var prevActive = _walletBotsWatch.activeBots;
+    var prevBal = _walletBotsWatch.botsBalanceUsd;
+    var prevRunning = _walletBotsWatch.runningCount;
+    var prevTotal = _walletBotsWatch.totalBots;
+    _walletBotsWatch.sig = sig;
+    _walletBotsWatch.activeBots = account.active_bots;
+    _walletBotsWatch.botsBalanceUsd = account.bots_balance_usd;
+    _walletBotsWatch.runningCount = runningNow;
+    _walletBotsWatch.totalBots = account.total_bots;
+    var activeNow = account.active_bots;
+    var balNow = account.bots_balance_usd;
+    var totalNow = account.total_bots;
+    var shouldRefresh = false;
+    if (prevRunning != null && runningNow < prevRunning) shouldRefresh = true;
+    if (prevActive != null && activeNow != null && Number(activeNow) < Number(prevActive)) shouldRefresh = true;
+    if (prevBal != null && balNow != null && Number(balNow) < Number(prevBal) - 0.5) shouldRefresh = true;
+    if (prevTotal != null && totalNow != null && Number(totalNow) < Number(prevTotal)) shouldRefresh = true;
+    if (!shouldRefresh) return;
+    if (typeof scheduleWalletRefreshAfterTrade === 'function') {
+        scheduleWalletRefreshAfterTrade(State.accountId, { delays: [200, 800, 2000, 5000, 10000] });
+    }
+}
+window.maybeRefreshWalletOnBotsChange = maybeRefreshWalletOnBotsChange;
+
+function _parseWalletRefreshAfterBotPayload(raw) {
+    if (!raw) return null;
+    try {
+        var pending = JSON.parse(raw);
+        if (!pending || pending.accountId == null) return null;
+        if (Date.now() - (pending.at || 0) > 120000) return null;
+        return pending;
+    } catch (e) {
+        return null;
+    }
+}
+
+function _applyWalletRefreshAfterBotPayload(pending) {
+    if (!pending) return;
+    if (Number(window.__ACTIVE_ACCOUNT_ID || State.accountId) !== Number(pending.accountId)) return;
+    var delays = pending.convert ? [300, 900, 2500, 6000, 12000] : [200, 800, 2000, 5000, 10000];
+    if (typeof scheduleWalletRefreshAfterTrade === 'function') {
+        scheduleWalletRefreshAfterTrade(pending.accountId, { delays: delays });
+    }
 }
 
 function _persistKpisStorageCache(account, data) {
@@ -6515,14 +6615,14 @@ window.scheduleWalletRefreshAfterTrade = scheduleWalletRefreshAfterTrade;
 function consumePendingWalletRefreshAfterBot(accountId) {
     if (!accountId) return;
     try {
-        var raw = sessionStorage.getItem('tt_wallet_refresh_after_bot');
+        var raw = sessionStorage.getItem('tt_wallet_refresh_after_bot')
+            || localStorage.getItem('tt_wallet_refresh_after_bot_v1');
         if (!raw) return;
-        var pending = JSON.parse(raw);
+        var pending = _parseWalletRefreshAfterBotPayload(raw);
         sessionStorage.removeItem('tt_wallet_refresh_after_bot');
+        localStorage.removeItem('tt_wallet_refresh_after_bot_v1');
         if (!pending || Number(pending.accountId) !== Number(accountId)) return;
-        if (Date.now() - (pending.at || 0) > 120000) return;
-        var delays = pending.convert ? [300, 900, 2500, 6000] : [300, 1500];
-        scheduleWalletRefreshAfterTrade(accountId, { delays: delays });
+        _applyWalletRefreshAfterBotPayload(pending);
     } catch (e) { /* ignore */ }
 }
 window.consumePendingWalletRefreshAfterBot = consumePendingWalletRefreshAfterBot;
@@ -10457,6 +10557,7 @@ async function initDashboard() {
     // Flash Home (Patch H): when enabled, use /api/home/fast + wallet/refresh; no Binance on critical path
     window.FLASH_HOME_ENABLED = typeof window.FLASH_HOME_ENABLED !== 'undefined' ? window.FLASH_HOME_ENABLED : true;
     var _binanceWalletIdleCycles = 0;
+    var _dashboardWalletForceTick = 0;
     function dashboardDataRefresh() {
         if (!State.accountId || State.inFlight || (typeof isSpotModalOpen === 'function' && isSpotModalOpen())) return;
         var activeTab = document.querySelector('.dm-tab.is-active');
@@ -10477,11 +10578,23 @@ async function initDashboard() {
                 window.homeFlash.loadFast(State.accountId);
             }
             if (typeof loadBotsListFast === 'function') loadBotsListFast(State.accountId);
+            _dashboardWalletForceTick++;
+            if (_dashboardWalletForceTick >= 6 && typeof triggerWalletRefreshForVarliklar === 'function') {
+                _dashboardWalletForceTick = 0;
+                triggerWalletRefreshForVarliklar(State.accountId, { force: true });
+            }
             return;
         }
         _binanceWalletIdleCycles = 0;
+        _dashboardWalletForceTick = 0;
         fetchSnapshot();
     }
+    window.addEventListener('storage', function (e) {
+        if (e.key !== 'tt_wallet_refresh_after_bot_v1' || !e.newValue) return;
+        var pending = _parseWalletRefreshAfterBotPayload(e.newValue);
+        if (!pending) return;
+        _applyWalletRefreshAfterBotPayload(pending);
+    });
     if (accountId) {
         if (window.marketDataService && typeof window.marketDataService.stop === 'function') {
             window.marketDataService.stop();

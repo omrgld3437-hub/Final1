@@ -390,6 +390,8 @@
                 iaParts.push((coin ? coin + ' ' : '') + fmtQty(qty) + ' @ $' + price.toFixed(2));
                 iaParts.push('tutar ' + fmtUsd(qty * price, false));
             }
+            var iaFee = num(meta.fee);
+            if (iaFee != null && iaFee > 0) iaParts.push('komisyon ' + fmtUsd(iaFee, false));
             return joinParts(iaParts);
         }
 
@@ -512,6 +514,35 @@
         };
     }
 
+    function equityLooksBaseOnlyUsd(eq, base, ref) {
+        if (eq == null || base == null || ref == null || base <= 0 || ref <= 0) return false;
+        var baseUsd = base * ref;
+        return Math.abs(eq - baseUsd) <= Math.max(0.05, baseUsd * 0.015);
+    }
+
+    function sanitizeCycleStartWallet(meta) {
+        meta = Object.assign({}, meta || {});
+        var base = num(meta.base_balance);
+        if (base == null) base = num(meta.base_qty);
+        var ref = num(meta.reference_price);
+        var quote = num(meta.quote_balance);
+        var eq = num(meta.equity_usdt);
+        if (eq == null) eq = num(meta.equity_usd);
+        if (eq != null && base != null && ref != null && equityLooksBaseOnlyUsd(eq, base, ref)) {
+            delete meta.equity_usdt;
+            delete meta.equity_usd;
+            if (quote != null && quote < 0.01) delete meta.quote_balance;
+        }
+        quote = num(meta.quote_balance);
+        base = num(meta.base_balance);
+        if (base == null) base = num(meta.base_qty);
+        ref = num(meta.reference_price);
+        if (quote != null && quote >= 0.01 && base != null && ref != null) {
+            meta.equity_usdt = Math.round((quote + base * ref) * 100) / 100;
+        }
+        return meta;
+    }
+
     function openSnapFromCycleOpenTrades(cycleId) {
         var rows = _logContext.cycleOpenTrades || [];
         var cid = Number(cycleId);
@@ -523,20 +554,20 @@
             var ref = num(row.reference_price) || num(row.price);
             var quote = num(row.quote_balance);
             var eq = num(row.equity_usdt);
-            if (quote == null && eq != null && base != null && ref != null) {
+            if (quote == null && eq != null && base != null && ref != null && !equityLooksBaseOnlyUsd(eq, base, ref)) {
                 quote = Math.max(0, eq - base * ref);
             }
             if (eq == null && quote != null && base != null && ref != null) {
                 eq = quote + base * ref;
             }
             if (base == null && quote == null) return null;
-            return {
+            return sanitizeCycleStartWallet({
                 base_balance: base,
                 base_qty: base,
                 quote_balance: quote != null ? Math.round(quote * 100) / 100 : null,
                 equity_usdt: eq != null ? Math.round(eq * 100) / 100 : null,
                 reference_price: ref
-            };
+            });
         }
         return null;
     }
@@ -625,19 +656,63 @@
         return out;
     }
 
+    function mergedCycleStartMetaFromEvents(cycleId) {
+        var cid = Number(cycleId);
+        if (!cid) return {};
+        var cands = [];
+        (_logContext.events || []).forEach(function (ev) {
+            if ((ev.type || '') !== 'CYCLE_START') return;
+            if (Number((ev.meta || {}).cycle_id) !== cid) return;
+            cands.push(ev);
+        });
+        if (!cands.length) return {};
+        cands.sort(function (a, b) {
+            var sa = cycleStartRichnessScore(a);
+            var sb = cycleStartRichnessScore(b);
+            if (sb !== sa) return sb - sa;
+            return Number(b.id || 0) - Number(a.id || 0);
+        });
+        var merged = {};
+        cands.forEach(function (ev) {
+            var m = ev.meta || {};
+            ['base_balance', 'base_qty', 'quote_balance', 'equity_usdt', 'equity_usd', 'reference_price', 'symbol'].forEach(function (k) {
+                if (merged[k] == null && m[k] != null) merged[k] = m[k];
+            });
+        });
+        return merged;
+    }
+
+    function finalizeCycleStartWallet(meta) {
+        meta = sanitizeCycleStartWallet(meta || {});
+        var base = num(meta.base_balance);
+        if (base == null) base = num(meta.base_qty);
+        var ref = num(meta.reference_price);
+        var quote = num(meta.quote_balance);
+        var eq = num(meta.equity_usdt);
+        if (eq == null) eq = num(meta.equity_usd);
+        if (base == null || ref == null || ref <= 0 || base <= 0) return meta;
+        var out = Object.assign({}, meta);
+        if (eq != null && quote == null && !equityLooksBaseOnlyUsd(eq, base, ref)) {
+            out.quote_balance = Math.round(Math.max(0, eq - base * ref) * 100) / 100;
+        } else if (quote != null && quote >= 0.01 && eq == null) {
+            out.equity_usdt = Math.round((quote + base * ref) * 100) / 100;
+        }
+        return sanitizeCycleStartWallet(out);
+    }
+
     function enrichCycleStartMeta(meta) {
         meta = enrichFirstTurStartMeta(meta || {});
         var rowSnap = openSnapFromCycleOpenTrades(meta.cycle_id);
-        if (rowSnap && rowSnap.quote_balance != null) {
-            meta = Object.assign({}, meta, rowSnap);
-        }
+        var merged = mergedCycleStartMetaFromEvents(meta.cycle_id);
+        if (rowSnap) meta = Object.assign({}, meta, rowSnap);
+        meta = Object.assign({}, meta, merged);
         if (cycleStartMetaStaleForPastTur(meta)) {
             var snap = Number(meta.cycle_id) === 1
                 ? tur1WalletFromInitialFill(_logContext.events || [], 1)
                 : frozenOpenWalletForActiveTur(meta);
-            if (snap) meta = Object.assign({}, meta, snap);
+            if (snap) meta = Object.assign({}, meta, snap, merged);
         }
-        return meta;
+        return finalizeCycleStartWallet(meta);
     }
 
     function cycleStartRichnessScore(ev) {
@@ -649,6 +724,7 @@
         if (meta.equity_usdt != null || meta.equity_usd != null) score += 100;
         if (meta.quote_balance != null) score += 50;
         if (meta.synthetic && meta.quote_balance == null && meta.equity_usdt == null && meta.equity_usd == null) score -= 400;
+        if (meta.quote_balance == null && meta.equity_usdt == null && meta.equity_usd == null) score -= 1000;
         return score;
     }
 
@@ -710,7 +786,7 @@
         var refPx = num(meta.reference_price);
         var eq = num(meta.equity_usdt);
         if (eq == null) eq = num(meta.equity_usd);
-        if (refPx != null && baseBal != null && quoteBal != null) {
+        if (refPx != null && baseBal != null && quoteBal != null && quoteBal >= 0.01) {
             var computedEq = quoteBal + baseBal * refPx;
             if (eq == null || Math.abs(eq - computedEq) > 0.02) {
                 eq = Math.round(computedEq * 100) / 100;
@@ -719,7 +795,7 @@
         if (baseBal != null && baseBal > 0) {
             parts.push('Base ' + fmtQty(baseBal) + (coin ? ' ' + coin : ''));
         }
-        if (quoteBal != null) parts.push('USDT ' + fmtUsd(quoteBal, false));
+        if (quoteBal != null && quoteBal >= 0.01) parts.push('Quote ' + fmtUsd(quoteBal, false));
         if (eq != null && eq > 0) parts.push('Bakiye ' + fmtUsd(eq, false));
         return joinParts(parts);
     }

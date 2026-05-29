@@ -549,6 +549,56 @@ def _cycle_start_meta_stale_for_past_tur(
         return False
 
 
+def _equity_looks_base_only_usd(
+    equity: Any,
+    base: Any,
+    ref: Any,
+) -> bool:
+    """equity ≈ base×ref ise quote yok sayılır (yanlış equity_usdt heal)."""
+    try:
+        eq = float(equity)
+        base_f = float(base)
+        ref_f = float(ref)
+    except (TypeError, ValueError):
+        return False
+    if base_f <= 0 or ref_f <= 0:
+        return False
+    base_usd = base_f * ref_f
+    if base_usd <= 0:
+        return False
+    return abs(eq - base_usd) <= max(0.05, base_usd * 0.015)
+
+
+def _sanitize_cycle_start_wallet(out: Dict[str, Any]) -> Dict[str, Any]:
+    """Base-only equity ve türetilmiş quote=0 kalıntılarını temizle; tutarlı equity hesapla."""
+    if not out:
+        return out
+    try:
+        base_f = float(out.get("base_balance") or out.get("base_qty") or 0)
+        ref_f = float(out.get("reference_price") or 0)
+    except (TypeError, ValueError):
+        return out
+    eq_raw = out.get("equity_usdt")
+    if eq_raw is None:
+        eq_raw = out.get("equity_usd")
+    quote_raw = out.get("quote_balance")
+    if eq_raw is not None and base_f > 0 and ref_f > 0 and _equity_looks_base_only_usd(eq_raw, base_f, ref_f):
+        out.pop("equity_usdt", None)
+        out.pop("equity_usd", None)
+        try:
+            if quote_raw is not None and float(quote_raw) < 0.01:
+                out.pop("quote_balance", None)
+        except (TypeError, ValueError):
+            out.pop("quote_balance", None)
+    try:
+        quote_f = float(out.get("quote_balance")) if out.get("quote_balance") is not None else None
+    except (TypeError, ValueError):
+        quote_f = None
+    if quote_f is not None and quote_f >= 0.01 and base_f > 0 and ref_f > 0:
+        out["equity_usdt"] = round(quote_f + base_f * ref_f, 2)
+    return out
+
+
 def _snapshot_from_cycle_open_row(state: Dict[str, Any], cycle_id: int) -> Dict[str, Any]:
     """Tur açılış anı — cycle_open_trades (tur içi fill ile değişmez)."""
     row = _cycle_open_trade_row(state, int(cycle_id))
@@ -576,9 +626,15 @@ def _snapshot_from_cycle_open_row(state: Dict[str, Any], cycle_id: int) -> Dict[
                 pass
     if out.get("equity_usdt") is None and out.get("quote_balance") is not None and base_f > 0 and ref_f > 0:
         out["equity_usdt"] = round(float(out["quote_balance"]) + base_f * ref_f, 2)
-    elif out.get("quote_balance") is None and out.get("equity_usdt") is not None and base_f > 0 and ref_f > 0:
+    elif (
+        out.get("quote_balance") is None
+        and out.get("equity_usdt") is not None
+        and base_f > 0
+        and ref_f > 0
+        and not _equity_looks_base_only_usd(out["equity_usdt"], base_f, ref_f)
+    ):
         out["quote_balance"] = round(float(out["equity_usdt"]) - base_f * ref_f, 2)
-    return out
+    return _sanitize_cycle_start_wallet(out)
 
 
 def _snapshot_from_frozen_cycle_start_equity(
@@ -646,46 +702,54 @@ def _cycle_start_wallet_snapshot(
     cycle_id: int,
     events: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
-    """Tur açılış cüzdanı — cycle_open_trades / frozen equity / DB; asla canlı quote/base."""
+    """Tur açılış cüzdanı — cycle_open_trades / CYCLE_START meta / frozen; asla canlı quote/base."""
     cid = int(cycle_id)
-    open_row_snap = _snapshot_from_cycle_open_row(state, cid)
-    if open_row_snap.get("quote_balance") is not None and open_row_snap.get("base_balance") is not None:
-        return dict(open_row_snap)
+    merged_em = _merged_cycle_start_meta_from_events(events, cid)
+    open_row_snap = _sanitize_cycle_start_wallet(_snapshot_from_cycle_open_row(state, cid))
+    db_ev = _find_cycle_start_event(events, cid)
+    db_meta = (db_ev.get("meta") or {}) if db_ev else {}
+
+    out: Dict[str, Any] = {}
+    for src in (open_row_snap, merged_em, db_meta):
+        if not isinstance(src, dict):
+            continue
+        for key, val in src.items():
+            if val is not None and out.get(key) is None:
+                out[key] = val
 
     if cid == 1:
         snap = _tur1_wallet_snapshot(state, events)
         if snap:
-            return dict(snap)
+            for key, val in snap.items():
+                if val is not None and out.get(key) is None:
+                    out[key] = val
 
     frozen = _snapshot_from_frozen_cycle_start_equity(state, cid, events, open_row_snap)
     if frozen.get("quote_balance") is not None:
-        return frozen
+        for key, val in frozen.items():
+            if val is not None:
+                out[key] = val
 
-    out: Dict[str, Any] = dict(open_row_snap)
-    db_ev = _find_cycle_start_event(events, cid)
-    if db_ev and int(db_ev.get("id") or 0) > 0:
-        dm = db_ev.get("meta") or {}
-        for key in (
-            "base_balance", "base_qty", "quote_balance", "equity_usdt",
-            "reference_price", "symbol", "target_quote_usdt", "target_base_usdt",
-        ):
-            if out.get(key) is None and dm.get(key) is not None:
-                out[key] = dm[key]
-        if out.get("equity_usdt") is None and out.get("equity_usd") is not None:
-            out["equity_usdt"] = out.get("equity_usd")
-
-    if (
-        out.get("quote_balance") is not None
-        and (out.get("base_balance") is not None or out.get("base_qty") is not None)
-        and out.get("equity_usdt") is not None
+    # CYCLE_START event meta (en zengin DB kaydı) quote/equity için öncelikli
+    for key in (
+        "quote_balance", "equity_usdt", "equity_usd",
+        "base_balance", "base_qty", "reference_price", "symbol",
+        "target_quote_usdt", "target_base_usdt",
     ):
-        return out
+        val = merged_em.get(key)
+        if val is None:
+            val = db_meta.get(key)
+        if val is None:
+            continue
+        if key in ("quote_balance", "equity_usdt", "equity_usd"):
+            out[key] = val
+        elif out.get(key) is None:
+            out[key] = val
 
-    if cid == 1:
-        snap = _tur1_wallet_snapshot(state, events)
-        if snap:
-            out.update({k: v for k, v in snap.items() if v is not None})
-    return out
+    if out.get("equity_usdt") is None and out.get("equity_usd") is not None:
+        out["equity_usdt"] = out.get("equity_usd")
+
+    return _finalize_cycle_start_wallet(_sanitize_cycle_start_wallet(out))
 
 
 def _apply_cycle_start_wallet_snapshot(
@@ -769,14 +833,17 @@ def _completed_dual_pnl_entry(state: Dict[str, Any], cycle_id: int) -> Optional[
 
 def _find_cycle_start_event(events: List[Dict[str, Any]], cycle_id: int) -> Optional[Dict[str, Any]]:
     found: Optional[Dict[str, Any]] = None
+    best_score = -10**9
     for ev in events:
         if (ev.get("type") or "") != "CYCLE_START":
             continue
         if int((ev.get("meta") or {}).get("cycle_id") or 0) != int(cycle_id):
             continue
+        score = _cycle_start_richness_score(ev)
         eid = int(ev.get("id") or 0)
-        if found is None or eid > int(found.get("id") or 0):
+        if found is None or score > best_score or (score == best_score and eid > int(found.get("id") or 0)):
             found = ev
+            best_score = score
     return found
 
 
@@ -1029,6 +1096,7 @@ def _merge_synthetic_cycle_start_events(events: List[Dict[str, Any]], state: Opt
         if any(
             (e.get("type") or "") == "CYCLE_START"
             and int((e.get("meta") or {}).get("cycle_id") or 0) == int(cid)
+            and _cycle_start_is_complete(e.get("meta") or {})
             for e in events
         ):
             continue
@@ -1109,6 +1177,65 @@ def _cycle_start_is_complete(meta: Dict[str, Any]) -> bool:
     return meta.get("quote_balance") is not None or meta.get("equity_usdt") is not None or meta.get("equity_usd") is not None
 
 
+def _merged_cycle_start_meta_from_events(
+    events: List[Dict[str, Any]],
+    cycle_id: int,
+) -> Dict[str, Any]:
+    """Aynı tur için tüm CYCLE_START meta alanlarını birleştir (eksik Quote/Bakiye heal)."""
+    candidates: List[Dict[str, Any]] = []
+    for ev in events or []:
+        if (ev.get("type") or "") != "CYCLE_START":
+            continue
+        try:
+            if int((ev.get("meta") or {}).get("cycle_id") or 0) != int(cycle_id):
+                continue
+        except (TypeError, ValueError):
+            continue
+        candidates.append(ev)
+    if not candidates:
+        return {}
+    candidates.sort(
+        key=lambda e: (_cycle_start_richness_score(e), int(e.get("id") or 0)),
+        reverse=True,
+    )
+    merged: Dict[str, Any] = {}
+    for ev in candidates:
+        meta = ev.get("meta") or {}
+        for key in (
+            "base_balance", "base_qty", "quote_balance", "equity_usdt", "equity_usd",
+            "reference_price", "symbol", "target_quote_usdt", "target_base_usdt",
+        ):
+            if merged.get(key) is None and meta.get(key) is not None:
+                merged[key] = meta[key]
+    return merged
+
+
+def _finalize_cycle_start_wallet(out: Dict[str, Any]) -> Dict[str, Any]:
+    """Quote/Bakiye eksikse base+ref veya equity'den türet."""
+    if not out:
+        return out
+    try:
+        base_f = float(out.get("base_balance") or out.get("base_qty") or 0)
+        ref_f = float(out.get("reference_price") or 0)
+    except (TypeError, ValueError):
+        return out
+    if base_f <= 0 or ref_f <= 0:
+        return out
+    eq = out.get("equity_usdt")
+    if eq is None:
+        eq = out.get("equity_usd")
+    quote = out.get("quote_balance")
+    try:
+        if eq is not None and quote is None:
+            if not _equity_looks_base_only_usd(eq, base_f, ref_f):
+                out["quote_balance"] = round(max(0.0, float(eq) - base_f * ref_f), 2)
+        elif quote is not None and eq is None:
+            out["equity_usdt"] = round(float(quote) + base_f * ref_f, 2)
+    except (TypeError, ValueError):
+        pass
+    return _sanitize_cycle_start_wallet(out)
+
+
 def _enrich_cycle_start_events_meta(
     events: List[Dict[str, Any]],
     state: Optional[Dict[str, Any]],
@@ -1137,6 +1264,13 @@ def _enrich_cycle_start_events_meta(
             _apply_cycle_start_wallet_snapshot(meta, snap, overwrite=True)
         elif overwrite or not _cycle_start_is_complete(meta):
             _apply_cycle_start_wallet_snapshot(meta, snap, overwrite=overwrite)
+        _apply_cycle_start_wallet_snapshot(
+            meta, _merged_cycle_start_meta_from_events(events, cid), overwrite=False
+        )
+        fin = _finalize_cycle_start_wallet(meta)
+        for key, val in fin.items():
+            if val is not None:
+                meta[key] = val
         if meta.get("symbol") is None and state.get("symbol"):
             meta["symbol"] = state.get("symbol")
 
@@ -1159,6 +1293,8 @@ def _cycle_start_richness_score(ev: Dict[str, Any]) -> int:
         score += 25
     if meta.get("base_qty") is not None:
         score += 10
+    if not _cycle_start_is_complete(meta):
+        score -= 1000
     if meta.get("synthetic") and not _cycle_start_is_complete(meta):
         score -= 400
     return score
@@ -2564,9 +2700,10 @@ def _build_live_snapshot_from_state(bot: Bot, state: Optional[Dict[str, Any]], d
     if initial_capital > 0 and equity is not None and not equity_unavailable:
         pnl_pct = (equity - initial_capital) / initial_capital * 100.0
 
-    # Günlük K/Z: TR gece 00:00 veya bot açılış gününde initial_capital referansı
+    # Günlük K/Z: TR gece 00:00 equity referansı (state daily_ref_usd)
     daily_pnl_usd: Optional[float] = None
     daily_pnl_pct: Optional[float] = None
+    daily_ref_usd: Optional[float] = None
     if state and equity is not None and not equity_unavailable and state.get("initial_allocation_done"):
         daily_pnl_usd, daily_pnl_pct = ensure_daily_ref_and_compute(
             state,
@@ -2578,6 +2715,9 @@ def _build_live_snapshot_from_state(bot: Bot, state: Optional[Dict[str, Any]], d
             account_id=bot.account_id,
             persist=True,
         )
+        _dr = state.get("daily_ref_usd")
+        if _dr is not None and float(_dr) > 0:
+            daily_ref_usd = float(_dr)
 
     stale = False
     if last_tick_at is not None:
@@ -2603,11 +2743,17 @@ def _build_live_snapshot_from_state(bot: Bot, state: Optional[Dict[str, Any]], d
         "initial_capital": initial_capital,
         "daily_pnl_usd": round(daily_pnl_usd, 2) if daily_pnl_usd is not None else None,
         "daily_pnl_pct": round(daily_pnl_pct, 2) if daily_pnl_pct is not None else None,
+        "daily_ref_usd": round(daily_ref_usd, 2) if daily_ref_usd is not None else None,
         "base_balance": base_balance,
         "quote_balance": quote_balance,
+        "cycle_id": cycle_id,
+        "cycle_opened_at": (
+            str(state.get("cycle_opened_at")).strip()
+            if state and isinstance(state.get("cycle_opened_at"), str) and str(state.get("cycle_opened_at")).strip()
+            else None
+        ),
         "first_buy_pending": first_buy_pending,
         "initial_allocation_done": initial_allocation_done,
-        "cycle_id": cycle_id,
     }
     if stale:
         out["stale"] = True
@@ -3316,6 +3462,12 @@ async def bots_stop(
         request_id=rid,
         meta={"bot_id": bot.id, "account_id": bot.account_id, "symbol": (bot.symbol or "") or ""},
     )
+    try:
+        from app.api.routes import invalidate_wallet_cache
+
+        await invalidate_wallet_cache(bot.account_id)
+    except Exception:
+        pass
     return {
         "ok": True,
         "bot_id": bot.id,

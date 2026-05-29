@@ -368,7 +368,7 @@ def _process_metrics(pid: Optional[int], started_at: Optional[float]) -> dict:
 
 
 def _reset_session_chrono() -> float:
-    """Sistem çalışması kronometresi — manager açılışında veya global start/restart'ta sıfırlanır."""
+    """Sistem çalışması kronometresi — yalnızca manager süreci yeniden başlayınca sıfırlanır."""
     _RUN_DIR.mkdir(parents=True, exist_ok=True)
     now = time.time()
     try:
@@ -376,6 +376,21 @@ def _reset_session_chrono() -> float:
     except Exception:
         pass
     return now
+
+
+def _init_session_chrono_on_manager_start() -> None:
+    """Manager boot: aynı PID ile tekrar init olmadıkça mevcut session.started_at korunur."""
+    _RUN_DIR.mkdir(parents=True, exist_ok=True)
+    current_pid = os.getpid()
+    keep_existing = False
+    if _MANAGER_PID_FILE.is_file() and _SESSION_STARTED_FILE.is_file():
+        try:
+            if int(_MANAGER_PID_FILE.read_text(encoding="utf-8").strip()) == current_pid:
+                keep_existing = True
+        except Exception:
+            keep_existing = False
+    if not keep_existing:
+        _reset_session_chrono()
 
 
 def _session_uptime_s() -> int:
@@ -699,7 +714,7 @@ def save_locks(l: dict) -> None:
 def init_state() -> None:
     global status, logs_ring, errors_ring, warns_ring, locks
     _RUN_DIR.mkdir(parents=True, exist_ok=True)
-    _reset_session_chrono()
+    _init_session_chrono_on_manager_start()
     try:
         _MANAGER_PID_FILE.write_text(str(os.getpid()), encoding="utf-8")
         _MANAGER_STARTED_FILE.write_text(str(time.time()), encoding="utf-8")
@@ -849,6 +864,9 @@ def _is_noise_line(line: str, level: str) -> bool:
         if "/api/stack/restart" in s and (" 400" in s or " 404" in s):
             return True
         if "/api/server/manager/restart" in s and " 404" in s:
+            return True
+        # Toplu start/stop/restart: önceki işlem sürerken çift tıklama — beklenen, panel gürültüsü
+        if "/api/global/" in s and " 409" in s:
             return True
         # Cüzdan yenileme import (düzeltildi / geçmiş spam)
         if "wallet_refresh_attempt error_code=ImportError" in s:
@@ -2059,7 +2077,6 @@ def _exit_manager_after_delay(delay_s: float = 0.75) -> None:
 
 def schedule_manager_restart() -> bool:
     """Manager dahil tüm stack'i yeniden başlat (panel API)."""
-    _reset_session_chrono()
     if not _spawn_manager_reboot():
         return False
     status["manager"]["restart_count"] = status["manager"].get("restart_count", 0) + 1
@@ -2113,7 +2130,6 @@ def schedule_global_action(action: str) -> dict[str, Any]:
 
 
 def global_start() -> tuple[list, list]:
-    _reset_session_chrono()
     locks = load_locks()
     applied, skipped = [], []
     for key in ("web", "engine"):
@@ -2146,7 +2162,6 @@ def global_stop() -> tuple[list, list]:
 
 
 def global_restart() -> tuple[list, list]:
-    _reset_session_chrono()
     locks = load_locks()
     applied, skipped = [], []
     for key in ("web", "engine"):

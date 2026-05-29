@@ -687,7 +687,7 @@ async def _bot_loop(bot_id: int) -> None:
                         )
                     except Exception as sync_err:
                         logger.debug("bot_engine sync_virtual_wallet_from_state failed bot_id=%s err=%s", bot_id, sync_err)
-                    # Günlük K/Z referansı: gece 00:00 (Türkiye) veya bot açılış gününde initial_capital
+                    # Günlük K/Z referansı: gece 00:00 (Türkiye) equity; gün değişince ref=equity
                     if state.get("initial_allocation_done"):
                         equity = float(state.get("base_balance") or 0) * float(price or 0) + float(state.get("quote_balance") or 0)
                         init_cap_tick = float(

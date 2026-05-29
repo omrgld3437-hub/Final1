@@ -113,7 +113,7 @@ _HEALTH_MESSAGES: Dict[str, Dict[str, Any]] = {
     "REPEATED_ORDER_FAIL": {
         "severity": "warn",
         "title": "Tekrarlayan emir hatası",
-        "cause": "Son 15 dakikada birden fazla Binance emir reddi veya ağ hatası.",
+        "cause": "Son 15 dakikada birden fazla Binance emir reddi.",
         "actions": [
             "Logda binance kodunu kontrol edin (LOT_SIZE / MIN_NOTIONAL / -2010).",
             "Bütçe, grid yüzdesi ve min tutarı (≈10 USDT) artırın.",
@@ -689,7 +689,7 @@ def evaluate_bot_health(bot, state: Optional[Dict[str, Any]], db: Session) -> Li
             if skip in ("LOT_SIZE", "MIN_NOTIONAL", "MIN_NOTIONAL_AFTER_CAP"):
                 if not meta.get("binance_code"):
                     continue
-            if skip not in ("ORDER_FAILED", "LOT_SIZE", "MIN_NOTIONAL", "INSUFFICIENT_QUOTE", "ORDER_TIMEOUT"):
+            if skip not in ("ORDER_FAILED", "LOT_SIZE", "MIN_NOTIONAL", "INSUFFICIENT_QUOTE"):
                 continue
             ts = ev.get("ts")
             if ts:

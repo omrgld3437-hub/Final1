@@ -52,6 +52,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Binance REST yavaş ortamda 3s yetersiz; reconcile yine devreye girer ama gecikme + ORDER_TIMEOUT uyarısı üretir.
+EXEC_ORDER_TIMEOUT_SEC = 15.0
+
 # Track initial_allocation skip count per (bot_id, action_key) for WARN when > 3
 _initial_alloc_skip_count: Dict[Tuple[int, str], int] = {}
 
@@ -374,7 +377,7 @@ async def run_actions(
                                         exec_qty = _num(existing_order.get("executedQty"))
                                         cum_quote = _num(existing_order.get("cummulativeQuoteQty"))
                                         fill_price_raw = (cum_quote / exec_qty) if exec_qty else _num((existing_order.get("fills") or [{}])[0].get("price"))
-                                        fill_price = round(float(fill_price_raw), 4)
+                                        fill_price = round(float(fill_price_raw), 8)
                                         fee_raw, fee_asset, fee = parse_fill_commission(
                                             existing_order.get("fills") or [], symbol, fill_price,
                                         )
@@ -438,7 +441,7 @@ async def run_actions(
                                     exec_qty = _num(existing_order.get("executedQty"))
                                     cum_quote = _num(existing_order.get("cummulativeQuoteQty"))
                                     fill_price_raw = (cum_quote / exec_qty) if exec_qty else _num((existing_order.get("fills") or [{}])[0].get("price"))
-                                    fill_price = round(float(fill_price_raw), 4)
+                                    fill_price = round(float(fill_price_raw), 8)
                                     fee_raw, fee_asset, fee = parse_fill_commission(
                                         existing_order.get("fills") or [], symbol, fill_price,
                                     )
@@ -818,9 +821,15 @@ async def run_actions(
                                 ),
                             )
                         if side == "BUY":
-                            res = await asyncio.wait_for(adapter.place_market_buy(symbol, quote_qty, client_order_id), timeout=3.0)
+                            res = await asyncio.wait_for(
+                                adapter.place_market_buy(symbol, quote_qty, client_order_id),
+                                timeout=EXEC_ORDER_TIMEOUT_SEC,
+                            )
                         else:
-                            res = await asyncio.wait_for(adapter.place_market_sell(symbol, qty, client_order_id), timeout=3.0)
+                            res = await asyncio.wait_for(
+                                adapter.place_market_sell(symbol, qty, client_order_id),
+                                timeout=EXEC_ORDER_TIMEOUT_SEC,
+                            )
                     except asyncio.TimeoutError:
                         if db is not None and intent_id:
                             update_intent_unknown(db, intent_id, error_code="TIMEOUT", error_id=str(uuid.uuid4()))
@@ -953,7 +962,7 @@ async def run_actions(
                     state.pop("health_error_since", None)
                 cum_quote = _num(res.get("cummulativeQuoteQty"))
                 fill_price_raw = (cum_quote / exec_qty) if exec_qty else _num(fills[0].get("price")) if fills else 0
-                fill_price = round(float(fill_price_raw), 4)
+                fill_price = round(float(fill_price_raw), 8)
                 fee_raw, fee_asset, fee = parse_fill_commission(fills, symbol, fill_price)
                 is_multi_rebalance = (
                     getattr(config, "symbol", None) == "MULTI"
@@ -1105,6 +1114,8 @@ async def run_actions(
                     "fill_qty": exec_qty,
                     "fill_price": fill_price,
                     "fee": fee,
+                    "fee_asset": fee_asset,
+                    "fee_raw": fee_raw,
                     "reason": reason,
                     "grid_index": a.get("grid_index"),
                     "symbol": symbol,
@@ -1150,7 +1161,8 @@ async def run_actions(
                                 from app.services.transaction_history_file_store import record_bot_trade_fill
 
                                 record_bot_trade_fill(
-                                    db, account_id, bot_id, trade_row_early, symbol, quote_qty=cum_quote
+                                    db, account_id, bot_id, trade_row_early, symbol,
+                                    quote_qty=cum_quote, fee_raw=fee_raw,
                                 )
                             except Exception as tx_ex:
                                 logger.debug("tx_history record_bot_trade_fill bot_id=%s: %s", bot_id, tx_ex)
@@ -1451,7 +1463,8 @@ async def run_actions(
                                 from app.services.transaction_history_file_store import record_bot_trade_fill
 
                                 record_bot_trade_fill(
-                                    db, account_id, bot_id, trade_row, symbol, quote_qty=cum_quote
+                                    db, account_id, bot_id, trade_row, symbol,
+                                    quote_qty=cum_quote, fee_raw=fee_raw,
                                 )
                             except Exception as tx_ex:
                                 logger.debug("tx_history record_bot_trade_fill bot_id=%s: %s", bot_id, tx_ex)

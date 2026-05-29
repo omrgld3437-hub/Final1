@@ -79,6 +79,21 @@ def _running_since_iso(started_at) -> Optional[str]:
     return s
 
 
+def _running_since_iso_for_bot(db: Session, bot: Any) -> Optional[str]:
+    """Bot detay stateHeroMetaDur ile aynı kaynak: state bot_run_started_at (+ heal), yoksa DB."""
+    if bot is None:
+        return None
+    try:
+        from app.botengine.bot_session import bot_run_started_at_iso
+        from app.botengine.state_store import load_state
+
+        state = load_state(db, int(bot.id)) or {}
+        iso = bot_run_started_at_iso(bot, state, db)
+        return _running_since_iso(iso)
+    except Exception:
+        return _running_since_iso(getattr(bot, "started_at", None))
+
+
 def _initial_capital_from_config(config_json_raw: Optional[str]) -> float:
     try:
         cfg = json.loads(config_json_raw or "{}")
@@ -286,7 +301,7 @@ def _global_top_from_running_bots(db: Session, limit: int) -> List[Dict[str, Any
             "daily_pnl_usd": extras["daily_pnl_usd"],
             "cycles_count": extras["cycles_count"],
             "params": params,
-            "running_since_iso": _running_since_iso(getattr(bot, "started_at", None)),
+            "running_since_iso": _running_since_iso_for_bot(db, bot),
             "symbol": symbol,
             "reference_price": ref_price,
         })
@@ -300,6 +315,8 @@ def get_global_top(db: Session, limit: int = 1) -> List[Dict[str, Any]]:
     Returns list of { structure_id, profit_pct, total_pnl_usd, profit_pct_daily, daily_pnl_usd, cycles_count, params, running_since_iso, reference_price }
     (no bot_id/account/balance)."""
     limit = max(1, min(20, limit))
+    from app.db.models import Bot
+
     try:
         rows = db.execute(
             text("""
@@ -325,7 +342,12 @@ def get_global_top(db: Session, limit: int = 1) -> List[Dict[str, Any]]:
             bot_id = int(row[5]) if row[5] is not None else None
             account_id = int(row[6]) if row[6] is not None else None
             config_json_raw = row[7] if len(row) > 7 else None
-            running_since_iso = _running_since_iso(started_at)
+            bot = (
+                db.query(Bot).filter(Bot.id == bot_id, Bot.account_id == account_id).first()
+                if bot_id is not None and account_id is not None
+                else None
+            )
+            running_since_iso = _running_since_iso_for_bot(db, bot) if bot else _running_since_iso(started_at)
             ref_price = _reference_price_from_state(db, bot_id, account_id)
             params = _resolve_leaderboard_params(
                 db, params, config_json_raw, bot_id, account_id, symbol, ref_price

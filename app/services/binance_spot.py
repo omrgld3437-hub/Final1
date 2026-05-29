@@ -128,19 +128,50 @@ class CircuitBreaker:
 
 # Binance server time cache (avoid -1021 timestamp outside recvWindow)
 _binance_time_cache: Dict[bool, Tuple[int, float]] = {}  # testnet -> (server_time_ms, local_ts)
-_binance_time_cache_sync: Dict[bool, Tuple[int, float]] = {}
 _BINANCE_TIME_CACHE_TTL = 30.0  # seconds
+_BINANCE_TIME_STALE_MAX_SEC = 120.0  # extrapolate stale cache before local-ms fallback
+_BINANCE_TIME_FETCH_TIMEOUT = httpx.Timeout(15.0, connect=5.0)
+_BINANCE_TIME_WARN_THROTTLE_SEC = 300.0
+_binance_time_warn_last = 0.0
 _MAX_CLOCK_RETRIES = 2
 
 
+def _read_binance_time_from_cache(testnet: bool, *, max_age_sec: float) -> Optional[int]:
+    """Extrapolate cached server time; None if missing or older than max_age_sec."""
+    cached = _binance_time_cache.get(testnet)
+    if not cached:
+        return None
+    server_ms, local_ts = cached
+    age = time.time() - local_ts
+    if age > max_age_sec:
+        return None
+    return int(server_ms + age * 1000)
+
+
+def _store_binance_time_cache(testnet: bool, server_ms: int) -> None:
+    _binance_time_cache[testnet] = (server_ms, time.time())
+
+
+def _log_binance_time_unavailable(reason: Optional[BaseException] = None) -> None:
+    global _binance_time_warn_last
+    now = time.monotonic()
+    if now - _binance_time_warn_last < _BINANCE_TIME_WARN_THROTTLE_SEC:
+        return
+    _binance_time_warn_last = now
+    extra = f" ({type(reason).__name__})" if reason else ""
+    logger.warning(
+        "Binance server time unavailable; using local timestamp%s. If you get -1021, sync clock: %s",
+        extra,
+        clock_sync_hint(),
+    )
+
+
 def invalidate_binance_time_cache(testnet: Optional[bool] = None) -> None:
-    """Clear cached Binance server time (async + sync). testnet=None clears both."""
+    """Clear cached Binance server time. testnet=None clears both."""
     if testnet is None:
         _binance_time_cache.clear()
-        _binance_time_cache_sync.clear()
     else:
         _binance_time_cache.pop(testnet, None)
-        _binance_time_cache_sync.pop(testnet, None)
 
 
 def clock_sync_hint() -> str:
@@ -400,42 +431,32 @@ async def _get_binance_timestamp(
     testnet: bool,
     force_refresh: bool = False,
 ) -> int:
-    """Binance server time (ms). Cached 30s to avoid -1021 (timestamp outside recvWindow)."""
+    """Binance server time (ms). Cached 30s; stale extrapolation up to 120s before local fallback."""
     if force_refresh:
         invalidate_binance_time_cache(testnet)
-    now_local = time.time()
-    cached = _binance_time_cache.get(testnet)
-    if cached and not force_refresh:
-        server_ms, local_ts = cached
-        if now_local - local_ts < _BINANCE_TIME_CACHE_TTL:
-            return int(server_ms + (now_local - local_ts) * 1000)
+    if not force_refresh:
+        fresh = _read_binance_time_from_cache(testnet, max_age_sec=_BINANCE_TIME_CACHE_TTL)
+        if fresh is not None:
+            return fresh
     if is_ip_banned():
-        if cached:
-            server_ms, local_ts = cached
-            return int(server_ms + (now_local - local_ts) * 1000)
+        stale = _read_binance_time_from_cache(testnet, max_age_sec=_BINANCE_TIME_STALE_MAX_SEC)
+        if stale is not None:
+            return stale
         return int(time.time() * 1000)
     base = _base_url(testnet)
     url = f"{base}/api/v3/time"
-    for _ in range(2):
+    last_exc: Optional[BaseException] = None
+    for attempt in range(3):
         try:
-            allowed, reason, _w = None, None, 1
-            try:
-                from app.services.binance_rest_log import should_allow_rest, record_rest
-                allowed, reason, _w = should_allow_rest("GET", "/api/v3/time", {})
-                if not allowed:
-                    record_rest("GET", "/api/v3/time", weight=_w, outcome="skipped", detail=reason)
-                    break
-            except Exception:
-                pass
             if client is not None:
-                r = await client.get(url)
+                r = await client.get(url, timeout=_BINANCE_TIME_FETCH_TIMEOUT)
             else:
-                async with httpx.AsyncClient(timeout=BINANCE_HTTP_TIMEOUT) as c:
+                async with httpx.AsyncClient(timeout=_BINANCE_TIME_FETCH_TIMEOUT) as c:
                     r = await c.get(url)
             r.raise_for_status()
             data = r.json()
             server_ms = int(data.get("serverTime", 0) or (time.time() * 1000))
-            _binance_time_cache[testnet] = (server_ms, time.time())
+            _store_binance_time_cache(testnet, server_ms)
             try:
                 from app.services.binance_rest_log import record_rest
                 from app.services.binance_weight import record_weight_used
@@ -444,15 +465,15 @@ async def _get_binance_timestamp(
             except Exception:
                 pass
             return server_ms
-        except Exception:
-            await _asyncio_sleep(0.3)
-    # Last resort: local time (401 if server clock wrong - user must sync time)
-    local_ms = int(time.time() * 1000)
-    logger.warning(
-        "Binance server time unavailable; using local timestamp. If you get -1021, sync clock: %s",
-        clock_sync_hint(),
-    )
-    return local_ms
+        except Exception as exc:
+            last_exc = exc
+            if attempt < 2:
+                await _asyncio_sleep(0.5 * (attempt + 1))
+    stale = _read_binance_time_from_cache(testnet, max_age_sec=_BINANCE_TIME_STALE_MAX_SEC)
+    if stale is not None:
+        return stale
+    _log_binance_time_unavailable(last_exc)
+    return int(time.time() * 1000)
 
 
 def _path_weight(path: str, method: str, params: Optional[Dict[str, Any]] = None) -> int:
@@ -1222,26 +1243,45 @@ def _sync_public_get(path: str, params: Optional[Dict[str, Any]] = None, testnet
 
 
 def _get_binance_timestamp_sync(testnet: bool, force_refresh: bool = False) -> int:
-    """Binance server time (ms) for sync calls. Cached 30s to avoid -1021."""
+    """Binance server time (ms) for sync calls. Same cache/TTL as async path."""
     import requests
     if force_refresh:
         invalidate_binance_time_cache(testnet)
-    now_local = time.time()
-    cached = _binance_time_cache_sync.get(testnet)
-    if cached and not force_refresh:
-        server_ms, local_ts = cached
-        if now_local - local_ts < _BINANCE_TIME_CACHE_TTL:
-            return int(server_ms + (now_local - local_ts) * 1000)
-    base = _base_url(testnet)
-    try:
-        r = requests.get(f"{base}/api/v3/time", timeout=2)
-        r.raise_for_status()
-        data = r.json()
-        server_ms = int(data.get("serverTime", 0) or (time.time() * 1000))
-        _binance_time_cache_sync[testnet] = (server_ms, time.time())
-        return server_ms
-    except Exception:
+    if not force_refresh:
+        fresh = _read_binance_time_from_cache(testnet, max_age_sec=_BINANCE_TIME_CACHE_TTL)
+        if fresh is not None:
+            return fresh
+    if is_ip_banned():
+        stale = _read_binance_time_from_cache(testnet, max_age_sec=_BINANCE_TIME_STALE_MAX_SEC)
+        if stale is not None:
+            return stale
         return int(time.time() * 1000)
+    base = _base_url(testnet)
+    last_exc: Optional[BaseException] = None
+    for attempt in range(3):
+        try:
+            r = requests.get(f"{base}/api/v3/time", timeout=15)
+            r.raise_for_status()
+            data = r.json()
+            server_ms = int(data.get("serverTime", 0) or (time.time() * 1000))
+            _store_binance_time_cache(testnet, server_ms)
+            try:
+                from app.services.binance_rest_log import record_rest
+                from app.services.binance_weight import record_weight_used
+                record_rest("GET", "/api/v3/time", weight=1, status=r.status_code, outcome="ok")
+                record_weight_used(None, None, 1)
+            except Exception:
+                pass
+            return server_ms
+        except Exception as exc:
+            last_exc = exc
+            if attempt < 2:
+                time.sleep(0.5 * (attempt + 1))
+    stale = _read_binance_time_from_cache(testnet, max_age_sec=_BINANCE_TIME_STALE_MAX_SEC)
+    if stale is not None:
+        return stale
+    _log_binance_time_unavailable(last_exc)
+    return int(time.time() * 1000)
 
 
 def _sync_signed_request(method: str, path: str, keys: Any, params: Optional[Dict[str, Any]] = None) -> Any:

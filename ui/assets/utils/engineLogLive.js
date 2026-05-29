@@ -302,6 +302,9 @@
         var list = prep.list;
         var collapsed = prep.collapsed;
         if (!list.length) {
+            if (opts._logBootstrapping) {
+                return { rendered: false, events: list, skipped: true };
+            }
             if (opts._lastLogRenderSig !== 'empty') {
                 container.innerHTML = '<div class="muted" style="padding: 0.75rem;">Henüz event yok.</div>';
                 opts._lastLogRenderSig = 'empty';
@@ -309,6 +312,9 @@
             return { rendered: false, events: list, skipped: true };
         }
         if (!collapsed.length) {
+            if (opts._logBootstrapping) {
+                return { rendered: false, events: list, skipped: true };
+            }
             var emptySig = 'hidden\x1e' + prep.signature;
             if (opts._lastLogRenderSig !== emptySig) {
                 container.innerHTML = '<div class="muted" style="padding: 0.75rem;">Gösterilecek önemli kayıt yok (rutin uyarılar gizlendi).</div>';
@@ -370,7 +376,12 @@
                 (qBase ? '&' : '?') + 'limit=100&after_id=' + encodeURIComponent(state.lastId);
         } else {
             if (!incremental && !(state.events && state.events.length)) {
-                opts.container.innerHTML = '<div class="muted" style="padding: 0.75rem;">Yükleniyor…</div>';
+                opts._logBootstrapping = true;
+                var hasTable = opts.container.querySelector('table.engine-log-table');
+                var hasLoading = opts.container.querySelector('.engine-log-loading');
+                if (!hasTable && !hasLoading) {
+                    opts.container.innerHTML = '<div class="muted engine-log-loading" style="padding: 0.75rem;">Yükleniyor…</div>';
+                }
             }
             opts._logForceTop = true;
             opts._logPinTop = true;
@@ -405,6 +416,7 @@
             if (didMerge || !incremental || !(state.events && state.events.length)) {
                 renderTable(opts.container, state.events, global.EngineLogFormat, opts.botId, opts);
             }
+            opts._logBootstrapping = false;
             if (typeof opts.onAfterRender === 'function') {
                 opts.onAfterRender(state.events);
             }
@@ -436,15 +448,17 @@
         });
     }
 
-    function startPolling(opts) {
+    function startPolling(opts, skipSigReset) {
         stopPolling(opts);
         if (!opts || !opts.botId) return;
         opts.state = opts.state || { events: [], lastId: 0 };
         opts._failCount = 0;
         opts._logPinTop = true;
         opts._logForceTop = true;
-        opts._lastLogRenderSig = null;
-        opts._connectivitySynthetic = null;
+        if (!skipSigReset) {
+            opts._lastLogRenderSig = null;
+            opts._connectivitySynthetic = null;
+        }
         opts._lastFullRefresh = Date.now();
         opts._pollTimer = setInterval(function () {
             if (document.hidden) return;

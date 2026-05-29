@@ -50,6 +50,64 @@ def _f(v: Optional[float]) -> Optional[float]:
         return None
 
 
+TRAIL_FAST_TICK_MS_DEFAULT = 800
+TRAIL_FAST_WAKE_MIN_SEC = 0.5
+
+
+def _trail_fast_wake_sec(config: DcaGridTrailingConfig) -> float:
+    """Dip/tepe veya kar trail aktifken tick aralığı (orchestrator min 0.5s)."""
+    fast_ms = getattr(config, "trail_fast_tick_ms", None)
+    if fast_ms is None:
+        fast_ms = TRAIL_FAST_TICK_MS_DEFAULT
+    try:
+        fast_ms = int(fast_ms)
+    except (TypeError, ValueError):
+        fast_ms = TRAIL_FAST_TICK_MS_DEFAULT
+    normal = config.tick_interval_ms / 1000.0
+    return max(TRAIL_FAST_WAKE_MIN_SEC, min(normal, fast_ms / 1000.0))
+
+
+def _is_trail_armed(state: Dict[str, Any], config: DcaGridTrailingConfig) -> bool:
+    """Grid tetiklenmiş (dip/tepe takibi) veya tur kar trail modu aktif."""
+    mode = state.get("mode") or BotEngineMode.IDLE.value
+    if mode in (
+        BotEngineMode.TRAIL_REENTRY_BUY.value,
+        BotEngineMode.TRAIL_PROFIT_SELL.value,
+        BotEngineMode.TRAIL_SELL_GRID.value,
+        BotEngineMode.TRAIL_BUY_GRID.value,
+    ):
+        return True
+    _ensure_sell_buy_lists(state, config)
+    n = len(config.sell_grids)
+    m = len(config.buy_grids)
+    sell_fired = state.get("sell_grid_fired") or []
+    sell_trig = state.get("sell_grid_trigger_price") or []
+    for idx in range(n):
+        if idx < len(sell_fired) and sell_fired[idx]:
+            continue
+        if idx < len(sell_trig) and sell_trig[idx] is not None:
+            return True
+    buy_fired = state.get("buy_grid_fired") or []
+    buy_trig = state.get("buy_grid_trigger_price") or []
+    for idx in range(m):
+        if idx < len(buy_fired) and buy_fired[idx]:
+            continue
+        if idx < len(buy_trig) and buy_trig[idx] is not None:
+            return True
+    return False
+
+
+def _finish_tick(
+    state: Dict[str, Any],
+    config: DcaGridTrailingConfig,
+    actions: List[Dict[str, Any]],
+    next_wake: float,
+) -> Tuple[List[Dict[str, Any]], float]:
+    if _is_trail_armed(state, config):
+        next_wake = min(next_wake, _trail_fast_wake_sec(config))
+    return actions, next_wake
+
+
 def _ensure_sell_buy_lists(state: Dict[str, Any], cfg: DcaGridTrailingConfig) -> None:
     n = len(cfg.sell_grids)
     m = len(cfg.buy_grids)
@@ -360,7 +418,7 @@ def tick_dca_grid_trailing(
                     "BOT_REENTRY_HOLD bot_id=%s cycle_id=%s price=%.4f max_buy=%.4f decision=HOLD reason=buy_above_sell_basis",
                     state.get("bot_id"), state.get("cycle_id"), P, max_buy,
                 )
-                return actions, next_wake
+                return _finish_tick(state, config, actions, next_wake)
             qty_usdt = _reentry_buy_qty(state, config, quote_balance)
             if qty_usdt and qty_usdt > 0:
                 actions.append({
@@ -379,7 +437,7 @@ def tick_dca_grid_trailing(
                 state.pop("_reentry_avg_sell", None)
                 state.pop("_reentry_max_buy_price", None)
                 state.pop("_outage_force_reentry_buy", None)
-        return actions, next_wake
+        return _finish_tick(state, config, actions, next_wake)
 
     if mode == BotEngineMode.TRAIL_PROFIT_SELL.value:
         anchor = _f(state.get("trail_anchor_price") or P) or P
@@ -394,7 +452,7 @@ def tick_dca_grid_trailing(
                     "BOT_PROFIT_EXIT_HOLD bot_id=%s cycle_id=%s price=%.4f breakeven=%.4f decision=HOLD reason=trail_would_sell_below_breakeven",
                     state.get("bot_id"), state.get("cycle_id"), P, breakeven_floor,
                 )
-                return actions, next_wake
+                return _finish_tick(state, config, actions, next_wake)
             qty = _profit_exit_sell_qty(state, config, base_balance)
             if qty and qty > 0:
                 actions.append({
@@ -413,7 +471,7 @@ def tick_dca_grid_trailing(
                 state.pop("_profit_exit_breakeven", None)
                 state.pop("_profit_exit_trigger_price", None)
                 state.pop("_outage_force_profit_sell", None)
-        return actions, next_wake
+        return _finish_tick(state, config, actions, next_wake)
 
     # ---- Per-grid parallel trailing (each grid independent) ----
     ref = _f(state.get("reference_price"))
@@ -605,7 +663,7 @@ def tick_dca_grid_trailing(
             state["_reentry_avg_sell"] = avg_sell
             state["_reentry_max_buy_price"] = max_buy
             state["mode"] = BotEngineMode.TRAIL_REENTRY_BUY.value
-            return actions, next_wake
+            return _finish_tick(state, config, actions, next_wake)
 
     # D) Profit exit (after any buy) — fee-aware when pnl_mode=cycle_only_fee_aware_v1
     buy_hist = state.get("buy_history") or []
@@ -644,7 +702,7 @@ def tick_dca_grid_trailing(
                 state["_profit_exit_breakeven"] = breakeven
                 state["_profit_exit_trigger_price"] = trigger_price
                 state["mode"] = BotEngineMode.TRAIL_PROFIT_SELL.value
-                return actions, next_wake
+                return _finish_tick(state, config, actions, next_wake)
             if trigger_price is not None and P < trigger_price and breakeven is not None and P < breakeven:
                 logger.info(
                     "BOT_PROFIT_EXIT_EVAL bot_id=%s cycle_id=%s symbol=%s scope=cycle last_price=%.4f breakeven=%.4f trigger=%.4f decision=HOLD reason=below_breakeven",
@@ -661,9 +719,9 @@ def tick_dca_grid_trailing(
                     state["_profit_exit_breakeven"] = thr
                     state["_profit_exit_trigger_price"] = thr
                     state["mode"] = BotEngineMode.TRAIL_PROFIT_SELL.value
-                    return actions, next_wake
+                    return _finish_tick(state, config, actions, next_wake)
 
-    return actions, next_wake
+    return _finish_tick(state, config, actions, next_wake)
 
 
 def _float(x: Any, default: float) -> float:

@@ -19,7 +19,7 @@ python -m app.botengine.worker_main
 | `orchestrator.py` | Legacy `_bot_loop` |
 | `bot_run.py` | v5 tek tick |
 | `scheduler.py` | v5 heap (`BOT_ENGINE_V5_SCHEDULER=1`) |
-| `execution.py` | `run_actions` → Binance; 401 → `paused_error`; SELL LOT_SIZE preflight; `RUN_ACTION_EXCEPTION` → resilience log |
+| `execution.py` | `run_actions` → Binance; `EXEC_ORDER_TIMEOUT_SEC=15`; 401 → `paused_error`; SELL LOT_SIZE preflight; `RUN_ACTION_EXCEPTION` → resilience log |
 | `health_watch.py` | `evaluate_bot_health`, `emit_resilience_continue`, `emit_loop_auto_restart`; worker ~60s emit |
 | `bot_session.py` | `bot_run_started_at` oturum saati; connectivity START sıfırlamaz; event heal |
 | `orchestrator.py` | Tick hatalarında running kalır; emilen TRDCA/tick → INFO worker log; döngü crash → auto-restart; `ensure_running_bots` |
@@ -43,7 +43,7 @@ python -m app.botengine.worker_main
 
 | ID | Dosya |
 |----|--------|
-| `dca_grid_trailing` | `strategies/dca_grid_trailing.py` |
+| `dca_grid_trailing` | `strategies/dca_grid_trailing.py` — dip/tepe/kar trail aktifken `trail_fast_tick_ms` (varsayılan 800) ile hızlı next_wake |
 | `trdca_pro` | `strategies/trdca_pro.py` |
 | `multi_asset_rebalance` | `strategies/multi_asset_rebalance.py` |
 

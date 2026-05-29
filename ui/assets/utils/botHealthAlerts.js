@@ -1,6 +1,6 @@
 /**
  * Per-bot health UI — page frame blink, status badges, engine-log rows (no top banner).
- * Critical / warn classes; deduped log rows; reset clears until re-fire; resolved rows stay in log.
+ * Critical / warn classes; deduped log rows; reset clears until re-fire; cleared alerts removed from log (no stale "çözüldü" rows).
  */
 (function (global) {
     'use strict';
@@ -508,10 +508,9 @@
 
         Object.keys(reg.entries).forEach(function (k) {
             var e = reg.entries[k];
-            if (!e || e.dismissed || !e.active) return;
-            if (!activeCodes[e.code]) {
-                e.active = false;
-                e.resolvedAt = now;
+            if (!e || e.dismissed) return;
+            if (!e.active || !activeCodes[e.code]) {
+                delete reg.entries[k];
             }
         });
 
@@ -582,24 +581,29 @@
         var dismiss = getDismissInfo(botId);
         var reg = syncLogRegistry(botId, alerts, dismiss, events, healthData);
 
+        var currentAlertCodes = {};
+        alerts.forEach(function (a) {
+            if (a && a.code) currentAlertCodes[a.code] = true;
+        });
+
         var trackedCodes = {};
         Object.keys(reg.entries || {}).forEach(function (k) {
             var e = reg.entries[k];
-            if (e && !e.dismissed && e.code) trackedCodes[e.code] = true;
+            if (e && !e.dismissed && e.active && e.code) trackedCodes[e.code] = true;
         });
 
         var out = events.filter(function (ev) {
             if (!isHealthEventType(ev && ev.type)) return true;
             var code = eventHealthCode(ev);
             if (code && trackedCodes[code]) return false;
+            if (code && KNOWN_HEALTH_CODES.indexOf(code) >= 0 && !currentAlertCodes[code]) return false;
             return true;
         });
 
         var synthetics = [];
         Object.keys(reg.entries || {}).forEach(function (k) {
             var e = reg.entries[k];
-            if (!e || e.dismissed) return;
-            if (!e.active && !e.resolvedAt) return;
+            if (!e || e.dismissed || !e.active) return;
             synthetics.push(buildRegistrySynthetic(e));
         });
 

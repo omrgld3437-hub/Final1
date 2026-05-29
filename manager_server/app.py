@@ -139,6 +139,7 @@ _SUPPRESS_404_PATHS = frozenset({
 })
 # Tam yeniden başlatma — başarılı istek INFO; hata panelde zaten görünür, WARN spam olmasın.
 _STACK_RESTART_PATHS = frozenset({"/api/stack/restart", "/api/server/manager/restart"})
+_GLOBAL_ACTION_PATHS = frozenset({"/api/global/start", "/api/global/stop", "/api/global/restart"})
 _last_404_log_ts: dict[str, float] = {}
 _404_LOG_THROTTLE_SEC = 60.0
 
@@ -150,6 +151,8 @@ async def log_errors_only(request: Request, call_next):
     if response.status_code >= 400:
         path = (request.url.path or "").rstrip("/") or "/"
         if path in _STACK_RESTART_PATHS:
+            return response
+        if path in _GLOBAL_ACTION_PATHS and response.status_code == 409:
             return response
         if response.status_code == 404:
             if path in _SUPPRESS_404_PATHS or path.startswith("/api/security/"):
@@ -201,6 +204,7 @@ async def api_status():
         out["host"] = socket.gethostname()
     except Exception:
         out["host"] = "—"
+    out["global_action_busy"] = state.global_action_busy()
     return out
 
 
@@ -256,7 +260,7 @@ async def api_server_restart(key: str):
 async def api_global_start():
     body = state.schedule_global_action("start")
     if body.get("busy"):
-        return JSONResponse(status_code=409, content={"detail": "Başka bir toplu işlem sürüyor", "ok": False})
+        return {"ok": False, "busy": True, "detail": "Başka bir toplu işlem sürüyor"}
     return body
 
 
@@ -264,7 +268,7 @@ async def api_global_start():
 async def api_global_stop():
     body = state.schedule_global_action("stop")
     if body.get("busy"):
-        return JSONResponse(status_code=409, content={"detail": "Başka bir toplu işlem sürüyor", "ok": False})
+        return {"ok": False, "busy": True, "detail": "Başka bir toplu işlem sürüyor"}
     return body
 
 
@@ -272,7 +276,7 @@ async def api_global_stop():
 async def api_global_restart():
     body = state.schedule_global_action("restart")
     if body.get("busy"):
-        return JSONResponse(status_code=409, content={"detail": "Başka bir toplu işlem sürüyor", "ok": False})
+        return {"ok": False, "busy": True, "detail": "Başka bir toplu işlem sürüyor"}
     return body
 
 

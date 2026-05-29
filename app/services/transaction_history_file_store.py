@@ -282,6 +282,7 @@ def record_bot_trade_fill(
     symbol: str,
     *,
     quote_qty: Optional[float] = None,
+    fee_raw: Optional[float] = None,
 ) -> None:
     """Bot fill anında işlem geçmişi dosyasına yaz."""
     from app.db.models import Bot
@@ -302,6 +303,7 @@ def record_bot_trade_fill(
     quote = float(quote_qty) if quote_qty is not None and quote_qty > 0 else (qty * price if qty and price else 0.0)
     if quote > 0 and qty > 0:
         price = quote / qty
+    comm_raw = float(fee_raw) if fee_raw is not None else float(getattr(trade, "fee", 0) or 0)
     upsert_trade_fill(
         account_id,
         trade_id=str(trade.order_id or trade.id),
@@ -312,7 +314,7 @@ def record_bot_trade_fill(
         qty=qty,
         price=price,
         quote_qty=quote,
-        commission=float(trade.fee or 0),
+        commission=comm_raw,
         commission_asset=getattr(trade, "fee_asset", None) or "USDT",
         is_maker=False,
         bot_id=bot_id,
@@ -442,6 +444,19 @@ def _expand_record(key: str, rec: List[Any]) -> Dict[str, Any]:
         float(rec[C_PRICE] or 0),
         float(rec[C_QUOTE] or 0),
     )
+    comm_raw = float(rec[C_COMM] or 0)
+    comm_asset = rec[C_CASSET] or "USDT"
+    sym = rec[C_SYM] or ""
+    comm_usdt = 0.0
+    if comm_raw > 0:
+        try:
+            from app.botengine.fee_utils import commission_to_usdt
+            comm_usdt = float(commission_to_usdt(comm_raw, comm_asset, sym, price) or 0)
+            # Eski bot kayıtları: C_COMM bazen fee_usdt (USDT) iken commission_asset base coin
+            if quote > 0 and comm_usdt > max(quote * 0.02, 0.5):
+                comm_usdt = comm_raw
+        except Exception:
+            comm_usdt = comm_raw if (comm_asset or "").upper() in ("USDT", "BUSD", "FDUSD", "USDC") else 0.0
     return {
         "id": key if key.startswith(("o_", "t_", "dw_")) else f"ord_{rec[C_OID] or rec[C_TID]}",
         "trade_id": rec[C_TID],
@@ -454,8 +469,9 @@ def _expand_record(key: str, rec: List[Any]) -> Dict[str, Any]:
         "qty": qty,
         "price": price,
         "quote_qty": quote,
-        "commission": float(rec[C_COMM] or 0),
-        "commission_asset": rec[C_CASSET] or "USDT",
+        "commission": comm_raw,
+        "commission_asset": comm_asset,
+        "commission_usdt": round(comm_usdt, 8) if comm_usdt else 0.0,
         "is_maker": False,
         "source": "bot" if is_bot else "spot",
         "source_label": "Bot" if is_bot else "Spot",
@@ -514,13 +530,17 @@ def upsert_trade_fill(
         orders: Dict[str, List[Any]] = data["orders"]
         existing = orders.get(key)
         if existing and tc in ("b", "s"):
-            if (
-                abs(float(qty or 0) - float(existing[C_QTY] or 0)) < 1e-12
-                and abs(float(quote_qty or 0) - float(existing[C_QUOTE] or 0)) < 0.02
-            ):
-                return
+            # Spot/Binance kaydı bot satırının üzerine yazılır (çift sayım / eski miktar kalmasın)
             if existing[C_SRC] == "b" and not bot_id:
+                orders.pop(key, None)
                 existing = None
+            elif existing:
+                same_qty = abs(float(qty or 0) - float(existing[C_QTY] or 0)) < 1e-12
+                same_quote = abs(float(quote_qty or 0) - float(existing[C_QUOTE] or 0)) < 0.02
+                same_comm = abs(float(commission or 0) - float(existing[C_COMM] or 0)) < 1e-12
+                same_asset = (commission_asset or "USDT") == (existing[C_CASSET] or "USDT")
+                if same_qty and same_quote and same_comm and same_asset:
+                    return
         if existing and tc in ("b", "s"):
             total_qty = float(existing[C_QTY] or 0) + float(qty or 0)
             total_quote = float(existing[C_QUOTE] or 0) + float(quote_qty or 0)

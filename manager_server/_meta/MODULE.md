@@ -16,11 +16,11 @@ python -m manager_server
 
 | Dosya | Görev |
 |-------|--------|
-| `app.py` | FastAPI, API, WS · `POST /api/global/{start,stop,restart}` (anında yanıt `pending`; iş `state.schedule_global_action` arka plan thread) · `POST /api/stack/restart` (Manager+Web+Engine+HTML tam yeniden başlatma; rota `{key}` önünde tanımlı) |
-| `state.py` | PID, log ring (kilitli), gürültü filtresi (deque race, TradeSync cache, emilen `BOT_*_EXCEPTION` / lease skip / fiyat yok); helper spawn; IP engel listesi (`.run/blocked_ips.json`); **sistem çalışması** kronometresi (`.run/session.started_at` — manager açılışı + global start/restart'ta sıfırlanır; metrik `system.uptime_s` / `session_started_at`); manager tam restart → `scripts/runtime/manager_reboot.py` |
+| `app.py` | FastAPI, API, WS · `POST /api/global/{start,stop,restart}` (anında yanıt `pending`; iş `state.schedule_global_action` arka plan thread; çakışmada HTTP 200 + `{ busy: true }`, WARN log yok) · `POST /api/stack/restart` (Manager+Web+Engine+HTML tam yeniden başlatma; rota `{key}` önünde tanımlı) |
+| `state.py` | PID, log ring (kilitli), gürültü filtresi (deque race, TradeSync cache, emilen `BOT_*_EXCEPTION` / lease skip / fiyat yok); helper spawn; IP engel listesi (`.run/blocked_ips.json`); **sistem çalışması** kronometresi (`.run/session.started_at` — yalnızca manager süreci yeniden başlayınca sıfırlanır; global start/stop/restart etkilemez); manager tam restart → `scripts/runtime/manager_reboot.py` |
 | `issue_file_store.py` | Olay Merkezi dosya deposu (`.run/issues/`) |
 | `reason_engine.py` | Durum açıklama |
-| `ui/` | manager.js, logHumanize.js, index.html — özet kartları (Port/PID/Çalışma/Kaynak/Hata), **Sistem çalışması** canlı kronometre (`H:MM:SS`), servis sekmeleri, dosya tabanlı metrik |
+| `ui/` | manager.js, logHumanize.js, index.html — özet kartları; header toplu start/stop/restart (`is-busy` yalnız global düğmeler; stuck heal + 90s watchdog) |
 
 ## Güvenlik
 

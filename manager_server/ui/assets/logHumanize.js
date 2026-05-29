@@ -163,6 +163,23 @@
             oneri: '30–60 sn bekleyin; sayfa otomatik yenilenmezse F5 ile Manager\'a tekrar bağlanın.'
           };
         }
+        if (/\/api\/global\/restart/.test(path) && status === '409') {
+          return {
+            konu: 'Toplu yeniden başlatma zaten sürüyor',
+            sebep: '«Tümünü yeniden başlat» isteği gönderildi; önceki toplu işlem (start/stop/restart) henüz bitmedi veya düğmeye tekrar basıldı.',
+            etki: 'İkinci istek uygulanmadı; ilk işlem devam ediyor.',
+            oneri: '30–60 sn bekleyin; durum kartları güncellenene kadar tekrar basmayın.'
+          };
+        }
+        if (/\/api\/global\/(start|stop)/.test(path) && status === '409') {
+          var actTr = /\/stop/.test(path) ? 'durdurma' : 'başlatma';
+          return {
+            konu: 'Toplu ' + actTr + ' zaten sürüyor',
+            sebep: 'Panel toplu işlem gönderdi; önceki start/stop/restart henüz tamamlanmadı.',
+            etki: 'İkinci istek uygulanmadı.',
+            oneri: 'İşlem bitene kadar bekleyin; üst bildirimde «Başka bir toplu işlem sürüyor» görünebilir.'
+          };
+        }
         if ((/\/api\/stack\/restart/.test(path) || /\/api\/server\/manager\/restart/.test(path)) && status === '404') {
           return {
             konu: 'Tam yeniden başlatma API\'si yok (404)',

@@ -9,8 +9,8 @@ Web panel — HTML + vanilla JS (FastAPI `/ui` mount).
 | Dosya | Kullanım |
 |-------|----------|
 | `dashboard.html` | Ana panel, bot listesi |
-| `bot.html` | Trailing DCA detay |
-| `bot_multi.html` | TRDCA / multi |
+| `bot.html` | Trailing DCA detay — grid warmup; tur raporu süre sayacı (`cycle_opened_at`, 1s poll, tur değişiminde sıfırlanır) |
+| `bot_multi.html` | TRDCA / multi — aynı grid warmup + display fingerprint yenileme |
 | `admin.html` | Admin |
 | `login.html` | Giriş |
 
@@ -21,8 +21,8 @@ Web panel — HTML + vanilla JS (FastAPI `/ui` mount).
 | `core/` | apiClient, appBoot, intervalRegistry |
 | `stores/` | dashboardStore, financeStore |
 | `services/` | marketData, finance |
-| `utils/` | trTime, coinLogo |
-| *(kök)* | dashboard.js, admin.js, chart.js |
+| `utils/` | trTime, coinLogo, botHealthAlerts (aktif uyarı log; çözülen HEALTH gizlenir) |
+| *(kök)* | dashboard.js (cüzdan canlı yenileme: bot durdur/sil, periyodik force), admin.js, chart.js |
 
 ## Bot oluşturma
 

@@ -101,6 +101,7 @@ class DcaGridTrailingConfig:
             self.basis_mode = "grid_only"
 
         self.tick_interval_ms = _int_or(r.get("tick_interval_ms"), 2000)
+        self.trail_fast_tick_ms = _int_or(r.get("trail_fast_tick_ms"), 800)
         self.max_orders_per_minute = _int_or(r.get("max_orders_per_minute"), 12)
         self.max_slippage_pct = _float_or(r.get("max_slippage_pct"), 0.5)
         self.min_notional_guard = _float_or(r.get("min_notional_guard"), 5.0)
@@ -132,6 +133,7 @@ class DcaGridTrailingConfig:
             "profit_exit_drop_pct": self.profit_exit_drop_pct,
             "basis_mode": self.basis_mode,
             "tick_interval_ms": self.tick_interval_ms,
+            "trail_fast_tick_ms": self.trail_fast_tick_ms,
             "max_orders_per_minute": self.max_orders_per_minute,
             "max_slippage_pct": self.max_slippage_pct,
             "min_notional_guard": self.min_notional_guard,

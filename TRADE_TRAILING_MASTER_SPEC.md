@@ -317,7 +317,7 @@ SQLite: `PRAGMA journal_mode=WAL`; `PRAGMA synchronous=NORMAL` (app/db/base.py c
 - If heartbeat renew fails => log lock_heartbeat_fail; caller must stop submits, release if possible, schedule retry.
 - **Submit guard (zorunlu):** Order göndermeden hemen önce `lease_still_valid(db, account_id, symbol, bot_id)` çağrılmalıdır. False ise submit yapılmaz, kilit bırakılır, LOCK_LEASE_EXPIRED event yazılır (orchestrator.py).
 
-**What can go wrong here?** Long GC pause can prevent heartbeat; lease expires; another bot acquires lock and may submit; first bot may still try to submit. Mitigation: short lease (10 s); submit timeout 3 s; lease_still_valid check before run_actions.
+**What can go wrong here?** Long GC pause can prevent heartbeat; lease expires; another bot acquires lock and may submit; first bot may still try to submit. Mitigation: short lease (10 s); submit timeout 15 s (`EXEC_ORDER_TIMEOUT_SEC`); lease_still_valid check before run_actions.
 
 ---
 
@@ -344,7 +344,7 @@ SQLite: `PRAGMA journal_mode=WAL`; `PRAGMA synchronous=NORMAL` (app/db/base.py c
 ## REST load monitor (`rest.log`)
 
 - `app/services/binance_rest_log.py` — tüm `binance_spot` gateway çağrıları kaydedilir; **60 s** pencerede `rest.log` (proje kökü, `REST_LOG_PATH` ile değiştirilebilir).
-- Endpoint throttle: bulk `ticker/24hr` min **45 s**, bulk `ticker/price` min **8 s**, `openOrders` min **12 s**.
+- Endpoint throttle: bulk `ticker/24hr` min **45 s**, bulk `ticker/price` min **8 s**, `openOrders` min **12 s**; **`/api/v3/time` REST budget/throttle'dan muaf** (imzalı istek timestamp).
 - Soft limit: `REST_SOFT_WEIGHT_LIMIT` (varsayılan limit×0.85); ağır endpointler reddedilir.
 - Worker: DataHub **WS-only** (REST döngüsü web sürecinde); `DATAHUB_REST_IN_WORKER=1` ile worker REST açılır.
 - DataHub: `ticker/24hr` interval **60 s** (WS aktifken **120 s**); `update_coin_list` ayrı REST çağrısı yapmaz (24h cache reuse).
@@ -722,6 +722,8 @@ export BOT_ENGINE_KILL_SWITCH=1
 |----------|-------|----------|
 | BINANCE_REQUEST_TIMEOUT_SEC | 4.0 | binance_spot.py |
 | BINANCE_HTTP_TIMEOUT | 3.0 connect, 2.0 read | binance_spot.py |
+| BINANCE_TIME_FETCH_TIMEOUT | 15.0 connect, 5.0 read | binance_spot.py (`/api/v3/time`) |
+| BINANCE_TIME_STALE_MAX_SEC | 120 | binance_spot.py (stale cache extrapolation) |
 | SNAPSHOT_TASK_TIMEOUT | 3.0 | dashboard_snapshot.py |
 | DEFAULT_TIMEOUT (apiClient) | 5000 | apiClient.js |
 | Snapshot fetch timeout | 12000 | dashboard.js |
@@ -847,7 +849,7 @@ DataHub:
 | GET /api/v3/exchangeInfo | 10 | DataHub update_all_symbols, binance_client | 1/600s |
 | GET /api/v3/account | 10 | Snapshot _fetch_wallet | Per snapshot (1/3s per user) |
 | POST /api/v3/order | 1 | Worker execution | On trade |
-| GET /api/v3/time | 1 | Signed requests | Per signed call; cached 30s |
+| GET /api/v3/time | 1 | Signed requests | Cached 30s; stale extrapolation 120s; fetch timeout 15s |
 | GET /sapi/v1/asset/tradeFee | 1 | Fee rates | On demand |
 | DELETE /api/v3/order | 1 | cancel_order | On cancel |
 | GET /api/v3/openOrders | 2-5 | get_open_orders | On demand |
@@ -985,7 +987,7 @@ wallet_refresh_success asset_count=5 total_usd=1234.56 request_id=... account_id
 BOT_PRICE bot_id=1 status=STALE symbol=BTCUSDT
 BOT_STATE_SAVED bot_id=1 ver=5 ia_done=True hash=abc123
 ```
-Snapshot wallet is cache-only; "[snapshot] wallet timeout" no longer occurs. Live wallet only via POST /api/home/wallet/refresh.
+Snapshot wallet is cache-only; "[snapshot] wallet timeout" no longer occurs. Live wallet only via POST /api/home/wallet/refresh. Dashboard: bot durdurma/silme (`active_bots` / `bots_balance_usd` düşüşü veya `tt_wallet_refresh_after_bot_v1`) → kademeli `force=1` wallet refresh; Anasayfa açıkken ~30s güvenlik yenilemesi.
 
 ## Log Format
 
@@ -1127,7 +1129,7 @@ Snapshot wallet is cache-only; "[snapshot] wallet timeout" no longer occurs. Liv
 | POST | /api/accounts/{id}/delete | Yes | Yes | No | Hesap sil (body: password). Şifre zorunlu; log/işlem geçmişi silinmez; aynı tel ile yeniden kayıt sıfırdan yeni hesap açar. |
 | GET | /api/accounts/{id}/bot-performance | Yes | Yes | No | Hesap ham tur dosyası + kapanan tur USDT toplamı; `bot_daily_pnl` yedek; haftalık+ cache |
 | GET | /api/leaderboard/structures/{structure_id}/top | Yes | Yes | No | Copy Trading: structure bazlı top 5 (profit_pct + `params`; stale cache varsa `config_json`'dan re-sanitize; username/bakiye yok) |
-| GET | /api/leaderboard/global/top | Yes | Yes | No | Global En İyi Bot (limit varsayılan 5): çalışan botlar, canlı K/Z ≥ 0 (`compute_bot_equity_usd` − bütçe; cache satırı negatif olsa bile elenir); `structure_id`, `profit_pct`, `total_pnl_usd`, `running_since_iso` (UTC Z), `reference_price`, `params`; username/bot_id/bakiye yok. UI: K/Z 5s poll + süre 1s yerel tick; **Parametreleri görüntüle** / **Uygula** aynı önceki davranış. |
+| GET | /api/leaderboard/global/top | Yes | Yes | No | Global En İyi Bot (limit varsayılan 5): çalışan botlar, canlı K/Z ≥ 0 (`compute_bot_equity_usd` − bütçe; cache satırı negatif olsa bile elenir); `structure_id`, `profit_pct`, `total_pnl_usd`, `running_since_iso` (UTC Z; **`bot_run_started_at_iso`** — bot detay `stateHeroMetaDur` ile aynı; `bots.started_at` değil), `reference_price`, `params`; username/bot_id/bakiye yok. UI: K/Z 5s poll + süre 1s yerel tick; **Parametreleri görüntüle** / **Uygula** aynı önceki davranış. |
 | GET | /api/bots-engine | Yes | Yes | No | List bots |
 | POST | /api/bots-engine | Yes | Yes | No | Create bot |
 | POST | /api/bots-engine/{id}/start | Yes | Yes | No | Insert START command |
@@ -1528,7 +1530,7 @@ Tur kapanışında `record_bot_daily_cycle_pnl` (DB yedek); silme/arşivde `rebu
 
 **Bağlantı düzelince otomatik devam:** Probe OK → `on_connectivity_restored`: `paused_error` botlar `running` + START; `running` botlar state `_pending_connectivity_stable` + START `connectivity_resume` (çift Bismillah yok). Yeşil `CONNECTIVITY_STABLE` (“Bağlantı kuruldu ve stabil · Bot sorunsuz çalışıyor”, Tür **Bağlantı**, `log-row-success`) **döngü kurtarma loglarından sonra** yazılır: `flush_pending_connectivity_stable` — `emit_loop_auto_restart` sonunda veya v5 `run_one_bot_tick`; eski stabil satırı pending’i iptal etmez (yalnızca `_pending_connectivity_stable_at` sonrası dedup). Worker yeniden başlatması tek başına stabil yazmaz (bağlantı kurtarması gerekir). Tetik: worker `run_connectivity_auto_resume_pass`, bot sayfası `/health` + `/events` (`sync_bot_connectivity_on_view`). **Resetle** / `POST /health/ack`: `CONNECTIVITY_STABLE` dismiss (`engine_log_ack`).
 
-Tur sync / yeni fill → dosyaya ekle; bot fill `record_bot_trade_fill` ile anında (`quote_qty` = Binance `cummulativeQuoteQty`). Alım/satım **Toplam** = USDT notional (`quote_qty`); fiyat = notional/miktar. Bot kaydı + Binance fill birleşiminde çift sayım önlenir (Binance gelince bot satırı yerine geçer). **İlk açılış / API anahtarı kaydı:** `bootstrap_tx_history_from_binance` — Binance `myTrades` → `TradeNormalized` → `rebuild_from_db` (365 gün) → `.enc`; `{id}.rev` içinde `bootstrapped: true`. `GET .../transaction-history` bootstrap bitmeden dosyadan filtreler; `sync=1` zorla yeniler. `GET .../transaction-history/revision` ~3.5s poll; değişince panel sessiz yenilenir.
+Tur sync / yeni fill → dosyaya ekle; bot fill `record_bot_trade_fill` ile anında (`quote_qty` = Binance `cummulativeQuoteQty`, `commission` = `fee_raw`). Alım/satım **Toplam** = USDT notional (`quote_qty`); fiyat = notional/miktar (UI ≥1000 USD fiyatlarda binlik virgül yok, örn. `$2038.77`). API `commission_usdt` döner; alım grid komisyonu base coin ise UI ham miktar + USDT karşılığı gösterir. **İlk açılış / API anahtarı kaydı:** `bootstrap_tx_history_from_binance` — Binance `myTrades` → `TradeNormalized` → `rebuild_from_db` (365 gün) → `.enc`; `{id}.rev` içinde `bootstrapped: true`. `GET .../transaction-history` bootstrap bitmeden dosyadan filtreler; `sync=1` zorla yeniler. `GET .../transaction-history/revision` ~3.5s poll; değişince panel sessiz yenilenir.
 
 ## encryption (at-rest, v2)
 
@@ -2007,8 +2009,15 @@ tail -5 logs/ram_snapshots.log | jq -c '{ts, component, rss_mb, tracemalloc_peak
 
 - Üst banner **yok**; kritik/uyarı `#statusBadge` yanında rozet (`#healthCriticalBadge`, `#healthWarnBadge`).
 - Sayfa çerçevesi: yalnız kritik → kırmızı yanıp sönme; yalnız uyarı → sarı; ikisi birden → kırmızı çerçeve + her iki rozet yanıp söner.
-- Tüm aktif/çözülmüş uyarı-kritik satırları motor log tablosunda (`#engineLogList`); aynı `health_code` için tek satır (registry dedupe). Çözülünce satır kalır, mesaja `· çözüldü` eklenir; aktif yanıp sönme kalkar.
+- Tüm **aktif** uyarı-kritik satırları motor log tablosunda (`#engineLogList`); aynı `health_code` için tek satır (registry dedupe). Koşul düzelince veya Resetle sonrası satır logdan kalkar (eski DB `HEALTH_*` satırları da gizlenir).
 - **Resetle** (`#btnEngineLogReset`): çerçeve/rozet sıfır, registry temiz, dismiss anchor (`maxEventId` + `perCodeMaxEventId` + sunucu `engine_log_dismiss_before_id` state’te); sayfa yenilemesinde eski satırlar API’den filtrelenir (`engine_log_ack.py`). `POST /health/ack` anchor yazar. Resetlenebilir loglar: `HEALTH_*`, dayanıklılık, bağlantı `ERROR`/`INFO`, emir `SKIP_REASON`, **`RUN_ACTION_EXCEPTION`** ve diğer kurtarılabilir döngü `ERROR`’ları, **`OUTAGE_RECOVERY`** / kopma sonrası grid `INFO` (meta `health_code` veya mesaj kalıbı).
+
+### Bot detay — grid / tur panel yenileme (`ui/bot.html`, `ui/bot_multi.html`)
+
+- **`/live` (2.5s):** hero KPI; `cycle_id` artınca `onBotCycleChanged` → tam detay `refreshAll()` + `GridTrailEnvelope.resetSession` (sayfa yenilemesiz yeni tur grid’i).
+- **`/grid-points`:** trail aktifken tepe/dip; trail bitince (tur kapanışı / fill) son poll → `refreshAll()`.
+- **Tur işlemleri poll:** trail aktifken **1.5s**, aksi **3s** (`bot-detail-trades`).
+- **`bot_multi.html`:** 1s tam detay poll + `patchBotDetailFromPoll` (grid fingerprint değişince panel çizimi).
 
 ### Bot engine — dayanıklılık ve sağlık logları (`health_watch.py`, `orchestrator.py`)
 
@@ -3099,6 +3108,7 @@ Büyük JSON (snapshot 50–200 KB) sıkıştırılmadan gidiyor; proxy açıksa
 | Metrik | Değer |
 |--------|--------|
 | Snapshot görev timeout | 3s |
+| Emir gönderim timeout (`EXEC_ORDER_TIMEOUT_SEC`) | 15s |
 | Snapshot görev sayısı | 4 (prices, wallet, bots, pnl) |
 | Wallet cache TTL (binance/wallet) | 2s |
 | Wallet upstream timeout (binance/wallet) | 12s |
@@ -3632,6 +3642,7 @@ Detail endpoint: load_state, grid view, fiyat, TRDCA ise N asset fiyat; her 1s f
 | Metrik | Değer |
 |--------|--------|
 | tick_interval_ms (DCA) | 2000 (config); next_wake saniye |
+| trail_fast_tick_ms (DCA) | 800 (config); grid/kar dip-tepe takibinde next_wake min(değer, tick_interval); orchestrator min 0.5s |
 | TRDCA tick_interval_ms | 1000 (config) |
 | Symbol lock lease | 60 s |
 | Idempotency TTL | 5 s (2 s initial_allocation) |
@@ -3871,7 +3882,7 @@ get_strategy_safe(raw): config.strategy_id veya raw["strategy_id"]; registry'den
 | BINANCE_FREE_QUOTE_INSUFFICIENT | !paper_mode BUY: quote_qty + buffer > free_usdt | SKIP_REASON; continue |
 | BINANCE_FREE_BASE_INSUFFICIENT | !paper_mode SELL: qty > free_base * (1 - buffer) | SKIP_REASON; continue |
 | SELL LOT_SIZE preflight | `order_qty.validate_market_sell_qty`: qty `stepSize` aşağı yuvarlanır; `qty < minQty` veya exchange `minNotional` altı | SKIP_REASON `LOT_SIZE` / `MIN_NOTIONAL`, `preflight: true` (Binance -1013 gönderilmez; `REPEATED_ORDER_FAIL` sayılmaz) |
-| REPEATED_ORDER_FAIL | Son 15 dk SKIP_REASON | Yalnızca borsa reddi (`binance_code` veya `ORDER_FAILED` / `ORDER_TIMEOUT`); `preflight` skip'ler hariç |
+| REPEATED_ORDER_FAIL | Son 15 dk SKIP_REASON | Yalnızca borsa reddi (`binance_code` veya `ORDER_FAILED`); `preflight` ve geçici `ORDER_TIMEOUT` hariç |
 | get_symbol_filters fallback | data_hub cache boşsa worker adapter `fetch_exchange_info` ile gerçek `stepSize`/`minQty` | Yanlış varsayılan `0.00001` ile fazla hassasiyet hatası önlenir |
 | INSUFFICIENT_BALANCE (Binance -2010) | place_* exception code -2010 | Bot paused_insufficient_balance; backoff_until; append_event ERROR |
 | 401 Unauthorized | _is_401_unauthorized; log throttle 10 dk; state backoff_until 300 s | continue (emir atılmaz); backoff süresince order denemesi skip |
@@ -4185,7 +4196,7 @@ action_key: reason + grid_index + client_order_id; idempotency bu key'e göre.
 | cycle_pnls | Tamamlanan turların kar listesi [{cycle_id, pnl_usdt, fees_usdt, ...}] |
 | sell_grids_filled_qty, buy_grids_filled_qty | Grid doluluk (veya benzeri alanlar) |
 | trail_anchor_price, _trail_sell_grid_index, _trail_buy_grid_index | Trailing state |
-| daily_ref_usd, daily_ref_date | Günlük K/Z referansı; bot açılış gününde (TR) `initial_capital`, sonraki günlerde TR gece 00:00 (23:59 sonrası) equity; `daily_ref_date` = `turkey_today_date_str()` (canlı Europe/Istanbul, UTC tarih string değil) |
+| daily_ref_usd, daily_ref_date | Günlük K/Z referansı: TR gece 00:00 (23:59 sonrası) **mevcut equity**; bot **aynı gün** açıldıysa referans = **başlangıç sermayesi** (`initial_capital`); `daily_ref_date` = `turkey_today_date_str()` (Europe/Istanbul). Günlük K/Z = bot bakiyesi (equity) − referans. Toplam K/Z ile aynı değil. |
 | last_tick_at, last_error_code, retry_at | Meta |
 | last_fill_snapshot | Son fill sonrası snapshot (free_quote, base_qty, avg_cost, realized_pnl, fees_total) |
 
@@ -5904,7 +5915,7 @@ curl -X POST http://127.0.0.1:8000/api/admin/force-unlock-symbol -H "Authorizati
 
 **Domain split:** Three data domains—STATIC_DETAIL, LIVE_SNAPSHOT, PERF_SERIES—each isolated in endpoint, lifecycle, cache policy, and UI responsibility. No cross-domain mixing.
 
-**Live snapshot endpoint:** `GET /api/bots-engine/{bot_id}/live`. Response: status, pnl_pct, equity, last_price, last_tick_at, last_error_code, initial_capital, daily_pnl_usd, daily_pnl_pct. Optional flags: stale (last_tick_at > 30s), equity_unavailable. daily_pnl_* from state daily_ref_usd/daily_ref_date (TR gece 00:00 / 23:59 sonrası referans; `turkey_today_date_str()`; bot aynı gün açıldıysa ilk tick’te ref set edilir). Source: in-memory snapshot from bot state only; no historical DB. TTL cache 2s, key = bot_id, thread-safe. Response time < 15ms CPU. 404 with structured error_code if bot not found.
+**Live snapshot endpoint:** `GET /api/bots-engine/{bot_id}/live`. Response: status, pnl_pct, equity, last_price, last_tick_at, last_error_code, initial_capital, daily_pnl_usd, daily_pnl_pct, daily_ref_usd. Optional flags: stale (last_tick_at > 30s), equity_unavailable. daily_pnl_* from state daily_ref_usd/daily_ref_date (TR gece 00:00 equity referans; gün değişince ref=equity; bot aynı gün açıldıysa ref=initial_capital). Source: in-memory snapshot from bot state only; no historical DB. TTL cache 2s, key = bot_id, thread-safe. Response time < 15ms CPU. 404 with structured error_code if bot not found.
 
 **Perf chart endpoint:** `GET /api/bots-engine/{bot_id}/perf-chart-data?range=&bucket=`. Valid range: 1h, 4h, 1d, 7d, 30d. Valid bucket: 1m, 5m, 1h, 4h, 1d. Invalid combinations rejected with 400. Response: range, bucket, series [{ ts, bot_pct, basket_pct }], meta { baseline_equity, baseline_bot0, baseline_parite0, points }. Backend CPU < 40ms.
 
@@ -5916,7 +5927,7 @@ curl -X POST http://127.0.0.1:8000/api/admin/force-unlock-symbol -H "Authorizati
 
 **UI: removal of 1s polling.** Bot detail page no longer polls full detail every 1s. On load: fetchDetail() then registerLiveInterval(). Live interval: 2500ms via intervalRegistry ("bot-detail-live"). fetchLive() calls GET .../live and applyLive(newState).
 
-**State diff guard:** prevLiveState maintained; applyLive(newState) does shallow compare (status, pnl_pct, equity, last_price, last_tick_at, last_error_code, initial_capital, daily_pnl_usd, daily_pnl_pct); only updates DOM when state actually changed. applyLive updates stateBotBalanceValue, stateTotalKzValue (equity − initial_capital), stateDailyKzValue (daily_pnl_usd/daily_pnl_pct). No deep clone each tick.
+**State diff guard:** prevLiveState maintained; applyLive(newState) does shallow compare (status, pnl_pct, equity, last_price, last_tick_at, last_error_code, initial_capital, daily_ref_usd); only updates DOM when state actually changed. applyLive updates stateBotBalanceValue, stateTotalKzValue (equity − initial_capital), stateDailyKzValue (equity − daily_ref_usd). No deep clone each tick.
 
 **Perf chart module (perf_chart_tv.js):** No DOM parsing or innerHTML JSON extraction. Data from GET perf-chart-data only. Export: initPerfChart(container), updatePerfChart(series), destroyPerfChart(). On range change: only setData(), never re-create chart. Range switch: activeAbortController aborts previous request; disable range buttons during fetch; ignore late/aborted responses.
 

@@ -5,7 +5,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Yönetici Paneli v3.5 (127.0.0.1:7999)</title>
-  <link rel="stylesheet" href="/ui/assets/manager.css?v=26" />
+  <link rel="stylesheet" href="/ui/assets/manager.css?v=34" />
 </head>
 <body class="theme-dark">
   <header class="manager-header">
@@ -58,7 +58,6 @@
                   <span class="overview-live-text">Canlı izleme</span>
                 </div>
                 <h2 class="overview-title">Kontrol Merkezi</h2>
-                <p class="overview-subtitle">Sistem kaynakları, servis durumu ve son uyarılar — tek ekranda özetlenir.</p>
               </div>
               <div class="overview-header-panel">
                 <div id="overview-health-badge" class="overview-health-card ok">
@@ -78,7 +77,6 @@
                     <span id="overview-last-update" class="overview-header-metric-value tabular-nums">—</span>
                   </div>
                 </div>
-                <button type="button" class="btn btn-sm btn-export overview-export-btn" data-export="metrics">Metrik dışa aktar</button>
               </div>
             </div>
           </div>
@@ -102,6 +100,7 @@
             <div class="ov-stat-card ov-stat-uptime">
               <span class="ov-stat-label">Sistem çalışması</span>
               <span id="overview-system-uptime" class="ov-stat-value">—</span>
+              <span class="ov-uptime-foot">Oturum · canlı</span>
             </div>
           </div>
 
@@ -909,7 +908,7 @@
     </main>
   </div>
 
-  <script src="/ui/assets/logHumanize.js?v=19"></script>
-  <script src="/ui/assets/manager.js?v=30"></script>
+  <script src="/ui/assets/logHumanize.js?v=20"></script>
+  <script src="/ui/assets/manager.js?v=31"></script>
 </body>
 </html>

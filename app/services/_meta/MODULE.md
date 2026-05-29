@@ -14,7 +14,7 @@ Paylaşılan iş mantığı: Binance, fiyat, PnL, şifreleme, audit.
 | `binance_weight.py` | Rate limit / weight |
 | `market_data.py` | SSOT okuma — fiyat/24h/sembol (Binance REST yok) |
 | `market_data.py` | Cüzdan fiyat map (market_data) |
-| `binance_rest_log.py` | REST yük izleme, `rest.log` 60s özet, throttle |
+| `binance_rest_log.py` | REST yük izleme, `rest.log` 60s özet, throttle; `/api/v3/time` budget/throttle muaf |
 | `binance_ws.py` | WebSocket |
 | `data_hub.py` | Fiyat cache; `get_prices_for_ui`; `pin_symbols` (worker running-bot); ham 24h/exchangeInfo RAM yok |
 | `market_data.py` | `resolve_price_fast`, `refresh_worker_symbol_from_web` |
@@ -22,7 +22,7 @@ Paylaşılan iş mantığı: Binance, fiyat, PnL, şifreleme, audit.
 | `binance_spot.py` | Kompakt exchangeInfo cache (`get_cached_symbol_filters`) |
 | `price_hub.py` | Fiyat hub |
 | `encryption.py` | AES-256-GCM v2 + HKDF (`BINANCE_MASTER_KEY`, `ENCRYPTION_SALT`); hesap bağlamı |
-| `pnl_service.py` | Bot PnL, daily_ref |
+| `pnl_service.py` | Bot PnL, daily_ref (TR 00:00 equity; aynı gün açılışta initial_capital; günlük K/Z = equity − ref) |
 | `spot_engine.py` | UI manuel al/sat |
 | `binance_connectivity.py` | Binance upstream hata izleme → bot_engine_events |
 | `dashboard_snapshot.py` | Snapshot builder |
@@ -36,6 +36,7 @@ Paylaşılan iş mantığı: Binance, fiyat, PnL, şifreleme, audit.
 | `binance_connectivity.py` | Upstream hata; probe OK → `on_connectivity_restored` (paused START + running pending `CONNECTIVITY_STABLE` → flush after loop restart + START `connectivity_resume`) |
 | `bot_perf_file_store.py` | Bot performans saatlik/günlük dosya deposu |
 | `ip_blocklist.py` | Manager'ın yazdığı `.run/blocked_ips.json` okuma; web middleware 403 |
+| `leaderboard_service.py` | Global/structure leaderboard; `running_since_iso` = `bot_run_started_at_iso` (bot detay süre ile aynı) |
 
 ## Dosya envanteri
 

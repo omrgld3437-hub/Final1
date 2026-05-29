@@ -845,9 +845,9 @@
     <script src="/ui/assets/core/apiClient.js?v=refactor1"></script>
     <script src="/ui/assets/utils/gridTrailEnvelope.js?v=2"></script>
     <script src="/ui/assets/utils/engineLogArchive.js?v=1"></script>
-    <script src="/ui/assets/utils/engineLogFormat.js?v=54"></script>
-    <script src="/ui/assets/utils/botHealthAlerts.js?v=24"></script>
-    <script src="/ui/assets/utils/engineLogLive.js?v=27"></script>
+    <script src="/ui/assets/utils/engineLogFormat.js?v=58"></script>
+    <script src="/ui/assets/utils/botHealthAlerts.js?v=25"></script>
+    <script src="/ui/assets/utils/engineLogLive.js?v=28"></script>
     <script src="/ui/vendor/lightweight-charts.standalone.production.js"></script>
     <script src="/ui/assets/perf_chart_tv.js?v=1"></script>
     <script>
@@ -899,6 +899,9 @@
         var loadingEl = document.getElementById('loadingEl');
         var errorEl = document.getElementById('errorEl');
         var lastKnownCycleId = null;
+        var _lastGridStructureFp = '';
+        var _lastGridDisplayFp = '';
+        var _lastGridTrailActive = false;
         var _cycleTradesCache = {};
         var lastRefPriceForPerf = null;
         var initialCapForPerf = null;
@@ -1175,7 +1178,8 @@
                     loadEngineEvents(botId, false);
                 }
                 window._lastHealthData = res || { alerts: [] };
-                if (window.EngineLogLive && _engineLogLiveOpts) {
+                if (window.EngineLogLive && _engineLogLiveOpts
+                    && (_engineLogLiveOpts.state.events || []).length > 0) {
                     window.EngineLogLive.renderDisplayEvents(_engineLogLiveOpts);
                 }
                 syncHealthFromState();
@@ -1228,12 +1232,18 @@
 
         function startEngineLogLive() {
             if (!window.EngineLogLive || !botId) return;
+            _engineLogLiveOpts._logBootstrapping = true;
+            _engineLogLiveOpts._lastLogRenderSig = null;
             var bootLogs = function () {
                 loadEngineEvents(botId, false).then(function (events) {
+                    _engineLogLiveOpts._logBootstrapping = false;
                     if (window.BotHealthAlerts) {
                         window._lastSeenHealthEventId = window.BotHealthAlerts.maxHealthEventId(events || window._lastEngineEvents);
                     }
-                    window.EngineLogLive.startPolling(_engineLogLiveOpts);
+                    if (window._lastHealthData && window.EngineLogLive) {
+                        window.EngineLogLive.renderDisplayEvents(_engineLogLiveOpts);
+                    }
+                    window.EngineLogLive.startPolling(_engineLogLiveOpts, true);
                 });
             };
             fetchBotHealth().finally(bootLogs);
@@ -1390,6 +1400,94 @@
             if (typeof renderProfitPointsPanel === 'function') {
                 renderProfitPointsPanel(merged, { livePrice: livePrice, applyLive: true });
             }
+        }
+        function gridStructureFingerprint(data) {
+            data = data || {};
+            var gps = data.grid_points || [];
+            var pps = data.profit_points || [];
+            var st = data.state || {};
+            var parts = [String(st.cycle_id != null ? st.cycle_id : ''), String(st.cycle_grid_side || '')];
+            gps.forEach(function (p) {
+                parts.push(
+                    (p.type || '') + ':' + (p.i != null ? p.i : '') + ':' + (p.fired ? 1 : 0) + ':' +
+                    (p.disabled ? 1 : 0) + ':' + (p.trigger_hit_price != null ? 1 : 0) + ':' + (p.anchor != null ? 1 : 0)
+                );
+            });
+            pps.forEach(function (p) {
+                parts.push((p.type || '') + ':' + (p.trigger_hit ? 1 : 0) + ':' + (p.status || ''));
+            });
+            return parts.join('|');
+        }
+        function gridDisplayFingerprint(data) {
+            data = data || {};
+            var st = data.state || {};
+            var parts = [
+                String(data.reference_display != null ? data.reference_display : ''),
+                String(st.reference_price != null ? st.reference_price : ''),
+                String(st.base_balance != null ? st.base_balance : ''),
+                String(st.initial_allocation_done ? 1 : 0),
+                String(st.first_buy_pending ? 1 : 0)
+            ];
+            (data.grid_points || []).forEach(function (p) {
+                parts.push(
+                    String(p.trigger_price != null ? p.trigger_price : '') + ':' +
+                    String(p.qty_pct != null ? p.qty_pct : '') + ':' +
+                    String(p.qty != null ? p.qty : '')
+                );
+            });
+            return parts.join('|');
+        }
+        function botDetailGridNeedsWarmup(data) {
+            data = data || lastBotDetail || {};
+            if (!gridPointsPanel || gridPointsPanel.style.display === 'none') return false;
+            var status = (data.status || lastBotDetail.status || '').toLowerCase();
+            if (status !== 'running') return false;
+            var ref = data.reference_display != null ? data.reference_display : lastBotDetail.reference_display;
+            if (ref != null && !isNaN(Number(ref)) && Number(ref) > 0) return false;
+            var st = data.state || lastBotDetail.state || {};
+            if (st.reference_price != null && !isNaN(Number(st.reference_price)) && Number(st.reference_price) > 0) return false;
+            return true;
+        }
+        var gridWarmupPollMs = 4000;
+        var gridWarmupPollTimer = null;
+        function syncGridWarmupPoll() {
+            if (gridWarmupPollTimer) {
+                clearInterval(gridWarmupPollTimer);
+                gridWarmupPollTimer = null;
+            }
+            if (botDetailGridNeedsWarmup(lastBotDetail)) {
+                gridWarmupPollTimer = setInterval(function () {
+                    if (!botDetailGridNeedsWarmup(lastBotDetail)) {
+                        syncGridWarmupPoll();
+                        return;
+                    }
+                    if (typeof refreshAll === 'function') refreshAll();
+                }, gridWarmupPollMs);
+            }
+        }
+        function patchBotDetailFromPoll(res) {
+            if (!res) return;
+            lastBotDetail.state = res.state || lastBotDetail.state || {};
+            lastBotDetail.grid_points = res.grid_points || lastBotDetail.grid_points || [];
+            lastBotDetail.profit_points = res.profit_points || lastBotDetail.profit_points || [];
+            lastBotDetail.reference_display = res.reference_display != null ? res.reference_display : lastBotDetail.reference_display;
+            var gridFp = gridStructureFingerprint(res);
+            var displayFp = gridDisplayFingerprint(res);
+            if (gridFp !== _lastGridStructureFp || displayFp !== _lastGridDisplayFp) {
+                _lastGridStructureFp = gridFp;
+                _lastGridDisplayFp = displayFp;
+                renderGridPointsPanel(res, { applyLive: false });
+                renderProfitPointsPanel(res, { applyLive: false });
+            }
+            syncGridWarmupPoll();
+            var trailNow = botDetailGridTrailActive(lastBotDetail);
+            if (_lastGridTrailActive && !trailNow) {
+                if (window.GridTrailEnvelope && typeof window.GridTrailEnvelope.resetSession === 'function') {
+                    window.GridTrailEnvelope.resetSession();
+                }
+                refreshAll();
+            }
+            _lastGridTrailActive = trailNow;
         }
         function updateGridPointsRefPriceLine(livePrice) {
             var refEl = document.getElementById('gridPointsRefPrice');
@@ -1654,6 +1752,16 @@
                     renderGridPointsPanel(merged, { applyLive: false });
                     renderProfitPointsPanel(merged, { applyLive: false });
                     if (!botDetailGridTrailActive(merged)) syncGridPointsPoll();
+                    var trailAfter = botDetailGridTrailActive(merged);
+                    if (_lastGridTrailActive && !trailAfter) {
+                        if (window.GridTrailEnvelope && typeof window.GridTrailEnvelope.resetSession === 'function') {
+                            window.GridTrailEnvelope.resetSession();
+                        }
+                        _lastGridStructureFp = '';
+                        _lastGridDisplayFp = '';
+                        refreshAll();
+                    }
+                    _lastGridTrailActive = trailAfter;
                 })
                 .catch(function () {})
                 .finally(function () { _gridPointsPollInFlight = false; });
@@ -1797,6 +1905,9 @@
 
             renderGridPointsPanel(data, { applyLive: false });
             renderProfitPointsPanel(data, { applyLive: false });
+            _lastGridStructureFp = gridStructureFingerprint(data);
+            _lastGridDisplayFp = gridDisplayFingerprint(data);
+            _lastGridTrailActive = botDetailGridTrailActive(lastBotDetail);
             lastBotDetail.state = st;
             lastBotDetail.config = data.config || {};
             lastBotDetail.grid_points = data.grid_points || [];
@@ -1804,6 +1915,7 @@
             lastBotDetail.reference_display = data.reference_display;
             lastBotDetail.status = data.status || '';
             syncGridPointsPoll();
+            syncGridWarmupPoll();
             syncTradesPanelPoll();
 
             tradesPanel.style.display = 'block';
@@ -2495,11 +2607,13 @@
                     .then(function () {
                         try {
                             sessionStorage.removeItem('financeBotsTable_' + (accountId || ''));
-                            sessionStorage.setItem('tt_wallet_refresh_after_bot', JSON.stringify({
+                            var walletRefreshPayload = JSON.stringify({
                                 accountId: accountId,
                                 at: Date.now(),
                                 convert: !!convert
-                            }));
+                            });
+                            sessionStorage.setItem('tt_wallet_refresh_after_bot', walletRefreshPayload);
+                            try { localStorage.setItem('tt_wallet_refresh_after_bot_v1', walletRefreshPayload); } catch (e) {}
                         } catch (e) {}
                         if (window.Toast) window.Toast.success('Bot sonlandırıldı ve silindi');
                         window.location.href = backLink.href;
@@ -2573,10 +2687,17 @@
                     if (stateTrbCycleEl && stateTrbCycleEl.textContent !== trbCycleValPoll) stateTrbCycleEl.textContent = trbCycleValPoll;
                     if (st.cycle_id != null && String(st.cycle_id) !== String(lastKnownCycleId)) {
                         lastKnownCycleId = st.cycle_id;
+                        if (window.GridTrailEnvelope && typeof window.GridTrailEnvelope.resetSession === 'function') {
+                            window.GridTrailEnvelope.resetSession();
+                        }
+                        _lastGridStructureFp = '';
+                        _lastGridDisplayFp = '';
+                        refreshAll();
                         if (typeof window._botDetailRefreshTradesPanel === 'function') {
                             window._botDetailRefreshTradesPanel(st.cycle_id);
                         }
                     }
+                    patchBotDetailFromPoll(res);
                     var baseValueUsdPoll = res.base_value_usd != null && !isNaN(res.base_value_usd) ? Number(res.base_value_usd) : null;
                     var quoteBalanceUsdPoll = res.quote_balance_usd != null && !isNaN(res.quote_balance_usd) ? Number(res.quote_balance_usd) : null;
                     var baseValPoll = baseValueUsdPoll != null ? fmtUsd(baseValueUsdPoll) : (st.base_balance != null ? fmtBaseCompact(st.base_balance) + (baseFromSymbol(lastBotDetail.symbol) ? ' ' + baseFromSymbol(lastBotDetail.symbol) : '') : '—');

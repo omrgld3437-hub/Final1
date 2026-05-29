@@ -63,6 +63,9 @@
         b.style.removeProperty("opacity");
       }
     });
+  }
+
+  function setGlobalHeaderBusy(loading) {
     var grp = qs(".manager-header-action-group");
     if (grp) grp.classList.toggle("is-busy", !!loading);
   }
@@ -73,6 +76,34 @@
 
   var globalActionBusy = false;
   var globalActionPollTimer = null;
+  var globalActionWatchdogTimer = null;
+  var globalBtnIds = ["btnGlobalStart", "btnGlobalStop", "btnGlobalRestart"];
+
+  function clearGlobalActionWatchdog() {
+    if (globalActionWatchdogTimer) {
+      clearTimeout(globalActionWatchdogTimer);
+      globalActionWatchdogTimer = null;
+    }
+  }
+
+  function releaseGlobalActionUi() {
+    globalActionBusy = false;
+    clearGlobalActionWatchdog();
+    setButtonsLoading(globalBtnIds, false);
+    setGlobalHeaderBusy(false);
+  }
+
+  function healStuckGlobalActionUi(serverBusy) {
+    if (globalActionBusy) return;
+    if (serverBusy === true) return;
+    var grp = qs(".manager-header-action-group");
+    var stuck = grp && grp.classList.contains("is-busy");
+    globalBtnIds.forEach(function (id) {
+      var b = qs("#" + id);
+      if (b && (b.disabled || b.classList.contains("is-loading"))) stuck = true;
+    });
+    if (stuck) releaseGlobalActionUi();
+  }
 
   function stopGlobalActionPoll() {
     if (globalActionPollTimer) {
@@ -301,6 +332,9 @@
     out.system = Object.assign({}, prevSys, nextSys);
     if (nextSys.uptime_s == null && prevSys.uptime_s != null) {
       out.system.uptime_s = prevSys.uptime_s;
+    }
+    if (nextSys.session_started_at == null && prevSys.session_started_at != null) {
+      out.system.session_started_at = prevSys.session_started_at;
     }
     var prevWeb = lastMetrics.web_app || {};
     var nextWeb = incoming.web_app || {};
@@ -1253,6 +1287,7 @@
         const cb = qs("#lock-" + k);
         if (cb) cb.checked = !!locks[k];
       });
+      healStuckGlobalActionUi(s.global_action_busy === true);
       refreshDiagnosis();
     } catch (e) { console.error(e); }
   }
@@ -2129,6 +2164,8 @@
       .catch(function (e) {
         showActionFeedback("Hata: " + (e.message || String(e)), true);
         alert(e.message || String(e));
+      })
+      .finally(function () {
         setButtonsLoading(btnIds, false);
       });
   }
@@ -2214,20 +2251,25 @@
     });
   });
 
-  var globalBtnIds = ["btnGlobalStart", "btnGlobalStop", "btnGlobalRestart"];
   function disableGlobalBtns(disabled) {
     setButtonsLoading(globalBtnIds, disabled);
+    setGlobalHeaderBusy(disabled);
   }
   function runGlobalAction(path, label) {
     if (globalActionBusy) return;
     if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
     globalActionBusy = true;
     disableGlobalBtns(true);
+    clearGlobalActionWatchdog();
+    globalActionWatchdogTimer = setTimeout(function () {
+      showActionFeedback(label + " yanıt gecikti — düğmeler serbest bırakıldı.", true);
+      releaseGlobalActionUi();
+    }, 90000);
     showActionFeedback(label + " işleniyor…", false);
     api("POST", path)
       .then(function (r) {
         if (r && r.busy) {
-          showActionFeedback("Başka bir toplu işlem sürüyor.", true);
+          showActionFeedback(r.detail || "Başka bir toplu işlem sürüyor.", true);
           return;
         }
         if (r && r.pending) {
@@ -2245,8 +2287,7 @@
         alert(e.message || String(e));
       })
       .finally(function () {
-        globalActionBusy = false;
-        disableGlobalBtns(false);
+        releaseGlobalActionUi();
         refreshStatus();
         refreshMetrics();
       });
@@ -2274,6 +2315,11 @@
       else if (unbanBtn) securityUnbanIp(unbanBtn.getAttribute("data-ip"));
     });
   }
+
+  window.addEventListener("pageshow", function () { healStuckGlobalActionUi(false); });
+  document.addEventListener("visibilitychange", function () {
+    if (!document.hidden) healStuckGlobalActionUi(false);
+  });
 
   refreshStatus();
   refreshMetrics();

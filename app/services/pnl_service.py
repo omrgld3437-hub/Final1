@@ -143,6 +143,44 @@ def _apply_stale_return(
         out["monthly"] = float(last_row.monthly or 0)
 
 
+def _equity_at_tr_day_open(
+    db: Session,
+    bot_id: int,
+    account_id: int,
+    today_date: str,
+) -> Optional[float]:
+    """TR gün başı (00:00) civarı equity: önce gece yarısından önceki son PnlSnapshot."""
+    try:
+        day_start = turkey_day_start_utc_for_date(today_date)
+    except ValueError:
+        return None
+    row = (
+        db.query(PnlSnapshot)
+        .filter(
+            PnlSnapshot.bot_id == bot_id,
+            PnlSnapshot.account_id == account_id,
+            PnlSnapshot.ts < day_start,
+        )
+        .order_by(PnlSnapshot.ts.desc())
+        .first()
+    )
+    if row and row.total_usd is not None:
+        return float(row.total_usd)
+    row_today = (
+        db.query(PnlSnapshot)
+        .filter(
+            PnlSnapshot.bot_id == bot_id,
+            PnlSnapshot.account_id == account_id,
+            PnlSnapshot.ts >= day_start,
+        )
+        .order_by(PnlSnapshot.ts.asc())
+        .first()
+    )
+    if row_today and row_today.total_usd is not None:
+        return float(row_today.total_usd)
+    return None
+
+
 def ensure_daily_ref_and_compute(
     state: dict,
     total_usd: float,
@@ -154,8 +192,9 @@ def ensure_daily_ref_and_compute(
     persist: bool = True,
 ) -> tuple[float, float]:
     """
-    Günlük K/Z: TR gece 00:00 (23:59'dan sonra) equity referansı; bot aynı gün açıldıysa initial_capital
-    (toplam K/Z ile aynı baz — gün içi tutarlılık).
+    Günlük K/Z: TR gece 00:00 (23:59 sonrası) mevcut equity referans; gün içinde equity − referans.
+    Bot aynı gün açıldıysa referans = başlangıç sermayesi (bot bakiyesi hareketi günlük K/Z'de görünür).
+    Toplam K/Z (initial_capital bazlı) ile karıştırılmaz.
     """
     if not state.get("initial_allocation_done"):
         return 0.0, 0.0
@@ -167,15 +206,41 @@ def ensure_daily_ref_and_compute(
     daily_ref_usd = float(state.get("daily_ref_usd") or 0)
     changed = False
 
-    if daily_ref_date != today_date:
-        new_ref = float(initial_capital) if (started_today and initial_capital > 0) else float(total_usd)
-        state["daily_ref_usd"] = new_ref
+    if daily_ref_date != today_date or daily_ref_usd <= 0:
+        if started_today and initial_capital > 0:
+            state["daily_ref_usd"] = float(initial_capital)
+            daily_ref_usd = float(initial_capital)
+        else:
+            state["daily_ref_usd"] = float(total_usd)
+            daily_ref_usd = float(total_usd)
         state["daily_ref_date"] = today_date
-        daily_ref_usd = new_ref
         changed = True
-    elif started_today and initial_capital > 0 and abs(daily_ref_usd - initial_capital) > 1e-6:
+    elif (
+        started_today
+        and initial_capital > 0
+        and daily_ref_date == today_date
+        and abs(daily_ref_usd - float(total_usd)) < 1e-6
+        and abs(float(total_usd) - initial_capital) > 0.005
+    ):
+        # Aynı gün açılan bot: ref yanlışlıkla ilk tick equity'sine yazılmış — başlangıç sermayesine heal
         state["daily_ref_usd"] = float(initial_capital)
         daily_ref_usd = float(initial_capital)
+        changed = True
+    elif (
+        not started_today
+        and initial_capital > 0
+        and abs(daily_ref_usd - initial_capital) < 1e-6
+        and abs(float(total_usd) - initial_capital) > 1e-6
+        and db is not None
+        and bot_id is not None
+        and account_id is not None
+    ):
+        # Eski mantık (initial_capital referans) kalmış çok günlük bot — gün açılış equity'sine heal
+        open_eq = _equity_at_tr_day_open(db, bot_id, account_id, today_date)
+        if open_eq is None or open_eq <= 0:
+            open_eq = float(total_usd)
+        state["daily_ref_usd"] = open_eq
+        daily_ref_usd = open_eq
         changed = True
 
     if changed and persist and db is not None and bot_id is not None and account_id is not None:
