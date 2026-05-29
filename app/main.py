@@ -130,10 +130,39 @@ class WebSocketCloseFilter(logging.Filter):
         return True
 
 
+class AsyncioTransientErrorFilter(logging.Filter):
+    """DNS/ağ geçici asyncio gürültüsünü err-web panelinden düşür (Future exception was never retrieved)."""
+    _SUPPRESS_FRAGMENTS = (
+        "Future exception was never retrieved",
+        "Task exception was never retrieved",
+        "Exception in callback",
+        "nodename nor servname",
+        "gaierror",
+        "ConnectError",
+        "ConnectTimeout",
+        "ConnectionResetError",
+        "forcibly closed",
+        "_call_connection_lost",
+        "_ProactorBasePipeTransport",
+    )
+
+    def filter(self, record):
+        msg = (record.getMessage() or "") + (str(record.exc_text or ""))
+        if record.exc_info and record.exc_info[1]:
+            en = type(record.exc_info[1]).__name__
+            if en in ("gaierror", "ConnectionResetError", "ConnectError", "ConnectTimeout"):
+                return False
+        if any(frag in msg for frag in self._SUPPRESS_FRAGMENTS):
+            return False
+        return True
+
+
 logging.getLogger("uvicorn.access").addFilter(LocalLogsPageFilter())
 logging.getLogger("uvicorn.error").addFilter(WebSocketCloseFilter())
 logging.getLogger("uvicorn").addFilter(WebSocketCloseFilter())
 logger.addFilter(WebSocketCloseFilter())
+_asyncio_noise_filter = AsyncioTransientErrorFilter()
+logging.getLogger("asyncio").addFilter(_asyncio_noise_filter)
 if getattr(sys.stdout, "isatty", lambda: False)():
     logging.getLogger("uvicorn").setLevel(logging.WARNING)
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)

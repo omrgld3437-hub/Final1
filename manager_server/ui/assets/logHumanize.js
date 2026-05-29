@@ -290,7 +290,38 @@
       }
     },
     {
-      test: function (msg) { return /binance_spot public_get/i.test(msg); },
+      test: function (msg) {
+        return /Future exception was never retrieved|Task exception was never retrieved/i.test(msg)
+          && /gaierror|nodename nor servname|ConnectError|ConnectTimeout/i.test(msg);
+      },
+      apply: function () {
+        return {
+          konu: 'Binance WebSocket DNS geçici hatası',
+          sebep: 'Ağ/DNS anlık kesinti; arka planda Binance host adı çözülemedi (asyncio Future).',
+          etki: 'Canlı fiyat WebSocket yeniden bağlanır; REST/cache devreye girer.',
+          oneri: 'İnternet/DNS stabil ise birkaç dakika içinde düzelir; sürekli tekrarlıyorsa firewall/VPN kontrol edin.'
+        };
+      }
+    },
+    {
+      test: function (msg) {
+        return /binance_spot public_get/i.test(msg) && /status=400/.test(msg);
+      },
+      apply: function (ctx) {
+        var path = (String(ctx.message || '').match(/path=([^\s]+)/) || [])[1] || '';
+        var endpoint = path ? (' (' + path + ')') : '';
+        return {
+          konu: 'Geçersiz grafik sembolü (Binance 400)',
+          sebep: 'Kline isteği geçersiz sembolle gitti' + endpoint + '; Binance reddetti (ör. BTC yerine BTCUSDT gerekir).',
+          etki: 'Grafik boş kalabilir; doğru sembolle istek tekrarlanır.',
+          oneri: 'UI sembol normalizasyonu otomatik; tekrarlıyorsa chart isteğindeki symbol parametresini kontrol edin.'
+        };
+      }
+    },
+    {
+      test: function (msg) {
+        return /binance_spot public_get/i.test(msg) && !/status=400/.test(msg);
+      },
       apply: function (ctx) {
         var path = (String(ctx.message || '').match(/path=([^\s]+)/) || [])[1] || '';
         var endpoint = path ? (' (' + path + ')') : '';

@@ -15,15 +15,16 @@ def get_running_bots_equity_usd(db: Any, account_id: int) -> float:
     from app.db.models import Bot
     from app.botengine.state_store import load_state
     from app.services.bot_equity import compute_bot_equity_usd
+    from app.services.bot_status_utils import is_bot_running
     from app.services.pnl_service import PnlService
 
     total = 0.0
     try:
-        bots = (
-            db.query(Bot)
-            .filter(Bot.account_id == int(account_id), Bot.status == "running")
-            .all()
-        )
+        bots = [
+            b
+            for b in db.query(Bot).filter(Bot.account_id == int(account_id)).all()
+            if is_bot_running(getattr(b, "status", None))
+        ]
     except Exception:
         return 0.0
     for bot in bots or []:
@@ -133,14 +134,15 @@ def _test_running_bots_usdt_budget(db: Any, account_id: int) -> float:
     import json
 
     from app.db.models import Bot
+    from app.services.bot_status_utils import is_bot_running
 
     total = 0.0
     try:
-        bots = (
-            db.query(Bot)
-            .filter(Bot.account_id == int(account_id), Bot.status == "running")
-            .all()
-        )
+        bots = [
+            b
+            for b in db.query(Bot).filter(Bot.account_id == int(account_id)).all()
+            if is_bot_running(getattr(b, "status", None))
+        ]
     except Exception:
         return 0.0
     for bot in bots or []:

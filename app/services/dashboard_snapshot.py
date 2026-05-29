@@ -58,7 +58,9 @@ async def fetch_bots_and_account_kpis(account_id: int, db: Session) -> Dict[str,
 
         bots = db.query(Bot).filter(Bot.account_id == account_id).all()
         total_bots = len(bots)
-        active_bots = len([b for b in bots if b.status == "running"])
+        from app.services.bot_status_utils import count_running_bots
+
+        active_bots = count_running_bots(bots)
         total_profit_usd = 0.0
         total_bot_equity_usd = 0.0
         total_bot_initial_usd = 0.0

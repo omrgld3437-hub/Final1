@@ -69,6 +69,20 @@ def _is_invalid_spot_symbol(symbol: str) -> bool:
     return False
 
 
+def _normalize_spot_trading_symbol(symbol: str) -> Optional[str]:
+    """BTC → BTCUSDT; geçersiz/boş sembolde None (Binance çağrısı yapılmaz)."""
+    sym = (symbol or "").upper().strip()
+    if not sym or _is_invalid_spot_symbol(sym):
+        return None
+    if _SPOT_SYMBOL_RE.match(sym):
+        return sym
+    if re.match(r"^[A-Z0-9]{2,10}$", sym):
+        candidate = sym + "USDT"
+        if _SPOT_SYMBOL_RE.match(candidate) and not _is_invalid_spot_symbol(candidate):
+            return candidate
+    return None
+
+
 async def _get_valid_spot_symbols_async() -> Set[str]:
     """ExchangeInfo cache'ten geçerli sembol seti; TTL 300s."""
     global _VALID_SPOT_SYMBOLS, _VALID_SPOT_SYMBOLS_TS
@@ -500,10 +514,9 @@ async def get_spot_klines(
     end_time: Optional[int] = Query(None, description="Optional end time (ms). For backfill: older candles before this time."),
 ):
     """Public: Kline verisi (grafik). Geçersiz sembolde Binance çağrılmadan [] döner."""
-    sym = (symbol or "").upper().strip()
-    if _is_invalid_spot_symbol(sym):
+    symbol = _normalize_spot_trading_symbol(symbol)
+    if not symbol:
         return []
-    symbol = sym
     interval = (interval or "5m").lower()
     cache_key = (symbol, interval, limit, end_time if end_time is not None else "latest")
     now = time.time()
@@ -535,13 +548,15 @@ async def get_spot_klines(
             out = [{"t": c[0], "o": float(c[1]), "h": float(c[2]), "l": float(c[3]), "c": float(c[4]), "v": float(c[5])} for c in data]
             KLINES_CACHE[cache_key] = (out, time.time())
             return out
-        except (BinanceIPBannedError, DependencyFailure):
+        except (BinanceIPBannedError, DependencyFailure) as e:
             if stale:
-                logger.warning("Klines blocked symbol=%s interval=%s — serving stale cache", symbol, interval)
+                logger.debug("Klines blocked symbol=%s interval=%s — serving stale cache", symbol, interval)
                 return stale
+            if isinstance(e, DependencyFailure) and "client error" in str(e).lower():
+                logger.debug("Klines client error symbol=%s interval=%s: %s", symbol, interval, e)
             return []
         except Exception as e:
-            logger.warning("Klines error: %s", e)
+            logger.debug("Klines error symbol=%s interval=%s: %s", symbol, interval, e)
             if stale:
                 return stale
             return []

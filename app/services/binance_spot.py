@@ -87,6 +87,40 @@ def is_transient_upstream_error(exc: BaseException) -> bool:
     )
 
 
+def _is_non_retryable_http_error(exc: BaseException) -> bool:
+    """4xx istemci hatası — yeniden deneme ve manager WARNING gereksiz."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code in (400, 401, 403, 404, 422)
+    return False
+
+
+def _log_binance_request_failure(
+    *,
+    kind: str,
+    path: str,
+    method: Optional[str],
+    attempt: int,
+    max_retries: int,
+    status: Any,
+    request_id: Optional[str],
+    exc: BaseException,
+) -> None:
+    """Ara deneme + geçici/4xx final: DEBUG; yalnızca kalıcı upstream final: WARNING."""
+    is_final = attempt >= max_retries
+    warn = is_final and not _is_non_retryable_http_error(exc) and not is_transient_upstream_error(exc)
+    log_fn = logger.warning if warn else logger.debug
+    if kind == "signed":
+        log_fn(
+            "binance_spot signed method=%s path=%s attempt=%s status=%s request_id=%s",
+            method, path, attempt + 1, status, request_id or "-",
+        )
+    else:
+        log_fn(
+            "binance_spot public_get path=%s attempt=%s status=%s request_id=%s error=%s",
+            path, attempt + 1, status, request_id or "-", type(exc).__name__,
+        )
+
+
 # 418 "IP banned until XXX" sonrası signed istekleri bu süreye kadar atlama (global backoff)
 # Mutable container so no "global" declaration needed in functions (avoids "used prior to global declaration")
 _binance_ip_ban_state: dict = {"until_ts": 0.0}
@@ -256,11 +290,12 @@ async def _public_get_json_impl(
             last_exc = e
             retry_count = attempt
             status = getattr(getattr(e, "response", None), "status_code", None)
-            log_fn = logger.warning if attempt >= MAX_RETRIES else logger.debug
-            log_fn(
-                "binance_spot public_get path=%s attempt=%s status=%s request_id=%s error=%s",
-                path, attempt + 1, status, request_id or "-", type(e).__name__
+            _log_binance_request_failure(
+                kind="public_get", path=path, method=None, attempt=attempt,
+                max_retries=MAX_RETRIES, status=status, request_id=request_id, exc=e,
             )
+            if _is_non_retryable_http_error(e):
+                raise DependencyFailure(f"Binance client error: {e}") from e
             if attempt < MAX_RETRIES:
                 await _asyncio_sleep(backoff)
                 backoff *= BACKOFF_MULTIPLIER
@@ -287,7 +322,9 @@ async def public_get_json(
             timeout=BINANCE_REQUEST_TIMEOUT_SEC,
         )
     except asyncio.TimeoutError as e:
-        raise DependencyFailure("Binance request timeout (4s)") from e
+        raise DependencyFailure(
+            "Binance request timeout (%ss)" % int(BINANCE_REQUEST_TIMEOUT_SEC)
+        ) from e
 
 
 async def _signed_json_impl(
@@ -324,11 +361,12 @@ async def _signed_json_impl(
             last_exc = e
             retry_count = attempt
             status = getattr(getattr(e, "response", None), "status_code", None)
-            log_fn = logger.warning if attempt >= MAX_RETRIES else logger.debug
-            log_fn(
-                "binance_spot signed method=%s path=%s attempt=%s status=%s request_id=%s",
-                method, path, attempt + 1, status, request_id or "-"
+            _log_binance_request_failure(
+                kind="signed", path=path, method=method, attempt=attempt,
+                max_retries=MAX_RETRIES, status=status, request_id=request_id, exc=e,
             )
+            if _is_non_retryable_http_error(e):
+                raise DependencyFailure(f"Binance client error: {e}") from e
             if attempt < MAX_RETRIES:
                 await _asyncio_sleep(backoff)
                 backoff *= BACKOFF_MULTIPLIER
@@ -356,7 +394,9 @@ async def signed_json(
             timeout=BINANCE_REQUEST_TIMEOUT_SEC,
         )
     except asyncio.TimeoutError as e:
-        raise DependencyFailure("Binance request timeout (4s)") from e
+        raise DependencyFailure(
+            "Binance signed request timeout (%ss)" % int(BINANCE_REQUEST_TIMEOUT_SEC)
+        ) from e
 
 
 def _guard_no_per_symbol_ticker_price(path: str, params: Optional[Dict[str, Any]]) -> None:
@@ -411,6 +451,16 @@ async def _public_get(
             return r.json()
         except httpx.HTTPStatusError as e:
             last_exc = e
+            if e.response.status_code in (400, 401, 403, 404, 422):
+                try:
+                    from app.services.binance_rest_log import record_rest
+                    record_rest("GET", path, params=params, weight=weight,
+                                status=e.response.status_code,
+                                latency_ms=(time.perf_counter() - t0) * 1000,
+                                outcome="error", detail=str(e)[:120])
+                except Exception:
+                    pass
+                raise
             if e.response.status_code in (429, 418) and attempt < MAX_RETRIES:
                 await _asyncio_sleep(backoff)
                 backoff *= BACKOFF_MULTIPLIER
@@ -783,7 +833,9 @@ async def _signed_request(
             timeout=BINANCE_REQUEST_TIMEOUT_SEC,
         )
     except asyncio.TimeoutError as e:
-        raise DependencyFailure("Binance signed request timeout (%ss)" % int(BINANCE_REQUEST_TIMEOUT_SEC)) from e
+        raise DependencyFailure(
+            "Binance signed request timeout (%ss)" % int(BINANCE_REQUEST_TIMEOUT_SEC)
+        ) from e
 
 
 # ---------------------------------------------------------------------------

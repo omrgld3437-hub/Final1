@@ -2256,7 +2256,9 @@ async def api_dashboard_summary(
 
     bots = db.query(Bot).filter(Bot.account_id == account_id).all()
     total_bots = len(bots)
-    active_bots = len([b for b in bots if b.status == "running"])
+    from app.services.bot_status_utils import count_running_bots
+
+    active_bots = count_running_bots(bots)
     import json as _json
     total_bot_equity_usd = 0.0
     total_bot_initial_usd = 0.0  # Sum of all bot initial balances

@@ -734,7 +734,7 @@ export BOT_ENGINE_KILL_SWITCH=1
 | WS_STALE_SEC | 60 | data_hub.py |
 | BULK_REFRESH_MIN_INTERVAL | 10 | data_hub.py |
 
-**Geçici upstream hataları (2026-05-29):** `is_transient_upstream_error()` — timeout, DNS, circuit breaker, IP ban. `reconcile_open_orders_for_bot` yalnızca `PENDING` intent varken Binance `openOrders` çağırır; geçici hatalar DEBUG. `finance_reports` deposit/withdraw SAPI geçici hatasında 90s boş cache + DEBUG (manager uyarı spam önleme). `binance_spot` `public_get_json` / `signed_json`: ara deneme hataları DEBUG; yalnızca retry bütçesi tükendiğinde WARNING (manager `#wrn-web` spam önleme).
+**Geçici upstream hataları (2026-05-29):** `is_transient_upstream_error()` — timeout, DNS, circuit breaker, IP ban. `reconcile_open_orders_for_bot` yalnızca `PENDING` intent varken Binance `openOrders` çağırır; geçici hatalar DEBUG. `finance_reports` deposit/withdraw SAPI geçici hatasında 90s boş cache + DEBUG (manager uyarı spam önleme). `binance_spot` `public_get_json` / `signed_json`: ara deneme hataları DEBUG; 4xx istemci hatası ve geçici final hata DEBUG; kalıcı upstream final hata WARNING. `/api/spot/klines`: `_normalize_spot_trading_symbol` (BTC→BTCUSDT); geçersiz sembolde Binance çağrılmaz. Web `asyncio` DNS gürültüsü `AsyncioTransientErrorFilter` ile filtrelenir. **Admin AKTİF BOT:** `count_admin_active_bots` = `running` + `paused` (case-insensitive); dashboard KPI `active_bots` = yalnızca `running` (`bot_status_utils`).
 
 ---
 

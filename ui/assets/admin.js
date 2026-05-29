@@ -567,7 +567,7 @@ function renderTiles(accounts, container = null) {
                 <div class="acct-section">
                     <div class="acct-active">
                         <div class="label">AKTİF BOT</div>
-                        <div class="value">${acc.active_bots}</div>
+                        <div class="value">${acc.active_bots}${acc.total_bots != null && acc.total_bots > acc.active_bots ? '<span style="font-size:0.75rem;color:var(--ds-text-secondary);font-weight:400;"> / ' + acc.total_bots + ' toplam</span>' : ''}</div>
                     </div>
                 </div>
                 

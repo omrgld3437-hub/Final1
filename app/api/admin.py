@@ -169,16 +169,17 @@ async def get_admin_accounts(
             if admin_user_id is not None and account.user_id == admin_user_id:
                 continue
             bots = db.query(Bot).filter(Bot.account_id == account.id).all()
-            active_bots_count = len([b for b in bots if b.status == "running"])
-            total_active_bots += active_bots_count
-            
+            from app.services.bot_status_utils import count_admin_active_bots
+
+            active_bots_count = count_admin_active_bots(bots)
+
             # Bot bakiye: dashboard strip "Bot kilitli" (wallet bot_locked_usd)
             spot_balance, bot_locked_usd, spot_balance_status = await _get_account_wallet_strip_kpis(
                 account.id, db
             )
             bots_balance = float(bot_locked_usd or 0.0)
 
-            # Günlük bot PnL: snapshot (daily_ref + tamamlanan tur)
+            # Günlük bot PnL + aktif bot (snapshot ile dashboard aynı bot listesi)
             daily_pnl_usd = 0.0
             daily_pnl_pct = 0.0
             try:
@@ -187,6 +188,9 @@ async def get_admin_accounts(
                 bot_raw = await fetch_bots_and_account_kpis(account.id, db)
                 if not bot_raw.get("_error"):
                     bots_array = bot_raw.get("bots") or []
+                    kpi_active = count_admin_active_bots(bots_array)
+                    if kpi_active > active_bots_count:
+                        active_bots_count = kpi_active
                     daily_pnl_usd = float(bot_raw.get("daily_bot_pnl_usd_kpi") or 0)
                     ak = bot_raw.get("account") or {}
                     if ak.get("daily_bot_pnl_usd") is not None:
@@ -207,6 +211,8 @@ async def get_admin_accounts(
                         daily_pnl_pct = (daily_pnl_usd / ref_open * 100.0) if ref_open > 1e-9 else 0.0
             except Exception as bot_kpi_ex:
                 logger.warning("[Admin] fetch_bots_and_account_kpis account_id=%s: %s", account.id, bot_kpi_ex)
+
+            total_active_bots += active_bots_count
 
             total_bots_balance_usd += bots_balance
             total_spot_balance_usd += spot_balance
