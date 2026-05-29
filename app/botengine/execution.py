@@ -976,6 +976,7 @@ async def run_actions(
                         "side": side,
                         "fill_qty": exec_qty,
                         "fill_price": fill_price,
+                        "filled_quote": cum_quote,
                         "fee": fee,
                         "reason": reason,
                         "status": (res.get("status") or "FILLED").upper(),

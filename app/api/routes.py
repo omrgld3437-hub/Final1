@@ -151,6 +151,35 @@ async def api_error_logs_test_account(
     return {"items": out}
 
 
+class TestDailySpotRefBody(BaseModel):
+    account_id: int
+    ref_usd: float
+    date: Optional[str] = None
+
+
+@router.post("/binance/test-daily-spot-ref")
+async def api_test_daily_spot_ref_sync(
+    body: TestDailySpotRefBody,
+    db: Session = Depends(get_db),
+    current: dict = Depends(require_auth),
+):
+    """Test hesabı: dashboard günlük spot referansını sunucuya yazar (admin tile ile aynı)."""
+    from app.services.test_account import is_test_account
+    from app.services.test_account_kpi import set_test_daily_spot_ref_usd
+
+    account_id = int(body.account_id)
+    session_account_id = current.get("account_id")
+    if session_account_id is not None and is_test_account(session_account_id, db):
+        if session_account_id != account_id:
+            account_id = session_account_id
+    else:
+        require_account_access(current, account_id)
+    if not is_test_account(account_id, db):
+        raise HTTPException(status_code=403, detail="Bu özellik sadece test hesabında kullanılabilir.")
+    set_test_daily_spot_ref_usd(account_id, float(body.ref_usd), body.date)
+    return {"ok": True, "account_id": account_id, "ref_usd": round(float(body.ref_usd), 2)}
+
+
 # POST /api/error-logs/clear -> main.py'de tanımlı (404 önlemek için doğrudan app'te)
 
 
@@ -2740,38 +2769,50 @@ async def api_dashboard_snapshot(
         bots = bots_raw.get("bots") or []
         account_kpis = bots_raw.get("account") or {}
         if wallet and "total_usd" in wallet:
-            account_kpis["spot_balance_usd"] = wallet.get("total_usd", 0)
+            if is_test_account(account_id, db):
+                account_kpis["spot_balance_usd"] = wallet.get("spot_kpi_total_usd") or wallet.get("total_usd", 0)
+            else:
+                account_kpis["spot_balance_usd"] = wallet.get("total_usd", 0)
         elif last_known_total is not None:
             account_kpis["spot_balance_usd"] = last_known_total
         today_tr = _turkey_date_str()
-        binance_equity = float(wallet.get("total_usd", 0) or 0) if wallet else (last_known_total or 0.0)
         total_bot_equity = float(bots_raw.get("total_bot_equity_usd", 0) or 0)
-        today_start_utc = turkey_today_start_utc()
-        ref_cuzdan = None
-        try:
-            last_before_today = (
-                db.query(AssetSnapshot)
-                .filter(AssetSnapshot.account_id == account_id, AssetSnapshot.timestamp < today_start_utc)
-                .order_by(desc(AssetSnapshot.timestamp))
-                .first()
-            )
-            if last_before_today and getattr(last_before_today, "total_usd_value", None) is not None:
-                ref_cuzdan = float(last_before_today.total_usd_value)
+        if is_test_account(account_id, db) and wallet.get("daily_wallet_pnl_usd") is not None:
+            daily_wallet_pnl_usd = float(wallet.get("daily_wallet_pnl_usd") or 0)
+            daily_wallet_pnl_pct = float(wallet.get("daily_wallet_pnl_pct") or 0)
+        else:
+            if is_test_account(account_id, db) and wallet:
+                binance_equity = float(
+                    wallet.get("spot_kpi_total_usd") or wallet.get("total_usd") or 0
+                )
             else:
-                first_today = (
+                binance_equity = float(wallet.get("total_usd", 0) or 0) if wallet else (last_known_total or 0.0)
+            today_start_utc = turkey_today_start_utc()
+            ref_cuzdan = None
+            try:
+                last_before_today = (
                     db.query(AssetSnapshot)
-                    .filter(AssetSnapshot.account_id == account_id, AssetSnapshot.timestamp >= today_start_utc)
-                    .order_by(AssetSnapshot.timestamp.asc())
+                    .filter(AssetSnapshot.account_id == account_id, AssetSnapshot.timestamp < today_start_utc)
+                    .order_by(desc(AssetSnapshot.timestamp))
                     .first()
                 )
-                if first_today and getattr(first_today, "total_usd_value", None) is not None:
-                    ref_cuzdan = float(first_today.total_usd_value)
-        except Exception:
-            pass
-        if ref_cuzdan is None:
-            ref_cuzdan = binance_equity
-        daily_wallet_pnl_usd = binance_equity - ref_cuzdan
-        daily_wallet_pnl_pct = (daily_wallet_pnl_usd / ref_cuzdan * 100.0) if ref_cuzdan and ref_cuzdan > 0 else 0.0
+                if last_before_today and getattr(last_before_today, "total_usd_value", None) is not None:
+                    ref_cuzdan = float(last_before_today.total_usd_value)
+                else:
+                    first_today = (
+                        db.query(AssetSnapshot)
+                        .filter(AssetSnapshot.account_id == account_id, AssetSnapshot.timestamp >= today_start_utc)
+                        .order_by(AssetSnapshot.timestamp.asc())
+                        .first()
+                    )
+                    if first_today and getattr(first_today, "total_usd_value", None) is not None:
+                        ref_cuzdan = float(first_today.total_usd_value)
+            except Exception:
+                pass
+            if ref_cuzdan is None:
+                ref_cuzdan = binance_equity
+            daily_wallet_pnl_usd = binance_equity - ref_cuzdan
+            daily_wallet_pnl_pct = (daily_wallet_pnl_usd / ref_cuzdan * 100.0) if ref_cuzdan and ref_cuzdan > 0 else 0.0
         ref = _daily_kpi_ref.get(account_id)
         if ref is None or ref.get("ref_date") != today_tr:
             ref = {"ref_date": today_tr, "bots_ref_usd": total_bot_equity}

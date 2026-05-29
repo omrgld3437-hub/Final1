@@ -219,7 +219,6 @@ def execute_test_paper_order(
 ) -> Dict[str, Any]:
     from app.services.test_account import is_test_account
     from app.services.wallet_display import build_test_account_wallet
-    from app.botengine.virtual_wallet import get_bot_locked_balances_for_account
 
     if not is_test_account(account_id, db):
         raise ValueError("NOT_TEST_ACCOUNT")
@@ -238,15 +237,16 @@ def execute_test_paper_order(
     if px <= 0:
         raise ValueError("Fiyat geçersiz")
 
+    from app.services.test_simulation import build_paper_market_fill, sync_paper_order_latency
+
+    sync_paper_order_latency()
+    fill_resp: Dict[str, Any] = {}
+
     with _account_lock(account_id):
         wallet = build_test_account_wallet(account_id, db)
-        bot_locked = get_bot_locked_balances_for_account(db, account_id) or {}
         quote_av = _usdt_available_from_wallet(wallet)
         state = load_paper_state(account_id)
         manual_base: Dict[str, float] = dict(state.get("manual_base") or {})
-
-        executed_qty = 0.0
-        executed_quote = 0.0
 
         if side_u == "BUY":
             quote_in = float(quote_order_qty or 0)
@@ -258,10 +258,11 @@ def execute_test_paper_order(
                 raise ValueError(
                     f"Yetersiz kullanılabilir USDT (mevcut: {quote_av:.2f}, gerekli: {quote_in:.2f})"
                 )
-            executed_qty = _quantize_step(quote_in / px)
+            fill_resp = build_paper_market_fill(sym, "BUY", quote_qty=quote_in, mid_price=px)
+            executed_qty = float(fill_resp["executedQty"])
+            executed_quote = float(fill_resp["cummulativeQuoteQty"])
             if executed_qty <= 0:
                 raise ValueError("Miktar çok küçük")
-            executed_quote = round(executed_qty * px, 8)
             manual_base[base] = round(float(manual_base.get(base, 0) or 0) + executed_qty, 8)
             state["usdt_delta"] = round(float(state.get("usdt_delta") or 0) - executed_quote, 8)
         elif side_u == "SELL":
@@ -273,8 +274,10 @@ def execute_test_paper_order(
                 raise ValueError(
                     f"Yetersiz satılabilir {base} (mevcut: {avail_base:.8f})"
                 )
-            executed_qty = _quantize_step(min(qty_in, avail_base))
-            executed_quote = round(executed_qty * px, 8)
+            sell_qty = _quantize_step(min(qty_in, avail_base))
+            fill_resp = build_paper_market_fill(sym, "SELL", base_qty=sell_qty, mid_price=px)
+            executed_qty = float(fill_resp["executedQty"])
+            executed_quote = float(fill_resp["cummulativeQuoteQty"])
             new_base = round(avail_base - executed_qty, 8)
             if new_base <= 1e-12:
                 manual_base.pop(base, None)
@@ -286,6 +289,7 @@ def execute_test_paper_order(
 
         state["manual_base"] = manual_base
         save_paper_state(account_id, state)
+        px = float((fill_resp.get("fills") or [{}])[0].get("price") or px)
 
     order_id = f"test_paper_{int(time.time() * 1000)}"
     return {
@@ -298,4 +302,5 @@ def execute_test_paper_order(
         "price": str(px),
         "status": "FILLED",
         "paper": True,
+        "fills": fill_resp.get("fills") or [],
     }

@@ -32,7 +32,7 @@ const AdminStore = {
         settings: { data: null, ts: 0, inflight: null, abort: null }
     },
     TTL: {
-        accounts: 300000,
+        accounts: 4000,
         pending: 30000,
         suspended: 30000,
         contact: 60000,
@@ -117,7 +117,7 @@ function invalidateAccountsAndSuspendedCache() {
 var adminTabsJustOpenedAt = 0;
 var adminTabsLastToggleRunAt = 0;
 
-var ADMIN_ACCOUNTS_CACHE_KEY = 'admin_accounts_cache_v2';
+var ADMIN_ACCOUNTS_CACHE_KEY = 'admin_accounts_cache_v3';
 var ADMIN_ACCOUNTS_CACHE_MAX_AGE_MS = 5 * 60 * 1000;
 
 function adminReadAccountsCacheRaw() {
@@ -319,7 +319,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     state.timer = setInterval(function () {
         if (state.currentTab !== 'accounts') return;
         if (document.visibilityState !== 'visible') return;
-        loadAccounts(false);
+        loadAccounts(true);
     }, 5000);
 
     // Breach uyarıları periyodik kontrol (15s) – sadece sekme görünürken
@@ -478,9 +478,10 @@ function adminAccountSpotDisplay(acc, balDisplayFn, pnlDisplayFn) {
     var spotError = !isTest && spotStatus === "error";
     var spotNoData = spotNoKeys || spotError;
     var spotLabel = isTest ? "SPOT BAKİYESİ" : "BİNANCE BAKİYESİ";
-    var spotUsd = acc.spot_balance_usd;
-    if (isTest && (spotUsd == null || spotUsd === "" || spotNoData)) {
-        spotUsd = 10000;
+    var spotUsd = (acc.spot_kpi_total_usd != null && acc.spot_kpi_total_usd !== '')
+        ? acc.spot_kpi_total_usd
+        : acc.spot_balance_usd;
+    if (isTest && spotStatus === 'ok' && spotUsd != null && spotUsd !== '') {
         spotNoData = false;
     }
     var walPnl = pnlDisplayFn(acc.daily_wallet_pnl_usd, acc.daily_wallet_pnl_pct, !!acc.admin_isolated);
@@ -1369,7 +1370,10 @@ function runRenderForTab(tabKey, data) {
         state.accountsTotals = data.totals || null;
         if (state.accountsTotals) renderKpis(state.accountsTotals);
         var container = document.getElementById('tilesContainer');
-        if (container) renderTiles(state.accounts, container);
+        if (container) {
+            renderTiles(state.accounts, container);
+            if (typeof updateAccountTileStrips === 'function') updateAccountTileStrips(state.accounts);
+        }
         try {
             adminWriteAccountsCache({ accounts: state.accounts, totals: state.accountsTotals, ts: Date.now() });
         } catch (e) {}

@@ -3318,7 +3318,7 @@ Cycle sayısı bot başına bir sorgu; N bot = N cycle sorgusu (batch yapılabil
 
 | Koşul | Davranış |
 |-------|----------|
-| is_test_account(account_id) | Binance çağrısı yok; DataHub get_all_prices + virtual_wallet get_bot_locked_balances_for_account; 10.000 USDT paper bakiye |
+| is_test_account(account_id) | Binance çağrısı yok; `build_test_account_wallet` + `test_account_kpi.compute_test_account_dashboard_spot_kpi` (spot_kpi_total_usd = dashboard KPI strip; günlük değişim TR gün ref `.run/test_daily_spot_ref/`); admin tile aynı kaynak |
 | keys_configured | True döner; UI'da Binance uyarısı kalkar |
 
 Test hesapta snapshot wallet hızlı; sadece DataHub + DB.
@@ -3866,10 +3866,14 @@ get_strategy_safe(raw): config.strategy_id veya raw["strategy_id"]; registry'den
 | Koşul | Davranış |
 |-------|----------|
 | get_account_keys testnet | Sadece test hesabı (is_test_account) için account.mode kullanılır; gerçek hesaplar her zaman testnet=False (mainnet). binance_assets.get_account_keys. |
-| paper_mode | User.username test hesap pattern; BinanceAdapter(..., paper_mode=True) |
-| place_market_buy/sell | paper_mode ise adapter._simulate_fill; gerçek API çağrısı yok |
+| paper_mode | Bot `mode=paper` (test hesabı); BinanceAdapter(..., paper_mode=True) |
+| place_market_buy/sell | paper_mode ise `test_simulation.build_paper_market_fill` + emir gecikmesi (`await_paper_order_latency` 120–450 ms); gerçek API yok |
+| paper komisyon | Taker %0,1 (`TEST_TAKER_FEE_RATE=0.001`); BUY komisyon base coin, SELL USDT — `fills[]` + `parse_fill_commission` + `apply_fill_to_state` / `update_virtual_after_fill` |
+| paper kayma | Market slippage `TEST_SLIPPAGE_BPS=5` (alış +bps, satış −bps) |
+| paper tick jitter | `paper_tick_sleep_seconds`: paper bot tick sleep’e ≤%10 rastgele jitter |
+| test manuel spot | `test_spot_paper.execute_test_paper_order` aynı fill/komisyon/gecikme modeli |
 | get_account_balances | paper_mode ise boş veya test bakiye; TRDCA snapshot'ta initial_capital veya virtual_balances |
-| virtual_balances | TRDCA paper: state.virtual_balances; fill sonrası _apply_fills_to_virtual_balances ile güncellenir |
+| virtual_balances | TRDCA paper: state.virtual_balances; fill sonrası _apply_fills_to_virtual_balances (`filled_quote`, `fee` dahil) |
 | check_virtual_budget / Binance balance | paper_mode + TRDCA/MULTI ise skip_virtual_check; yoksa get_virtual_wallet, check_virtual_budget; paper değilse BUY/SELL öncesi adapter.get_account_balances ile free kontrolü |
 | INSUFFICIENT_BALANCE (-2010) | Bot status paused_insufficient_balance; state backoff_until 60s; append_event ERROR |
 

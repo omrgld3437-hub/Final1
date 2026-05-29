@@ -159,7 +159,9 @@ class BinanceAdapter:
         """Market BUY with quoteOrderQty. Returns Binance order response or simulated."""
         symbol = symbol.upper()
         if self.paper_mode:
-            return self._simulate_fill(symbol, "BUY", quote_qty=quote_amount_usdt, client_order_id=client_order_id)
+            return await self._simulate_fill_async(
+                symbol, "BUY", quote_qty=quote_amount_usdt, client_order_id=client_order_id
+            )
         filters = await self.get_symbol_filters(symbol)
         min_notional = filters.get("min_notional") or 5.0
         if quote_amount_usdt < min_notional:
@@ -183,7 +185,9 @@ class BinanceAdapter:
         """Market SELL with quantity (base)."""
         symbol = symbol.upper()
         if self.paper_mode:
-            return self._simulate_fill(symbol, "SELL", base_qty=quantity, client_order_id=client_order_id)
+            return await self._simulate_fill_async(
+                symbol, "SELL", base_qty=quantity, client_order_id=client_order_id
+            )
         from app.botengine.order_qty import validate_market_sell_qty
 
         filters = await self.get_symbol_filters(symbol)
@@ -208,7 +212,7 @@ class BinanceAdapter:
         }
         return await place_order(self.keys, payload)
 
-    def _simulate_fill(
+    async def _simulate_fill_async(
         self,
         symbol: str,
         side: str,
@@ -217,23 +221,21 @@ class BinanceAdapter:
         quote_qty: Optional[float] = None,
         client_order_id: str = "",
     ) -> Dict[str, Any]:
-        """Paper mode: no real order, return mock fill. Fails when price stale/missing (bot safety)."""
+        """Paper: taker komisyon, kayma, emir gecikmesi; fiyat bayat/yoksa fill yok."""
+        from app.services.test_simulation import await_paper_order_latency, build_paper_market_fill
+
         price = self.get_price(symbol) or 0.0
         if not price or price <= 0:
             raise ValueError(f"Price stale or missing for {symbol}; paper mode refuses fill")
-        if side == "BUY" and quote_qty is not None:
-            base_qty = quote_qty / price
-        elif side == "SELL" and base_qty is not None:
-            quote_qty = base_qty * price
-        else:
-            base_qty = quote_qty = 0.0
-        import time
-        return {
-            "orderId": int(time.time() * 1000),
-            "clientOrderId": client_order_id,
-            "symbol": symbol,
-            "status": "FILLED",
-            "executedQty": str(base_qty),
-            "cummulativeQuoteQty": str(quote_qty or 0),
-            "fills": [{"price": str(price), "qty": str(base_qty), "commission": "0", "commissionAsset": "USDT"}],
-        }
+        await await_paper_order_latency()
+        filters = await self.get_symbol_filters(symbol)
+        step = str(filters.get("step_size_str") or "0.00000001")
+        return build_paper_market_fill(
+            symbol,
+            side,
+            quote_qty=quote_qty,
+            base_qty=base_qty,
+            mid_price=price,
+            client_order_id=client_order_id,
+            step_size=step,
+        )

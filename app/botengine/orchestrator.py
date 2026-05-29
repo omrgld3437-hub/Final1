@@ -319,6 +319,7 @@ async def _bot_loop(bot_id: int) -> None:
         tick_count = 0
         while bot_id not in _stop_requested:
             db = _get_db()
+            paper_mode = False
             try:
                 row = db.query(Bot).filter(Bot.id == bot_id).first()
                 status_lower = (str(row.status or "").lower()) if row else ""
@@ -472,7 +473,10 @@ async def _bot_loop(bot_id: int) -> None:
                                             "side": r.get("side") or "BUY",
                                             "status": st,
                                             "filled_qty": r.get("fill_qty") or 0,
-                                            "filled_quote": (r.get("fill_price") or 0) * (r.get("fill_qty") or 0),
+                                            "filled_quote": r.get("filled_quote")
+                                            if r.get("filled_quote") is not None
+                                            else (r.get("fill_price") or 0) * (r.get("fill_qty") or 0),
+                                            "fee": r.get("fee") or 0,
                                             "event_ts": int(time.time() * 1000),
                                         })
                                     state["_pending_fills"] = pending_fills
@@ -520,7 +524,9 @@ async def _bot_loop(bot_id: int) -> None:
                             )
                         except Exception:
                             pass
-                    await asyncio.sleep(max(0.5, next_wake))
+                    from app.services.test_simulation import paper_tick_sleep_seconds
+
+                    await asyncio.sleep(paper_tick_sleep_seconds(next_wake, paper_mode))
                     continue
                 if is_multi or symbol == "MULTI":
                     # Multi-asset rebalance: no single symbol price; strategy uses per-asset prices later
@@ -557,7 +563,9 @@ async def _bot_loop(bot_id: int) -> None:
                                 emit_price_stale(db, bot_id, account_id, symbol)
                             except Exception:
                                 pass
-                        await asyncio.sleep(max(0.5, next_wake))
+                        from app.services.test_simulation import paper_tick_sleep_seconds
+
+                        await asyncio.sleep(paper_tick_sleep_seconds(next_wake, paper_mode))
                         continue
                     if state.pop("price_stale_since", None):
                         save_state(db, bot_id, account_id, state)
@@ -742,7 +750,9 @@ async def _bot_loop(bot_id: int) -> None:
             finally:
                 db.close()
 
-            await asyncio.sleep(max(0.5, next_wake))
+            from app.services.test_simulation import paper_tick_sleep_seconds
+
+            await asyncio.sleep(paper_tick_sleep_seconds(next_wake, paper_mode))
     except asyncio.CancelledError:
         logger.info("bot_engine loop cancelled bot_id=%s", bot_id)
     except Exception as e:

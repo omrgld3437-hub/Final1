@@ -48,12 +48,12 @@ async def _get_account_wallet_strip_kpis(account_id: int, db: Session) -> tuple:
         bot_locked_map = get_bot_locked_balances_for_account(db, account_id) or {}
 
         if is_test_account(account_id, db):
-            from app.services.wallet_display import build_test_account_wallet
+            from app.services.test_account_kpi import compute_test_account_dashboard_spot_kpi_async
 
-            resp = build_test_account_wallet(account_id, db)
+            kpi = await compute_test_account_dashboard_spot_kpi_async(account_id, db)
             return (
-                float(resp.get("total_usd") or TEST_PAPER_BALANCE_USDT),
-                float(resp.get("bot_locked_usd") or 0.0),
+                float(kpi.get("spot_strip_total_usd") or 0.0),
+                float(kpi.get("bot_locked_usd") or 0.0),
                 "ok",
             )
 
@@ -173,10 +173,21 @@ async def get_admin_accounts(
 
             active_bots_count = count_admin_active_bots(bots)
 
-            # Bot bakiye: dashboard strip "Bot kilitli" (wallet bot_locked_usd)
-            spot_balance, bot_locked_usd, spot_balance_status = await _get_account_wallet_strip_kpis(
-                account.id, db
-            )
+            from app.services.test_account import is_test_account
+
+            acct_is_test = is_test_account(account.id, db)
+            test_spot_kpi = None
+            if acct_is_test:
+                from app.services.test_account_kpi import compute_test_account_dashboard_spot_kpi_async
+
+                test_spot_kpi = await compute_test_account_dashboard_spot_kpi_async(account.id, db)
+                spot_balance = float(test_spot_kpi.get("spot_strip_total_usd") or 0.0)
+                bot_locked_usd = float(test_spot_kpi.get("bot_locked_usd") or 0.0)
+                spot_balance_status = "ok"
+            else:
+                spot_balance, bot_locked_usd, spot_balance_status = await _get_account_wallet_strip_kpis(
+                    account.id, db
+                )
             bots_balance = float(bot_locked_usd or 0.0)
 
             # Günlük bot PnL + aktif bot (snapshot ile dashboard aynı bot listesi)
@@ -218,29 +229,33 @@ async def get_admin_accounts(
             total_spot_balance_usd += spot_balance
             total_usd = bots_balance + spot_balance
             
-            # Günlük cüzdan PnL: AssetSnapshot ile bugün başı referansı
+            # Günlük cüzdan PnL: test = dashboard KPI strip; canlı = AssetSnapshot
             daily_wallet_pnl_usd = None
             daily_wallet_pnl_pct = None
-            try:
-                last_before_today = db.query(AssetSnapshot).filter(
-                    AssetSnapshot.account_id == account.id,
-                    AssetSnapshot.timestamp < today_start
-                ).order_by(desc(AssetSnapshot.timestamp)).first()
-                if last_before_today and getattr(last_before_today, "total_usd_value", None) is not None:
-                    ref_cuzdan = float(last_before_today.total_usd_value)
-                    daily_wallet_pnl_usd = spot_balance - ref_cuzdan
-                    daily_wallet_pnl_pct = (daily_wallet_pnl_usd / ref_cuzdan * 100.0) if ref_cuzdan and ref_cuzdan > 0 else 0.0
-                else:
-                    first_today = db.query(AssetSnapshot).filter(
+            if acct_is_test and test_spot_kpi:
+                daily_wallet_pnl_usd = float(test_spot_kpi.get("daily_wallet_pnl_usd") or 0.0)
+                daily_wallet_pnl_pct = float(test_spot_kpi.get("daily_wallet_pnl_pct") or 0.0)
+            else:
+                try:
+                    last_before_today = db.query(AssetSnapshot).filter(
                         AssetSnapshot.account_id == account.id,
-                        AssetSnapshot.timestamp >= today_start
-                    ).order_by(AssetSnapshot.timestamp.asc()).first()
-                    if first_today and getattr(first_today, "total_usd_value", None) is not None:
-                        ref_cuzdan = float(first_today.total_usd_value)
+                        AssetSnapshot.timestamp < today_start
+                    ).order_by(desc(AssetSnapshot.timestamp)).first()
+                    if last_before_today and getattr(last_before_today, "total_usd_value", None) is not None:
+                        ref_cuzdan = float(last_before_today.total_usd_value)
                         daily_wallet_pnl_usd = spot_balance - ref_cuzdan
                         daily_wallet_pnl_pct = (daily_wallet_pnl_usd / ref_cuzdan * 100.0) if ref_cuzdan and ref_cuzdan > 0 else 0.0
-            except Exception:
-                pass
+                    else:
+                        first_today = db.query(AssetSnapshot).filter(
+                            AssetSnapshot.account_id == account.id,
+                            AssetSnapshot.timestamp >= today_start
+                        ).order_by(AssetSnapshot.timestamp.asc()).first()
+                        if first_today and getattr(first_today, "total_usd_value", None) is not None:
+                            ref_cuzdan = float(first_today.total_usd_value)
+                            daily_wallet_pnl_usd = spot_balance - ref_cuzdan
+                            daily_wallet_pnl_pct = (daily_wallet_pnl_usd / ref_cuzdan * 100.0) if ref_cuzdan and ref_cuzdan > 0 else 0.0
+                except Exception:
+                    pass
             
             # Get user info
             user_login_info = None
@@ -274,13 +289,8 @@ async def get_admin_accounts(
                         user_is_suspended = user.is_suspended
                         user_id = user.id
             
-            from app.services.test_account import is_test_account, TEST_PAPER_BALANCE_USDT
-
-            acct_is_test = is_test_account(account.id, db)
             if acct_is_test and spot_balance_status != "ok":
                 spot_balance_status = "ok"
-            if acct_is_test and spot_balance <= 0:
-                spot_balance = float(TEST_PAPER_BALANCE_USDT)
 
             accounts_list.append({
                 "account_id": account.id,
@@ -293,6 +303,7 @@ async def get_admin_accounts(
                 "bots_balance_usd": round(bots_balance, 2),
                 "bot_locked_usd": round(bots_balance, 2),
                 "spot_balance_usd": round(spot_balance, 2),
+                "spot_kpi_total_usd": round(spot_balance, 2) if acct_is_test else None,
                 "spot_balance_status": spot_balance_status,
                 "total_usd": round(total_usd, 2),
                 "daily_pnl_usd": round(daily_pnl_usd, 2),

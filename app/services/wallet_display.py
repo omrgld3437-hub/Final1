@@ -182,6 +182,7 @@ def build_test_account_wallet(account_id: int, db: Any) -> Dict[str, Any]:
     out["ts"] = ts_iso
     out["ts_ms"] = int(time.time() * 1000)
     out["data_status"] = "fresh"
+    enrich_test_wallet_dashboard_kpi(out, db, account_id)
     return out
 
 
@@ -369,3 +370,26 @@ def apply_test_wallet_equity_totals(wallet: Dict[str, Any], db: Any, account_id:
         sum(float(a.get("free_usd") or 0) for a in wallet.get("assets") or [] if isinstance(a, dict)),
         2,
     )
+
+
+def enrich_test_wallet_dashboard_kpi(wallet: Dict[str, Any], db: Any, account_id: int) -> None:
+    """Dashboard KPI strip + admin tile: spot_kpi_total_usd, daily_wallet_pnl_*."""
+    import logging
+
+    logger = logging.getLogger(__name__)
+    try:
+        from app.services.test_account_kpi import (
+            compute_test_account_spot_strip_total_usd,
+            get_test_daily_spot_ref_for_pnl,
+        )
+
+        total, _, bot_eq, _locked = compute_test_account_spot_strip_total_usd(wallet, db, account_id)
+        ref = get_test_daily_spot_ref_for_pnl(account_id, total)
+        pnl_usd = round(total - ref, 2)
+        pnl_pct = round((pnl_usd / ref * 100.0), 2) if ref > 0 else 0.0
+        wallet["spot_kpi_total_usd"] = total
+        wallet["daily_wallet_pnl_usd"] = pnl_usd
+        wallet["daily_wallet_pnl_pct"] = pnl_pct
+        wallet["bot_locked_usd"] = bot_eq
+    except Exception as ex:
+        logger.debug("enrich_test_wallet_dashboard_kpi account_id=%s: %s", account_id, ex)

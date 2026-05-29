@@ -31,6 +31,8 @@ Paylaşılan iş mantığı: Binance, fiyat, PnL, şifreleme, audit.
 | `test_account.py` | Paper test hesabı |
 | `wallet_display.py` | Strip/tablo bot_locked; test paper USDT Toplam = 10k − config bütçesi (equity değil) |
 | `test_spot_paper.py` | Test hesabı manuel spot paper bakiye |
+| `test_simulation.py` | Paper fill: taker komisyon, kayma, emir/tick gecikmesi (bot + manuel spot) |
+| `test_account_kpi.py` | Test spot KPI strip + günlük değişim (admin tile = dashboard) |
 | `transaction_history_service.py` | İşlem geçmişi API |
 | `transaction_history_file_store.py` | Şifreli işlem geçmişi (`.run/tx_history/`); `bootstrap_tx_history_from_binance` |
 | `binance_connectivity.py` | Upstream hata; probe OK → `on_connectivity_restored` (paused START + running pending `CONNECTIVITY_STABLE` → flush after loop restart + START `connectivity_resume`) |

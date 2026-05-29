@@ -904,8 +904,6 @@ async function loadSummary(accountId) {
         updateAccountName(data.account?.name ?? data.account_name ?? "Hesap Dashboard");
         setAppbarAccountHolderName(data);
         hideError();
-        if (State.isTestAccount && typeof renderPageErrorLog === 'function') renderPageErrorLog();
-        if (State.isTestAccount && typeof isBinanceTabActive === 'function' && isBinanceTabActive() && typeof renderAllSystemErrors === 'function') renderAllSystemErrors();
     } catch (error) {
         const errorMsg = error instanceof window.APIError ? `Dashboard yüklenemedi: ${error.message}` : `Dashboard yüklenemedi: ${error.message || 'Bilinmeyen hata'}`;
         showError(errorMsg, error);
@@ -954,6 +952,12 @@ function _fmtPerfUsdt(v) {
     if (!Number.isFinite(n)) return '—';
     var sign = n >= 0 ? '+' : '';
     return sign + n.toFixed(2) + ' USDT';
+}
+
+function _fmtPerfUsdtPlain(v) {
+    var n = Number(v);
+    if (!Number.isFinite(n)) return '—';
+    return n.toFixed(2) + ' USDT';
 }
 
 function _fmtPerfCoin(v, asset) {
@@ -1045,11 +1049,11 @@ function _perfPeriodPrefix(period) {
 }
 
 function _perfPeriodPnlLabel(period) {
-    return _perfPeriodPrefix(period) + ' K/Z (USDT)';
+    return _perfPeriodPrefix(period) + ' K/Z (komisyon hariç)';
 }
 
 function _perfPeriodFeesLabel(period) {
-    return _perfPeriodPrefix(period) + ' komisyon (USDT)';
+    return _perfPeriodPrefix(period) + ' komisyon';
 }
 
 function renderBotPerformancePanel(data, forPeriod) {
@@ -1078,7 +1082,7 @@ function renderBotPerformancePanel(data, forPeriod) {
         pnlEl.className = 'bot-perf-summary-value' + _perfColorClass(totalPnl);
     }
     if (feesEl) {
-        feesEl.textContent = Number.isFinite(totalFees) ? totalFees.toFixed(2) : '0.00';
+        feesEl.textContent = _fmtPerfUsdtPlain(totalFees);
         feesEl.className = 'bot-perf-summary-value bot-perf-summary-value--muted';
     }
 }
@@ -2025,7 +2029,6 @@ function applySnapshotToUI(data) {
             if (typeof updateAccountName === 'function') updateAccountName(data.account.name || "Hesap Dashboard");
             if (typeof setAppbarAccountHolderName === 'function') setAppbarAccountHolderName(summaryShape);
             hideError();
-            if (State.isTestAccount && typeof renderPageErrorLog === 'function') renderPageErrorLog();
         }
     }
     if (State.accountId && typeof loadBotPerformance === 'function') {
@@ -2051,145 +2054,6 @@ function computeHash(data) {
 function isBinanceTabActive() {
     const t = document.getElementById('tabBinance');
     return !!(t && t.classList.contains('is-active'));
-}
-
-function getCurrentTabKey() {
-    var active = document.querySelector('.dm-tab.is-active');
-    return (active && active.getAttribute('data-tab')) || 'binance';
-}
-
-function renderPageErrorLog() {
-    var strip = document.getElementById('pageErrorLogStrip');
-    var list = document.getElementById('pageErrorLogList');
-    if (!strip || !list) return;
-    if (typeof State === 'undefined' || !State.isTestAccount) {
-        strip.style.display = 'none';
-        return;
-    }
-    strip.style.display = 'block';
-    var tab = getCurrentTabKey();
-    var errors = (window.errorReporter && window.errorReporter.getPageErrors) ? window.errorReporter.getPageErrors(tab) : [];
-    if (errors.length === 0) {
-        list.textContent = 'Bu sayfada henüz hata yok.';
-        list.style.color = 'var(--ds-text-tertiary)';
-    } else {
-        list.style.color = 'var(--ds-text-error, #f6465d)';
-        list.textContent = errors.map(function(e) {
-            var t = e.ts ? new Date(e.ts).toLocaleTimeString('tr-TR') : '';
-            return '[' + t + '] ' + (e.message || '').substring(0, 200) + (e.detail ? '\n  ' + String(e.detail).substring(0, 150) : '');
-        }).join('\n\n');
-    }
-    var resetBtn = document.getElementById('pageErrorLogResetBtn');
-    if (resetBtn && !resetBtn._bound) {
-        resetBtn._bound = true;
-        resetBtn.disabled = false;
-        resetBtn.onclick = function() {
-            var tab = getCurrentTabKey();
-            if (window.errorReporter && window.errorReporter.clearPageErrors) window.errorReporter.clearPageErrors(tab);
-            var listEl = document.getElementById('pageErrorLogList');
-            if (listEl) {
-                listEl.textContent = 'Bu sayfada henüz hata yok.';
-                listEl.style.color = 'var(--ds-text-tertiary)';
-            }
-            // Tek güncelleme; renderPageErrorLog() tekrar yazınca flicker oluyordu
-        };
-    } else if (resetBtn) {
-        resetBtn.disabled = false;
-    }
-}
-
-function renderAllSystemErrors() {
-    var block = document.getElementById('allSystemErrorsBlock');
-    var list = document.getElementById('allSystemErrorsList');
-    if (!block || !list) return;
-    if (typeof State === 'undefined' || !State.isTestAccount || !document.getElementById('tabBinance') || !document.getElementById('tabBinance').classList.contains('is-active')) {
-        block.style.display = 'none';
-        return;
-    }
-    block.style.display = 'block';
-    var parts = [];
-    if (window.errorReporter && window.errorReporter.getAllPageErrors) {
-        var front = window.errorReporter.getAllPageErrors();
-        if (front.length) {
-            parts.push('--- Frontend ---');
-            front.slice(0, 30).forEach(function(e) {
-                var t = e.ts ? new Date(e.ts).toLocaleString('tr-TR') : '';
-                parts.push('[' + t + '] ' + (e.message || '').substring(0, 180));
-            });
-        }
-    }
-    function setListText(backendParts) {
-        var all = parts.concat(backendParts || []);
-        list.textContent = all.length ? all.join('\n') : 'Henüz kayıtlı hata yok.';
-        list.style.color = all.length ? 'var(--ds-text-error, #f6465d)' : 'var(--ds-text-tertiary)';
-    }
-    // Use session user's account_id for error-logs so it matches backend (avoids 403 when State.accountId comes from URL/localStorage)
-    var accountIdForLogs = State.accountId;
-    try {
-        var u = sessionStorage.getItem('user') || localStorage.getItem('user');
-        if (u) {
-            var uu = JSON.parse(u);
-            if (uu && uu.account_id != null && Number.isFinite(parseInt(uu.account_id, 10))) accountIdForLogs = parseInt(uu.account_id, 10);
-        }
-    } catch (e) {}
-    if (accountIdForLogs && window.apiClient) {
-        window.apiClient.get('/api/error-logs?account_id=' + accountIdForLogs + '&limit=50').then(function(res) {
-            var items = (res && res.items) ? res.items : [];
-            var backendParts = [];
-            if (items.length) {
-                backendParts.push('\n--- Backend ---');
-                items.forEach(function(e) {
-                    backendParts.push('[' + (e.created_at || '').replace('Z', '') + '] ' + (e.message || '').substring(0, 180));
-                });
-            }
-            setListText(backendParts);
-        }).catch(function() {
-            setListText(['\n--- Backend ---', 'Backend logları yüklenemedi.']);
-        });
-    } else {
-        setListText([]);
-    }
-    var resetBtn = document.getElementById('allSystemErrorsResetBtn');
-    if (resetBtn && !resetBtn._boundAll) {
-        resetBtn._boundAll = true;
-        resetBtn.disabled = false;
-        resetBtn.onclick = function() {
-            if (window.errorReporter && window.errorReporter.clearAllPageErrors) window.errorReporter.clearAllPageErrors();
-            var listEl = document.getElementById('allSystemErrorsList');
-            if (listEl) {
-                listEl.textContent = 'Sıfırlanıyor…';
-                listEl.style.color = 'var(--ds-text-tertiary)';
-            }
-            var accountIdForLogs = State.accountId;
-            try {
-                var u = sessionStorage.getItem('user') || localStorage.getItem('user');
-                if (u) {
-                    var uu = JSON.parse(u);
-                    if (uu && uu.account_id != null && Number.isFinite(parseInt(uu.account_id, 10))) accountIdForLogs = parseInt(uu.account_id, 10);
-                }
-            } catch (e) {}
-            if (accountIdForLogs && window.apiClient) {
-                window.apiClient.post('/api/error-logs/clear?account_id=' + accountIdForLogs).then(function() {
-                    if (listEl) {
-                        listEl.textContent = 'Hatalar sıfırlandı. Yenileyince de boş kalacak.';
-                        listEl.style.color = 'var(--ds-text-tertiary)';
-                    }
-                }).catch(function() {
-                    if (listEl) {
-                        listEl.textContent = 'Frontend temizlendi. Backend sıfırlama isteği başarısız.';
-                        listEl.style.color = 'var(--ds-text-secondary)';
-                    }
-                });
-            } else {
-                if (listEl) {
-                    listEl.textContent = 'Hatalar sıfırlandı. (Sadece frontend; hesap bilgisi yok.)';
-                    listEl.style.color = 'var(--ds-text-tertiary)';
-                }
-            }
-        };
-    } else if (resetBtn) {
-        resetBtn.disabled = false;
-    }
 }
 
 function isBotsTabActive() {
@@ -2973,83 +2837,6 @@ function closeBotStructureModal() {
     document.body.style.overflow = "";
 }
 
-var copyTradingCache = {};
-var COPY_TRADING_CACHE_TTL_MS = 30000;
-
-function toggleCopyTradingDrawer(structure) {
-    var drawer = document.querySelector('[data-copy-drawer="' + structure.id + '"]');
-    if (!drawer) return;
-    if (drawer.style.display === 'block') {
-        drawer.style.display = 'none';
-        drawer.innerHTML = '';
-        return;
-    }
-    document.querySelectorAll('.bot-structure-card__copy-drawer').forEach(function (d) {
-        d.style.display = 'none';
-        d.innerHTML = '';
-    });
-    var cached = copyTradingCache[structure.id];
-    if (cached && (Date.now() - cached.ts) < COPY_TRADING_CACHE_TTL_MS && cached.items) {
-        renderCopyTradingDrawer(drawer, structure, cached.items);
-        drawer.style.display = 'block';
-        return;
-    }
-    drawer.innerHTML = '<div style="padding: 8px; color: var(--ds-text-secondary);">Yükleniyor…</div>';
-    drawer.style.display = 'block';
-    var url = '/api/leaderboard/structures/' + encodeURIComponent(structure.id) + '/top?limit=5';
-    window.apiClient.get(url).then(function (data) {
-        var items = (data && data.items) ? data.items : [];
-        copyTradingCache[structure.id] = { ts: Date.now(), items: items };
-        renderCopyTradingDrawer(drawer, structure, items);
-    }).catch(function () {
-        drawer.innerHTML = '<div style="padding: 8px; color: var(--ds-text-secondary); font-size: 0.9rem;">Bulunamadı.</div>';
-    });
-}
-
-function renderCopyTradingDrawer(drawer, structure, items) {
-    var structureName = (structure && structure.name) ? structure.name : structure.id;
-    var html = '<h4 style="margin: 0 0 10px 0; font-size: 1rem; font-weight: 600; color: var(--ds-text-primary);">Top 5 (' + escapeHtml(structureName) + ')</h4>';
-    if (!items.length) {
-        html += '<p style="margin: 0; font-size: 0.9rem; color: var(--ds-text-secondary);">Bulunamadı. Bu yapı için kârda olan bot bulunamadı.</p>';
-        drawer.innerHTML = html;
-        return;
-    }
-    items.forEach(function (item, idx) {
-        var pct = item.profit_pct != null ? Number(item.profit_pct) : 0;
-        var pctStr = (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%';
-        var pctColor = pct >= 0 ? '#0ecb81' : '#f6465d';
-        html += '<div class="copy-trading-row" style="margin-bottom: 12px; padding: 10px; background: var(--ds-bg-secondary); border-radius: 6px; border: 1px solid var(--ds-border);">';
-        html += '<div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">';
-        html += '<span style="font-weight: 600; color: ' + pctColor + ';">Kâr %: ' + pctStr + '</span>';
-        html += '<button type="button" class="btn btn-sm" data-apply-idx="' + idx + '" style="background: var(--ds-accent); color: #000;">Bu parametreleri uygula</button>';
-        html += '</div>';
-        var params = item.params || {};
-        var keys = Object.keys(params).filter(function (k) { return k && params[k] !== undefined && params[k] !== null && typeof params[k] !== 'object'; });
-        if (keys.length) {
-            html += '<div style="margin-top: 8px; font-size: 0.8rem; color: var(--ds-text-secondary);">';
-            keys.slice(0, 8).forEach(function (k) {
-                var v = params[k];
-                if (typeof v === 'object') return;
-                html += '<span style="margin-right: 12px;">' + escapeHtml(String(k)) + ': ' + escapeHtml(String(v)) + '</span>';
-            });
-            html += '</div>';
-        }
-        html += '</div>';
-    });
-    drawer.innerHTML = html;
-    drawer.querySelectorAll('[data-apply-idx]').forEach(function (btn) {
-        var idx = parseInt(btn.getAttribute('data-apply-idx'), 10);
-        var item = items[idx];
-        if (!item) return;
-        btn.onclick = function (e) {
-            e.stopPropagation();
-            var p = normalizeLeaderboardParamsToFormConfig(item.params || {});
-            if (item.symbol && !p.symbol) p.symbol = item.symbol;
-            applyLeaderboardParams(structure, p);
-        };
-    });
-}
-
 function escapeHtml(s) {
     if (s == null) return '';
     var div = document.createElement('div');
@@ -3111,10 +2898,8 @@ function renderBotStructures() {
                     <button class="btn btn-primary-gold bot-structure-card__btn" style="padding: 10px 24px; font-weight: 600; white-space: nowrap;" data-action="select" data-structure-id="${structure.id}"${btnDisabled}>
                         ${btnLabel}
                     </button>
-                    ${'<button type="button" class="btn bot-structure-card__btn-copy" style="padding: 10px 16px; font-weight: 600; white-space: nowrap; background: var(--ds-bg-tertiary); color: var(--ds-text-primary); border: 1px solid var(--ds-border);" data-action="copy-trading" data-structure-id="' + structure.id + '">Copy Trading</button>'}
                 </div>
             </div>
-            <div class="bot-structure-card__copy-drawer" data-copy-drawer="${structure.id}" style="display: none; margin-top: 12px; padding: 12px; background: var(--ds-bg-tertiary); border-radius: 8px; border: 1px solid var(--ds-border);"></div>
         `;
         
         card.onmouseenter = () => {
@@ -3134,14 +2919,6 @@ function renderBotStructures() {
                 selectBotStructure(structure);
             };
         }
-        const copyBtn = card.querySelector('[data-action="copy-trading"]');
-        if (copyBtn) {
-            copyBtn.onclick = (e) => {
-                e.stopPropagation();
-                toggleCopyTradingDrawer(structure);
-            };
-        }
-        
         // Card click
         card.onclick = (e) => {
             if (!e.target.closest('button')) {
@@ -4290,9 +4067,6 @@ function bindTabs() {
                 document.body.classList.toggle("tab-settings-active", targetTab === "settings");
                 document.body.classList.toggle("tab-trade-active", targetTab === "trade");
                 document.body.classList.toggle("tab-bots-active", targetTab === "bots");
-
-                if (typeof renderPageErrorLog === 'function') renderPageErrorLog();
-                if (targetTab === 'binance' && typeof renderAllSystemErrors === 'function') renderAllSystemErrors();
 
                 // İşlem Geçmişi paneli: Anasayfa/Binance sekmesinde her zaman görünsün ve veri yüklensin
                 var txPanel = document.getElementById("transactionHistoryPanel");
@@ -6784,27 +6558,23 @@ function testAccountUsdtAvailablePool(assets) {
     return sum;
 }
 
-/** Test paper: Al/Sat buton durumu — quote havuzu + satır kullanılabilir. */
+/** Test paper: Al/Sat — butonlar her zaman aktif (pasif görünüm yok); yetersiz bakiye emir gönderiminde doğrulanır. */
 function testAccountVarlikRowTradeState(a, assets) {
     var asset = (a && a.asset) || '';
     var isQuote = isTestWalletStableAsset(asset);
     var available = testAccountVarlikAvailableQty(a);
     var usdtPool = testAccountUsdtAvailablePool(assets);
-    var canBuy = isQuote ? false : usdtPool > 0;
-    var canSell = available > 0;
-    var sellTitle = canSell
-        ? ('Satış (kullanılabilir: ' + fmtNum(available, 8) + ')')
-        : 'Satış yapılamaz: kullanılabilir bakiye yok (bot/emir kilitli)';
-    var buyTitle = canBuy
-        ? ('Alış (USDT havuzu: ' + fmtNum(usdtPool, 2) + ')')
-        : (isQuote ? 'Stable coin alışı desteklenmiyor' : 'Alış yapılamaz: kullanılabilir USDT yok');
+    var sellTitle = 'Satış (test paper' + (available > 0 ? ', kullanılabilir: ' + fmtNum(available, 8) : '') + ')';
+    var buyTitle = isQuote
+        ? 'Alış (test paper — stable satır)'
+        : ('Alış (test paper' + (usdtPool > 0 ? ', USDT havuzu: ' + fmtNum(usdtPool, 2) : '') + ')');
     return {
-        canBuy: canBuy,
-        canSell: canSell,
+        canBuy: true,
+        canSell: true,
         sellTitle: sellTitle,
         buyTitle: buyTitle,
-        sellDisabled: canSell ? '' : ' disabled',
-        buyDisabled: canBuy ? '' : ' disabled',
+        sellDisabled: '',
+        buyDisabled: '',
     };
 }
 
@@ -6882,6 +6652,13 @@ function testAccountEnsureDailySpotRef(accountId, currentTotal) {
     if (!stored || stored.date !== today || !Number.isFinite(Number(stored.refUsd)) || Number(stored.refUsd) <= 0) {
         stored = { date: today, refUsd: total, setAt: Date.now() };
         try { localStorage.setItem(key, JSON.stringify(stored)); } catch (e2) {}
+    }
+    if (window.apiClient && accountId) {
+        window.apiClient.post('/api/binance/test-daily-spot-ref', {
+            account_id: accountId,
+            ref_usd: Number(stored.refUsd),
+            date: today
+        }).catch(function () {});
     }
     return Number(stored.refUsd);
 }
