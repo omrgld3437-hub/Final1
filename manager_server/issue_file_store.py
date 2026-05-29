@@ -306,15 +306,21 @@ def _query_jsonl_archive(
     lines = [ln for ln in text.splitlines() if ln.strip()]
     if len(lines) > max_scan:
         lines = lines[-max_scan:]
+    need = max(0, offset) + max(0, limit)
     matched: List[dict] = []
+    extra = 0
     for line in reversed(lines):
         try:
             rec = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if match_fn(rec):
+        if not match_fn(rec):
+            continue
+        if len(matched) < need:
             matched.append(rec)
-    total = len(matched)
+        else:
+            extra += 1
+    total = len(matched) + extra
     return matched[offset : offset + limit], total
 
 

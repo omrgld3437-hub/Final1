@@ -9,6 +9,7 @@ import hashlib
 import hmac
 import json
 import logging
+import sys
 import time
 import traceback
 from typing import Any, Dict, List, Optional, Tuple
@@ -129,6 +130,26 @@ class CircuitBreaker:
 _binance_time_cache: Dict[bool, Tuple[int, float]] = {}  # testnet -> (server_time_ms, local_ts)
 _binance_time_cache_sync: Dict[bool, Tuple[int, float]] = {}
 _BINANCE_TIME_CACHE_TTL = 30.0  # seconds
+_MAX_CLOCK_RETRIES = 2
+
+
+def invalidate_binance_time_cache(testnet: Optional[bool] = None) -> None:
+    """Clear cached Binance server time (async + sync). testnet=None clears both."""
+    if testnet is None:
+        _binance_time_cache.clear()
+        _binance_time_cache_sync.clear()
+    else:
+        _binance_time_cache.pop(testnet, None)
+        _binance_time_cache_sync.pop(testnet, None)
+
+
+def clock_sync_hint() -> str:
+    """OS-aware NTP resync hint for Binance -1021 (timestamp outside recvWindow)."""
+    if sys.platform == "win32":
+        return "Windows: w32tm /resync veya Ayarlar > Saat ile NTP senkronizasyonu yapın."
+    if sys.platform == "darwin":
+        return "macOS: sudo sntp -sS time.apple.com veya Sistem Ayarları > Tarih ve Saat > Otomatik ayarla."
+    return "Linux: sudo timedatectl set-ntp true ile NTP senkronizasyonu yapın."
 
 
 def _base_url(testnet: bool) -> str:
@@ -374,17 +395,20 @@ def _sign(secret: str, query: str) -> str:
     return hmac.new(secret.encode("utf-8"), query.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
-async def _get_binance_timestamp(client: Optional[httpx.AsyncClient], testnet: bool) -> int:
+async def _get_binance_timestamp(
+    client: Optional[httpx.AsyncClient],
+    testnet: bool,
+    force_refresh: bool = False,
+) -> int:
     """Binance server time (ms). Cached 30s to avoid -1021 (timestamp outside recvWindow)."""
+    if force_refresh:
+        invalidate_binance_time_cache(testnet)
     now_local = time.time()
     cached = _binance_time_cache.get(testnet)
-    if cached:
+    if cached and not force_refresh:
         server_ms, local_ts = cached
         if now_local - local_ts < _BINANCE_TIME_CACHE_TTL:
             return int(server_ms + (now_local - local_ts) * 1000)
-        drift_s = now_local - local_ts
-        if abs(drift_s) < 120:
-            return int(server_ms + drift_s * 1000)
     if is_ip_banned():
         if cached:
             server_ms, local_ts = cached
@@ -425,7 +449,8 @@ async def _get_binance_timestamp(client: Optional[httpx.AsyncClient], testnet: b
     # Last resort: local time (401 if server clock wrong - user must sync time)
     local_ms = int(time.time() * 1000)
     logger.warning(
-        "Binance server time unavailable; using local timestamp. If you get 401 Unauthorized, sync server clock (Windows: w32tm /resync or Settings > Time)."
+        "Binance server time unavailable; using local timestamp. If you get -1021, sync clock: %s",
+        clock_sync_hint(),
     )
     return local_ms
 
@@ -476,6 +501,40 @@ async def _rest_precheck(method: str, path: str, params: Optional[Dict[str, Any]
     return weight
 
 
+async def _build_signed_request(
+    client: Optional[httpx.AsyncClient],
+    method: str,
+    path: str,
+    keys: Any,
+    base_params: Dict[str, Any],
+    force_refresh_time: bool = False,
+) -> tuple:
+    """Build url/headers/request_kw for a signed Binance call. Timestamp refreshed each call."""
+    testnet = getattr(keys, "testnet", False)
+    params = dict(base_params)
+    params["timestamp"] = await _get_binance_timestamp(client, testnet, force_refresh=force_refresh_time)
+    params["recvWindow"] = 60000
+    params_str = {k: str(v) for k, v in params.items()}
+    query_for_sign = "&".join(f"{k}={v}" for k, v in sorted(params_str.items()))
+    signature = _sign(keys.api_secret, query_for_sign)
+    final_query = query_for_sign + "&signature=" + signature
+    base = _base_url(testnet)
+    url = f"{base}{path}"
+    headers = {"X-MBX-APIKEY": keys.api_key}
+    logger.debug(
+        "BINANCE_SIGN_DEBUG %s %s QUERY=%s",
+        method.upper(), path, final_query.replace(signature, "***"),
+    )
+    if method.upper() == "POST":
+        headers["Content-Type"] = "application/x-www-form-urlencoded"
+        request_kw = {"content": final_query}
+        req_url = url
+    else:
+        req_url = f"{url}?{final_query}"
+        request_kw = {"url": req_url}
+    return req_url, url, headers, request_kw, params
+
+
 async def _signed_request_impl(
     client: Optional[httpx.AsyncClient],
     method: str,
@@ -489,36 +548,22 @@ async def _signed_request_impl(
     Timestamp = Binance server time (cached) to avoid -1021 recvWindow.
     Weight budget: deny call if insufficient tokens (sliding 60s).
     """
-    params = dict(params or {})
-    weight = await _rest_precheck(method, path, params)
+    base_params = dict(params or {})
+    weight = await _rest_precheck(method, path, base_params)
     if time.time() < _binance_ip_ban_state["until_ts"]:
         raise BinanceIPBannedError(_binance_ip_ban_state["until_ts"])
     t0_req = time.perf_counter()
-    params["timestamp"] = await _get_binance_timestamp(client, getattr(keys, "testnet", False))
-    params["recvWindow"] = 60000  # 60s tolerance (max allowed by Binance)
-    params_str = {k: str(v) for k, v in params.items()}
-    query_for_sign = "&".join(f"{k}={v}" for k, v in sorted(params_str.items()))
-    signature = _sign(keys.api_secret, query_for_sign)
-    final_query = query_for_sign + "&signature=" + signature
-    base = _base_url(getattr(keys, "testnet", False))
-    url = f"{base}{path}"
-    headers = {"X-MBX-APIKEY": keys.api_key}
-    logger.debug(
-        "BINANCE_SIGN_DEBUG %s %s QUERY=%s",
-        method.upper(), path, final_query.replace(signature, "***")
-    )
-    if method.upper() == "POST":
-        headers["Content-Type"] = "application/x-www-form-urlencoded"
-        request_kw = {"content": final_query}
-    else:
-        url_with_qs = f"{url}?{final_query}"
-        request_kw = {"url": url_with_qs}
+    testnet = getattr(keys, "testnet", False)
     last_exc = None
     backoff = INITIAL_BACKOFF
     http_method = method.upper()
+    clock_retries = 0
     for attempt in range(MAX_RETRIES + 1):
+        force_refresh_time = clock_retries > 0
+        req_url, url, headers, request_kw, params = await _build_signed_request(
+            client, method, path, keys, base_params, force_refresh_time=force_refresh_time,
+        )
         try:
-            req_url = request_kw.get("url", url)
             if client is None:
                 async with httpx.AsyncClient(timeout=BINANCE_HTTP_TIMEOUT) as c:
                     if http_method == "GET":
@@ -556,11 +601,17 @@ async def _signed_request_impl(
                 record_weight_used(None, getattr(keys, "api_key", None), weight, elapsed_ms)
             except Exception:
                 pass
-            # Binance bazen 200 OK ile {"code": -1022, "msg": "..."} gibi hata döner
             code = data.get("code", 0) if isinstance(data, dict) else 0
             if code not in (0, None):
                 msg = data.get("msg", "Unknown error") if isinstance(data, dict) else "Unknown error"
-                # -2015/-2008 (Invalid API-key/IP): DEBUG; diğerleri WARNING (sistem hatası)
+                if code == -1021 and clock_retries < _MAX_CLOCK_RETRIES:
+                    clock_retries += 1
+                    invalidate_binance_time_cache(testnet)
+                    logger.info(
+                        "BINANCE_CLOCK_RETRY path=%s attempt=%s/%s",
+                        path, clock_retries, _MAX_CLOCK_RETRIES,
+                    )
+                    continue
                 if code in (-2015, -2008):
                     logger.debug("BINANCE_SIGNED_ERROR path=%s status=200 code=%s msg=%s", path, code, msg)
                 else:
@@ -570,7 +621,7 @@ async def _signed_request_impl(
                         from app.error_logging import log_error_fire_and_forget
                         ctx = {"path": path, "method": method, "code": code}
                         if code == -1021:
-                            ctx["hint"] = "Sunucu saati ile Binance saati uyumsuz (recvWindow dışı). Uyku/uyanma, NTP veya sistem saati kayması olabilir."
+                            ctx["hint"] = f"Sunucu saati ile Binance saati uyumsuz. {clock_sync_hint()}"
                         log_error_fire_and_forget("binance", msg, detail=None, context=ctx)
                 except Exception:
                     pass
@@ -583,18 +634,24 @@ async def _signed_request_impl(
             except Exception:
                 body = ""
             sc = getattr(e.response, "status_code", None)
-            # 401 / 400(-2015, -2008) log flood: invalid key 5 dk içinde tekrar WARNING yazılmasın
             try:
                 b = json.loads(body) if body else {}
                 code = isinstance(b, dict) and b.get("code")
                 msg = (isinstance(b, dict) and b.get("msg")) or ""
                 is_invalid_key = (
                     sc == 401
-                    or (sc == 400 and code in (-2015, -2008))  # -2008 = Invalid Api-Key ID
+                    or (sc == 400 and code in (-2015, -2008))
                 )
-                # -2013 "Order does not exist" => raise BinanceSignedError so reconcile treats as NOT_FOUND; avoid WARNING flood
                 if sc == 400 and code == -2013:
                     raise BinanceSignedError(int(code), str(msg), b if isinstance(b, dict) else {})
+                if sc == 400 and code == -1021 and clock_retries < _MAX_CLOCK_RETRIES:
+                    clock_retries += 1
+                    invalidate_binance_time_cache(testnet)
+                    logger.info(
+                        "BINANCE_CLOCK_RETRY path=%s attempt=%s/%s status=400",
+                        path, clock_retries, _MAX_CLOCK_RETRIES,
+                    )
+                    continue
             except BinanceSignedError:
                 raise
             except Exception:
@@ -607,7 +664,7 @@ async def _signed_request_impl(
                     path,
                 )
             else:
-                hint = "API anahtari, IP beyaz listesi veya sunucu saati (Binance ile uyumlu olmali). Windows: w32tm /resync"
+                hint = f"API anahtari, IP beyaz listesi veya sunucu saati. {clock_sync_hint()}"
                 logger.warning(
                     "BINANCE_SIGNED_ERROR path=%s status=%s body=%s hint=%s",
                     path, sc, body[:200] if body else "", hint,
@@ -620,7 +677,6 @@ async def _signed_request_impl(
                 await _asyncio_sleep(backoff)
                 backoff *= BACKOFF_MULTIPLIER
                 continue
-            # 401/-2015 için error_logs'a yazma (zaten WARNING loglandı; tekrarlayan kayıt flood önlenir)
             if not is_invalid_key:
                 try:
                     sk = (path, str(getattr(e.response, "status_code", None)))
@@ -631,11 +687,23 @@ async def _signed_request_impl(
                             b = json.loads(body) if body else {}
                             if isinstance(b, dict) and b.get("code") == -2015:
                                 ctx["hint"] = "IP değişmiş veya API anahtarı/izin hatası olabilir; Binance'te güncel IP ve izinleri kontrol edin."
+                            if isinstance(b, dict) and b.get("code") == -1021:
+                                ctx["hint"] = clock_sync_hint()
                         except Exception:
                             pass
                         log_error_fire_and_forget("binance", str(e), detail=traceback.format_exc(), context=ctx)
                 except Exception:
                     pass
+            raise
+        except BinanceSignedError as e:
+            if e.code == -1021 and clock_retries < _MAX_CLOCK_RETRIES:
+                clock_retries += 1
+                invalidate_binance_time_cache(testnet)
+                logger.info(
+                    "BINANCE_CLOCK_RETRY path=%s attempt=%s/%s signed_error",
+                    path, clock_retries, _MAX_CLOCK_RETRIES,
+                )
+                continue
             raise
         except Exception as e:
             last_exc = e
@@ -877,47 +945,153 @@ async def cancel_order(keys: Any, symbol: str, order_id: int) -> Dict[str, Any]:
     return await _signed_request(client, "DELETE", "/api/v3/order", keys, params)
 
 
-_exchange_info_cache: Dict[str, tuple] = {}  # key -> (data, ts)
 _exchange_info_inflight: Dict[str, asyncio.Task] = {}
 _exchange_info_lock = asyncio.Lock()
 EXCHANGE_INFO_TTL = 3600.0
+# Kompakt cache: tam exchangeInfo JSON RAM'de tutulmaz
+_exchange_compact_cache: Dict[str, Tuple[List[str], Dict[str, Dict[str, Any]], float]] = {}
 
 
-async def fetch_exchange_info(testnet: bool = False, force_refresh: bool = False) -> Dict[str, Any]:
-    """GET /api/v3/exchangeInfo. Cache 1 hour + inflight dedupe."""
+def _exchange_cache_key(testnet: bool) -> str:
+    return "testnet" if testnet else "live"
+
+
+def _filters_from_exchange_symbol_entry(s: Dict[str, Any]) -> Dict[str, Any]:
+    sym = (s.get("symbol") or "").upper().strip()
+    out: Dict[str, Any] = {
+        "step_size": 0.00001,
+        "step_size_str": "0.00001",
+        "min_qty": 0.00001,
+        "min_qty_str": "0.00001",
+        "tick_size": 0.01,
+        "tick_size_str": "0.01",
+        "min_notional": 5.0,
+        "baseAsset": s.get("baseAsset"),
+        "quoteAsset": s.get("quoteAsset"),
+    }
+    for f in s.get("filters") or []:
+        t = f.get("filterType")
+        if t == "LOT_SIZE":
+            step_raw = str(f.get("stepSize") or "0.00001")
+            min_raw = str(f.get("minQty") or step_raw)
+            out["step_size_str"] = step_raw
+            out["min_qty_str"] = min_raw
+            out["step_size"] = float(step_raw)
+            out["min_qty"] = float(min_raw)
+        elif t == "PRICE_FILTER":
+            tick_raw = str(f.get("tickSize") or "0.01")
+            out["tick_size_str"] = tick_raw
+            out["tick_size"] = float(tick_raw)
+        elif t in ("MIN_NOTIONAL", "NOTIONAL"):
+            out["min_notional"] = float(f.get("minNotional") or f.get("notional") or 5)
+    return out
+
+
+def _ingest_exchange_info_payload(key: str, data: Dict[str, Any]) -> None:
+    symbols_list: List[str] = []
+    filters_map: Dict[str, Dict[str, Any]] = {}
+    for s in data.get("symbols") or []:
+        if (s.get("status") or "") != "TRADING":
+            continue
+        sym = (s.get("symbol") or "").strip().upper()
+        if not sym:
+            continue
+        symbols_list.append(sym)
+        filters_map[sym] = _filters_from_exchange_symbol_entry(s)
+    symbols_list.sort()
+    _exchange_compact_cache[key] = (symbols_list, filters_map, time.time())
+
+
+def _exchange_info_lightweight(symbols_list: List[str]) -> Dict[str, Any]:
+    """Eski fetch_exchange_info çağıranları için sembol listesi (filtre yok)."""
+    return {"symbols": [{"symbol": s, "status": "TRADING"} for s in symbols_list]}
+
+
+async def _ensure_exchange_compact(testnet: bool = False, force_refresh: bool = False) -> None:
     from app.services.binance_rest_log import rest_source
-    key = "testnet" if testnet else "live"
+
+    key = _exchange_cache_key(testnet)
     now = time.time()
-    if not force_refresh and key in _exchange_info_cache:
-        data, ts = _exchange_info_cache[key]
+    if not force_refresh and key in _exchange_compact_cache:
+        _, _, ts = _exchange_compact_cache[key]
         if now - ts < EXCHANGE_INFO_TTL:
-            return data
+            return
     task = None
     is_creator = False
     async with _exchange_info_lock:
-        if not force_refresh and key in _exchange_info_cache:
-            data, ts = _exchange_info_cache[key]
+        if not force_refresh and key in _exchange_compact_cache:
+            _, _, ts = _exchange_compact_cache[key]
             if now - ts < EXCHANGE_INFO_TTL:
-                return data
+                return
         if key in _exchange_info_inflight:
             task = _exchange_info_inflight[key]
         else:
+
             async def _fetch():
                 async with httpx.AsyncClient(timeout=BINANCE_HTTP_TIMEOUT) as c:
                     with rest_source("binance.exchange_info"):
                         return await _public_get(c, "/api/v3/exchangeInfo", None, testnet)
+
             task = asyncio.create_task(_fetch())
             _exchange_info_inflight[key] = task
             is_creator = True
     try:
         data = await task
+        if isinstance(data, dict):
+            _ingest_exchange_info_payload(key, data)
     finally:
         if is_creator:
             async with _exchange_info_lock:
                 if _exchange_info_inflight.get(key) is task:
                     del _exchange_info_inflight[key]
-    _exchange_info_cache[key] = (data, time.time())
-    return data
+
+
+def get_symbol_filters_sync(symbol: str, testnet: bool = False) -> Optional[Dict[str, Any]]:
+    """Senkron okuma — cache zaten yüklüyse (DataHub tick dışı)."""
+    sym = (symbol or "").upper().strip()
+    if not sym:
+        return None
+    key = _exchange_cache_key(testnet)
+    entry = _exchange_compact_cache.get(key)
+    if not entry:
+        return None
+    return entry[1].get(sym)
+
+
+async def get_cached_symbol_filters(
+    symbol: str, testnet: bool = False, force_refresh: bool = False
+) -> Optional[Dict[str, Any]]:
+    """LOT_SIZE / PRICE_FILTER — kompakt RAM cache."""
+    sym = (symbol or "").upper().strip()
+    if not sym:
+        return None
+    await _ensure_exchange_compact(testnet, force_refresh)
+    key = _exchange_cache_key(testnet)
+    entry = _exchange_compact_cache.get(key)
+    if not entry:
+        return None
+    return entry[1].get(sym)
+
+
+async def get_cached_trading_symbols(
+    testnet: bool = False, force_refresh: bool = False
+) -> List[str]:
+    await _ensure_exchange_compact(testnet, force_refresh)
+    key = _exchange_cache_key(testnet)
+    entry = _exchange_compact_cache.get(key)
+    if not entry:
+        return []
+    return list(entry[0])
+
+
+async def fetch_exchange_info(testnet: bool = False, force_refresh: bool = False) -> Dict[str, Any]:
+    """GET /api/v3/exchangeInfo — RAM'de yalnızca kompakt filtre indeksi tutulur."""
+    await _ensure_exchange_compact(testnet, force_refresh)
+    key = _exchange_cache_key(testnet)
+    entry = _exchange_compact_cache.get(key)
+    if not entry:
+        return {"symbols": []}
+    return _exchange_info_lightweight(entry[0])
 
 
 async def ticker_price_all(testnet: bool = False) -> List[Dict]:
@@ -1047,12 +1221,14 @@ def _sync_public_get(path: str, params: Optional[Dict[str, Any]] = None, testnet
     return None
 
 
-def _get_binance_timestamp_sync(testnet: bool) -> int:
+def _get_binance_timestamp_sync(testnet: bool, force_refresh: bool = False) -> int:
     """Binance server time (ms) for sync calls. Cached 30s to avoid -1021."""
     import requests
+    if force_refresh:
+        invalidate_binance_time_cache(testnet)
     now_local = time.time()
     cached = _binance_time_cache_sync.get(testnet)
-    if cached:
+    if cached and not force_refresh:
         server_ms, local_ts = cached
         if now_local - local_ts < _BINANCE_TIME_CACHE_TTL:
             return int(server_ms + (now_local - local_ts) * 1000)
@@ -1071,39 +1247,49 @@ def _get_binance_timestamp_sync(testnet: bool) -> int:
 def _sync_signed_request(method: str, path: str, keys: Any, params: Optional[Dict[str, Any]] = None) -> Any:
     """Sync signed request. GET/DELETE: query string imza ile aynı sırada URL'e eklenir (params= yok)."""
     import requests
-    params = dict(params or {})
-    params["timestamp"] = _get_binance_timestamp_sync(getattr(keys, "testnet", False))
-    params["recvWindow"] = 60000
-    params_str = {k: str(v) for k, v in params.items()}
-    query_for_sign = "&".join(f"{k}={v}" for k, v in sorted(params_str.items()))
-    signature = _sign(keys.api_secret, query_for_sign)
-    final_query = query_for_sign + "&signature=" + signature
-    base = _base_url(getattr(keys, "testnet", False))
+    base_params = dict(params or {})
+    testnet = getattr(keys, "testnet", False)
+    base = _base_url(testnet)
     url = f"{base}{path}"
     headers = {"X-MBX-APIKEY": keys.api_key}
-    if method.upper() == "POST":
-        headers["Content-Type"] = "application/x-www-form-urlencoded"
-        body = final_query
-    else:
-        url = f"{url}?{final_query}"
-        body = None
     t0 = time.perf_counter()
+    clock_retries = 0
     for attempt in range(MAX_RETRIES + 1):
+        params = dict(base_params)
+        params["timestamp"] = _get_binance_timestamp_sync(testnet, force_refresh=clock_retries > 0)
+        params["recvWindow"] = 60000
+        params_str = {k: str(v) for k, v in params.items()}
+        query_for_sign = "&".join(f"{k}={v}" for k, v in sorted(params_str.items()))
+        signature = _sign(keys.api_secret, query_for_sign)
+        final_query = query_for_sign + "&signature=" + signature
+        if method.upper() == "POST":
+            headers["Content-Type"] = "application/x-www-form-urlencoded"
+            body = final_query
+            req_url = url
+        else:
+            req_url = f"{url}?{final_query}"
+            body = None
         try:
             if method.upper() == "GET":
-                r = requests.get(url, headers=headers, timeout=3)
+                r = requests.get(req_url, headers=headers, timeout=3)
             elif method.upper() == "DELETE":
-                r = requests.delete(url, headers=headers, timeout=3)
+                r = requests.delete(req_url, headers=headers, timeout=3)
             else:
-                r = requests.post(url, headers=headers, data=body, timeout=3)
+                r = requests.post(req_url, headers=headers, data=body, timeout=3)
             if r.status_code in (429, 418):
                 if attempt < MAX_RETRIES:
                     time.sleep(INITIAL_BACKOFF * (BACKOFF_MULTIPLIER ** attempt))
                     continue
             r.raise_for_status()
+            data = r.json()
+            code = data.get("code", 0) if isinstance(data, dict) else 0
+            if code == -1021 and clock_retries < _MAX_CLOCK_RETRIES:
+                clock_retries += 1
+                invalidate_binance_time_cache(testnet)
+                continue
             elapsed_ms = (time.perf_counter() - t0) * 1000
             logger.debug("binance_spot sync_signed method=%s path=%s latency_ms=%.0f", method, path, elapsed_ms)
-            return r.json()
+            return data
         except Exception as e:
             if attempt >= MAX_RETRIES:
                 raise

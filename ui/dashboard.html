@@ -62,7 +62,7 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
     <link rel="stylesheet" href="/ui/assets/theme.css?v=clean1">
     <link rel="stylesheet" href="/ui/assets/ui.css?v=clean1">
     <link rel="stylesheet" href="/ui/assets/design.css?v=clean1">
-    <link rel="stylesheet" href="/ui/assets/dashboard.css?v=wallet-live-kpi1">
+    <link rel="stylesheet" href="/ui/assets/dashboard.css?v=mevcut-botlar-align5">
     <link rel="stylesheet" href="/ui/assets/binance-colors.css?v=bin1">
     <link rel="stylesheet" href="/ui/assets/blink.css?v=1">
     <link rel="stylesheet" href="/ui/assets/dashboard-login-theme.css?v=1">
@@ -360,16 +360,15 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
                 <div id="botPerformanceSummary" class="bot-performance-summary">
                     <div class="bot-perf-summary-row bot-perf-summary-row--single">
                         <div class="bot-perf-summary-card bot-perf-summary-card--primary">
-                            <div class="bot-perf-summary-label">Toplam K/Z (USDT)</div>
+                            <div id="botPerfPnlLabel" class="bot-perf-summary-label">K/Z (USDT)</div>
                             <div id="botPerfTotalPnl" class="bot-perf-summary-value">—</div>
                         </div>
                         <div class="bot-perf-summary-card">
-                            <div class="bot-perf-summary-label">Komisyon (USDT)</div>
+                            <div id="botPerfFeesLabel" class="bot-perf-summary-label">Komisyon (USDT)</div>
                             <div id="botPerfTotalFees" class="bot-perf-summary-value bot-perf-summary-value--muted">—</div>
                         </div>
                     </div>
                 </div>
-                <div id="botPerformanceDaily" class="bot-performance-daily"></div>
             </div>
 
             <!-- İşlem Geçmişi – alım/satım/yatırım/çekim, Spot vs Bot (Anasayfada her zaman görünür) -->
@@ -1761,7 +1760,7 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
     <script src="/ui/assets/renderHome.js?v=wallet-stable6"></script>
     <script src="/ui/assets/homeFlash.js?v=wallet-stable4"></script>
     <!-- Main dashboard (refactored) -->
-    <script src="/ui/assets/dashboard.js?v=wallet-stable8"></script>
+    <script src="/ui/assets/dashboard.js?v=wallet-stable13"></script>
     <script src="/ui/assets/ticker.js?v=mobile1" defer></script>
 </body>
 </html>

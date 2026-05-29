@@ -5,20 +5,31 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Yönetici Paneli v3.5 (127.0.0.1:7999)</title>
-  <link rel="stylesheet" href="/ui/assets/manager.css?v=3" />
+  <link rel="stylesheet" href="/ui/assets/manager.css?v=26" />
 </head>
 <body class="theme-dark">
   <header class="manager-header">
-    <div class="manager-header-title-block">
-      <h1>Server Admin Paneli</h1>
-      <p id="manager-controlled-host" class="manager-controlled-host" title="Bu panel hangi makinedeki servisleri kontrol ediyor. SSH tünel ile açtıysanız sunucu adı görünür.">Kontrol edilen sunucu: —</p>
+    <div class="manager-header-brand">
+      <span class="manager-header-logo" aria-hidden="true"></span>
+      <div class="manager-header-identity">
+        <div class="manager-header-title-row">
+          <h1>Server Admin Paneli</h1>
+          <span class="manager-header-port">:7999</span>
+        </div>
+        <div class="manager-host-badge" title="Bu panel hangi makinedeki servisleri kontrol ediyor. SSH tünel ile açtıysanız sunucu adı görünür.">
+          <span class="manager-host-label">Kontrol edilen sunucu</span>
+          <span id="manager-controlled-host" class="manager-host-value">&nbsp;</span>
+        </div>
+      </div>
     </div>
-    <div class="manager-header-actions">
-      <button type="button" id="btnGlobalStart" class="btn btn-primary">Tümünü Başlat</button>
-      <button type="button" id="btnGlobalStop" class="btn btn-danger">Tümünü Durdur</button>
-      <button type="button" id="btnGlobalRestart" class="btn btn-warning">Tümünü Yeniden Başlat</button>
-      <button type="button" id="btnResetAll" class="btn btn-reset">Sıfırla</button>
-      <span id="globalLastOp" class="global-last-op" aria-live="polite"></span>
+    <div class="manager-header-toolbar">
+      <div class="manager-header-action-group" role="group" aria-label="Toplu servis kontrolü">
+        <button type="button" id="btnGlobalStart" class="btn btn-sm btn-primary manager-action-btn manager-action-start">Tümünü Başlat</button>
+        <button type="button" id="btnGlobalStop" class="btn btn-sm btn-danger manager-action-btn manager-action-stop">Tümünü Durdur</button>
+        <button type="button" id="btnGlobalRestart" class="btn btn-sm btn-warning manager-action-btn manager-action-restart">Tümünü Yeniden Başlat</button>
+      </div>
+      <span class="manager-header-divider" aria-hidden="true"></span>
+      <button type="button" id="btnResetAll" class="btn btn-sm btn-reset manager-action-btn manager-action-reset">Logları sıfırla</button>
     </div>
   </header>
 
@@ -40,15 +51,35 @@
       <section id="panel-overview" class="tab-panel active">
         <div class="overview-page">
           <div class="overview-header">
-            <div>
-              <h2 class="overview-title">Kontrol Merkezi</h2>
-              <p class="overview-subtitle">Sistem kaynakları, servis durumu, olaylar ve son uyarılar — tek ekranda.</p>
-            </div>
-            <div class="overview-header-actions">
-              <span class="overview-live-badge">CANLI</span>
-              <span id="overview-last-update" class="overview-meta">Son güncelleme: —</span>
-              <span id="overview-health-badge" class="overview-health-badge">—</span>
-              <button type="button" class="btn btn-sm btn-export" data-export="metrics">Metrik dışa aktar</button>
+            <div class="overview-header-inner">
+              <div class="overview-header-copy">
+                <div class="overview-header-eyebrow">
+                  <span class="overview-live-dot" aria-hidden="true"></span>
+                  <span class="overview-live-text">Canlı izleme</span>
+                </div>
+                <h2 class="overview-title">Kontrol Merkezi</h2>
+                <p class="overview-subtitle">Sistem kaynakları, servis durumu ve son uyarılar — tek ekranda özetlenir.</p>
+              </div>
+              <div class="overview-header-panel">
+                <div id="overview-health-badge" class="overview-health-card ok">
+                  <span class="overview-health-icon" aria-hidden="true"></span>
+                  <div class="overview-health-body">
+                    <span class="overview-health-label">Sistem durumu</span>
+                    <span id="overview-health-text" class="overview-health-text">—</span>
+                  </div>
+                </div>
+                <div class="overview-header-metrics">
+                  <div class="overview-header-metric">
+                    <span class="overview-header-metric-label">Servisler</span>
+                    <span id="overview-services-count" class="overview-header-metric-value">—</span>
+                  </div>
+                  <div class="overview-header-metric">
+                    <span class="overview-header-metric-label">Son güncelleme</span>
+                    <span id="overview-last-update" class="overview-header-metric-value tabular-nums">—</span>
+                  </div>
+                </div>
+                <button type="button" class="btn btn-sm btn-export overview-export-btn" data-export="metrics">Metrik dışa aktar</button>
+              </div>
             </div>
           </div>
 
@@ -68,22 +99,9 @@
               <span id="overview-disk" class="ov-stat-value">—</span>
               <div class="ov-progress-wrap"><div id="progress-disk" class="ov-progress-fill" style="width:0%"></div></div>
             </div>
-            <div class="ov-stat-card ov-stat-load">
-              <span class="ov-stat-label">Sistem yükü</span>
-              <span id="overview-load" class="ov-stat-value">—</span>
-              <span class="ov-stat-hint">load avg</span>
-            </div>
-            <div class="ov-stat-card ov-stat-slo">
-              <span class="ov-stat-label">Erişilebilirlik</span>
-              <div class="ov-slo-inline">
-                <div class="ov-progress-wrap ov-slo-bar-wrap"><div id="slo-bar" class="ov-progress-fill slo-bar" style="width:100%"></div></div>
-              </div>
-              <p id="slo-text" class="ov-stat-hint slo-text">—</p>
-            </div>
-            <div class="ov-stat-card ov-stat-issues" data-tab-link="incidents">
-              <span class="ov-stat-label">Aktif olay</span>
-              <span id="overview-issue-count" class="ov-stat-value issue-count">0</span>
-              <span class="ov-stat-hint">Olay Merkezi →</span>
+            <div class="ov-stat-card ov-stat-uptime">
+              <span class="ov-stat-label">Sistem çalışması</span>
+              <span id="overview-system-uptime" class="ov-stat-value">—</span>
             </div>
           </div>
 
@@ -105,11 +123,14 @@
                   <dt>Port</dt><dd id="overview-manager-port">7999</dd>
                   <dt>PID</dt><dd id="overview-manager-pid">—</dd>
                   <dt>Çalışma</dt><dd id="overview-manager-uptime">—</dd>
-                  <dt>Kaynak</dt><dd id="overview-manager-resource">—</dd>
+                  <dt>CPU</dt><dd id="overview-manager-cpu" class="metric-num">—</dd>
+                  <dt>RAM</dt><dd id="overview-manager-ram" class="metric-num">—</dd>
                   <dt>Hata / Uyarı</dt><dd id="overview-manager-err-wrn">—</dd>
                 </dl>
                 <p id="overview-manager-diagnosis" class="overview-diagnosis diagnosis-empty">—</p>
-                <div class="service-card-toolbar" aria-hidden="true"></div>
+                <div class="service-card-toolbar">
+                  <button type="button" class="btn btn-sm btn-restart" id="btn-overview-manager-restart" title="Manager, Web, Engine ve HTML dahil tüm sistemi yeniden başlatır">Yeniden başlat</button>
+                </div>
                 <footer class="service-card-foot">
                   <a href="#" class="link-tab service-link" data-tab="manager">Logları aç →</a>
                 </footer>
@@ -124,15 +145,20 @@
                 </header>
                 <dl class="service-metrics">
                   <dt>Port</dt><dd id="overview-web-port">8000</dd>
-                  <dt>İstek/dk</dt><dd id="overview-web-reqmin">—</dd>
-                  <dt>Hata oranı</dt><dd id="overview-web-error-rate">—</dd>
-                  <dt>P95</dt><dd id="overview-web-p95">—</dd>
+                  <dt>PID</dt><dd id="overview-web-pid">—</dd>
+                  <dt>Çalışma</dt><dd id="overview-web-uptime">—</dd>
+                  <dt>CPU</dt><dd id="overview-web-cpu" class="metric-num">—</dd>
+                  <dt>RAM</dt><dd id="overview-web-ram" class="metric-num">—</dd>
                   <dt>Hata / Uyarı</dt><dd id="overview-web-err-wrn">—</dd>
                 </dl>
                 <p id="overview-web-diagnosis" class="overview-diagnosis diagnosis-empty">—</p>
-                <div class="service-card-toolbar" aria-hidden="true"></div>
-                <footer class="service-card-foot">
+                <div class="service-card-toolbar">
+                  <button type="button" class="btn btn-sm btn-start" id="btn-overview-web-start">Başlat</button>
+                  <button type="button" class="btn btn-sm btn-stop" id="btn-overview-web-stop">Durdur</button>
+                </div>
+                <footer class="service-card-foot service-card-foot-split">
                   <a href="#" class="link-tab service-link" data-tab="web">Logları aç →</a>
+                  <a href="http://127.0.0.1:8000" target="_blank" rel="noopener" class="service-link-ext">Siteyi aç ↗</a>
                 </footer>
               </article>
               <article class="overview-service-card svc-engine" data-service="engine">
@@ -144,14 +170,18 @@
                   <span class="status-chip service-status" id="overview-engine-status">—</span>
                 </header>
                 <dl class="service-metrics">
-                  <dt>PID</dt><dd id="overview-engine-pid">—</dd>
                   <dt>Aktif bot</dt><dd id="overview-engine-bots">—</dd>
-                  <dt>Tick/10sn</dt><dd id="overview-engine-tick">—</dd>
-                  <dt>Tick yaşı</dt><dd id="overview-engine-tick-age">—</dd>
+                  <dt>PID</dt><dd id="overview-engine-pid">—</dd>
+                  <dt>Çalışma</dt><dd id="overview-engine-uptime">—</dd>
+                  <dt>CPU</dt><dd id="overview-engine-cpu" class="metric-num">—</dd>
+                  <dt>RAM</dt><dd id="overview-engine-ram" class="metric-num">—</dd>
                   <dt>Hata / Uyarı</dt><dd id="overview-engine-err-wrn">—</dd>
                 </dl>
                 <p id="overview-engine-diagnosis" class="overview-diagnosis diagnosis-empty">—</p>
-                <div class="service-card-toolbar" aria-hidden="true"></div>
+                <div class="service-card-toolbar">
+                  <button type="button" class="btn btn-sm btn-start" id="btn-overview-engine-start">Başlat</button>
+                  <button type="button" class="btn btn-sm btn-stop" id="btn-overview-engine-stop">Durdur</button>
+                </div>
                 <footer class="service-card-foot">
                   <a href="#" class="link-tab service-link" data-tab="engine">Logları aç →</a>
                 </footer>
@@ -168,35 +198,20 @@
                   <dt>Port</dt><dd id="overview-html-port">8080</dd>
                   <dt>PID</dt><dd id="overview-html-pid">—</dd>
                   <dt>Çalışma</dt><dd id="overview-html-uptime">—</dd>
-                  <dt>Kaynak</dt><dd id="overview-html-resource">—</dd>
+                  <dt>CPU</dt><dd id="overview-html-cpu" class="metric-num">—</dd>
+                  <dt>RAM</dt><dd id="overview-html-ram" class="metric-num">—</dd>
                   <dt>Hata / Uyarı</dt><dd id="overview-html-err-wrn">—</dd>
                 </dl>
                 <p id="overview-html-diagnosis" class="overview-diagnosis diagnosis-empty">—</p>
                 <div class="service-card-toolbar">
-                  <button type="button" class="btn btn-sm btn-start" id="btn-html-start">Başlat</button>
-                  <button type="button" class="btn btn-sm btn-stop" id="btn-html-stop">Durdur</button>
+                  <button type="button" class="btn btn-sm btn-start" id="btn-overview-html-start">Başlat</button>
+                  <button type="button" class="btn btn-sm btn-stop" id="btn-overview-html-stop">Durdur</button>
                 </div>
                 <footer class="service-card-foot service-card-foot-split">
-                  <a href="#" class="link-tab service-link" data-tab="html">Yönet →</a>
+                  <a href="#" class="link-tab service-link" data-tab="html">Logları aç →</a>
                   <a href="http://127.0.0.1:8080" target="_blank" rel="noopener" class="service-link-ext">Siteyi aç ↗</a>
                 </footer>
               </article>
-            </div>
-          </div>
-
-          <div class="overview-bottom">
-            <div class="overview-panel overview-quick-stats">
-              <h3 class="overview-block-title">Hızlı özet</h3>
-              <ul class="overview-kv-list">
-                <li><span class="ov-kv-label">Hatalar (son 50)</span><span id="overview-errors-summary" class="ov-kv-value">—</span></li>
-                <li><span class="ov-kv-label">Başarısız giriş</span><span id="overview-login-fail" class="ov-kv-value">—</span></li>
-                <li><span class="ov-kv-label">Son işlemler</span><span id="overview-restarts-10" class="ov-kv-value ov-kv-multiline">—</span></li>
-              </ul>
-            </div>
-            <div class="overview-panel overview-alerts-panel">
-              <h3 class="overview-block-title">Son hata ve uyarılar</h3>
-              <div id="overview-alerts-list" class="overview-alerts-list"></div>
-              <pre id="overview-alerts" class="hidden" aria-hidden="true"></pre>
             </div>
           </div>
         </div>
@@ -204,18 +219,44 @@
 
       <!-- WEB -->
       <section id="panel-web" class="tab-panel">
-        <div class="panel-head">
-          <span class="status-chip" id="status-web">—</span>
-          <span id="stat-web" class="stat-bar"></span>
-          <label class="lock-toggle"><input type="checkbox" id="lock-web" /> Kilitle</label>
-          <button type="button" id="btnWebStart" class="btn btn-sm">Başlat</button>
-          <button type="button" id="btnWebStop" class="btn btn-sm btn-danger">Durdur</button>
-          <button type="button" id="btnWebRestart" class="btn btn-sm btn-warning">Yeniden başlat</button>
-          <button type="button" id="btnWebReset" class="btn btn-sm btn-reset">Sıfırla</button>
-          <button type="button" class="btn btn-sm btn-export" data-export="logs-web">Dışa aktar</button>
-        </div>
-        <div id="diagnosis-web" class="diagnosis-box hidden"></div>
-        <div class="panel-grid">
+        <div class="service-tab-page svc-tab-web">
+          <header class="service-tab-header">
+            <div class="service-tab-title-block">
+              <h2 class="service-tab-title">TraderTrailing.com</h2>
+              <p class="service-tab-subtitle">Web uygulaması · port 8000 · canlı log ve metrikler</p>
+            </div>
+            <span class="status-chip" id="status-web">—</span>
+          </header>
+          <div class="service-tab-stats">
+            <div class="svc-stat"><span class="svc-stat-label">Port</span><span id="tab-web-port" class="svc-stat-value">8000</span></div>
+            <div class="svc-stat"><span class="svc-stat-label">PID</span><span id="tab-web-pid" class="svc-stat-value">—</span></div>
+            <div class="svc-stat"><span class="svc-stat-label">Çalışma</span><span id="tab-web-uptime" class="svc-stat-value">—</span></div>
+            <div class="svc-stat"><span class="svc-stat-label">Kaynak</span><span id="tab-web-resource" class="svc-stat-value">—</span></div>
+            <div class="svc-stat"><span class="svc-stat-label">Hata / Uyarı</span><span id="tab-web-err-wrn" class="svc-stat-value">—</span></div>
+          </div>
+          <div class="service-tab-toolbar">
+            <div class="svc-toolbar-inner">
+              <div class="svc-toolbar-block">
+                <span class="svc-toolbar-label">Servis kontrolü</span>
+                <div class="svc-toolbar-action-group svc-toolbar-action-power">
+                  <label class="svc-toolbar-lock lock-toggle"><input type="checkbox" id="lock-web" /><span>Kilitle</span></label>
+                  <button type="button" id="btnWebStart" class="btn btn-sm svc-tb-btn svc-tb-start">Başlat</button>
+                  <button type="button" id="btnWebStop" class="btn btn-sm svc-tb-btn svc-tb-stop">Durdur</button>
+                  <button type="button" id="btnWebRestart" class="btn btn-sm svc-tb-btn svc-tb-restart">Yeniden başlat</button>
+                </div>
+              </div>
+              <span class="svc-toolbar-divider" aria-hidden="true"></span>
+              <div class="svc-toolbar-block svc-toolbar-block-secondary">
+                <span class="svc-toolbar-label">Loglar</span>
+                <div class="svc-toolbar-action-group">
+                  <button type="button" id="btnWebReset" class="btn btn-sm svc-tb-btn svc-tb-reset">Logları sıfırla</button>
+                  <button type="button" class="btn btn-sm svc-tb-btn svc-tb-export" data-export="logs-web">Dışa aktar</button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div id="diagnosis-web" class="diagnosis-box hidden"></div>
+          <div class="panel-grid">
           <div class="log-panel">
             <div class="log-panel-head">
               <span>Canlı log</span>
@@ -235,23 +276,50 @@
             <div class="log-panel-head"><span>Uyarılar (son 50)</span><span id="wrn-web-count" class="log-count">0</span><button type="button" class="btn-copy" data-copy="wrn-web">Kopyala</button></div>
             <pre id="wrn-web" class="log-content log-content-detail"></pre>
           </div>
+          </div>
         </div>
       </section>
 
       <!-- ENGINE -->
       <section id="panel-engine" class="tab-panel">
-        <div class="panel-head">
-          <span class="status-chip" id="status-engine">—</span>
-          <span id="stat-engine" class="stat-bar"></span>
-          <label class="lock-toggle"><input type="checkbox" id="lock-engine" /> Kilitle</label>
-          <button type="button" id="btnEngineStart" class="btn btn-sm">Başlat</button>
-          <button type="button" id="btnEngineStop" class="btn btn-sm btn-danger">Durdur</button>
-          <button type="button" id="btnEngineRestart" class="btn btn-sm btn-warning">Yeniden başlat</button>
-          <button type="button" id="btnEngineReset" class="btn btn-sm btn-reset">Sıfırla</button>
-          <button type="button" class="btn btn-sm btn-export" data-export="logs-engine">Dışa aktar</button>
-        </div>
-        <div id="diagnosis-engine" class="diagnosis-box hidden"></div>
-        <div class="panel-grid">
+        <div class="service-tab-page svc-tab-engine">
+          <header class="service-tab-header">
+            <div class="service-tab-title-block">
+              <h2 class="service-tab-title">TraderTrailing Bot Server</h2>
+              <p class="service-tab-subtitle">Bot motoru · worker süreci · canlı log ve metrikler</p>
+            </div>
+            <span class="status-chip" id="status-engine">—</span>
+          </header>
+          <div class="service-tab-stats">
+            <div class="svc-stat"><span class="svc-stat-label">Aktif bot</span><span id="tab-engine-bots" class="svc-stat-value">—</span></div>
+            <div class="svc-stat"><span class="svc-stat-label">PID</span><span id="tab-engine-pid" class="svc-stat-value">—</span></div>
+            <div class="svc-stat"><span class="svc-stat-label">Çalışma</span><span id="tab-engine-uptime" class="svc-stat-value">—</span></div>
+            <div class="svc-stat"><span class="svc-stat-label">Kaynak</span><span id="tab-engine-resource" class="svc-stat-value">—</span></div>
+            <div class="svc-stat"><span class="svc-stat-label">Hata / Uyarı</span><span id="tab-engine-err-wrn" class="svc-stat-value">—</span></div>
+          </div>
+          <div class="service-tab-toolbar">
+            <div class="svc-toolbar-inner">
+              <div class="svc-toolbar-block">
+                <span class="svc-toolbar-label">Servis kontrolü</span>
+                <div class="svc-toolbar-action-group svc-toolbar-action-power">
+                  <label class="svc-toolbar-lock lock-toggle"><input type="checkbox" id="lock-engine" /><span>Kilitle</span></label>
+                  <button type="button" id="btnEngineStart" class="btn btn-sm svc-tb-btn svc-tb-start">Başlat</button>
+                  <button type="button" id="btnEngineStop" class="btn btn-sm svc-tb-btn svc-tb-stop">Durdur</button>
+                  <button type="button" id="btnEngineRestart" class="btn btn-sm svc-tb-btn svc-tb-restart">Yeniden başlat</button>
+                </div>
+              </div>
+              <span class="svc-toolbar-divider" aria-hidden="true"></span>
+              <div class="svc-toolbar-block svc-toolbar-block-secondary">
+                <span class="svc-toolbar-label">Loglar</span>
+                <div class="svc-toolbar-action-group">
+                  <button type="button" id="btnEngineReset" class="btn btn-sm svc-tb-btn svc-tb-reset">Logları sıfırla</button>
+                  <button type="button" class="btn btn-sm svc-tb-btn svc-tb-export" data-export="logs-engine">Dışa aktar</button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div id="diagnosis-engine" class="diagnosis-box hidden"></div>
+          <div class="panel-grid">
           <div class="log-panel">
             <div class="log-panel-head">
               <span>Canlı log</span>
@@ -271,19 +339,47 @@
             <div class="log-panel-head"><span>Uyarılar (son 50) — WARNING (401/Binance 10 dk’da 1)</span><span id="wrn-engine-count" class="log-count">0</span><button type="button" class="btn-copy" data-copy="wrn-engine">Kopyala</button></div>
             <pre id="wrn-engine" class="log-content log-content-detail"></pre>
           </div>
+          </div>
         </div>
       </section>
 
       <!-- MANAGER -->
       <section id="panel-manager" class="tab-panel">
-        <div class="panel-head">
-          <span class="status-chip" id="status-manager">—</span>
-          <span id="stat-manager" class="stat-bar"></span>
-          <button type="button" id="btnManagerReset" class="btn btn-sm btn-reset">Logları sıfırla</button>
-          <button type="button" class="btn btn-sm btn-export" data-export="logs-manager">Dışa aktar</button>
-        </div>
-        <div id="diagnosis-manager" class="diagnosis-box hidden"></div>
-        <div class="panel-grid">
+        <div class="service-tab-page svc-tab-manager">
+          <header class="service-tab-header">
+            <div class="service-tab-title-block">
+              <h2 class="service-tab-title">Manager Server</h2>
+              <p class="service-tab-subtitle">Yönetici paneli · port 7999 · kendi logları</p>
+            </div>
+            <span class="status-chip" id="status-manager">—</span>
+          </header>
+          <div class="service-tab-stats">
+            <div class="svc-stat"><span class="svc-stat-label">Port</span><span id="tab-manager-port" class="svc-stat-value">7999</span></div>
+            <div class="svc-stat"><span class="svc-stat-label">PID</span><span id="tab-manager-pid" class="svc-stat-value">—</span></div>
+            <div class="svc-stat"><span class="svc-stat-label">Çalışma</span><span id="tab-manager-uptime" class="svc-stat-value">—</span></div>
+            <div class="svc-stat"><span class="svc-stat-label">Kaynak</span><span id="tab-manager-resource" class="svc-stat-value">—</span></div>
+            <div class="svc-stat"><span class="svc-stat-label">Hata / Uyarı</span><span id="tab-manager-err-wrn" class="svc-stat-value">—</span></div>
+          </div>
+          <div class="service-tab-toolbar svc-toolbar-compact">
+            <div class="svc-toolbar-inner">
+              <div class="svc-toolbar-block">
+                <span class="svc-toolbar-label">Yönetici</span>
+                <div class="svc-toolbar-action-group svc-toolbar-action-power">
+                  <button type="button" id="btnManagerRestart" class="btn btn-sm svc-tb-btn svc-tb-restart" title="Manager, Web, Engine ve HTML dahil tüm sistemi yeniden başlatır">Yeniden başlat</button>
+                </div>
+              </div>
+              <span class="svc-toolbar-divider" aria-hidden="true"></span>
+              <div class="svc-toolbar-block svc-toolbar-block-secondary">
+                <span class="svc-toolbar-label">Loglar</span>
+                <div class="svc-toolbar-action-group">
+                  <button type="button" id="btnManagerReset" class="btn btn-sm svc-tb-btn svc-tb-reset">Logları sıfırla</button>
+                  <button type="button" class="btn btn-sm svc-tb-btn svc-tb-export" data-export="logs-manager">Dışa aktar</button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div id="diagnosis-manager" class="diagnosis-box hidden"></div>
+          <div class="panel-grid">
           <div class="log-panel">
             <div class="log-panel-head">
               <span>Canlı log</span>
@@ -303,24 +399,50 @@
             <div class="log-panel-head"><span>Uyarılar (son 50)</span><span id="wrn-manager-count" class="log-count">0</span><button type="button" class="btn-copy" data-copy="wrn-manager">Kopyala</button></div>
             <pre id="wrn-manager" class="log-content log-content-detail"></pre>
           </div>
+          </div>
         </div>
       </section>
 
       <!-- HTML (omeraltin.com) -->
       <section id="panel-html" class="tab-panel">
-        <div class="panel-head">
-          <span class="status-chip" id="status-html">—</span>
-          <span id="stat-html" class="stat-bar"></span>
-          <a href="http://127.0.0.1:8080" target="_blank" rel="noopener" class="btn btn-sm btn-primary">Siteyi aç (8080)</a>
-          <button type="button" id="btnHtmlStart" class="btn btn-sm btn-start">Başlat</button>
-          <button type="button" id="btnHtmlStop" class="btn btn-sm btn-stop">Durdur</button>
-          <button type="button" id="btnHtmlReset" class="btn btn-sm btn-reset">Logları sıfırla</button>
-          <button type="button" class="btn btn-sm btn-export" data-export="logs-html">Dışa aktar</button>
-        </div>
-        <div class="panel-html-info panel-html-info-top">
-          <p><code>proje/omeraltinhtml</code> klasöründeki <code>start.py</code> (port 8080) veya <code>calistir.bat</code> / <code>calistir.command</code> ile başlatılır. Klasör: <code>proje/omeraltinhtml</code> (tercih) veya <code>OMERALTINHTML_PATH</code> env. Çalışıyor = port 8080 açık.</p>
-        </div>
-        <div class="panel-grid">
+        <div class="service-tab-page svc-tab-html">
+          <header class="service-tab-header">
+            <div class="service-tab-title-block">
+              <h2 class="service-tab-title">omeraltin.com</h2>
+              <p class="service-tab-subtitle">Statik site · port 8080 · <code>start.py</code> veya <code>calistir.command</code></p>
+            </div>
+            <span class="status-chip" id="status-html">—</span>
+          </header>
+          <div class="service-tab-stats">
+            <div class="svc-stat"><span class="svc-stat-label">Port</span><span id="tab-html-port" class="svc-stat-value">8080</span></div>
+            <div class="svc-stat"><span class="svc-stat-label">PID</span><span id="tab-html-pid" class="svc-stat-value">—</span></div>
+            <div class="svc-stat"><span class="svc-stat-label">Çalışma</span><span id="tab-html-uptime" class="svc-stat-value">—</span></div>
+            <div class="svc-stat"><span class="svc-stat-label">Kaynak</span><span id="tab-html-resource" class="svc-stat-value">—</span></div>
+            <div class="svc-stat"><span class="svc-stat-label">Hata / Uyarı</span><span id="tab-html-err-wrn" class="svc-stat-value">—</span></div>
+          </div>
+          <div class="service-tab-toolbar">
+            <div class="svc-toolbar-inner">
+              <div class="svc-toolbar-block">
+                <span class="svc-toolbar-label">Servis kontrolü</span>
+                <div class="svc-toolbar-action-group svc-toolbar-action-power">
+                  <a href="http://127.0.0.1:8080" target="_blank" rel="noopener" class="btn btn-sm svc-tb-btn svc-tb-open">Siteyi aç ↗</a>
+                  <button type="button" id="btnHtmlStart" class="btn btn-sm svc-tb-btn svc-tb-start">Başlat</button>
+                  <button type="button" id="btnHtmlStop" class="btn btn-sm svc-tb-btn svc-tb-stop">Durdur</button>
+                  <button type="button" id="btnHtmlRestart" class="btn btn-sm svc-tb-btn svc-tb-restart">Yeniden başlat</button>
+                </div>
+              </div>
+              <span class="svc-toolbar-divider" aria-hidden="true"></span>
+              <div class="svc-toolbar-block svc-toolbar-block-secondary">
+                <span class="svc-toolbar-label">Loglar</span>
+                <div class="svc-toolbar-action-group">
+                  <button type="button" id="btnHtmlReset" class="btn btn-sm svc-tb-btn svc-tb-reset">Logları sıfırla</button>
+                  <button type="button" class="btn btn-sm svc-tb-btn svc-tb-export" data-export="logs-html">Dışa aktar</button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div id="diagnosis-html" class="diagnosis-box hidden"></div>
+          <div class="panel-grid">
           <div class="log-panel">
             <div class="log-panel-head">
               <span>Canlı log</span>
@@ -340,24 +462,89 @@
             <div class="log-panel-head"><span>Uyarılar (son 50)</span><span id="wrn-html-count" class="log-count">0</span><button type="button" class="btn-copy" data-copy="wrn-html">Kopyala</button></div>
             <pre id="wrn-html" class="log-content log-content-detail"></pre>
           </div>
+          </div>
         </div>
       </section>
 
       <!-- SECURITY -->
       <section id="panel-security" class="tab-panel">
-        <div class="panel-toolbar"><button type="button" class="btn btn-sm btn-export" data-export="security">Dışa aktar</button></div>
-        <div class="security-grid">
-          <div class="security-card">
-            <h3>Başarısız girişler (son 50)</h3>
-            <pre id="security-login-fails" class="log-content"></pre>
+        <div class="security-page">
+          <header class="security-header">
+            <div class="security-header-copy">
+              <div class="security-header-eyebrow">
+                <span class="security-live-dot" aria-hidden="true"></span>
+                <span class="security-live-text">Canlı · dosyadan okunur</span>
+              </div>
+              <h2 class="security-title">Güvenlik</h2>
+              <p class="security-subtitle">Web trafiği, başarısız girişler, yoğun IP'ler ve 5xx özeti — ek API yükü olmadan metrik dosyasından.</p>
+            </div>
+            <div class="security-header-actions">
+              <span id="security-last-update" class="security-last-update tabular-nums">—</span>
+              <button type="button" class="btn btn-sm svc-tb-btn svc-tb-export" data-export="security">Güvenlik dışa aktar</button>
+            </div>
+          </header>
+
+          <div id="security-health-banner" class="security-health-banner ok">
+            <span class="security-health-icon" aria-hidden="true"></span>
+            <div class="security-health-body">
+              <span class="security-health-title">Trafik durumu normal</span>
+              <span id="security-5xx-msg" class="security-health-detail">5xx yok · hata oranı düşük</span>
+            </div>
           </div>
-          <div class="security-card">
-            <h3>En çok istek yapan IP (max 50)</h3>
-            <pre id="security-top-ips" class="log-content"></pre>
+
+          <div class="security-stats-row">
+            <div class="sec-stat-card sec-stat-login">
+              <span class="sec-stat-label">Son giriş hataları</span>
+              <span id="security-stat-login" class="sec-stat-value">—</span>
+              <span class="sec-stat-hint">son 50 kayıt</span>
+            </div>
+            <div class="sec-stat-card sec-stat-login-total">
+              <span class="sec-stat-label">Toplam giriş hatası</span>
+              <span id="security-stat-login-total" class="sec-stat-value">—</span>
+              <span class="sec-stat-hint">kümülatif sayaç</span>
+            </div>
+            <div class="sec-stat-card sec-stat-5xx">
+              <span class="sec-stat-label">5xx yanıt</span>
+              <span id="security-stat-5xx" class="sec-stat-value">—</span>
+              <span class="sec-stat-hint">web sunucusu</span>
+            </div>
+            <div class="sec-stat-card sec-stat-error">
+              <span class="sec-stat-label">Hata oranı</span>
+              <span id="security-stat-error-rate" class="sec-stat-value">—</span>
+              <span class="sec-stat-hint">4xx + 5xx / toplam</span>
+            </div>
+            <div class="sec-stat-card sec-stat-rpm">
+              <span class="sec-stat-label">İstek / dk</span>
+              <span id="security-stat-rpm" class="sec-stat-value">—</span>
+              <span class="sec-stat-hint">web trafiği</span>
+            </div>
           </div>
-          <div class="security-card security-alert">
-            <h3>5xx / Hata oranı</h3>
-            <p id="security-5xx-msg" class="security-5xx"></p>
+
+          <div class="security-panels">
+            <article class="security-panel">
+              <header class="security-panel-head">
+                <div>
+                  <h3 class="security-panel-title">Başarısız girişler</h3>
+                  <p class="security-panel-desc">Son denemeler · IP, kullanıcı ve sebep</p>
+                </div>
+                <span id="security-login-count" class="security-panel-badge">0</span>
+              </header>
+              <div id="security-login-list" class="security-login-list">
+                <p class="security-empty">Başarısız giriş yok.</p>
+              </div>
+            </article>
+            <article class="security-panel">
+              <header class="security-panel-head">
+                <div>
+                  <h3 class="security-panel-title">En çok istek yapan IP</h3>
+                  <p class="security-panel-desc">Süreç başlangıcından beri kümülatif · yerel IP (127.0.0.1) dashboard/API polling ile yüksek olabilir</p>
+                </div>
+                <span id="security-ip-count" class="security-panel-badge">0</span>
+              </header>
+              <div id="security-ip-list" class="security-ip-list">
+                <p class="security-empty">IP verisi yok.</p>
+              </div>
+            </article>
           </div>
         </div>
       </section>
@@ -722,7 +909,7 @@
     </main>
   </div>
 
-  <script src="/ui/assets/logHumanize.js?v=3"></script>
-  <script src="/ui/assets/manager.js"></script>
+  <script src="/ui/assets/logHumanize.js?v=19"></script>
+  <script src="/ui/assets/manager.js?v=29"></script>
 </body>
 </html>

@@ -99,11 +99,54 @@ h1, h2, h3, h4 {
 }
 .page-dashboard .mevcut-botlar-table {
     width: 100% !important;
-    table-layout: auto;
+    table-layout: fixed;
+    border-collapse: collapse;
+}
+.page-dashboard .mevcut-botlar-table col.mevcut-botlar-col {
+    width: 12.5%;
+}
+.page-dashboard .mevcut-botlar-table.binance-assets-table thead th,
+.page-dashboard .mevcut-botlar-table.binance-assets-table tbody td {
+    padding: 12px 6px;
+    vertical-align: middle;
+    box-sizing: border-box;
+    font-variant-numeric: tabular-nums;
+    text-align: center;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.page-dashboard .mevcut-botlar-table.binance-assets-table thead th {
+    text-align: center;
+}
+.page-dashboard .mevcut-botlar-table .col-left {
+    text-align: left;
+}
+.page-dashboard .mevcut-botlar-table .col-right {
+    text-align: right;
+}
+.page-dashboard .mevcut-botlar-table .col-center {
+    text-align: center;
+}
+.page-dashboard .mevcut-botlar-table thead th {
+    color: var(--ds-text-secondary);
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    white-space: normal;
+    line-height: 1.25;
+    hyphens: auto;
 }
 .page-dashboard .mevcut-botlar-table tbody tr {
     display: table-row;
     width: 100%;
+}
+.page-dashboard .mevcut-botlar-table .col-symbol a {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    justify-content: center;
+    max-width: 100%;
 }
 .page-dashboard .mevcut-botlar-status {
     display: inline-block;
@@ -141,22 +184,47 @@ h1, h2, h3, h4 {
     background: var(--ds-bg-tertiary, #2b3139);
 }
 
-/* Fiyat hücresi – blink animasyonu; satır kayması önlenir (sabit genişlik + box-sizing) */
+/* Fiyat hücresi – blink; sütun ortasında */
 .page-dashboard .mevcut-botlar-price-cell {
-    padding: 2px 8px;
-    border-radius: 4px;
-    box-sizing: border-box;
-    min-width: 5.5rem;
-    width: 5.5rem;
-    text-align: right;
+    text-align: center;
     vertical-align: middle;
 }
-.page-dashboard .finance-bot-live-price.mevcut-bot-portfolio-balance {
-    padding: 2px 6px;
-    border-radius: 4px;
+.page-dashboard .mevcut-botlar-price-cell .finance-bot-live-price,
+.page-dashboard .mevcut-botlar-price-cell .mevcut-bot-portfolio-balance {
     display: inline-block;
-    min-width: 4rem;
+    text-align: center;
+    padding: 2px 5px;
+    border-radius: 3px;
     box-sizing: border-box;
+    vertical-align: middle;
+}
+@keyframes mevcutBotPriceBlinkUp {
+    0% { background-color: rgba(14, 203, 129, 0.22); color: #0ecb81; }
+    40% { background-color: rgba(14, 203, 129, 0.14); color: #0ecb81; }
+    100% { background-color: transparent; color: inherit; }
+}
+@keyframes mevcutBotPriceBlinkDown {
+    0% { background-color: rgba(246, 70, 93, 0.22); color: #f6465d; }
+    40% { background-color: rgba(246, 70, 93, 0.14); color: #f6465d; }
+    100% { background-color: transparent; color: inherit; }
+}
+.page-dashboard .finance-bot-live-price.mevcut-bot-blink-up {
+    animation: mevcutBotPriceBlinkUp 0.75s ease-out 1 forwards;
+}
+.page-dashboard .finance-bot-live-price.mevcut-bot-blink-down {
+    animation: mevcutBotPriceBlinkDown 0.75s ease-out 1 forwards;
+}
+.page-dashboard .mevcut-botlar-table .col-pnl {
+    white-space: nowrap;
+    font-size: 0.85rem;
+}
+/* binance-assets-table varsayılan sola hizayı geçersiz kıl */
+.page-dashboard .mevcut-botlar-table.binance-assets-table th,
+.page-dashboard .mevcut-botlar-table.binance-assets-table td {
+    text-align: center;
+}
+.page-dashboard .mevcut-botlar-table .col-action .mevcut-botlar-detay-btn {
+    display: inline-block;
 }
 
 /* Kâr sıralama butonu (Anasayfa Mevcut Botlar) - sadece ikon */

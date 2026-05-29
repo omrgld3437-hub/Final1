@@ -386,6 +386,20 @@ def _is_rate_limit_error(e: Exception) -> bool:
     return False
 
 
+def _is_clock_drift_error(e: Exception) -> bool:
+    try:
+        from app.services.binance_spot import BinanceSignedError
+        if isinstance(e, BinanceSignedError) and e.code == -1021:
+            return True
+    except Exception:
+        pass
+    err_str = str(e)
+    if "-1021" in err_str:
+        return True
+    msg = err_str.lower()
+    return "timestamp" in msg and ("recvwindow" in msg or "outside" in msg)
+
+
 def _cooldown_sec_for_rate_limit(e: Exception, default_sec: float = 30) -> float:
     """418 IP banned: use parsed 'banned until' + buffer; else default (429 or unknown)."""
     try:
@@ -457,7 +471,8 @@ async def _do_wallet_refresh(account_id: int, db: Session, request_id: str, forc
                 code, cooldown_sec, duration_ms, request_id, account_id,
             )
             return {"_error": err_str}
-        elif "-1021" in err_str or "timestamp" in err_str.lower():
+        elif _is_clock_drift_error(e):
+            from app.services.binance_spot import clock_sync_hint
             code = "CLOCK_DRIFT"
             _wallet_last_error_code[account_id] = code
             _wallet_cooldown_until[account_id] = time.monotonic() + cfg.get("wallet_cooldown_sec", 30)
@@ -465,14 +480,22 @@ async def _do_wallet_refresh(account_id: int, db: Session, request_id: str, forc
                 "wallet_refresh_attempt error_code=%s duration_ms=%.0f request_id=%s account_id=%s",
                 code, duration_ms, request_id, account_id,
             )
-            return {"_error": "Sunucu saati Binance ile uyuşmuyor (-1021). Windows: w32tm /resync ile NTP senkronizasyonu yapın.", "code": code}
+            return {
+                "_error": f"Sunucu saati Binance ile uyuşmuyor (-1021). {clock_sync_hint()}",
+                "code": code,
+            }
         else:
             from app.services.binance_assets import KEY_ERROR_CODES
-            code = err_str if isinstance(e, ValueError) else type(e).__name__
+            if isinstance(e, ImportError):
+                code = "WALLET_MODULE_MISSING"
+            elif isinstance(e, ValueError):
+                code = err_str
+            else:
+                code = type(e).__name__
             _wallet_last_error_code[account_id] = code
             logger.warning(
-                "wallet_refresh_attempt error_code=%s duration_ms=%.0f request_id=%s account_id=%s",
-                code, duration_ms, request_id, account_id,
+                "wallet_refresh_attempt error_code=%s duration_ms=%.0f request_id=%s account_id=%s err=%s",
+                code, duration_ms, request_id, account_id, err_str[:300],
             )
             out = {"_error": err_str}
             if isinstance(e, ValueError) and code in KEY_ERROR_CODES:

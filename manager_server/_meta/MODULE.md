@@ -16,15 +16,25 @@ python -m manager_server
 
 | Dosya | Görev |
 |-------|--------|
-| `app.py` | FastAPI, API, WS |
-| `state.py` | PID, log ring, helper spawn; olaylar → dosya |
+| `app.py` | FastAPI, API, WS · `POST /api/stack/restart` (Manager+Web+Engine+HTML tam yeniden başlatma; rota `{key}` önünde tanımlı) |
+| `state.py` | PID, log ring (kilitli), gürültü filtresi (deque race, TradeSync cache); helper spawn; IP engel listesi (`.run/blocked_ips.json`); **sistem çalışması** kronometresi (`.run/session.started_at` — manager açılışı + global start/restart'ta sıfırlanır; metrik `system.uptime_s` / `session_started_at`); manager tam restart → `scripts/runtime/manager_reboot.py` |
 | `issue_file_store.py` | Olay Merkezi dosya deposu (`.run/issues/`) |
 | `reason_engine.py` | Durum açıklama |
-| `ui/` | manager.js, logHumanize.js, index.html — canlı log paneli hata/uyarı ring’ini birleştirir |
+| `ui/` | manager.js, logHumanize.js, index.html — özet kartları (Port/PID/Çalışma/Kaynak/Hata), **Sistem çalışması** canlı kronometre (`H:MM:SS`), servis sekmeleri, dosya tabanlı metrik |
 
 ## Güvenlik
 
 `MANAGER_ALLOW_REMOTE=1` olmadan yalnızca localhost.
+
+**IP engelleme (Manager → Web):** Güvenlik sekmesinden IP engellenir; liste `.run/blocked_ips.json` dosyasına yazılır. Web (`8000`) `request_metrics_middleware` başında listeyi okur (2s cache) ve engelli IP'ye **403** döner.
+
+| Endpoint | Açıklama |
+|----------|----------|
+| `GET /api/security/blocked-ips` | Aktif engelli IP listesi |
+| `POST /api/security/ban-ip` | `{ "ip", "reason?" }` — web'den engelle |
+| `POST /api/security/unban-ip` | `{ "ip" }` — engeli kaldır |
+
+`top_ips` sayaçları web süreci başlangıcından beri **kümülatif**tir; yerel `127.0.0.1` dashboard/API polling ile yüksek görünmesi normaldir.
 
 ## Dosya envanteri
 

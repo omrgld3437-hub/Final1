@@ -9,6 +9,8 @@ from sqlalchemy.orm import Session
 from typing import Optional, Dict, Tuple, Set
 from pydantic import BaseModel
 import asyncio
+import os
+import re
 import time
 import logging
 import httpx
@@ -35,8 +37,11 @@ INVALID_QUICK_DATA_SYMBOLS = frozenset({
     "USDTUSDT", "USDCUSDT", "FDUSDUSDT", "BUSDUSDT", "TUSDUSDT", "DAIUSDT"
 })
 
-# In-flight dedupe: (account_id, symbol) -> asyncio.Task (sadece quick_data/price için)
+# In-flight dedupe: (account_id, symbol) -> asyncio.Task (quick_data)
 _SPOT_INFLIGHT: Dict[Tuple[int, str], asyncio.Task] = {}
+# Fiyat SSOT: sembol başına tek uçuş (account_id gerekmez)
+_PRICE_INFLIGHT: Dict[str, asyncio.Task] = {}
+_SPOT_SYMBOL_RE = re.compile(r"^[A-Z0-9]{2,20}(USDT|BUSD|BTC|ETH|FDUSD)$")
 # Hata log rate-limit: symbol -> last_log_ts
 _ERROR_LOG_LAST: Dict[str, float] = {}
 _ERROR_LOG_INTERVAL = 10.0
@@ -461,16 +466,23 @@ async def get_spot_klines(
 async def get_spot_ticker_24h(
     symbol: str = Query(..., description="Trading pair (e.g. BTCUSDT)"),
 ):
-    """Public: 24 saat özeti. Geçersiz sembolde Binance çağrılmadan varsayılan döner."""
+    """24 saat özeti — DataHub (WS/REST); eksikse tek sembol REST doldurur."""
     sym = (symbol or "").upper().strip()
     if _is_invalid_spot_symbol(sym):
-        return {"lowPrice": 0, "highPrice": 0, "priceChangePercent": 0, "lastPrice": 0}
+        return {"lowPrice": None, "highPrice": None, "priceChangePercent": None, "lastPrice": None, "available": False}
     try:
+        from app.services.data_hub import data_hub
         from app.services.market_data import get_ticker_24h
-        return get_ticker_24h(sym)
+
+        data_hub.pin_symbols([sym])
+        out = get_ticker_24h(sym)
+        if not out.get("available"):
+            await data_hub.ensure_symbol_ticker_24h(sym)
+            out = get_ticker_24h(sym)
+        return out
     except Exception:
         pass
-    return {"lowPrice": 0, "highPrice": 0, "priceChangePercent": 0, "lastPrice": 0}
+    return {"lowPrice": None, "highPrice": None, "priceChangePercent": None, "lastPrice": None, "available": False}
 
 
 # Commission (tradeFee) cache: account_id -> (rates_dict, ts). TTL 30 min.
@@ -506,6 +518,40 @@ async def get_spot_commission(
         logger.debug("Commission fetch failed, using default: %s", e)
     return default_rates
 
+async def _resolve_public_spot_price(sym: str) -> Dict:
+    """DataHub/spot_cache — API anahtarı ve SpotEngine yok."""
+    from app.services.market_data import resolve_price_fast
+
+    if sym in _PRICE_INFLIGHT:
+        try:
+            return await _PRICE_INFLIGHT[sym]
+        except Exception:
+            _PRICE_INFLIGHT.pop(sym, None)
+
+    async def _do() -> Dict:
+        try:
+            price, source, is_stale = resolve_price_fast(sym)
+            if price is not None and price > 0:
+                return {
+                    "ok": True,
+                    "symbol": sym,
+                    "price": price,
+                    "cached": source == "spot_cache",
+                    "source": source,
+                    "is_stale": is_stale,
+                }
+            valid = await _get_valid_spot_symbols_async()
+            if valid and sym not in valid:
+                return {"ok": False, "error_code": "INVALID_SYMBOL", "symbol": sym}
+            return {"ok": True, "symbol": sym, "price": 0.0, "source": "none", "is_stale": True}
+        finally:
+            _PRICE_INFLIGHT.pop(sym, None)
+
+    task = asyncio.create_task(_do())
+    _PRICE_INFLIGHT[sym] = task
+    return await task
+
+
 @router.get("/spot/price")
 async def get_spot_price(
     account_id: int = Query(..., description="Account ID"),
@@ -514,42 +560,27 @@ async def get_spot_price(
     current: dict = Depends(require_auth),
 ):
     """
-    FLASH HIZLI: Get current price only. Auth zorunlu; account ownership doğrulanır.
+    Fiyat yalnızca DataHub/spot_cache (SSOT). Auth + rate limit; API key çekilmez.
     """
     get_account_or_403(current, account_id, db)
     sym = (symbol or "").upper().strip()
-    if _is_invalid_spot_symbol(sym):
+    if _is_invalid_spot_symbol(sym) or not _SPOT_SYMBOL_RE.match(sym):
         return {"ok": False, "error_code": "INVALID_SYMBOL", "symbol": sym}
-    valid = await _get_valid_spot_symbols_async()
-    if valid and sym not in valid:
-        return {"ok": False, "error_code": "INVALID_SYMBOL", "symbol": sym}
-    try:
-        keys = await get_account_keys(account_id, db)
-        from app.services.spot_engine import spot_cache
-        price = spot_cache.get_price(sym)
-        if price is not None:
-            return {"ok": True, "symbol": sym, "price": price, "cached": True}
-        async with SpotEngine(keys) as engine:
-            spot_data = await engine.get_quick_data(symbol, account_id)
-            return {"ok": True, "symbol": spot_data.symbol, "price": spot_data.price, "cached": False}
-    except Exception as e:
-        from app.services.binance_assets import KEY_ERROR_CODES
-        def _is_keys_missing(ex):
-            if ex is None:
-                return False
-            s = str(ex).strip()
-            if any(c in s for c in KEY_ERROR_CODES):
-                return True
-            args = getattr(ex, "args", ()) or ()
-            if any(any(c in str(x) for c in KEY_ERROR_CODES) for x in args):
-                return True
-            return _is_keys_missing(getattr(ex, "__cause__", None))
-        if _is_keys_missing(e):
-            logger.debug("Spot price for %s: account keys not configured", sym)
-        else:
-            now = time.time()
-            if now - _ERROR_LOG_LAST.get(sym, 0) > _ERROR_LOG_INTERVAL:
-                _ERROR_LOG_LAST[sym] = now
-                logger.warning("Spot price error for %s: %s", sym, e)
-        return {"ok": True, "symbol": sym, "price": 0.0, "error": str(e)}
+
+    from app.core.security.endpoint_rate_limit import check_endpoint_rate_limit
+
+    uid = int(current.get("user_id") or 0)
+    allowed, retry = check_endpoint_rate_limit(
+        f"spot_price:u{uid}",
+        limit=int(os.getenv("SPOT_PRICE_RATE_LIMIT", "90")),
+        window_sec=float(os.getenv("SPOT_PRICE_RATE_WINDOW_SEC", "10")),
+    )
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail="Çok fazla fiyat isteği. Lütfen kısa süre sonra tekrar deneyin.",
+            headers={"Retry-After": str(retry)},
+        )
+
+    return await _resolve_public_spot_price(sym)
 

@@ -197,12 +197,15 @@ def cycle_ledger_add_fill(
     qty = max(0.0, _num(qty))
     price = max(0.0, _num(price))
     fee = max(0.0, _num(fee))
-    if fee_asset and fee_asset.upper() != "USDT":
+    fee_quote = fee  # USDT-normalized (execution: parse_fill_commission → commission_to_usdt)
+    raw_fee = max(0.0, _num(fee_raw)) if fee_raw is not None else 0.0
+    asset = (fee_asset or "USDT").strip().upper()
+    if raw_fee > 0 and fee_quote <= 0 and asset != "USDT":
         logger.warning(
-            "CYCLE_LEDGER fee_asset=%s not USDT; treating fee as quote for PnL (TODO: convert)",
-            fee_asset,
+            "CYCLE_LEDGER fee_asset=%s amount=%.8f could not convert to USDT; cycle PnL fee understated",
+            asset,
+            raw_fee,
         )
-    fee_quote = fee  # assume fee already in quote (USDT) or converted by caller
     entry = {
         "ts": ts,
         "order_id": order_id,

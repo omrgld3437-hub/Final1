@@ -778,9 +778,10 @@ DataHub:
 
 1. **Insert:** REST bulk ticker/price or ticker/24hr → `prices[sym] = {price, change24h, volume24h, ts}`
 2. **Update:** WS mini ticker → `_mini_ws[sym]`; merged on get; or REST update_ticker_24h overwrites
-3. **Read:** get_price(sym), get_price_with_meta(sym), get_all_prices()
+3. **Read:** get_price(sym), get_price_with_meta(sym), get_all_prices() (max ~600), **get_prices_for_ui()** (öncelikli + ~200 ek — dashboard snapshot)
 4. **Stale check:** `age = now - data["ts"]`; `is_stale = age > 120`
 5. **Eviction:** _trim_prices when len > 600; prefer top_100, coin_list; then most recent ts
+6. **RAM:** Tam `ticker/24hr` satır listesi ve ham `exchangeInfo` JSON DataHub RAM'de tutulmaz; 24h merge sonrası `coin_list` güncellenir. Sembol filtreleri: `binance_spot` kompakt cache (`get_cached_symbol_filters`, `get_symbol_filters_sync`).
 
 ## What Happens If WS Sends Nothing for 10 Minutes
 
@@ -1124,9 +1125,9 @@ Snapshot wallet is cache-only; "[snapshot] wallet timeout" no longer occurs. Liv
 | POST | /api/auth/logout | Yes | No | No | Logout |
 | GET | /api/accounts | Yes | Yes | No | List accounts |
 | POST | /api/accounts/{id}/delete | Yes | Yes | No | Hesap sil (body: password). Şifre zorunlu; log/işlem geçmişi silinmez; aynı tel ile yeniden kayıt sıfırdan yeni hesap açar. |
-| GET | /api/accounts/{id}/bot-performance | Yes | Yes | No | Saatlik/günlük dosya + `bot_daily_pnl` yedek; günlük filtre cache yok |
+| GET | /api/accounts/{id}/bot-performance | Yes | Yes | No | Hesap ham tur dosyası + kapanan tur USDT toplamı; `bot_daily_pnl` yedek; haftalık+ cache |
 | GET | /api/leaderboard/structures/{structure_id}/top | Yes | Yes | No | Copy Trading: structure bazlı top 5 (profit_pct + `params`; stale cache varsa `config_json`'dan re-sanitize; username/bakiye yok) |
-| GET | /api/leaderboard/global/top | Yes | Yes | No | Global En İyi Bot (limit varsayılan 5): çalışan botlar, `profit_pct_all >= 0`; `structure_id`, `profit_pct`, `total_pnl_usd` (mevcut−başlangıç, USD), `running_since_iso` (UTC Z), `reference_price`, `params` (grid/trail/allocation + `initial_capital_usdt` görüntüleme; stale cache → `config_json` re-sanitize); username/bot_id/bakiye yok. UI: K/Z 5s poll + süre 1s yerel tick; **Parametreleri görüntüle** → bot detay `#parametrelerModal` ile aynı modal/render; **Uygula** → oluştur modalı (bütçe boş, odak Bot Bakiyesi). |
+| GET | /api/leaderboard/global/top | Yes | Yes | No | Global En İyi Bot (limit varsayılan 5): çalışan botlar, canlı K/Z ≥ 0 (`compute_bot_equity_usd` − bütçe; cache satırı negatif olsa bile elenir); `structure_id`, `profit_pct`, `total_pnl_usd`, `running_since_iso` (UTC Z), `reference_price`, `params`; username/bot_id/bakiye yok. UI: K/Z 5s poll + süre 1s yerel tick; **Parametreleri görüntüle** / **Uygula** aynı önceki davranış. |
 | GET | /api/bots-engine | Yes | Yes | No | List bots |
 | POST | /api/bots-engine | Yes | Yes | No | Create bot |
 | POST | /api/bots-engine/{id}/start | Yes | Yes | No | Insert START command |
@@ -1178,7 +1179,7 @@ Snapshot wallet is cache-only; "[snapshot] wallet timeout" no longer occurs. Liv
 | Item | Detail |
 |------|--------|
 | Table | `bot_public_metrics` (bot_id UNIQUE, structure_id, profit_pct_all, params_sanitized_json; no username/balance) |
-| Refresh | 60s loop in web lifespan; `refresh_bot_public_metrics()` uses PnlService + DB only (no Binance) |
+| Refresh | 60s loop in web lifespan; `refresh_bot_public_metrics()` uses `compute_bot_equity_usd` (dashboard ile aynı K/Z; DCA grid’de `PnlService.total_usd` tek başına kullanılmaz) + DB only (no Binance) |
 | Multi-worker | `.run/leaderboard_refresh.lock` with 55s timeout; only one process runs refresh per cycle |
 | Logs | `LEADERBOARD_REFRESH_OK count=… duration_ms=…`, `LEADERBOARD_REFRESH_FAIL error_code=…` |
 | Privacy | Response: `profit_pct`, `total_pnl_usd`, `params` (grid/trail/allocation + `initial_capital_usdt` + `reference_price` for Parametreler modal), top-level `reference_price`; bot_id, account_id, username, live wallet balance never exposed |
@@ -1495,10 +1496,12 @@ Bot silinmeden önce `completed_cycle_dual_pnls` buraya yazılır; aktif botlar 
 
 | Path | TTL | İçerik |
 |------|-----|--------|
-| `.run/bot_perf/hourly/{account_id}_{date_tr}.json` | Gün başına yeni dosya (00:00 TR) | 24 saat `[pnl_usd, fees_usd]` |
-| `.run/bot_perf/daily/{account_id}.json` | Kalıcı | `days[date_tr]` hesap + bot günlük K/Z |
+| `.run/bot_perf/bots/{bot_id}.json` | Kalıcı | Yalnızca **kapanan** turlar (kompakt `c[]`, `px` kapanış kuru); tur kapanışında `record_closed_cycle_file` |
+| `.run/bot_perf/accounts/{account_id}.json` | Kalıcı | Hesap **ham tur** defteri `r[]`: `bid`, `sym`, `t` (ISO), `d` (TR gün), `h`, `pnl`/`fee` (USDT), ham `cp`/`iq`/`px` |
+| `.run/bot_perf/hourly/{account_id}_{date_tr}.json` | Gün başına yeni dosya (00:00 TR) | 24 saat `[pnl_usd, fees_usd]` (yedek; okuma önceliği hesap `accounts`) |
+| `.run/bot_perf/daily/{account_id}.json` | Kalıcı | `days[date_tr]` hesap + bot günlük K/Z (yedek) |
 
-Tur kapanışında saatlik + kalıcı dosya güncellenir. Panel: günlük filtre → `hourly_series[]` (24 saat); **Toplam K/Z ve Komisyon = saatlik satırların toplamı**; haftalık/aylık/genel → `daily_series[]` toplamı. Saatlik dosya boşsa arşiv/DB'den backfill. `bots[]` API'de yok.
+Tur kapanışında bot cycles + hesap ham tur + saatlik + günlük dosya güncellenir. **USDT K/Z:** nakit tur `cash_pnl_usdt`; yukarı (envanter) tur `inventory_coin_adv_qty × close_price_quote_per_base` (tur kapanış kuru). **Dashboard `#botPerformancePanel`:** `GET .../bot-performance?period=` → TR aralığındaki **tüm kapanan turların** `pnl`/`fee` toplamı (dosya + canlı state); **Günlük ⊂ Haftalık ⊂ Aylık ⊂ Genel** (bugünkü turlar geniş aralıkta da sayılır). Cache `rounds_u` ile tur dosyası revizyonuna bağlı. **Bot detay `#perfPanel`:** `bots/{bot_id}.json` TR aralık filtresi. `bots[]` API'de yok.
 
 ## bot_daily_pnl
 
@@ -2005,7 +2008,7 @@ tail -5 logs/ram_snapshots.log | jq -c '{ts, component, rss_mb, tracemalloc_peak
 - Üst banner **yok**; kritik/uyarı `#statusBadge` yanında rozet (`#healthCriticalBadge`, `#healthWarnBadge`).
 - Sayfa çerçevesi: yalnız kritik → kırmızı yanıp sönme; yalnız uyarı → sarı; ikisi birden → kırmızı çerçeve + her iki rozet yanıp söner.
 - Tüm aktif/çözülmüş uyarı-kritik satırları motor log tablosunda (`#engineLogList`); aynı `health_code` için tek satır (registry dedupe). Çözülünce satır kalır, mesaja `· çözüldü` eklenir; aktif yanıp sönme kalkar.
-- **Resetle** (`#btnEngineLogReset`): çerçeve/rozet sıfır, registry temiz, dismiss anchor; aynı kod tekrar tetiklenince yeniden listelenir. `POST /health/ack` ile backend ack.
+- **Resetle** (`#btnEngineLogReset`): çerçeve/rozet sıfır, registry temiz, dismiss anchor (`maxEventId` + `perCodeMaxEventId` + sunucu `engine_log_dismiss_before_id` state’te); sayfa yenilemesinde eski satırlar API’den filtrelenir (`engine_log_ack.py`). `POST /health/ack` anchor yazar.
 
 ### Bot engine — dayanıklılık ve sağlık logları (`health_watch.py`, `orchestrator.py`)
 
@@ -2950,6 +2953,8 @@ DataHub arka planda güncellenir; get_all_prices sync, snapshot'ta run_in_execut
 | Özellik | Değer |
 |---------|--------|
 | Konum | request_metrics_middleware (main.py); RequestMetrics.record(method, path, status, duration_ms, client_ip, user_agent) |
+| IP engel | Middleware başında `app.services.ip_blocklist.is_ip_blocked(client_ip)` → 403; kaynak `.run/blocked_ips.json` (Manager güvenlik paneli yazar, 2s cache) |
+| top_ips | Süreç başlangıcından beri kümülatif IP sayacı; yerel `127.0.0.1` polling ile yüksek olabilir |
 | Path normalizasyonu | Sayı ve UUID segmentleri /{id} yapılır; route şablonu |
 | Depolama | In-memory; _by_route, RingBuffer(latencies), _recent_requests; uygulama yeniden başlayınca sıfırlanır |
 | RingBuffer | Son 100 (veya _RING_SIZE) latency; p50, p95 hesaplanır |
@@ -4177,7 +4182,7 @@ action_key: reason + grid_index + client_order_id; idempotency bu key'e göre.
 | cycle_pnls | Tamamlanan turların kar listesi [{cycle_id, pnl_usdt, fees_usdt, ...}] |
 | sell_grids_filled_qty, buy_grids_filled_qty | Grid doluluk (veya benzeri alanlar) |
 | trail_anchor_price, _trail_sell_grid_index, _trail_buy_grid_index | Trailing state |
-| daily_ref_usd, daily_ref_date | Günlük K/Z referansı; bot açılış gününde (TR) `initial_capital`, sonraki günlerde gece 00:00 equity |
+| daily_ref_usd, daily_ref_date | Günlük K/Z referansı; bot açılış gününde (TR) `initial_capital`, sonraki günlerde TR gece 00:00 (23:59 sonrası) equity; `daily_ref_date` = `turkey_today_date_str()` (canlı Europe/Istanbul, UTC tarih string değil) |
 | last_tick_at, last_error_code, retry_at | Meta |
 | last_fill_snapshot | Son fill sonrası snapshot (free_quote, base_qty, avg_cost, realized_pnl, fees_total) |
 
@@ -4426,7 +4431,7 @@ Modül: `app/botengine/strategies/grid_outage_recovery.py` — `tick_dca_grid_tr
 | 4 Grid kaçtı | Tetikli alım: P &gt; tetik fiyatı; tetikli satış: P &lt; tetik fiyatı | Tetik sıfırlanır (bekleme modu); işlem yok |
 | 5 Kısmi tur | Bir grid fill, diğerleri tetikli + kar alım aktif | Her açık grid ve TRAIL_PROFIT_SELL / TRAIL_REENTRY_BUY için yukarı kurallar bağımsız uygulanır |
 
-**Engine log (bot_engine_events):** Soğuk başlatma `COMMAND START` (Tür: **Start**) → Bismillah + bakiye + kısa config (`Base/Quote %`, Yukarı/Aşağı grid adet, `Y#n`/`A#n` seviye, trail, KA/KS); yalnızca `initial_allocation_done=false` (`start_log_brief.py`). İlk tur: **iki satır** — `ORDER_FILLED` `initial_allocation` → `İlk base alımı · …` (üstte), `CYCLE_START` → `Tur n başlatıldı · Base · Quote · Bakiye` (hemen altında; fill +1sn, aynı 8sn küme). Sentetik `CYCLE_START` yoksa backfill `id=fill_id+1`. Kesinti: `CONNECTIVITY_PAUSED` / `CONNECTIVITY_RECOVERED`. `OUTAGE_RECOVERY` — grid özeti.
+**Engine log (bot_engine_events):** Soğuk başlatma `COMMAND START` (Tür: **Start**) → Bismillah + bakiye + kısa config (`Base/Quote %`, Yukarı/Aşağı grid adet, `Y#n`/`A#n` seviye, trail, KA/KS); yalnızca `initial_allocation_done=false` (`start_log_brief.py`). İlk tur: **iki satır** — `ORDER_FILLED` `initial_allocation` → `İlk base alımı · …`, `CYCLE_START` → `Tur n başlatıldı · Base · Quote · Bakiye` (fill +1sn, aynı 8sn küme). Tur kapanışı: `ORDER_FILLED` `trail_reentry_buy`/`trail_profit_sell` → `CYCLE_END` (+100ms) → `CYCLE_START` (+200ms); fill `ts` Binance `transactTime`. API `ts` → UTC `…Z` (`normalize_event_ts_iso_z`); **UI yeni→eski DESC** (en yeni üstte, start altta); üstteyken canlı pin. Sentetik `CYCLE_START` yoksa backfill `id=fill_id+1`. Kesinti: `CONNECTIVITY_PAUSED` / `CONNECTIVITY_RECOVERED`. `OUTAGE_RECOVERY` — grid özeti.
 | Kopma sırasında tetiksiz grid | P tetik seviyesini geçmiş (ör. alım tetik altında) | Tetik + dip/tepe canlı P ile kaydedilir; uygunsa favorable execute |
 
 Bayraklar (tek tick): `_outage_favorable_buy`, `_outage_favorable_sell`, `_outage_force_profit_sell`, `_outage_force_reentry_buy` — tick sonunda temizlenir.
@@ -5688,6 +5693,19 @@ Step-by-step migration path for horizontal scaling. No code; design only.
 | BREACH_SHUTDOWN | 0 | Lockdown mode | Normal operation |
 | DATAHUB_SERVE_STALE_FOR_UI | 1 | Serve stale prices to UI | 0 = None when stale |
 | RAM_PROBE_ENABLED | 0 | RAM diagnostics | No probe |
+| RAM_CAPTURE | 0 | 5 dk detaylı JSONL (`logs/ram_capture_*`) | `scripts/perf/ram_capture_5min.py --guide` |
+| RAM_CAPTURE_DURATION | 300 | Capture süresi (sn) | ram_capture.py |
+| RAM_CAPTURE_INTERVAL | 10 | Snapshot aralığı (sn) | ram_capture.py |
+| WORKER_MAX_PRICES | 200 | Worker slim price sync cap; **running bot symbols pinned** (never evicted) | data_hub.py, worker_main.py |
+| /api/data/prices?slim=1&symbols= | — | Worker sync: ensure running-bot symbols in slim snapshot | data_hub_routes.py |
+| SPOT_PRICE_RATE_LIMIT | 90 | `/api/spot/price` per user / 10s | spot_routes.py |
+| TX_HISTORY_RATE_LIMIT | 30 | transaction-history per user+account / 60s | routes.py |
+| TX_HISTORY_SYNC_RATE_LIMIT | 3 | `sync=1` per 5 dk | routes.py |
+| ENDPOINT_RATE_LIMIT_ENABLED | 1 | Endpoint rate limiter | endpoint_rate_limit.py |
+| SPOT_CACHE_PRICE_TTL | 4s | spot_cache fiyat TTL | spot_engine.py |
+| TX_HISTORY_QUERY_CACHE_TTL | 8s | Dosya sorgu LRU (max 48) | transaction_history_file_store.py |
+| TX_HISTORY_DB_SYNC_MIN_SEC | 60 | İşlem geçmişi DB sync throttle | transaction_history_file_store.py |
+| RAM_CAPTURE_DURATION (6h) | 21600 | `scripts/perf/ram_capture_6h.py --start` | ram_capture.py |
 | PG_STATEMENT_TIMEOUT_MS | — | PostgreSQL timeout | No timeout |
 
 ## How to Debug "Why Did This Break at 03:17 on Mobile Only?"
@@ -5750,6 +5768,13 @@ Step-by-step migration path for horizontal scaling. No code; design only.
 | BOT_ENGINE_V5_SCHEDULER | 0 (env) | worker_main — set 1 for event-driven scheduler |
 | BOT_ENGINE_KILL_SWITCH | 0 (env) | kill_switch — set 1 to deny new submits |
 | BINANCE_WEIGHT_LIMIT_PER_MIN | 1200 | binance_weight.py |
+| REST_EVENTS_MAX (deque) | 1200 (env `REST_EVENTS_MAX`) | binance_rest_log.py |
+| _MAX_FIFO_TRADES_ROWS | 4000 | pnl_service.py |
+| state_trim caps | completed_cycle_dual 200, grid archive 500, … | state_trim.py / save+load |
+| MAX_MARKET_PRICE_KEYS (UI) | 400 | marketStore.js |
+| SPOT_CACHE_MAX_PRICES | 400 | dashboard.js SpotCache |
+| _MAX_BOT_CYCLES (file) | 2000 | bot_perf_file_store.py |
+| FINANCE_TRADES_ALL_MAX_ROWS | 5000 | finance_reports.py |
 
 ---
 
@@ -5876,7 +5901,7 @@ curl -X POST http://127.0.0.1:8000/api/admin/force-unlock-symbol -H "Authorizati
 
 **Domain split:** Three data domains—STATIC_DETAIL, LIVE_SNAPSHOT, PERF_SERIES—each isolated in endpoint, lifecycle, cache policy, and UI responsibility. No cross-domain mixing.
 
-**Live snapshot endpoint:** `GET /api/bots-engine/{bot_id}/live`. Response: status, pnl_pct, equity, last_price, last_tick_at, last_error_code, initial_capital, daily_pnl_usd, daily_pnl_pct. Optional flags: stale (last_tick_at > 30s), equity_unavailable. daily_pnl_* from state daily_ref_usd/daily_ref_date (TR gece 00:00 referansı; bot aynı gün açıldıysa ilk tick’te ref set edilir). Source: in-memory snapshot from bot state only; no historical DB. TTL cache 2s, key = bot_id, thread-safe. Response time < 15ms CPU. 404 with structured error_code if bot not found.
+**Live snapshot endpoint:** `GET /api/bots-engine/{bot_id}/live`. Response: status, pnl_pct, equity, last_price, last_tick_at, last_error_code, initial_capital, daily_pnl_usd, daily_pnl_pct. Optional flags: stale (last_tick_at > 30s), equity_unavailable. daily_pnl_* from state daily_ref_usd/daily_ref_date (TR gece 00:00 / 23:59 sonrası referans; `turkey_today_date_str()`; bot aynı gün açıldıysa ilk tick’te ref set edilir). Source: in-memory snapshot from bot state only; no historical DB. TTL cache 2s, key = bot_id, thread-safe. Response time < 15ms CPU. 404 with structured error_code if bot not found.
 
 **Perf chart endpoint:** `GET /api/bots-engine/{bot_id}/perf-chart-data?range=&bucket=`. Valid range: 1h, 4h, 1d, 7d, 30d. Valid bucket: 1m, 5m, 1h, 4h, 1d. Invalid combinations rejected with 400. Response: range, bucket, series [{ ts, bot_pct, basket_pct }], meta { baseline_equity, baseline_bot0, baseline_parite0, points }. Backend CPU < 40ms.
 
@@ -5903,6 +5928,11 @@ curl -X POST http://127.0.0.1:8000/api/admin/force-unlock-symbol -H "Authorizati
 ---
 
 ## Changelog (spec güncellemeleri)
+
+**2026-05-28 — Binance -1021 (CLOCK_DRIFT) auto-heal:**
+- `binance_spot`: imzalı isteklerde timestamp her denemede yenilenir; -1021'de saat önbelleği temizlenip 2 kez otomatik retry
+- `clock_sync_hint()`: macOS/Linux/Windows için doğru NTP talimatı (Windows-only w32tm kaldırıldı)
+- `home.py`: CLOCK_DRIFT algılama `BinanceSignedError(-1021)` ile güçlendirildi
 
 **2026-02-12 — Wallet loading / cüzdan hiç gelmiyor fix:**
 - applySnapshotToUI: wallet _error → status='error'; UI banner "Yenile | Ayarlara git"

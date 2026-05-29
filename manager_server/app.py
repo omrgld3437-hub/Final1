@@ -129,7 +129,16 @@ async def catch_http_exceptions(request: Request, call_next):
 
 
 # Bilinen / isteğe bağlı endpoint 404'leri log spam üretmesin (eski UI sürümü veya probe).
-_SUPPRESS_404_PATHS = frozenset({"/", "/favicon.ico", "/api/issues/summary"})
+_SUPPRESS_404_PATHS = frozenset({
+    "/",
+    "/favicon.ico",
+    "/api/issues/summary",
+    "/api/security/blocked-ips",
+    "/api/stack/restart",
+    "/api/server/manager/restart",
+})
+# Tam yeniden başlatma — başarılı istek INFO; hata panelde zaten görünür, WARN spam olmasın.
+_STACK_RESTART_PATHS = frozenset({"/api/stack/restart", "/api/server/manager/restart"})
 _last_404_log_ts: dict[str, float] = {}
 _404_LOG_THROTTLE_SEC = 60.0
 
@@ -140,8 +149,10 @@ async def log_errors_only(request: Request, call_next):
     response = await call_next(request)
     if response.status_code >= 400:
         path = (request.url.path or "").rstrip("/") or "/"
+        if path in _STACK_RESTART_PATHS:
+            return response
         if response.status_code == 404:
-            if path in _SUPPRESS_404_PATHS:
+            if path in _SUPPRESS_404_PATHS or path.startswith("/api/security/"):
                 return response
             now = time.time()
             last = _last_404_log_ts.get(path, 0.0)
@@ -191,6 +202,24 @@ async def api_status():
     except Exception:
         out["host"] = "—"
     return out
+
+
+@app.post("/api/stack/restart")
+async def api_stack_restart():
+    """Manager + Web + Engine + HTML tam yeniden başlatma."""
+    ok = state.schedule_manager_restart()
+    if not ok:
+        return JSONResponse(status_code=500, content={"detail": "Stack restart failed"})
+    return {"ok": True, "action": "restart", "restarting": True, "scope": "full_stack"}
+
+
+@app.post("/api/server/manager/restart")
+async def api_manager_restart():
+    """Geriye uyumluluk — tam stack restart."""
+    ok = state.schedule_manager_restart()
+    if not ok:
+        return JSONResponse(status_code=500, content={"detail": "Stack restart failed"})
+    return {"ok": True, "service": "manager", "action": "restart", "restarting": True, "scope": "full_stack"}
 
 
 @app.post("/api/server/{key}/start")
@@ -266,6 +295,36 @@ async def api_traffic():
     return state.get_traffic()
 
 
+@app.get("/api/security/blocked-ips")
+async def api_security_blocked_ips():
+    return {"blocked": state.get_blocked_ips()}
+
+
+@app.post("/api/security/ban-ip")
+async def api_security_ban_ip(request: Request):
+    body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
+    ip = (body.get("ip") or "").strip() if isinstance(body, dict) else ""
+    reason = (body.get("reason") or "Manager güvenlik paneli") if isinstance(body, dict) else "Manager güvenlik paneli"
+    if not ip:
+        return JSONResponse(status_code=400, content={"detail": "IP gerekli"})
+    try:
+        return state.ban_ip(ip, reason=reason)
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"detail": str(e)})
+
+
+@app.post("/api/security/unban-ip")
+async def api_security_unban_ip(request: Request):
+    body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
+    ip = (body.get("ip") or "").strip() if isinstance(body, dict) else ""
+    if not ip:
+        return JSONResponse(status_code=400, content={"detail": "IP gerekli"})
+    try:
+        return state.unban_ip(ip)
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"detail": str(e)})
+
+
 @app.get("/api/engine_metrics")
 async def api_engine_metrics():
     return state.get_engine_metrics()
@@ -289,7 +348,7 @@ async def api_diagnosis_all():
 
 @app.get("/api/diagnosis/{service}")
 async def api_diagnosis_one(service: str):
-    if service not in ("web", "engine", "manager"):
+    if service not in ("web", "engine", "manager", "html"):
         return JSONResponse(status_code=400, content={"detail": "Invalid service"})
     return state.get_diagnosis(service) or {}
 

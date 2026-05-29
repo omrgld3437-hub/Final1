@@ -68,7 +68,7 @@ from app.botengine.strategies.registry import get_strategy_safe
 from app.botengine.strategies.trdca_pro import strategy_tick as trdca_strategy_tick
 from app.botengine.virtual_wallet import ensure_virtual_wallet, get_virtual_wallet, sync_virtual_wallet_from_state
 from app.services.pnl_service import ensure_daily_ref_and_compute
-from app.utils.tz_utils import turkey_today_start_utc
+from app.utils.tz_utils import turkey_today_date_str
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +76,18 @@ _tasks: Dict[int, asyncio.Task] = {}
 _stop_requested: Set[int] = set()
 _reconcile_last_ts: Dict[int, float] = {}
 _config_cache: Dict[int, object] = {}  # DcaGridTrailingConfig | MultiAssetRebalanceConfig
+_CONFIG_CACHE_MAX = 64
 _task_create_lock = asyncio.Lock()
+_bot_diag_logged: Set[int] = set()
+
+
+def _config_cache_put(bot_id: int, cfg: object) -> None:
+    if bot_id not in _config_cache and len(_config_cache) >= _CONFIG_CACHE_MAX:
+        try:
+            _config_cache.pop(next(iter(_config_cache)))
+        except StopIteration:
+            pass
+    _config_cache[bot_id] = cfg
 
 
 def invalidate_config_cache(bot_id: int) -> None:
@@ -282,25 +293,26 @@ async def _bot_loop(bot_id: int) -> None:
             account_id = bot.account_id
             symbol = (bot.symbol or "").upper()
             ensure_state_row(db, bot_id, account_id, symbol)
-            # Teşhis: bot_engine_events son 80 kayıt özeti + son 15 satır (başlatınca loglara yazılır)
-            try:
-                diag = get_events_diagnostic_summary(db, bot_id, limit=80)
-                logger.info(
-                    "BOT_TEŞHIS_DUMP bot_id=%s total_events=%s by_type=%s skip_reasons=%s",
-                    bot_id,
-                    diag.get("total", 0),
-                    diag.get("by_type") or {},
-                    diag.get("skip_reasons") or {},
-                )
-                for le in (diag.get("last_events") or [])[:10]:
+            if bot_id not in _bot_diag_logged:
+                _bot_diag_logged.add(bot_id)
+                try:
+                    diag = get_events_diagnostic_summary(db, bot_id, limit=40)
                     logger.info(
-                        "BOT_TEŞHIS_EVENT id=%s type=%s message=%s",
-                        le.get("id"),
-                        le.get("type"),
-                        (le.get("message") or "")[:200],
+                        "BOT_TEŞHIS_DUMP bot_id=%s total_events=%s by_type=%s skip_reasons=%s",
+                        bot_id,
+                        diag.get("total", 0),
+                        diag.get("by_type") or {},
+                        diag.get("skip_reasons") or {},
                     )
-            except Exception as diag_err:
-                logger.warning("BOT_TEŞHIS_DUMP bot_id=%s err=%s", bot_id, diag_err)
+                    for le in (diag.get("last_events") or [])[:5]:
+                        logger.info(
+                            "BOT_TEŞHIS_EVENT id=%s type=%s message=%s",
+                            le.get("id"),
+                            le.get("type"),
+                            (le.get("message") or "")[:200],
+                        )
+                except Exception as diag_err:
+                    logger.warning("BOT_TEŞHIS_DUMP bot_id=%s err=%s", bot_id, diag_err)
         finally:
             db.close()
 
@@ -323,7 +335,7 @@ async def _bot_loop(bot_id: int) -> None:
                     cfg = _config_cache.get(bot_id) or (
                         config_multi_asset_from_payload(raw) if is_multi else DcaGridTrailingConfig(raw)
                     )
-                _config_cache[bot_id] = cfg
+                _config_cache_put(bot_id, cfg)
                 state = load_state(db, bot_id)
                 if not state:
                     if is_trdca:
@@ -505,17 +517,25 @@ async def _bot_loop(bot_id: int) -> None:
                     # data_hub only; no price_hub/ticker fallback (eliminates N× Binance REST)
                     price = adapter.get_price(symbol)
                     if not price or price <= 0:
+                        try:
+                            from app.services.market_data import refresh_worker_symbol_from_web
+                            refetched = await refresh_worker_symbol_from_web(symbol)
+                            if refetched and refetched > 0:
+                                price = refetched
+                        except Exception:
+                            pass
+                    if not price or price <= 0:
                         logger.debug("BOT_PRICE bot_id=%s loop=%s tick=%s status=STALE symbol=%s", bot_id, loop_instance_id, tick_count, symbol)
-                        logger.warning(
-                            "BOT_TICK_PRICE_MISSING bot_id=%s loop=%s tick=%s symbol=%s price=%s skip_trade=True next_wake=%.1f",
-                            bot_id, loop_instance_id, tick_count, symbol, price, next_wake,
-                        )
                         now_ts = time.time()
                         if not state.get("price_stale_since"):
                             state["price_stale_since"] = int(now_ts)
                             save_state(db, bot_id, account_id, state)
                         if (now_ts - _last_stale_event_ts.get(bot_id, 0)) >= _STALE_EVENT_THROTTLE_SEC:
                             _last_stale_event_ts[bot_id] = now_ts
+                            logger.warning(
+                                "BOT_TICK_PRICE_MISSING bot_id=%s loop=%s tick=%s symbol=%s price=%s skip_trade=True next_wake=%.1f",
+                                bot_id, loop_instance_id, tick_count, symbol, price, next_wake,
+                            )
                             try:
                                 from app.botengine.health_watch import emit_price_stale
                                 emit_price_stale(db, bot_id, account_id, symbol)
@@ -900,7 +920,7 @@ async def delete_bot_fully(bot_id: int, db: Session) -> None:
             archive_bot_performance(db, bot_id, bot.account_id)
         except Exception as e:
             logger.warning("delete_bot_fully archive bot_id=%s: %s", bot_id, e)
-        today_str = turkey_today_start_utc().strftime("%Y-%m-%d")
+        today_str = turkey_today_date_str()
         bot_today_realized = PnlService._daily_realized_for_bot_trades(db, bot_id, bot.account_id)
         if bot_today_realized != 0:
             PnlService.add_to_account_daily_realized_cache(db, bot.account_id, today_str, bot_today_realized)

@@ -14,7 +14,7 @@ FastAPI router’ları — web süreci emir göndermez (worker-only).
 | `admin.py` | Admin panel |
 | `finance.py` | Finans API |
 | `finance_reports.py` | Raporlar |
-| `spot_routes.py` | Manuel spot (UI) |
+| `spot_routes.py` | Manuel spot; `/spot/price` → DataHub only + rate limit |
 | `data_hub_routes.py` | Fiyat hub |
 | `market_data_routes.py` | Piyasa verisi |
 | `pricing_routes.py` | Fiyatlandırma |

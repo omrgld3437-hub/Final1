@@ -72,7 +72,9 @@ async def run_one_bot_tick(bot_id: int, tick_id: str) -> float:
             cfg = _config_cache.get(bot_id) or (
                 config_multi_asset_from_payload(raw) if is_multi else DcaGridTrailingConfig(raw)
             )
-        _config_cache[bot_id] = cfg
+        from app.botengine.orchestrator import _config_cache_put
+
+        _config_cache_put(bot_id, cfg)
         if state and state.get("run_id"):
             logger.info("BOT_RUN_ID run_id=%s bot_id=%s", state.get("run_id"), bot_id)
         if not state:

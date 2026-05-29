@@ -2,6 +2,7 @@
 (function () {
   const API = "";
   const keys = ["web", "engine", "manager", "html"];
+  const SERVICE_PORTS = { manager: "7999", web: "8000", engine: "—", html: "8080" };
   let ws = {};
   let wsEvents = null;
   let pause = { web: false, engine: false, manager: false, html: false };
@@ -57,13 +58,9 @@
     });
   }
 
-  function showActionFeedback(message, isError) {
-    var el = qs("#globalLastOp");
-    if (el) {
-      el.textContent = message;
-      el.style.color = isError ? "#e74c3c" : "";
-    }
-  }
+  function showActionFeedback() {}
+
+  function showApiConnectionError() {}
 
   function getLiveUptime(key) {
     if (!lastMetrics || !lastMetrics[key]) return null;
@@ -73,42 +70,58 @@
     return Math.max(0, Math.floor(base + elapsed));
   }
 
+  function getLiveSystemUptime() {
+    if (!lastMetrics || !lastMetrics.system) return null;
+    var sys = lastMetrics.system;
+    var started = sys.session_started_at;
+    if (started != null && !isNaN(Number(started))) {
+      return Math.max(0, Math.floor(Date.now() / 1000 - Number(started)));
+    }
+    var base = sys.uptime_s;
+    if (base == null) return null;
+    var elapsed = (Date.now() / 1000) - lastMetricsReceivedAt;
+    return Math.max(0, Math.floor(base + elapsed));
+  }
+
   function setStatus(key, data) {
+    data = data || {};
+    var proc = (lastMetrics && lastMetrics[key]) || {};
+    var pid = stickyServicePid(key, data, proc);
     const chip = qs("#status-" + key);
     if (chip) {
-      chip.textContent = data.running ? "ÇALIŞIYOR " + (data.pid || "") : "DURDURULDU";
+      chip.textContent = data.running ? "ÇALIŞIYOR" + (pid != null ? " " + pid : "") : "DURDURULDU";
       chip.className = "status-chip " + (data.running ? "running" : "stopped");
     }
     const statEl = qs("#stat-" + key);
     if (statEl && data) {
-      const parts = [];
-      if (data.pid != null) parts.push("PID " + data.pid);
-      var uptime = data.running ? getLiveUptime(key) : (lastMetrics && lastMetrics[key] ? lastMetrics[key].uptime_s : null);
-      if (key === "html" && typeof data.started_at === "number") uptime = Math.max(0, Math.floor(Date.now() / 1000 - data.started_at));
-      parts.push("Çalışma süresi: " + formatUptime(uptime));
-      if (data.restart_count != null) parts.push("Yeniden başlatma: " + data.restart_count);
-      if (key === "web" && lastMetrics && lastMetrics.web) {
-        if (lastMetrics.web.cpu_pct != null) parts.push(lastMetrics.web.cpu_pct + "% CPU");
-        if (lastMetrics.web.rss_mb != null) parts.push(lastMetrics.web.rss_mb + " MB");
-      }
-      if (key === "engine" && lastMetrics && lastMetrics.engine) {
-        if (lastMetrics.engine.cpu_pct != null) parts.push(lastMetrics.engine.cpu_pct + "% CPU");
-        if (lastMetrics.engine.rss_mb != null) parts.push(lastMetrics.engine.rss_mb + " MB");
-      }
-      if (key === "manager" && lastMetrics && lastMetrics.manager) {
-        if (lastMetrics.manager.cpu_pct != null) parts.push(lastMetrics.manager.cpu_pct + "% CPU");
-        if (lastMetrics.manager.rss_mb != null) parts.push(lastMetrics.manager.rss_mb + " MB");
-      }
-      statEl.textContent = parts.join(" · ");
+      statEl.textContent = data.running ? "ÇALIŞIYOR" : "DURDURULDU";
     }
   }
 
-  function formatUptime(s) {
+  function formatUptime(s, chronometer) {
     if (s == null || s === undefined) return "—";
+    s = Math.max(0, Math.floor(Number(s)));
+    if (chronometer) {
+      var h = Math.floor(s / 3600);
+      var m = Math.floor((s % 3600) / 60);
+      var sec = s % 60;
+      if (h > 0) {
+        return h + ":" + (m < 10 ? "0" : "") + m + ":" + (sec < 10 ? "0" : "") + sec;
+      }
+      return m + ":" + (sec < 10 ? "0" : "") + sec;
+    }
     if (s < 60) return s + " sn";
-    const m = Math.floor(s / 60);
-    const h = Math.floor(m / 60);
-    if (h > 0) return h + " sa " + (m % 60) + " dk";
+    var m = Math.floor(s / 60);
+    var h = Math.floor(m / 60);
+    var d = Math.floor(h / 24);
+    h = h % 24;
+    m = m % 60;
+    if (d > 0) {
+      return d + " gün " + h + " sa";
+    }
+    if (h > 0) {
+      return h + " sa " + (m < 10 ? "0" : "") + m + " dk";
+    }
     return m + " dk";
   }
 
@@ -119,7 +132,66 @@
   }
 
   /** PID null geldiğinde çalışan serviste son bilinen değeri koru (flicker önleme). */
-  var overviewPidCache = { manager: null, engine: null, html: null };
+  var overviewPidCache = { manager: null, web: null, engine: null, html: null };
+  var engineBotsCache = null;
+
+  function stickyActiveBots(running, engApp) {
+    engApp = engApp || {};
+    var bots = engApp.active_bots;
+    if (bots != null) {
+      engineBotsCache = bots;
+      return bots;
+    }
+    if (running && engineBotsCache != null) return engineBotsCache;
+    if (!running) engineBotsCache = null;
+    return null;
+  }
+
+  function getServiceUptime(key, status, proc, running) {
+    status = status || {};
+    if (key === "html" && typeof status.started_at === "number") {
+      return Math.max(0, Math.floor(Date.now() / 1000 - status.started_at));
+    }
+    if (running) return getLiveUptime(key);
+    if (proc && proc.uptime_s != null) return proc.uptime_s;
+    return null;
+  }
+
+  function updateServiceMetricsDisplay(key, m, errCount, wrnCount) {
+    m = m || {};
+    var status = (m.status && m.status[key]) || {};
+    var proc = m[key] || {};
+    var running = !!status.running;
+    var pid = stickyServicePid(key, status, proc);
+    var uptime = getServiceUptime(key, status, proc, running);
+    var errWrn = errCount + " / " + wrnCount;
+    var port = SERVICE_PORTS[key] || "—";
+    var engApp = m.engine_app || {};
+
+    ["overview", "tab"].forEach(function (scope) {
+      var prefix = "#" + scope + "-" + key + "-";
+      if (key !== "engine") {
+        setTextIfChanged(qs(prefix + "port"), port);
+      }
+      if (key === "engine") {
+        var bots = stickyActiveBots(running, engApp);
+        var botsText = bots != null ? String(bots) : (running ? "0" : "—");
+        setTextIfChanged(qs(prefix + "bots"), botsText);
+      }
+      setTextIfChanged(qs(prefix + "pid"), pid != null ? String(pid) : "—");
+      setTextIfChanged(qs(prefix + "uptime"), formatUptime(uptime) || "—");
+      if (scope === "overview") {
+        setTextIfChanged(qs(prefix + "cpu"), formatCpuPct(proc));
+        setTextIfChanged(qs(prefix + "ram"), formatRamMb(proc));
+      } else {
+        var resourceEl = qs(prefix + "resource");
+        setTextIfChanged(resourceEl, formatResource(proc));
+        if (resourceEl) resourceEl.classList.add("metric-resource");
+      }
+      setTextIfChanged(qs(prefix + "err-wrn"), errWrn);
+    });
+    setOverviewStatusChip(qs("#overview-" + key + "-status"), running);
+  }
 
   function stickyServicePid(key, status, proc) {
     var st = status || {};
@@ -139,11 +211,20 @@
     setTextIfChanged(qs("#overview-" + key + "-pid"), pid != null ? String(pid) : "—");
   }
 
-  function setHealthBadgeIfChanged(el, text, className) {
-    if (!el) return;
+  function setHealthBadgeIfChanged(cardEl, text, stateClass) {
+    if (!cardEl) return;
+    var textEl = qs("#overview-health-text");
     var s = (text == null || text === undefined) ? "" : String(text);
-    if (el.textContent !== s) el.textContent = s;
-    if (el.className !== className) el.className = className;
+    if (textEl && textEl.textContent !== s) textEl.textContent = s;
+    var cls = "overview-health-card " + (stateClass || "ok");
+    if (cardEl.className !== cls) cardEl.className = cls;
+  }
+
+  function setOverviewHeaderMetric(el, text, level) {
+    if (!el) return;
+    setTextIfChanged(el, text);
+    el.classList.remove("warn", "crit");
+    if (level) el.classList.add(level);
   }
 
   function setOverviewStatusChip(el, running) {
@@ -160,40 +241,31 @@
     el.className = "ov-progress-fill" + (pct > 90 ? " crit" : pct > 70 ? " warn" : "");
   }
 
-  function renderOverviewAlerts(errWeb, wrnWeb, errEng, wrnEng, errMgr, wrnMgr) {
-    var listEl = qs("#overview-alerts-list");
-    if (!listEl) return;
-    var items = [];
-    errWeb.slice(-5).forEach(function (l) { items.push({ svc: "TraderTrailing", type: "err", msg: l || "" }); });
-    wrnWeb.slice(-5).forEach(function (l) { items.push({ svc: "TraderTrailing", type: "wrn", msg: l || "" }); });
-    errEng.slice(-5).forEach(function (l) { items.push({ svc: "Bot Engine", type: "err", msg: l || "" }); });
-    wrnEng.slice(-5).forEach(function (l) { items.push({ svc: "Bot Engine", type: "wrn", msg: l || "" }); });
-    errMgr.slice(-3).forEach(function (l) { items.push({ svc: "Yönetici", type: "err", msg: l || "" }); });
-    wrnMgr.slice(-3).forEach(function (l) { items.push({ svc: "Yönetici", type: "wrn", msg: l || "" }); });
-    if (!items.length) {
-      listEl.innerHTML = "<div class=\"overview-alerts-empty\">Son hata veya uyarı yok.</div>";
-      return;
-    }
-    listEl.innerHTML = items.map(function (it) {
-      var cls = it.type === "err" ? "alert-err" : "alert-wrn";
-      var typeLabel = it.type === "err" ? "HATA" : "UYARI";
-      var typeCls = it.type === "err" ? "type-err" : "type-wrn";
-      return "<div class=\"overview-alert-item " + cls + "\">" +
-        "<span class=\"overview-alert-svc\">" + escHtml(it.svc) + "</span>" +
-        "<span class=\"overview-alert-type " + typeCls + "\">" + typeLabel + "</span>" +
-        "<span class=\"overview-alert-msg\">" + escHtml(it.msg) + "</span></div>";
-    }).join("");
+  function formatCpuPct(proc) {
+    if (!proc || proc.cpu_pct == null) return "—";
+    return Number(proc.cpu_pct).toFixed(1) + "%";
+  }
+
+  function formatRamMb(proc) {
+    if (!proc || proc.rss_mb == null) return "—";
+    return Number(proc.rss_mb).toFixed(1) + " MB";
   }
 
   function formatResource(proc) {
-    if (!proc) return "—";
-    return [proc.cpu_pct != null ? proc.cpu_pct + "% CPU" : null, proc.rss_mb != null ? proc.rss_mb + " MB" : null].filter(Boolean).join(" · ") || "—";
+    if (!proc || (proc.cpu_pct == null && proc.rss_mb == null)) return "—";
+    return formatCpuPct(proc) + " · " + formatRamMb(proc);
   }
 
   function mergeMetricsPayload(incoming) {
     incoming = incoming || {};
     if (!lastMetrics) return incoming;
     var out = Object.assign({}, lastMetrics, incoming);
+    var prevSys = lastMetrics.system || {};
+    var nextSys = incoming.system || {};
+    out.system = Object.assign({}, prevSys, nextSys);
+    if (nextSys.uptime_s == null && prevSys.uptime_s != null) {
+      out.system.uptime_s = prevSys.uptime_s;
+    }
     var prevWeb = lastMetrics.web_app || {};
     var nextWeb = incoming.web_app || {};
     out.web_app = Object.assign({}, prevWeb, nextWeb);
@@ -227,27 +299,35 @@
     const sys = m.system || {};
     const el = (id, text) => { const e = qs(id); if (e) e.textContent = text; };
     const traffic = m.web_app || {};
-    const loginFails = traffic.last_login_fails || [];
-    const topIps = traffic.top_ips || [];
-    const errWeb = (m.errors_ring && m.errors_ring.web) ? m.errors_ring.web : [];
-    const errEng = (m.errors_ring && m.errors_ring.engine) ? m.errors_ring.engine : [];
-    const errMgr = (m.errors_ring && m.errors_ring.manager) ? m.errors_ring.manager : [];
-    const wrnWeb = (m.warns_ring && m.warns_ring.web) ? m.warns_ring.web : [];
-    const wrnEng = (m.warns_ring && m.warns_ring.engine) ? m.warns_ring.engine : [];
-    const wrnMgr = (m.warns_ring && m.warns_ring.manager) ? m.warns_ring.manager : [];
 
     var lastUpdateEl = qs("#overview-last-update");
-    if (lastUpdateEl) setTextIfChanged(lastUpdateEl, "Son güncelleme: " + (new Date().toLocaleTimeString("tr-TR") || "—"));
+    if (lastUpdateEl) setTextIfChanged(lastUpdateEl, new Date().toLocaleTimeString("tr-TR") || "—");
+
+    var runningCount = keys.filter(function (k) {
+      return m.status && m.status[k] && m.status[k].running;
+    }).length;
+    var svcEl = qs("#overview-services-count");
+    var svcLevel = runningCount === keys.length ? null : (runningCount <= 1 ? "crit" : "warn");
+    setOverviewHeaderMetric(svcEl, runningCount + " / " + keys.length + " aktif", svcLevel);
+
     var healthEl = qs("#overview-health-badge");
     if (healthEl) {
-      var webOk = m.status && m.status.web && m.status.web.running;
-      var engOk = m.status && m.status.engine && m.status.engine.running;
-      var hasErr = errWeb.length + errEng.length > 0;
-      var healthText, healthClass;
-      if (!webOk || !engOk) { healthText = "Servis durumu uyarı"; healthClass = "overview-health-badge warn"; }
-      else if (hasErr) { healthText = "Hata var"; healthClass = "overview-health-badge warn"; }
-      else { healthText = "Tümü normal"; healthClass = "overview-health-badge ok"; }
-      setHealthBadgeIfChanged(healthEl, healthText, healthClass);
+      var hasErr = keys.some(function (k) {
+        return m.errors_ring && m.errors_ring[k] && m.errors_ring[k].length > 0;
+      });
+      var healthText, healthState;
+      if (runningCount < keys.length) {
+        var stopped = keys.length - runningCount;
+        healthText = stopped === 1 ? "1 servis durdu" : stopped + " servis durdu";
+        healthState = runningCount <= 1 ? "crit" : "warn";
+      } else if (hasErr) {
+        healthText = "Log hatası var";
+        healthState = "warn";
+      } else {
+        healthText = "Tümü normal";
+        healthState = "ok";
+      }
+      setHealthBadgeIfChanged(healthEl, healthText, healthState);
     }
 
     const cpuPct = sys.cpu_pct != null ? sys.cpu_pct : 0;
@@ -260,7 +340,7 @@
       ? sys.ram_used_mb + " / " + sys.ram_total_mb + " MB" : "—");
     el("#overview-disk", sys.disk_used_mb != null && sys.disk_total_mb != null
       ? Math.round(sys.disk_used_mb / 1024) + " / " + Math.round(sys.disk_total_mb / 1024) + " GB" : "—");
-    el("#overview-load", sys.load_avg != null ? sys.load_avg : "—");
+    setTextIfChanged(qs("#overview-system-uptime"), formatUptime(getLiveSystemUptime(), true) || "—");
     const progressCpu = qs("#progress-cpu");
     setProgressBar(progressCpu, cpuPct);
     const progressRam = qs("#progress-ram");
@@ -268,162 +348,215 @@
     const progressDisk = qs("#progress-disk");
     setProgressBar(progressDisk, diskPct);
 
-    setTextIfChanged(qs("#overview-manager-port"), "7999");
-    var mgrRunning = m.status && m.status.manager && m.status.manager.running;
-    var mgrStatus = qs("#overview-manager-status");
-    setOverviewStatusChip(mgrStatus, mgrRunning);
-    var d = m.status && m.status.manager ? m.status.manager : {};
-    var liveMgrUptime = (d.running && m.manager) ? getLiveUptime("manager") : (m.manager ? m.manager.uptime_s : null);
-    setOverviewPid("manager", d, m.manager);
-    setTextIfChanged(qs("#overview-manager-uptime"), formatUptime(liveMgrUptime) || "—");
-    el("#overview-manager-resource", formatResource(m.manager));
-    setTextIfChanged(qs("#overview-manager-err-wrn"), errMgr.length + " / " + wrnMgr.length);
-
-    const webProc = m.web || {};
-    const webApp = m.web_app || {};
-    const webRunning = (m.status && m.status.web && m.status.web.running);
-    setTextIfChanged(qs("#overview-web-port"), "8000");
-    const overviewWebChip = qs("#overview-web-status");
-    setOverviewStatusChip(overviewWebChip, webRunning);
-    el("#overview-web-reqmin", metricOrDash(webApp.requests_per_min, webRunning));
-    el("#overview-web-error-rate", metricOrDash(webApp.error_rate, webRunning, function (v) { return (Number(v) * 100).toFixed(2) + "%"; }));
-    el("#overview-web-p95", metricOrDash(webApp.latency_p95_ms, webRunning, function (v) { return v + " ms"; }));
-    setTextIfChanged(qs("#overview-web-err-wrn"), errWeb.length + " / " + wrnWeb.length);
-
-    const engProc = m.engine || {};
-    const engApp = m.engine_app || {};
-    const engStatus = m.status && m.status.engine ? m.status.engine : {};
-    const engRunning = !!engStatus.running;
-    setOverviewPid("engine", engStatus, engProc);
-    const overviewEngChip = qs("#overview-engine-status");
-    setOverviewStatusChip(overviewEngChip, engRunning);
-    el("#overview-engine-bots", engApp.active_bots != null ? engApp.active_bots : "—");
-    el("#overview-engine-tick", engApp.tick_rate_10s != null ? engApp.tick_rate_10s : "—");
-    el("#overview-engine-tick-age", engApp.last_tick_age_s != null ? engApp.last_tick_age_s + " sn" : "—");
-    setTextIfChanged(qs("#overview-engine-err-wrn"), errEng.length + " / " + wrnEng.length);
-
-    var htmlProc = m.html || {};
-    var htmlStatus = m.status && m.status.html ? m.status.html : {};
-    var htmlChip = qs("#overview-html-status");
-    setOverviewStatusChip(htmlChip, !!htmlStatus.running);
-    setTextIfChanged(qs("#overview-html-port"), "8080");
-    setOverviewPid("html", htmlStatus, htmlProc);
-    var htmlUptime = (typeof htmlStatus.started_at === "number")
-      ? Math.max(0, Math.floor(Date.now() / 1000 - htmlStatus.started_at))
-      : (htmlProc.uptime_s != null ? htmlProc.uptime_s : null);
-    setTextIfChanged(qs("#overview-html-uptime"), formatUptime(htmlUptime) || "—");
-    var errHtml = (m.errors_ring && m.errors_ring.html) ? m.errors_ring.html : [];
-    var wrnHtml = (m.warns_ring && m.warns_ring.html) ? m.warns_ring.html : [];
-    el("#overview-html-resource", formatResource(htmlProc));
-    setTextIfChanged(qs("#overview-html-err-wrn"), errHtml.length + " / " + wrnHtml.length);
-
-    const total = webApp.request_total || 0;
-    const bad = webApp.status_5xx || 0;
-    const availability = total > 0 ? ((total - bad) / total * 100) : 100;
-    const sloBar = qs("#slo-bar");
-    if (sloBar) {
-      sloBar.style.width = Math.min(100, availability) + "%";
-      sloBar.className = "ov-progress-fill slo-bar" + (availability >= 99.9 ? "" : availability >= 99 ? " warn" : " crit");
-    }
-    el("#slo-text", availability.toFixed(2) + "% · hedef 99.9% · 5xx: " + bad);
-
-    renderOverviewAlerts(errWeb, wrnWeb, errEng, wrnEng, errMgr, wrnMgr);
-    const alertsPre = qs("#overview-alerts");
-    if (alertsPre) alertsPre.textContent = "";
-
-    setTextIfChanged(qs("#overview-errors-summary"), "TraderTrailing: " + errWeb.length + ", Bot Engine: " + errEng.length + ", Yönetici: " + errMgr.length);
-
     keys.forEach(function (k) {
       var ec = (m.errors_ring && m.errors_ring[k]) ? m.errors_ring[k].length : 0;
       var wc = (m.warns_ring && m.warns_ring[k]) ? m.warns_ring[k].length : 0;
+      updateServiceMetricsDisplay(k, m, ec, wc);
       updateNavAlertState(k, ec, wc);
     });
 
-    setTextIfChanged(qs("#overview-login-fail"), "Toplam " + (traffic.login_fail_total || 0) + " · Listede: " + loginFails.length);
-
-    const restWeb = (m.status && m.status.web && m.status.web.restart_count != null) ? m.status.web.restart_count : 0;
-    const statWeb = qs("#stat-web");
-    if (statWeb) {
-      const parts = [];
-      if (webProc.pid != null) parts.push("PID " + webProc.pid);
-      parts.push("Çalışma süresi: " + formatUptime(webRunning ? getLiveUptime("web") : webProc.uptime_s));
-      parts.push("Yeniden başlatma: " + restWeb);
-      if (webProc.cpu_pct != null) parts.push(webProc.cpu_pct + "% CPU");
-      if (webProc.rss_mb != null) parts.push(webProc.rss_mb + " MB");
-      if (webApp.requests_per_min != null) parts.push(webApp.requests_per_min + "/min");
-      if (webApp.latency_p95_ms != null) parts.push("P95 " + webApp.latency_p95_ms + "ms");
-      statWeb.textContent = parts.join(" · ");
-    }
-    const restEng = (m.status && m.status.engine && m.status.engine.restart_count != null) ? m.status.engine.restart_count : 0;
-    const statEng = qs("#stat-engine");
-    if (statEng) {
-      const parts = [];
-      if (engProc.pid != null) parts.push("PID " + engProc.pid);
-      parts.push("Çalışma süresi: " + formatUptime(engRunning ? getLiveUptime("engine") : engProc.uptime_s));
-      parts.push("Yeniden başlatma: " + restEng);
-      if (engProc.cpu_pct != null) parts.push(engProc.cpu_pct + "% CPU");
-      if (engProc.rss_mb != null) parts.push(engProc.rss_mb + " MB");
-      if (engApp.active_bots != null) parts.push(engApp.active_bots + " bots");
-      if (engApp.tick_rate_10s != null) parts.push("tick/10s " + engApp.tick_rate_10s);
-      if (engApp.last_tick_age_s != null) parts.push("tick yaşı " + engApp.last_tick_age_s + " sn");
-      statEng.textContent = parts.join(" · ");
-    }
-
-    const loginPre = qs("#security-login-fails");
-    if (loginPre) patchLogPre(loginPre, loginFails.length ? formatLoginFails(loginFails) : "Başarısız giriş yok.");
-    const ipsPre = qs("#security-top-ips");
-    if (ipsPre) patchLogPre(ipsPre, topIps.length
-      ? topIps.map(x => (x.ip || "") + " " + (x.count || 0)).join("\n")
-      : "IP verisi yok.");
-    const fivexx = qs("#security-5xx-msg");
-    if (fivexx) fivexx.textContent = (traffic.status_5xx || 0) > 0
-      ? "5xx: " + traffic.status_5xx + " | Hata oranı: " + (traffic.error_rate != null ? (traffic.error_rate * 100).toFixed(2) + "%" : "—")
-      : "5xx yok.";
+    updateSecurityUI(traffic);
   }
 
-  function formatLoginFails(list) {
-    return list.map(function (f) {
+  function formatLoginFailReason(reasonRaw) {
+    var reason = reasonRaw || "—";
+    if (window.LogHumanize && reason !== "—" && /ERROR|WARN|fail|SSL|401|Unauthorized|Exception/i.test(reason)) {
+      return window.LogHumanize.format(reason, "web");
+    }
+    return reason;
+  }
+
+  function renderSecurityLoginFails(list) {
+    var el = qs("#security-login-list");
+    var badge = qs("#security-login-count");
+    if (!el) return;
+    list = list || [];
+    if (badge) {
+      badge.textContent = String(list.length);
+      badge.classList.toggle("warn", list.length > 0);
+    }
+    if (!list.length) {
+      el.innerHTML = "<p class=\"security-empty\">Başarısız giriş yok.</p>";
+      return;
+    }
+    el.innerHTML = list.map(function (f) {
       var ts = f.ts ? new Date(f.ts * 1000).toLocaleString("tr-TR") : "—";
-      var ip = f.ip || "—";
-      var user = f.user || "—";
-      var reasonRaw = f.reason ? f.reason : "—";
-      var reason = reasonRaw;
-      if (window.LogHumanize && reasonRaw !== "—" && /ERROR|WARN|fail|SSL|401|Unauthorized|Exception/i.test(reasonRaw)) {
-        reason = window.LogHumanize.format(reasonRaw, "web");
+      var ip = escHtml(f.ip || "—");
+      var user = escHtml(f.user || "—");
+      var reason = escHtml(formatLoginFailReason(f.reason));
+      return "<div class=\"sec-login-item\">" +
+        "<div class=\"sec-login-meta\">" +
+          "<span class=\"sec-login-time\">" + escHtml(ts) + "</span>" +
+          "<span class=\"sec-login-ip\">" + ip + "</span>" +
+          "<span class=\"sec-login-user\">" + user + "</span>" +
+        "</div>" +
+        "<p class=\"sec-login-reason\">" + reason + "</p>" +
+      "</div>";
+    }).join("");
+  }
+
+  function renderSecurityTopIps(list, blockedMap) {
+    var el = qs("#security-ip-list");
+    var badge = qs("#security-ip-count");
+    if (!el) return;
+    list = list || [];
+    blockedMap = blockedMap || {};
+    if (badge) badge.textContent = String(list.length);
+    if (!list.length) {
+      el.innerHTML = "<p class=\"security-empty\">IP verisi yok.</p>";
+      return;
+    }
+    var maxCount = 1;
+    list.forEach(function (x) {
+      var c = Number(x.count) || 0;
+      if (c > maxCount) maxCount = c;
+    });
+    el.innerHTML = list.map(function (x, i) {
+      var ipRaw = x.ip || "—";
+      var ip = escHtml(ipRaw);
+      var count = Number(x.count) || 0;
+      var pct = Math.max(2, Math.round(100 * count / maxCount));
+      var local = isLocalIp(ipRaw);
+      var blocked = !!blockedMap[ipRaw];
+      var localTag = local ? "<span class=\"sec-ip-local\" title=\"Bu makineden gelen trafik (dashboard, API polling)\">yerel</span>" : "";
+      var actionBtn = blocked
+        ? "<button type=\"button\" class=\"sec-ip-btn sec-ip-unban\" data-ip=\"" + ip + "\" title=\"Engeli kaldır\">Kaldır</button>"
+        : "<button type=\"button\" class=\"sec-ip-btn sec-ip-ban\" data-ip=\"" + ip + "\" title=\"Web uygulamasından engelle\">Engelle</button>";
+      var rowClass = "sec-ip-row" + (blocked ? " is-blocked" : "");
+      return "<div class=\"" + rowClass + "\">" +
+        "<span class=\"sec-ip-rank\">" + (i + 1) + "</span>" +
+        "<span class=\"sec-ip-addr\" title=\"" + ip + "\">" + ip + localTag + "</span>" +
+        "<div class=\"sec-ip-bar-wrap\"><div class=\"sec-ip-bar\" style=\"width:" + pct + "%\"></div></div>" +
+        "<span class=\"sec-ip-count\">" + count + "</span>" +
+        actionBtn +
+      "</div>";
+    }).join("");
+  }
+
+  function isLocalIp(ip) {
+    if (!ip) return false;
+    var s = String(ip).trim().toLowerCase();
+    return s === "127.0.0.1" || s === "::1" || s === "localhost";
+  }
+
+  async function securityBanIp(ip) {
+    if (!ip) return;
+    if (!securityBlockedAvailable) {
+      alert("IP engelleme API'si yok. Manager Server'ı yeniden başlatın (python -m manager_server), ardından sayfayı yenileyin.");
+      return;
+    }
+    var msg = isLocalIp(ip)
+      ? "Yerel IP (" + ip + ") engellensin mi? Bu makineden web uygulamasına (8000) erişim kesilir."
+      : ip + " engellensin mi? Web uygulamasından gelen istekler reddedilir.";
+    if (!confirm(msg)) return;
+    try {
+      await api("POST", "/api/security/ban-ip", { ip: ip, reason: "Manager güvenlik paneli" });
+      refreshSecurity();
+    } catch (e) {
+      alert(e.message || "Engelleme başarısız");
+    }
+  }
+
+  async function securityUnbanIp(ip) {
+    if (!ip) return;
+    try {
+      await api("POST", "/api/security/unban-ip", { ip: ip });
+      refreshSecurity();
+    } catch (e) {
+      alert(e.message || "Engel kaldırılamadı");
+    }
+  }
+
+  var securityBlockedMap = {};
+  var securityBlockedAvailable = true;
+  var securityBlockedProbePending = false;
+
+  async function fetchSecurityBlocked() {
+    if (!securityBlockedAvailable && !securityBlockedProbePending) {
+      return { blocked: [] };
+    }
+    try {
+      var data = await api("GET", "/api/security/blocked-ips");
+      securityBlockedAvailable = true;
+      securityBlockedProbePending = false;
+      return data || { blocked: [] };
+    } catch (e) {
+      if (e && e.message && (e.message.indexOf("404") >= 0 || e.message.indexOf("Not Found") >= 0)) {
+        securityBlockedAvailable = false;
+        securityBlockedProbePending = false;
       }
-      return "Tarih: " + ts + "\nIP: " + ip + "\nKullanıcı: " + user + "\nSebep: " + reason;
-    }).join("\n\n");
+    }
+    return { blocked: [] };
+  }
+
+  function setSecurityStat(el, text, level) {
+    if (!el) return;
+    setTextIfChanged(el, text);
+    el.classList.remove("warn", "crit");
+    if (level) el.classList.add(level);
+  }
+
+  function updateSecurityUI(traffic) {
+    traffic = traffic || {};
+    var loginFails = traffic.last_login_fails || [];
+    var topIps = traffic.top_ips || [];
+    var status5xx = Number(traffic.status_5xx) || 0;
+    var errRate = traffic.error_rate != null ? Number(traffic.error_rate) : null;
+    var errPctText = errRate != null ? (errRate * 100).toFixed(2) + "%" : "—";
+
+    setSecurityStat(qs("#security-stat-login"), String(loginFails.length), loginFails.length > 0 ? "warn" : null);
+    setSecurityStat(
+      qs("#security-stat-login-total"),
+      traffic.login_fail_total != null ? String(traffic.login_fail_total) : "—",
+      traffic.login_fail_total > 0 ? "warn" : null
+    );
+    setSecurityStat(qs("#security-stat-5xx"), String(status5xx), status5xx > 0 ? "crit" : null);
+    setSecurityStat(
+      qs("#security-stat-error-rate"),
+      errPctText,
+      errRate != null && errRate > 0.05 ? "crit" : (errRate != null && errRate > 0.01 ? "warn" : null)
+    );
+    setSecurityStat(
+      qs("#security-stat-rpm"),
+      traffic.requests_per_min != null ? String(Math.round(traffic.requests_per_min)) : "—",
+      null
+    );
+
+    var lastUp = qs("#security-last-update");
+    if (lastUp) setTextIfChanged(lastUp, new Date().toLocaleTimeString("tr-TR"));
+
+    var banner = qs("#security-health-banner");
+    var detail = qs("#security-5xx-msg");
+    var titleEl = banner && banner.querySelector(".security-health-title");
+    var warn = status5xx > 0 || (errRate != null && errRate > 0.01) || loginFails.length > 5;
+    if (banner) banner.className = "security-health-banner " + (warn ? "warn" : "ok");
+    if (titleEl) {
+      setTextIfChanged(titleEl, warn ? "Güvenlik uyarısı var" : "Trafik durumu normal");
+    }
+    if (detail) {
+      var parts = [];
+      parts.push(status5xx > 0 ? ("5xx: " + status5xx) : "5xx yok");
+      parts.push(errRate != null ? ("hata oranı: " + errPctText) : "hata oranı: —");
+      if (loginFails.length) parts.push("son giriş hatası: " + loginFails.length);
+      setTextIfChanged(detail, parts.join(" · "));
+    }
+
+    renderSecurityLoginFails(loginFails);
+    renderSecurityTopIps(topIps, securityBlockedMap);
   }
 
   async function refreshSecurity() {
     try {
-      const traffic = await fetch(API + "/api/traffic").then(r => r.ok ? r.json() : {}).catch(function () { return {}; });
-      const loginFails = traffic.last_login_fails || [];
-      const topIps = traffic.top_ips || [];
-      const loginPre = qs("#security-login-fails");
-      if (loginPre) patchLogPre(loginPre, loginFails.length ? formatLoginFails(loginFails) : "Başarısız giriş yok.");
-      const ipsPre = qs("#security-top-ips");
-      if (ipsPre) patchLogPre(ipsPre, topIps.length
-        ? topIps.map(function (x) { return (x.ip || "") + " " + (x.count || 0); }).join("\n")
-        : "IP verisi yok.");
-      const fivexx = qs("#security-5xx-msg");
-      if (fivexx) fivexx.textContent = (traffic.status_5xx || 0) > 0
-        ? "5xx: " + traffic.status_5xx + " | Hata oranı: " + (traffic.error_rate != null ? (traffic.error_rate * 100).toFixed(2) + "%" : "—")
-        : "5xx yok.";
+      const [traffic, blockedRes] = await Promise.all([
+        fetch(API + "/api/traffic").then(function (r) { return r.ok ? r.json() : {}; }).catch(function () { return {}; }),
+        fetchSecurityBlocked()
+      ]);
+      securityBlockedMap = {};
+      (blockedRes.blocked || []).forEach(function (b) {
+        if (b && b.ip) securityBlockedMap[b.ip] = b;
+      });
+      updateSecurityUI(traffic);
     } catch (e) { console.error(e); }
-  }
-
-  function showApiConnectionError(msg) {
-    var el = qs("#globalLastOp");
-    if (el) {
-      el.textContent = msg || "API bağlantı hatası";
-      el.style.color = "#e74c3c";
-    }
-    var statWeb = qs("#stat-web");
-    if (statWeb && !statWeb.dataset.hasShownError) {
-      statWeb.dataset.hasShownError = "1";
-      statWeb.textContent = (statWeb.textContent || "") + " [API erişilemiyor – localhost veya MANAGER_ALLOW_REMOTE=1 gerekli]";
-    }
   }
 
   async function refreshMetrics() {
@@ -460,19 +593,9 @@
       }
       keys.forEach(k => setStatus(k, status[k]));
       var hostEl = qs("#manager-controlled-host");
-      if (hostEl) hostEl.textContent = "Kontrol edilen sunucu: " + (status.host || "—");
-      const [audit] = await Promise.all([
-        fetch(API + "/api/audit?limit=300").then(r => r.ok ? r.json() : []).catch(() => []),
-      ]);
-      var overviewActive = qs("#panel-overview") && qs("#panel-overview").classList.contains("active");
+      if (hostEl) hostEl.textContent = status.host || "—";
       var incidentsActive = qs("#panel-incidents") && qs("#panel-incidents").classList.contains("active");
-      if (overviewActive || incidentsActive) refreshIssueStats();
-      const restarts = Array.isArray(audit) ? audit.filter(function (e) { return ["start", "stop", "restart"].indexOf(e.action) >= 0; }).slice(-10) : [];
-      var restartsText = restarts.length ? restarts.map(function (e) {
-        var svc = (e.detail && e.detail.service) ? e.detail.service : "";
-        return (e.action || "") + (svc ? " " + svc : "");
-      }).join("\n") : "—";
-      setTextIfChanged(qs("#overview-restarts-10"), restartsText);
+      if (incidentsActive) refreshIssueStats();
     } catch (e) { console.error(e); }
   }
 
@@ -567,7 +690,6 @@
     setTextIfChanged(qs("#inc-stat-resolved"), stats.resolved != null ? stats.resolved : 0);
     setTextIfChanged(qs("#inc-stat-archived"), stats.archived != null ? stats.archived : 0);
     setTextIfChanged(qs("#inc-stat-backup"), stats.backup != null ? stats.backup : 0);
-    setTextIfChanged(qs("#overview-issue-count"), stats.active != null ? stats.active : (stats.open || 0));
   }
 
   async function refreshIssueStats(cachedList, force) {
@@ -745,9 +867,86 @@
     if (incidentsPollTimer) { clearInterval(incidentsPollTimer); incidentsPollTimer = null; }
   }
 
-  function renderDiagnosis(key, data, isRunning) {
+  function diagnosisRunningFallback(key, st) {
+    st = st || {};
+    var portMap = { web: 8000, manager: 7999, html: 8080 };
+    var proc = (lastMetrics && lastMetrics[key]) || {};
+    return {
+      reason_code: "RUNNING",
+      state: "RUNNING",
+      title_tr: "Çalışıyor",
+      summary_tr: "Servis normal çalışıyor.",
+      impact_tr: "Yok.",
+      evidence: {
+        pid: stickyServicePid(key, st, proc),
+        port: portMap[key] != null ? portMap[key] : null
+      },
+      actions_tr: [],
+      next_checks_tr: []
+    };
+  }
+
+  function diagnosisLiveMeta(key, statusObj, ev) {
+    statusObj = statusObj || {};
+    ev = ev || {};
+    var proc = (lastMetrics && lastMetrics[key]) || {};
+    var pid = stickyServicePid(key, statusObj, proc);
+    if (pid == null && ev.pid != null) pid = ev.pid;
+    var portMap = { web: 8000, manager: 7999, html: 8080 };
+    var port = portMap[key] != null ? portMap[key] : ev.port;
+    var meta = [];
+    if (pid != null) meta.push("PID " + pid);
+    if (port != null) meta.push("Port " + port);
+    return meta;
+  }
+
+  function diagnosisFallback(key) {
+    var errs = [];
+    if (lastMetrics && lastMetrics.errors_ring && lastMetrics.errors_ring[key]) {
+      errs = lastMetrics.errors_ring[key].slice(-8);
+    } else if (errWrnSnapshot[key] && errWrnSnapshot[key].errors) {
+      errs = errWrnSnapshot[key].errors.slice(-8);
+    }
+    var lines = errs.map(function (l) { return humanizeLogLineIfNeeded(l, key); });
+    return {
+      reason_code: "STOPPED",
+      state: "STOPPED",
+      title_tr: "Servis çalışmıyor",
+      summary_tr: "Servis durduruldu veya yanıt vermiyor. Özet ve log kanıtına bakın.",
+      impact_tr: "Bu servisin sunduğu özellikler şu an kullanılamaz.",
+      actions_tr: [
+        "Başlat düğmesi ile yeniden başlatmayı deneyin.",
+        "Aşağıdaki log satırlarında hata veya port mesajı arayın."
+      ],
+      next_checks_tr: [],
+      evidence: { last_lines: lines }
+    };
+  }
+
+  function formatEvidenceLines(key, ev) {
+    ev = ev || {};
+    var lines = [];
+    if (ev.exit_code != null) lines.push("exit_code: " + ev.exit_code);
+    if (ev.signal) lines.push("signal: " + ev.signal);
+    if (ev.port != null) lines.push("port: " + ev.port);
+    if (ev.pid != null) lines.push("pid: " + ev.pid);
+    if (ev.last_lines && ev.last_lines.length) {
+      ev.last_lines.forEach(function (ln) {
+        lines.push(humanizeLogLineIfNeeded(ln, key));
+      });
+    }
+    return lines;
+  }
+
+  function renderDiagnosis(key, data, isRunning, statusObj) {
     var box = qs("#diagnosis-" + key);
     if (!box) return;
+    if ((!data || !data.reason_code) && isRunning) {
+      data = diagnosisRunningFallback(key, statusObj);
+    }
+    if ((!data || !data.reason_code) && !isRunning) {
+      data = diagnosisFallback(key);
+    }
     if (!data || !data.reason_code) {
       box.classList.add("hidden");
       box.innerHTML = "";
@@ -760,30 +959,70 @@
     }
     lastDiagnosis[key] = data;
     box.classList.remove("hidden");
-    const ev = data.evidence || {};
-    const stateClass = "state-" + (data.state || "").toLowerCase().replace(" ", "_");
-    let html = "<div class=\"diag-badges\"><span class=\"diag-badge " + stateClass + "\">" + (data.state || "—") + "</span><span class=\"diag-badge\">" + (data.reason_code || "") + "</span></div>";
-    html += "<div class=\"diag-title\">" + (data.title_tr || "") + "</div>";
-    if (data.summary_tr) html += "<div class=\"diag-summary\">" + data.summary_tr + "</div>";
-    if (data.impact_tr) html += "<div class=\"diag-impact\">Etkisi: " + data.impact_tr + "</div>";
+
+    var code = data.reason_code || "";
+    var isHealthy = code === "RUNNING" && isRunning;
+    var ev = data.evidence || {};
+
+    if (isHealthy) {
+      box.className = "diagnosis-box diagnosis-box-ok";
+      var meta = diagnosisLiveMeta(key, statusObj, ev);
+      box.innerHTML =
+        "<div class=\"diag-compact\">" +
+          "<span class=\"diag-compact-icon\" aria-hidden=\"true\"></span>" +
+          "<div class=\"diag-compact-body\">" +
+            "<span class=\"diag-compact-title\">" + escHtml(data.title_tr || "Çalışıyor") + "</span>" +
+            "<span class=\"diag-compact-summary\">" + escHtml(data.summary_tr || "Servis normal çalışıyor.") + "</span>" +
+          "</div>" +
+          (meta.length ? "<span class=\"diag-compact-meta\">" + escHtml(meta.join(" · ")) + "</span>" : "") +
+        "</div>";
+      return;
+    }
+
+    var stateClass = "state-" + String(data.state || "unknown").toLowerCase().replace(/\s+/g, "_");
+    box.className = "diagnosis-box diagnosis-box-issue " + stateClass;
+
+    var html = "<div class=\"diag-panel\">" +
+      "<header class=\"diag-panel-head\">" +
+        "<span class=\"diag-state-badge " + stateClass + "\">" + escHtml(data.state || "—") + "</span>" +
+        "<div class=\"diag-panel-intro\">" +
+          "<h4 class=\"diag-panel-title\">" + escHtml(data.title_tr || "Teşhis") + "</h4>" +
+          (data.summary_tr ? "<p class=\"diag-panel-summary\">" + escHtml(data.summary_tr) + "</p>" : "") +
+          (data.reason_code ? "<p class=\"diag-panel-code\">Kod: " + escHtml(data.reason_code) + "</p>" : "") +
+        "</div>" +
+      "</header>";
+
+    if (data.impact_tr && data.impact_tr !== "Yok.") {
+      html += "<section class=\"diag-section diag-impact-section\">" +
+        "<span class=\"diag-section-label\">Etki</span>" +
+        "<p class=\"diag-section-text\">" + escHtml(data.impact_tr) + "</p></section>";
+    }
+
     if (data.actions_tr && data.actions_tr.length) {
-      html += "<div class=\"diag-title\">Yapılacaklar:</div><ul class=\"diag-list\">";
-      data.actions_tr.forEach(function (a) { html += "<li>" + a + "</li>"; });
-      html += "</ul>";
+      html += "<section class=\"diag-section\"><span class=\"diag-section-label\">Ne yapmalı?</span><ul class=\"diag-list\">";
+      data.actions_tr.forEach(function (a) { html += "<li>" + escHtml(a) + "</li>"; });
+      html += "</ul></section>";
     }
+
     if (data.next_checks_tr && data.next_checks_tr.length) {
-      html += "<div class=\"diag-title\">Kontroller:</div><ul class=\"diag-list\">";
-      data.next_checks_tr.forEach(function (c) { html += "<li>" + c + "</li>"; });
-      html += "</ul>";
+      html += "<section class=\"diag-section\"><span class=\"diag-section-label\">Kontrol listesi</span><ul class=\"diag-list diag-list-checks\">";
+      data.next_checks_tr.forEach(function (c) { html += "<li>" + escHtml(c) + "</li>"; });
+      html += "</ul></section>";
     }
-    html += "<div class=\"diag-title\">Kanıt:</div><div class=\"diag-evidence\">";
-    if (ev.exit_code != null) html += "exit_code: " + ev.exit_code + "\n";
-    if (ev.signal) html += "signal: " + ev.signal + "\n";
-    if (ev.port != null) html += "port: " + ev.port + "\n";
-    if (ev.pid != null) html += "pid: " + ev.pid + "\n";
-    if (ev.last_lines && ev.last_lines.length) html += (ev.last_lines || []).join("\n");
-    html += "</div>";
-    html += "<div class=\"diag-export\"><a href=\"" + (API || "") + "/api/export/logs?service=" + key + "&format=csv\" target=\"_blank\" class=\"btn btn-sm btn-export\">Log dışa aktar</a> <a href=\"" + (API || "") + "/api/export/diagnosis?service=" + key + "&format=json\" target=\"_blank\" class=\"btn btn-sm btn-export\">Teşhis dışa aktar</a></div>";
+
+    var evidenceLines = formatEvidenceLines(key, ev);
+    if (evidenceLines.length) {
+      html += "<details class=\"diag-evidence-details\" open>" +
+        "<summary class=\"diag-evidence-summary\">Log kanıtı (" + evidenceLines.length + " satır)</summary>" +
+        "<pre class=\"diag-evidence\">" + escHtml(evidenceLines.join("\n")) + "</pre>" +
+      "</details>";
+    }
+
+    html += "<footer class=\"diag-panel-foot\">" +
+      "<a href=\"" + escHtml(API || "") + "/api/export/logs?service=" + escHtml(key) + "&amp;format=csv\" target=\"_blank\" rel=\"noopener\" class=\"btn btn-sm btn-export\">Log dışa aktar</a>" +
+      "<a href=\"" + escHtml(API || "") + "/api/export/diagnosis?service=" + escHtml(key) + "&amp;format=json\" target=\"_blank\" rel=\"noopener\" class=\"btn btn-sm btn-export\">Teşhis dışa aktar</a>" +
+    "</footer></div>";
+
     box.innerHTML = html;
   }
 
@@ -965,14 +1204,13 @@
       const s = await api("GET", "/api/status");
       keys.forEach(k => setStatus(k, s[k]));
       var hostEl = qs("#manager-controlled-host");
-      if (hostEl) hostEl.textContent = "Kontrol edilen sunucu: " + (s.host || "—");
-      if (s.html) {
-        setStatus("html", s.html);
-        var chip = qs("#overview-html-status");
-        setOverviewStatusChip(chip, !!s.html.running);
-        setOverviewPid("html", s.html, null);
-        var htmlUptime = (typeof s.html.started_at === "number") ? Math.max(0, Math.floor(Date.now() / 1000 - s.html.started_at)) : null;
-        setTextIfChanged(qs("#overview-html-uptime"), formatUptime(htmlUptime) || "—");
+      if (hostEl) hostEl.textContent = s.host || "—";
+      if (s.html && lastMetrics) {
+        lastMetrics.status = lastMetrics.status || {};
+        lastMetrics.status.html = s.html;
+        var errHtml = (lastMetrics.errors_ring && lastMetrics.errors_ring.html) ? lastMetrics.errors_ring.html.length : 0;
+        var wrnHtml = (lastMetrics.warns_ring && lastMetrics.warns_ring.html) ? lastMetrics.warns_ring.html.length : 0;
+        updateServiceMetricsDisplay("html", lastMetrics, errHtml, wrnHtml);
       }
       const locks = await api("GET", "/api/locks");
       keys.forEach(k => {
@@ -991,10 +1229,11 @@
       keys.forEach(function (k) {
         var d = all[k];
         var running = !!(status[k] && status[k].running);
-        renderDiagnosis(k, d, running);
+        renderDiagnosis(k, d, running, status[k]);
         var ov = qs("#overview-" + k + "-diagnosis");
         if (ov) {
-          var txt = (running || !d || !d.title_tr) ? "—" : ("Son teşhis: " + d.title_tr + (d.ts ? " (" + d.ts + ")" : ""));
+          var showOv = !running && d && d.title_tr && d.reason_code !== "RUNNING";
+          var txt = showOv ? ("Son teşhis: " + d.title_tr + (d.ts ? " (" + d.ts + ")" : "")) : "—";
           setTextIfChanged(ov, txt);
           ov.classList.toggle("diagnosis-empty", txt === "—");
         }
@@ -1055,6 +1294,26 @@
     if (typeof l === "string") return l.trim();
     return (((l && l.ts) || "") + " " + toLogText(l)).trim();
   }
+  /** Panel hata/uyarı listesinde gösterilmeyecek gürültü (ring’de kalsa bile). */
+  function isPanelErrWrnNoise(line) {
+    var s = normalizeLogLine(line);
+    if (!s) return true;
+    if (/deque mutated during iteration/i.test(s)) return true;
+    if (/\[TradeSync\]\s*Symbol cache empty/i.test(s)) return true;
+    if (/wallet_refresh_attempt error_code=(?:ImportError|WALLET_MODULE_MISSING)/i.test(s)) return true;
+    if (/get_price_map_flat/i.test(s) && /wallet_refresh/i.test(s)) return true;
+    if (/home_wallet_refresh/i.test(s) && /\s-\sINFO\s-/i.test(s) && /\berror=/i.test(s)) return true;
+    if (/\/api\/server\/manager\/restart\b/i.test(s) && /\s400\b/.test(s)) return true;
+    if (/\/api\/stack\/restart\b/i.test(s) && /\s404\b/.test(s)) return true;
+    if (/EADDRINUSE|Address already in use|error while attempting to bind/i.test(s) && /7999/.test(s)) return true;
+    if (/\/api\/server\/manager\/restart\b/i.test(s) && /\s404\b/.test(s)) return true;
+    if (/\/api\/issues\/summary\b/i.test(s) && /\s404\b/.test(s)) return true;
+    if (/\/api\/security\//i.test(s) && /\s404\b/.test(s)) return true;
+    return false;
+  }
+  function filterPanelErrWrn(arr) {
+    return (arr || []).filter(function (l) { return !isPanelErrWrnNoise(l); });
+  }
   function errWrnLineSet(key, kind) {
     var snap = errWrnSnapshot[key] || { errors: [], warns: [] };
     var src = kind === "ERROR" ? snap.errors : kind === "WARN" ? snap.warns : snap.errors.concat(snap.warns);
@@ -1082,8 +1341,8 @@
   function setErrWrn(key, newErrors, newWarns) {
     var errEl = qs("#err-" + key);
     var wrnEl = qs("#wrn-" + key);
-    var errList = Array.isArray(newErrors) ? newErrors : [];
-    var wrnList = Array.isArray(newWarns) ? newWarns : [];
+    var errList = filterPanelErrWrn(Array.isArray(newErrors) ? newErrors : []);
+    var wrnList = filterPanelErrWrn(Array.isArray(newWarns) ? newWarns : []);
     var nextFp = errWrnFingerprint(errList, wrnList);
     var prevFp = errWrnSnapshot[key] && errWrnSnapshot[key]._fp;
     errWrnSnapshot[key] = { errors: errList.slice(), warns: wrnList.slice(), _fp: nextFp };
@@ -1109,8 +1368,8 @@
     try {
       const d = await api("GET", "/api/logs/" + key + "?tail=300");
       rawLogLines[key] = (d.lines || []).map(function (l) { return normalizeLogLine(l); }).filter(Boolean);
-      var errList = d.errors || [];
-      var wrnList = d.warns || [];
+      var errList = filterPanelErrWrn(d.errors || []);
+      var wrnList = filterPanelErrWrn(d.warns || []);
       errWrnSnapshot[key] = {
         errors: errList.slice(),
         warns: wrnList.slice(),
@@ -1535,14 +1794,14 @@
     if (tab === "web") { refreshMetrics(); fetchLogs("web"); }
     if (tab === "engine") { refreshMetrics(); fetchLogs("engine"); }
     if (tab === "manager") { refreshMetrics(); fetchLogs("manager"); }
-    if (tab === "html") { refreshStatus(); fetchLogs("html"); }
+    if (tab === "html") { refreshMetrics(); refreshStatus(); fetchLogs("html"); }
     if (tab === "security") {
       refreshSecurity();
       securityPollIntervalId = setInterval(refreshSecurity, 1500);
     }
     if (tab === "incidents") { refreshIssues(true); startIncidentsPoll(); } else { stopIncidentsPoll(); }
     if (tab === "audit") { refreshAudit(true); startAuditPoll(); } else { stopAuditPoll(); }
-    if (tab === "web" || tab === "engine" || tab === "manager") refreshDiagnosis();
+    if (tab === "web" || tab === "engine" || tab === "manager" || tab === "html") refreshDiagnosis();
     if (tab === "settings") loadSettings();
   }
   qsa(".nav-item").forEach(n => {
@@ -1798,44 +2057,109 @@
     if (el) el.addEventListener("change", saveSettings);
   });
 
-  keys.forEach(k => {
+  function serviceActionButtonIds(key) {
+    var ids = ["btn-overview-" + key + "-start", "btn-overview-" + key + "-stop"];
+    if (key === "web") ids = ids.concat(["btnWebStart", "btnWebStop", "btnWebRestart"]);
+    else if (key === "engine") ids = ids.concat(["btnEngineStart", "btnEngineStop", "btnEngineRestart"]);
+    else if (key === "html") ids = ids.concat(["btnHtmlStart", "btnHtmlStop", "btnHtmlRestart"]);
+    return ids.filter(function (id) { return qs("#" + id); });
+  }
+
+  function waitForManagerBack() {
+    var attempts = 0;
+    var poll = setInterval(function () {
+      attempts += 1;
+      fetch(API + "/api/status", { cache: "no-store" })
+        .then(function (r) {
+          if (r.ok) {
+            clearInterval(poll);
+            location.reload();
+          }
+        })
+        .catch(function () {});
+      if (attempts >= 90) clearInterval(poll);
+    }, 1000);
+  }
+
+  function runManagerRestart() {
+    if (!confirm("Tüm sistem yeniden başlatılacak: Manager (7999), Web (8000), Bot Engine ve HTML (8080).\nPanel 30–60 sn kesilebilir. Devam edilsin mi?")) return;
+    var btnIds = ["btn-overview-manager-restart", "btnManagerRestart"].filter(function (id) { return qs("#" + id); });
+    setButtonsLoading(btnIds, true);
+    showActionFeedback("Tüm sistem yeniden başlatılıyor…", false);
+    api("POST", "/api/stack/restart")
+      .then(function () {
+        waitForManagerBack();
+      })
+      .catch(function (e) {
+        showActionFeedback("Hata: " + (e.message || String(e)), true);
+        alert(e.message || String(e));
+        setButtonsLoading(btnIds, false);
+      });
+  }
+
+  function runServiceAction(key, action) {
+    if (key === "manager") return;
+    var btnIds = serviceActionButtonIds(key);
+    setButtonsLoading(btnIds, true);
+    showActionFeedback(key + " " + action + " işleniyor…", false);
+    api("POST", "/api/server/" + key + "/" + action)
+      .then(function (r) {
+        refreshStatus();
+        refreshMetrics();
+        if (r.diagnosis) {
+          var st = r.status && r.status[r.service];
+          renderDiagnosis(r.service, r.diagnosis, !!(st && st.running), st);
+        }
+        refreshDiagnosis();
+        showActionFeedback(key + " " + action + " tamam.", false);
+      })
+      .catch(function (e) {
+        showActionFeedback("Hata: " + (e.message || String(e)), true);
+        alert(e.message || String(e));
+      })
+      .finally(function () {
+        setButtonsLoading(btnIds, false);
+        refreshStatus();
+        refreshMetrics();
+      });
+  }
+
+  keys.forEach(function (k) {
     const lockCb = qs("#lock-" + k);
     if (lockCb) lockCb.addEventListener("change", function () {
       api("POST", "/api/locks", { web: k === "web" ? lockCb.checked : qs("#lock-web").checked, engine: k === "engine" ? lockCb.checked : qs("#lock-engine").checked }).then(refreshStatus);
     });
-    if (k !== "manager" && k !== "html") {
-      var panelBtnIds = k === "web" ? ["btnWebStart", "btnWebStop", "btnWebRestart"] : ["btnEngineStart", "btnEngineStop", "btnEngineRestart"];
-      ["Start", "Stop", "Restart"].forEach(action => {
-        const btn = qs("#btn" + (k === "web" ? "Web" : "Engine") + action);
+    if (k === "web" || k === "engine") {
+      ["Start", "Stop", "Restart"].forEach(function (actionName) {
+        const btn = qs("#btn" + (k === "web" ? "Web" : "Engine") + actionName);
         if (btn) btn.addEventListener("click", function () {
           if (btn.disabled) return;
-          setButtonsLoading(panelBtnIds, true);
-          api("POST", "/api/server/" + k + "/" + action.toLowerCase())
-            .then(function (r) {
-              refreshStatus();
-              refreshMetrics();
-              if (r.diagnosis) {
-                renderDiagnosis(r.service, r.diagnosis, r.status && r.status[r.service] && r.status[r.service].running);
-                if (!r.ok || r.action === "stop") showDiagnosisToast(r.diagnosis);
-              }
-              refreshDiagnosis();
-              showActionFeedback(k + " " + action.toLowerCase() + " tamam.", false);
-            })
-            .catch(function (e) {
-              showActionFeedback("Hata: " + (e.message || String(e)), true);
-              alert(e.message || String(e));
-            })
-            .finally(function () {
-              setButtonsLoading(panelBtnIds, false);
-              refreshStatus();
-              refreshMetrics();
-            });
+          runServiceAction(k, actionName.toLowerCase());
         });
       });
     }
+    if (k === "html") {
+      var btnHtmlStart = qs("#btnHtmlStart");
+      var btnHtmlStop = qs("#btnHtmlStop");
+      var btnHtmlRestart = qs("#btnHtmlRestart");
+      if (btnHtmlStart) btnHtmlStart.addEventListener("click", function () { runServiceAction("html", "start"); });
+      if (btnHtmlStop) btnHtmlStop.addEventListener("click", function () { runServiceAction("html", "stop"); });
+      if (btnHtmlRestart) btnHtmlRestart.addEventListener("click", function () { runServiceAction("html", "restart"); });
+    }
+    var ovStart = qs("#btn-overview-" + k + "-start");
+    var ovStop = qs("#btn-overview-" + k + "-stop");
+    if (ovStart && k !== "manager") ovStart.addEventListener("click", function () { runServiceAction(k, "start"); });
+    if (ovStop && k !== "manager") ovStop.addEventListener("click", function () { runServiceAction(k, "stop"); });
+    if (k === "manager") {
+      var ovRestart = qs("#btn-overview-manager-restart");
+      var tabRestart = qs("#btnManagerRestart");
+      if (ovRestart) ovRestart.addEventListener("click", runManagerRestart);
+      if (tabRestart) tabRestart.addEventListener("click", runManagerRestart);
+    }
     const resetBtn = k === "manager" ? qs("#btnManagerReset") : k === "html" ? qs("#btnHtmlReset") : qs("#btn" + (k === "web" ? "Web" : "Engine") + "Reset");
     if (resetBtn) resetBtn.addEventListener("click", function () {
-      api("POST", "/api/reset/" + k).then(() => { fetchLogs(k); refreshStatus(); refreshMetrics(); }).catch(e => alert(e.message));
+      if (!confirm(k.toUpperCase() + " logları sıfırlansın mı?")) return;
+      api("POST", "/api/reset/" + k).then(function () { fetchLogs(k); refreshStatus(); refreshMetrics(); }).catch(function (e) { alert(e.message); });
     });
     const pauseCb = qs("#pause-" + k);
     if (pauseCb) pauseCb.addEventListener("change", function () { pause[k] = pauseCb.checked; });
@@ -1854,33 +2178,6 @@
     });
   });
 
-  function runHtmlAction(action, label) {
-    var ids = ["btnHtmlStart", "btnHtmlStop", "btn-html-start", "btn-html-stop"];
-    setButtonsLoading(ids.filter(function (id) { return qs("#" + id); }), true);
-    showActionFeedback(label + " isleniyor...", false);
-    api("POST", "/api/server/html/" + action)
-      .then(function () {
-        refreshStatus();
-        refreshMetrics();
-        showActionFeedback("HTML " + label + " tamam.", false);
-      })
-      .catch(function (e) {
-        showActionFeedback("Hata: " + (e.message || String(e)), true);
-        alert(e.message || String(e));
-      })
-      .finally(function () {
-        setButtonsLoading(ids.filter(function (id) { return qs("#" + id); }), false);
-        refreshStatus();
-        refreshMetrics();
-      });
-  }
-  function htmlStart() { runHtmlAction("start", "baslat"); }
-  function htmlStop() { runHtmlAction("stop", "durdur"); }
-  var btnHtmlStart = qs("#btn-html-start"); if (btnHtmlStart) btnHtmlStart.addEventListener("click", htmlStart);
-  var btnHtmlStop = qs("#btn-html-stop"); if (btnHtmlStop) btnHtmlStop.addEventListener("click", htmlStop);
-  var btnHtmlStartPanel = qs("#btnHtmlStart"); if (btnHtmlStartPanel) btnHtmlStartPanel.addEventListener("click", htmlStart);
-  var btnHtmlStopPanel = qs("#btnHtmlStop"); if (btnHtmlStopPanel) btnHtmlStopPanel.addEventListener("click", htmlStop);
-
   var globalBtnIds = ["btnGlobalStart", "btnGlobalStop", "btnGlobalRestart"];
   function disableGlobalBtns(disabled) {
     setButtonsLoading(globalBtnIds, disabled);
@@ -1888,12 +2185,12 @@
   function runGlobalAction(path, label) {
     if (qs("#btnGlobalStart").disabled) return;
     disableGlobalBtns(true);
-    showActionFeedback(label + " isleniyor...", false);
+    showActionFeedback(label + " işleniyor…", false);
     api("POST", path)
       .then(function (r) {
         var applied = (r.applied || []).join(", ") || "—";
         var skipped = (r.skipped || []).join(", ") || "—";
-        showActionFeedback("Uygulandi: " + applied + (skipped ? "; Atlandi: " + skipped : ""), false);
+        showActionFeedback("Uygulandı: " + applied + (skipped !== "—" ? " · Atlandı: " + skipped : ""), false);
       })
       .catch(function (e) {
         showActionFeedback("Hata: " + (e.message || String(e)), true);
@@ -1905,12 +2202,29 @@
         refreshMetrics();
       });
   }
-  qs("#btnGlobalStart").addEventListener("click", function () { runGlobalAction("/api/global/start", "Tumunu baslat"); });
-  qs("#btnGlobalStop").addEventListener("click", function () { runGlobalAction("/api/global/stop", "Tumunu durdur"); });
-  qs("#btnGlobalRestart").addEventListener("click", function () { runGlobalAction("/api/global/restart", "Tumunu yeniden baslat"); });
-  qs("#btnResetAll").addEventListener("click", function () {
-    api("POST", "/api/reset/all").then(() => { keys.forEach(fetchLogs); refreshStatus(); refreshMetrics(); }).catch(e => alert(e.message));
+  qs("#btnGlobalStart").addEventListener("click", function () { runGlobalAction("/api/global/start", "Tümünü başlat"); });
+  qs("#btnGlobalStop").addEventListener("click", function () {
+    if (!confirm("Web, engine ve HTML servisleri durdurulsun mu? (Yönetici çalışmaya devam eder.)")) return;
+    runGlobalAction("/api/global/stop", "Tümünü durdur");
   });
+  qs("#btnGlobalRestart").addEventListener("click", function () {
+    if (!confirm("Web, engine ve HTML yeniden başlatılsın mı?")) return;
+    runGlobalAction("/api/global/restart", "Tümünü yeniden başlat");
+  });
+  qs("#btnResetAll").addEventListener("click", function () {
+    if (!confirm("Tüm servis log ring buffer'ları sıfırlansın mı?")) return;
+    api("POST", "/api/reset/all").then(function () { keys.forEach(fetchLogs); refreshStatus(); refreshMetrics(); showActionFeedback("Tüm loglar sıfırlandı.", false); }).catch(function (e) { alert(e.message); });
+  });
+
+  var securityIpList = qs("#security-ip-list");
+  if (securityIpList) {
+    securityIpList.addEventListener("click", function (e) {
+      var banBtn = e.target.closest(".sec-ip-ban");
+      var unbanBtn = e.target.closest(".sec-ip-unban");
+      if (banBtn) securityBanIp(banBtn.getAttribute("data-ip"));
+      else if (unbanBtn) securityUnbanIp(unbanBtn.getAttribute("data-ip"));
+    });
+  }
 
   refreshStatus();
   refreshMetrics();
@@ -1924,18 +2238,19 @@
   setInterval(refreshStatus, 5000);
   metricsIntervalId = setInterval(refreshMetrics, pollIntervalMs);
   setInterval(function () {
-    if (!lastMetrics || !lastMetrics.status) return;
+    if (!lastMetrics) return;
+    if (lastMetrics.system && (lastMetrics.system.session_started_at != null || lastMetrics.system.uptime_s != null)) {
+      setTextIfChanged(qs("#overview-system-uptime"), formatUptime(getLiveSystemUptime(), true) || "—");
+    }
+    if (!lastMetrics.status) return;
     keys.forEach(function (k) {
-      setStatus(k, lastMetrics.status[k] || {});
+      var st = lastMetrics.status[k] || {};
+      setStatus(k, st);
+      if (!st.running) return;
+      var proc = lastMetrics[k] || {};
+      var uptimeText = formatUptime(getServiceUptime(k, st, proc, true)) || "—";
+      setTextIfChanged(qs("#overview-" + k + "-uptime"), uptimeText);
+      setTextIfChanged(qs("#tab-" + k + "-uptime"), uptimeText);
     });
-    var h = lastMetrics.status.html;
-    if (h && h.running && typeof h.started_at === "number") {
-      var htmlUptime = Math.max(0, Math.floor(Date.now() / 1000 - h.started_at));
-      setTextIfChanged(qs("#overview-html-uptime"), formatUptime(htmlUptime) || "—");
-    }
-    var mgr = lastMetrics.status.manager;
-    if (mgr && mgr.running) {
-      setTextIfChanged(qs("#overview-manager-uptime"), formatUptime(getLiveUptime("manager")) || "—");
-    }
   }, 1000);
 })();

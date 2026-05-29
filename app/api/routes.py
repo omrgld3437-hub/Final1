@@ -31,7 +31,7 @@ from app.services.encryption import (
 from app.api.auth import require_auth, require_account_access, get_client_ip, verify_password
 from app.services import audit as audit_svc
 from app.utils.account_code import generate_account_code
-from app.utils.tz_utils import turkey_today_start_utc
+from app.utils.tz_utils import turkey_today_start_utc, turkey_today_date_str
 # Binance kaldırıldı – sonra temiz kurulum ile eklenecek
 from app.services.price_hub import price_hub
 from app.services.pnl_service import PnlService
@@ -464,7 +464,7 @@ def _get_account_bot_total_equity_initial(db: Session, account_id: int) -> tuple
     bots = db.query(Bot).filter(Bot.account_id == account_id).all()
     total_equity = 0.0
     total_initial = 0.0
-    _today_date = turkey_today_start_utc().strftime("%Y-%m-%d")
+    _today_date = turkey_today_date_str()
     for bot in bots:
         pnl_data = PnlService.calculate_bot_pnl(db, bot.id, account_id)
         cfg = {}
@@ -534,7 +534,6 @@ async def get_transaction_history_revision(
             get_public_revision,
         )
 
-        ensure_tx_history_fresh_from_db(db, account_id)
         return get_public_revision(account_id)
     except Exception as e:
         logger.debug("transaction-history revision account_id=%s: %s", account_id, e)
@@ -549,27 +548,69 @@ async def get_transaction_history(
     source_filter: str = Query("all", description="all | spot | bot"),
     page: int = Query(1, ge=1, description="Page number"),
     sync: int = Query(0, description="1 = sync trades from Binance first"),
+    revision: Optional[str] = Query(None, description="İstemci revision — eşleşirse DB sync atlanır"),
     db: Session = Depends(get_db),
     current: dict = Depends(require_auth),
 ):
     """İşlem geçmişi: günlük/haftalık/aylık/genel, tür ve kaynak filtresi, sayfalama (20 işlem/sayfa)."""
+    import os
+    from app.core.security.endpoint_rate_limit import check_endpoint_rate_limit
+
     account = db.query(Account).filter(Account.id == account_id).first()
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
     require_account_access(current, account_id)
+
+    uid = int(current.get("user_id") or 0)
+    allowed, retry = check_endpoint_rate_limit(
+        f"tx_history:u{uid}:a{account_id}",
+        limit=int(os.getenv("TX_HISTORY_RATE_LIMIT", "30")),
+        window_sec=float(os.getenv("TX_HISTORY_RATE_WINDOW_SEC", "60")),
+    )
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail="İşlem geçmişi istek limiti aşıldı.",
+            headers={"Retry-After": str(retry)},
+        )
+    if sync:
+        allowed_sync, retry_sync = check_endpoint_rate_limit(
+            f"tx_history_sync:u{uid}:a{account_id}",
+            limit=int(os.getenv("TX_HISTORY_SYNC_RATE_LIMIT", "3")),
+            window_sec=float(os.getenv("TX_HISTORY_SYNC_RATE_WINDOW_SEC", "300")),
+        )
+        if not allowed_sync:
+            raise HTTPException(
+                status_code=429,
+                detail="Senkron istek limiti aşıldı.",
+                headers={"Retry-After": str(retry_sync)},
+            )
+
     try:
         from app.services.transaction_history_file_store import (
             bootstrap_tx_history_from_binance,
             ensure_tx_history_fresh_from_db,
+            get_public_revision,
             is_tx_history_bootstrapped,
         )
 
-        ensure_tx_history_fresh_from_db(db, account_id)
-        if sync or not is_tx_history_bootstrapped(account_id):
+        current_rev = str(get_public_revision(account_id).get("revision") or "0")
+        rev_match = revision is not None and str(revision).strip() == current_rev
+
+        if sync:
             try:
-                await bootstrap_tx_history_from_binance(db, account_id, force=bool(sync))
+                ensure_tx_history_fresh_from_db(db, account_id, force=True)
+            except Exception:
+                pass
+            try:
+                await bootstrap_tx_history_from_binance(db, account_id, force=True)
             except Exception as e:
                 logger.warning("transaction-history bootstrap failed: %s", e)
+        elif not rev_match and is_tx_history_bootstrapped(account_id):
+            try:
+                ensure_tx_history_fresh_from_db(db, account_id)
+            except Exception:
+                pass
     except Exception:
         pass
     from app.services.transaction_history_service import TransactionHistoryService
@@ -2810,6 +2851,24 @@ async def api_dashboard_snapshot(
     try:
         from app.observability.metrics_stubs import record_snapshot
         record_snapshot(round(elapsed_ms, 2), len(payload_bytes))
+    except Exception:
+        pass
+    try:
+        from app.observability.ram_capture import log_ram_event
+
+        log_ram_event(
+            "dashboard_snapshot",
+            {
+                "account_id": account_id,
+                "fields": requested_fields,
+                "server_ms": round(elapsed_ms, 2),
+                "payload_bytes": len(payload_bytes),
+                "prices_keys": len(prices) if isinstance(prices, dict) else 0,
+                "bots_count": len(bots) if isinstance(bots, list) else 0,
+                "trimmed_fields": trimmed_fields,
+            },
+            component="web",
+        )
     except Exception:
         pass
 

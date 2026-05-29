@@ -22,11 +22,14 @@ python -m app.botengine.worker_main
 | `execution.py` | `run_actions` → Binance; 401 → `paused_error`; SELL LOT_SIZE preflight; `RUN_ACTION_EXCEPTION` → resilience log |
 | `health_watch.py` | `evaluate_bot_health`, `emit_resilience_continue`, `emit_loop_auto_restart`; worker ~60s emit |
 | `orchestrator.py` | Tick hatalarında running kalır; döngü crash → auto-restart; `ensure_running_bots` |
+| `engine_log_ack.py` | Reset/ack sonrası motor log event filtreleme |
 | `order_qty.py` | Decimal `stepSize` floor + `validate_market_sell_qty` |
 | `health_watch.py` | Sağlık uyarıları (otomatik durdurmaz) |
 | `intent_ledger.py` | Exactly-once intent |
 | `locks.py` | Hesap kilidi, lease 10s |
 | `reconcile.py` | Binance truth |
+| `state_trim.py` | `save_state`/`load_state` öncesi JSON RAM sınırları |
+| `state_store.py` | Snapshot; `load_state_json_extract` tek alan okuma |
 
 ## Alt klasörler
 
@@ -69,6 +72,7 @@ reconcile.py
 risk.py
 scheduler.py
 state_store.py
+state_trim.py
 user_stream.py
 virtual_wallet.py
 worker_main.py

@@ -287,33 +287,72 @@
         .btn-ghost { background: var(--ds-bg-tertiary, #2b3139); color: var(--ds-text-primary); }
         .btn-danger { background: rgba(246, 70, 93, 0.2); color: #f6465d; }
         .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-        .grid-points-table, .profit-points-table, .cycle-pnls-list { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
-        .grid-sell-table, .grid-buy-table, .profit-points-table { table-layout: fixed; width: 100%; min-width: 560px; }
-        .grid-sell-table th, .grid-sell-table td, .grid-buy-table th, .grid-buy-table td { padding: 10px 14px; border-bottom: 1px solid var(--ds-border, #2b3139); box-sizing: border-box; }
-        .grid-sell-table thead th, .grid-buy-table thead th, .profit-points-table thead th { white-space: nowrap; }
-        .grid-sell-table col.col-level, .grid-buy-table col.col-level, .profit-points-table col.col-type { width: 22%; }
-        .grid-sell-table col.col-qty, .grid-buy-table col.col-qty, .profit-points-table col.col-avg { width: 14%; }
-        .grid-sell-table col.col-trigger, .grid-buy-table col.col-trigger, .profit-points-table col.col-trigger { width: 15%; }
-        .grid-sell-table col.col-peak, .grid-buy-table col.col-peak, .profit-points-table col.col-peak { width: 21%; }
-        .grid-sell-table col.col-exec, .grid-buy-table col.col-exec, .profit-points-table col.col-exec { width: 15%; }
-        .grid-sell-table col.col-status, .grid-buy-table col.col-status, .profit-points-table col.col-status { width: 13%; }
-        .grid-tepe-dip-cell { display: inline-flex; flex-wrap: wrap; align-items: baseline; justify-content: flex-end; gap: 0.2rem 0.35rem; max-width: 100%; line-height: 1.35; }
-        .grid-tepe-dip-cell .grid-price-val { white-space: nowrap; }
-        .grid-price-pct { font-size: 0.82em; white-space: nowrap; opacity: 0.85; flex-shrink: 0; }
-        .grid-sell-table th:nth-child(1), .grid-sell-table td:nth-child(1), .grid-buy-table th:nth-child(1), .grid-buy-table td:nth-child(1) { text-align: left; }
-        .grid-sell-table th:nth-child(2), .grid-sell-table td:nth-child(2), .grid-buy-table th:nth-child(2), .grid-buy-table td:nth-child(2) { text-align: right; }
-        .grid-sell-table th:nth-child(3), .grid-sell-table td:nth-child(3), .grid-buy-table th:nth-child(3), .grid-buy-table td:nth-child(3) { text-align: right; }
-        .grid-sell-table th:nth-child(4), .grid-sell-table td:nth-child(4), .grid-buy-table th:nth-child(4), .grid-buy-table td:nth-child(4) { text-align: right; }
-        .grid-sell-table th:nth-child(5), .grid-sell-table td:nth-child(5), .grid-buy-table th:nth-child(5), .grid-buy-table td:nth-child(5) { text-align: right; }
-        .grid-sell-table th:nth-child(6), .grid-sell-table td:nth-child(6), .grid-buy-table th:nth-child(6), .grid-buy-table td:nth-child(6) { text-align: center; }
-        .profit-points-table th:nth-child(1), .profit-points-table td:nth-child(1) { text-align: left; }
+        .grid-points-table, .profit-points-table, .cycle-pnls-list { width: 100%; border-collapse: collapse; font-size: 0.8125rem; }
+        .grid-tables-wrap { width: 100%; overflow: visible; }
+        .grid-sell-table, .grid-buy-table, .profit-points-table {
+            table-layout: fixed; width: 100%; min-width: 0; max-width: 100%;
+        }
+        .grid-sell-table th, .grid-sell-table td, .grid-buy-table th, .grid-buy-table td,
+        .profit-points-table th, .profit-points-table td {
+            padding: 8px 11px; border-bottom: 1px solid var(--ds-border, #2b3139);
+            box-sizing: border-box; vertical-align: middle;
+        }
+        .grid-sell-table thead th, .grid-buy-table thead th, .profit-points-table thead th {
+            padding: 10px 11px 9px;
+            color: var(--ds-text-secondary);
+            font-weight: 600;
+            font-size: 0.78rem;
+            letter-spacing: 0.03em;
+            line-height: 1.25;
+            border-bottom: 1px solid var(--ds-border, #2b3139);
+            white-space: nowrap;
+            vertical-align: middle;
+        }
+        .grid-sell-table col.col-level, .grid-sell-table col.col-qty, .grid-sell-table col.col-trigger,
+        .grid-sell-table col.col-peak, .grid-sell-table col.col-exec, .grid-sell-table col.col-status,
+        .grid-buy-table col.col-level, .grid-buy-table col.col-qty, .grid-buy-table col.col-trigger,
+        .grid-buy-table col.col-peak, .grid-buy-table col.col-exec, .grid-buy-table col.col-status { width: 16.6667%; }
+        .profit-points-table col.col-type, .profit-points-table col.col-avg, .profit-points-table col.col-amount,
+        .profit-points-table col.col-trigger, .profit-points-table col.col-peak, .profit-points-table col.col-exec,
+        .profit-points-table col.col-status { width: 14.2857%; }
+        .grid-tepe-dip-cell { display: block; white-space: nowrap; text-align: inherit; line-height: 1.3; }
+        .grid-tepe-dip-cell .grid-price-val { display: inline; white-space: nowrap; }
+        .grid-price-pct { display: inline; margin-left: 0.28em; font-size: 0.8em; white-space: nowrap; opacity: 0.85; }
+        .grid-sell-table td:nth-child(4), .grid-sell-table td:nth-child(5),
+        .grid-buy-table td:nth-child(4), .grid-buy-table td:nth-child(5),
+        .profit-points-table td:nth-child(5), .profit-points-table td:nth-child(6) { white-space: nowrap; }
+        .grid-sell-table th:nth-child(1), .grid-sell-table td:nth-child(1),
+        .grid-buy-table th:nth-child(1), .grid-buy-table td:nth-child(1),
+        .grid-sell-table th:nth-child(2), .grid-sell-table td:nth-child(2),
+        .grid-buy-table th:nth-child(2), .grid-buy-table td:nth-child(2),
+        .grid-sell-table th:nth-child(3), .grid-sell-table td:nth-child(3),
+        .grid-buy-table th:nth-child(3), .grid-buy-table td:nth-child(3),
+        .grid-sell-table th:nth-child(4), .grid-sell-table td:nth-child(4),
+        .grid-buy-table th:nth-child(4), .grid-buy-table td:nth-child(4),
+        .grid-sell-table th:nth-child(5), .grid-sell-table td:nth-child(5),
+        .grid-buy-table th:nth-child(5), .grid-buy-table td:nth-child(5) { text-align: left; }
+        .grid-sell-table thead th, .grid-buy-table thead th { text-align: left; }
+        .grid-sell-table th:nth-child(6), .grid-sell-table td:nth-child(6),
+        .grid-buy-table th:nth-child(6), .grid-buy-table td:nth-child(6) {
+            text-align: center; overflow: hidden;
+        }
+        .grid-sell-table td:nth-child(6) .grid-status-badge,
+        .grid-buy-table td:nth-child(6) .grid-status-badge,
+        .profit-points-table td:nth-child(7) .grid-status-badge {
+            max-width: 100%; padding: 3px 6px; font-size: 0.7rem; line-height: 1.2;
+            box-sizing: border-box; white-space: nowrap;
+        }
+        .profit-points-table th:nth-child(1), .profit-points-table td:nth-child(1),
         .profit-points-table th:nth-child(2), .profit-points-table td:nth-child(2),
         .profit-points-table th:nth-child(3), .profit-points-table td:nth-child(3),
         .profit-points-table th:nth-child(4), .profit-points-table td:nth-child(4),
-        .profit-points-table th:nth-child(5), .profit-points-table td:nth-child(5) { text-align: right; }
-        .profit-points-table th:nth-child(6), .profit-points-table td:nth-child(6) { text-align: center; }
-        .grid-points-table th, .grid-points-table td, .profit-points-table th, .profit-points-table td { padding: 8px 12px; border-bottom: 1px solid var(--ds-border, #2b3139); }
-        .grid-sell-table th, .grid-sell-table td, .grid-buy-table th, .grid-buy-table td { padding: 10px 14px; }
+        .profit-points-table th:nth-child(5), .profit-points-table td:nth-child(5),
+        .profit-points-table th:nth-child(6), .profit-points-table td:nth-child(6) { text-align: left; }
+        .profit-points-table thead th { text-align: left; }
+        .profit-points-table thead th:nth-child(7) { text-align: center; }
+        .profit-points-table th:nth-child(7), .profit-points-table td:nth-child(7) {
+            text-align: center; overflow: hidden;
+        }
         .grid-points-table th, .profit-points-table th { color: var(--ds-text-secondary); font-weight: 500; }
         .cycle-pnls-list { max-height: 320px; overflow-y: auto; }
         .cycle-pnl-item { padding: 10px 12px; border-bottom: 1px solid var(--ds-border, #2b3139); display: flex; justify-content: space-between; align-items: center; }
@@ -496,10 +535,8 @@
             /* Grid / kar noktaları tabloları */
             .grid-section-title { font-size: 0.8rem; margin: 1.25rem 0 0.75rem 0; padding-bottom: 0.5rem; }
             .grid-section-title.first { margin-top: 0; }
-            #gridPointsPanel > div[style*="overflow-x"],
-            #profitPointsPanel > div[style*="overflow-x"] { margin-left: -1.25rem; margin-right: -1.25rem; padding-left: 1.25rem; padding-right: 1.25rem; -webkit-overflow-scrolling: touch; }
-            .grid-points-table, .profit-points-table { font-size: 0.8rem; min-width: 480px; }
-            .grid-points-table th, .grid-points-table td, .profit-points-table th, .profit-points-table td { padding: 0.6rem 0.5rem; }
+            .grid-sell-table th, .grid-sell-table td, .grid-buy-table th, .grid-buy-table td,
+            .profit-points-table th, .profit-points-table td { padding: 6px 6px; font-size: 0.75rem; }
             .grid-status-badge { padding: 6px 10px; font-size: 0.75rem; border-radius: 8px; }
 
             /* Tur işlemleri: cycle butonları eşit, simetrik */
@@ -577,6 +614,9 @@
         .grid-buy-table .trade-side-buy { color: #0ecb81; }
         .grid-sell-table thead th { background: rgba(246,70,93,0.08); }
         .grid-buy-table thead th { background: rgba(14,203,129,0.08); }
+        .profit-points-table thead th { background: rgba(240, 185, 11, 0.09); }
+        #profitPointsPanel .grid-tables-wrap { border: 1px solid var(--ds-border, #2b3139); border-radius: 6px; overflow: hidden; }
+        #gridPointsPanel .grid-tables-wrap { border: 1px solid var(--ds-border, #2b3139); border-radius: 6px; overflow: hidden; margin-bottom: 0.5rem; }
         /* Grid Durum: Bekliyor kırmızı, Tetiklendi sarı, Tamamlandı yeşil kutu */
         .grid-status-badge { display: inline-block; padding: 4px 10px; border-radius: 6px; font-size: 0.8rem; font-weight: 600; }
         .grid-status-bekliyor { background: rgba(246, 70, 93, 0.15); color: #f6465d; border: 1px solid rgba(246, 70, 93, 0.4); }
@@ -643,36 +683,35 @@
         </div>
 
         <div class="panel" id="gridPointsPanel" style="display: none;">
-            <h2>Grid alım satım noktaları</h2>
+            <h2 id="gridPointsPanelTitle">Grid alım satım noktaları</h2>
             <p id="gridPointsRefPrice" class="muted poll-note grid-points-ref-price" style="font-size: 0.85rem; margin-top: -0.35rem; margin-bottom: 0.75rem;"></p>
             <p class="muted poll-note" style="font-size: 0.85rem; margin-bottom: 1rem;">Tepe/dip noktası grid tetiklendikten sonra aktif olur; anlık en tepe veya en dip her yakalandığında güncellenir, gerçekleşme fiyatı da belirlenen yüzdeliğe göre anlık güncellenir.</p>
             <div class="grid-section-title grid-section-title first">Satış gridleri</div>
-            <div style="overflow-x: auto;">
+            <div class="grid-tables-wrap">
                 <table class="grid-points-table grid-sell-table" id="gridSellTable">
                     <colgroup><col class="col-level"><col class="col-qty"><col class="col-trigger"><col class="col-peak"><col class="col-exec"><col class="col-status"></colgroup>
-                    <thead><tr><th>Seviye</th><th>Miktar</th><th>Tetik fiyat</th><th>Tepe</th><th>Gerçekleşme fiyatı</th><th>Durum</th></tr></thead>
+                    <thead><tr><th>Seviye</th><th>Miktar</th><th>Tetik</th><th>Tepe</th><th>Gerçekleşme</th><th>Durum</th></tr></thead>
                     <tbody id="gridSellBody"></tbody>
                 </table>
             </div>
             <div class="grid-section-title">Alım gridleri</div>
             <p class="muted poll-note" style="font-size: 0.8rem; margin-bottom: 0.5rem;">Alım, fiyat <strong>Gerçekleşme fiyatı</strong>na (dip + trailing %) ulaşınca yapılır. Alış olmadıysa fiyat o seviyeye gelmemiştir veya bütçe/limit nedeniyle atlanmıştır.</p>
-            <div style="overflow-x: auto;">
+            <div class="grid-tables-wrap">
                 <table class="grid-points-table grid-buy-table" id="gridBuyTable">
                     <colgroup><col class="col-level"><col class="col-qty"><col class="col-trigger"><col class="col-peak"><col class="col-exec"><col class="col-status"></colgroup>
-                    <thead><tr><th>Seviye</th><th>Tutar</th><th>Tetik fiyat</th><th title="Tetik sonrası yakalanan en düşük fiyat">Dip</th><th title="Alış, piyasa fiyatı bu değere ulaştığında yapılır">Gerçekleşme fiyatı</th><th>Durum</th></tr></thead>
+                    <thead><tr><th>Seviye</th><th>Tutar</th><th>Tetik</th><th title="Tetik sonrası yakalanan en düşük fiyat">Dip</th><th title="Alış, piyasa fiyatı bu değere ulaştığında yapılır">Gerçekleşme</th><th>Durum</th></tr></thead>
                     <tbody id="gridBuyBody"></tbody>
                 </table>
             </div>
         </div>
 
         <div class="panel" id="profitPointsPanel" style="display: none;">
-            <h2>Kar alım satım noktaları</h2>
-            <p class="muted poll-note" style="font-size: 0.85rem; margin-bottom: 1rem;">Kar alım satım noktaları ortalama maliyete göre hesaplanır. Her grid alış veya satışından sonra değişen maliyetle birlikte bu noktalar güncellenir.</p>
-            <div class="grid-section-title grid-section-title first">Kar noktaları</div>
-            <div style="overflow-x: auto;">
+            <h2 id="profitPointsPanelTitle">Kar alım satım noktası</h2>
+            <p id="profitPointsPanelNote" class="muted poll-note" style="font-size: 0.85rem; margin-bottom: 1rem;">Kar alım satım noktaları ortalama maliyete göre hesaplanır. Her grid alış veya satışından sonra değişen maliyetle birlikte bu noktalar güncellenir.</p>
+            <div class="grid-tables-wrap">
                 <table class="grid-points-table profit-points-table" id="profitPointsTable">
-                    <colgroup><col class="col-type"><col class="col-avg"><col class="col-trigger"><col class="col-peak"><col class="col-exec"><col class="col-status"></colgroup>
-                    <thead><tr><th>Tür</th><th>Ortalama maliyet</th><th>Tetik fiyat</th><th>Tepe / Dip</th><th>Gerçekleşme fiyatı</th><th>Durum</th></tr></thead>
+                    <colgroup><col class="col-type"><col class="col-avg"><col class="col-amount"><col class="col-trigger"><col class="col-peak"><col class="col-exec"><col class="col-status"></colgroup>
+                    <thead><tr><th>Tür</th><th>Ort. maliyet</th><th id="profitPointsAmountColHeader">İşlem</th><th>Tetik</th><th id="profitPointsPeakColHeader">Tepe / Dip</th><th>Gerçekleşme</th><th>Durum</th></tr></thead>
                     <tbody id="profitPointsBody"></tbody>
                 </table>
             </div>
@@ -803,9 +842,9 @@
     <script src="/ui/assets/core/apiClient.js?v=refactor1"></script>
     <script src="/ui/assets/utils/gridTrailEnvelope.js?v=2"></script>
     <script src="/ui/assets/utils/engineLogArchive.js?v=1"></script>
-    <script src="/ui/assets/utils/engineLogFormat.js?v=35"></script>
-    <script src="/ui/assets/utils/botHealthAlerts.js?v=20"></script>
-    <script src="/ui/assets/utils/engineLogLive.js?v=12"></script>
+    <script src="/ui/assets/utils/engineLogFormat.js?v=39"></script>
+    <script src="/ui/assets/utils/botHealthAlerts.js?v=23"></script>
+    <script src="/ui/assets/utils/engineLogLive.js?v=19"></script>
     <script src="/ui/vendor/lightweight-charts.standalone.production.js"></script>
     <script src="/ui/assets/perf_chart_tv.js?v=1"></script>
     <script>
@@ -1103,15 +1142,16 @@
         }
 
         function fetchBotHealth() {
-            if (!botId || !window.apiClient || document.hidden) return;
+            if (!botId || !window.apiClient || document.hidden) return Promise.resolve();
             var q = accountCode ? '?account_code=' + encodeURIComponent(accountCode) : '?account_id=' + (accountId || '');
-            window.apiClient.get('/api/bots-engine/' + botId + '/health' + q).then(function (res) {
+            return window.apiClient.get('/api/bots-engine/' + botId + '/health' + q).then(function (res) {
                 window._lastHealthData = res || { alerts: [] };
                 if (window.EngineLogLive && _engineLogLiveOpts) {
                     window.EngineLogLive.renderDisplayEvents(_engineLogLiveOpts);
                 }
                 syncHealthFromState();
-            }).catch(function () {});
+                return res;
+            }).catch(function () { return null; });
         }
 
         function onEngineEventsForHealth(events) {
@@ -1159,12 +1199,15 @@
 
         function startEngineLogLive() {
             if (!window.EngineLogLive || !botId) return;
-            loadEngineEvents(botId, false).then(function (events) {
-                if (window.BotHealthAlerts) {
-                    window._lastSeenHealthEventId = window.BotHealthAlerts.maxHealthEventId(events || window._lastEngineEvents);
-                }
-                window.EngineLogLive.startPolling(_engineLogLiveOpts);
-            });
+            var bootLogs = function () {
+                loadEngineEvents(botId, false).then(function (events) {
+                    if (window.BotHealthAlerts) {
+                        window._lastSeenHealthEventId = window.BotHealthAlerts.maxHealthEventId(events || window._lastEngineEvents);
+                    }
+                    window.EngineLogLive.startPolling(_engineLogLiveOpts);
+                });
+            };
+            fetchBotHealth().finally(bootLogs);
         }
 
         function stopEngineLogLive() {
@@ -1203,6 +1246,90 @@
                 return avgSellGrid != null && !isNaN(avgSellGrid) ? Number(avgSellGrid) : null;
             }
             return avgBuyGrid != null && !isNaN(avgBuyGrid) ? Number(avgBuyGrid) : null;
+        }
+        function profitReentryUsdFromState(st, quoteBal) {
+            st = st || {};
+            var buyHist = st.buy_history || [];
+            for (var i = 0; i < buyHist.length; i++) {
+                var h = buyHist[i];
+                if (!h || String(h.reason || '') !== 'trail_reentry_buy') continue;
+                var q = Number(h.qty) || 0, pr = Number(h.price) || 0;
+                if (q > 0 && pr > 0) return q * pr;
+            }
+            var sellHist = st.sell_history || [];
+            var total = 0;
+            for (var j = 0; j < sellHist.length; j++) {
+                var s = sellHist[j];
+                if (s) total += (Number(s.qty) || 0) * (Number(s.price) || 0);
+            }
+            if (total <= 0) return null;
+            var qb = Number(quoteBal) || 0;
+            return qb > 0 ? Math.min(qb, total) : total;
+        }
+        function profitExitQtyFromState(st, baseBal) {
+            st = st || {};
+            var sellHist = st.sell_history || [];
+            for (var i = 0; i < sellHist.length; i++) {
+                var h = sellHist[i];
+                if (!h || String(h.reason || '') !== 'trail_profit_sell') continue;
+                var q = Number(h.qty) || 0;
+                if (q > 0) return q;
+            }
+            var buyHist = st.buy_history || [];
+            var totalQ = 0;
+            for (var j = 0; j < buyHist.length; j++) {
+                var b = buyHist[j];
+                if (b) totalQ += Number(b.qty) || 0;
+            }
+            if (totalQ <= 0) return null;
+            var bb = Number(baseBal) || 0;
+            return bb > 0 ? Math.min(bb, totalQ) : totalQ;
+        }
+        function profitRowAmountHtml(p, baseAsset, st, quoteBal, baseBal) {
+            if (p.type === 'reentry') {
+                var usd = p.planned_quote_usd != null && !isNaN(p.planned_quote_usd) ? Number(p.planned_quote_usd)
+                    : (p.notional_usdt != null && !isNaN(p.notional_usdt) ? Number(p.notional_usdt) : null);
+                if (usd == null || usd <= 0) usd = profitReentryUsdFromState(st, quoteBal);
+                return usd != null && usd > 0 ? fmtUsd(usd) : '—';
+            }
+            var qty = p.planned_base_qty != null && !isNaN(p.planned_base_qty) ? Number(p.planned_base_qty) : null;
+            if (qty == null || qty <= 0) qty = profitExitQtyFromState(st, baseBal);
+            if (qty != null && qty > 0) {
+                return fmtBaseCompact(qty) + (baseAsset ? ' ' + baseAsset : '');
+            }
+            return '—';
+        }
+        function resolveCycleGridSide(data) {
+            var gm = (data && (data.grid_meta || data.meta)) || {};
+            var st = (data && data.state) || {};
+            var side = gm.cycle_grid_side || st.cycle_grid_side || null;
+            return (side === 'SELL' || side === 'BUY') ? side : null;
+        }
+        function applyGridPanelCopy(cycleSide) {
+            var titleEl = document.getElementById('gridPointsPanelTitle');
+            if (!titleEl) return;
+            if (cycleSide === 'SELL') {
+                titleEl.textContent = 'Grid satış noktaları';
+            } else if (cycleSide === 'BUY') {
+                titleEl.textContent = 'Grid alım noktaları';
+            } else {
+                titleEl.textContent = 'Grid alım satım noktaları';
+            }
+        }
+        function applyProfitPanelCopy(cycleSide) {
+            var titleEl = document.getElementById('profitPointsPanelTitle');
+            var noteEl = document.getElementById('profitPointsPanelNote');
+            if (!titleEl || !noteEl) return;
+            if (cycleSide === 'SELL') {
+                titleEl.textContent = 'Kar alım noktası';
+                noteEl.textContent = 'Tur satış yönünde: grid satışlarının ortalama maliyetine göre hesaplanır. Fiyat tetik seviyesinin altına inince kar alım devreye girer; satış geliri (USDT) ile tekrar alım yapılır. Her grid satışından sonra ortalama maliyet ve tutar güncellenir.';
+            } else if (cycleSide === 'BUY') {
+                titleEl.textContent = 'Kar satış noktası';
+                noteEl.textContent = 'Tur alım yönünde: grid alımlarının ortalama maliyetine göre hesaplanır. Fiyat tetik seviyesinin üstüne çıkınca kar satış devreye girer; grid ile alınan coin satılır. Her grid alımından sonra ortalama maliyet ve miktar güncellenir.';
+            } else {
+                titleEl.textContent = 'Kar alım satım noktası';
+                noteEl.textContent = 'Kar alım satım noktası ortalama maliyete göre hesaplanır. İlk grid işleminden sonra tur yönüne göre güncellenir.';
+            }
         }
         function gridTrailPct(side, cfg) {
             cfg = cfg || {};
@@ -1273,6 +1400,7 @@
             }
             updateGridPointsRefPriceLine(livePrice);
             gridPointsPanel.style.display = 'block';
+            applyGridPanelCopy(resolveCycleGridSide(data));
             var cfg = data.config || {};
             var sellTrailPct = gridTrailPct('sell', cfg);
             var buyTrailPct = gridTrailPct('buy', cfg);
@@ -1292,7 +1420,7 @@
                 var anchorVal = liveTrailS.anchor != null ? liveTrailS.anchor : p.anchor;
                 var execVal = liveTrailS.exec != null ? liveTrailS.exec : p.execution_price;
                 var anchor = gridTepeDipCellHtml(anchorVal, refD, 4);
-                var exec = gridPlainPriceHtml(execVal, 4);
+                var exec = gridTepeDipCellHtml(execVal, refD, 4);
                 var miktar = '—';
                 if (p.planned_base_qty != null && !isNaN(p.planned_base_qty) && p.planned_base_qty > 0) {
                     miktar = fmtBaseCompact(Number(p.planned_base_qty)) + (baseAsset ? ' ' + baseAsset : '');
@@ -1328,7 +1456,7 @@
                 var anchorValB = liveTrailB.anchor != null ? liveTrailB.anchor : p.anchor;
                 var execValB = liveTrailB.exec != null ? liveTrailB.exec : p.execution_price;
                 var anchor = gridTepeDipCellHtml(anchorValB, refD, 4);
-                var exec = gridPlainPriceHtml(execValB, 4);
+                var exec = gridTepeDipCellHtml(execValB, refD, 4);
                 var tutar = '—';
                 if (p.qty_pct != null && !isNaN(p.qty_pct)) {
                     if (quoteBal > 0) {
@@ -1370,6 +1498,9 @@
             var gm = data.grid_meta || {};
             var avgSellGrid = gm.avg_sell_grid != null ? String(gm.avg_sell_grid) : avgFromHist(sellHist, true);
             var avgBuyGrid = gm.avg_buy_grid != null ? String(gm.avg_buy_grid) : avgFromHist(buyHist, true);
+            var cycleSideProfit = resolveCycleGridSide(data);
+            applyGridPanelCopy(cycleSideProfit);
+            applyProfitPanelCopy(cycleSideProfit);
             profitPointsPanel.style.display = 'block';
             var pr = cfg.profit || {};
             var profitExitPctConfig = cfg.profit_exit_rise_pct != null ? cfg.profit_exit_rise_pct : pr.resell_trigger_pct;
@@ -1386,6 +1517,17 @@
                     opts.applyLive === true
                 );
             }
+            var peakColHeader = document.getElementById('profitPointsPeakColHeader');
+            if (peakColHeader) {
+                peakColHeader.textContent = cycleSideProfit === 'SELL' ? 'Dip' : (cycleSideProfit === 'BUY' ? 'Tepe' : 'Tepe / Dip');
+            }
+            var amountColHeader = document.getElementById('profitPointsAmountColHeader');
+            var baseAssetProfit = baseFromSymbol(data.symbol || lastBotDetail.symbol || '') || '';
+            if (amountColHeader) {
+                amountColHeader.textContent = cycleSideProfit === 'SELL' ? 'Alım (USD)' : (cycleSideProfit === 'BUY' ? 'Satış' : 'İşlem');
+            }
+            var quoteBalProfit = st.quote_balance != null ? Number(st.quote_balance) : 0;
+            var baseBalProfit = st.base_balance != null ? Number(st.base_balance) : 0;
             profitPointsBody.innerHTML = '';
             pps.forEach(function (p) {
                 var tr = document.createElement('tr');
@@ -1416,17 +1558,18 @@
                         execNum = p.execution_price;
                     }
                 }
+                var amountStr = profitRowAmountHtml(p, baseAssetProfit, st, quoteBalProfit, baseBalProfit);
                 var tepeDipStr = gridTepeDipCellHtml(tepeDipNum, avgBase, 4);
-                var execStr = gridPlainPriceHtml(execNum, 4);
+                var execStr = gridTepeDipCellHtml(execNum, avgBase, 4);
                 var statusKey = (p.status || '').toLowerCase();
                 var statusText = statusKey === 'tamamlandi' ? 'Tamamlandı' : (statusKey === 'tetiklendi' ? 'Tetiklendi' : 'Bekliyor');
                 var statusClass = statusKey === 'tamamlandi' ? 'grid-status-tamamlandi' : (statusKey === 'tetiklendi' ? 'grid-status-tetiklendi' : 'grid-status-bekliyor');
-                tr.innerHTML = '<td>' + labelCell + '</td><td>' + avgCostStr + '</td><td>' + triggerStr + '</td><td>' + tepeDipStr + '</td><td>' + execStr + '</td><td><span class="grid-status-badge ' + statusClass + '">' + statusText + '</span></td>';
+                tr.innerHTML = '<td>' + labelCell + '</td><td>' + avgCostStr + '</td><td>' + amountStr + '</td><td>' + triggerStr + '</td><td>' + tepeDipStr + '</td><td>' + execStr + '</td><td><span class="grid-status-badge ' + statusClass + '">' + statusText + '</span></td>';
                 profitPointsBody.appendChild(tr);
             });
             if (!pps.length) {
                 var tr = document.createElement('tr');
-                tr.innerHTML = '<td colspan="6" class="muted">İlk grid alış veya satışından sonra kar noktaları aktif olur.</td>';
+                tr.innerHTML = '<td colspan="7" class="muted">İlk grid alış veya satışından sonra kar noktaları aktif olur.</td>';
                 profitPointsBody.appendChild(tr);
             }
         }
@@ -1640,6 +1783,20 @@
             var botSymbolForTrades = symbol || '';
             function renderCycleTradesList(trades, cycleNum) {
                 cycleTradesList.innerHTML = '';
+                trades = (trades || []).slice().sort(function(a, b) {
+                    function tradeTsMs(t) {
+                        if (!t || !t.ts) return 0;
+                        var s = String(t.ts).trim();
+                        if (s.indexOf('T') < 0 && s.indexOf(' ') > 0) s = s.replace(' ', 'T');
+                        if (s.indexOf('Z') < 0 && s.indexOf('+') < 0 && s.indexOf('-', 10) < 0) s = s + 'Z';
+                        var d = new Date(s);
+                        return isNaN(d.getTime()) ? 0 : d.getTime();
+                    }
+                    var ta = tradeTsMs(a);
+                    var tb = tradeTsMs(b);
+                    if (tb !== ta) return tb - ta;
+                    return Number(b.id || 0) - Number(a.id || 0);
+                });
                 if (!trades || !trades.length) {
                     cycleTradesList.innerHTML = '<div class="cycle-pnl-item muted">Tur ' + (cycleNum || selectedCycleId) + ' için henüz işlem yok.</div>';
                     return;
@@ -2161,8 +2318,8 @@
             var alerts = (window._lastHealthData && window._lastHealthData.alerts) || [];
             var q = accountCode ? '?account_code=' + encodeURIComponent(accountCode) : '?account_id=' + (accountId || '');
             var finish = function () {
-                var events = window._lastEngineEvents
-                    || (_engineLogLiveOpts && _engineLogLiveOpts.state && _engineLogLiveOpts.state.events)
+                var events = (_engineLogLiveOpts && _engineLogLiveOpts.state && _engineLogLiveOpts.state.events)
+                    || window._lastEngineEvents
                     || [];
                 window.BotHealthAlerts.resetUi(botId, alerts, events);
                 if (window.EngineLogFormat && window.EngineLogFormat.setLogContext) {
@@ -2175,6 +2332,12 @@
             };
             if (window.apiClient) {
                 window.apiClient.post('/api/bots-engine/' + botId + '/health/ack' + q, {})
+                    .then(function (res) {
+                        if (res && res.engine_log_dismiss_before_id != null) {
+                            window._lastHealthData = window._lastHealthData || {};
+                            window._lastHealthData.engine_log_dismiss_before_id = res.engine_log_dismiss_before_id;
+                        }
+                    })
                     .catch(function () {})
                     .finally(finish);
             } else {

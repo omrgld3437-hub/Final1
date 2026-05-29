@@ -33,9 +33,12 @@ class SpotCache:
         self.filters: Dict[str, Tuple[Dict, float]] = {}   # symbol -> (data, timestamp)
         
         # TTL constants (seconds)
-        self.PRICE_TTL = 1.0      # 1 second - very fresh
+        self.PRICE_TTL = 4.0      # UI poll — DataHub SSOT; REST yükünü azalt
         self.BALANCE_TTL = 2.0    # 2 seconds
         self.FILTER_TTL = 3600.0  # 1 hour - rarely changes
+        self._MAX_PRICES = 128
+        self._MAX_BALANCES = 32
+        self._MAX_FILTERS = 200
         
     def get_price(self, symbol: str) -> Optional[float]:
         """Get cached price if fresh"""
@@ -50,6 +53,9 @@ class SpotCache:
     def set_price(self, symbol: str, price: float):
         """Cache price"""
         self.prices[symbol] = (price, time.time())
+        if len(self.prices) > self._MAX_PRICES:
+            oldest = min(self.prices.items(), key=lambda x: x[1][1])[0]
+            self.prices.pop(oldest, None)
     
     def get_balance(self, account_id: int) -> Optional[Dict]:
         """Get cached balance if fresh"""
@@ -64,6 +70,9 @@ class SpotCache:
     def set_balance(self, account_id: int, data: Dict):
         """Cache balance"""
         self.balances[account_id] = (data, time.time())
+        if len(self.balances) > self._MAX_BALANCES:
+            oldest = min(self.balances.items(), key=lambda x: x[1][1])[0]
+            self.balances.pop(oldest, None)
     
     def get_filters(self, symbol: str) -> Optional[Dict]:
         """Get cached filters if fresh"""
@@ -78,6 +87,9 @@ class SpotCache:
     def set_filters(self, symbol: str, data: Dict):
         """Cache filters"""
         self.filters[symbol] = (data, time.time())
+        if len(self.filters) > self._MAX_FILTERS:
+            oldest = min(self.filters.items(), key=lambda x: x[1][1])[0]
+            self.filters.pop(oldest, None)
 
     def invalidate_filters(self, symbol: str) -> None:
         """LOT_SIZE vb. hatalarda eski/yanlış filtre cache'ini temizle."""
@@ -349,41 +361,37 @@ class SpotEngine:
             return (f"%.{decimals}f" % p).rstrip("0").rstrip(".") or "0"
 
     async def _fetch_symbol_filters_from_binance(self, symbol: str) -> Optional[Dict[str, str]]:
-        """exchangeInfo REST — data_hub cache boşsa sembol filtrelerini doğrudan al."""
+        """exchangeInfo — kompakt cache (binance_spot), tam JSON RAM'de tutulmaz."""
         try:
-            from app.services.binance_spot import fetch_exchange_info
-            info = await fetch_exchange_info(testnet=getattr(self.keys, "testnet", False))
+            from app.services.binance_spot import get_cached_symbol_filters
+
             sym = symbol.upper()
-            for s in info.get("symbols") or []:
-                if s.get("symbol") != sym:
-                    continue
-                step, tick, min_q, min_notional = "0.00001", "0.01", "0.00001", "5"
-                for f in s.get("filters") or []:
-                    t = f.get("filterType")
-                    if t == "LOT_SIZE":
-                        step = str(f.get("stepSize") or step)
-                        min_q = str(f.get("minQty") or step)
-                    elif t == "PRICE_FILTER":
-                        tick = str(f.get("tickSize") or tick)
-                    elif t in ("MIN_NOTIONAL", "NOTIONAL"):
-                        min_notional = str(f.get("minNotional") or f.get("notional") or min_notional)
-                out = {
-                    "step_size": step,
-                    "tick_size": tick,
-                    "min_qty": min_q,
-                    "min_notional": min_notional,
-                    "base_asset": s.get("baseAsset") or sym.replace("USDT", ""),
-                    "quote_asset": s.get("quoteAsset") or "USDT",
-                }
-                spot_cache.set_filters(sym, {
-                    "stepSize": step,
-                    "tickSize": tick,
-                    "minQty": min_q,
-                    "minNotional": min_notional,
-                    "baseAsset": out["base_asset"],
-                    "quoteAsset": out["quote_asset"],
-                })
-                return out
+            cached_ex = await get_cached_symbol_filters(
+                sym, testnet=getattr(self.keys, "testnet", False), force_refresh=False
+            )
+            if not cached_ex:
+                return None
+            step = str(cached_ex.get("step_size_str") or "0.00001")
+            tick = str(cached_ex.get("tick_size_str") or "0.01")
+            min_q = str(cached_ex.get("min_qty_str") or step)
+            min_notional = str(cached_ex.get("min_notional") or 5)
+            out = {
+                "step_size": step,
+                "tick_size": tick,
+                "min_qty": min_q,
+                "min_notional": min_notional,
+                "base_asset": cached_ex.get("baseAsset") or sym.replace("USDT", ""),
+                "quote_asset": cached_ex.get("quoteAsset") or "USDT",
+            }
+            spot_cache.set_filters(sym, {
+                "stepSize": step,
+                "tickSize": tick,
+                "minQty": min_q,
+                "minNotional": min_notional,
+                "baseAsset": out["base_asset"],
+                "quoteAsset": out["quote_asset"],
+            })
+            return out
         except Exception as e:
             logger.warning("fetch_symbol_filters_from_binance %s: %s", symbol, e)
         return None

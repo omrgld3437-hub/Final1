@@ -1,8 +1,10 @@
 """
 Bot performans dosya deposu — hızlı okuma için kompakt JSON.
 
-- Saatlik (bugün): `.run/bot_perf/hourly/{account_id}_{date_tr}.json` — her gece yeni dosya (00:00 TR).
-- Kalıcı günlük: `.run/bot_perf/daily/{account_id}.json` — bot başına günlük K/Z; haftalık/aylık/genel buradan.
+- Kapanan tur: `.run/bot_perf/bots/{bot_id}.json` — bot başına kapanan turlar.
+- Hesap ham tur: `.run/bot_perf/accounts/{account_id}.json` — tüm botlar, tarih/saat + USDT K/Z (dashboard filtresi).
+- Saatlik (bugün): `.run/bot_perf/hourly/{account_id}_{date_tr}.json` — yedek.
+- Kalıcı günlük: `.run/bot_perf/daily/{account_id}.json` — yedek.
 """
 from __future__ import annotations
 
@@ -19,13 +21,28 @@ from app.utils.tz_utils import TR_TZ
 logger = logging.getLogger(__name__)
 
 _STORE_VERSION = 1
+_ACCOUNT_ROUNDS_VERSION = 1
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _PERF_ROOT = _PROJECT_ROOT / ".run" / "bot_perf"
+_MAX_ACCOUNT_ROUNDS = 50000
 
 
 def _ensure_dirs() -> None:
     (_PERF_ROOT / "hourly").mkdir(parents=True, exist_ok=True)
     (_PERF_ROOT / "daily").mkdir(parents=True, exist_ok=True)
+    (_PERF_ROOT / "bots").mkdir(parents=True, exist_ok=True)
+    (_PERF_ROOT / "accounts").mkdir(parents=True, exist_ok=True)
+
+
+def _bot_cycles_path(bot_id: int) -> Path:
+    return _PERF_ROOT / "bots" / f"{bot_id}.json"
+
+
+def _account_rounds_path(account_id: int) -> Path:
+    return _PERF_ROOT / "accounts" / f"{account_id}.json"
+
+
+_MAX_BOT_CYCLES = 2000
 
 
 def _atomic_write_json(path: Path, payload: Dict[str, Any]) -> None:
@@ -342,3 +359,498 @@ def sum_daily_from_file(account_id: int, date_from: str, date_to: str) -> Tuple[
     pnl = sum(d["pnl_usd"] for d in series)
     fees = sum(d["fees_usd"] for d in series)
     return round(pnl, 2), round(fees, 2)
+
+
+def _base_from_symbol(symbol: str) -> str:
+    s = (symbol or "").upper().strip()
+    if s == "MULTI":
+        return "MULTI"
+    for q in ("USDT", "FDUSD", "BUSD", "USDC"):
+        if s.endswith(q) and len(s) > len(q):
+            return s[: -len(q)]
+    return s
+
+
+def _compact_cycle(entry: Dict[str, Any], *, symbol: str = "") -> Optional[Dict[str, Any]]:
+    """Tamamlanan tur → kompakt kayıt."""
+    if not entry or not isinstance(entry, dict):
+        return None
+    at = entry.get("completed_at")
+    if not at:
+        return None
+    date_tr = ts_to_date_tr(at)
+    if not date_tr:
+        return None
+    cid = entry.get("cycle_id")
+    sym = (entry.get("symbol") or symbol or "").upper()
+    px = 0.0
+    for key in ("close_price_quote_per_base", "close_px", "px"):
+        try:
+            v = float(entry.get(key) or 0)
+            if v > 0:
+                px = v
+                break
+        except (TypeError, ValueError):
+            pass
+    if px <= 0:
+        close_fill = entry.get("close_fill")
+        if isinstance(close_fill, dict):
+            for key in ("price", "execution_price"):
+                try:
+                    v = float(close_fill.get(key) or 0)
+                    if v > 0:
+                        px = v
+                        break
+                except (TypeError, ValueError):
+                    pass
+    row = {
+        "i": int(cid) if cid is not None else 0,
+        "t": str(at),
+        "d": date_tr,
+        "r": str(entry.get("completed_reason") or entry.get("close_reason") or "")[:32],
+        "ct": str(entry.get("cycle_type") or "")[:16],
+        "cp": round(float(entry.get("cash_pnl_usdt") or 0), 8),
+        "cf": round(float(entry.get("cash_fees_usdt") or 0), 8),
+        "iq": round(float(entry.get("inventory_coin_adv_qty") or 0), 12),
+        "if": round(float(entry.get("inventory_fees_usdt") or 0), 8),
+    }
+    if sym:
+        row["sy"] = sym[:24]
+    if px > 0:
+        row["px"] = round(px, 8)
+    return row
+
+
+def expand_cycle(compact: Dict[str, Any]) -> Dict[str, Any]:
+    """Kompakt kayıt → aggregate_dual_perf uyumlu dict."""
+    out = {
+        "cycle_id": compact.get("i"),
+        "completed_at": compact.get("t"),
+        "completed_reason": compact.get("r"),
+        "cycle_type": compact.get("ct"),
+        "cash_pnl_usdt": float(compact.get("cp") or 0),
+        "cash_fees_usdt": float(compact.get("cf") or 0),
+        "inventory_coin_adv_qty": float(compact.get("iq") or 0),
+        "inventory_fees_usdt": float(compact.get("if") or 0),
+    }
+    if compact.get("sy"):
+        out["symbol"] = compact.get("sy")
+    if compact.get("px") is not None:
+        out["close_price_quote_per_base"] = float(compact.get("px") or 0)
+    return out
+
+
+def _cycle_dedupe_key(compact: Dict[str, Any]) -> str:
+    return f"{compact.get('i')}|{compact.get('t')}"
+
+
+def load_bot_cycles_file(bot_id: int) -> Dict[str, Any]:
+    path = _bot_cycles_path(bot_id)
+    if not path.is_file():
+        return {"v": _STORE_VERSION, "bid": bot_id, "aid": None, "sym": "", "c": [], "u": datetime.now(timezone.utc).isoformat()}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            raise ValueError("invalid bot cycles payload")
+        if not isinstance(data.get("c"), list):
+            data["c"] = []
+        return data
+    except Exception as e:
+        logger.debug("load_bot_cycles_file bot_id=%s: %s", bot_id, e)
+        return {"v": _STORE_VERSION, "bid": bot_id, "aid": None, "sym": "", "c": [], "u": datetime.now(timezone.utc).isoformat()}
+
+
+def list_bot_completed_cycles(bot_id: int) -> List[Dict[str, Any]]:
+    data = load_bot_cycles_file(bot_id)
+    out: List[Dict[str, Any]] = []
+    for row in data.get("c") or []:
+        if isinstance(row, dict):
+            out.append(expand_cycle(row))
+    return out
+
+
+def query_bot_cycles_by_date_range(
+    bot_id: int,
+    date_from: str,
+    date_to: str,
+) -> List[Dict[str, Any]]:
+    """TR takvim günü [date_from, date_to] içindeki kapanan turlar."""
+    out: List[Dict[str, Any]] = []
+    for entry in list_bot_completed_cycles(bot_id):
+        d = ts_to_date_tr(entry.get("completed_at"))
+        if d and date_from <= d <= date_to:
+            out.append(entry)
+    return out
+
+
+def earliest_bot_cycle_date(bot_id: int) -> Optional[str]:
+    dates: List[str] = []
+    for entry in list_bot_completed_cycles(bot_id):
+        d = ts_to_date_tr(entry.get("completed_at"))
+        if d:
+            dates.append(d)
+    return min(dates) if dates else None
+
+
+def _account_round_dedupe_key(row: Dict[str, Any]) -> str:
+    return f"{row.get('bid')}|{row.get('cid')}|{row.get('t')}"
+
+
+def _raw_round_from_entry(
+    bot_id: int,
+    account_id: int,
+    symbol: str,
+    entry: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    """Hesap ham tur defteri satırı (tarih/saat + USDT K/Z)."""
+    if not entry or not isinstance(entry, dict):
+        return None
+    at = entry.get("completed_at")
+    if not at:
+        return None
+    date_tr = ts_to_date_tr(at)
+    if not date_tr:
+        return None
+    sym = (entry.get("symbol") or symbol or "").upper()
+    from app.services.bot_performance_service import _cycle_ledger_amounts
+
+    pnl_usd, fees_usd = _cycle_ledger_amounts(entry, symbol=sym)
+    cid = entry.get("cycle_id")
+    side = None
+    try:
+        from app.services.bot_performance_service import _completed_cycle_side
+
+        side = _completed_cycle_side(entry)
+    except Exception:
+        pass
+    px = 0.0
+    for key in ("close_price_quote_per_base", "close_px", "px"):
+        try:
+            v = float(entry.get(key) or 0)
+            if v > 0:
+                px = v
+                break
+        except (TypeError, ValueError):
+            pass
+    return {
+        "bid": bot_id,
+        "aid": account_id,
+        "sym": sym,
+        "base": _base_from_symbol(sym),
+        "cid": int(cid) if cid is not None else 0,
+        "t": str(at),
+        "d": date_tr,
+        "h": hour_tr(at),
+        "side": side or "",
+        "cp": round(float(entry.get("cash_pnl_usdt") or 0), 8),
+        "cf": round(float(entry.get("cash_fees_usdt") or 0), 8),
+        "iq": round(float(entry.get("inventory_coin_adv_qty") or 0), 12),
+        "if": round(float(entry.get("inventory_fees_usdt") or 0), 8),
+        "px": round(px, 8) if px > 0 else None,
+        "pnl": round(pnl_usd, 4),
+        "fee": round(fees_usd, 4),
+    }
+
+
+def load_account_rounds(account_id: int) -> Dict[str, Any]:
+    path = _account_rounds_path(account_id)
+    if not path.is_file():
+        return {
+            "v": _ACCOUNT_ROUNDS_VERSION,
+            "aid": account_id,
+            "r": [],
+            "u": datetime.now(timezone.utc).isoformat(),
+        }
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            raise ValueError("invalid account rounds payload")
+        if not isinstance(data.get("r"), list):
+            data["r"] = []
+        return data
+    except Exception as e:
+        logger.debug("load_account_rounds account_id=%s: %s", account_id, e)
+        return {
+            "v": _ACCOUNT_ROUNDS_VERSION,
+            "aid": account_id,
+            "r": [],
+            "u": datetime.now(timezone.utc).isoformat(),
+        }
+
+
+def append_account_round(
+    account_id: int,
+    bot_id: int,
+    symbol: str,
+    cycle_entry: Dict[str, Any],
+) -> None:
+    """Tur kapanışında hesap ham defterine ekle."""
+    row = _raw_round_from_entry(bot_id, account_id, symbol, cycle_entry)
+    if not row:
+        return
+    path = _account_rounds_path(account_id)
+    data = load_account_rounds(account_id)
+    rounds: List[Any] = data.get("r") or []
+    key = _account_round_dedupe_key(row)
+    existing = {_account_round_dedupe_key(r) for r in rounds if isinstance(r, dict)}
+    if key in existing:
+        return
+    rounds.append(row)
+    if len(rounds) > _MAX_ACCOUNT_ROUNDS:
+        rounds = rounds[-_MAX_ACCOUNT_ROUNDS:]
+    data["r"] = rounds
+    data["aid"] = account_id
+    data["u"] = datetime.now(timezone.utc).isoformat()
+    try:
+        _atomic_write_json(path, data)
+    except Exception as e:
+        logger.warning("append_account_round account_id=%s: %s", account_id, e)
+
+
+def rebuild_account_rounds_file(
+    account_id: int,
+    bot_rounds: List[Tuple[int, str, List[Dict[str, Any]]]],
+) -> None:
+    """Tüm bot turlarından hesap ham defterini yeniden yaz."""
+    rows: List[Dict[str, Any]] = []
+    seen: set = set()
+    for bot_id, symbol, cycles in bot_rounds:
+        for entry in cycles or []:
+            expanded = entry
+            if entry and "completed_at" not in entry and entry.get("t"):
+                expanded = expand_cycle(entry)
+            row = _raw_round_from_entry(bot_id, account_id, symbol, expanded)
+            if not row:
+                continue
+            key = _account_round_dedupe_key(row)
+            if key in seen:
+                continue
+            seen.add(key)
+            rows.append(row)
+    rows.sort(key=lambda r: (r.get("d") or "", r.get("t") or ""))
+    if len(rows) > _MAX_ACCOUNT_ROUNDS:
+        rows = rows[-_MAX_ACCOUNT_ROUNDS:]
+    payload = {
+        "v": _ACCOUNT_ROUNDS_VERSION,
+        "aid": account_id,
+        "r": rows,
+        "u": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        _atomic_write_json(_account_rounds_path(account_id), payload)
+    except Exception as e:
+        logger.warning("rebuild_account_rounds_file account_id=%s: %s", account_id, e)
+
+
+def round_row_key(row: Dict[str, Any]) -> str:
+    return _account_round_dedupe_key(row)
+
+
+def account_rounds_revision(account_id: int) -> str:
+    """Dosya güncelleme damgası — performans cache geçerliliği."""
+    return str(load_account_rounds(account_id).get("u") or "")
+
+
+def sum_rounds_totals(rounds: List[Dict[str, Any]]) -> Tuple[float, float]:
+    """Kapanan tur satırlarından USDT K/Z + komisyon toplamı."""
+    pnl = 0.0
+    fees = 0.0
+    for row in rounds or []:
+        if not isinstance(row, dict):
+            continue
+        pnl += float(row.get("pnl") or 0)
+        fees += float(row.get("fee") or 0)
+    return round(pnl, 2), round(fees, 2)
+
+
+def query_account_rounds_by_date_range(
+    account_id: int,
+    date_from: str,
+    date_to: str,
+) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for row in load_account_rounds(account_id).get("r") or []:
+        if not isinstance(row, dict):
+            continue
+        d = row.get("d") or ts_to_date_tr(row.get("t"))
+        if d and date_from <= d <= date_to:
+            out.append(row)
+    return out
+
+
+def aggregate_rounds_to_daily_series(
+    rounds: List[Dict[str, Any]],
+    date_from: str,
+    date_to: str,
+) -> List[Dict[str, Any]]:
+    """Yalnızca aktivitesi olan günler (sıfır satır yok)."""
+    by_date: Dict[str, Dict[str, float]] = {}
+    for row in rounds:
+        d = row.get("d")
+        if not d or d < date_from or d > date_to:
+            continue
+        bucket = by_date.setdefault(d, {"pnl_usd": 0.0, "fees_usd": 0.0})
+        bucket["pnl_usd"] += float(row.get("pnl") or 0)
+        bucket["fees_usd"] += float(row.get("fee") or 0)
+    out: List[Dict[str, Any]] = []
+    for d in sorted(by_date.keys()):
+        agg = by_date[d]
+        pnl = round(agg["pnl_usd"], 4)
+        fees = round(agg["fees_usd"], 4)
+        if abs(pnl) < 1e-9 and fees <= 0:
+            continue
+        out.append({"date_tr": d, "pnl_usd": pnl, "fees_usd": fees})
+    return out
+
+
+def aggregate_rounds_to_hourly_series(
+    rounds: List[Dict[str, Any]],
+    date_tr: str,
+) -> List[Dict[str, Any]]:
+    hours = empty_hour_slots()
+    for row in rounds:
+        if (row.get("d") or "") != date_tr:
+            continue
+        pnl = float(row.get("pnl") or 0)
+        fees = float(row.get("fee") or 0)
+        if abs(pnl) < 1e-9 and fees <= 0:
+            continue
+        h = int(row.get("h") if row.get("h") is not None else hour_tr(row.get("t")))
+        if h < 0 or h > 23:
+            h = max(0, min(23, h))
+        hours[h][0] = round(float(hours[h][0]) + pnl, 4)
+        hours[h][1] = round(float(hours[h][1]) + fees, 4)
+    return hourly_to_series({"h": hours})
+
+
+def record_closed_cycle_file(
+    bot_id: int,
+    account_id: int,
+    symbol: str,
+    cycle_entry: Dict[str, Any],
+) -> None:
+    """Tur kapanışında anında dosyaya ekle (idempotent)."""
+    compact = _compact_cycle(cycle_entry, symbol=symbol)
+    if not compact:
+        return
+    path = _bot_cycles_path(bot_id)
+    data = load_bot_cycles_file(bot_id)
+    cycles: List[Any] = data.get("c") or []
+    key = _cycle_dedupe_key(compact)
+    existing_keys = {_cycle_dedupe_key(c) for c in cycles if isinstance(c, dict)}
+    if key in existing_keys:
+        return
+    cycles.append(compact)
+    if len(cycles) > _MAX_BOT_CYCLES:
+        cycles = cycles[-_MAX_BOT_CYCLES:]
+    data["c"] = cycles
+    data["bid"] = bot_id
+    data["aid"] = account_id
+    data["sym"] = (symbol or data.get("sym") or "").upper()
+    data["u"] = datetime.now(timezone.utc).isoformat()
+    try:
+        _atomic_write_json(path, data)
+    except Exception as e:
+        logger.warning("record_closed_cycle_file bot_id=%s: %s", bot_id, e)
+    try:
+        append_account_round(account_id, bot_id, symbol, cycle_entry)
+    except Exception as e:
+        logger.debug("append_account_round bot_id=%s: %s", bot_id, e)
+
+
+_cycles_rebuild_fp: Dict[int, str] = {}
+_MAX_CYCLES_REBUILD_FP = 800
+
+
+def _completed_cycles_fingerprint(completed_cycles: List[Dict[str, Any]]) -> str:
+    n = len(completed_cycles or [])
+    if n == 0:
+        return "0"
+    last = completed_cycles[-1] if isinstance(completed_cycles[-1], dict) else {}
+    return f"{n}:{last.get('completed_at') or last.get('cycle_id') or ''}"
+
+
+def rebuild_bot_cycles_file_if_changed(
+    bot_id: int,
+    account_id: int,
+    symbol: str,
+    completed_cycles: List[Dict[str, Any]],
+) -> bool:
+    """Fingerprint değişmediyse disk yazma atlanır (sync tick RAM/IO)."""
+    fp = _completed_cycles_fingerprint(completed_cycles)
+    if _cycles_rebuild_fp.get(bot_id) == fp:
+        return False
+    _cycles_rebuild_fp[bot_id] = fp
+    if len(_cycles_rebuild_fp) > _MAX_CYCLES_REBUILD_FP:
+        for k in list(_cycles_rebuild_fp.keys())[: _MAX_CYCLES_REBUILD_FP // 2]:
+            _cycles_rebuild_fp.pop(k, None)
+    rebuild_bot_cycles_file(bot_id, account_id, symbol, completed_cycles)
+    return True
+
+
+def rebuild_bot_cycles_file(
+    bot_id: int,
+    account_id: int,
+    symbol: str,
+    completed_cycles: List[Dict[str, Any]],
+) -> None:
+    """State/arşiv backfill — yalnızca tamamlanan turlar."""
+    rows: List[Dict[str, Any]] = []
+    seen: set = set()
+    for entry in completed_cycles or []:
+        compact = _compact_cycle(entry, symbol=symbol)
+        if not compact:
+            continue
+        key = _cycle_dedupe_key(compact)
+        if key in seen:
+            continue
+        seen.add(key)
+        rows.append(compact)
+    rows.sort(key=lambda c: (c.get("d") or "", c.get("t") or ""))
+    if len(rows) > _MAX_BOT_CYCLES:
+        rows = rows[-_MAX_BOT_CYCLES:]
+    payload = {
+        "v": _STORE_VERSION,
+        "bid": bot_id,
+        "aid": account_id,
+        "sym": (symbol or "").upper(),
+        "c": rows,
+        "u": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        _atomic_write_json(_bot_cycles_path(bot_id), payload)
+    except Exception as e:
+        logger.warning("rebuild_bot_cycles_file bot_id=%s: %s", bot_id, e)
+
+
+def sum_bot_daily_from_file(
+    account_id: int,
+    bot_id: int,
+    date_from: str,
+    date_to: str,
+) -> Tuple[float, float, int]:
+    """Hesap günlük defterinden tek bot toplamı (dashboard ile uyumlu yedek)."""
+    data = load_daily_ledger(account_id)
+    days: Dict[str, Any] = data.get("days") or {}
+    key = str(bot_id)
+    pnl = 0.0
+    fees = 0.0
+    cycles = 0
+    try:
+        start = datetime.strptime(date_from, "%Y-%m-%d").date()
+        end = datetime.strptime(date_to, "%Y-%m-%d").date()
+    except ValueError:
+        return 0.0, 0.0, 0
+    current = start
+    while current <= end:
+        d_str = current.strftime("%Y-%m-%d")
+        rec = (days.get(d_str) or {}).get("b") or {}
+        row = rec.get(key)
+        if isinstance(row, list) and len(row) >= 2:
+            pnl += float(row[0] or 0)
+            fees += float(row[1] or 0)
+            cycles += 1
+        current += timedelta(days=1)
+    return round(pnl, 4), round(fees, 4), cycles

@@ -421,6 +421,21 @@ async def _reconciler_background_task():
             logger.warning("reconciler_background err=%s", e)
 
 
+def _running_bot_symbols() -> list:
+    """Çalışan botların sembolleri — worker slim cache'te asla düşmesin."""
+    from app.db.session import SessionLocal
+    from app.db.models import Bot
+
+    db = SessionLocal()
+    try:
+        rows = db.query(Bot.symbol).filter(Bot.status == "running").all()
+        return sorted({(r[0] or "").strip().upper() for r in rows if r and r[0] and (r[0] or "").upper() != "MULTI"})
+    except Exception:
+        return []
+    finally:
+        db.close()
+
+
 async def _market_sync_from_web_loop():
     """Worker: web sürecindeki DataHub cache'ini kopyala — tek Binance WS/REST web'de."""
     import httpx
@@ -431,8 +446,14 @@ async def _market_sync_from_web_loop():
     failures = 0
     while True:
         try:
+            syms = _running_bot_symbols()
+            if syms:
+                data_hub.pin_symbols(syms)
+            params: dict = {"slim": 1}
+            if syms:
+                params["symbols"] = ",".join(syms)
             async with httpx.AsyncClient(timeout=5.0) as c:
-                r = await c.get(f"{base}/api/data/prices")
+                r = await c.get(f"{base}/api/data/prices", params=params)
             if r.status_code == 200:
                 import_from_peer_snapshot(r.json())
                 failures = 0
@@ -440,9 +461,10 @@ async def _market_sync_from_web_loop():
                 failures += 1
         except Exception:
             failures += 1
-        if failures >= 5 and not getattr(data_hub, "_ws_started", False):
-            data_hub.start_ws(testnet=False)
-            logger.warning("WORKER_MARKET_SYNC web unreachable — WS fallback started")
+        if failures >= 12 and os.getenv("WORKER_WS_FALLBACK", "0").strip() == "1":
+            if not getattr(data_hub, "_ws_started", False):
+                data_hub.start_ws(testnet=False)
+                logger.warning("WORKER_MARKET_SYNC web unreachable — WS fallback (opt-in)")
         await asyncio.sleep(interval)
 
 
@@ -652,8 +674,20 @@ async def worker_loop():
 
 
 def main():
-    # RAM probe: JSONL to logs/ram_snapshots.log when RAM_PROBE=1 (inherit from parent; helper must not override)
-    if os.getenv("RAM_PROBE") == "1":
+    # RAM capture (5 dk) veya RAM_PROBE
+    if os.getenv("RAM_CAPTURE", "").strip() == "1":
+        try:
+            os.environ.setdefault("RAM_PROBE", "1")
+            from app.observability.ram_capture import (
+                register_default_capture_hooks,
+                start_ram_capture_session,
+            )
+
+            register_default_capture_hooks("worker")
+            start_ram_capture_session("worker")
+        except Exception as e:
+            logger.debug("RAM capture start skipped: %s", e)
+    elif os.getenv("RAM_PROBE") == "1":
         try:
             from app.observability.ram_probe import start_ram_probe, register_probe_hook, write_snapshot_now
             interval = int(os.getenv("RAM_PROBE_INTERVAL", "30"))

@@ -80,6 +80,8 @@ async def csrf_middleware(request: Request, call_next):
     if path in CSRF_EXEMPT_PATHS:
         return await call_next(request)
 
+    origin_only = path in CSRF_ORIGIN_ONLY_PATHS
+
     # Determine auth source: Bearer first, then cookie
     auth_header = request.headers.get("Authorization") or request.headers.get("authorization") or ""
     bearer_token = (auth_header[7:].strip() if auth_header.startswith("Bearer ") else None) or ""
@@ -144,7 +146,7 @@ async def csrf_middleware(request: Request, call_next):
         else:
             logger.debug("CSRF: Origin and Referer missing (allowed when not strict) request_id=%s", getattr(request.state, "request_id", None))
 
-    if cfg.get("auth_csrf_double_submit"):
+    if cfg.get("auth_csrf_double_submit") and not origin_only:
         csrf_cookie = (request.cookies.get("csrf_token") or "").strip()
         csrf_header = (request.headers.get("X-CSRF-Token") or "").strip()
         if not csrf_cookie or not csrf_header or csrf_cookie != csrf_header:

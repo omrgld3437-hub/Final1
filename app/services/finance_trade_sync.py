@@ -186,7 +186,7 @@ class TradeSyncService:
 
             common_symbols = get_symbols("usdt")
             if not common_symbols:
-                logger.warning("[TradeSync] Symbol cache empty, using common + bot symbols")
+                logger.info("[TradeSync] Symbol cache empty, using common + bot symbols")
                 common_symbols = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "ADAUSDT", "XRPUSDT"]
 
             # Rate limit: max 40 symbols (myTrades = 10 weight each = 400 weight per sync; 6000/min limit)

@@ -11,7 +11,16 @@ from typing import Dict, List, Optional
 from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 from app.db.models import Trade, PnlSnapshot, Bot
-from app.utils.tz_utils import turkey_today_start_utc, turkey_day_start_utc_for_date, turkey_day_end_utc_for_date, bot_started_on_tr_date
+from app.utils.tz_utils import (
+    turkey_today_start_utc,
+    turkey_today_date_str,
+    turkey_day_start_utc_for_date,
+    turkey_day_end_utc_for_date,
+    bot_started_on_tr_date,
+)
+
+# FIFO fallback: çok uzun geçmişte tam trade listesi RAM patlamasını önler
+_MAX_FIFO_TRADES_ROWS = 4000
 from sqlalchemy import text
 from app.services.price_hub import price_hub
 
@@ -145,14 +154,14 @@ def ensure_daily_ref_and_compute(
     persist: bool = True,
 ) -> tuple[float, float]:
     """
-    Günlük K/Z: gece 00:00 TR'de equity referansı; bot aynı gün açıldıysa initial_capital
+    Günlük K/Z: TR gece 00:00 (23:59'dan sonra) equity referansı; bot aynı gün açıldıysa initial_capital
     (toplam K/Z ile aynı baz — gün içi tutarlılık).
     """
     if not state.get("initial_allocation_done"):
         return 0.0, 0.0
     from app.botengine.state_store import save_state
 
-    today_date = turkey_today_start_utc().strftime("%Y-%m-%d")
+    today_date = turkey_today_date_str()
     started_today = bot_started_on_tr_date(bot_started_at, today_date)
     daily_ref_date = state.get("daily_ref_date")
     daily_ref_usd = float(state.get("daily_ref_usd") or 0)
@@ -205,10 +214,7 @@ class PnlService:
 
         # Prefer virtual wallet for total_usd (base*price+quote) when engine has a row
         vw = _get_virtual_wallet_or_none(db, bot_id, bot.symbol or "")
-        trades = db.query(Trade).filter(
-            Trade.bot_id == bot_id,
-            Trade.account_id == account_id
-        ).order_by(Trade.ts).all()
+        trades: Optional[List[Any]] = None
 
         raw = {}
         try:
@@ -259,6 +265,15 @@ class PnlService:
             quote_qty = total_usd
             pnl_mode_used = "initial_capital_override" if total_usd == initial_capital else "virtual_wallet"
         else:
+            if trades is None:
+                trades = (
+                    db.query(Trade)
+                    .filter(Trade.bot_id == bot_id, Trade.account_id == account_id)
+                    .order_by(Trade.ts.desc())
+                    .limit(_MAX_FIFO_TRADES_ROWS)
+                    .all()
+                )
+                trades = list(reversed(trades))
             if not trades:
                 out = {
                     "total_usd": 0.0,
@@ -313,7 +328,7 @@ class PnlService:
             PnlSnapshot.ts >= month_start
         ).order_by(PnlSnapshot.ts.asc()).first()
 
-        today_date = today_start.strftime("%Y-%m-%d")
+        today_date = turkey_today_date_str()
         # Stale or invalid price: do NOT update daily_ref or write snapshot (Spec B)
         if price_is_stale or (pnl_mode_used == "virtual_wallet" and not price_valid):
             out = {

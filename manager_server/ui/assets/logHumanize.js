@@ -17,6 +17,7 @@
     'app.botengine.worker_main': 'Bot engine worker',
     'app.botengine.orchestrator': 'Bot tick döngüsü',
     'app.services.binance_spot': 'Binance Spot API',
+    'app.services.finance_trade_sync': 'Finans işlem senkronu',
     'app.botengine.adapters.binance_adapter': 'Binance adapter',
     'app.botengine.health_watch': 'Bot sağlık izleme',
     'app.botengine.intent_ledger': 'Emir intent defteri',
@@ -49,6 +50,8 @@
 
   var RE_PY_LOG = /^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\s*-\s*(\S+)\s*-\s*(WARNING|ERROR|CRITICAL|INFO|DEBUG)\s*-\s*(.+)$/i;
   var RE_BRACKET_LOG = /^\[(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\]\s*(WARNING|ERROR|CRITICAL|INFO|DEBUG)\s+(.+)$/i;
+  var RE_MANAGER_LOG = /^\[(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\]\s*\[MANAGER\]\s*\[(WARNING|ERROR|CRITICAL|INFO|DEBUG)\]\s*(.+)$/i;
+  var RE_HTTP_ACCESS = /\b(GET|POST|PUT|DELETE|PATCH)\s+(\S+)\s+(\d{3})\b/;
 
   function formatTsTr(ts) {
     if (!ts) return '—';
@@ -104,6 +107,14 @@
       ctx.params = extractParams(rest);
       return ctx;
     }
+    var mgr = s.match(RE_MANAGER_LOG);
+    if (mgr) {
+      ctx.timestamp = mgr[1];
+      ctx.level = mgr[2].toUpperCase();
+      ctx.message = mgr[3];
+      ctx.params = extractParams(mgr[3]);
+      return ctx;
+    }
     ctx.params = extractParams(s);
     return ctx;
   }
@@ -125,6 +136,66 @@
   }
 
   var RULES = [
+    {
+      test: function (msg) {
+        return RE_HTTP_ACCESS.test(msg) && /\b(GET|POST|PUT|DELETE|PATCH)\s+\/api\//i.test(msg);
+      },
+      apply: function (ctx) {
+        var msg = ctx.message || ctx.raw || '';
+        var http = msg.match(RE_HTTP_ACCESS);
+        if (!http) return null;
+        var method = http[1];
+        var path = http[2];
+        var status = http[3];
+        if (/\/api\/server\/manager\/restart/.test(path) && status === '400') {
+          return {
+            konu: 'Tam yeniden başlatma isteği reddedildi (400)',
+            sebep: 'Eski Manager sürümünde «/api/server/manager/restart» yolu yanlış eşleşiyordu; istek geçersiz anahtar olarak işlendi.',
+            etki: 'Sistem yeniden başlatılmadı.',
+            oneri: 'Manager\'ı güncel kodla yeniden başlatın; «Yeniden başlat» artık /api/stack/restart kullanır.'
+          };
+        }
+        if (/\/api\/stack\/restart/.test(path) && status === '200') {
+          return {
+            konu: 'Tam sistem yeniden başlatma başlatıldı',
+            sebep: 'Panel tüm servisleri (Manager, Web, Engine, HTML) yeniden başlatma komutunu gönderdi.',
+            etki: 'Servisler kısa süre durur; panel birkaç saniye yanıt vermeyebilir.',
+            oneri: '30–60 sn bekleyin; sayfa otomatik yenilenmezse F5 ile Manager\'a tekrar bağlanın.'
+          };
+        }
+        if ((/\/api\/stack\/restart/.test(path) || /\/api\/server\/manager\/restart/.test(path)) && status === '404') {
+          return {
+            konu: 'Tam yeniden başlatma API\'si yok (404)',
+            sebep: 'Çalışan Manager süreci güncel kodu yüklemedi; bu endpoint henüz tanımlı değil.',
+            etki: '«Yeniden başlat» işlemi yapılmadı.',
+            oneri: 'Terminalden güncel kodla başlatın: .venv/bin/python -m manager_server veya ops/start.command — ardından tarayıcıda Ctrl+F5.'
+          };
+        }
+        if (/\/api\/security\//.test(path) && status === '404') {
+          return {
+            konu: 'Güvenlik API\'si bulunamadı (404)',
+            sebep: 'Panel IP engelleme uçlarını sorguladı; çalışan Manager sürümünde bu endpoint henüz yok veya eski.',
+            etki: 'IP engelleme paneli çalışmayabilir; diğer servisler etkilenmez.',
+            oneri: 'Manager\'ı güncel kodla yeniden başlatın.'
+          };
+        }
+        if (/\/api\/issues\/summary/.test(path) && status === '404') {
+          return {
+            konu: 'Olay özeti API\'si yok (404)',
+            sebep: 'Eski UI sürümü veya probe /api/issues/summary çağırdı; endpoint kaldırılmış veya taşınmış olabilir.',
+            etki: 'Olay Merkezi özeti panelde boş kalabilir.',
+            oneri: 'Manager ve tarayıcı önbelleğini yenileyin; güncel panelde Olay Merkezi sekmesini kullanın.'
+          };
+        }
+        var stTr = status === '404' ? 'bulunamadı' : (status === '400' ? 'geçersiz istek' : ('HTTP ' + status));
+        return {
+          konu: 'Manager panel isteği: ' + method + ' ' + path,
+          sebep: 'Yerel panel veya tarayıcı Manager API\'sine istek attı; yanıt ' + stTr + ' (' + status + ').',
+          etki: Number(status) >= 500 ? 'İlgili panel işlemi başarısız olmuş olabilir.' : 'Genelde bilgi amaçlı; servisler çalışmaya devam eder.',
+          oneri: status === '404' ? 'Endpoint adını ve Manager sürümünü kontrol edin.' : 'Tekrarlıyorsa manager.log içinde aynı zaman damgasını arayın.'
+        };
+      }
+    },
     {
       test: function (msg) { return /BOT_EXECUTION_SKIP/i.test(msg); },
       apply: function (ctx) {
@@ -393,7 +464,41 @@
       }
     },
     {
-      test: function (msg) { return /ImportError/i.test(msg); },
+      test: function (msg) {
+        return /home_wallet_refresh/i.test(msg) && /\berror=/i.test(msg) && /get_price_map_flat|cannot import name/i.test(msg);
+      },
+      apply: function (ctx) {
+        var m = (ctx.message || ctx.raw || '').match(/\berror=([^\s]+(?:\s+[^\s]+){0,12})/i);
+        var detail = m ? m[1].trim() : 'cüzdan yenileme başarısız';
+        return {
+          konu: 'Cüzdan yenileme başarısız (önbellek kullanılır)',
+          sebep: 'Canlı Binance cüzdan çekimi tamamlanamadı: ' + detail,
+          etki: 'Dashboard önbellekli cüzdan gösterir; K/Z kartları etkilenmez.',
+          oneri: 'Web servisini yeniden başlatın (market_data güncellemesi yüklensin).'
+        };
+      }
+    },
+    {
+      test: function (msg) {
+        return /wallet_refresh_attempt error_code=(?:ImportError|WALLET_MODULE_MISSING)/i.test(msg);
+      },
+      apply: function (ctx) {
+        var m = (ctx.message || ctx.raw || '').match(/err=([^\n]+)/i);
+        var detail = m ? m[1].trim() : 'market_data / wallet_pricing içe aktarımı';
+        return {
+          konu: 'Cüzdan yenileme — eksik kod modülü',
+          sebep: 'Binance cüzdan snapshot\'ı fiyat haritası yüklerken içe aktarım başarısız: ' + detail,
+          etki: 'Anasayfa cüzdan canlı yenilemesi çalışmaz; önbellekli snapshot kullanılır.',
+          oneri: 'Web servisini yeniden başlatın; app/services/market_data.py güncel mi kontrol edin.'
+        };
+      }
+    },
+    {
+      test: function (msg) {
+        return /ImportError/i.test(msg)
+          && !/error_code=ImportError/i.test(msg)
+          && !/cannot import name/i.test(msg);
+      },
       apply: function () {
         return {
           konu: 'Python import hatası',
@@ -481,8 +586,18 @@
       }
     },
     {
-      test: function (msg) { return /EADDRINUSE|Address already in use|port.*in use|bind\s*\(\s*\)\s*failed/i.test(msg); },
+      test: function (msg) { return /EADDRINUSE|Address already in use|port.*in use|error while attempting to bind/i.test(msg); },
       apply: function (ctx) {
+        var msg = ctx.message || ctx.raw || '';
+        var is7999 = /7999|127\.0\.0\.1['\u2019]?\s*,\s*7999/i.test(msg);
+        if (is7999) {
+          return {
+            konu: 'Manager portu geçici çakışma (7999)',
+            sebep: 'Tam yeniden başlat sırasında eski Manager süreci portu henüz bırakmadan yeni süreç başlatılmaya çalışıldı.',
+            etki: 'Bu satır genelde zararsızdır; birkaç saniye sonra tek Manager ayakta kalır.',
+            oneri: 'Panel yanıt veriyorsa yok sayın. Yanıt yoksa: lsof -i :7999 ile çift süreç var mı bakın; gerekirse ops/start.command veya tek python -m manager_server.'
+          };
+        }
         return {
           konu: 'Port kullanımda',
           sebep: 'Servis hedef porta bağlanamadı; port başka bir süreç tarafından kullanılıyor.',
@@ -543,6 +658,21 @@
           sebep: 'İstek yetkilendirme veya uzaktan erişim kuralı nedeniyle reddedildi.',
           etki: 'Manager paneli veya API uzaktan erişilemez; localhost dışından bağlantı kopar.',
           oneri: 'Manager için MANAGER_ALLOW_REMOTE=1 ile başlatın veya localhost/VPN üzerinden erişin; API token/cookie kontrol edin.'
+        };
+      }
+    },
+    {
+      test: function (msg) { return RE_HTTP_ACCESS.test(msg) && /\s404\b/.test(msg); },
+      apply: function (ctx) {
+        var m = ctx.message || ctx.raw || '';
+        var hit = m.match(RE_HTTP_ACCESS);
+        var method = hit ? hit[1] : 'GET';
+        var path = hit ? hit[2] : '—';
+        return {
+          konu: 'Manager API bulunamadı (404)',
+          sebep: method + ' ' + path + ' endpoint\'i yok veya Manager eski sürümle çalışıyor.',
+          etki: 'Panel özelliği devre dışı kalır; uyarı Manager loguna düşer.',
+          oneri: 'Manager Server\'ı yeniden başlatın: python -m manager_server · ardından Ctrl+Shift+R ile sayfayı yenileyin.'
         };
       }
     },
@@ -635,13 +765,61 @@
       }
     },
     {
+      test: function (msg) { return /\[TradeSync\]\s*Symbol cache empty/i.test(msg); },
+      apply: function () {
+        return {
+          konu: 'Finans senkron — sembol listesi yedek modda',
+          sebep: 'Piyasa sembol önbelleği henüz dolu değil; bot + yaygın USDT çiftleri ile myTrades çekiliyor.',
+          etki: 'İşlem senkronu devam eder; panelde uyarı gerekmez.',
+          oneri: 'Yok — beklenen davranış. Önbellek dolunca otomatik genişler.'
+        };
+      }
+    },
+    {
+      test: function (msg) { return /\[TradeSync\].*429|Binance rate limit for account/i.test(msg); },
+      apply: function (ctx) {
+        var acct = (ctx.params && ctx.params.account_id) || (ctx.message || '').match(/account\s+(\d+)/i);
+        return {
+          konu: 'Finans senkron — Binance istek limiti',
+          sebep: 'myTrades çekerken Binance 429 (ağırlık limiti) döndü; o ana kadar toplanan işlemler kaydedildi.',
+          etki: 'Bu turda kalan semboller atlanmış olabilir; sonraki senkron tamamlar.',
+          oneri: acct ? ('Hesap ' + (acct[1] || acct) + ': tekrarlıysa senkron aralığını artırın.') : 'Tekrarlıysa senkron sıklığını azaltın.'
+        };
+      }
+    },
+    {
+      test: function (msg) { return /\[TradeSync\].*Invalid API-key|401\/-2015/i.test(msg); },
+      apply: function () {
+        return {
+          konu: 'Finans senkron — API anahtarı geçersiz',
+          sebep: 'Binance myTrades bu hesap için 401 veya -2015 (yetki/IP) döndü.',
+          etki: 'Bu hesabın işlem geçmişi senkron edilmez.',
+          oneri: 'Hesap API anahtarını ve IP kısıtını kontrol edin.'
+        };
+      }
+    },
+    {
+      test: function (msg) { return /CYCLE_LEDGER fee_asset=.*could not convert to USDT/i.test(msg); },
+      apply: function (ctx) {
+        var m = (ctx.message || ctx.raw || '').match(/fee_asset=(\w+).*amount=([\d.]+)/i);
+        var asset = m ? m[1] : '—';
+        var amt = m ? m[2] : '';
+        return {
+          konu: 'Tur defteri — komisyon USDT\'ye çevrilemedi',
+          sebep: 'Binance komisyonu ' + asset + (amt ? ' (' + amt + ')' : '') + ' olarak geldi; USDT fiyatı bulunamadığı için tur K/Z komisyonu 0 yazıldı.',
+          etki: 'Tur kar/zarar hesabında komisyon eksik kalabilir.',
+          oneri: 'Sembol fiyat önbelleğinin (price hub) çalıştığını doğrulayın; tekrarlıysa worker.log içinde aynı zaman damgasını inceleyin.'
+        };
+      }
+    },
+    {
       test: function (msg) { return /deque mutated during iteration/i.test(msg); },
       apply: function () {
         return {
-          konu: 'Yönetici paneli log eşzamanlılık hatası',
-          sebep: 'Log halkası okunurken arka planda yeni satır eklendi (thread yarışı). Düzeltme: log ring kilidi.',
-          etki: 'WebSocket anlık log akışı bir tick atlayabilir; servisler çalışmaya devam eder.',
-          oneri: 'Manager servisini yeniden başlatın; güncel sürümde kilit ile giderilmiş olmalı.'
+          konu: 'Yönetici paneli — eski log ring uyarısı (gürültü)',
+          sebep: 'Log halkası okunurken eşzamanlı yazma (eski sürüm). Güncel kodda kilit var; panel bu satırı artık listelemez.',
+          etki: 'Yok — servisler etkilenmez.',
+          oneri: 'Yok. Manager yeniden başlatılırsa halka temizlenir.'
         };
       }
     },
@@ -674,10 +852,12 @@
   function technicalDetail(ctx) {
     if (ctx.params.err) return ctx.params.err;
     var msg = ctx.message || ctx.raw;
+    var http = msg.match(RE_HTTP_ACCESS);
+    if (http) return http[1] + ' ' + http[2] + ' → ' + http[3];
     var colon = msg.indexOf(':');
     if (colon >= 0 && colon < msg.length - 1) {
       var tail = msg.slice(colon + 1).trim();
-      if (tail.length > 10) return tail;
+      if (tail.length > 10 && !/^\d{2}:\d{2}/.test(tail)) return tail;
     }
     return msg;
   }

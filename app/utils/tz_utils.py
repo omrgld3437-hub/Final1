@@ -25,8 +25,13 @@ def turkey_now_utc() -> datetime:
     return datetime.now(TR_TZ).astimezone(timezone.utc).replace(tzinfo=None)
 
 
+def turkey_today_date_str() -> str:
+    """Türkiye takvim günü (YYYY-MM-DD); canlı saat Europe/Istanbul."""
+    return datetime.now(TR_TZ).strftime("%Y-%m-%d")
+
+
 def turkey_today_start_utc() -> datetime:
-    """Türkiye'de bugünün gece yarısı (00:00), naive UTC olarak."""
+    """Türkiye'de bugünün gece yarısı (00:00, 23:59'dan sonraki an), naive UTC olarak."""
     now_tr = datetime.now(TR_TZ)
     midnight_tr = now_tr.replace(hour=0, minute=0, second=0, microsecond=0)
     return midnight_tr.astimezone(timezone.utc).replace(tzinfo=None)

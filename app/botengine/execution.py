@@ -6,7 +6,7 @@ import asyncio
 import logging
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 from sqlalchemy import event
@@ -127,6 +127,21 @@ def _num(v: Any) -> float:
         return float(v)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _fill_ts_from_order(order: Dict[str, Any]) -> datetime:
+    """Binance order yanıtından UTC fill zamanı (transactTime öncelikli)."""
+    for key in ("transactTime", "updateTime", "workingTime"):
+        raw = order.get(key)
+        if raw is None:
+            continue
+        try:
+            ms = int(raw)
+            if ms > 0:
+                return datetime.fromtimestamp(ms / 1000.0, tz=timezone.utc)
+        except (TypeError, ValueError):
+            continue
+    return datetime.now(timezone.utc)
 
 
 def _parse_binance_order_error(e: Exception) -> Dict[str, Any]:
@@ -999,7 +1014,7 @@ async def run_actions(
                         fee_raw=fee_raw,
                     )
                     state["cycle_ledger_current"] = ledger
-                fill_ts_utc = datetime.now(timezone.utc)
+                fill_ts_utc = _fill_ts_from_order(res)
                 # initial_allocation: ia_done ONLY when order really filled (exec_qty > 0)
                 if reason == "initial_allocation":
                     if exec_qty <= 0:
@@ -1250,10 +1265,12 @@ async def run_actions(
                     completed_list.append({
                         "cycle_id": cycle_id_for_trade,
                         "cycle_type": cycle_type_snapshot,
+                        "symbol": symbol,
                         "cash_pnl_usdt": round(cash_pnl, 8),
                         "cash_fees_usdt": round(cash_fees, 8),
                         "inventory_coin_adv_qty": round(inv_qty, 12),
                         "inventory_fees_usdt": round(inv_fees, 8),
+                        "close_price_quote_per_base": round(float(fill_price), 8),
                         "started_at": ledger.get("started_at"),
                         "completed_at": last_fill_ts_iso,
                         "completed_reason": reason,
@@ -1278,7 +1295,9 @@ async def run_actions(
                     m = len(config.buy_grids)
                     cycle_reset_after_fill(state, fill_price, n, m, symbol=symbol)
                     if db is not None:
-                        append_event(db, bot_id, account_id, "CYCLE_END", "Tur bitti", meta)
+                        cycle_end_ts = fill_ts_utc + timedelta(milliseconds=100)
+                        cycle_start_ts = fill_ts_utc + timedelta(milliseconds=200)
+                        append_event(db, bot_id, account_id, "CYCLE_END", "Tur bitti", meta, ts=cycle_end_ts)
                         logger.info(
                             "BOT_CYCLE_END bot_id=%s cycle_id=%s pnl_usdt_net=%.4f cycle_type=%s base_delta=%s matched_qty=%s fees_usdt=%.4f pnl_mode=%s",
                             bot_id, cycle_id_for_trade, pnl, cycle_type, base_delta, matched_qty, fees, pnl_mode,
@@ -1294,7 +1313,7 @@ async def run_actions(
                             "symbol": symbol,
                             "carry_over": True,
                             "prev_close_reason": close_reason,
-                        })
+                        }, ts=cycle_start_ts)
                     # Reinvest policy: target budgets from equity (order sizing reference only; no rebalance order)
                     quote_bal = _num(state.get("quote_balance"))
                     base_bal = _num(state.get("base_balance"))

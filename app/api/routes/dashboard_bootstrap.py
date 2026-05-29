@@ -56,7 +56,7 @@ async def dashboard_bootstrap(
     last_error_code = None
     cooldown_until_iso = None
     try:
-        from app.api.routes import home as home_mod
+        import app.api.routes.home as home_mod
         last_error_code = getattr(home_mod, "_wallet_last_error_code", {}).get(account_id)
         cooldown_until = getattr(home_mod, "_wallet_cooldown_until", {}).get(account_id)
         if cooldown_until is not None:

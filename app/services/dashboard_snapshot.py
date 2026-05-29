@@ -24,7 +24,7 @@ async def fetch_prices() -> Dict[str, Any]:
         from app.services.data_hub import data_hub
         loop = asyncio.get_running_loop()
         result = await asyncio.wait_for(
-            loop.run_in_executor(None, data_hub.get_all_prices),
+            loop.run_in_executor(None, data_hub.get_prices_for_ui),
             timeout=SNAPSHOT_TASK_TIMEOUT,
         )
         return result or {}
@@ -48,7 +48,7 @@ async def fetch_bots_and_account_kpis(account_id: int, db: Session) -> Dict[str,
         from app.botengine.state_store import load_state
         from app.services.bot_equity import compute_bot_equity_usd
         from zoneinfo import ZoneInfo
-        from app.utils.tz_utils import turkey_today_start_utc
+        from app.utils.tz_utils import turkey_today_date_str
 
         TR_TZ = ZoneInfo("Europe/Istanbul")
 
@@ -83,8 +83,7 @@ async def fetch_bots_and_account_kpis(account_id: int, db: Session) -> Dict[str,
                 logger.debug("[snapshot] batch last_trade query failed, fallback per-bot: %s", e)
                 last_trade_by_bot = {}
 
-        today_start_loop = turkey_today_start_utc()
-        today_date_loop = today_start_loop.strftime("%Y-%m-%d")
+        today_date_loop = turkey_today_date_str()
         for bot in bots:
             pnl_data = PnlService.calculate_bot_pnl(db, bot.id, account_id)
             initial_usd = 0.0
@@ -212,7 +211,7 @@ async def fetch_finance_pnl(account_id: int, db: Session) -> Dict[str, Any]:
         from app.db.models import Account, Bot, AssetSnapshot
         from app.services.finance_pnl_calculator import FinancePnlCalculator
         from app.services.pnl_service import PnlService
-        from app.utils.tz_utils import turkey_today_start_utc
+        from app.utils.tz_utils import turkey_today_date_str, turkey_today_start_utc
 
         account = db.query(Account).filter(Account.id == account_id).first()
         if not account:

@@ -140,15 +140,43 @@ def _reference_price_from_state(db: Session, bot_id: Optional[int], account_id: 
     if bot_id is None:
         return None
     try:
-        from app.botengine.state_store import load_state
+        from app.botengine.state_store import load_state_json_extract
 
-        state = load_state(db, bot_id) or {}
-        ref = state.get("reference_price")
+        ref = load_state_json_extract(db, bot_id, "$.reference_price")
         if ref is not None and float(ref) > 0:
             return round(float(ref), 8)
     except Exception:
         pass
     return None
+
+
+def _bot_profit_metrics(db: Session, bot: Any) -> Dict[str, Any]:
+    """
+    Dashboard ile aynı equity: compute_bot_equity_usd (DCA state+price).
+    PnlService virtual_wallet tek başına grid botlarda yanlış total_usd verebilir.
+    """
+    from app.botengine.state_store import load_state
+    from app.services.bot_equity import compute_bot_equity_usd
+    from app.services.pnl_service import PnlService
+
+    initial = _initial_capital_from_config(getattr(bot, "config_json", None))
+    out: Dict[str, Any] = {"total_pnl_usd": None, "profit_pct": None, "equity_usd": None}
+    if initial <= 0:
+        return out
+    try:
+        pnl_data = PnlService.calculate_bot_pnl(db, bot.id, bot.account_id)
+        state = load_state(db, bot.id) or {}
+        equity = float(
+            compute_bot_equity_usd(db, bot, state, pnl_data, initial_usd=initial)
+        )
+        total_pnl_usd = round(equity - initial, 2)
+        profit_pct = round((equity - initial) / initial * 100.0, 2)
+        out["equity_usd"] = round(equity, 2)
+        out["total_pnl_usd"] = total_pnl_usd
+        out["profit_pct"] = profit_pct
+    except Exception:
+        pass
+    return out
 
 
 def _live_pnl_fields(
@@ -158,20 +186,17 @@ def _live_pnl_fields(
     config_json_raw: Optional[str],
     stored_profit_pct: Optional[float] = None,
 ) -> Dict[str, Any]:
-    from app.services.pnl_service import PnlService
+    from app.db.models import Bot
 
-    initial = _initial_capital_from_config(config_json_raw)
     profit_pct = stored_profit_pct
     total_pnl_usd = None
-    if bot_id is not None and account_id is not None and initial > 0:
-        try:
-            pnl_data = PnlService.calculate_bot_pnl(db, bot_id, account_id)
-            if not pnl_data.get("error"):
-                total_usd = float(pnl_data.get("total_usd") or 0)
-                total_pnl_usd = round(total_usd - initial, 2)
-                profit_pct = round((total_usd - initial) / initial * 100.0, 2)
-        except Exception:
-            pass
+    if bot_id is not None and account_id is not None:
+        bot = db.query(Bot).filter(Bot.id == bot_id, Bot.account_id == account_id).first()
+        if bot:
+            m = _bot_profit_metrics(db, bot)
+            if m.get("profit_pct") is not None:
+                profit_pct = m["profit_pct"]
+            total_pnl_usd = m.get("total_pnl_usd")
     return {
         "total_pnl_usd": total_pnl_usd,
         "profit_pct": profit_pct,
@@ -219,24 +244,21 @@ def _leaderboard_item_extras(
 def _global_top_from_running_bots(db: Session, limit: int) -> List[Dict[str, Any]]:
     """Live fallback: running bots with profit_pct >= 0 when metrics cache is empty/stale."""
     from app.db.models import Bot
-    from app.services.pnl_service import PnlService
     from app.services.copytrading_sanitize import sanitize_bot_params
 
     candidates: List[tuple] = []
     bots = db.query(Bot).filter(Bot.status == "running").all()
     for bot in bots:
         try:
-            pnl_data = PnlService.calculate_bot_pnl(db, bot.id, bot.account_id)
-            if pnl_data.get("error"):
-                continue
             cfg = json.loads(bot.config_json or "{}")
             initial = float(cfg.get("initial_capital_usdt") or cfg.get("budget_usd") or cfg.get("bot_budget_quote") or 0)
             if initial <= 0:
                 continue
-            total_usd = float(pnl_data.get("total_usd") or 0)
-            profit_pct = (total_usd - initial) / initial * 100.0
-            if profit_pct < 0:
+            metrics = _bot_profit_metrics(db, bot)
+            profit_pct = metrics.get("profit_pct")
+            if profit_pct is None or float(profit_pct) < 0:
                 continue
+            profit_pct = float(profit_pct)
             strategy_id = (cfg.get("strategy_id") or "").strip().lower() or "dca_grid_trailing"
             structure_id = _strategy_to_structure_id(strategy_id)
             params = sanitize_bot_params(bot, None, bot.config_json or "{}")
@@ -284,12 +306,11 @@ def get_global_top(db: Session, limit: int = 1) -> List[Dict[str, Any]]:
                 SELECT bpm.structure_id, bpm.profit_pct_all, bpm.params_sanitized_json, b.started_at, b.symbol, b.id, b.account_id, b.config_json
                 FROM bot_public_metrics bpm
                 INNER JOIN bots b ON b.id = bpm.bot_id
-                WHERE bpm.profit_pct_all >= 0
-                  AND LOWER(TRIM(COALESCE(b.status, ''))) = 'running'
+                WHERE LOWER(TRIM(COALESCE(b.status, ''))) = 'running'
                 ORDER BY bpm.profit_pct_all DESC
                 LIMIT :lim
             """),
-            {"lim": limit},
+            {"lim": max(limit * 3, limit)},
         ).fetchall()
         out: List[Dict[str, Any]] = []
         for row in rows:
@@ -311,10 +332,16 @@ def get_global_top(db: Session, limit: int = 1) -> List[Dict[str, Any]]:
             )
             extras = _leaderboard_item_extras(db, bot_id, account_id, config_json_raw)
             live = _live_pnl_fields(db, bot_id, account_id, config_json_raw, pct)
+            live_pct = live["profit_pct"] if live["profit_pct"] is not None else round(pct, 2)
+            live_pnl = live["total_pnl_usd"]
+            if live_pnl is not None and float(live_pnl) < 0:
+                continue
+            if live_pct is not None and float(live_pct) < 0:
+                continue
             out.append({
                 "structure_id": sid,
-                "profit_pct": live["profit_pct"] if live["profit_pct"] is not None else round(pct, 2),
-                "total_pnl_usd": live["total_pnl_usd"],
+                "profit_pct": live_pct,
+                "total_pnl_usd": live_pnl,
                 "profit_pct_daily": extras["profit_pct_daily"],
                 "daily_pnl_usd": extras["daily_pnl_usd"],
                 "cycles_count": extras["cycles_count"],
@@ -323,6 +350,8 @@ def get_global_top(db: Session, limit: int = 1) -> List[Dict[str, Any]]:
                 "symbol": symbol,
                 "reference_price": ref_price,
             })
+            if len(out) >= limit:
+                break
         if not out:
             out = _global_top_from_running_bots(db, limit)
         return out
@@ -352,15 +381,15 @@ def refresh_bot_public_metrics(db: Session, batch_size: int = 200) -> int:
         now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         for bot in bots:
             try:
-                pnl_data = PnlService.calculate_bot_pnl(db, bot.id, bot.account_id)
-                if pnl_data.get("error"):
-                    continue
-                total_usd = float(pnl_data.get("total_usd") or 0)
                 cfg = json.loads(bot.config_json or "{}")
                 initial = float(cfg.get("initial_capital_usdt") or cfg.get("budget_usd") or cfg.get("bot_budget_quote") or 0)
                 if initial <= 0:
                     continue
-                profit_pct_all = (total_usd - initial) / initial * 100.0
+                metrics = _bot_profit_metrics(db, bot)
+                profit_pct_all = metrics.get("profit_pct")
+                if profit_pct_all is None:
+                    continue
+                profit_pct_all = float(profit_pct_all)
                 strategy_id = (cfg.get("strategy_id") or "").strip().lower() or "dca_grid_trailing"
                 structure_id = _strategy_to_structure_id(strategy_id)
                 params_json = json.dumps(sanitize_bot_params(bot, None, bot.config_json or "{}"), ensure_ascii=False)

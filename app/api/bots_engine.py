@@ -97,7 +97,7 @@ from app.api.auth import get_account_or_403, require_auth, get_client_ip
 from app.botengine.models import DcaGridTrailingConfig, config_from_ui_payload
 from app.services import audit as audit_svc
 from app.botengine.orchestrator import delete_bot_fully, invalidate_config_cache
-from app.botengine.state_store import append_event, ensure_state_row, list_events, load_state, save_state
+from app.botengine.state_store import append_event, ensure_state_row, list_events, load_state, normalize_event_ts_iso_z, save_state
 from app.botengine.grid_view import compute_grid_profit_view, compute_trdca_grid_view
 from app.db.session import get_db
 from app.db.models import Bot, Account, Trade, PnlSnapshot
@@ -271,6 +271,17 @@ def _event_ui_sort_rank(ev: Dict[str, Any]) -> int:
     return 0
 
 
+def _sort_engine_events_asc(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return sorted(
+        events,
+        key=lambda e: (
+            _event_sort_timestamp(e, events),
+            _event_ui_sort_rank(e),
+            int(e.get("id") or 0),
+        ),
+    )
+
+
 def _sort_engine_events_desc(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return sorted(
         events,
@@ -309,7 +320,7 @@ def _merge_synthetic_cycle_start_events(events: List[Dict[str, Any]], state: Opt
             continue
         synthetic.append({
             "id": None,
-            "ts": row.get("ts") or state.get("last_tick_at"),
+            "ts": normalize_event_ts_iso_z(row.get("ts") or state.get("last_tick_at")),
             "type": "CYCLE_START",
             "message": "Tur başladı",
             "meta": {
@@ -376,7 +387,7 @@ def _merge_synthetic_tur_after_initial_fill(
         pass
     synthetic = {
         "id": synth_id,
-        "ts": tur_ts or fill_ts or state.get("last_tick_at"),
+        "ts": normalize_event_ts_iso_z(tur_ts or fill_ts or state.get("last_tick_at")),
         "type": "CYCLE_START",
         "message": "Tur başladı",
         "meta": {
@@ -596,8 +607,13 @@ async def bots_detail(
         if not sym or sym == "MULTI":
             return out
         try:
+            from app.services.data_hub import data_hub
             from app.services.market_data import get_ticker_24h
+            data_hub.pin_symbols([sym])
             t = get_ticker_24h(sym)
+            if not t.get("available"):
+                await data_hub.ensure_symbol_ticker_24h(sym)
+                t = get_ticker_24h(sym)
             pct = t.get("priceChangePercent")
             if pct is not None:
                 out["pct"] = round(float(pct), 2)
@@ -2519,6 +2535,11 @@ async def bots_health(
     except Exception as e:
         logger.debug("bots_health connectivity probe bot_id=%s: %s", bot.id, e)
     state = load_state(db, bot.id) or {}
+    dismiss_id = int(state.get("engine_log_dismiss_before_id") or 0)
+    if not dismiss_id and int(state.get("health_ack_at") or 0) > 0:
+        from app.botengine.engine_log_ack import max_resettable_event_id
+
+        dismiss_id = max_resettable_event_id(list_events(db, bot.id, limit=500))
     alerts = evaluate_bot_health(bot, state, db)
     now_ts = int(datetime.now(timezone.utc).timestamp())
     last_tick = _parse_last_tick_ts(state)
@@ -2533,6 +2554,8 @@ async def bots_health(
         "tick_age_s": round(tick_age, 1) if tick_age is not None else None,
         "tick_interval_s": interval_s,
         "last_error_code": state.get("last_error_code"),
+        "health_ack_at": int(state.get("health_ack_at") or 0),
+        "engine_log_dismiss_before_id": dismiss_id,
         "request_id": rid,
     }
 
@@ -2560,12 +2583,18 @@ async def bots_health_ack(
     if prev_err:
         state["health_ack_error"] = prev_err
     state.pop("health_error_since", None)
+    from app.botengine.engine_log_ack import max_resettable_event_id
+
+    ack_events = list_events(db, bot.id, limit=500)
+    dismiss_before = max_resettable_event_id(ack_events)
+    state["engine_log_dismiss_before_id"] = dismiss_before
     save_state(db, bot.id, bot.account_id, state)
     return {
         "ok": True,
         "bot_id": bot.id,
         "cleared_error": prev_err,
         "health_ack_at": now_ts,
+        "engine_log_dismiss_before_id": dismiss_before,
         "request_id": rid,
     }
 
@@ -2599,9 +2628,16 @@ async def bots_events(
         logger.debug("bots_events connectivity probe bot_id=%s: %s", bot.id, e)
     events = list_events(db, bot.id, limit=limit, after_id=after_id)
     state = load_state(db, bot.id)
+    if after_id is None:
+        dismiss_before = int((state or {}).get("engine_log_dismiss_before_id") or 0)
+        if dismiss_before > 0:
+            from app.botengine.engine_log_ack import filter_events_for_dismiss
+
+            events = filter_events_for_dismiss(events, dismiss_before)
     events = _enrich_command_start_events(events, bot, state)
     events = _merge_synthetic_cycle_start_events(events, state)
     events = _merge_synthetic_tur_after_initial_fill(events, state)[:limit]
+    events = _sort_engine_events_desc(events)
     conn_fail = None
     try:
         from app.services.binance_connectivity import active_failure
@@ -3550,9 +3586,17 @@ async def bots_performance(
         pnl_data = {"total_usd": 0.0, "realized": 0.0, "unrealized": 0.0, "daily": 0.0, "monthly": 0.0, "current_price": 0.0}
 
     now = datetime.now(timezone.utc)
+    from app.services.bot_performance_service import (
+        load_bot_closed_cycles_for_period,
+        resolve_perf_date_range,
+    )
+
+    perf_date_from, perf_date_to, perf_period_label = resolve_perf_date_range(
+        period, bot_id=bot.id, account_id=bot.account_id
+    )
     start_ts, _ = _performance_period_range(period)
 
-    # Trades in period: count + sum(fee) for this bot only
+    # Trades in period (grafik/legacy); metrik kartları dosyadaki kapanan turlardan
     q_trades = db.query(Trade).filter(Trade.bot_id == bot.id, Trade.account_id == bot.account_id)
     if start_ts:
         q_trades = q_trades.filter(Trade.ts >= start_ts)
@@ -3605,18 +3649,25 @@ async def bots_performance(
     dual_perf: Optional[Dict[str, Any]] = None
     initial_for_pnl = config_initial if config_initial > 0 else (initial_usd or 0.0)
     cur_px_perf = float(pnl_data.get("current_price") or 0)
-    if is_trailing_dual_dca and state_for_pnl:
-        dual_perf = _aggregate_dual_perf_closed_cycles(state_for_pnl, start_ts, initial_for_pnl)
-        dual_perf["current_cycle_id"] = int(state_for_pnl.get("cycle_id") or 1)
+    if is_trailing_dual_dca:
+        closed_cycles, perf_date_from, perf_date_to = load_bot_closed_cycles_for_period(
+            db, bot.id, bot.account_id, period, state_for_pnl
+        )
+        from app.services.bot_performance_service import aggregate_dual_perf_closed_cycles
+
+        dual_perf = aggregate_dual_perf_closed_cycles(
+            closed_cycles,
+            initial_capital=initial_for_pnl,
+            date_from=perf_date_from,
+            date_to=perf_date_to,
+        )
+        dual_perf["current_cycle_id"] = int((state_for_pnl or {}).get("cycle_id") or 1)
+        dual_perf["period_date_from"] = perf_date_from
+        dual_perf["period_date_to"] = perf_date_to
+        dual_perf["period_label"] = perf_period_label
         pnl_usd = float(dual_perf["cash_pnl_usdt"])
         pnl_pct = float(dual_perf["cash_pnl_pct"] or 0.0)
-        fees_usd = float(dual_perf["cash_fees_usdt"])
-    elif is_trailing_dual_dca:
-        dual_perf = _aggregate_dual_perf_closed_cycles(None, start_ts, initial_for_pnl)
-        dual_perf["current_cycle_id"] = 1
-        pnl_usd = 0.0
-        pnl_pct = 0.0
-        fees_usd = 0.0
+        fees_usd = float(dual_perf["cash_fees_usdt"]) + float(dual_perf.get("inventory_fees_usdt") or 0)
     if dual_perf is not None and initial_for_pnl > 0 and cur_px_perf > 0:
         inv_coin = float(dual_perf.get("inventory_pnl_coin") or 0)
         dual_perf["inventory_pnl_pct"] = round(inv_coin * cur_px_perf / initial_for_pnl * 100.0, 2)

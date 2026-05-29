@@ -80,26 +80,20 @@ class BinanceAdapter:
             pass
         if not self.paper_mode and self.keys:
             try:
-                from app.services.binance_spot import fetch_exchange_info
-                info = await fetch_exchange_info(
+                from app.services.binance_spot import get_cached_symbol_filters
+
+                cached_ex = await get_cached_symbol_filters(
+                    symbol,
                     testnet=getattr(self.keys, "testnet", False),
                     force_refresh=False,
                 )
-                for s in info.get("symbols") or []:
-                    if (s.get("symbol") or "").upper() != symbol:
-                        continue
-                    raw: Dict[str, Any] = {"min_notional": 5.0}
-                    for f in s.get("filters") or []:
-                        t = f.get("filterType")
-                        if t == "LOT_SIZE":
-                            raw["step_size_str"] = str(f.get("stepSize") or "0.00001")
-                            raw["min_qty_str"] = str(f.get("minQty") or raw["step_size_str"])
-                        elif t == "PRICE_FILTER":
-                            raw["tick_size_str"] = str(f.get("tickSize") or "0.01")
-                        elif t in ("MIN_NOTIONAL", "NOTIONAL"):
-                            raw["min_notional"] = float(
-                                f.get("minNotional") or f.get("notional") or 5
-                            )
+                if cached_ex:
+                    raw = {
+                        "step_size_str": cached_ex.get("step_size_str"),
+                        "min_qty_str": cached_ex.get("min_qty_str"),
+                        "tick_size_str": cached_ex.get("tick_size_str"),
+                        "min_notional": cached_ex.get("min_notional", 5.0),
+                    }
                     out = normalize_symbol_filters(raw)
                     self._filters_cache[symbol] = out
                     return out

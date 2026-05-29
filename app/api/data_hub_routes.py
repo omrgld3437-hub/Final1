@@ -64,8 +64,14 @@ async def get_datahub_status():
     return data_hub.get_status()
 
 @router.get("/data/prices")
-async def get_prices():
-    """Get all cached prices"""
+async def get_prices(
+    slim: int = Query(0, description="1 = UI/ worker slim snapshot (~200 symbols)"),
+    symbols: Optional[str] = Query(None, description="Virgülle ayrılmış; slim=1 iken her zaman dahil (ör. ETHUSDT)"),
+):
+    """Cached prices. Worker sync should use slim=1 to limit RAM."""
+    if slim:
+        extra = [s.strip().upper() for s in (symbols or "").split(",") if s.strip()]
+        return data_hub.get_prices_for_ui(ensure_symbols=extra or None)
     return data_hub.get_all_prices()
 
 @router.get("/data/coin-list")

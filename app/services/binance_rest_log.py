@@ -46,7 +46,13 @@ _PATH_MIN_INTERVAL_SINGLE: Dict[str, float] = {
 
 _lock = threading.Lock()
 _window_start = time.time()
-_events: Deque[Dict[str, Any]] = deque(maxlen=5000)
+_REST_EVENTS_MAX = int(os.getenv("REST_EVENTS_MAX", "1200"))
+_events: Deque[Dict[str, Any]] = deque(maxlen=max(200, _REST_EVENTS_MAX))
+
+
+def get_rest_events_buffer_info() -> Dict[str, Any]:
+    """RAM capture: deque boyutu (okuma güvenli)."""
+    return {"deque_len": len(_events), "maxlen": _events.maxlen}
 _last_path_ts: Dict[str, float] = {}
 _flush_task: Optional[asyncio.Task] = None
 _denied_by_reason: Dict[str, int] = defaultdict(int)

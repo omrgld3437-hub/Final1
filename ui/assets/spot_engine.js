@@ -23,8 +23,9 @@ class SpotEngine {
         this.abortControllers = new Map();
         
         // TTL constants (ms)
-        this.PRICE_TTL = 1000;      // 1 second
+        this.PRICE_TTL = 4000;      // 4s — sunucu spot_cache ile uyumlu, REST yükünü azalt
         this.QUICK_DATA_TTL = 2000; // 2 seconds
+        this._MAX_PRICE_CACHE = 64;
     }
     
     // ============================================================
@@ -43,6 +44,10 @@ class SpotEngine {
     }
     
     setCachedPrice(symbol, price) {
+        if (this.cache.prices.size >= this._MAX_PRICE_CACHE) {
+            const first = this.cache.prices.keys().next().value;
+            if (first) this.cache.prices.delete(first);
+        }
         this.cache.prices.set(symbol, { price, ts: Date.now() });
     }
     

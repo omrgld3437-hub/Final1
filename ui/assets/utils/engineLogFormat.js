@@ -296,35 +296,77 @@
     function parseEventTsMs(ts) {
         if (!ts) return 0;
         var s = String(ts).trim();
-        if (s && s.indexOf('T') < 0 && s.indexOf(' ') > 0) {
+        if (s.indexOf('T') < 0 && s.indexOf(' ') > 0) {
             s = s.replace(' ', 'T');
+        }
+        // Naive ISO → UTC (backend normalize_event_ts_iso_z ile uyumlu)
+        if (s.indexOf('Z') < 0 && s.indexOf('+') < 0 && s.indexOf('-', 10) < 0) {
+            s = s + 'Z';
         }
         var d = new Date(s);
         if (isNaN(d.getTime())) return 0;
         return d.getTime();
     }
 
-    function eventDisplayRank(ev) {
-        var meta = ev.meta || {};
-        if (ev.type === 'ORDER_FILLED' && String(meta.reason || '').trim() === 'initial_allocation') {
-            return 2;
-        }
-        if (ev.type === 'CYCLE_START' && (meta.first_tur || String(meta.reason || '').trim() === 'initial_allocation')) {
-            return 1;
-        }
-        return 0;
+    function formatEventTs(ts) {
+        var ms = parseEventTsMs(ts);
+        if (ms <= 0) return '—';
+        return new Date(ms).toLocaleString('tr-TR', { timeZone: 'Europe/Istanbul' });
     }
 
+    function eventDisplayRank(ev) {
+        var meta = ev.meta || {};
+        var ty = String(ev.type || '').toUpperCase();
+        var reason = String(meta.reason || '').trim();
+        var raw = String(ev.message || '');
+
+        if (ty === 'INFO' && /COMMAND_EXECUTED.*START/i.test(raw) && meta.connectivity_resume !== true) {
+            return 10;
+        }
+        if (ty === 'ORDER_FILLED' && reason === 'initial_allocation') {
+            return 20;
+        }
+        if (ty === 'CYCLE_START') {
+            var cid = Number(meta.cycle_id != null ? meta.cycle_id : 1);
+            if (meta.first_tur || reason === 'initial_allocation') return 30;
+            return 700 + cid * 10;
+        }
+        if (ty === 'ORDER_FILLED' && (reason === 'trail_sell_grid' || reason === 'trail_buy_grid')) {
+            var gi = Number(meta.grid_index);
+            return 400 + (isNaN(gi) ? 0 : gi);
+        }
+        if (ty === 'ORDER_FILLED' && (reason === 'trail_reentry_buy' || reason === 'trail_profit_sell')) {
+            return 550;
+        }
+        if (ty === 'CYCLE_END') {
+            return 600 + Number(meta.cycle_id != null ? meta.cycle_id : 0);
+        }
+        return 500;
+    }
+
+    function compareEngineEventsAsc(a, b, list) {
+        var ta = eventSortTimestamp(a, list);
+        var tb = eventSortTimestamp(b, list);
+        if (ta !== tb) return ta - tb;
+        var ra = eventDisplayRank(a);
+        var rb = eventDisplayRank(b);
+        if (ra !== rb) return ra - rb;
+        return Number(a.id || 0) - Number(b.id || 0);
+    }
+
+    /** Yeni → eski (canlı log: en yeni üstte, start altta). */
     function sortEngineEventsDesc(events) {
         var list = events || [];
         return list.slice().sort(function (a, b) {
-            var ta = eventSortTimestamp(a, list);
-            var tb = eventSortTimestamp(b, list);
-            if (tb !== ta) return tb - ta;
-            var ra = eventDisplayRank(a);
-            var rb = eventDisplayRank(b);
-            if (rb !== ra) return rb - ra;
-            return Number(b.id || 0) - Number(a.id || 0);
+            return -compareEngineEventsAsc(a, b, list);
+        });
+    }
+
+    /** Eski → yeni (hikâye/export). */
+    function sortEngineEventsAsc(events) {
+        var list = events || [];
+        return list.slice().sort(function (a, b) {
+            return compareEngineEventsAsc(a, b, list);
         });
     }
 
@@ -372,6 +414,18 @@
             var profitFee = num(meta.fee);
             if (profitFee != null && profitFee > 0) profitParts.push('komisyon ' + fmtUsd(profitFee, false));
             return joinParts(profitParts);
+        }
+
+        if (reason === 'trail_reentry_buy') {
+            var reentryParts = [meta.repaired ? 'Kayıt onarıldı' : null, 'Kar alımı gerçekleşti'];
+            if (qty != null && price != null) {
+                reentryParts.push(fmtQty(qty) + ' @ $' + price.toFixed(2));
+                reentryParts.push('tutar ' + fmtUsd(qty * price, false));
+            }
+            var reentryFee = num(meta.fee);
+            if (reentryFee != null && reentryFee > 0) reentryParts.push('komisyon ' + fmtUsd(reentryFee, false));
+            if (meta.cycle_id != null) reentryParts.push('tur ' + meta.cycle_id);
+            return joinParts(reentryParts);
         }
 
         var used = { side: 1, fill_qty: 1, fill_price: 1, fee: 1, reason: 1, grid_index: 1, symbol: 1, cycle_id: 1, order_id: 1, client_order_id: 1, status: 1 };
@@ -841,7 +895,12 @@
             return { hidden: true };
         }
         if (!options.forExport && _logContext.botId && global.BotHealthAlerts && global.BotHealthAlerts.shouldHideResetLogEvent
-            && global.BotHealthAlerts.shouldHideResetLogEvent(ev, _logContext.botId)) {
+            && global.BotHealthAlerts.shouldHideResetLogEvent(
+                ev,
+                _logContext.botId,
+                _logContext.events,
+                _logContext.healthData
+            )) {
             return { hidden: true };
         }
         if (!options.forExport && ty === 'INFO' && shouldHideDuplicateBotStart(ev, meta, raw)) {
@@ -1010,6 +1069,9 @@
     function setLogContext(ctx) {
         if (ctx && typeof ctx === 'object') {
             _logContext = Object.assign({}, _logContext, ctx);
+            if (typeof global !== 'undefined' && global._lastHealthData) {
+                _logContext.healthData = _logContext.healthData || global._lastHealthData;
+            }
         } else {
             _logContext = {};
         }
@@ -1021,6 +1083,9 @@
         hasRecentCritical: hasRecentCritical,
         rowClass: rowClass,
         setLogContext: setLogContext,
-        sortEngineEventsDesc: sortEngineEventsDesc
+        sortEngineEventsAsc: sortEngineEventsAsc,
+        sortEngineEventsDesc: sortEngineEventsDesc,
+        parseEventTsMs: parseEventTsMs,
+        formatEventTs: formatEventTs
     };
 })(typeof window !== 'undefined' ? window : globalThis);

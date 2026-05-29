@@ -43,10 +43,14 @@ _RUN_DIR = _PROJECT_ROOT / ".run"
 _LOGS_DIR = _PROJECT_ROOT / "logs"
 _LOCKS_FILE = _RUN_DIR / "locks.json"
 _DIAGNOSIS_FILE = _RUN_DIR / "diagnosis.json"
+_BLOCKED_IPS_FILE = _RUN_DIR / "blocked_ips.json"
 _HELPER = _PROJECT_ROOT / "scripts" / "runtime" / "local_web_worker_helper.py"
+_MANAGER_REBOOT = _PROJECT_ROOT / "scripts" / "runtime" / "manager_reboot.py"
 _WEB_METRICS_FILE = _RUN_DIR / "web.metrics.json"
 _ENGINE_METRICS_FILE = _RUN_DIR / "engine.metrics.json"
 _MANAGER_PID_FILE = _RUN_DIR / "manager.pid"
+_MANAGER_STARTED_FILE = _RUN_DIR / "manager.started_at"
+_SESSION_STARTED_FILE = _RUN_DIR / "session.started_at"
 
 # Server keys: "web" | "engine" | "manager" | "html"
 _WEB_PID = _RUN_DIR / "web.pid"
@@ -88,8 +92,10 @@ _METRICS_TOP_PATHS = 30
 _METRICS_TOP_IPS = 30
 _METRICS_LOGIN_FAILS = 30
 
-# Parsing
-_ERROR_RE = re.compile(r"\b(ERROR|Traceback|Exception|CRITICAL)\b", re.I)
+# Parsing — önce standart Python log seviyesi (" - INFO - "); error= alanı ERROR sayılmaz
+_PY_LOG_LEVEL_RE = re.compile(r"\s-\s(WARNING|ERROR|CRITICAL|INFO|DEBUG)\s-", re.I)
+_BRACKET_LEVEL_RE = re.compile(r"\]\s*(WARNING|ERROR|CRITICAL|INFO|DEBUG)\s+", re.I)
+_ERROR_FALLBACK_RE = re.compile(r"Traceback \(most recent call last\)|\b(ERROR|CRITICAL)\s", re.I)
 _WARN_RE = re.compile(r"\b(WARN(?:ING)?)\b", re.I)
 # 401/Binance tekrarlarını ring'e ekleme: servis başına 10 dk'da en fazla 1
 _WARN_401_THROTTLE_SEC = 600
@@ -213,15 +219,21 @@ def _query_jsonl_archive(
     lines = [ln for ln in text.splitlines() if ln.strip()]
     if len(lines) > max_scan:
         lines = lines[-max_scan:]
+    need = max(0, offset) + max(0, limit)
     matched: list = []
+    extra = 0
     for line in reversed(lines):
         try:
             rec = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if match_fn(rec):
+        if not match_fn(rec):
+            continue
+        if len(matched) < need:
             matched.append(rec)
-    total = len(matched)
+        else:
+            extra += 1
+    total = len(matched) + extra
     return matched[offset: offset + limit], total
 
 
@@ -339,10 +351,79 @@ def _process_metrics(pid: Optional[int], started_at: Optional[float]) -> dict:
     return out
 
 
+def _reset_session_chrono() -> float:
+    """Sistem çalışması kronometresi — manager açılışında veya global start/restart'ta sıfırlanır."""
+    _RUN_DIR.mkdir(parents=True, exist_ok=True)
+    now = time.time()
+    try:
+        _SESSION_STARTED_FILE.write_text(str(now), encoding="utf-8")
+    except Exception:
+        pass
+    return now
+
+
+def _session_uptime_s() -> int:
+    """session.started_at dosyasından geçen süre (saniye)."""
+    if not _SESSION_STARTED_FILE.is_file():
+        return 0
+    try:
+        started = float(_SESSION_STARTED_FILE.read_text(encoding="utf-8").strip())
+        return max(0, int(time.time() - started))
+    except Exception:
+        return 0
+
+
+def _session_started_ts() -> Optional[float]:
+    if not _SESSION_STARTED_FILE.is_file():
+        return None
+    try:
+        return float(_SESSION_STARTED_FILE.read_text(encoding="utf-8").strip())
+    except Exception:
+        return None
+
+
+def _system_uptime_s() -> Optional[int]:
+    """OS boot'tan bu yana saniye; psutil + platform yedekleri."""
+    if psutil:
+        try:
+            boot = psutil.boot_time()
+            if boot:
+                return max(0, int(time.time() - boot))
+        except Exception:
+            pass
+    if not _IS_WINDOWS:
+        if sys.platform == "darwin":
+            try:
+                r = subprocess.run(
+                    ["sysctl", "-n", "kern.boottime"],
+                    capture_output=True,
+                    text=True,
+                    timeout=3,
+                )
+                m = re.search(r"sec\s*=\s*(\d+)", r.stdout or "")
+                if m:
+                    return max(0, int(time.time() - int(m.group(1))))
+            except Exception:
+                pass
+        else:
+            try:
+                with open("/proc/uptime", encoding="utf-8") as f:
+                    parts = (f.read() or "").split()
+                    if parts:
+                        return max(0, int(float(parts[0])))
+            except Exception:
+                pass
+    return None
+
+
 def _collect_metrics() -> None:
     """Update metrics_cache once: system + manager/web/engine + app JSON files. All lists capped."""
     global metrics_cache
-    system = {"cpu_pct": None, "ram_used_mb": None, "ram_total_mb": None, "disk_used_mb": None, "disk_total_mb": None, "net_bytes_sent": None, "net_bytes_recv": None, "load_avg": None}
+    system = {"cpu_pct": None, "ram_used_mb": None, "ram_total_mb": None, "disk_used_mb": None, "disk_total_mb": None, "net_bytes_sent": None, "net_bytes_recv": None, "load_avg": None, "cpu_count": None, "uptime_s": None}
+    try:
+        system["cpu_count"] = os.cpu_count() or 1
+    except Exception:
+        system["cpu_count"] = 1
     if psutil:
         try:
             system["cpu_pct"] = round(psutil.cpu_percent(interval=0.1) or 0, 1)
@@ -364,11 +445,16 @@ def _collect_metrics() -> None:
                 pass
         except Exception:
             pass
+    system["uptime_s"] = _session_uptime_s()
+    system["session_started_at"] = _session_started_ts()
+    os_uptime = _system_uptime_s()
+    if os_uptime is not None:
+        system["os_uptime_s"] = os_uptime
     manager_pid = _read_pid(_MANAGER_PID_FILE) if _MANAGER_PID_FILE.exists() else os.getpid()
     manager_started = None
-    if (_RUN_DIR / "manager.started_at").exists():
+    if _MANAGER_STARTED_FILE.exists():
         try:
-            manager_started = float((_RUN_DIR / "manager.started_at").read_text().strip())
+            manager_started = float(_MANAGER_STARTED_FILE.read_text(encoding="utf-8").strip())
         except Exception:
             pass
     web_pid = _read_pid(_WEB_PID)
@@ -481,6 +567,17 @@ def get_metrics() -> dict:
         ea = _read_json_capped(_ENGINE_METRICS_FILE)
         if ea:
             out["engine_app"] = ea
+    sys_obj = out.setdefault("system", {})
+    sys_obj["uptime_s"] = _session_uptime_s()
+    sys_obj["session_started_at"] = _session_started_ts()
+    os_uptime = _system_uptime_s()
+    if os_uptime is not None:
+        sys_obj["os_uptime_s"] = os_uptime
+    if sys_obj.get("cpu_count") is None:
+        try:
+            sys_obj["cpu_count"] = os.cpu_count() or 1
+        except Exception:
+            sys_obj["cpu_count"] = 1
     return out
 
 
@@ -585,6 +682,13 @@ def save_locks(l: dict) -> None:
 
 def init_state() -> None:
     global status, logs_ring, errors_ring, warns_ring, locks
+    _RUN_DIR.mkdir(parents=True, exist_ok=True)
+    _reset_session_chrono()
+    try:
+        _MANAGER_PID_FILE.write_text(str(os.getpid()), encoding="utf-8")
+        _MANAGER_STARTED_FILE.write_text(str(time.time()), encoding="utf-8")
+    except Exception:
+        pass
     _load_audit()
     from manager_server import issue_file_store
 
@@ -618,11 +722,13 @@ def init_state() -> None:
     # Manager: this process; status from .run/manager.pid and manager.started_at
     manager_pid = _read_pid(_MANAGER_PID_FILE) if _MANAGER_PID_FILE.exists() else os.getpid()
     manager_started = None
-    if (_RUN_DIR / "manager.started_at").exists():
+    if _MANAGER_STARTED_FILE.exists():
         try:
-            manager_started = float((_RUN_DIR / "manager.started_at").read_text().strip())
+            manager_started = float(_MANAGER_STARTED_FILE.read_text(encoding="utf-8").strip())
         except Exception:
             pass
+    if manager_started is None:
+        manager_started = _session_started_ts()
     status["manager"] = {
         "running": True,  # we are the manager
         "pid": manager_pid,
@@ -653,10 +759,25 @@ def init_state() -> None:
         "locked": False,
         "restart_count": 0,
     }
+    try:
+        _produce_and_store_diagnosis("manager", "RUNNING")
+        if status["html"]["running"]:
+            _produce_and_store_diagnosis("html", "RUNNING")
+    except Exception:
+        pass
 
 
 def classify_line(line: str) -> str:
-    if _ERROR_RE.search(line):
+    """Log seviyesi: Python ' - LEVEL - ' alanı; error= parametresi ERROR değildir."""
+    m = _PY_LOG_LEVEL_RE.search(line) or _BRACKET_LEVEL_RE.search(line)
+    if m:
+        lvl = m.group(1).upper()
+        if lvl == "WARNING":
+            return "WARN"
+        if lvl in ("ERROR", "CRITICAL"):
+            return "ERROR"
+        return "INFO"
+    if _ERROR_FALLBACK_RE.search(line):
         return "ERROR"
     if _WARN_RE.search(line):
         return "WARN"
@@ -676,13 +797,24 @@ def _is_noise_line(line: str, level: str) -> bool:
     if not s:
         return True
     if level == "ERROR":
+        # Eski manager sürümü: log ring okuma/yazma yarışı (güncel sürümde kilitli; panel gürültüsü)
+        if "deque mutated during iteration" in s:
+            return True
         # WebSocket normal kapanma (1000/1001) — istemci sayfadan ayrıldığında beklenen davranış
         if "ConnectionClosedOK" in s or "1001 (going away)" in s or "received 1001" in s:
             return True
         # Sadece "Traceback (most recent call last):" başlığı, stack yok
         if s == "Traceback (most recent call last):" or s.startswith("Traceback (most recent call last):") and len(s) < 80:
             return True
+        # Tam yeniden başlat: eski Manager kapanmadan yeni süreç 7999'a bind dener (geçici)
+        if ("EADDRINUSE" in s or "Address already in use" in s or "error while attempting to bind" in s) and (
+            "7999" in s or "127.0.0.1', 7999" in s
+        ):
+            return True
     if level == "WARN":
+        # Finans senkron: sembol önbelleği boşken yedek liste — beklenen, işlem devam eder
+        if "[TradeSync] Symbol cache empty" in s:
+            return True
         # Kesik veya anlamsız: sadece "warnings.warn(" gibi
         if re.match(r"^\s*warnings\.warn\s*\(\s*$", s) or (s.startswith("warnings.warn(") and len(s) < 30):
             return True
@@ -691,6 +823,27 @@ def _is_noise_line(line: str, level: str) -> bool:
             return True
         # Manager kendi /api/issues/summary 404 probe satırları — panel gürültüsü
         if "/api/issues/summary" in s and "404" in s:
+            return True
+        # Eski Manager sürümü: güvenlik IP engel API'si yokken UI probe
+        if "/api/security/" in s and "404" in s:
+            return True
+        # Eski rota: /api/server/manager/restart {key} çakışması → 400
+        if "/api/server/manager/restart" in s and " 400" in s:
+            return True
+        if "/api/stack/restart" in s and (" 400" in s or " 404" in s):
+            return True
+        if "/api/server/manager/restart" in s and " 404" in s:
+            return True
+        # Cüzdan yenileme import (düzeltildi / geçmiş spam)
+        if "wallet_refresh_attempt error_code=ImportError" in s:
+            return True
+        if "wallet_refresh_attempt error_code=WALLET_MODULE_MISSING" in s:
+            return True
+        if "get_price_map_flat" in s and "wallet_refresh" in s:
+            return True
+    if level == "ERROR":
+        # INFO yanlış sınıflandırma düzeltmesi öncesi: home_wallet_refresh error=...
+        if "home_wallet_refresh" in s and " error=" in s and " - INFO - " in s:
             return True
     return False
 
@@ -708,8 +861,9 @@ def _should_throttle_401_warn(key: str, line: str) -> bool:
         if now - placeholder_last >= _WARN_401_THROTTLE_SEC:
             _last_401_placeholder_ts[key] = now
             placeholder = "[401/Binance uyarısı – tekrarlar 10 dk throttle, panelde tek satır gösterilir]"
-            if key in warns_ring:
-                warns_ring[key].append(placeholder)
+            with _rings_lock:
+                if key in warns_ring:
+                    warns_ring[key].append(placeholder)
         return True
     _last_401_warn_ts[key] = now
     return False
@@ -1119,7 +1273,7 @@ def _load_diagnosis() -> None:
         with _diagnosis_lock:
             data = json.loads(_DIAGNOSIS_FILE.read_text(encoding="utf-8"))
             if isinstance(data, dict):
-                _diagnosis = {k: v for k, v in data.items() if k in ("web", "engine", "manager") and isinstance(v, dict)}
+                _diagnosis = {k: v for k, v in data.items() if k in ("web", "engine", "manager", "html") and isinstance(v, dict)}
     except Exception:
         pass
 
@@ -1153,8 +1307,138 @@ def _diagnosis_context(key: str) -> tuple:
     return restart_count_5m, last_audit_was_stop
 
 
+def _ensure_diagnosis_current() -> None:
+    """Store'da eksik veya güncel olmayan manager/html teşhislerini tamamla."""
+    with _diagnosis_lock:
+        mgr = _diagnosis.get("manager") or {}
+    if mgr.get("reason_code") != "RUNNING":
+        _produce_and_store_diagnosis("manager", "RUNNING")
+
+    html_up = _is_port_in_use(_HTML_PORT)
+    html_pid = _pid_on_port(_HTML_PORT) if html_up else None
+    if "html" in status:
+        status["html"]["running"] = html_up
+        status["html"]["pid"] = html_pid
+    with _diagnosis_lock:
+        html_d = _diagnosis.get("html") or {}
+    if html_up:
+        if html_d.get("reason_code") != "RUNNING":
+            _produce_and_store_diagnosis("html", "RUNNING")
+    elif html_d.get("reason_code") == "RUNNING":
+        _produce_and_store_diagnosis("html", "STOPPED")
+
+
+def _patch_running_diagnosis_pids(live: Optional[dict] = None) -> None:
+    """RUNNING teşhisinde evidence.pid/port değerlerini güncel status ile hizala."""
+    ports = {"web": 8000, "manager": 7999, "html": 8080}
+    changed_any = False
+    with _diagnosis_lock:
+        for key in ("web", "engine", "manager", "html"):
+            d = _diagnosis.get(key)
+            if not d or d.get("reason_code") != "RUNNING":
+                continue
+            st = (live or {}).get(key) or status.get(key) or {}
+            if not st.get("running"):
+                continue
+            ev = dict(d.get("evidence") or {})
+            patched = False
+            live_pid = st.get("pid")
+            if live_pid is not None and ev.get("pid") != live_pid:
+                ev["pid"] = live_pid
+                patched = True
+            port = ports.get(key)
+            if port is not None and ev.get("port") != port:
+                ev["port"] = port
+                patched = True
+            if patched:
+                nd = dict(d)
+                nd["evidence"] = ev
+                _diagnosis[key] = nd
+                changed_any = True
+    if changed_any:
+        _save_diagnosis()
+
+
+_blocked_ips_lock = threading.Lock()
+
+
+def _load_blocked_ips() -> dict:
+    if not _BLOCKED_IPS_FILE.exists():
+        return {}
+    try:
+        raw = json.loads(_BLOCKED_IPS_FILE.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            return {}
+        out = {}
+        for ip, meta in raw.items():
+            if isinstance(ip, str) and ip.strip() and isinstance(meta, dict):
+                out[ip.strip()] = meta
+        return out
+    except Exception:
+        return {}
+
+
+def _save_blocked_ips(data: dict) -> None:
+    try:
+        _RUN_DIR.mkdir(parents=True, exist_ok=True)
+        tmp = _BLOCKED_IPS_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(_BLOCKED_IPS_FILE)
+    except Exception:
+        pass
+
+
+def get_blocked_ips() -> list:
+    """Aktif engelli IP listesi (Manager güvenlik paneli)."""
+    with _blocked_ips_lock:
+        data = _load_blocked_ips()
+    items = []
+    for ip, meta in sorted(data.items()):
+        items.append({
+            "ip": ip,
+            "reason": meta.get("reason") or "",
+            "banned_at": meta.get("banned_at") or "",
+        })
+    return items
+
+
+def ban_ip(ip: str, reason: str = "Manager güvenlik paneli") -> dict:
+    ip = (ip or "").strip()
+    if not ip:
+        raise ValueError("IP gerekli")
+    with _blocked_ips_lock:
+        data = _load_blocked_ips()
+        entry = {
+            "reason": (reason or "Manager güvenlik paneli")[:200],
+            "banned_at": _now_tr_iso(),
+            "banned_by": "manager",
+        }
+        data[ip] = entry
+        _save_blocked_ips(data)
+    audit_event("ip_ban", {"ip": ip, "reason": reason})
+    return {"ok": True, "ip": ip, **entry}
+
+
+def unban_ip(ip: str) -> dict:
+    ip = (ip or "").strip()
+    if not ip:
+        raise ValueError("IP gerekli")
+    removed = False
+    with _blocked_ips_lock:
+        data = _load_blocked_ips()
+        if ip in data:
+            del data[ip]
+            _save_blocked_ips(data)
+            removed = True
+    if removed:
+        audit_event("ip_unban", {"ip": ip})
+    return {"ok": removed, "ip": ip}
+
+
 def get_diagnosis(service: Optional[str] = None) -> dict:
-    """Returns diagnosis dict(s). If service is None, returns { web: {...}, engine: {...}, manager: {...} }."""
+    """Returns diagnosis dict(s). If service is None, returns { web: {...}, engine: {...}, manager: {...}, html: {...} }."""
+    _ensure_diagnosis_current()
+    _patch_running_diagnosis_pids()
     with _diagnosis_lock:
         if service:
             return _diagnosis.get(service) or {}
@@ -1309,7 +1593,7 @@ def get_status() -> dict:
         if alive:
             with _diagnosis_lock:
                 cur = _diagnosis.get(key) or {}
-            if cur.get("state") not in (None, "RUNNING"):
+            if cur.get("reason_code") != "RUNNING":
                 _produce_and_store_diagnosis(key, "RUNNING")
         out[key] = {
             "running": alive,
@@ -1320,6 +1604,10 @@ def get_status() -> dict:
         }
     # Manager: always running (we are it)
     manager_pid = _read_pid(_MANAGER_PID_FILE) if _MANAGER_PID_FILE.exists() else os.getpid()
+    with _diagnosis_lock:
+        mgr_diag = _diagnosis.get("manager") or {}
+    if mgr_diag.get("reason_code") != "RUNNING":
+        _produce_and_store_diagnosis("manager", "RUNNING")
     out["manager"] = {
         "running": True,
         "pid": manager_pid,
@@ -1344,13 +1632,19 @@ def get_status() -> dict:
         "started_at": status["html"].get("started_at"),
         "restart_count": status["html"].get("restart_count", 0),
     }
+    if html_running:
+        with _diagnosis_lock:
+            html_diag = _diagnosis.get("html") or {}
+        if html_diag.get("reason_code") != "RUNNING":
+            _produce_and_store_diagnosis("html", "RUNNING")
+    _patch_running_diagnosis_pids(out)
     return out
 
 
 def _produce_and_store_diagnosis(key: str, state: str, exit_code: Optional[int] = None, signal: Optional[str] = None) -> None:
     from manager_server.reason_engine import diagnose as reason_diagnose
     restart_count_5m, last_audit_was_stop = _diagnosis_context(key)
-    port = 8000 if key == "web" else (7999 if key == "manager" else None)
+    port = 8000 if key == "web" else (7999 if key == "manager" else (_HTML_PORT if key == "html" else None))
     log_data = get_logs(key, 200)
     last_lines = log_data.get("lines") or []
     d = reason_diagnose(
@@ -1592,7 +1886,14 @@ def _do_stop_html() -> bool:
 
 def do_start(key: str) -> bool:
     if key == "html":
-        return _do_start_html()
+        _do_start_html()
+        time.sleep(1.5)
+        get_status()
+        if status["html"]["running"]:
+            _produce_and_store_diagnosis("html", "RUNNING")
+        else:
+            _produce_and_store_diagnosis("html", "START_FAILED")
+        return status["html"]["running"]
     if key not in ("web", "engine"):
         return False
     helper_action = "web-start" if key == "web" else "worker-start"
@@ -1618,7 +1919,11 @@ def do_start(key: str) -> bool:
 
 def do_stop(key: str) -> bool:
     if key == "html":
-        return _do_stop_html()
+        _do_stop_html()
+        time.sleep(0.5)
+        get_status()
+        _produce_and_store_diagnosis("html", "STOPPED")
+        return not status["html"]["running"]
     if key not in ("web", "engine"):
         return False
     helper_action = "web-stop" if key == "web" else "worker-stop"
@@ -1643,7 +1948,15 @@ def do_restart(key: str) -> bool:
     if key == "html":
         _do_stop_html()
         time.sleep(1)
-        return _do_start_html()
+        _do_start_html()
+        time.sleep(1.5)
+        get_status()
+        if status["html"]["running"]:
+            _produce_and_store_diagnosis("html", "RUNNING")
+        else:
+            _produce_and_store_diagnosis("html", "START_FAILED")
+        audit_event("restart", {"service": "html"})
+        return status["html"]["running"]
     if key not in ("web", "engine"):
         return False
     status[key]["restart_count"] = status[key].get("restart_count", 0) + 1
@@ -1670,7 +1983,74 @@ def do_restart(key: str) -> bool:
     return status[key]["running"]
 
 
+_REBOOT_LOCK_FILE = _RUN_DIR / "stack_reboot.lock"
+
+
+def _spawn_manager_reboot() -> bool:
+    """Detached reboot helper: eski PID kapanınca manager_server yeniden başlar."""
+    if _REBOOT_LOCK_FILE.is_file():
+        try:
+            holder = int(_REBOOT_LOCK_FILE.read_text(encoding="utf-8").strip())
+            if _process_alive(holder):
+                return True
+        except Exception:
+            pass
+    if not _MANAGER_REBOOT.is_file():
+        logging.getLogger(__name__).error("manager_reboot.py missing: %s", _MANAGER_REBOOT)
+        return False
+    old_pid = os.getpid()
+    allow_remote = (os.environ.get("MANAGER_ALLOW_REMOTE") or "").strip()
+    cmd = [
+        _python_exe(),
+        str(_MANAGER_REBOOT),
+        "--old-pid",
+        str(old_pid),
+        "--root",
+        str(_PROJECT_ROOT),
+        "--python",
+        _python_exe(),
+    ]
+    if allow_remote:
+        cmd.extend(["--allow-remote", allow_remote])
+    cmd.append("--full-stack")
+    try:
+        kw: dict = {"cwd": str(_PROJECT_ROOT), "stdin": subprocess.DEVNULL}
+        if _IS_WINDOWS:
+            flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
+            kw["creationflags"] = flags
+        else:
+            kw["start_new_session"] = True
+        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **kw)
+        return True
+    except Exception as e:
+        logging.getLogger(__name__).error("manager reboot spawn failed: %s", e)
+        return False
+
+
+def _exit_manager_after_delay(delay_s: float = 0.75) -> None:
+    def _go() -> None:
+        time.sleep(delay_s)
+        try:
+            os.kill(os.getpid(), signal.SIGTERM)
+        except Exception:
+            os._exit(0)
+
+    threading.Thread(target=_go, daemon=True).start()
+
+
+def schedule_manager_restart() -> bool:
+    """Manager dahil tüm stack'i yeniden başlat (panel API)."""
+    _reset_session_chrono()
+    if not _spawn_manager_reboot():
+        return False
+    status["manager"]["restart_count"] = status["manager"].get("restart_count", 0) + 1
+    audit_event("restart", {"service": "stack", "full_process": True, "includes": ["manager", "web", "engine", "html"]})
+    _exit_manager_after_delay()
+    return True
+
+
 def global_start() -> tuple[list, list]:
+    _reset_session_chrono()
     locks = load_locks()
     applied, skipped = [], []
     for key in ("web", "engine"):
@@ -1703,6 +2083,7 @@ def global_stop() -> tuple[list, list]:
 
 
 def global_restart() -> tuple[list, list]:
+    _reset_session_chrono()
     locks = load_locks()
     applied, skipped = [], []
     for key in ("web", "engine"):

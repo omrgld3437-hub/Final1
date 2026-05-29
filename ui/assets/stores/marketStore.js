@@ -7,6 +7,9 @@
  * RULE: UI pages read from marketStore, never fetch market data directly
  */
 
+const MAX_MARKET_PRICE_KEYS = 400;
+const MAX_MARKET_MINI_KEYS = 400;
+
 const marketStore = {
     // State
     prices: new Map(), // symbol -> number (last price)
@@ -38,6 +41,19 @@ const marketStore = {
     /**
      * Notify all subscribers
      */
+    _trimMap(map, maxKeys) {
+        while (map.size > maxKeys) {
+            const first = map.keys().next().value;
+            if (first === undefined) break;
+            map.delete(first);
+        }
+    },
+
+    _trimMaps() {
+        this._trimMap(this.prices, MAX_MARKET_PRICE_KEYS);
+        this._trimMap(this.mini, MAX_MARKET_MINI_KEYS);
+    },
+
     _notify() {
         const state = this.getState();
         this._subscribers.forEach(callback => {
@@ -87,6 +103,7 @@ const marketStore = {
 
         const upperSymbol = symbol.toUpperCase();
         this.prices.set(upperSymbol, price);
+        this._trimMaps();
         this.lastUpdateTs = Date.now();
         this._notify();
     },
@@ -139,6 +156,7 @@ const marketStore = {
         }
 
         if (updated) {
+            this._trimMaps();
             this.lastUpdateTs = Date.now();
             this._notify();
         }

@@ -85,6 +85,13 @@ def _write_rev_meta(account_id: int, meta: Dict[str, Any]) -> None:
         raise
 
 
+def _invalidate_query_cache(account_id: int) -> None:
+    prefix = f"{account_id}:"
+    for k in list(_query_cache.keys()):
+        if k.startswith(prefix):
+            _query_cache.pop(k, None)
+
+
 def _bump_revision_meta(account_id: int, data: Dict[str, Any]) -> Dict[str, Any]:
     prev = _read_rev_meta(account_id)
     rev_n = int(prev.get("rev") or 0) + 1
@@ -99,6 +106,7 @@ def _bump_revision_meta(account_id: int, data: Dict[str, Any]) -> Dict[str, Any]
         if prev.get("bootstrapped_at"):
             meta["bootstrapped_at"] = prev["bootstrapped_at"]
     _write_rev_meta(account_id, meta)
+    _invalidate_query_cache(account_id)
     return meta
 
 
@@ -123,6 +131,12 @@ def clear_tx_history_bootstrap(account_id: int) -> None:
 
 _bootstrap_in_flight: set = set()
 _bootstrap_guard = threading.Lock()
+_db_sync_last_ts: Dict[int, float] = {}
+_DB_SYNC_MIN_SEC = 90.0
+_FRESH_DB_MIN_SEC = 90.0
+_query_cache: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+_QUERY_CACHE_TTL_SEC = 8.0
+_QUERY_CACHE_MAX = 48
 
 
 async def bootstrap_tx_history_from_binance(
@@ -182,8 +196,15 @@ def get_public_revision(account_id: int) -> Dict[str, Any]:
     }
 
 
-def ensure_tx_history_fresh_from_db(db: Any, account_id: int) -> None:
+def ensure_tx_history_fresh_from_db(db: Any, account_id: int, *, force: bool = False) -> None:
     """DB'de dosyadan yeni bot işlemi varsa son kayıtları dosyaya yansıt (Binance sync yok)."""
+    import time as _time
+
+    if not force:
+        now = _time.time()
+        if now - _db_sync_last_ts.get(account_id, 0.0) < _FRESH_DB_MIN_SEC:
+            return
+        _db_sync_last_ts[account_id] = now
     from sqlalchemy import text
     from app.db.models import Bot, Trade
 
@@ -676,6 +697,11 @@ def _collect_keys_for_period(data: Dict[str, Any], start_date: str, end_date: st
 
 def sync_from_db_if_stale(db: Any, account_id: int, *, max_rows: int = 500) -> int:
     """TradeNormalized'da dosyadan yeni kayıt varsa ekle (hafif kontrol)."""
+    import time as _time
+
+    now = _time.time()
+    if now - _db_sync_last_ts.get(account_id, 0.0) < _DB_SYNC_MIN_SEC:
+        return 0
     from sqlalchemy import func
     from app.db.models import TradeNormalized
 
@@ -745,6 +771,7 @@ def sync_from_db_if_stale(db: Any, account_id: int, *, max_rows: int = 500) -> i
             bot_name=bot_names.get(t.bot_id) if t.bot_id else None,
         )
         count += 1
+    _db_sync_last_ts[account_id] = _time.time()
     return count
 
 
@@ -760,6 +787,29 @@ def _period_date_bounds(period: str) -> Tuple[Optional[str], str]:
     return start, end
 
 
+def _record_passes_filters(rec: List[Any], tf: str, sf: str) -> bool:
+    tc = rec[C_TYPE]
+    if tf in ("deposit",) and tc != "d":
+        return False
+    if tf in ("withdraw",) and tc != "w":
+        return False
+    if tf == "depositwithdraw" and tc not in ("d", "w"):
+        return False
+    if tf in ("buy",) and tc != "b":
+        return False
+    if tf in ("sell",) and tc != "s":
+        return False
+    if tf in ("buysell",) and tc not in ("b", "s"):
+        return False
+    if tf in ("all", "") and tc not in ("b", "s", "d", "w"):
+        return False
+    if sf == "spot" and rec[C_SRC] == "b":
+        return False
+    if sf == "bot" and rec[C_SRC] != "b":
+        return False
+    return True
+
+
 def query_transactions(
     account_id: int,
     period: str = "weekly",
@@ -767,8 +817,19 @@ def query_transactions(
     source_filter: str = "all",
     page: int = 1,
     per_page: int = 20,
+    *,
+    use_cache: bool = True,
 ) -> Dict[str, Any]:
     """Dosyadan filtreli sayfalı liste; decrypt sonrası geçici işlem, kalıcı RAM yok."""
+    import time as _time
+
+    if use_cache:
+        rev = str(get_public_revision(account_id).get("revision") or "0")
+        cache_key = f"{account_id}:{rev}:{period}:{type_filter}:{source_filter}:{page}:{per_page}"
+        now = _time.time()
+        hit = _query_cache.get(cache_key)
+        if hit and (now - hit[0]) < _QUERY_CACHE_TTL_SEC:
+            return dict(hit[1])
     start_date, end_date = _period_date_bounds(period)
     tf = (type_filter or "all").strip().lower()
     sf = (source_filter or "all").strip().lower()
@@ -780,36 +841,21 @@ def query_transactions(
         orders: Dict[str, List[Any]] = data.get("orders") or {}
 
     unique_keys = _collect_keys_for_period(data, start_date, end_date)
-    ordered_keys = sorted(unique_keys, key=lambda k: orders[k][C_TIME], reverse=True)
+    candidates: List[Tuple[str, str]] = []
+    for key in unique_keys:
+        rec = orders.get(key)
+        if not rec or not _record_passes_filters(rec, tf, sf):
+            continue
+        candidates.append((str(rec[C_TIME] or ""), key))
+    candidates.sort(reverse=True)
+    del unique_keys
 
-    filtered: List[str] = []
-    for key in ordered_keys:
-        rec = orders[key]
-        tc = rec[C_TYPE]
-        if tf in ("deposit",) and tc != "d":
-            continue
-        if tf in ("withdraw",) and tc != "w":
-            continue
-        if tf == "depositwithdraw" and tc not in ("d", "w"):
-            continue
-        if tf in ("buy",) and tc != "b":
-            continue
-        if tf in ("sell",) and tc != "s":
-            continue
-        if tf in ("buysell",) and tc not in ("b", "s"):
-            continue
-        if tf in ("all", "") and tc not in ("b", "s", "d", "w"):
-            continue
-        if sf == "spot" and rec[C_SRC] == "b":
-            continue
-        if sf == "bot" and rec[C_SRC] != "b":
-            continue
-        filtered.append(key)
-
-    total = len(filtered)
+    total = len(candidates)
     offset = max(0, page - 1) * per_page
-    page_keys = filtered[offset : offset + per_page]
+    page_keys = [k for _, k in candidates[offset : offset + per_page]]
+    del candidates
     items = [_expand_record(k, orders[k]) for k in page_keys]
+    del data, orders
     total_pages = (total + per_page - 1) // per_page if total > 0 else 0
 
     today_start = turkey_today_start_utc()
@@ -817,7 +863,7 @@ def query_transactions(
     if period == "all":
         start_dt = datetime.utcnow() - timedelta(days=365)
 
-    return {
+    result = {
         "items": items,
         "total": total,
         "page": page,
@@ -829,6 +875,12 @@ def query_transactions(
         "source": "file",
         **get_public_revision(account_id),
     }
+    if use_cache:
+        if len(_query_cache) >= _QUERY_CACHE_MAX:
+            oldest_k = min(_query_cache.keys(), key=lambda k: _query_cache[k][0])
+            _query_cache.pop(oldest_k, None)
+        _query_cache[cache_key] = (_time.time(), result)
+    return result
 
 
 def rebuild_from_db(db: Any, account_id: int, *, days: int = 365) -> int:
@@ -845,7 +897,7 @@ def rebuild_from_db(db: Any, account_id: int, *, days: int = 365) -> int:
             TradeNormalized.side.in_(["BUY", "SELL"]),
         )
         .order_by(TradeNormalized.time.asc())
-        .limit(15000)
+        .limit(_MAX_ORDERS)
         .all()
     )
     if not rows:

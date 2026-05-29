@@ -105,7 +105,11 @@ def _get_top_allocations(limit: int = 10) -> List[Dict[str, Any]]:
 
 
 def _get_gc_counts() -> Dict[str, Any]:
-    out: Dict[str, Any] = {"total_objects": 0, "get_count": list(gc.get_count())}
+    out: Dict[str, Any] = {"get_count": list(gc.get_count())}
+    deep = os.getenv("RAM_PROBE_GC_DEEP", "").strip() in ("1", "true", "yes")
+    if not deep:
+        return out
+    out["total_objects"] = 0
     type_counts: Dict[str, int] = defaultdict(int)
     try:
         objs = gc.get_objects()
@@ -175,6 +179,13 @@ def snapshot_now(component: str, reason: str = "") -> Dict[str, Any]:
 
 def _write_snapshot_line(payload: Dict[str, Any]) -> None:
     """Append one JSON line to logs/ram_snapshots.log. On failure write error line to same file."""
+    try:
+        if os.getenv("RAM_CAPTURE", "").strip().lower() in ("1", "true", "yes"):
+            from app.observability.ram_capture import mirror_probe_line
+
+            mirror_probe_line(payload)
+    except Exception:
+        pass
     try:
         _ensure_logs_dir()
         with open(_RAM_SNAPSHOT_LOG, "a", encoding="utf-8") as f:

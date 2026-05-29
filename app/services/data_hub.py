@@ -71,6 +71,8 @@ class DataHub:
         self.BALANCE_TTL = 5.0
         
         self.top_100_symbols: List[str] = []
+        self._pinned_symbols: set = set()  # worker: çalışan bot sembolleri asla trim'den düşmez
+        self._symbol_24h_fetch_ts: Dict[str, float] = {}  # tek sembol REST throttle
         self.all_symbols: List[str] = []
         self.all_symbols_ts: float = 0
         self.ALL_SYMBOLS_TTL = 600.0
@@ -94,10 +96,7 @@ class DataHub:
         self._running = False
         self._warmup_done = False
         self._warmup_lock = asyncio.Lock()
-        self._last_24h_rows: List[Dict] = []
         self._last_24h_ts: float = 0.0
-        self._exchange_info_raw: Optional[Dict] = None
-        self._exchange_info_ts: float = 0.0
 
         # WebSocket: live prices when connected
         self.ws_status: str = "disabled"  # "connected" | "reconnecting" | "disabled" | "rest"
@@ -159,26 +158,119 @@ class DataHub:
             return None
         return float(p)
     
+    def get_change24h_pct(self, symbol: str) -> Optional[float]:
+        """24s % — REST ticker merge veya WS miniTicker (open/close)."""
+        sym = (symbol or "").upper().strip()
+        if not sym:
+            return None
+        data = self.prices.get(sym) or {}
+        if data.get("change24h_ts") is not None:
+            val = data.get("change24h")
+            if val is not None:
+                try:
+                    return float(val)
+                except (TypeError, ValueError):
+                    pass
+        mini = self._mini_ws.get(sym)
+        if mini and mini.get("changePct") is not None:
+            try:
+                return float(mini["changePct"])
+            except (TypeError, ValueError):
+                pass
+        return None
+
+    def _merge_ticker_24h_row(self, r: Dict, now: Optional[float] = None) -> None:
+        """Tek /api/v3/ticker/24hr satırını prices cache'e işle."""
+        sym = (r.get("symbol") or "").upper().strip()
+        if not sym:
+            return
+        ts = now if now is not None else time.time()
+        change24h = float(r.get("priceChangePercent", 0) or 0)
+        volume24h = float(r.get("volume", 0) or 0)
+        price = float(r.get("lastPrice", 0) or 0)
+        prev = self.prices.get(sym) or {}
+        entry = {
+            **prev,
+            "change24h": change24h,
+            "volume24h": volume24h,
+            "change24h_ts": ts,
+            "low24h": float(r.get("lowPrice", 0) or 0),
+            "high24h": float(r.get("highPrice", 0) or 0),
+            "ts": ts,
+        }
+        if price > 0:
+            entry["price"] = price
+        elif prev.get("price"):
+            entry["price"] = prev["price"]
+        self.prices[sym] = entry
+    
+    def pin_symbols(self, symbols: List[str]) -> None:
+        """Worker/bot: bu semboller RAM trim'de korunur."""
+        for s in symbols or []:
+            sym = (s or "").strip().upper()
+            if sym:
+                self._pinned_symbols.add(sym)
+
+    def _preferred_price_symbols(self) -> set:
+        pref = set(self.top_100_symbols or [])
+        pref.update(c.get("symbol") for c in (self.coin_list or [])[:200] if c.get("symbol"))
+        pref.update(self._pinned_symbols)
+        return pref
+
+    def _price_entry(self, symbol: str, data: Dict, now: float) -> Dict:
+        ts = data.get("ts", 0)
+        age = now - ts
+        entry = {
+            "price": data.get("price", 0.0),
+            "change24h": data.get("change24h"),
+            "volume24h": data.get("volume24h"),
+            "low24h": data.get("low24h"),
+            "high24h": data.get("high24h"),
+            "ts": ts,
+            "is_stale": age > self.PRICE_TTL,
+        }
+        if data.get("change24h_ts"):
+            entry["change24h_ts"] = data.get("change24h_ts")
+        return entry
+
+    def get_prices_for_ui(
+        self,
+        max_extra: int = 200,
+        ensure_symbols: Optional[List[str]] = None,
+    ) -> Dict[str, Dict]:
+        """Dashboard/snapshot: öncelikli semboller + sınırlı ek — tam 600 kopyası yok."""
+        if ensure_symbols:
+            self.pin_symbols(ensure_symbols)
+        if not self.prices:
+            logger.info("datahub_cache_miss prices_empty=1")
+        now = time.time()
+        result: Dict[str, Dict] = {}
+        preferred = self._preferred_price_symbols()
+        for sym in preferred:
+            data = self.prices.get(sym)
+            if data:
+                result[sym] = self._price_entry(sym, data, now)
+        for sym in (ensure_symbols or []):
+            s = (sym or "").strip().upper()
+            if s and s not in result and s in self.prices:
+                result[s] = self._price_entry(s, self.prices[s], now)
+        if len(result) < max(50, len(preferred) // 2):
+            for symbol, data in list(self.prices.items()):
+                if symbol in result:
+                    continue
+                result[symbol] = self._price_entry(symbol, data, now)
+                if len(result) >= len(preferred) + max_extra:
+                    break
+        return result
+
     def get_all_prices(self) -> Dict[str, Dict]:
-        """Get all cached prices (including stale with is_stale=True). If empty, log cache_miss."""
+        """Tüm cache (max ~600). Ağır endpoint'ler için; UI tercihen get_prices_for_ui."""
         if not self.prices:
             logger.info("datahub_cache_miss prices_empty=1")
         now = time.time()
         result = {}
-        # Snapshot keys to avoid "dictionary changed size during iteration" if cache is updated concurrently
         for symbol, data in list(self.prices.items()):
-            ts = data.get("ts", 0)
-            age = now - ts
-            is_stale = age > self.PRICE_TTL
-            result[symbol] = {
-                "price": data.get("price", 0.0),
-                "change24h": data.get("change24h"),
-                "volume24h": data.get("volume24h"),
-                "low24h": data.get("low24h"),
-                "high24h": data.get("high24h"),
-                "ts": ts,
-                "is_stale": is_stale,
-            }
+            result[symbol] = self._price_entry(symbol, data, now)
         return result
     
     def get_coin_list(self) -> List[Dict]:
@@ -238,13 +330,31 @@ class DataHub:
                 if not sym:
                     continue
                 price = float(r.get("price", 0) or 0)
-                self.prices[sym] = {
+                prev = self.prices.get(sym) or {}
+                entry = {
                     "price": price,
-                    "change24h": self.prices.get(sym, {}).get("change24h", 0.0),
-                    "volume24h": self.prices.get(sym, {}).get("volume24h", 0.0),
+                    "volume24h": prev.get("volume24h"),
                     "ts": self._last_bulk_refresh_ts,
                 }
+                if prev.get("change24h_ts"):
+                    entry["change24h"] = prev.get("change24h")
+                    entry["change24h_ts"] = prev.get("change24h_ts")
+                if prev.get("low24h") is not None:
+                    entry["low24h"] = prev.get("low24h")
+                if prev.get("high24h") is not None:
+                    entry["high24h"] = prev.get("high24h")
+                self.prices[sym] = {**prev, **entry}
             self._trim_prices()
+            try:
+                from app.observability.ram_capture import log_ram_event
+
+                log_ram_event(
+                    "datahub_bulk_price",
+                    {"rows": len(rows or []), "prices_len": len(self.prices)},
+                    component="web",
+                )
+            except Exception:
+                pass
         except Exception as e:
             logger.debug("[DataHub] refresh_all_prices_bulk error: %s", e)
 
@@ -267,58 +377,88 @@ class DataHub:
             with rest_source("data_hub.ticker_24h"):
                 data = await ticker_24h_all(testnet=False)
             rows = data if isinstance(data, list) else [data] if data else []
-            self._last_24h_rows = rows
             self._last_24h_ts = time.time()
             now = time.time()
+            usdt_rows: List[Dict] = []
             for r in rows:
                 sym = r.get("symbol")
                 if not sym:
                     continue
-                change24h = float(r.get("priceChangePercent", 0) or 0)
-                volume24h = float(r.get("volume", 0) or 0)
-                quote_vol = float(r.get("quoteVolume", 0) or 0)
-                price = float(r.get("lastPrice", 0) or 0)
-                if sym not in self.prices:
-                    self.prices[sym] = {"price": 0.0, "change24h": 0.0, "volume24h": 0.0, "ts": 0}
-                self.prices[sym]["change24h"] = change24h
-                self.prices[sym]["volume24h"] = volume24h
-                self.prices[sym]["low24h"] = float(r.get("lowPrice", 0) or 0)
-                self.prices[sym]["high24h"] = float(r.get("highPrice", 0) or 0)
-                if price > 0:
-                    self.prices[sym]["price"] = price
-                self.prices[sym]["ts"] = now
+                self._merge_ticker_24h_row(r, now)
+                if str(sym).endswith("USDT"):
+                    usdt_rows.append(r)
             self._trim_prices()
+            self._rebuild_coin_list_from_usdt_rows(usdt_rows)
+            try:
+                from app.observability.ram_capture import log_ram_event
+
+                log_ram_event(
+                    "datahub_ticker_24h",
+                    {
+                        "rows_in": len(rows),
+                        "usdt_rows": len(usdt_rows),
+                        "prices_len": len(self.prices),
+                        "coin_list_len": len(self.coin_list or []),
+                    },
+                    component="web",
+                )
+            except Exception:
+                pass
         except Exception as e:
             logger.debug("[DataHub] update_ticker_24h error: %s", e)
 
-    async def update_coin_list(self):
-        """Build coin_list from current prices + 24h data (top by quoteVolume)."""
+    async def ensure_symbol_ticker_24h(self, symbol: str) -> bool:
+        """Bot/UI: sembol için 24s % yoksa tek sembol REST (throttle)."""
+        sym = (symbol or "").upper().strip()
+        if not sym or self.get_change24h_pct(sym) is not None:
+            return self.get_change24h_pct(sym) is not None
+        last = self._symbol_24h_fetch_ts.get(sym, 0.0)
+        if time.time() - last < 15.0:
+            return False
+        self._symbol_24h_fetch_ts[sym] = time.time()
+        if len(self._symbol_24h_fetch_ts) > 200:
+            oldest = min(self._symbol_24h_fetch_ts, key=self._symbol_24h_fetch_ts.get)
+            self._symbol_24h_fetch_ts.pop(oldest, None)
         try:
-            rows = self._last_24h_rows
-            if not rows or (time.time() - self._last_24h_ts) > self.TICKER_24H_UPDATE_INTERVAL * 2:
-                await self.update_ticker_24h()
-                rows = self._last_24h_rows
-            coins = []
-            for r in rows:
-                sym = r.get("symbol", "")
-                if not sym or not sym.endswith("USDT"):
-                    continue
-                price = float(r.get("lastPrice", 0) or 0)
-                change24h = float(r.get("priceChangePercent", 0) or 0)
-                volume24h = float(r.get("volume", 0) or 0)
-                quote_vol = float(r.get("quoteVolume", 0) or 0)
-                coins.append({
-                    "symbol": sym,
-                    "price": price,
-                    "change24h": change24h,
-                    "volume24h": volume24h,
-                    "quoteVolume24h": quote_vol,
-                    "marketCap": 0.0,
-                })
-            coins.sort(key=lambda x: x.get("quoteVolume24h", 0), reverse=True)
-            self.coin_list = coins[:200]
-            self.top_100_symbols = [c["symbol"] for c in self.coin_list[:100]]
-            self.coin_list_ts = time.time()
+            from app.services.binance_rest_log import rest_source
+            from app.services.binance_spot import ticker_24h_all
+
+            with rest_source("data_hub.ticker_24h_single"):
+                data = await ticker_24h_all(testnet=False, symbol=sym)
+            row = data if isinstance(data, dict) else (data[0] if isinstance(data, list) and data else None)
+            if row:
+                self._merge_ticker_24h_row(row)
+                self.pin_symbols([sym])
+                return True
+        except Exception as e:
+            logger.debug("[DataHub] ensure_symbol_ticker_24h %s: %s", sym, e)
+        return False
+
+    def _rebuild_coin_list_from_usdt_rows(self, rows: List[Dict]) -> None:
+        coins = []
+        for r in rows or []:
+            sym = r.get("symbol", "")
+            if not sym or not str(sym).endswith("USDT"):
+                continue
+            coins.append({
+                "symbol": sym,
+                "price": float(r.get("lastPrice", 0) or 0),
+                "change24h": float(r.get("priceChangePercent", 0) or 0),
+                "volume24h": float(r.get("volume", 0) or 0),
+                "quoteVolume24h": float(r.get("quoteVolume", 0) or 0),
+                "marketCap": 0.0,
+            })
+        coins.sort(key=lambda x: x.get("quoteVolume24h", 0), reverse=True)
+        self.coin_list = coins[:200]
+        self.top_100_symbols = [c["symbol"] for c in self.coin_list[:100]]
+        self.coin_list_ts = time.time()
+
+    async def update_coin_list(self):
+        """Build coin_list from 24h ticker (USDT, top quote volume)."""
+        try:
+            if self.coin_list and (time.time() - self.coin_list_ts) < self.COIN_LIST_UPDATE_INTERVAL:
+                return
+            await self.update_ticker_24h()
         except Exception as e:
             logger.debug("[DataHub] update_coin_list error: %s", e)
             self.coin_list = []
@@ -326,19 +466,11 @@ class DataHub:
             self.coin_list_ts = time.time()
 
     async def update_all_symbols(self):
-        """Fetch /api/v3/exchangeInfo and set all_symbols (all TRADING pairs)."""
+        """TRADING sembol listesi — kompakt exchangeInfo cache (binance_spot)."""
         try:
-            from app.services.binance_rest_log import rest_source
-            from app.services.binance_spot import fetch_exchange_info
-            with rest_source("data_hub.exchange_info"):
-                info = await fetch_exchange_info(testnet=False, force_refresh=False)
-            self._exchange_info_raw = info
-            self._exchange_info_ts = time.time()
-            symbols = [
-                s.get("symbol", "")
-                for s in info.get("symbols", [])
-                if s.get("status") == "TRADING" and s.get("symbol", "")
-            ]
+            from app.services.binance_spot import get_cached_trading_symbols
+
+            symbols = await get_cached_trading_symbols(testnet=False, force_refresh=False)
             self.all_symbols = sorted(symbols)
             self.all_symbols_ts = time.time()
         except Exception as e:
@@ -356,41 +488,16 @@ class DataHub:
         return [s for s in self.all_symbols if s.endswith("USDT")]
 
     def get_symbol_filters_cached(self, symbol: str) -> Optional[Dict[str, Any]]:
-        """exchangeInfo RAM cache — REST yok."""
+        """Sembol filtreleri — binance_spot kompakt cache (senkron okuma)."""
         sym = (symbol or "").upper().strip()
-        if not sym or not self._exchange_info_raw:
+        if not sym:
             return None
-        for s in self._exchange_info_raw.get("symbols") or []:
-            if s.get("symbol") != sym:
-                continue
-            out: Dict[str, Any] = {
-                "step_size": 0.00001,
-                "step_size_str": "0.00001",
-                "min_qty": 0.00001,
-                "min_qty_str": "0.00001",
-                "tick_size": 0.01,
-                "tick_size_str": "0.01",
-                "min_notional": 5.0,
-                "baseAsset": s.get("baseAsset"),
-                "quoteAsset": s.get("quoteAsset"),
-            }
-            for f in s.get("filters") or []:
-                t = f.get("filterType")
-                if t == "LOT_SIZE":
-                    step_raw = str(f.get("stepSize") or "0.00001")
-                    min_raw = str(f.get("minQty") or step_raw)
-                    out["step_size_str"] = step_raw
-                    out["min_qty_str"] = min_raw
-                    out["step_size"] = float(step_raw)
-                    out["min_qty"] = float(min_raw)
-                elif t == "PRICE_FILTER":
-                    tick_raw = str(f.get("tickSize") or "0.01")
-                    out["tick_size_str"] = tick_raw
-                    out["tick_size"] = float(tick_raw)
-                elif t in ("MIN_NOTIONAL", "NOTIONAL"):
-                    out["min_notional"] = float(f.get("minNotional") or f.get("notional") or 5)
-            return out
-        return None
+        try:
+            from app.services.binance_spot import get_symbol_filters_sync
+
+            return get_symbol_filters_sync(sym, testnet=False)
+        except Exception:
+            return None
 
     def import_prices_snapshot(self, prices: Dict[str, Any]) -> int:
         """Başka süreçten (web API) fiyat snapshot'ı — worker SSOT senkronu."""
@@ -406,17 +513,36 @@ class DataHub:
             if p is None or float(p) <= 0:
                 continue
             prev = self.prices.get(s) or {}
-            self.prices[s] = {
+            entry: Dict[str, Any] = {
                 "price": float(p),
-                "change24h": d.get("change24h", prev.get("change24h", 0.0)),
-                "volume24h": d.get("volume24h", prev.get("volume24h", 0.0)),
-                "low24h": d.get("low24h", prev.get("low24h", 0.0)),
-                "high24h": d.get("high24h", prev.get("high24h", 0.0)),
+                "volume24h": d.get("volume24h", prev.get("volume24h")),
+                "low24h": d.get("low24h", prev.get("low24h")),
+                "high24h": d.get("high24h", prev.get("high24h")),
                 "ts": now,
             }
+            ch = d.get("change24h")
+            if ch is not None:
+                entry["change24h"] = float(ch)
+                entry["change24h_ts"] = float(d.get("change24h_ts") or prev.get("change24h_ts") or now)
+            elif prev.get("change24h_ts"):
+                entry["change24h"] = prev.get("change24h")
+                entry["change24h_ts"] = prev.get("change24h_ts")
+            self.prices[s] = {**prev, **entry}
             n += 1
         if n:
             self._trim_prices()
+            if os.getenv("MARKET_SYNC_FROM_WEB", "").strip() == "1":
+                cap = int(os.getenv("WORKER_MAX_PRICES", "200"))
+                if len(self.prices) > cap:
+                    preferred = self._preferred_price_symbols()
+                    keep = set(self._pinned_symbols)
+                    for sym in preferred:
+                        if len(keep) >= cap:
+                            break
+                        keep.add(sym)
+                    for sym in list(self.prices.keys()):
+                        if sym not in keep and len(self.prices) > cap:
+                            self.prices.pop(sym, None)
         return n
 
     def _trim_prices(self) -> None:
@@ -424,6 +550,7 @@ class DataHub:
         if len(self.prices) <= self._MAX_PRICES:
             return
         preferred = set(self.top_100_symbols) | {c["symbol"] for c in self.coin_list[:200]}
+        preferred.update(self._pinned_symbols)
         keep_keys = {k for k in self.prices if k in preferred}
         rest = [(k, self.prices[k]) for k in self.prices if k not in keep_keys]
         rest.sort(key=lambda x: x[1].get("ts", 0), reverse=True)
@@ -511,7 +638,8 @@ class DataHub:
                 if now - last_all_symbols_update >= self.ALL_SYMBOLS_TTL:
                     await self.update_all_symbols()
                     last_all_symbols_update = now
-                if os.getenv("RAM_PROBE_ENABLED") == "1" and now - last_market_probe >= 60.0:
+                _ram_diag = os.getenv("RAM_PROBE_ENABLED") == "1" or os.getenv("RAM_CAPTURE", "").strip() == "1"
+                if _ram_diag and now - last_market_probe >= 60.0:
                     last_market_probe = now
                     try:
                         from app.observability.ram_probe import probe_market_data
@@ -573,16 +701,27 @@ class DataHub:
                     quote_vol = float(item.get("q") or 0)
                 except (TypeError, ValueError):
                     continue
-                self.prices[s] = {
+                prev = self.prices.get(s) or {}
+                change_pct = float((close - open_) / open_ * 100) if open_ and open_ > 0 else None
+                entry = {
+                    **prev,
                     "price": close,
-                    "change24h": self.prices.get(s, {}).get("change24h", 0.0),
                     "volume24h": vol,
+                    "low24h": low,
+                    "high24h": high,
                     "ts": now,
                 }
+                if change_pct is not None:
+                    entry["change24h"] = change_pct
+                    entry["change24h_ts"] = now
+                elif prev.get("change24h_ts"):
+                    entry["change24h"] = prev.get("change24h")
+                    entry["change24h_ts"] = prev.get("change24h_ts")
+                self.prices[s] = entry
                 self._mini_ws[s] = {
                     "last": close,
                     "open": open_,
-                    "changePct": (float((close - open_) / open_ * 100) if open_ else 0.0),
+                    "changePct": change_pct if change_pct is not None else prev.get("change24h"),
                     "volume": vol,
                     "quoteVolume": quote_vol,
                     "marketCap": 0.0,
@@ -659,7 +798,7 @@ class DataHub:
             async def do_refresh():
                 try:
                     snapshot = {
-                        "prices": self.get_all_prices(),
+                        "prices": self.get_prices_for_ui(),
                         "mini": self._build_mini_map(),
                         "coin_list": self.get_coin_list(),
                         "symbols": self.get_all_symbols(),

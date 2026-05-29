@@ -17,6 +17,15 @@
         return max;
     }
 
+    function sortEventsForDisplay(events) {
+        if (global.EngineLogFormat && global.EngineLogFormat.sortEngineEventsDesc) {
+            return global.EngineLogFormat.sortEngineEventsDesc(events || []);
+        }
+        return (events || []).slice().sort(function (a, b) {
+            return Number(b.id || 0) - Number(a.id || 0);
+        });
+    }
+
     function mergeEvents(existing, incoming, limit) {
         var byId = {};
         (existing || []).forEach(function (e) {
@@ -26,11 +35,7 @@
             if (e && e.id != null) byId[String(e.id)] = e;
         });
         var merged = Object.keys(byId).map(function (k) { return byId[k]; });
-        if (global.EngineLogFormat && global.EngineLogFormat.sortEngineEventsDesc) {
-            merged = global.EngineLogFormat.sortEngineEventsDesc(merged);
-        } else {
-            merged.sort(function (a, b) { return Number(b.id || 0) - Number(a.id || 0); });
-        }
+        merged = sortEventsForDisplay(merged);
         if (merged.length > limit) merged = merged.slice(0, limit);
         return merged;
     }
@@ -38,6 +43,32 @@
     function wasScrolledToTop(el) {
         if (!el) return true;
         return el.scrollTop < 48;
+    }
+
+    function ensureLogScrollPin(container, opts) {
+        if (!container || !opts || container._engineLogScrollPin) return;
+        container._engineLogScrollPin = true;
+        if (opts._logPinTop == null) opts._logPinTop = true;
+        container.addEventListener('scroll', function () {
+            opts._logPinTop = wasScrolledToTop(container);
+        }, { passive: true });
+    }
+
+    function scrollLogToTop(container) {
+        if (!container) return;
+        container.scrollTop = 0;
+    }
+
+    function shouldStickLogTop(container, opts) {
+        if (opts && opts._logForceTop) return true;
+        if (opts && opts._logPinTop === false) return false;
+        return wasScrolledToTop(container);
+    }
+
+    function trimEventsForDisplay(events, limit) {
+        var sorted = sortEventsForDisplay(events || []);
+        if (sorted.length > limit) return sorted.slice(0, limit);
+        return sorted;
     }
 
     function isConnectivityEvent(ev) {
@@ -152,26 +183,30 @@
     function renderDisplayEvents(opts) {
         if (!opts || !opts.container) return;
         var state = opts.state || { events: [], lastId: 0 };
+        if (typeof global !== 'undefined') {
+            global._lastEngineEvents = state.events;
+        }
         var fmtApi = global.EngineLogFormat;
         var healthData = typeof opts.getHealthData === 'function' ? opts.getHealthData() : opts.healthData;
         var connFail = opts.connectivityFailure || null;
+        if (opts.botId && fmtApi && fmtApi.setLogContext) {
+            fmtApi.setLogContext({ botId: opts.botId, events: state.events, healthData: healthData });
+        }
         var displayEvents = injectConnectivityFromHealth(state.events, healthData, fmtApi, opts.botId, connFail);
         displayEvents = mergeHealthForDisplay(opts.botId, displayEvents, healthData, opts);
         archiveDisplayEvents(opts, displayEvents, state.events);
-        renderTable(opts.container, enrichStartEvents(displayEvents, opts), fmtApi, opts.botId);
+        renderTable(opts.container, enrichStartEvents(displayEvents, opts), fmtApi, opts.botId, opts);
         if (typeof opts.onAfterRender === 'function') {
             opts.onAfterRender(state.events);
         }
     }
 
-    function renderTable(container, events, fmtApi, botId) {
+    function renderTable(container, events, fmtApi, botId, opts) {
         if (!container) return { rendered: false, events: events || [] };
         fmtApi = fmtApi || global.EngineLogFormat;
-        var list = (global.EngineLogFormat && global.EngineLogFormat.sortEngineEventsDesc)
-            ? global.EngineLogFormat.sortEngineEventsDesc(events || [])
-            : (events || []).slice().sort(function (a, b) {
-                return Number(b.id || 0) - Number(a.id || 0);
-            });
+        opts = opts || {};
+        ensureLogScrollPin(container, opts);
+        var list = sortEventsForDisplay(events || []);
         if (fmtApi && fmtApi.setLogContext) {
             fmtApi.setLogContext({ botId: botId, events: list });
         }
@@ -180,17 +215,22 @@
             return { rendered: false, events: list };
         }
         var collapsed = fmtApi && fmtApi.collapseEngineEvents ? fmtApi.collapseEngineEvents(list) : [];
+        if (!collapsed.length && list.length && (!fmtApi || !fmtApi.collapseEngineEvents)) {
+            collapsed = list.map(function (ev) {
+                var msg = ev.message || '—';
+                return { ts: ev.ts, typeLabel: ev.type || '—', message: msg, severity: 'info', count: 1 };
+            });
+        }
         if (!collapsed.length) {
             container.innerHTML = '<div class="muted" style="padding: 0.75rem;">Gösterilecek önemli kayıt yok (rutin uyarılar gizlendi).</div>';
             return { rendered: false, events: list };
         }
-        var stickTop = wasScrolledToTop(container);
+        var stickTop = shouldStickLogTop(container, opts);
         var html = '<table class="engine-log-table"><colgroup><col class="log-col-time"><col class="log-col-type"><col class="log-col-msg"></colgroup><thead><tr><th>Zaman</th><th>Tür</th><th>Mesaj</th></tr></thead><tbody>';
         collapsed.forEach(function (item) {
-            var ts = item.ts ? (function () {
-                var d = new Date(item.ts);
-                return d.toLocaleString('tr-TR', { timeZone: 'Europe/Istanbul' });
-            })() : '—';
+            var ts = (fmtApi && fmtApi.formatEventTs)
+                ? fmtApi.formatEventTs(item.ts)
+                : (item.ts ? String(item.ts) : '—');
             if (item.count > 1) {
                 ts += ' <span class="log-repeat-badge" title="Aynı kayıttan ' + item.count + ' adet">(' + item.count + '×)</span>';
             }
@@ -204,7 +244,8 @@
         });
         html += '</tbody></table>';
         container.innerHTML = html;
-        if (stickTop) container.scrollTop = 0;
+        if (stickTop) scrollLogToTop(container);
+        if (opts._logForceTop) opts._logForceTop = false;
         return { rendered: true, events: list, collapsed: collapsed };
     }
 
@@ -232,6 +273,8 @@
             if (!incremental && !(state.events && state.events.length)) {
                 opts.container.innerHTML = '<div class="muted" style="padding: 0.75rem;">Yükleniyor…</div>';
             }
+            opts._logForceTop = true;
+            opts._logPinTop = true;
             url = '/api/bots-engine/' + opts.botId + '/events' + qBase +
                 (qBase ? '&' : '?') + 'limit=' + MAX_EVENTS;
         }
@@ -246,20 +289,27 @@
                     archiveIngest(opts, state.events, incoming);
                 }
             } else {
-                state.events = incoming.slice(0, MAX_EVENTS);
+                state.events = trimEventsForDisplay(incoming, MAX_EVENTS);
                 state.lastId = maxEventId(state.events);
                 archiveIngest(opts, state.events, incoming);
             }
-            if (opts.botId && global.EngineLogFormat && global.EngineLogFormat.setLogContext) {
-                global.EngineLogFormat.setLogContext({ botId: opts.botId });
+            if (typeof global !== 'undefined') {
+                global._lastEngineEvents = state.events;
             }
             var fmtApi = global.EngineLogFormat;
             var healthData = typeof opts.getHealthData === 'function' ? opts.getHealthData() : opts.healthData;
+            if (opts.botId && global.EngineLogFormat && global.EngineLogFormat.setLogContext) {
+                global.EngineLogFormat.setLogContext({
+                    botId: opts.botId,
+                    events: state.events,
+                    healthData: healthData
+                });
+            }
             var connFail = opts.connectivityFailure || null;
             var displayEvents = injectConnectivityFromHealth(state.events, healthData, fmtApi, opts.botId, connFail);
             displayEvents = mergeHealthForDisplay(opts.botId, displayEvents, healthData, opts);
             archiveDisplayEvents(opts, displayEvents, state.events);
-            renderTable(opts.container, enrichStartEvents(displayEvents, opts), fmtApi, opts.botId);
+            renderTable(opts.container, enrichStartEvents(displayEvents, opts), fmtApi, opts.botId, opts);
             if (typeof opts.onAfterRender === 'function') {
                 opts.onAfterRender(state.events);
             }
@@ -280,6 +330,8 @@
         if (!opts || !opts.botId) return;
         opts.state = opts.state || { events: [], lastId: 0 };
         opts._failCount = 0;
+        opts._logPinTop = true;
+        opts._logForceTop = true;
         opts._lastFullRefresh = Date.now();
         opts._pollTimer = setInterval(function () {
             if (document.hidden) return;

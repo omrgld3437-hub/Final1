@@ -338,14 +338,26 @@ async def startup_event():
 
     # Bot engine: worker ayrı proses (start.command ile worker_main.py). Web task yaratmaz.
 
-    # RAM probe: JSONL to logs/ram_snapshots.log (RAM_PROBE=1)
+    # RAM probe / 5dk capture (RAM_CAPTURE=1 → logs/ram_capture_*_{web}.jsonl)
     try:
-        from app.observability.ram_probe import start_ram_probe
-        if os.getenv("RAM_PROBE", "").strip() == "1" or os.getenv("RAM_PROBE_ENABLED", "").strip() == "1":
-            interval = int(os.getenv("RAM_PROBE_INTERVAL", "30"))
-            start_ram_probe(component="web", interval_sec=interval)
+        if os.getenv("RAM_CAPTURE", "").strip() == "1":
+            os.environ.setdefault("RAM_PROBE", "1")
+            os.environ.setdefault("RAM_PROBE_ENABLED", "1")
+            from app.observability.ram_capture import (
+                register_default_capture_hooks,
+                start_ram_capture_session,
+            )
+
+            register_default_capture_hooks("web")
+            start_ram_capture_session("web")
+        else:
+            from app.observability.ram_probe import start_ram_probe
+
+            if os.getenv("RAM_PROBE", "").strip() == "1" or os.getenv("RAM_PROBE_ENABLED", "").strip() == "1":
+                interval = int(os.getenv("RAM_PROBE_INTERVAL", "30"))
+                start_ram_probe(component="web", interval_sec=interval)
     except Exception as e:
-        logger.debug("RAM probe start skipped: %s", e)
+        logger.debug("RAM probe/capture start skipped: %s", e)
 
     # Grafik: tarayıcı kapalıyken de çalışan botlar için periyodik örnek (sekme arka planda grafik durmasın)
     async def _perf_chart_sample_loop():
@@ -453,6 +465,58 @@ async def no_cache_ui_middleware(request, call_next):
     return response
 
 
+# RAM capture: /api istekleri (RAM_CAPTURE=1, 5 dk oturum)
+@app.middleware("http")
+async def ram_capture_api_middleware(request, call_next):
+    try:
+        from app.observability.ram_capture import is_capture_enabled, log_ram_event, _quick_rss_mb
+    except ImportError:
+        return await call_next(request)
+    if not is_capture_enabled():
+        return await call_next(request)
+    path = request.url.path or ""
+    if not path.startswith("/api/"):
+        return await call_next(request)
+    method = getattr(request, "method", "GET") or "GET"
+    rss0 = _quick_rss_mb()
+    t0 = time.perf_counter()
+    response = await call_next(request)
+    duration_ms = round((time.perf_counter() - t0) * 1000, 2)
+    rss1 = _quick_rss_mb()
+    resp_bytes = None
+    try:
+        cl = response.headers.get("content-length")
+        if cl is not None:
+            resp_bytes = int(cl)
+    except (TypeError, ValueError):
+        pass
+    log_all = os.getenv("RAM_CAPTURE_HTTP_ALL", "").strip().lower() in ("1", "true", "yes")
+    heavy = (
+        log_all
+        or duration_ms >= 80
+        or (resp_bytes is not None and resp_bytes >= 8192)
+        or path.startswith("/api/dashboard")
+        or path.startswith("/api/bots")
+        or path.startswith("/api/finance")
+        or path.startswith("/api/data")
+    )
+    if heavy:
+        log_ram_event(
+            "http_request",
+            {
+                "method": method,
+                "path": path,
+                "status": getattr(response, "status_code", None),
+                "duration_ms": duration_ms,
+                "response_bytes": resp_bytes,
+                "rss_mb": rss1,
+                "rss_delta_mb": round(rss1 - rss0, 3) if rss0 is not None and rss1 is not None else None,
+            },
+            component="web",
+        )
+    return response
+
+
 # Request ID: X-Request-ID propagated client->server->logs->errors (correlation ID)
 @app.middleware("http")
 async def request_id_middleware(request, call_next):
@@ -512,6 +576,14 @@ async def request_metrics_middleware(request, call_next):
     if forwarded:
         client_ip = forwarded.split(",")[0].strip() or client_ip
     user_agent = request.headers.get("user-agent") or ""
+
+    if client_ip:
+        try:
+            from app.services.ip_blocklist import is_ip_blocked
+            if is_ip_blocked(client_ip):
+                return JSONResponse(status_code=403, content={"detail": "IP engellendi."})
+        except Exception:
+            pass
 
     try:
         response = await call_next(request)

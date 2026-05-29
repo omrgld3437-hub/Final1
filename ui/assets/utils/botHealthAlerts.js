@@ -123,7 +123,10 @@
                 ts: data.ts,
                 codes: Array.isArray(data.codes) ? data.codes : [],
                 codeDismissTs: data.codeDismissTs && typeof data.codeDismissTs === 'object' ? data.codeDismissTs : {},
-                maxEventId: data.maxEventId != null ? Number(data.maxEventId) : 0
+                maxEventId: data.maxEventId != null ? Number(data.maxEventId) : 0,
+                perCodeMaxEventId: data.perCodeMaxEventId && typeof data.perCodeMaxEventId === 'object'
+                    ? data.perCodeMaxEventId
+                    : {}
             };
         } catch (e) {
             return null;
@@ -141,8 +144,51 @@
         return max;
     }
 
+    function maxAllEventId(events) {
+        var max = 0;
+        (events || []).forEach(function (ev) {
+            var id = ev && ev.id != null ? Number(ev.id) : 0;
+            if (Number.isFinite(id) && id > max) max = id;
+        });
+        return max;
+    }
+
     function maxDismissAnchorEventId(events) {
-        return Math.max(maxResettableEventId(events || []), maxConnectivityEventId(events || []));
+        return Math.max(
+            maxResettableEventId(events || []),
+            maxConnectivityEventId(events || []),
+            maxAllEventId(events || [])
+        );
+    }
+
+    function resolveEventLogCode(ev) {
+        if (!ev) return '';
+        var meta = (ev && ev.meta) || {};
+        var code = String(meta.health_code || meta.healthCode || meta.error_code || '').toUpperCase();
+        if (code) return code;
+        if (isResilienceLogEvent(ev)) {
+            if (/BOT_LOOP|döngü sonlandı|yeniden başlatıyor/i.test(String(ev.message || ''))) {
+                return 'BOT_LOOP_AUTO_RESTART';
+            }
+            if (/ensure_running_bots|LOOP_TASK/i.test(String(ev.message || ''))) {
+                return 'LOOP_TASK_MISSING';
+            }
+            return 'BOT_LOOP_AUTO_RESTART';
+        }
+        return '';
+    }
+
+    function buildPerCodeMaxEventId(events) {
+        var per = {};
+        (events || []).forEach(function (ev) {
+            if (!isResettableLogEvent(ev)) return;
+            var code = resolveEventLogCode(ev);
+            if (!code) return;
+            var id = ev && ev.id != null ? Number(ev.id) : 0;
+            if (!Number.isFinite(id) || id <= 0) return;
+            if (!per[code] || id > per[code]) per[code] = id;
+        });
+        return per;
     }
 
     function setDismiss(botId, alerts, recentEvents) {
@@ -151,13 +197,22 @@
         (alerts || []).forEach(function (a) {
             if (a && a.code) codeDismissTs[a.code] = now;
         });
-        var maxEventId = maxDismissAnchorEventId(recentEvents || []);
+        KNOWN_HEALTH_CODES.forEach(function (code) {
+            codeDismissTs[code] = now;
+        });
+        var evs = recentEvents || [];
+        var maxEventId = maxDismissAnchorEventId(evs);
+        var perCodeMaxEventId = buildPerCodeMaxEventId(evs);
+        Object.keys(perCodeMaxEventId).forEach(function (code) {
+            if (!codeDismissTs[code]) codeDismissTs[code] = now;
+        });
         try {
             storageSet(resetKey(botId), JSON.stringify({
                 ts: now,
                 codes: Object.keys(codeDismissTs),
                 codeDismissTs: codeDismissTs,
-                maxEventId: maxEventId
+                maxEventId: maxEventId,
+                perCodeMaxEventId: perCodeMaxEventId
             }));
         } catch (e) {}
     }
@@ -203,8 +258,23 @@
         return /tekrar aktif edildi|beklemeye alındı/i.test(String(ev.message || ''));
     }
 
+    /** Döngü yeniden başlatma / ensure_running_bots — Reset ile gizlenir, yeni olay sonra tekrar görünür. */
+    function isResilienceLogEvent(ev) {
+        if (!ev) return false;
+        var meta = (ev && ev.meta) || {};
+        if (meta.event_kind === 'BOT_RESILIENCE') return true;
+        var code = String(meta.health_code || meta.error_code || '').toUpperCase();
+        if (code === 'BOT_LOOP_AUTO_RESTART' || code === 'LOOP_TASK_MISSING' || code === 'BOT_CONTINUES_ON_ERROR') {
+            return true;
+        }
+        var raw = String(ev.message || '');
+        return /Dayanıklılık:/i.test(raw) || /döngü yeniden başlatılıyor/i.test(raw)
+            || /ensure_running_bots/i.test(raw);
+    }
+
     function isResettableLogEvent(ev) {
         if (!ev) return false;
+        if (isResilienceLogEvent(ev)) return true;
         var ty = (ev.type || '').toUpperCase();
         if (ty === 'INFO' && isReconnectLogEvent(ev)) return true;
         if (ty === 'ERROR' && isConnectivityLogEvent(ev)) return true;
@@ -263,6 +333,41 @@
         return false;
     }
 
+    function hasLogEventForCodeAfterId(events, code, afterId) {
+        if (!code) return false;
+        afterId = Number(afterId) || 0;
+        for (var i = 0; i < (events || []).length; i++) {
+            var ev = events[i];
+            if (!ev) continue;
+            var match = false;
+            if (isHealthEventType(ev.type) && eventHealthCode(ev) === code) match = true;
+            else if (isResilienceLogEvent(ev) && resolveEventLogCode(ev) === code) match = true;
+            if (!match) continue;
+            var id = ev && ev.id != null ? Number(ev.id) : 0;
+            if (Number.isFinite(id) && id > afterId) return true;
+        }
+        return false;
+    }
+
+    function perCodeDismissAnchor(dismissInfo, code) {
+        if (!dismissInfo || !code) return dismissInfo.maxEventId != null ? Number(dismissInfo.maxEventId) : 0;
+        var per = dismissInfo.perCodeMaxEventId || {};
+        if (per[code] != null) return Number(per[code]);
+        return dismissInfo.maxEventId != null ? Number(dismissInfo.maxEventId) : 0;
+    }
+
+    function getServerDismissBeforeId(healthData) {
+        if (!healthData) return 0;
+        var n = Number(healthData.engine_log_dismiss_before_id);
+        return Number.isFinite(n) && n > 0 ? n : 0;
+    }
+
+    function effectiveGlobalDismissAnchor(dismissInfo, healthData) {
+        var local = dismissInfo && dismissInfo.maxEventId != null ? Number(dismissInfo.maxEventId) : 0;
+        var server = getServerDismissBeforeId(healthData);
+        return Math.max(local, server);
+    }
+
     function hasHealthEventForCodeAfterTs(events, code, afterTs) {
         if (!code) return false;
         afterTs = Number(afterTs) || 0;
@@ -298,14 +403,19 @@
 
     function isAlertSuppressed(alert, dismissInfo, recentEvents, healthSnapshot) {
         if (!alert || !alert.code) return false;
+        var serverBefore = getServerDismissBeforeId(healthSnapshot);
+        if (serverBefore > 0 && !hasLogEventForCodeAfterId(recentEvents, alert.code, serverBefore)) {
+            return true;
+        }
         if (!dismissInfo) return false;
         if (dismissInfo.codes.indexOf(alert.code) < 0) return false;
-        var afterId = dismissInfo.maxEventId != null ? Number(dismissInfo.maxEventId) : 0;
-        if (hasHealthEventForCodeAfterId(recentEvents, alert.code, afterId)) {
+        var afterId = perCodeDismissAnchor(dismissInfo, alert.code);
+        if (hasLogEventForCodeAfterId(recentEvents, alert.code, afterId)) {
             return false;
         }
         if (alert.code === 'BINANCE_UNREACHABLE' || alert.code === 'STATE_ERROR') {
-            if (hasConnectivityEventAfterId(recentEvents, afterId)) return false;
+            var globalAfter = dismissInfo.maxEventId != null ? Number(dismissInfo.maxEventId) : 0;
+            if (hasConnectivityEventAfterId(recentEvents, globalAfter)) return false;
         }
         var dts = dismissTsForCode(dismissInfo, alert.code);
         if (hasHealthEventForCodeAfterTs(recentEvents, alert.code, dts)) {
@@ -438,8 +548,18 @@
         };
     }
 
+    function filterDismissedFromEvents(botId, events, healthData) {
+        if (!botId) return events || [];
+        var dismiss = getDismissInfo(botId);
+        var list = events || [];
+        if (!dismiss && !getServerDismissBeforeId(healthData)) return list;
+        return list.filter(function (ev) {
+            return !shouldHideResetLogEvent(ev, botId, list, healthData);
+        });
+    }
+
     function mergeHealthDisplayEvents(botId, events, healthData, running) {
-        events = events || [];
+        events = filterDismissedFromEvents(botId, events, healthData);
         if (!botId) return events;
 
         var alerts = (healthData && healthData.alerts) ? healthData.alerts : [];
@@ -590,9 +710,9 @@
 
     function resetUi(botId, currentAlerts, recentEvents) {
         clearLogRegistry(botId);
+        var events = recentEvents || [];
         var alerts = currentAlerts || [];
         var codes = {};
-        var now = Date.now();
         alerts.forEach(function (a) {
             if (a && a.code) codes[a.code] = true;
         });
@@ -606,7 +726,7 @@
         var synthetic = Object.keys(codes).map(function (code) {
             return { code: code };
         });
-        setDismiss(botId, synthetic.length ? synthetic : alerts, recentEvents);
+        setDismiss(botId, synthetic.length ? synthetic : alerts, events);
         _lastDomSyncKey = '';
         syncDom({ running: true, warns: [], criticals: [], suppressLiveProblem: true });
     }
@@ -625,25 +745,46 @@
         return true;
     }
 
-    function shouldHideResetLogEvent(ev, botId) {
+    function shouldHideResetLogEvent(ev, botId, contextEvents, healthData) {
         if (!ev) return false;
-        var events = (typeof global !== 'undefined' && global._lastEngineEvents) || [];
+        var events = contextEvents
+            || (typeof global !== 'undefined' && global._lastEngineEvents)
+            || [];
+        healthData = healthData
+            || (typeof global !== 'undefined' && global._lastHealthData)
+            || null;
+        var serverBefore = getServerDismissBeforeId(healthData);
         if (ev.meta && ev.meta.synthetic_live) {
             return isConnectivityLogEvent(ev) && isConnectivityLogSuppressed(botId, events);
         }
-        if (ev.meta && ev.meta.health_ui_track) return false;
+        var dismissInfo = getDismissInfo(botId);
+        if (ev.meta && ev.meta.health_ui_track) {
+            if (!dismissInfo && !serverBefore) return false;
+            var hc = eventHealthCode(ev);
+            if (hc && isAlertSuppressed({ code: hc }, dismissInfo, events, healthData)) return true;
+            return false;
+        }
         if ((ev.type || '').toUpperCase() === 'ERROR' && isConnectivityLogEvent(ev)) {
             if (isConnectivityLogSuppressed(botId, events)) return true;
         }
         if (!isResettableLogEvent(ev)) return false;
-        var dismissInfo = getDismissInfo(botId);
-        if (!dismissInfo) return false;
         var evId = ev.id != null ? Number(ev.id) : 0;
-        var maxId = dismissInfo.maxEventId != null ? Number(dismissInfo.maxEventId) : 0;
-        if (Number.isFinite(evId) && evId > 0 && maxId >= 0 && evId <= maxId) return true;
+        if (Number.isFinite(evId) && evId > 0 && serverBefore > 0 && evId <= serverBefore) {
+            return true;
+        }
+        if (!dismissInfo) return false;
+        var code = resolveEventLogCode(ev);
+        var codeMax = code ? perCodeDismissAnchor(dismissInfo, code) : 0;
+        var globalMax = effectiveGlobalDismissAnchor(dismissInfo, healthData);
+        if (Number.isFinite(evId) && evId > 0) {
+            if (code && codeMax >= 0 && evId <= codeMax) return true;
+            if (globalMax >= 0 && evId <= globalMax) return true;
+        }
         if (dismissInfo.ts) {
             var eventTs = ev.ts ? new Date(ev.ts).getTime() : 0;
-            if (eventTs && eventTs <= Number(dismissInfo.ts)) return true;
+            if (eventTs && eventTs <= Number(dismissInfo.ts)) {
+                if (!code || !hasLogEventForCodeAfterId(events, code, codeMax)) return true;
+            }
         }
         return false;
     }
@@ -657,12 +798,16 @@
         resetUi: resetUi,
         applyHealth: applyHealth,
         syncDom: syncDom,
+        filterDismissedFromEvents: filterDismissedFromEvents,
+        getServerDismissBeforeId: getServerDismissBeforeId,
         mergeHealthDisplayEvents: mergeHealthDisplayEvents,
         maxHealthEventId: maxHealthEventId,
         maxResettableEventId: maxResettableEventId,
         maxDismissAnchorEventId: maxDismissAnchorEventId,
         isConnectivityLogSuppressed: isConnectivityLogSuppressed,
         hasConnectivityEventAfterId: hasConnectivityEventAfterId,
+        hasLogEventForCodeAfterId: hasLogEventForCodeAfterId,
+        perCodeDismissAnchor: perCodeDismissAnchor,
         shouldHideResetLogEvent: shouldHideResetLogEvent,
         shouldHideHealthLogEvent: shouldHideHealthLogEvent
     };

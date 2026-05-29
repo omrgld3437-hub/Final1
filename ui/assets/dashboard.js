@@ -68,6 +68,9 @@ let priceCacheTime = {};
 // ============================================================
 // PERFORMANCE HOTFIX: SpotCache - Global Warm Cache Layer
 // ============================================================
+const SPOT_CACHE_MAX_PRICES = 400;
+const SPOT_CACHE_MAX_FILTERS = 200;
+
 const SpotCache = {
     prices: new Map(),      // symbol -> {price, ts}
     balances: new Map(),    // accountId -> {freeUSDT, freeBase, assetsMap, ts}
@@ -77,6 +80,14 @@ const SpotCache = {
     PRICE_TTL: 2000,        // 2s
     BALANCE_TTL: 3000,      // 3s
     FILTER_TTL: 6 * 60 * 60 * 1000, // 6 hours
+
+    _trimMap(map, maxKeys) {
+        while (map.size > maxKeys) {
+            const first = map.keys().next().value;
+            if (first === undefined) break;
+            map.delete(first);
+        }
+    },
     
     // Get cached price
     getPrice(symbol) {
@@ -93,6 +104,7 @@ const SpotCache = {
     // Set cached price
     setPrice(symbol, price) {
         this.prices.set(symbol, { price, ts: Date.now() });
+        this._trimMap(this.prices, SPOT_CACHE_MAX_PRICES);
     },
     
     // Get cached balance (accountId -> { ...balanceData, ts })
@@ -129,6 +141,7 @@ const SpotCache = {
     // Set cached filters
     setFilters(symbol, filterData) {
         this.filters.set(symbol, { ...filterData, ts: Date.now() });
+        this._trimMap(this.filters, SPOT_CACHE_MAX_FILTERS);
     }
 };
 
@@ -930,55 +943,39 @@ function _fmtBotPerfRange(data, forPeriod) {
     return '';
 }
 
-function _sumPerfHourly(series) {
-    var pnl = 0;
-    var fees = 0;
-    (series || []).forEach(function (h) {
-        pnl += Number(h.pnl_usd) || 0;
-        fees += Number(h.fees_usd) || 0;
-    });
-    return { pnl_usd: pnl, fees_usd: fees };
+function _perfPeriodPrefix(period) {
+    var map = { daily: 'Günlük', weekly: 'Haftalık', monthly: 'Aylık', all: 'Genel' };
+    return map[(period || 'all').toLowerCase()] || 'Genel';
 }
 
-function _sumPerfDaily(series) {
-    var pnl = 0;
-    var fees = 0;
-    (series || []).forEach(function (d) {
-        pnl += Number(d.pnl_usd) || 0;
-        fees += Number(d.fees_usd) || 0;
-    });
-    return { pnl_usd: pnl, fees_usd: fees };
+function _perfPeriodPnlLabel(period) {
+    return _perfPeriodPrefix(period) + ' K/Z (USDT)';
+}
+
+function _perfPeriodFeesLabel(period) {
+    return _perfPeriodPrefix(period) + ' komisyon (USDT)';
 }
 
 function renderBotPerformancePanel(data, forPeriod) {
     if (forPeriod !== State.botPerformancePeriod) return;
     var rangeEl = document.getElementById('botPerformanceRange');
+    var pnlLabelEl = document.getElementById('botPerfPnlLabel');
+    var feesLabelEl = document.getElementById('botPerfFeesLabel');
     var pnlEl = document.getElementById('botPerfTotalPnl');
     var feesEl = document.getElementById('botPerfTotalFees');
-    var dailyEl = document.getElementById('botPerformanceDaily');
-    if (!dailyEl) return;
 
-    var hourlySeries = (data && Array.isArray(data.hourly_series)) ? data.hourly_series : [];
-    var dailySeries = (data && Array.isArray(data.daily_series)) ? data.daily_series : [];
-
-    var totalPnl = 0;
-    var totalFees = 0;
-    if (forPeriod === 'daily' && hourlySeries.length) {
-        var hourTotals = _sumPerfHourly(hourlySeries);
-        totalPnl = hourTotals.pnl_usd;
-        totalFees = hourTotals.fees_usd;
-    } else if (dailySeries.length) {
-        var dayTotals = _sumPerfDaily(dailySeries);
-        totalPnl = dayTotals.pnl_usd;
-        totalFees = dayTotals.fees_usd;
-    } else {
-        var totals = (data && data.totals) || {};
-        totalPnl = totals.pnl_usd != null ? Number(totals.pnl_usd) : (data && data.pnl_usd != null ? Number(data.pnl_usd) : 0);
-        totalFees = totals.fees_usd != null ? Number(totals.fees_usd) : 0;
-    }
+    var totals = (data && data.totals) || {};
+    var totalPnl = totals.pnl_usd != null ? Number(totals.pnl_usd) : (data && data.pnl_usd != null ? Number(data.pnl_usd) : 0);
+    var totalFees = totals.fees_usd != null ? Number(totals.fees_usd) : 0;
 
     if (rangeEl) {
         rangeEl.textContent = _fmtBotPerfRange(data, forPeriod);
+    }
+    if (pnlLabelEl) {
+        pnlLabelEl.textContent = _perfPeriodPnlLabel(forPeriod);
+    }
+    if (feesLabelEl) {
+        feesLabelEl.textContent = _perfPeriodFeesLabel(forPeriod);
     }
     if (pnlEl) {
         pnlEl.textContent = _fmtPerfUsdt(totalPnl);
@@ -988,27 +985,6 @@ function renderBotPerformancePanel(data, forPeriod) {
         feesEl.textContent = Number.isFinite(totalFees) ? totalFees.toFixed(2) : '0.00';
         feesEl.className = 'bot-perf-summary-value bot-perf-summary-value--muted';
     }
-
-    if (dailySeries.length > 1) {
-        var dailyRows = dailySeries.map(function (d) {
-            var pnl = Number(d.pnl_usd) || 0;
-            return '<tr>' +
-                '<td>' + (d.date_tr || '—') + '</td>' +
-                '<td class="bot-perf-pnl-cell' + _perfColorClass(pnl) + '">' + _fmtPerfUsdt(pnl) + '</td>' +
-                '<td>' + (Number(d.fees_usd) || 0).toFixed(2) + '</td>' +
-                '</tr>';
-        }).join('');
-        dailyEl.style.display = 'block';
-        dailyEl.innerHTML =
-            '<div class="bot-perf-daily-title">Günlük dağılım</div>' +
-            '<table class="bot-perf-table bot-perf-table--daily">' +
-            '<thead><tr><th>Tarih</th><th>K/Z (USDT)</th><th>Komisyon</th></tr></thead>' +
-            '<tbody>' + dailyRows + '</tbody></table>';
-        return;
-    }
-
-    dailyEl.innerHTML = '';
-    dailyEl.style.display = 'none';
 }
 
 async function loadBotPerformance(period) {
@@ -1017,10 +993,14 @@ async function loadBotPerformance(period) {
     if (!['daily', 'weekly', 'monthly', 'all'].includes(period)) period = 'all';
     State.botPerformancePeriod = period;
     var requestedPeriod = period;
-    var dailyEl = document.getElementById('botPerformanceDaily');
-    if (dailyEl && !_botPerformanceLoaded) {
-        dailyEl.innerHTML = '<div class="bot-performance-loading">Yükleniyor…</div>';
-        dailyEl.style.display = 'block';
+    if (requestedPeriod !== _botPerformanceLastPeriod) {
+        _botPerformanceLastSig = '';
+    }
+    var pnlEl = document.getElementById('botPerfTotalPnl');
+    var feesEl = document.getElementById('botPerfTotalFees');
+    if (!_botPerformanceLoaded) {
+        if (pnlEl) pnlEl.textContent = '…';
+        if (feesEl) feesEl.textContent = '…';
     }
     try {
         var res = await window.apiClient.get('/api/accounts/' + State.accountId + '/bot-performance?period=' + encodeURIComponent(period));
@@ -1037,7 +1017,6 @@ async function loadBotPerformance(period) {
     } catch (e) {
         if (window.errorReporter) window.errorReporter.report(e, { tab: 'dashboard', account_id: State.accountId, action: 'loadBotPerformance' });
         renderBotPerformancePanel({ totals: {} }, requestedPeriod);
-        if (dailyEl) dailyEl.innerHTML = '<div class="bot-performance-empty">Performans yüklenemedi.</div>';
     }
     _botPerformanceLoaded = true;
 }
@@ -1070,15 +1049,14 @@ function formatLeaderboardRunningDuration(runningSinceIso) {
 }
 
 function formatLeaderboardTotalPnl(item) {
-    var pnl = item && item.total_pnl_usd != null ? Number(item.total_pnl_usd) : null;
-    if (pnl == null || !Number.isFinite(pnl)) {
-        var pct = item && item.profit_pct != null ? Number(item.profit_pct) : 0;
-        pnl = 0;
-        if (!Number.isFinite(pct)) pct = 0;
+    var pct = item && item.profit_pct != null ? Number(item.profit_pct) : null;
+    if (pct == null || !Number.isFinite(pct)) {
+        var pnl = item && item.total_pnl_usd != null ? Number(item.total_pnl_usd) : null;
+        pct = pnl != null && Number.isFinite(pnl) ? pnl : 0;
     }
     return {
-        text: typeof fmtSignedUsd === 'function' ? fmtSignedUsd(pnl) : ((pnl >= 0 ? '+' : '') + '$' + Math.abs(pnl).toFixed(2)),
-        color: pnl >= 0 ? '#0ecb81' : '#f6465d'
+        text: fmtSignedPct(pct),
+        color: pct >= 0 ? '#0ecb81' : '#f6465d'
     };
 }
 
@@ -10007,9 +9985,13 @@ async function initDashboard() {
         var isOwner = user && !user.is_admin && user.account_id != null && Number(user.account_id) === Number(accountId);
         if (accountId && isOwner) {
             try {
+                var logoutHeaders = { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' };
+                var csrfM = typeof document !== 'undefined' && document.cookie && document.cookie.match(/\bcsrf_token=([^;]+)/);
+                if (csrfM && csrfM[1]) logoutHeaders['X-CSRF-Token'] = csrfM[1].trim();
                 await fetch('/api/auth/logout', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'include',
+                    headers: logoutHeaders,
                     body: JSON.stringify({ account_id: accountId })
                 });
             } catch (e) {}
@@ -11920,6 +11902,85 @@ function fmtSignedUsdOrDash(v) {
     return fmtSignedUsd(v);
 }
 
+function fmtSignedPct(pct) {
+    if (pct == null || !Number.isFinite(Number(pct))) return '—';
+    var n = Number(pct);
+    return (n >= 0 ? '+' : '') + n.toFixed(2) + '%';
+}
+
+/** Bot detay statePanel TOPLAM K/Z ile aynı kaynak: /api/bots-engine/{id}/live */
+function getBotLiveRow(bot) {
+    if (!bot || !State.botLiveEquity) return null;
+    var botId = String(bot.bot_id || bot.id || '');
+    return botId ? State.botLiveEquity[botId] : null;
+}
+
+function resolveBotHeroKz(bot) {
+    var budget = Number(bot.budget_usd || bot.initial_usd) || 0;
+    var row = getBotLiveRow(bot);
+    if (row && row.equity != null && Number.isFinite(row.equity) && !row.equity_unavailable) {
+        var ic = row.initial_capital > 0 ? row.initial_capital : budget;
+        if (row.first_buy_pending === true) {
+            return { usd: 0, pct: 0, equity: row.equity, initial: ic };
+        }
+        var usd = ic > 0 ? row.equity - ic : null;
+        var pct = row.pnl_pct != null && Number.isFinite(Number(row.pnl_pct))
+            ? Number(row.pnl_pct)
+            : (usd != null && ic > 0 ? (usd / ic) * 100 : null);
+        return { usd: usd, pct: pct, equity: row.equity, initial: ic };
+    }
+    var currentUsd = resolveBotCurrentUsd(bot);
+    if (currentUsd != null && budget > 0) {
+        var usdFb = currentUsd - budget;
+        var pctFb = bot.total_pnl_pct != null && Number.isFinite(Number(bot.total_pnl_pct))
+            ? Number(bot.total_pnl_pct)
+            : (usdFb / budget) * 100;
+        return { usd: usdFb, pct: pctFb, equity: currentUsd, initial: budget };
+    }
+    if (bot.total_pnl_usd != null && Number.isFinite(bot.total_pnl_usd)) {
+        var usdSnap = Number(bot.total_pnl_usd);
+        var pctSnap = bot.total_pnl_pct != null && Number.isFinite(Number(bot.total_pnl_pct))
+            ? Number(bot.total_pnl_pct)
+            : (budget > 0 ? (usdSnap / budget) * 100 : null);
+        return { usd: usdSnap, pct: pctSnap, equity: currentUsd, initial: budget };
+    }
+    if (botNeedsLiveEquity(bot) && !_financeBotsLiveHydrated) {
+        return { usd: null, pct: null, equity: null, initial: budget };
+    }
+    return { usd: 0, pct: 0, equity: currentUsd, initial: budget };
+}
+
+function resolveBotRowPnlPct(bot, rowPnl) {
+    var kz = resolveBotHeroKz(bot);
+    if (kz.pct != null && Number.isFinite(kz.pct)) return kz.pct;
+    var budget = Number(bot.budget_usd || bot.initial_usd) || 0;
+    if (bot.total_pnl_pct != null && Number.isFinite(Number(bot.total_pnl_pct))) {
+        return Number(bot.total_pnl_pct);
+    }
+    if (rowPnl != null && Number.isFinite(Number(rowPnl)) && budget > 0) {
+        return (Number(rowPnl) / budget) * 100;
+    }
+    return null;
+}
+
+/** bot.html formatHeroKzStr ile aynı: +$0.41 +0.75% */
+function formatHeroKzDisplay(usd, pct, initialCapital) {
+    if (usd == null || !Number.isFinite(Number(usd))) return '—';
+    var s = fmtSignedUsd(Number(usd));
+    var p = pct;
+    if ((p == null || !Number.isFinite(Number(p))) && initialCapital > 0) {
+        p = (Number(usd) / initialCapital) * 100;
+    }
+    if (p != null && Number.isFinite(Number(p))) {
+        s += ' ' + (Number(p) >= 0 ? '+' : '') + Number(p).toFixed(2) + '%';
+    }
+    return s;
+}
+
+function fmtSignedUsdWithPct(pnl, pct, initialCapital) {
+    return formatHeroKzDisplay(pnl, pct, initialCapital != null ? initialCapital : 0);
+}
+
 function isBotWaitingFirstBuy(bot) {
     if (!bot) return false;
     var st = (bot.status || '').toLowerCase();
@@ -12136,6 +12197,10 @@ function resolveBotLiveEquity(bot) {
 }
 
 function resolveBotCurrentUsd(bot) {
+    var row = getBotLiveRow(bot);
+    if (row && row.equity != null && Number.isFinite(row.equity) && !row.equity_unavailable) {
+        return row.equity;
+    }
     if (botNeedsLiveEquity(bot)) {
         if (_financeBotsLiveHydrated) {
             var live = resolveBotLiveEquity(bot);
@@ -12151,6 +12216,8 @@ function resolveBotCurrentUsd(bot) {
 }
 
 function resolveBotRowPnl(bot, currentUsd) {
+    var kz = resolveBotHeroKz(bot);
+    if (kz.usd != null && Number.isFinite(kz.usd)) return kz.usd;
     var budget = Number(bot.budget_usd || bot.initial_usd) || 0;
     if (currentUsd != null && budget > 0) return currentUsd - budget;
     if (bot.total_pnl_usd != null && Number.isFinite(bot.total_pnl_usd)) return Number(bot.total_pnl_usd);
@@ -12174,10 +12241,13 @@ function applyFinanceBotsLiveEquityToDom() {
     State.bots.forEach(function (bot) {
         var botId = String(bot.bot_id || bot.id || '');
         if (!botId) return;
-        var currentUsd = resolveBotCurrentUsd(bot);
-        var pnl = resolveBotRowPnl(bot, currentUsd);
+        var kz = resolveBotHeroKz(bot);
+        var currentUsd = kz.equity != null ? kz.equity : resolveBotCurrentUsd(bot);
+        var pnl = kz.usd;
+        var pnlPct = kz.pct;
         var sc = pnl != null && pnl >= 0 ? '#0ecb81' : (pnl != null ? '#f6465d' : 'var(--ds-text-secondary)');
         var balanceTxt = currentUsd != null ? fmtUsd(currentUsd) : '—';
+        var pnlTxt = formatHeroKzDisplay(pnl, pnlPct, kz.initial || Number(bot.budget_usd || bot.initial_usd) || 0);
         var cyclesTxt = resolveBotCyclesDisplay(bot);
         document.querySelectorAll('.finance-bot-balance[data-bot-id="' + botId + '"]').forEach(function (cell) {
             if (setTextIfChanged(cell, balanceTxt)) { /* patched */ }
@@ -12196,7 +12266,7 @@ function applyFinanceBotsLiveEquityToDom() {
                 }
             }
             if (tds.length >= 7) {
-                setTextIfChanged(tds[5], fmtSignedUsdOrDash(pnl));
+                setTextIfChanged(tds[5], pnlTxt);
                 if (tds[5].style.color !== sc) tds[5].style.color = sc;
                 setTextIfChanged(tds[6], cyclesTxt);
             }
@@ -12206,7 +12276,7 @@ function applyFinanceBotsLiveEquityToDom() {
             if (!label) return;
             if ((label.textContent || '') === 'Bakiye') setTextIfChanged(el, balanceTxt);
             if ((label.textContent || '') === 'K/Z') {
-                setTextIfChanged(el, fmtSignedUsdOrDash(pnl));
+                setTextIfChanged(el, pnlTxt);
                 if (el.style.color !== sc) el.style.color = sc;
             }
             if ((label.textContent || '') === 'Tur') setTextIfChanged(el, cyclesTxt);
@@ -12238,11 +12308,17 @@ async function pollFinanceBotsLiveEquity() {
                 .then(function (live) {
                     if (!live || typeof live !== 'object') return;
                     if (live.equity == null || isNaN(live.equity)) return;
+                    var ic = live.initial_capital != null && !isNaN(live.initial_capital)
+                        ? Number(live.initial_capital) : 0;
+                    var eq = Number(live.equity);
                     State.botLiveEquity[String(botId)] = {
-                        equity: Number(live.equity),
+                        equity: eq,
                         equity_unavailable: !!live.equity_unavailable,
                         first_buy_pending: live.first_buy_pending === true,
                         base_balance: live.base_balance != null ? Number(live.base_balance) : null,
+                        initial_capital: ic,
+                        pnl_pct: live.pnl_pct != null && !isNaN(live.pnl_pct) ? Number(live.pnl_pct) : null,
+                        last_price: live.last_price != null && !isNaN(live.last_price) ? Number(live.last_price) : null,
                         ts: Date.now()
                     };
                 })
@@ -12413,7 +12489,20 @@ function renderFinanceBots(bots) {
     var getLivePrice = function (sym) {
         return resolveMarketLivePrice(sym);
     };
-    const thead = '<thead><tr><th style="text-align:left">Sembol</th><th style="text-align:right">FİYAT</th><th style="text-align:center">Durum</th><th style="text-align:right">Bütçe</th><th style="text-align:right">Bot Bakiyesi</th><th style="text-align:right">Toplam K/Z</th><th style="text-align:center">Tur</th><th style="text-align:center">İşlem</th></tr></thead>';
+    var colgroup = '<colgroup>' +
+        '<col class="mevcut-botlar-col"><col class="mevcut-botlar-col"><col class="mevcut-botlar-col"><col class="mevcut-botlar-col">' +
+        '<col class="mevcut-botlar-col"><col class="mevcut-botlar-col"><col class="mevcut-botlar-col"><col class="mevcut-botlar-col">' +
+        '</colgroup>';
+    const thead = '<thead><tr>' +
+        '<th class="col-symbol col-center">Sembol</th>' +
+        '<th class="col-price col-center">Fiyat</th>' +
+        '<th class="col-status col-center">Durum</th>' +
+        '<th class="col-budget col-center">Bütçe</th>' +
+        '<th class="col-balance col-center">Bakiye</th>' +
+        '<th class="col-pnl col-center">K/Z</th>' +
+        '<th class="col-tur col-center">Tur</th>' +
+        '<th class="col-action col-center">İşlem</th>' +
+        '</tr></thead>';
     const rows = sorted.map(bot => {
         const botId = bot.bot_id || bot.id;
         const sym = (bot.symbol || 'N/A').toUpperCase();
@@ -12426,30 +12515,33 @@ function renderFinanceBots(bots) {
         const q = State.accountCode ? 'account_code=' + encodeURIComponent(State.accountCode) : 'account_id=' + (State.accountId || '');
         const href = detailPage + '?bot_id=' + botId + '&' + q;
         const statusMeta = getFinanceBotStatusMeta(bot);
-        const currentUsd = resolveBotCurrentUsd(bot);
+        const kz = resolveBotHeroKz(bot);
+        const currentUsd = kz.equity != null ? kz.equity : resolveBotCurrentUsd(bot);
         const balanceDisplay = currentUsd != null ? fmtUsd(currentUsd) : '—';
         const cyclesDisplay = resolveBotCyclesDisplay(bot);
-        const budgetUsd = Number(bot.budget_usd || bot.initial_usd) || 0;
-        const rowPnl = resolveBotRowPnl(bot, currentUsd);
+        const budgetUsd = kz.initial > 0 ? kz.initial : (Number(bot.budget_usd || bot.initial_usd) || 0);
+        const rowPnl = kz.usd;
+        const rowPnlPct = kz.pct;
         const sc = rowPnl != null && rowPnl >= 0 ? '#0ecb81' : (rowPnl != null ? '#f6465d' : 'var(--ds-text-secondary)');
+        var liveRow = getBotLiveRow(bot);
         var symbolCell = isMulti && multiCoins.length > 0
             ? '<a href="' + href + '" style="color:inherit;text-decoration:none;display:inline-flex;align-items:center;gap:6px">' + getMultiLogoHtml(multiCoins) + '</a>'
             : '<a href="' + href + '" style="color:inherit;text-decoration:none;display:inline-flex;align-items:center;gap:6px">' + logoHtml + (bot.symbol || 'N/A') + '</a>';
-        var livePrice = isMulti ? null : getLivePrice(sym);
+        var livePrice = isMulti ? null : (liveRow && liveRow.last_price != null ? liveRow.last_price : getLivePrice(sym));
         var priceCell = isMulti
             ? '<span class="mevcut-bot-portfolio-balance" title="Çoklu sembol">—</span>'
-            : '<span class="finance-bot-live-price mevcut-bot-portfolio-balance" data-symbol="' + sym + '" data-bot-id="' + botId + '" title="Sembol canlı fiyatı">' + (livePrice != null ? fmtCoinPrice(livePrice) : '—') + '</span>';
+            : '<span class="finance-bot-live-price mevcut-bot-portfolio-balance" data-symbol="' + sym + '" data-bot-id="' + botId + '" title="Sembol canlı fiyatı (bot detay /live)">' + (livePrice != null ? fmtCoinPrice(livePrice) : '—') + '</span>';
         return '<tr style="cursor:pointer" data-bot-id="' + botId + '" data-symbol="' + sym + '" data-detail-page="' + detailPage + '">' +
-            '<td style="font-weight:600">' + symbolCell + '</td>' +
-            '<td class="mevcut-botlar-price-cell" style="text-align:right">' + priceCell + '</td>' +
-            '<td style="text-align:center"><span class="mevcut-botlar-status ' + statusMeta.className + '">' + statusMeta.text + '</span></td>' +
-            '<td style="text-align:right">' + fmtUsd(bot.budget_usd || 0) + '</td>' +
-            '<td class="mevcut-botlar-balance-cell finance-bot-balance' + (balanceDisplay === '—' ? ' finance-bot-metric-pending' : '') + '" style="text-align:right" data-bot-id="' + botId + '" data-balance="' + (currentUsd != null ? currentUsd : '') + '" title="Bot bakiyesi (bot detay /live equity ile aynı)">' + balanceDisplay + '</td>' +
-            '<td style="text-align:right;color:' + sc + '">' + fmtSignedUsdOrDash(rowPnl) + '</td>' +
-            '<td style="text-align:center">' + cyclesDisplay + '</td>' +
-            '<td style="text-align:center"><a href="' + href + '" class="mevcut-botlar-detay-btn">Detay</a></td></tr>';
+            '<td class="col-symbol col-center" style="font-weight:600">' + symbolCell + '</td>' +
+            '<td class="mevcut-botlar-price-cell col-price col-center">' + priceCell + '</td>' +
+            '<td class="col-status col-center"><span class="mevcut-botlar-status ' + statusMeta.className + '">' + statusMeta.text + '</span></td>' +
+            '<td class="col-budget col-center">' + fmtUsd(bot.budget_usd || 0) + '</td>' +
+            '<td class="mevcut-botlar-balance-cell col-balance col-center finance-bot-balance' + (balanceDisplay === '—' ? ' finance-bot-metric-pending' : '') + '" data-bot-id="' + botId + '" data-balance="' + (currentUsd != null ? currentUsd : '') + '" title="Bot bakiyesi (bot detay /live equity ile aynı)">' + balanceDisplay + '</td>' +
+            '<td class="col-pnl col-center" style="color:' + sc + '">' + formatHeroKzDisplay(rowPnl, rowPnlPct, budgetUsd) + '</td>' +
+            '<td class="col-tur col-center">' + cyclesDisplay + '</td>' +
+            '<td class="col-action col-center"><a href="' + href + '" class="mevcut-botlar-detay-btn">Detay</a></td></tr>';
     }).join('');
-    var tableHtml = '<div class="mevcut-botlar-table-wrap" style="overflow-x: auto; width: 100%;"><table class="binance-assets-table mevcut-botlar-table" style="width: 100%;">' + thead + '<tbody>' + rows + '</tbody></table></div>';
+    var tableHtml = '<div class="mevcut-botlar-table-wrap" style="overflow-x: auto; width: 100%;"><table class="binance-assets-table mevcut-botlar-table" style="width: 100%;">' + colgroup + thead + '<tbody>' + rows + '</tbody></table></div>';
 
     var mobileCardsHtml = sorted.map(bot => {
         const botId = bot.bot_id || bot.id;
@@ -12463,14 +12555,18 @@ function renderFinanceBots(bots) {
         const q = State.accountCode ? 'account_code=' + encodeURIComponent(State.accountCode) : 'account_id=' + (State.accountId || '');
         const href = detailPage + '?bot_id=' + botId + '&' + q;
         const statusMeta = getFinanceBotStatusMeta(bot);
-        const currentUsd = resolveBotCurrentUsd(bot);
+        const kzM = resolveBotHeroKz(bot);
+        const currentUsd = kzM.equity != null ? kzM.equity : resolveBotCurrentUsd(bot);
         const balanceDisplay = currentUsd != null ? fmtUsd(currentUsd) : '—';
         const cyclesDisplay = resolveBotCyclesDisplay(bot);
-        const budgetUsd = Number(bot.budget_usd || bot.initial_usd) || 0;
-        const rowPnl = resolveBotRowPnl(bot, currentUsd);
+        const budgetUsd = kzM.initial > 0 ? kzM.initial : (Number(bot.budget_usd || bot.initial_usd) || 0);
+        const rowPnl = kzM.usd;
+        const rowPnlPct = kzM.pct;
         const sc = rowPnl != null && rowPnl >= 0 ? '#0ecb81' : (rowPnl != null ? '#f6465d' : 'var(--ds-text-secondary)');
+        var liveRowM = getBotLiveRow(bot);
         // Mobil: tek sembolde FİYAT = canlı sembol fiyatı; çoklu botta —
-        var mobilePriceDisplay = isMulti ? '—' : (getLivePrice(sym) != null ? fmtCoinPrice(getLivePrice(sym)) : '—');
+        var mobLp = liveRowM && liveRowM.last_price != null ? liveRowM.last_price : getLivePrice(sym);
+        var mobilePriceDisplay = isMulti ? '—' : (mobLp != null ? fmtCoinPrice(mobLp) : '—');
         var mobilePriceSpan = isMulti
             ? '<span class="mevcut-botlar-mobile-price" title="Çoklu sembol">—</span>'
             : '<span class="finance-bot-live-price mevcut-botlar-mobile-price" data-symbol="' + sym + '" data-bot-id="' + botId + '" title="Sembol canlı fiyatı">' + mobilePriceDisplay + '</span>';
@@ -12484,7 +12580,7 @@ function renderFinanceBots(bots) {
             '<div class="mevcut-botlar-mobile-stat"><span class="mevcut-botlar-mobile-stat-label">Durum</span><span class="mevcut-botlar-status ' + statusMeta.className + '">' + statusMeta.text + '</span></div>' +
             '<div class="mevcut-botlar-mobile-stat"><span class="mevcut-botlar-mobile-stat-label">Bütçe</span><span class="mevcut-botlar-mobile-stat-value">' + fmtUsd(bot.budget_usd || 0) + '</span></div>' +
             '<div class="mevcut-botlar-mobile-stat"><span class="mevcut-botlar-mobile-stat-label">Bakiye</span><span class="mevcut-botlar-mobile-stat-value">' + balanceDisplay + '</span></div>' +
-            '<div class="mevcut-botlar-mobile-stat"><span class="mevcut-botlar-mobile-stat-label">K/Z</span><span class="mevcut-botlar-mobile-stat-value mevcut-botlar-mobile-pnl" style="color:' + sc + '">' + fmtSignedUsdOrDash(rowPnl) + '</span></div>' +
+            '<div class="mevcut-botlar-mobile-stat"><span class="mevcut-botlar-mobile-stat-label">K/Z</span><span class="mevcut-botlar-mobile-stat-value mevcut-botlar-mobile-pnl" style="color:' + sc + '">' + formatHeroKzDisplay(rowPnl, rowPnlPct, budgetUsd) + '</span></div>' +
             '<div class="mevcut-botlar-mobile-stat"><span class="mevcut-botlar-mobile-stat-label">Tur</span><span class="mevcut-botlar-mobile-stat-value">' + cyclesDisplay + '</span></div>' +
             '</div>' +
             '<a href="' + href + '" class="mevcut-botlar-detay-btn mevcut-botlar-mobile-detay">Detay</a>' +
@@ -12566,19 +12662,12 @@ function updateFinanceBotsLivePrices() {
         var prev = financeBotLastPrices[botId];
         if (span.textContent !== newText) {
             if (prev != null && Number.isFinite(prev) && Math.abs(price - prev) > 1e-10) {
-                var cell = span.closest('.mevcut-botlar-price-cell') || span;
-                [span, cell].forEach(function (el) {
-                    el.classList.remove('blink-positive', 'blink-negative');
-                });
+                span.classList.remove('mevcut-bot-blink-up', 'mevcut-bot-blink-down', 'blink-positive', 'blink-negative');
                 void span.offsetWidth;
-                var blinkClass = price > prev ? 'blink-positive' : 'blink-negative';
-                span.classList.add(blinkClass);
-                if (cell !== span) cell.classList.add(blinkClass);
+                span.classList.add(price > prev ? 'mevcut-bot-blink-up' : 'mevcut-bot-blink-down');
                 setTimeout(function () {
-                    [span, cell].forEach(function (el) {
-                        el.classList.remove('blink-positive', 'blink-negative');
-                    });
-                }, 750);
+                    span.classList.remove('mevcut-bot-blink-up', 'mevcut-bot-blink-down');
+                }, 780);
             }
             span.textContent = newText;
         }

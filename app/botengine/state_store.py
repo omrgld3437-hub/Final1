@@ -14,6 +14,29 @@ from sqlalchemy.orm import Session
 logger = logging.getLogger(__name__)
 
 
+def normalize_event_ts_iso_z(ts: Any) -> str:
+    """Event ts → UTC ISO string with Z suffix (UI parse/sort tek kaynak)."""
+    if ts is None:
+        return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    if isinstance(ts, datetime):
+        dt = ts.replace(tzinfo=timezone.utc) if ts.tzinfo is None else ts.astimezone(timezone.utc)
+        return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+    s = str(ts).strip().replace(" ", "T")
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    elif "+" not in s[10:] and s.count("-") <= 2 and "T" in s:
+        s = s + "+00:00"
+    try:
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        else:
+            dt = dt.astimezone(timezone.utc)
+        return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+    except Exception:
+        return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def _state_to_json_serializable(obj: Any) -> Any:
     """Return a deep copy of obj with datetime/date converted to ISO string for JSON.dumps."""
     if obj is None:
@@ -32,6 +55,19 @@ def _state_to_json_serializable(obj: Any) -> Any:
         return None
 
 
+def load_state_json_extract(db: Session, bot_id: int, json_path: str) -> Any:
+    """Tek JSON alanı — tüm state_json parse etmez (leaderboard vb.)."""
+    row = db.execute(
+        text(
+            "SELECT json_extract(state_json, :path) FROM bot_engine_state WHERE bot_id = :bid"
+        ),
+        {"path": json_path, "bid": bot_id},
+    ).fetchone()
+    if not row:
+        return None
+    return row[0]
+
+
 def load_state(db: Session, bot_id: int) -> Optional[Dict[str, Any]]:
     """Load state snapshot for bot. Returns None if not found."""
     row = db.execute(
@@ -43,6 +79,12 @@ def load_state(db: Session, bot_id: int) -> Optional[Dict[str, Any]]:
         return None
     raw = row[0]
     state = json.loads(raw) if isinstance(raw, str) and raw else {}
+    try:
+        from app.botengine.state_trim import trim_bot_state_for_persist
+
+        trim_bot_state_for_persist(state)
+    except Exception:
+        pass
     state["cycle_id"] = state.get("cycle_id") or row[1] or 1
     state["mode"] = state.get("mode") or row[2] or "IDLE"
     state["last_tick_at"] = row[3]
@@ -69,6 +111,9 @@ def load_state(db: Session, bot_id: int) -> Optional[Dict[str, Any]]:
 
 def save_state(db: Session, bot_id: int, account_id: int, state: Dict[str, Any]) -> None:
     """Upsert state snapshot."""
+    from app.botengine.state_trim import trim_bot_state_for_persist
+
+    trim_bot_state_for_persist(state)
     # Increment state_version for optimistic locking
     old_ver = state.get("state_version", 0)
     state["state_version"] = old_ver + 1
@@ -111,11 +156,6 @@ def save_state(db: Session, bot_id: int, account_id: int, state: Dict[str, Any])
             "retry": state.get("retry_at"),
             "upd": now,
         },
-    )
-    db.commit()
-    db.execute(
-        text("UPDATE bot_engine_state SET updated_at = :upd WHERE bot_id = :bid"),
-        {"upd": now, "bid": bot_id},
     )
     db.commit()
 
@@ -255,7 +295,7 @@ def list_events(
                 pass
         out.append({
             "id": r[0],
-            "ts": r[1].isoformat() + "Z" if hasattr(r[1], "isoformat") else str(r[1]),
+            "ts": normalize_event_ts_iso_z(r[1]),
             "type": r[2],
             "message": r[3] or "",
             "meta": meta,

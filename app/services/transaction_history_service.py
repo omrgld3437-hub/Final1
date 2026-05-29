@@ -63,12 +63,12 @@ class TransactionHistoryService:
 
         if not ledger_has_buysell(account_id):
             try:
-                rebuild_from_db(db, account_id)
+                rebuild_from_db(db, account_id, days=90)
             except Exception:
                 pass
         else:
             try:
-                sync_from_db_if_stale(db, account_id)
+                sync_from_db_if_stale(db, account_id, max_rows=60)
             except Exception:
                 pass
 

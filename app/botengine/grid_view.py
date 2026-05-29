@@ -116,6 +116,39 @@ def _planned_sell_base_qty_display(
     return q if q > 0 else None
 
 
+def _planned_reentry_usd_display(state: Dict[str, Any], quote_bal: float) -> Optional[float]:
+    """Kar alım: planlanan USDT (sell_history proceeds cap, motor ile uyumlu)."""
+    for h in state.get("buy_history") or []:
+        if isinstance(h, dict) and str(h.get("reason") or "") == "trail_reentry_buy":
+            q = _f(h.get("qty"))
+            p = _f(h.get("price"))
+            if q > 0 and p > 0:
+                return round(q * p, 2)
+    sell_h = state.get("sell_history") or []
+    total = sum(_f(x.get("qty")) * _f(x.get("price")) for x in sell_h if isinstance(x, dict))
+    if total <= 0:
+        return None
+    qb = _f(quote_bal)
+    cap = min(qb, total) if qb > 0 else total
+    return round(cap, 2) if cap > 0 else None
+
+
+def _planned_profit_exit_base_qty_display(state: Dict[str, Any], base_bal: float) -> Optional[float]:
+    """Kar satış: planlanan base miktarı (buy_history toplamı cap, motor ile uyumlu)."""
+    for h in state.get("sell_history") or []:
+        if isinstance(h, dict) and str(h.get("reason") or "") == "trail_profit_sell":
+            q = _f(h.get("qty"))
+            if q > 0:
+                return round(q, 8)
+    buy_h = state.get("buy_history") or []
+    total_q = sum(_f(x.get("qty")) for x in buy_h if isinstance(x, dict))
+    if total_q <= 0:
+        return None
+    bb = _f(base_bal)
+    q = min(bb, total_q) if bb > 0 else total_q
+    return round(q, 8) if q > 0 else None
+
+
 def _planned_buy_usd_display(
     state: Dict[str, Any],
     cfg_obj: Any,
@@ -329,6 +362,8 @@ def compute_grid_profit_view(
         meta["avg_buy_grid"] = round(avg_buy_grid, 4)
     reentry_done = bool(state.get("_reentry_done"))
     profit_exit_done = bool(state.get("_profit_exit_done"))
+    quote_bal = _f(state.get("quote_balance") or 0)
+    base_bal = _f(state.get("base_balance") or 0)
 
     reentry_trigger_hit = mode == "TRAIL_REENTRY_BUY"
     profit_exit_trigger_hit = mode == "TRAIL_PROFIT_SELL"
@@ -343,11 +378,13 @@ def compute_grid_profit_view(
             anchor = None
         execution = (anchor * (1 + reentry_rise / 100.0)) if anchor is not None else None
         status = "tamamlandi" if reentry_done else ("tetiklendi" if reentry_trigger_hit else "bekliyor")
+        planned_reentry_usd = _planned_reentry_usd_display(state, quote_bal)
         profit_points.append({
             "type": "reentry",
             "trigger_price": round(trigger, 4),
             "average_cost": round(avg_sell_grid, 4) if avg_sell_grid else None,
             "profit_pct": round(reentry_drop, 2),
+            "planned_quote_usd": planned_reentry_usd,
             "anchor": round(anchor, 4) if anchor is not None else None,
             "dip": round(anchor, 4) if (reentry_trigger_hit and anchor is not None) else None,
             "tepe": None,
@@ -368,11 +405,13 @@ def compute_grid_profit_view(
             anchor = None
         execution = (anchor * (1 - exit_drop / 100.0)) if anchor is not None else None
         status = "tamamlandi" if profit_exit_done else ("tetiklendi" if profit_exit_trigger_hit else "bekliyor")
+        planned_exit_base = _planned_profit_exit_base_qty_display(state, base_bal)
         profit_points.append({
             "type": "profit_exit",
             "trigger_price": round(trigger, 4),
             "average_cost": round(avg_buy_grid, 4) if avg_buy_grid else None,
             "profit_pct": round(exit_rise, 2),
+            "planned_base_qty": planned_exit_base,
             "anchor": round(anchor, 4) if anchor is not None else None,
             "tepe": round(anchor, 4) if (profit_exit_trigger_hit and anchor is not None) else None,
             "dip": None,

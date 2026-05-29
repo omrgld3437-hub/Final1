@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 _TR_TZ = ZoneInfo("Europe/Istanbul")
 
 # Servis portları (teşhis için)
-_SERVICE_PORTS = {"web": 8000, "engine": None, "manager": 7999}
+_SERVICE_PORTS = {"web": 8000, "engine": None, "manager": 7999, "html": 8080}
 
 # Pattern kuralları: (reason_code, re_pattern, confidence)
 _RULES = [

@@ -16,7 +16,10 @@ Paylaşılan iş mantığı: Binance, fiyat, PnL, şifreleme, audit.
 | `market_data.py` | Cüzdan fiyat map (market_data) |
 | `binance_rest_log.py` | REST yük izleme, `rest.log` 60s özet, throttle |
 | `binance_ws.py` | WebSocket |
-| `data_hub.py` | Fiyat cache |
+| `data_hub.py` | Fiyat cache; `get_prices_for_ui`; `pin_symbols` (worker running-bot); ham 24h/exchangeInfo RAM yok |
+| `market_data.py` | `resolve_price_fast`, `refresh_worker_symbol_from_web` |
+| `core/security/endpoint_rate_limit.py` | spot/price, transaction-history rate limit |
+| `binance_spot.py` | Kompakt exchangeInfo cache (`get_cached_symbol_filters`) |
 | `price_hub.py` | Fiyat hub |
 | `encryption.py` | AES-256-GCM v2 + HKDF (`BINANCE_MASTER_KEY`, `ENCRYPTION_SALT`); hesap bağlamı |
 | `pnl_service.py` | Bot PnL, daily_ref |
@@ -30,6 +33,7 @@ Paylaşılan iş mantığı: Binance, fiyat, PnL, şifreleme, audit.
 | `transaction_history_file_store.py` | Şifreli işlem geçmişi (`.run/tx_history/`); `bootstrap_tx_history_from_binance` |
 | `binance_connectivity.py` | Upstream hata; `try_auto_resume_paused_bots` → `CONNECTIVITY_RECOVERED` + START `payload_json.connectivity_resume` (çift Bismillah logu yok) |
 | `bot_perf_file_store.py` | Bot performans saatlik/günlük dosya deposu |
+| `ip_blocklist.py` | Manager'ın yazdığı `.run/blocked_ips.json` okuma; web middleware 403 |
 
 ## Dosya envanteri
 
@@ -65,6 +69,7 @@ transaction_history_service.py
 transaction_history_file_store.py
 bot_perf_file_store.py
 bot_performance_service.py
+wallet_pricing.py → market_data.get_price_map_flat
 ```
 
 *Envanter: 2026-05-23 — `python scripts/sync_module_meta.py`*
