@@ -11,7 +11,7 @@ Web panel — HTML + vanilla JS (FastAPI `/ui` mount).
 | `dashboard.html` | Ana panel, bot listesi |
 | `bot.html` | Trailing DCA detay — grid warmup; state hero (`/live` 2.5s + süre 1s tick, `syncStateHeroDurationPoll`; çalışan botta detail patch hero’yu ezmez); tur raporu süre sayacı (`cycle_opened_at`, 1s poll, tur değişiminde sıfırlanır) |
 | `bot_multi.html` | TRDCA / multi — aynı grid warmup + display fingerprint yenileme |
-| `admin.html` | Admin |
+| `admin.html` | Admin — anında önbellek (inline + localStorage), boot-id bloklamaz |
 | `login.html` | Giriş |
 
 ## assets/
@@ -22,7 +22,7 @@ Web panel — HTML + vanilla JS (FastAPI `/ui` mount).
 | `stores/` | dashboardStore, financeStore |
 | `services/` | marketData, finance |
 | `utils/` | trTime, coinLogo, botHealthAlerts (aktif uyarı log; çözülen HEALTH gizlenir) |
-| *(kök)* | dashboard.js (cüzdan canlı yenileme: bot durdur/sil, periyodik force), admin.js, chart.js |
+| *(kök)* | dashboard.js (test: strip toplamı → TOPLAM SPOT BAKİYESİ KPI, canlı), admin.js, chart.js |
 
 ## Bot oluşturma
 

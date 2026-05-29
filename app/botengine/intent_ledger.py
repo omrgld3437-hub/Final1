@@ -319,6 +319,15 @@ def get_non_final_intents_for_account(db: Session, account_id: int) -> List[Dict
     return [{"id": row[0], "intent_id": row[1], "bot_id": row[2], "client_order_id": row[3], "symbol": row[4], "side": row[5], "qty": row[6], "status": row[7]} for row in r]
 
 
+def _bot_has_pending_intents(db: Session, bot_id: int) -> bool:
+    """Reconcile yalnızca PENDING intent varken Binance openOrders çağırır."""
+    row = db.execute(
+        text("SELECT 1 FROM order_intents WHERE bot_id = :bid AND status = 'PENDING' LIMIT 1"),
+        {"bid": bot_id},
+    ).fetchone()
+    return row is not None
+
+
 async def reconcile_open_orders_for_bot(adapter: Any, bot_id: int, account_id: int, db: Session, symbol: str) -> int:
     """
     Startup/periodic reconciliation: fetch open orders, match by clientOrderId, update order_intents.
@@ -326,6 +335,8 @@ async def reconcile_open_orders_for_bot(adapter: Any, bot_id: int, account_id: i
     """
     import logging
     log = logging.getLogger(__name__)
+    if not _bot_has_pending_intents(db, bot_id):
+        return 0
     try:
         open_orders = await adapter.get_open_orders(symbol=symbol)
         updated = 0
@@ -348,9 +359,11 @@ async def reconcile_open_orders_for_bot(adapter: Any, bot_id: int, account_id: i
                 log.info("RECONCILE_OPEN_ORDER bot_id=%s client_order_id=%s intent=%s", bot_id, coid, row[1])
         return updated
     except Exception as e:
-        from app.services.binance_spot import BinanceIPBannedError
+        from app.services.binance_spot import BinanceIPBannedError, is_transient_upstream_error
         if isinstance(e, BinanceIPBannedError):
             log.debug("reconcile_open_orders_for_bot bot_id=%s skipped (IP ban until %.0f)", bot_id, e.banned_until_ts)
+        elif is_transient_upstream_error(e):
+            log.debug("reconcile_open_orders_for_bot bot_id=%s transient err=%s", bot_id, e)
         else:
             log.warning("reconcile_open_orders_for_bot bot_id=%s err=%s", bot_id, e)
         db.rollback()

@@ -38,6 +38,7 @@ FINANCE_TRADES_ALL_MAX_ROWS = 5000  # type_filter=all tek istekte en fazla bu ka
 # Deposit/withdraw kısa süreli cache (aynı hesap/tarih tekrar istekte Binance'e gitmesin)
 _deposit_withdraw_cache: Dict[tuple, tuple] = {}  # (account_id, start_ms, end_ms, symbol_filter) -> (deposits, withdrawals, expiry_ts)
 _DEPOSIT_WITHDRAW_CACHE_TTL_SEC = 120  # 2 dakika
+_DEPOSIT_WITHDRAW_FAILURE_CACHE_TTL_SEC = 90  # geçici Binance hatasında boş cache (tekrarlı SAPI spam önleme)
 
 # Deposit/withdraw 400/401 hata log throttle: aynı hesap+endpoint için en fazla 5 dakikada bir WARNING
 _deposit_withdraw_error_ts: Dict[tuple, float] = {}
@@ -458,8 +459,13 @@ async def _fetch_deposit_withdraw(
                 deposits = data.get("data", [])
         except Exception as e:
             import logging
+            from app.services.binance_spot import is_transient_upstream_error
             _log = logging.getLogger(__name__)
-            if await _should_log_deposit_withdraw_error(account_id, "deposit"):
+            if is_transient_upstream_error(e):
+                _log.debug("deposit hisrec transient account_id=%s: %s", account_id, e)
+                expiry = time.monotonic() + _DEPOSIT_WITHDRAW_FAILURE_CACHE_TTL_SEC
+                _deposit_withdraw_cache[cache_key] = (deposits, withdrawals, expiry)
+            elif await _should_log_deposit_withdraw_error(account_id, "deposit"):
                 if getattr(e, "response", None) and getattr(e.response, "status_code", None) in (400, 401):
                     _log.debug(
                         "deposit hisrec account_id=%s: API anahtari gecersiz veya bu endpoint icin izin yok.",
@@ -476,8 +482,13 @@ async def _fetch_deposit_withdraw(
                 withdrawals = data.get("data", [])
         except Exception as e:
             import logging
+            from app.services.binance_spot import is_transient_upstream_error
             _log = logging.getLogger(__name__)
-            if await _should_log_deposit_withdraw_error(account_id, "withdraw"):
+            if is_transient_upstream_error(e):
+                _log.debug("withdraw history transient account_id=%s: %s", account_id, e)
+                expiry = time.monotonic() + _DEPOSIT_WITHDRAW_FAILURE_CACHE_TTL_SEC
+                _deposit_withdraw_cache[cache_key] = (deposits, withdrawals, expiry)
+            elif await _should_log_deposit_withdraw_error(account_id, "withdraw"):
                 if getattr(e, "response", None) and getattr(e.response, "status_code", None) in (400, 401):
                     _log.debug(
                         "withdraw history account_id=%s: API anahtari gecersiz veya bu endpoint icin izin yok.",

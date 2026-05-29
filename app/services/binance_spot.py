@@ -64,6 +64,29 @@ class BinanceIPBannedError(Exception):
         super().__init__(f"Binance IP banned until {banned_until_ts}")
 
 
+def is_transient_upstream_error(exc: BaseException) -> bool:
+    """Geçici ağ/Binance hatası; bir sonraki denemede tekrar dene, WARNING spam etme."""
+    if isinstance(exc, BinanceIPBannedError):
+        return True
+    if isinstance(exc, DependencyFailure):
+        msg = str(exc).lower()
+        return "timeout" in msg or "circuit breaker" in msg or "retry budget" in msg
+    if isinstance(exc, (OSError, ConnectionError, asyncio.TimeoutError)):
+        return True
+    msg = str(exc).lower()
+    return any(
+        token in msg
+        for token in (
+            "timed out",
+            "timeout",
+            "nodename nor servname",
+            "certificate verify failed",
+            "connect error",
+            "connection reset",
+        )
+    )
+
+
 # 418 "IP banned until XXX" sonrası signed istekleri bu süreye kadar atlama (global backoff)
 # Mutable container so no "global" declaration needed in functions (avoids "used prior to global declaration")
 _binance_ip_ban_state: dict = {"until_ts": 0.0}
@@ -233,7 +256,8 @@ async def _public_get_json_impl(
             last_exc = e
             retry_count = attempt
             status = getattr(getattr(e, "response", None), "status_code", None)
-            logger.warning(
+            log_fn = logger.warning if attempt >= MAX_RETRIES else logger.debug
+            log_fn(
                 "binance_spot public_get path=%s attempt=%s status=%s request_id=%s error=%s",
                 path, attempt + 1, status, request_id or "-", type(e).__name__
             )
@@ -300,7 +324,8 @@ async def _signed_json_impl(
             last_exc = e
             retry_count = attempt
             status = getattr(getattr(e, "response", None), "status_code", None)
-            logger.warning(
+            log_fn = logger.warning if attempt >= MAX_RETRIES else logger.debug
+            log_fn(
                 "binance_spot signed method=%s path=%s attempt=%s status=%s request_id=%s",
                 method, path, attempt + 1, status, request_id or "-"
             )

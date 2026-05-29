@@ -466,6 +466,31 @@ def rebuild_bot_daily_from_cycles(
         logger.debug("rebuild_bot_daily file bot_id=%s: %s", bot_id, e)
 
 
+def sync_bot_cycles_file_from_state(
+    db: Session,
+    bot_id: int,
+    account_id: int,
+    state: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Bot başlangıcında / okuma öncesi: perf dosyasını state ile hizala."""
+    from app.services.bot_perf_file_store import reconcile_bot_cycles_file_with_state
+
+    if state is None:
+        state = load_state(db, bot_id)
+    bot = db.query(Bot).filter(Bot.id == bot_id, Bot.account_id == account_id).first()
+    if not bot:
+        return
+    sym = bot.symbol or ""
+    completed = (state or {}).get("completed_cycle_dual_pnls") or []
+    if not completed:
+        for rec in _load_stored_bots(db, account_id):
+            if rec["bot_id"] == bot_id:
+                completed = rec.get("completed_cycles") or []
+                sym = rec.get("symbol") or sym
+                break
+    reconcile_bot_cycles_file_with_state(bot_id, account_id, sym, completed)
+
+
 def load_bot_closed_cycles_for_period(
     db: Session,
     bot_id: int,
@@ -473,37 +498,27 @@ def load_bot_closed_cycles_for_period(
     period: str,
     state: Optional[Dict[str, Any]] = None,
 ) -> Tuple[List[Dict[str, Any]], str, str]:
-    """Dosyadan kapanan turlar; boşsa state/arşivden bir kez backfill."""
+    """State/arşiv tek kaynak; dosya yalnızca cache. Uyuşmazlıkta state kazanır."""
     from app.services.bot_perf_file_store import (
         query_bot_cycles_by_date_range,
-        rebuild_bot_cycles_file,
+        reconcile_bot_cycles_file_with_state,
     )
-
-    date_from, date_to, _ = resolve_perf_date_range(period, bot_id=bot_id, account_id=account_id)
-    cycles = query_bot_cycles_by_date_range(bot_id, date_from, date_to)
-    if cycles:
-        return cycles, date_from, date_to
 
     if state is None:
         state = load_state(db, bot_id)
+    bot = db.query(Bot).filter(Bot.id == bot_id, Bot.account_id == account_id).first()
+    sym = (bot.symbol or "") if bot else ""
     completed = (state or {}).get("completed_cycle_dual_pnls") or []
     if not completed:
-        bot = db.query(Bot).filter(Bot.id == bot_id, Bot.account_id == account_id).first()
-        sym = (bot.symbol or "") if bot else ""
         for rec in _load_stored_bots(db, account_id):
             if rec["bot_id"] == bot_id:
                 completed = rec.get("completed_cycles") or []
                 sym = rec.get("symbol") or sym
                 break
-        else:
-            sym = sym or ""
-    else:
-        bot = db.query(Bot).filter(Bot.id == bot_id, Bot.account_id == account_id).first()
-        sym = (bot.symbol or "") if bot else ""
+    reconcile_bot_cycles_file_with_state(bot_id, account_id, sym, completed)
 
-    if completed:
-        rebuild_bot_cycles_file(bot_id, account_id, sym, completed)
-        cycles = query_bot_cycles_by_date_range(bot_id, date_from, date_to)
+    date_from, date_to, _ = resolve_perf_date_range(period, bot_id=bot_id, account_id=account_id)
+    cycles = query_bot_cycles_by_date_range(bot_id, date_from, date_to)
     return cycles, date_from, date_to
 
 

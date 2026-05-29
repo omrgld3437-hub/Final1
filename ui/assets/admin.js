@@ -32,7 +32,7 @@ const AdminStore = {
         settings: { data: null, ts: 0, inflight: null, abort: null }
     },
     TTL: {
-        accounts: 60000,
+        accounts: 300000,
         pending: 30000,
         suspended: 30000,
         contact: 60000,
@@ -40,12 +40,35 @@ const AdminStore = {
         popup: 60000,
         settings: 300000
     },
-    get: function (tab, fetcher) {
+    get: function (tab, fetcher, opts) {
+        opts = opts || {};
         var entry = this.cache[tab];
         if (!entry) return Promise.reject(new Error('Unknown tab: ' + tab));
         var ttl = this.TTL[tab] || 60000;
+        var staleMaxMs = tab === 'accounts' ? ADMIN_ACCOUNTS_CACHE_MAX_AGE_MS : 0;
         var now = Date.now();
         if (entry.data !== null && (now - entry.ts) < ttl) {
+            return Promise.resolve(entry.data);
+        }
+        if (entry.data !== null && staleMaxMs > 0 && (now - entry.ts) < staleMaxMs) {
+            if (!entry.inflight) {
+                var bgController = typeof AbortController !== 'undefined' ? new AbortController() : null;
+                entry.abort = bgController;
+                entry.inflight = fetcher(bgController ? bgController.signal : null)
+                    .then(function (data) {
+                        entry.data = data;
+                        entry.ts = Date.now();
+                        entry.inflight = null;
+                        entry.abort = null;
+                        if (typeof opts.onRefresh === 'function') opts.onRefresh(data);
+                        return data;
+                    })
+                    .catch(function (err) {
+                        entry.inflight = null;
+                        entry.abort = null;
+                        throw err;
+                    });
+            }
             return Promise.resolve(entry.data);
         }
         if (entry.inflight) return entry.inflight;
@@ -87,22 +110,42 @@ const AdminStore = {
 function invalidateAccountsAndSuspendedCache() {
     AdminStore.invalidate('accounts');
     AdminStore.invalidate('suspended');
+    adminClearAccountsCache();
 }
 
 /** Guard: same tap that opens menu must not close it (click-outside). */
 var adminTabsJustOpenedAt = 0;
 var adminTabsLastToggleRunAt = 0;
 
-var ADMIN_ACCOUNTS_CACHE_KEY = 'admin_accounts_cache';
+var ADMIN_ACCOUNTS_CACHE_KEY = 'admin_accounts_cache_v2';
 var ADMIN_ACCOUNTS_CACHE_MAX_AGE_MS = 5 * 60 * 1000;
+
+function adminReadAccountsCacheRaw() {
+    try {
+        return sessionStorage.getItem(ADMIN_ACCOUNTS_CACHE_KEY) || localStorage.getItem(ADMIN_ACCOUNTS_CACHE_KEY);
+    } catch (e) {
+        return null;
+    }
+}
+
+function adminWriteAccountsCache(payload) {
+    var raw = JSON.stringify(payload);
+    try { sessionStorage.setItem(ADMIN_ACCOUNTS_CACHE_KEY, raw); } catch (e) {}
+    try { localStorage.setItem(ADMIN_ACCOUNTS_CACHE_KEY, raw); } catch (e) {}
+}
+
+function adminClearAccountsCache() {
+    try { sessionStorage.removeItem(ADMIN_ACCOUNTS_CACHE_KEY); } catch (e) {}
+    try { localStorage.removeItem(ADMIN_ACCOUNTS_CACHE_KEY); } catch (e) {}
+}
 
 function restoreAccountsCacheFromStorage() {
     try {
-        var raw = sessionStorage.getItem(ADMIN_ACCOUNTS_CACHE_KEY);
-        if (!raw) return;
+        var raw = adminReadAccountsCacheRaw();
+        if (!raw) return false;
         var c = JSON.parse(raw);
-        if (Date.now() - (c.ts || 0) > ADMIN_ACCOUNTS_CACHE_MAX_AGE_MS) return;
-        if (!Array.isArray(c.accounts) || c.accounts.length === 0) return;
+        if (Date.now() - (c.ts || 0) > ADMIN_ACCOUNTS_CACHE_MAX_AGE_MS) return false;
+        if (!Array.isArray(c.accounts) || c.accounts.length === 0) return false;
         state.accounts = c.accounts;
         state.accountsTotals = c.totals || null;
         var container = document.getElementById('tilesContainer');
@@ -110,7 +153,25 @@ function restoreAccountsCacheFromStorage() {
         if (state.accountsTotals) renderKpis(state.accountsTotals);
         AdminStore.cache.accounts.data = { accounts: state.accounts, totals: state.accountsTotals };
         AdminStore.cache.accounts.ts = c.ts || Date.now();
-    } catch (e) {}
+        return true;
+    } catch (e) {
+        return false;
+    }
+}
+
+function adminAccountsHasDisplayCache() {
+    if (state.accounts.length > 0) return true;
+    var entry = AdminStore.cache.accounts;
+    if (entry && entry.data && (Date.now() - entry.ts) < ADMIN_ACCOUNTS_CACHE_MAX_AGE_MS) return true;
+    try {
+        var raw = adminReadAccountsCacheRaw();
+        if (!raw) return false;
+        var c = JSON.parse(raw);
+        return Array.isArray(c.accounts) && c.accounts.length > 0
+            && (Date.now() - (c.ts || 0)) < ADMIN_ACCOUNTS_CACHE_MAX_AGE_MS;
+    } catch (e) {
+        return false;
+    }
 }
 
 function adminAuthHeaders() {
@@ -157,6 +218,34 @@ function notifyServerDown() {
     }
 }
 
+/** Boot_id check — non-blocking; only logs out on confirmed 401 after server restart. */
+async function adminBootIdCheck() {
+    try {
+        var r = await fetch("/api/boot-id", { cache: "no-store" });
+        if (!r.ok) return;
+        var b = await r.json();
+        var serverBootId = b && b.boot_id ? String(b.boot_id) : "";
+        var localBootId = localStorage.getItem("boot_id") || "";
+        if (serverBootId && localBootId && serverBootId !== localBootId) {
+            try { localStorage.setItem("boot_id", serverBootId); } catch (e) {}
+            var who = await fetch(window.location.origin + "/api/auth/whoami", { method: "GET", credentials: "include", cache: "no-store" });
+            if (!who.ok && who.status === 401) {
+                var body = {};
+                try { body = await who.json(); } catch (_) {}
+                var detail = (body && body.detail && typeof body.detail === "object") ? body.detail : {};
+                var errCode = detail.error_code || body.error_code || "UNAUTHORIZED";
+                var isSessionInvalid = (errCode === "SESSION_NOT_FOUND");
+                if (isSessionInvalid) {
+                    if (window.apiClient && window.apiClient.redirectToLoginOnce) window.apiClient.redirectToLoginOnce(true);
+                    else { try { sessionStorage.removeItem("user"); sessionStorage.removeItem("token"); localStorage.removeItem("user"); localStorage.removeItem("token"); localStorage.removeItem("boot_id"); localStorage.removeItem("last_route"); adminClearAccountsCache(); } catch (e) {} window.location.replace("/ui/login.html?session_expired=1"); }
+                }
+            }
+        } else if (!localBootId && serverBootId) {
+            try { localStorage.setItem("boot_id", serverBootId); } catch (e) {}
+        }
+    } catch (e) {}
+}
+
 // Initialize
 document.addEventListener("DOMContentLoaded", async () => {
     var tok = sessionStorage.getItem("token");
@@ -188,41 +277,15 @@ document.addEventListener("DOMContentLoaded", async () => {
         window.location.replace("/ui/login.html?session_expired=1");
         return;
     }
-    // Boot_id: diagnostic only. On mismatch update local; only logout if whoami returns 401.
-    try {
-        var r = await fetch("/api/boot-id", { cache: "no-store" });
-        if (!r.ok) { document.documentElement.style.visibility = ""; return; }
-        var b = await r.json();
-        var serverBootId = b && b.boot_id ? String(b.boot_id) : "";
-        var localBootId = localStorage.getItem("boot_id") || "";
-        if (serverBootId && localBootId && serverBootId !== localBootId) {
-            try { localStorage.setItem("boot_id", serverBootId); } catch (e) {}
-            var who = await fetch(window.location.origin + "/api/auth/whoami", { method: "GET", credentials: "include", cache: "no-store" });
-            if (!who.ok && who.status === 401) {
-                var body = {};
-                try { body = await who.json(); } catch (_) {}
-                var detail = (body && body.detail && typeof body.detail === "object") ? body.detail : {};
-                var errCode = detail.error_code || body.error_code || "UNAUTHORIZED";
-                var isSessionInvalid = (errCode === "SESSION_NOT_FOUND");
-                if (isSessionInvalid) {
-                    if (window.apiClient && window.apiClient.redirectToLoginOnce) window.apiClient.redirectToLoginOnce(true);
-                    else { try { sessionStorage.removeItem("user"); sessionStorage.removeItem("token"); localStorage.removeItem("user"); localStorage.removeItem("token"); localStorage.removeItem("boot_id"); localStorage.removeItem("last_route"); } catch (e) {} window.location.replace("/ui/login.html?session_expired=1"); }
-                }
-                return;
-            }
-        } else if (!localBootId && serverBootId) {
-            try { localStorage.setItem("boot_id", serverBootId); } catch (e) {}
-        }
-    } catch (e) {}
-    // Kayıtlı sekmeyi sayfa görünmeden önce uygula; animasyonsuz (flicker önleme)
+    restoreAccountsCacheFromStorage();
     var savedTab = sessionStorage.getItem("admin_tab");
     var validTabs = ["accounts", "suspended", "pending", "contact", "server", "popup", "settings"];
     if (savedTab && validTabs.indexOf(savedTab) !== -1) {
-        switchTab(savedTab, { immediate: true });
+        switchTab(savedTab, { immediate: true, initial: true });
     } else {
-        switchTab("accounts", { immediate: true });
+        switchTab("accounts", { immediate: true, initial: true });
     }
-    document.documentElement.style.visibility = "";
+    adminBootIdCheck();
     const userStr = sessionStorage.getItem("user");
     let user = null;
     if (userStr) {
@@ -234,7 +297,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (nameEl) nameEl.textContent = "Admin";
 
     initAdminTabsSlider();
-    restoreAccountsCacheFromStorage();
     fetchBreachAlerts();
 
     schedulePreloadAllTabs();
@@ -407,6 +469,30 @@ function formatDateTime(isoString) {
     }
 }
 
+function adminAccountSpotDisplay(acc, balDisplayFn, pnlDisplayFn) {
+    var isTest = !!acc.is_test_account
+        || String(acc.user_username || "").trim().toLowerCase() === "test"
+        || (acc.name && String(acc.name).indexOf("Test (Paper)") >= 0);
+    var spotStatus = isTest ? "ok" : (acc.spot_balance_status || "ok");
+    var spotNoKeys = !isTest && spotStatus === "no_keys";
+    var spotError = !isTest && spotStatus === "error";
+    var spotNoData = spotNoKeys || spotError;
+    var spotLabel = isTest ? "SPOT BAKİYESİ" : "BİNANCE BAKİYESİ";
+    var spotUsd = acc.spot_balance_usd;
+    if (isTest && (spotUsd == null || spotUsd === "" || spotNoData)) {
+        spotUsd = 10000;
+        spotNoData = false;
+    }
+    var walPnl = pnlDisplayFn(acc.daily_wallet_pnl_usd, acc.daily_wallet_pnl_pct, !!acc.admin_isolated);
+    var balanceText = spotNoData
+        ? (spotNoKeys ? "Binance aktif edilmedi" : "Binance erişim hatası")
+        : balDisplayFn(spotUsd);
+    var pnlText = spotNoData
+        ? (spotNoKeys ? "Binance aktif edilmedi" : "Binance erişim hatası")
+        : walPnl.html;
+    return { spotLabel: spotLabel, balanceText: balanceText, pnlText: pnlText, walPnl: walPnl };
+}
+
 function renderTiles(accounts, container = null) {
     if (!container) {
         container = document.getElementById("tilesContainer");
@@ -461,13 +547,7 @@ function renderTiles(accounts, container = null) {
             return { html: html, color: color };
         };
         const botPnl = pnlDisplay(botPnlUsd, botPnlPct, isIsolated);
-        const walPnl = pnlDisplay(walPnlUsd, walPnlPct, isIsolated);
-        const spotStatus = acc.spot_balance_status || "ok";
-        const spotNoKeys = spotStatus === "no_keys";
-        const spotError = spotStatus === "error";
-        const spotNoData = spotNoKeys || spotError;
-        let binanceBalText = spotNoData ? (spotNoKeys ? "Binance aktif edilmedi" : "Binance erişim hatası") : balDisplay(acc.spot_balance_usd);
-        let binancePnlText = spotNoData ? (spotNoKeys ? "Binance aktif edilmedi" : "Binance erişim hatası") : walPnl.html;
+        const spotUi = adminAccountSpotDisplay(acc, balDisplay, pnlDisplay);
         return `
             <div class="${tileClass}" data-account-id="${accId}" onclick="handleAdminTileClick(event, ${navArg}, ${isIsolated})">
                 <div class="acct-head">
@@ -494,9 +574,9 @@ function renderTiles(accounts, container = null) {
                 <div class="acct-section">
                     <div class="bal-strip">
                         <div class="bal-item">
-                            <div class="bal-label">BİNANCE BAKİYESİ</div>
-                            <div class="bal-value">${binanceBalText}</div>
-                            <div class="bal-pnl" style="color: ${walPnl.color};">Günlük Değişim ${binancePnlText}</div>
+                            <div class="bal-label">${spotUi.spotLabel}</div>
+                            <div class="bal-value">${spotUi.balanceText}</div>
+                            <div class="bal-pnl" style="color: ${spotUi.walPnl.color};">Günlük Değişim ${spotUi.pnlText}</div>
                         </div>
                         <div class="bal-item">
                             <div class="bal-label">BOT BAKİYESİ</div>
@@ -541,23 +621,19 @@ function updateAccountTileStrips(accounts) {
         if (!accId) return;
         const tile = container.querySelector(`.acct-tile[data-account-id="${accId}"]`);
         if (!tile) return;
-        const spotStatus = acc.spot_balance_status || "ok";
-        const spotNoKeys = spotStatus === "no_keys";
-        const spotError = spotStatus === "error";
-        const spotNoData = spotNoKeys || spotError;
-        const binanceBalText = spotNoData ? (spotNoKeys ? "Binance aktif edilmedi" : "Binance erişim hatası") : balDisplay(acc.spot_balance_usd);
-        const walPnl = pnlDisplay(acc.daily_wallet_pnl_usd, acc.daily_wallet_pnl_pct, !!acc.admin_isolated);
+        const spotUi = adminAccountSpotDisplay(acc, balDisplay, pnlDisplay);
         const botPnl = pnlDisplay(acc.daily_bot_pnl_usd, acc.daily_bot_pnl_pct, !!acc.admin_isolated);
-        const binancePnlText = spotNoData ? (spotNoKeys ? "Binance aktif edilmedi" : "Binance erişim hatası") : walPnl.html;
         const item0 = tile.querySelector(".bal-strip .bal-item:nth-child(1)");
         const item1 = tile.querySelector(".bal-strip .bal-item:nth-child(2)");
         if (item0) {
+            const labelEl = item0.querySelector(".bal-label");
             const valEl = item0.querySelector(".bal-value");
             const pnlEl = item0.querySelector(".bal-pnl");
-            if (valEl) valEl.textContent = binanceBalText;
+            if (labelEl) labelEl.textContent = spotUi.spotLabel;
+            if (valEl) valEl.textContent = spotUi.balanceText;
             if (pnlEl) {
-                pnlEl.textContent = "Günlük Değişim " + binancePnlText;
-                pnlEl.style.color = walPnl.color;
+                pnlEl.textContent = "Günlük Değişim " + spotUi.pnlText;
+                pnlEl.style.color = spotUi.walPnl.color;
             }
         }
         if (item1) {
@@ -1241,7 +1317,12 @@ function loadTab(tabKey) {
         if (tabKey === 'settings') loadAdminSettings();
         return;
     }
-    AdminStore.get(tabKey, fetcher).then(function (data) {
+    AdminStore.get(tabKey, fetcher, {
+        onRefresh: function (data) {
+            if (state.currentTab !== tabKey || state.switchToken !== token) return;
+            runRenderForTab(tabKey, data);
+        }
+    }).then(function (data) {
         if (state.currentTab !== tabKey || state.switchToken !== token) return;
         runRenderForTab(tabKey, data);
         if (tabKey === 'server') startServerStatsRefresh();
@@ -1290,7 +1371,7 @@ function runRenderForTab(tabKey, data) {
         var container = document.getElementById('tilesContainer');
         if (container) renderTiles(state.accounts, container);
         try {
-            sessionStorage.setItem(ADMIN_ACCOUNTS_CACHE_KEY, JSON.stringify({ accounts: state.accounts, totals: state.accountsTotals, ts: Date.now() }));
+            adminWriteAccountsCache({ accounts: state.accounts, totals: state.accountsTotals, ts: Date.now() });
         } catch (e) {}
         return;
     }
@@ -1509,6 +1590,7 @@ function showSkeletonForTab(tabKey) {
     if (!panel) return;
     if (tabKey === 'accounts') {
         var c = document.getElementById('tilesContainer');
+        if (c && c.querySelector('.acct-tile')) return;
         if (c) c.innerHTML = '<div class="empty-state" data-skeleton>Yükleniyor...</div>';
     } else if (tabKey === 'pending') {
         var pc = document.getElementById('pendingContainer');
@@ -1531,6 +1613,7 @@ function showSkeletonForTab(tabKey) {
 function switchTab(tabName, opts) {
     var tabKey = tabName || 'accounts';
     var immediate = opts && opts.immediate === true;
+    var initial = opts && opts.initial === true;
     if (!immediate && __adminTabAnimating) return;
     var list = document.getElementById('adminTabsList') || document.querySelector('#adminTabsHeader .admin-tabs-list') || document.querySelector('.admin-tabs-list');
     var indicator = list ? list.querySelector('.tab-indicator') : null;
@@ -1538,7 +1621,7 @@ function switchTab(tabName, opts) {
     var oldBtn = list ? list.querySelector('.tab-btn.active') : null;
     var fromKey = __adminActiveTabKey || (oldBtn ? oldBtn.getAttribute('data-tab') : null);
     var toKey = tabKey;
-    if (fromKey === toKey) return;
+    if (fromKey === toKey && !initial) return;
 
     state.currentTab = toKey;
     state.switchToken++;
@@ -1555,10 +1638,10 @@ function switchTab(tabName, opts) {
     if (newBtn) newBtn.classList.add('active');
 
     showAdminPanel(toKey);
-    hideAdminPanel(fromKey);
+    if (fromKey !== toKey) hideAdminPanel(fromKey);
     var entry = AdminStore.cache[toKey];
     var hasCache = entry && entry.data !== null && (Date.now() - entry.ts) < (AdminStore.TTL[toKey] || 60000);
-    if (toKey === 'accounts' && state.accounts.length > 0) hasCache = true;
+    if (toKey === 'accounts' && adminAccountsHasDisplayCache()) hasCache = true;
     if (!hasCache) showSkeletonForTab(toKey);
     loadTab(toKey);
 

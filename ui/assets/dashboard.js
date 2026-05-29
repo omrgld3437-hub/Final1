@@ -2435,9 +2435,24 @@ window.setTextIfChanged = setTextIfChanged;
 var _blinkCooldownUntil = 0;
 var BLINK_COOLDOWN_MS = 400;
 
+/** Test paper: KPI + varlık strip canlı güncellenir; yeşil/kırmızı blink yok. */
+var TEST_ACCOUNT_NO_BLINK_IDS = {
+    kpiCuzdan: true,
+    kpiCuzdanPnl: true,
+    kpiCuzdanPnlPct: true,
+    binanceAvailableAssets: true,
+    binanceBotLockedAssets: true,
+    binanceLockedAssets: true
+};
+
 /** Proje geneli blink: bakiye/PnL değişince yeşil/kırmızı. Cooldown ile aynı anda iki blink engellenir. */
 function triggerValueBlink(el, newNum) {
     if (!el) return;
+    if (typeof State !== 'undefined' && State.isTestAccount) {
+        if (el.id && TEST_ACCOUNT_NO_BLINK_IDS[el.id]) return;
+        if (el.classList && el.classList.contains('value-cell')) return;
+        if (el.closest && el.closest('#varliklarTableBody')) return;
+    }
     var now = Date.now();
     if (now < _blinkCooldownUntil) return;
     var oldNum = parseFloat(String(el.textContent).replace(/[^0-9.-]/g, '')) || 0;
@@ -2633,7 +2648,12 @@ function updateKpiCuzdanBalance(el, walletTotal) {
         return;
     }
     setTextIfChanged(el, fmtUsd(next));
-    if (prev > 0) triggerValueBlink(el, next);
+    if (prev > 0 && !(typeof State !== 'undefined' && State.isTestAccount && el.id === 'kpiCuzdan')) {
+        triggerValueBlink(el, next);
+    }
+    if (typeof State !== 'undefined' && State.isTestAccount && el.id === 'kpiCuzdan') {
+        el.classList.remove('blink-positive', 'blink-negative');
+    }
 }
 
 function updateDatahubWsIndicator() {
@@ -2679,12 +2699,20 @@ function updateKPIs(data) {
     const walletTotal = (account.spot_balance_usd != null && Number(account.spot_balance_usd) > 0) ? Number(account.spot_balance_usd) : (typeof (assetsState && assetsState.wallet && assetsState.wallet.total_usd) === 'number' ? assetsState.wallet.total_usd : 0);
 
     var walletEl = document.getElementById("kpiCuzdan");
-    updateKpiCuzdanBalance(walletEl, walletTotal);
+    if (typeof State !== 'undefined' && State.isTestAccount && typeof updateTestAccountKpiCuzdanFromStrip === 'function') {
+        updateTestAccountKpiCuzdanFromStrip();
+    } else {
+        updateKpiCuzdanBalance(walletEl, walletTotal);
+    }
     if (assetsState.wallet && assetsState.wallet.data_status !== 'stale' && !assetsState.wallet.error) {
         lastSpotUpdateTs = Date.now();
     }
     applyWalletStaleWarningEl(document.getElementById('kpiCuzdanLive'));
-    updateCuzdanPnlKpi(dailyWalletPnl, account, data);
+    if (typeof State !== 'undefined' && State.isTestAccount) {
+        /* Günlük değişim: updateTestAccountKpiCuzdanFromStrip → updateTestAccountCuzdanDailyPnlLive */
+    } else {
+        updateCuzdanPnlKpi(dailyWalletPnl, account, data);
+    }
     if (hasDaily) {
         var botPnlEl = document.getElementById("kpiBotPnl");
         if (botPnlEl) {
@@ -5675,6 +5703,30 @@ function normalizeAndApplyWallet(payload, meta) {
         pushWalletEvent({ source: source, status: 'skipped', note: 'empty payload; keep ready wallet' });
         return;
     }
+    // Test hesabı: snapshot/wallet poll arasında küçük fiyat oynaklığı strip flicker yapmasın
+    if (typeof State !== 'undefined' && State.isTestAccount && currentReady && !err && payloadAssets.length > 0) {
+        payloadAssets = repairTestWalletAssets(payloadAssets);
+        var curBrokenQty = (assetsState.wallet.assets || []).some(function (a) {
+            return typeof testWalletAssetQtyBroken === 'function' && testWalletAssetQtyBroken(a);
+        });
+        var curAv = coerceNumber(assetsState.wallet.available_usd);
+        var curBl = coerceNumber(assetsState.wallet.bot_locked_usd);
+        var nextAv = coerceNumber(payload.available_usd);
+        var nextBl = coerceNumber(payload.bot_locked_usd);
+        var curUsdt = (assetsState.wallet.assets || []).find(function (a) { return a && (a.asset || '').toUpperCase() === 'USDT'; });
+        var nextUsdt = payloadAssets.find(function (a) { return a && (a.asset || '').toUpperCase() === 'USDT'; });
+        var curUsdtTotal = curUsdt && curUsdt.total != null ? Number(curUsdt.total) : null;
+        var nextUsdtTotal = nextUsdt && nextUsdt.total != null ? Number(nextUsdt.total) : null;
+        var usdtTotalStable = curUsdtTotal != null && nextUsdtTotal != null
+            && Math.abs(curUsdtTotal - nextUsdtTotal) < 0.00000001;
+        if (!curBrokenQty && curAv != null && nextAv != null && curBl != null && nextBl != null
+            && Math.abs(curAv - nextAv) < 0.02 && Math.abs(curBl - nextBl) < 0.02
+            && usdtTotalStable
+            && payloadAssets.length === (assetsState.wallet.assets || []).length) {
+            pushWalletEvent({ source: source, status: 'skipped', note: 'test strip within noise band' });
+            return;
+        }
+    }
     var totalUsd = coerceNumber(payload.total_usd);
     var freeUsd = coerceNumber(payload.free_usd);
     var lockedUsd = coerceNumber(payload.locked_usd);
@@ -5682,6 +5734,9 @@ function normalizeAndApplyWallet(payload, meta) {
     var availableUsd = coerceNumber(payload.available_usd);
     var keysConfigured = payload.keys_configured !== false;
     var assets = Array.isArray(payload.assets) ? payload.assets : [];
+    if (typeof State !== 'undefined' && State.isTestAccount) {
+        assets = repairTestWalletAssets(assets);
+    }
     // Bootstrap/minimal wallet uses usdt_value per asset; UI expects total_usd (so list and filter work)
     assets = assets.map(function (a) {
         if (!a || typeof a !== 'object') return a;
@@ -6084,7 +6139,19 @@ function renderAssetsSummary() {
     if (lockedEl) lockedEl.textContent = fmtUsd(lockedUsd);
     var availableUsd = typeof assetsState.wallet.available_usd === 'number' ? assetsState.wallet.available_usd : null;
     var botLockedUsd = typeof assetsState.wallet.bot_locked_usd === 'number' ? assetsState.wallet.bot_locked_usd : null;
-    if (availableUsd == null && (assetsState.wallet.assets || []).length) {
+    var testStripFromTable = false;
+    if (typeof State !== 'undefined' && State.isTestAccount) {
+        var testTbody = document.getElementById('varliklarTableBody');
+        if (testTbody && testTbody.querySelector('tr[data-asset]')) {
+            testStripFromTable = true;
+            if (typeof updateTestAccountStripFromTable === 'function') {
+                updateTestAccountStripFromTable(testTbody);
+            }
+        } else {
+            availableUsd = testAccountVarlikAvailableTotalFromAssets(assetsState.wallet.assets || []);
+            botLockedUsd = testAccountVarlikBotLockedTotalFromAssets(assetsState.wallet.assets || []);
+        }
+    } else if (availableUsd == null && (assetsState.wallet.assets || []).length) {
         var av = 0;
         (assetsState.wallet.assets || []).forEach(function (a) {
             if (a.available_usd != null && Number.isFinite(Number(a.available_usd))) av += Number(a.available_usd);
@@ -6098,9 +6165,41 @@ function renderAssetsSummary() {
         });
         botLockedUsd = bl;
     }
-    if (stripAvailable) { stripAvailable.classList.remove('binance-assets-strip-value--loading'); stripAvailable.textContent = fmtUsd(availableUsd != null ? availableUsd : freeUsd); triggerValueBlink(stripAvailable, availableUsd != null ? availableUsd : freeUsd); }
-    if (stripBotLocked) { stripBotLocked.classList.remove('binance-assets-strip-value--loading'); stripBotLocked.textContent = fmtUsd(botLockedUsd != null ? botLockedUsd : 0); triggerValueBlink(stripBotLocked, botLockedUsd != null ? botLockedUsd : 0); }
-    if (stripLocked) { stripLocked.classList.remove('binance-assets-strip-value--loading'); stripLocked.textContent = fmtUsd(lockedUsd); triggerValueBlink(stripLocked, lockedUsd); }
+    if (!testStripFromTable) {
+    var stripAvailableVal = availableUsd != null ? availableUsd : freeUsd;
+    var botLockedVal = botLockedUsd != null ? botLockedUsd : 0;
+    if (typeof State !== 'undefined' && State.isTestAccount && typeof updateTestAccountStripCell === 'function') {
+        updateTestAccountStripCell(stripAvailable, stripAvailableVal);
+        updateTestAccountStripCell(stripBotLocked, botLockedVal);
+    } else {
+    if (stripAvailable) {
+        stripAvailable.classList.remove('binance-assets-strip-value--loading');
+        stripAvailable.setAttribute('data-value', stripAvailableVal);
+        stripAvailable.textContent = fmtUsd(stripAvailableVal);
+        triggerValueBlink(stripAvailable, stripAvailableVal);
+    }
+    if (stripBotLocked) {
+        stripBotLocked.classList.remove('binance-assets-strip-value--loading');
+        stripBotLocked.setAttribute('data-value', botLockedVal);
+        stripBotLocked.textContent = fmtUsd(botLockedVal);
+        triggerValueBlink(stripBotLocked, botLockedVal);
+    }
+    }
+    }
+    var lockedVal = lockedUsd != null ? lockedUsd : 0;
+    if (stripLocked && !testStripFromTable) {
+        stripLocked.classList.remove('binance-assets-strip-value--loading');
+        stripLocked.setAttribute('data-value', lockedVal);
+        if (typeof State !== 'undefined' && State.isTestAccount && typeof updateTestAccountStripCell === 'function') {
+            updateTestAccountStripCell(stripLocked, lockedVal);
+        } else {
+            stripLocked.textContent = fmtUsd(lockedVal);
+            triggerValueBlink(stripLocked, lockedVal);
+        }
+    }
+    if (typeof State !== 'undefined' && State.isTestAccount && typeof updateTestAccountKpiCuzdanFromStrip === 'function') {
+        updateTestAccountKpiCuzdanFromStrip();
+    }
     if (lastEl) lastEl.textContent = assetsState.wallet.ts ? new Date(assetsState.wallet.ts).toLocaleTimeString('tr-TR') : '—';
     var walletLiveEl = document.getElementById('bnWalletLiveBadge');
     applyWalletStaleWarningEl(walletLiveEl);
@@ -6354,19 +6453,592 @@ function getAssetChangePct(asset) {
     return mini && Number.isFinite(mini.changePct) ? mini.changePct : null;
 }
 
+/** Varlıklar tablosu: marketStore anlık boşalsa son bilinen fiyat/% (… flicker önleme). */
+var _varlikDisplayPriceCache = Object.create(null);
+var _varlikDisplayChangeCache = Object.create(null);
+
+function rememberVarlikDisplayPrice(asset, price) {
+    var sym = (asset || '').toUpperCase();
+    if (!sym) return;
+    var p = Number(price);
+    if (Number.isFinite(p) && p > 0) _varlikDisplayPriceCache[sym] = p;
+}
+
+function getVarlikDisplayPrice(asset, rowEl) {
+    var sym = (asset || '').toUpperCase();
+    if (!sym) return null;
+    if (typeof isTestWalletStableAsset === 'function' && isTestWalletStableAsset(sym)) {
+        rememberVarlikDisplayPrice(sym, 1);
+        return 1;
+    }
+    var live = getAssetPrice(asset);
+    if (live != null && Number.isFinite(live) && live > 0) {
+        rememberVarlikDisplayPrice(sym, live);
+        return live;
+    }
+    if (rowEl) {
+        var priceCell = rowEl.querySelector('.price-cell');
+        if (priceCell) {
+            var fromAttr = parseFloat(priceCell.getAttribute('data-price') || '');
+            if (Number.isFinite(fromAttr) && fromAttr > 0) {
+                rememberVarlikDisplayPrice(sym, fromAttr);
+                return fromAttr;
+            }
+        }
+    }
+    var cached = _varlikDisplayPriceCache[sym];
+    if (cached != null && Number.isFinite(cached) && cached > 0) return cached;
+    return null;
+}
+
+function getVarlikDisplayChangePct(asset, rowEl) {
+    var sym = (asset || '').toUpperCase();
+    var live = getAssetChangePct(asset);
+    if (live != null && Number.isFinite(live)) {
+        if (sym) _varlikDisplayChangeCache[sym] = live;
+        return live;
+    }
+    if (rowEl) {
+        var changeCell = rowEl.querySelector('.change-pct');
+        if (changeCell) {
+            var fromAttr = parseFloat(changeCell.getAttribute('data-change-pct') || '');
+            if (Number.isFinite(fromAttr)) return fromAttr;
+        }
+    }
+    if (sym && _varlikDisplayChangeCache[sym] != null && Number.isFinite(_varlikDisplayChangeCache[sym])) {
+        return _varlikDisplayChangeCache[sym];
+    }
+    return null;
+}
+
+function formatVarlikPriceDisplay(asset, price) {
+    if (price != null && Number.isFinite(price) && price > 0) return fmtCoinPrice(price);
+    var cached = _varlikDisplayPriceCache[(asset || '').toUpperCase()];
+    if (cached != null && Number.isFinite(cached) && cached > 0) return fmtCoinPrice(cached);
+    return '…';
+}
+
+function walletAssetTotalQty(a) {
+    if (!a) return 0;
+    var free = Number(a.free) || 0;
+    var locked = Number(a.locked) || 0;
+    var botLocked = Number(a.bot_locked) || 0;
+    var derived = free + locked + botLocked;
+    if (typeof State !== 'undefined' && State.isTestAccount) {
+        if (derived > 0) return derived;
+        var explicit = (a.total != null && Number.isFinite(Number(a.total))) ? Number(a.total) : null;
+        if (explicit != null && explicit > 0) return explicit;
+        if (explicit != null) return explicit;
+    }
+    return free + locked;
+}
+
+function testWalletAssetQtyBroken(a) {
+    if (!a || typeof isTestWalletStableAsset === 'function' && isTestWalletStableAsset(a.asset)) return false;
+    var bl = Number(a.bot_locked) || 0;
+    var total = Number(a.total);
+    var derived = (Number(a.free) || 0) + (Number(a.locked) || 0) + bl;
+    if (derived <= 0) return false;
+    if (!Number.isFinite(total) || total <= 0) return true;
+    return bl > 0 && Math.abs(total - derived) > 1e-8;
+}
+
+function repairTestWalletAssets(assets) {
+    if (!Array.isArray(assets)) return assets;
+    return assets.map(function (a) {
+        if (!a || typeof a !== 'object') return a;
+        var out = Object.assign({}, a);
+        var bl = Number(out.bot_locked) || 0;
+        var free = Number(out.free) || 0;
+        var locked = Number(out.locked) || 0;
+        var total = Number(out.total);
+        var derived = free + locked + bl;
+        if (derived > 0 && (!Number.isFinite(total) || total <= 0 || (bl > 0 && Math.abs(total - derived) > 1e-8))) {
+            out.total = derived;
+        }
+        return out;
+    });
+}
+
+var TEST_WALLET_STABLE_ASSETS = ['USDT', 'USDC', 'FDUSD', 'BUSD', 'TUSD', 'DAI'];
+
+function isTestWalletStableAsset(asset) {
+    return TEST_WALLET_STABLE_ASSETS.indexOf((asset || '').toUpperCase()) >= 0;
+}
+
+/** Test paper: stable Toplam/Değer = kullanılabilir + kilitli + bot kilitli (quote bot bakiyesi dahil). */
+function testAccountVarlikStableRowTotalQty(a) {
+    if (!a) return 0;
+    return testAccountVarlikAvailableQty(a) + (Number(a.locked) || 0) + (Number(a.bot_locked) || 0);
+}
+
+/** Test paper: Değer = Toplam qty × canlı fiyat (stable satırlarda qty ≈ USD). */
+function testAccountVarlikLiveValueUsd(asset, totalQty, price) {
+    var qty = Number(totalQty) || 0;
+    if (qty <= 0) return 0;
+    if (isTestWalletStableAsset(asset)) return qty;
+    var px = (price != null && Number.isFinite(Number(price)) && Number(price) > 0)
+        ? Number(price)
+        : (typeof getAssetPrice === 'function' ? getAssetPrice(asset) : null);
+    if (px == null || !Number.isFinite(px) || px <= 0) return null;
+    return qty * px;
+}
+
+/** Test paper: satır Değer — stable tam satır; base = kullanılabilir + kilitli + bot (satır gösterimi). */
+function testAccountVarlikRowValueUsd(a, price) {
+    if (!a) return 0;
+    var asset = (a.asset || '').toUpperCase();
+    var av = testAccountVarlikAvailableQty(a);
+    var locked = Number(a.locked) || 0;
+    var bot = Number(a.bot_locked) || 0;
+    if (isTestWalletStableAsset(asset)) {
+        return testAccountVarlikLiveValueUsd(asset, av + locked + bot, price) || 0;
+    }
+    var avUsd = testAccountVarlikLiveValueUsd(asset, av, price);
+    var lockedUsd = testAccountVarlikLiveValueUsd(asset, locked, price);
+    var botUsd = 0;
+    if (bot > 0) {
+        if (a.bot_locked_usd != null && Number.isFinite(Number(a.bot_locked_usd)) && Number(a.bot_locked_usd) > 0) {
+            botUsd = Number(a.bot_locked_usd);
+        } else {
+            botUsd = testAccountVarlikLiveValueUsd(asset, bot, price) || 0;
+        }
+    }
+    return (avUsd != null && Number.isFinite(avUsd) ? avUsd : 0)
+        + (lockedUsd != null && Number.isFinite(lockedUsd) ? lockedUsd : 0)
+        + botUsd;
+}
+
+/** Test paper: dağılım % payı — stable yalnızca kullanılabilir+kilitli; base bot dahil (çift sayım yok). */
+function testAccountVarlikRowShareUsd(a, price) {
+    if (!a) return 0;
+    var asset = (a.asset || '').toUpperCase();
+    var av = testAccountVarlikAvailableQty(a);
+    var locked = Number(a.locked) || 0;
+    var bot = Number(a.bot_locked) || 0;
+    if (isTestWalletStableAsset(asset)) {
+        return testAccountVarlikLiveValueUsd(asset, av + locked, price) || 0;
+    }
+    return testAccountVarlikRowValueUsd(a, price);
+}
+
+function testAccountVarlikRowLiveValueFromDom(row, price) {
+    if (!row) return 0;
+    var asset = row.getAttribute('data-asset') || '';
+    if (isTestWalletStableAsset(asset)) {
+        return parseFloat(row.getAttribute('data-total') || '') || 0;
+    }
+    var avQty = parseFloat(row.getAttribute('data-available') || '') || 0;
+    var lockedQty = parseFloat(row.getAttribute('data-locked') || '') || 0;
+    var botLockedQty = parseFloat(row.getAttribute('data-bot-locked') || '') || 0;
+    var botLockedUsdHint = parseFloat(row.getAttribute('data-bot-locked-usd') || '');
+    var avUsd = testAccountVarlikLiveValueUsd(asset, avQty, price) || 0;
+    var lockedUsd = testAccountVarlikLiveValueUsd(asset, lockedQty, price) || 0;
+    var botUsd = 0;
+    if (botLockedQty > 0) {
+        if (Number.isFinite(botLockedUsdHint) && botLockedUsdHint > 0) {
+            botUsd = botLockedUsdHint;
+        } else {
+            botUsd = testAccountVarlikBotLockedUsd(asset, botLockedQty, price) || 0;
+        }
+    }
+    return avUsd + lockedUsd + botUsd;
+}
+
+function testAccountVarlikRowShareUsdFromDom(row, price) {
+    if (!row) return 0;
+    var asset = row.getAttribute('data-asset') || '';
+    if (isTestWalletStableAsset(asset)) {
+        var avQty = parseFloat(row.getAttribute('data-available') || '') || 0;
+        var lockedQty = parseFloat(row.getAttribute('data-locked') || '') || 0;
+        return testAccountVarlikLiveValueUsd(asset, avQty + lockedQty, price) || 0;
+    }
+    return testAccountVarlikRowLiveValueFromDom(row, price);
+}
+
+function testAccountUsdtAvailableFromTable(tbody) {
+    var root = tbody || document.getElementById('varliklarTableBody');
+    if (!root) return 0;
+    var row = root.querySelector('tr[data-asset="USDT"]');
+    if (!row) return 0;
+    var avQty = parseFloat(row.getAttribute('data-available') || '') || 0;
+    return avQty > 0 ? avQty : 0;
+}
+
+function testAccountRunningBotsEquityUsd() {
+    if (typeof State === 'undefined') return 0;
+    var bots = (State.summary && Array.isArray(State.summary.bots) && State.summary.bots.length)
+        ? State.summary.bots
+        : (Array.isArray(State.bots) ? State.bots : []);
+    var sum = 0;
+    bots.forEach(function (b) {
+        if (!b) return;
+        var st = String(b.status || '').toLowerCase();
+        if (st !== 'running' && st !== 'active') return;
+        if (typeof resolveBotCurrentUsd === 'function') {
+            var live = resolveBotCurrentUsd(b);
+            if (live != null && Number.isFinite(live)) {
+                sum += live;
+                return;
+            }
+        }
+        var cu = b.current_usd;
+        if (cu != null && Number.isFinite(Number(cu))) {
+            sum += Number(cu);
+            return;
+        }
+        var budget = Number(b.budget_usd || b.initial_capital_usdt || b.initial_usd || 0);
+        var pnl = Number(b.total_pnl_usd || b.pnl_usd || b.total_pnl || 0);
+        if (budget > 0 || pnl !== 0) sum += budget + pnl;
+    });
+    return sum;
+}
+
+/** Test paper: TOPLAM SPOT = USDT kullanılabilir + çalışan bot equity + kilitli. */
+function testAccountKpiTotalUsd(tbody) {
+    var avail = testAccountUsdtAvailableFromTable(tbody);
+    if (!(avail > 0) && assetsState && assetsState.wallet) {
+        if (typeof assetsState.wallet.available_usd === 'number') avail = assetsState.wallet.available_usd;
+        else avail = testAccountUsdtAvailablePool(assetsState.wallet.assets || []);
+    }
+    var botEq = testAccountRunningBotsEquityUsd();
+    if (!(botEq > 0) && assetsState && assetsState.wallet && typeof assetsState.wallet.bot_locked_usd === 'number') {
+        botEq = assetsState.wallet.bot_locked_usd;
+    }
+    var locked = testAccountReadStripUsdValue(document.getElementById('binanceLockedAssets'));
+    return avail + botEq + locked;
+}
+
+function testAccountVarlikPortfolioTotal(list) {
+    if (!list || !list.length) return 0;
+    return list.reduce(function (sum, x) { return sum + (Number(x._valueUsd) || 0); }, 0);
+}
+
+function testAccountVarlikBotLockedDisplay(asset, botLocked, price) {
+    var qty = Number(botLocked) || 0;
+    if (qty <= 0) return fmtNum(0, 8);
+    if (isTestWalletStableAsset(asset)) {
+        var usd = testAccountVarlikBotLockedUsd(asset, qty, price);
+        return (usd != null && Number.isFinite(usd)) ? fmtUsd(usd) : fmtNum(qty, 8);
+    }
+    return fmtNum(qty, 8);
+}
+
+function testAccountVarlikAvailableQty(a) {
+    if (!a) return 0;
+    var free = Number(a.free) || 0;
+    var botLocked = Number(a.bot_locked) || 0;
+    if (a.available != null && Number.isFinite(Number(a.available))) return Number(a.available);
+    return Math.max(0, free - botLocked);
+}
+
+/** Test paper: Kullanılabilir qty × canlı fiyat (USDT strip ile tablo uyumlu). */
+function testAccountVarlikAvailableUsd(asset, availableQty, price) {
+    return testAccountVarlikLiveValueUsd(asset, availableQty, price);
+}
+
+function testAccountVarlikAvailableTotalFromAssets(assets) {
+    if (!Array.isArray(assets)) return 0;
+    var sum = 0;
+    assets.forEach(function (a) {
+        if (!a || (typeof isWalletAssetSuspiciousFx === 'function' && isWalletAssetSuspiciousFx(a))) return;
+        var qty = testAccountVarlikAvailableQty(a);
+        if (qty <= 0) return;
+        var price = typeof getAssetPrice === 'function' ? getAssetPrice(a.asset) : null;
+        var usd = testAccountVarlikAvailableUsd(a.asset, qty, price);
+        if (usd != null && Number.isFinite(usd)) sum += usd;
+    });
+    return sum;
+}
+
+function testAccountVarlikBotLockedQty(a) {
+    if (!a) return 0;
+    return Number(a.bot_locked) || 0;
+}
+
+function testAccountVarlikBotLockedUsd(asset, botLockedQty, price) {
+    return testAccountVarlikLiveValueUsd(asset, botLockedQty, price);
+}
+
+function testAccountVarlikBotLockedTotalFromAssets(assets) {
+    if (!Array.isArray(assets)) return 0;
+    var sum = 0;
+    assets.forEach(function (a) {
+        if (!a || (typeof isWalletAssetSuspiciousFx === 'function' && isWalletAssetSuspiciousFx(a))) return;
+        var qty = testAccountVarlikBotLockedQty(a);
+        if (qty <= 0) return;
+        var price = typeof getAssetPrice === 'function' ? getAssetPrice(a.asset) : null;
+        var usd = testAccountVarlikBotLockedUsd(a.asset, qty, price);
+        if (usd != null && Number.isFinite(usd)) sum += usd;
+    });
+    return sum;
+}
+
+function testAccountUsdtAvailablePool(assets) {
+    if (!Array.isArray(assets)) return 0;
+    var sum = 0;
+    assets.forEach(function (a) {
+        if (!a || !isTestWalletStableAsset(a.asset)) return;
+        sum += testAccountVarlikAvailableQty(a);
+    });
+    return sum;
+}
+
+/** Test paper: Al/Sat buton durumu — quote havuzu + satır kullanılabilir. */
+function testAccountVarlikRowTradeState(a, assets) {
+    var asset = (a && a.asset) || '';
+    var isQuote = isTestWalletStableAsset(asset);
+    var available = testAccountVarlikAvailableQty(a);
+    var usdtPool = testAccountUsdtAvailablePool(assets);
+    var canBuy = isQuote ? false : usdtPool > 0;
+    var canSell = available > 0;
+    var sellTitle = canSell
+        ? ('Satış (kullanılabilir: ' + fmtNum(available, 8) + ')')
+        : 'Satış yapılamaz: kullanılabilir bakiye yok (bot/emir kilitli)';
+    var buyTitle = canBuy
+        ? ('Alış (USDT havuzu: ' + fmtNum(usdtPool, 2) + ')')
+        : (isQuote ? 'Stable coin alışı desteklenmiyor' : 'Alış yapılamaz: kullanılabilir USDT yok');
+    return {
+        canBuy: canBuy,
+        canSell: canSell,
+        sellTitle: sellTitle,
+        buyTitle: buyTitle,
+        sellDisabled: canSell ? '' : ' disabled',
+        buyDisabled: canBuy ? '' : ' disabled',
+    };
+}
+
+function updateTestAccountStripCell(stripEl, sum) {
+    if (!stripEl) return;
+    stripEl.classList.remove('binance-assets-strip-value--loading', 'blink-positive', 'blink-negative', 'value-blink');
+    stripEl.setAttribute('data-value', sum);
+    var txt = typeof fmtUsd === 'function' ? fmtUsd(sum) : String(sum);
+    if (typeof setTextIfChanged === 'function') setTextIfChanged(stripEl, txt);
+    else stripEl.textContent = txt;
+}
+
+function testAccountReadStripUsdValue(el) {
+    if (!el) return 0;
+    var fromAttr = parseFloat(el.getAttribute('data-value') || '');
+    if (Number.isFinite(fromAttr)) return fromAttr;
+    return parseFloat(String(el.textContent || '').replace(/[^0-9.-]/g, '')) || 0;
+}
+
+/** Test paper: TOPLAM SPOT BAKİYESİ = strip (Kullanılabilir + Bot kilitli + Kilitli). */
+function testAccountStripTotalUsd() {
+    return testAccountReadStripUsdValue(document.getElementById('binanceAvailableAssets'))
+        + testAccountReadStripUsdValue(document.getElementById('binanceBotLockedAssets'))
+        + testAccountReadStripUsdValue(document.getElementById('binanceLockedAssets'));
+}
+
+function updateTestAccountKpiCuzdanFromStrip() {
+    if (typeof State === 'undefined' || !State.isTestAccount) return;
+    var tbody = document.getElementById('varliklarTableBody');
+    var total = testAccountKpiTotalUsd(tbody);
+    if (!(total > 0) && assetsState && assetsState.wallet && Array.isArray(assetsState.wallet.assets)) {
+        var avail = testAccountUsdtAvailablePool(assetsState.wallet.assets);
+        var botEq = testAccountRunningBotsEquityUsd();
+        if (!(botEq > 0) && typeof assetsState.wallet.bot_locked_usd === 'number') {
+            botEq = assetsState.wallet.bot_locked_usd;
+        }
+        var locked = typeof assetsState.wallet.locked_usd === 'number' ? assetsState.wallet.locked_usd : 0;
+        total = avail + botEq + locked;
+    }
+    var el = document.getElementById('kpiCuzdan');
+    if (typeof updateKpiCuzdanBalance === 'function') updateKpiCuzdanBalance(el, total);
+    if (typeof updateTestAccountCuzdanDailyPnlLive === 'function') updateTestAccountCuzdanDailyPnlLive(total);
+}
+
+/** TR takvim günü (Europe/Istanbul) — YYYY-MM-DD */
+function testAccountTrDateKey() {
+    try {
+        return new Intl.DateTimeFormat('en-CA', {
+            timeZone: 'Europe/Istanbul',
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit'
+        }).format(new Date());
+    } catch (e) {
+        return new Date().toISOString().slice(0, 10);
+    }
+}
+
+function testAccountDailySpotRefStorageKey(accountId) {
+    return 'test_daily_spot_ref_v1_' + accountId;
+}
+
+/** Gün başı (TR 00:00 sonrası ilk değer) spot strip toplamı referans; gün değişince yenilenir. */
+function testAccountEnsureDailySpotRef(accountId, currentTotal) {
+    if (!accountId) return null;
+    var total = Number(currentTotal);
+    if (!Number.isFinite(total) || total <= 0) return null;
+    var today = testAccountTrDateKey();
+    var key = testAccountDailySpotRefStorageKey(accountId);
+    var stored = null;
+    try {
+        var raw = localStorage.getItem(key);
+        if (raw) stored = JSON.parse(raw);
+    } catch (e) {}
+    if (!stored || stored.date !== today || !Number.isFinite(Number(stored.refUsd)) || Number(stored.refUsd) <= 0) {
+        stored = { date: today, refUsd: total, setAt: Date.now() };
+        try { localStorage.setItem(key, JSON.stringify(stored)); } catch (e2) {}
+    }
+    return Number(stored.refUsd);
+}
+
+/** Test paper: Günlük Değişim = canlı strip toplamı − gün açılış referansı (TR 00:00). */
+function updateTestAccountCuzdanDailyPnlLive(currentTotal) {
+    if (typeof State === 'undefined' || !State.isTestAccount || !State.accountId) return;
+    var total = Number(currentTotal);
+    if (!Number.isFinite(total) || total <= 0) return;
+    var ref = testAccountEnsureDailySpotRef(State.accountId, total);
+    if (ref == null || !(ref > 0)) return;
+    var pnlUsd = total - ref;
+    var pnlPct = (pnlUsd / ref) * 100;
+    _kpiCuzdanPnlDisplay.pnlUsd = pnlUsd;
+    _kpiCuzdanPnlDisplay.pnlPct = pnlPct.toFixed(2);
+    var cuzdanPnlEl = document.getElementById('kpiCuzdanPnl');
+    if (cuzdanPnlEl) {
+        setTextIfChanged(cuzdanPnlEl, fmtUsd(pnlUsd));
+        var pnlColor = pnlUsd >= 0 ? '#0ecb81' : '#f6465d';
+        if (cuzdanPnlEl.style.color !== pnlColor) cuzdanPnlEl.style.color = pnlColor;
+        cuzdanPnlEl.classList.remove('blink-positive', 'blink-negative');
+    }
+    var pctStr = (pnlPct >= 0 ? '+' : '') + pnlPct.toFixed(2) + '%';
+    patchText('kpiCuzdanPnlPct', pctStr);
+    var pe = document.getElementById('kpiCuzdanPnlPct');
+    if (pe) {
+        var pctColor = pnlUsd >= 0 ? '#0ecb81' : '#f6465d';
+        if (pe.style.color !== pctColor) pe.style.color = pctColor;
+        pe.classList.remove('blink-positive', 'blink-negative');
+    }
+}
+
+/** Test paper: strip = tablo satırlarından canlı (Kullanılabilir qty×fiyat, Bot kilitli qty×fiyat). */
+function updateTestAccountStripFromTable(tbody) {
+    if (typeof State === 'undefined' || !State.isTestAccount) return;
+    var stripAvailable = document.getElementById('binanceAvailableAssets');
+    var stripBotLocked = document.getElementById('binanceBotLockedAssets');
+    var root = tbody || document.getElementById('varliklarTableBody');
+    if (!root) return;
+    var availSum = 0;
+    var botSum = testAccountRunningBotsEquityUsd();
+    var lockedSum = 0;
+    root.querySelectorAll('tr[data-asset]').forEach(function (row) {
+        var asset = row.getAttribute('data-asset') || '';
+        if (isTestWalletStableAsset(asset)) {
+            var avQty = parseFloat(row.getAttribute('data-available') || '') || 0;
+            if (avQty > 0) availSum += avQty;
+        }
+        var lockedQty = parseFloat(row.getAttribute('data-locked') || '') || 0;
+        if (lockedQty > 0) {
+            var priceCell = row.querySelector('.price-cell');
+            var price = priceCell ? parseFloat(priceCell.getAttribute('data-price') || '') : NaN;
+            if (!Number.isFinite(price) || price <= 0) {
+                price = typeof getAssetPrice === 'function' ? getAssetPrice(asset) : null;
+            }
+            var lockedUsd = testAccountVarlikLiveValueUsd(asset, lockedQty, price);
+            if (lockedUsd != null && Number.isFinite(lockedUsd)) lockedSum += lockedUsd;
+        }
+    });
+    if (!(botSum > 0)) {
+        root.querySelectorAll('tr[data-asset]').forEach(function (row) {
+            var asset = row.getAttribute('data-asset') || '';
+            var priceCell = row.querySelector('.price-cell');
+            var price = priceCell ? parseFloat(priceCell.getAttribute('data-price') || '') : NaN;
+            if (!Number.isFinite(price) || price <= 0) {
+                price = typeof getAssetPrice === 'function' ? getAssetPrice(asset) : null;
+            }
+            var blQty = parseFloat(row.getAttribute('data-bot-locked') || '') || 0;
+            if (blQty > 0) {
+                var blUsd = testAccountVarlikBotLockedUsd(asset, blQty, price);
+                if (blUsd != null && Number.isFinite(blUsd)) botSum += blUsd;
+            }
+        });
+    }
+    if (!(availSum > 0) && assetsState && assetsState.wallet && typeof assetsState.wallet.available_usd === 'number') {
+        availSum = assetsState.wallet.available_usd;
+    }
+    if (!(botSum > 0) && assetsState && assetsState.wallet && typeof assetsState.wallet.bot_locked_usd === 'number') {
+        botSum = assetsState.wallet.bot_locked_usd;
+    }
+    updateTestAccountStripCell(stripAvailable, availSum);
+    updateTestAccountStripCell(stripBotLocked, botSum);
+    var stripLocked = document.getElementById('binanceLockedAssets');
+    if (stripLocked) updateTestAccountStripCell(stripLocked, lockedSum);
+    if (typeof updateTestAccountKpiCuzdanFromStrip === 'function') updateTestAccountKpiCuzdanFromStrip();
+}
+
+function updateTestAccountAvailableStripFromTable(tbody) {
+    updateTestAccountStripFromTable(tbody);
+}
+
+function updateTestVarlikRowLiveMetrics(row, tbody) {
+    if (!row || typeof State === 'undefined' || !State.isTestAccount) return;
+    var asset = row.getAttribute('data-asset') || '';
+    if (isTestWalletStableAsset(asset)) return;
+    var priceCell = row.querySelector('.price-cell');
+    var valueCell = row.querySelector('.value-cell');
+    if (!priceCell || !valueCell) return;
+    var price = parseFloat(priceCell.getAttribute('data-price') || '');
+    if (!Number.isFinite(price) || price <= 0) {
+        price = typeof getAssetPrice === 'function' ? getAssetPrice(asset) : null;
+    }
+    var botLockedQty = parseFloat(row.getAttribute('data-bot-locked') || '') || 0;
+    var liveVal = testAccountVarlikRowLiveValueFromDom(row, price);
+    if (liveVal != null && Number.isFinite(liveVal)) {
+        var oldVal = parseFloat(valueCell.getAttribute('data-value') || '') || 0;
+        if (Math.abs(oldVal - liveVal) < 0.01) {
+            return;
+        }
+        valueCell.setAttribute('data-value', liveVal);
+        var valTxt = typeof fmtUsd === 'function' ? fmtUsd(liveVal) : String(liveVal);
+        if (typeof setTextIfChanged === 'function') setTextIfChanged(valueCell, valTxt);
+        else valueCell.textContent = valTxt;
+    }
+    var tds = row.querySelectorAll('td');
+    if (tds[4] && botLockedQty > 0) {
+        var botLockedUsd = parseFloat(row.getAttribute('data-bot-locked-usd') || '');
+        if (!(botLockedUsd > 0)) {
+            botLockedUsd = testAccountVarlikBotLockedUsd(asset, botLockedQty, price);
+        }
+        if (botLockedUsd != null && Number.isFinite(botLockedUsd)) {
+            tds[4].setAttribute('data-value', botLockedUsd);
+            var blTxt = testAccountVarlikBotLockedDisplay(asset, botLockedQty, price);
+            if (typeof setTextIfChanged === 'function') setTextIfChanged(tds[4], blTxt);
+            else tds[4].textContent = blTxt;
+        }
+    }
+}
+
 function renderVarliklarList() {
     const tbody = document.getElementById('varliklarTableBody');
     const emptyEl = document.getElementById('varliklarEmpty');
     if (!tbody) return;
     const assets = assetsState.wallet.assets || [];
-    const list = assets.filter(a => !isWalletAssetSuspiciousFx(a)).map(a => {
-        const total = (a.free || 0) + (a.locked || 0);
-        const valueUsd = (a.total_usd != null && Number.isFinite(Number(a.total_usd))) ? Number(a.total_usd) : null;
-        const price = getAssetPrice(a.asset);
-        return { ...a, _price: price, _valueUsd: valueUsd != null ? valueUsd : 0, _total: total };
-    }).filter(x => (x.total_usd != null ? Number(x.total_usd) : 0) >= VARLIKLAR_MIN_USD);
-    list.sort((a, b) => (b.total_usd != null ? Number(b.total_usd) : 0) - (a.total_usd != null ? Number(a.total_usd) : 0));
-    const totalPortfolio = typeof assetsState.wallet.total_usd === 'number' ? assetsState.wallet.total_usd : list.reduce((sum, x) => sum + (x._valueUsd || 0), 0);
+    let list = assets.filter(a => !isWalletAssetSuspiciousFx(a)).map(a => {
+        const price = getVarlikDisplayPrice(a.asset);
+        const isTestStable = typeof State !== 'undefined' && State.isTestAccount && isTestWalletStableAsset(a.asset);
+        const total = isTestStable ? testAccountVarlikStableRowTotalQty(a) : walletAssetTotalQty(a);
+        let valueUsd = (a.total_usd != null && Number.isFinite(Number(a.total_usd))) ? Number(a.total_usd) : null;
+        if (typeof State !== 'undefined' && State.isTestAccount) {
+            valueUsd = testAccountVarlikRowValueUsd(a, price);
+        }
+        if (valueUsd == null) valueUsd = 0;
+        return { ...a, _price: price, _valueUsd: valueUsd, _total: total };
+    });
+    const filterUsd = function (x) {
+        if (typeof State !== 'undefined' && State.isTestAccount) {
+            if ((Number(x.bot_locked) || 0) > 0) return true;
+            return (Number(x._valueUsd) || 0) >= VARLIKLAR_MIN_USD;
+        }
+        return (x.total_usd != null ? Number(x.total_usd) : 0) >= VARLIKLAR_MIN_USD;
+    };
+    list = list.filter(filterUsd);
+    list.sort((a, b) => (Number(b._valueUsd) || 0) - (Number(a._valueUsd) || 0));
+    const totalPortfolio = (typeof State !== 'undefined' && State.isTestAccount)
+        ? testAccountKpiTotalUsd(document.getElementById('varliklarTableBody'))
+        : (typeof assetsState.wallet.total_usd === 'number' ? assetsState.wallet.total_usd : list.reduce((sum, x) => sum + (x._valueUsd || 0), 0));
 
     if (list.length === 0) {
         var hasRenderedRows = _varliklarTableHasRows();
@@ -6400,33 +7072,46 @@ function renderVarliklarList() {
 
     const logoInitials = (a) => (a.asset || ' ').substring(0, 2).toUpperCase();
 
-    function rowData(a) {
+    function rowData(a, rowEl) {
         const asset = a.asset || 'N/A';
         const symbol = normalizeAssetToSymbol(asset, QUOTE);
         const free = a.free || 0;
         const locked = a.locked || 0;
+        var isTest = typeof State !== 'undefined' && State.isTestAccount;
+        const isQuote = (asset || '').toUpperCase() === 'USDT' || (asset || '').toUpperCase() === 'BUSD' || (asset || '').toUpperCase() === 'FDUSD';
         const botLocked = Number(a.bot_locked) || 0;
         const available = (a.available != null && Number.isFinite(Number(a.available))) ? Number(a.available) : Math.max(0, free - botLocked);
-        const total = a._total || 0;
-        const price = a._price;
+        const total = isTest && isQuote ? (available + locked + botLocked) : (a._total || 0);
+        const price = getVarlikDisplayPrice(asset, rowEl) ?? a._price;
         const valueUsd = a._valueUsd != null ? a._valueUsd : 0;
-        const valueDisplay = (a.total_usd != null && Number.isFinite(Number(a.total_usd))) ? fmtUsd(Number(a.total_usd)) : '—';
-        const pctPortfolio = totalPortfolio > 0 && valueUsd != null ? (valueUsd / totalPortfolio * 100).toFixed(2) : '0.00';
-        const priceDisplay = price != null && Number.isFinite(price) ? fmtCoinPrice(price) : '…';
-        const changePct = getAssetChangePct(asset);
+        const valueDisplay = Number.isFinite(valueUsd) ? fmtUsd(valueUsd) : '—';
+        const pctPortfolio = totalPortfolio > 0
+            ? (testAccountVarlikRowShareUsd(a, price) / totalPortfolio * 100).toFixed(2)
+            : '0.00';
+        const priceDisplay = formatVarlikPriceDisplay(asset, price);
+        const changePct = getVarlikDisplayChangePct(asset, rowEl);
         const changeStr = changePct != null ? (changePct >= 0 ? '+' : '') + changePct.toFixed(2) + '%' : '—';
         const changeColor = changePct != null ? (changePct >= 0 ? '#0ecb81' : '#f6465d') : 'var(--ds-text-secondary)';
         const name = assetNameMap[asset] || asset;
         const initials = logoInitials(a);
         const logoUrl = (typeof getCoinLogoUrl === 'function' && getCoinLogoUrl(a.asset)) || null;
-        const canSell = available > 0;
-        const isQuote = (asset || '').toUpperCase() === 'USDT' || (asset || '').toUpperCase() === 'BUSD' || (asset || '').toUpperCase() === 'FDUSD';
-        const canBuy = isQuote ? available > 0 : true;
-        const sellTitle = canSell ? 'Satış (kullanılabilir: ' + fmtNum(available, 8) + ')' : 'Satış yapılamaz: tutar bot veya açık emirde kilitli';
-        const buyTitle = canBuy ? 'Alış' : 'Alış yapılamaz: kullanılabilir bakiye yok (bot/emir kilitli)';
-        const sellDisabled = !canSell ? ' disabled' : '';
-        const buyDisabled = !canBuy ? ' disabled' : '';
-        return { asset, symbol, free, locked, botLocked, available, total, price, valueUsd, valueDisplay, pctPortfolio, priceDisplay, changePct, changeStr, changeColor, name, initials, logoUrl, canSell, canBuy, sellTitle, buyTitle, sellDisabled, buyDisabled };
+        var trade = (typeof State !== 'undefined' && State.isTestAccount)
+            ? testAccountVarlikRowTradeState(a, assetsState.wallet.assets || [])
+            : null;
+        const canSell = trade ? trade.canSell : (available > 0);
+        const canBuy = trade ? trade.canBuy : (isQuote ? available > 0 : true);
+        const sellTitle = trade ? trade.sellTitle : (canSell ? 'Satış (kullanılabilir: ' + fmtNum(available, 8) + ')' : 'Satış yapılamaz: tutar bot veya açık emirde kilitli');
+        const buyTitle = trade ? trade.buyTitle : (canBuy ? 'Alış' : 'Alış yapılamaz: kullanılabilir bakiye yok (bot/emir kilitli)');
+        const sellDisabled = trade ? trade.sellDisabled : (!canSell ? ' disabled' : '');
+        const buyDisabled = trade ? trade.buyDisabled : (!canBuy ? ' disabled' : '');
+        var botLockedUsdLive = isTest && botLocked > 0 ? testAccountVarlikBotLockedUsd(asset, botLocked, price) : null;
+        var botLockedDisplay = isTest
+            ? testAccountVarlikBotLockedDisplay(asset, botLocked, price)
+            : fmtNum(botLocked, 8);
+        var botLockedUsdStored = (a.bot_locked_usd != null && Number.isFinite(Number(a.bot_locked_usd)))
+            ? Number(a.bot_locked_usd)
+            : ((botLockedUsdLive != null && Number.isFinite(botLockedUsdLive)) ? botLockedUsdLive : null);
+        return { asset, symbol, free, locked, botLocked, available, total, price, valueUsd, valueDisplay, pctPortfolio, priceDisplay, changePct, changeStr, changeColor, name, initials, logoUrl, canSell, canBuy, sellTitle, buyTitle, sellDisabled, buyDisabled, botLockedDisplay, botLockedUsdLive, botLockedUsdStored };
     }
 
     var currentOrder = Array.from(tbody.querySelectorAll('tr[data-asset]')).map(function(tr) { return tr.getAttribute('data-asset'); });
@@ -6434,31 +7119,53 @@ function renderVarliklarList() {
     var sameOrder = currentOrder.length === newOrder.length && currentOrder.every(function(asset, i) { return asset === newOrder[i]; });
 
     if (sameOrder && currentOrder.length > 0) {
+        var isTestAcct = typeof State !== 'undefined' && State.isTestAccount;
+        function patchTd(el, txt) {
+            if (!el) return;
+            if (isTestAcct && typeof setTextIfChanged === 'function') setTextIfChanged(el, txt);
+            else el.textContent = txt;
+        }
         list.forEach(function(a, i) {
             var row = tbody.querySelector('tr[data-asset="' + (a.asset || 'N/A') + '"]');
             if (!row) return;
-            var d = rowData(a);
+            var d = rowData(a, row);
             row.setAttribute('data-symbol', d.symbol);
             row.setAttribute('data-free', d.free);
             row.setAttribute('data-locked', d.locked);
             row.setAttribute('data-total', d.total);
             row.setAttribute('data-available', d.available);
+            row.setAttribute('data-bot-locked', d.botLocked);
+            if (d.botLockedUsdStored != null && Number.isFinite(d.botLockedUsdStored)) {
+                row.setAttribute('data-bot-locked-usd', d.botLockedUsdStored);
+            } else {
+                row.removeAttribute('data-bot-locked-usd');
+            }
             var symbolCell = row.querySelector('.varlik-symbol');
-            if (symbolCell) symbolCell.textContent = d.asset;
+            if (symbolCell) patchTd(symbolCell, d.asset);
             var nameCell = row.querySelector('.varlik-name');
-            if (nameCell) nameCell.textContent = d.name;
+            if (nameCell) patchTd(nameCell, d.name);
             var priceCell = row.querySelector('.price-cell');
-            if (priceCell) { priceCell.setAttribute('data-price', d.price != null ? d.price : ''); priceCell.textContent = d.priceDisplay; }
+            if (priceCell && d.price != null && Number.isFinite(d.price)) {
+                priceCell.setAttribute('data-price', d.price);
+                patchTd(priceCell, d.priceDisplay);
+            }
             var changeCell = row.querySelector('.change-pct');
-            if (changeCell) { changeCell.setAttribute('data-change-pct', d.changePct != null ? d.changePct : ''); changeCell.style.color = d.changeColor; changeCell.textContent = d.changeStr; }
+            if (changeCell && d.changePct != null) { changeCell.setAttribute('data-change-pct', d.changePct); changeCell.style.color = d.changeColor; patchTd(changeCell, d.changeStr); }
             var tds = row.querySelectorAll('td');
-            if (tds[3]) tds[3].textContent = fmtNum(d.total, 8);
-            if (tds[4]) tds[4].textContent = fmtNum(d.botLocked, 8);
-            if (tds[5]) tds[5].textContent = fmtNum(d.locked, 8);
-            if (tds[6]) tds[6].textContent = fmtNum(d.available, 8);
+            if (tds[3]) patchTd(tds[3], fmtNum(d.total, 8));
+            if (tds[4]) {
+                patchTd(tds[4], d.botLockedDisplay);
+                if (d.botLocked > 0 && d.botLockedUsdLive != null && Number.isFinite(d.botLockedUsdLive)) {
+                    tds[4].setAttribute('data-value', d.botLockedUsdLive);
+                } else {
+                    tds[4].setAttribute('data-value', '0');
+                }
+            }
+            if (tds[5]) patchTd(tds[5], fmtNum(d.locked, 8));
+            if (tds[6]) patchTd(tds[6], fmtNum(d.available, 8));
             var valueCell = row.querySelector('.value-cell');
-            if (valueCell) { valueCell.setAttribute('data-value', d.valueUsd); valueCell.textContent = d.valueDisplay; }
-            if (tds[8]) tds[8].textContent = d.pctPortfolio + '%';
+            if (valueCell) { valueCell.setAttribute('data-value', d.valueUsd); patchTd(valueCell, d.valueDisplay); }
+            if (tds[8]) patchTd(tds[8], d.pctPortfolio + '%');
             var actionsCell = row.querySelector('.varlik-card-actions');
             if (actionsCell) {
                 actionsCell.innerHTML = '<div class="btn-al-sat-wrap">' +
@@ -6471,7 +7178,7 @@ function renderVarliklarList() {
     } else {
         tbody.innerHTML = list.map(function(a) {
             var d = rowData(a);
-            return '<tr data-asset="' + d.asset + '" data-symbol="' + d.symbol + '" data-free="' + d.free + '" data-locked="' + d.locked + '" data-total="' + d.total + '" data-available="' + d.available + '">' +
+            return '<tr data-asset="' + d.asset + '" data-symbol="' + d.symbol + '" data-free="' + d.free + '" data-locked="' + d.locked + '" data-total="' + d.total + '" data-available="' + d.available + '" data-bot-locked="' + d.botLocked + '"' + (d.botLockedUsdStored != null && Number.isFinite(d.botLockedUsdStored) ? ' data-bot-locked-usd="' + d.botLockedUsdStored + '"' : '') + '>' +
                 '<td class="varlik-logo-cell" style="padding: 0.5rem 0.75rem; vertical-align: middle;">' +
                 '<div class="varlik-logo" title="' + d.asset + '">' +
                 (d.logoUrl ? '<img src="' + d.logoUrl + '" alt="' + d.asset + '" loading="lazy" onerror="if(window.registerLogo404)window.registerLogo404(this.alt);this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\';" />' : '') +
@@ -6481,7 +7188,7 @@ function renderVarliklarList() {
                 '<div class="price-cell" data-price="' + (d.price != null ? d.price : '') + '" style="font-weight: 600;">' + d.priceDisplay + '</div>' +
                 '<div class="change-pct" data-change-pct="' + (d.changePct != null ? d.changePct : '') + '" style="color: ' + d.changeColor + ';">' + d.changeStr + '</div></td>' +
                 '<td data-label="Toplam" style="padding: 0.75rem; text-align: right; vertical-align: middle;">' + fmtNum(d.total, 8) + '</td>' +
-                '<td data-label="Bot kilitli" style="padding: 0.75rem; text-align: right; vertical-align: middle;">' + fmtNum(d.botLocked, 8) + '</td>' +
+                '<td data-label="Bot kilitli" style="padding: 0.75rem; text-align: right; vertical-align: middle;"' + (d.botLockedUsdLive != null && Number.isFinite(d.botLockedUsdLive) ? ' data-value="' + d.botLockedUsdLive + '"' : '') + '>' + d.botLockedDisplay + '</td>' +
                 '<td data-label="Kilitli" style="padding: 0.75rem; text-align: right; vertical-align: middle;">' + fmtNum(d.locked, 8) + '</td>' +
                 '<td data-label="Kullanılabilir" style="padding: 0.75rem; text-align: right; vertical-align: middle;">' + fmtNum(d.available, 8) + '</td>' +
                 '<td class="text-right value-cell" data-value="' + d.valueUsd + '" data-label="Değer" style="padding: 0.75rem; vertical-align: middle;">' + d.valueDisplay + '</td>' +
@@ -6495,11 +7202,19 @@ function renderVarliklarList() {
     lastWalletHash = hashWalletAssets(assetsState.wallet.assets);
     var unpricedEl = document.getElementById('varliklarUnpricedNotice');
     if (unpricedEl) unpricedEl.style.display = 'none';
+    if (typeof State !== 'undefined' && State.isTestAccount) {
+        if (typeof updateTestAccountStripFromTable === 'function') {
+            updateTestAccountStripFromTable(tbody);
+        } else if (typeof renderAssetsSummary === 'function') {
+            renderAssetsSummary();
+        }
+    }
 }
 
 function tickVarliklarPrices() {
     const tbody = document.getElementById('varliklarTableBody');
     if (!tbody || !tbody.querySelector('tr[data-asset]')) return;
+    const skipBlink = typeof State !== 'undefined' && State.isTestAccount;
     const rows = tbody.querySelectorAll('tr[data-asset]');
     const symbolAttr = row => row.getAttribute('data-symbol') || normalizeAssetToSymbol(row.getAttribute('data-asset') || '', QUOTE);
     rows.forEach(row => {
@@ -6510,27 +7225,31 @@ function tickVarliklarPrices() {
         const changeCell = row.querySelector('.change-pct');
         if (!priceCell || !valueCell) return;
         const fiyatTd = priceCell.closest('.varlik-fiyat-cell') || priceCell.parentElement;
-        const price = getAssetPrice(asset);
+        const price = getVarlikDisplayPrice(asset, row);
         const oldPrice = parseFloat(priceCell.getAttribute('data-price') || '') || 0;
         if (price == null || !Number.isFinite(price)) return;
         const samePrice = Number.isFinite(oldPrice) && Math.abs(oldPrice - price) < 1e-9;
-        if (!samePrice && Math.abs(oldPrice - price) > 0.0001 && typeof triggerValueBlink === 'function') {
+        if (!skipBlink && !samePrice && Math.abs(oldPrice - price) > 0.0001 && typeof triggerValueBlink === 'function') {
             triggerValueBlink(priceCell, price);
         }
         priceCell.setAttribute('data-price', price);
-        priceCell.textContent = fmtCoinPrice(price);
+        if (typeof setTextIfChanged === 'function' && skipBlink) setTextIfChanged(priceCell, fmtCoinPrice(price));
+        else priceCell.textContent = fmtCoinPrice(price);
         // 24s değişim %: marketStore mini ticker ile canlı güncelle
         let changePct = null;
         if (changeCell) {
             const mini = window.marketStore?.getMini(symbol);
-            changePct = mini && Number.isFinite(mini.changePct) ? mini.changePct : null;
+            changePct = getVarlikDisplayChangePct(asset, row);
+            if (changePct == null && mini && Number.isFinite(mini.changePct)) changePct = mini.changePct;
             const oldChangePct = parseFloat(changeCell.getAttribute('data-change-pct') || '');
             if (changePct != null) {
                 changeCell.setAttribute('data-change-pct', changePct);
-                changeCell.textContent = (changePct >= 0 ? '+' : '') + changePct.toFixed(2) + '%';
+                var changeTxt = (changePct >= 0 ? '+' : '') + changePct.toFixed(2) + '%';
+                if (skipBlink && typeof setTextIfChanged === 'function') setTextIfChanged(changeCell, changeTxt);
+                else changeCell.textContent = changeTxt;
                 changeCell.style.color = changePct >= 0 ? '#0ecb81' : '#f6465d';
                 const changePctChanged = Number.isFinite(oldChangePct) && Math.abs(oldChangePct - changePct) >= 0.01;
-                if (changePctChanged && fiyatTd) {
+                if (!skipBlink && changePctChanged && fiyatTd) {
                     fiyatTd.classList.remove('varlik-fiyat-blink-up', 'varlik-fiyat-blink-down');
                     fiyatTd.classList.add(changePct >= 0 ? 'varlik-fiyat-blink-up' : 'varlik-fiyat-blink-down');
                     setTimeout(() => {
@@ -6540,7 +7259,7 @@ function tickVarliklarPrices() {
             }
         }
         // Fiyat değişiminde blink
-        if (!samePrice && Math.abs(oldPrice - price) > 0.0001) {
+        if (!skipBlink && !samePrice && Math.abs(oldPrice - price) > 0.0001) {
             priceCell.classList.remove('price-up', 'price-down', 'price-neutral');
             priceCell.classList.add(price > oldPrice ? 'price-up' : 'price-down');
             if (fiyatTd) {
@@ -6552,6 +7271,35 @@ function tickVarliklarPrices() {
             }
             setTimeout(() => { priceCell.classList.remove('price-up', 'price-down'); priceCell.classList.add('price-neutral'); }, 600);
         }
+        if (typeof updateTestVarlikRowLiveMetrics === 'function') {
+            updateTestVarlikRowLiveMetrics(row, tbody);
+        }
+    });
+    if (typeof updateTestAccountStripFromTable === 'function') {
+        updateTestAccountStripFromTable(tbody);
+    }
+    if (skipBlink && typeof testAccountRefreshVarlikPctColumn === 'function') {
+        testAccountRefreshVarlikPctColumn(tbody);
+    }
+}
+
+function testAccountRefreshVarlikPctColumn(tbody) {
+    var root = tbody || document.getElementById('varliklarTableBody');
+    if (!root) return;
+    var portTotal = testAccountKpiTotalUsd(root);
+    if (!(portTotal > 0)) return;
+    root.querySelectorAll('tr[data-asset]').forEach(function (r) {
+        var priceCell = r.querySelector('.price-cell');
+        var price = priceCell ? parseFloat(priceCell.getAttribute('data-price') || '') : NaN;
+        if (!Number.isFinite(price) || price <= 0) {
+            price = typeof getAssetPrice === 'function' ? getAssetPrice(r.getAttribute('data-asset') || '') : null;
+        }
+        var rowTds = r.querySelectorAll('td');
+        if (!rowTds[8]) return;
+        var share = testAccountVarlikRowShareUsdFromDom(r, price);
+        var pctTxt = (share / portTotal * 100).toFixed(2) + '%';
+        if (typeof setTextIfChanged === 'function') setTextIfChanged(rowTds[8], pctTxt);
+        else rowTds[8].textContent = pctTxt;
     });
 }
 
@@ -12084,9 +12832,17 @@ function updateFinanceKPIs(data) {
 
     // Ortak KPI şeridi (tek kaynak): Cüzdan, Cüzdan PnL, Botlar Bakiye, Botlar PnL
     var walletEl = document.getElementById('kpiCuzdan');
-    updateKpiCuzdanBalance(walletEl, balance);
+    if ((typeof State !== 'undefined' && State.isTestAccount) || (account && account.is_test_account)) {
+        if (typeof updateTestAccountKpiCuzdanFromStrip === 'function') updateTestAccountKpiCuzdanFromStrip();
+    } else {
+        updateKpiCuzdanBalance(walletEl, balance);
+    }
     applyWalletStaleWarningEl(document.getElementById('kpiCuzdanLive'));
-    updateCuzdanPnlKpi(dailyWalletPnl, account, data);
+    if (typeof State !== 'undefined' && State.isTestAccount) {
+        /* Günlük değişim: updateTestAccountKpiCuzdanFromStrip → updateTestAccountCuzdanDailyPnlLive */
+    } else {
+        updateCuzdanPnlKpi(dailyWalletPnl, account, data);
+    }
     if (hasDailyKpi) {
         var botPnlEl = document.getElementById('kpiBotPnl');
         if (botPnlEl) {
@@ -12502,6 +13258,13 @@ function applyFinanceBotsLiveEquityToDom() {
             if (el.className !== statusCls) el.className = statusCls;
         });
     });
+    if (typeof State !== 'undefined' && State.isTestAccount) {
+        if (typeof updateTestAccountStripFromTable === 'function') {
+            updateTestAccountStripFromTable(document.getElementById('varliklarTableBody'));
+        } else if (typeof updateTestAccountKpiCuzdanFromStrip === 'function') {
+            updateTestAccountKpiCuzdanFromStrip();
+        }
+    }
 }
 
 async function pollFinanceBotsLiveEquity() {

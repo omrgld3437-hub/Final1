@@ -143,6 +143,61 @@ async def get_spot_quick_data(
             _SPOT_INFLIGHT.pop(key, None)
     async def _do():
         try:
+            from app.services.test_account import is_test_account
+            if is_test_account(account_id, db):
+                from app.services.wallet_display import build_test_account_wallet
+                from app.services.test_spot_paper import spot_balances_from_wallet
+                from app.services.market_data import get_ticker_24h
+                from app.botengine.virtual_wallet import get_bot_locked_balances_for_account
+
+                wallet = build_test_account_wallet(account_id, db)
+                bot_locked = get_bot_locked_balances_for_account(db, account_id) or {}
+                base_asset = sym.replace("USDT", "") if sym.endswith("USDT") else sym
+                quote_asset = "USDT"
+                bal = spot_balances_from_wallet(wallet, base_asset, quote_asset, bot_locked)
+                price = 0.0
+                try:
+                    from app.services.data_hub import data_hub
+                    price = float(data_hub.get_price(sym) or 0)
+                except Exception:
+                    price = 0.0
+                price_change_24h = 0.0
+                try:
+                    t = get_ticker_24h(sym)
+                    price_change_24h = float(t.get("priceChangePercent") or 0)
+                except Exception:
+                    pass
+                if get_account_keys is None:
+                    flt = {"tick_size": "0.01", "step_size": "0.00001", "min_qty": "0.00001", "min_notional": "5"}
+                else:
+                    try:
+                        keys = await get_account_keys(account_id, db)
+                        async with SpotEngine(keys) as engine:
+                            flt = await engine._get_symbol_filters(sym)
+                    except Exception:
+                        flt = {"tick_size": "0.01", "step_size": "0.00001", "min_qty": "0.00001", "min_notional": "5"}
+                return {
+                    "ok": True,
+                    "symbol": sym,
+                    "price": price,
+                    "priceChange24h": price_change_24h,
+                    "baseAsset": base_asset,
+                    "quoteAsset": quote_asset,
+                    "baseBalance": bal["base_balance"],
+                    "quoteBalance": bal["quote_balance"],
+                    "baseLockedByBots": round(bal["base_locked"], 8),
+                    "quoteLockedByBots": round(bal["quote_locked"], 8),
+                    "baseAvailable": round(bal["base_available"], 8),
+                    "quoteAvailable": round(bal["quote_available"], 8),
+                    "filters": {
+                        "tickSize": flt.get("tick_size", "0.01"),
+                        "stepSize": flt.get("step_size", "0.00001"),
+                        "minQty": flt.get("min_qty", "0.00001"),
+                        "minNotional": flt.get("min_notional", "5"),
+                    },
+                    "ts": time.time(),
+                    "paper": True,
+                }
             if get_account_keys is None:
                 return _default_quick_data_response(sym)
             keys = await get_account_keys(account_id, db)
@@ -231,6 +286,42 @@ async def place_spot_order(
             )
         raise
     acc = db.query(Account).filter(Account.id == request_body.account_id).first()
+    from app.services.test_account import is_test_account
+    if is_test_account(request_body.account_id, db):
+        try:
+            from app.services.test_spot_paper import execute_test_paper_order
+            from app.services.spot_engine import spot_cache
+
+            result = execute_test_paper_order(
+                db,
+                request_body.account_id,
+                request_body.symbol,
+                request_body.side,
+                request_body.type,
+                quantity=request_body.quantity,
+                quote_order_qty=request_body.quote_order_qty,
+                price=request_body.price,
+            )
+            spot_cache.invalidate_balance(request_body.account_id)
+            await invalidate_wallet_cache(request_body.account_id)
+            await invalidate_open_orders_cache(request_body.account_id)
+            meta = {
+                "symbol": request_body.symbol,
+                "side": request_body.side,
+                "type": request_body.type,
+                "order_id": result.get("orderId"),
+                "paper": True,
+            }
+            audit_svc.log_event(
+                db, actor_type="admin" if current.get("is_admin") else "user", event_type="SPOT_ORDER_CREATE", severity="INFO",
+                actor_user_id=current.get("user_id"), target_user_id=acc.user_id if acc else None, target_account_id=request_body.account_id,
+                ip=get_client_ip(request), device_id=current.get("device_id"),
+                request_id=getattr(request.state, "request_id", None),
+                meta=meta,
+            )
+            return {"success": True, "order": result}
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail={"error": "VALIDATION_ERROR", "detail": str(e)})
     try:
         keys = await get_account_keys(request_body.account_id, db)
         bot_locked = get_bot_locked_balances_for_account(db, request_body.account_id)

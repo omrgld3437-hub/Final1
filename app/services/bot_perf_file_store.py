@@ -470,6 +470,47 @@ def list_bot_completed_cycles(bot_id: int) -> List[Dict[str, Any]]:
     return out
 
 
+def _completed_cycles_dedupe_keys(
+    completed_cycles: List[Dict[str, Any]],
+    *,
+    symbol: str = "",
+) -> set:
+    keys: set = set()
+    for entry in completed_cycles or []:
+        if not isinstance(entry, dict):
+            continue
+        compact = _compact_cycle(entry, symbol=symbol)
+        if compact:
+            keys.add(_cycle_dedupe_key(compact))
+    return keys
+
+
+def reconcile_bot_cycles_file_with_state(
+    bot_id: int,
+    account_id: int,
+    symbol: str,
+    completed_cycles: List[Dict[str, Any]],
+) -> bool:
+    """State/arşiv tek kaynak; dosya `aid` veya tur kümesi uyuşmazsa yeniden yazar."""
+    data = load_bot_cycles_file(bot_id)
+    file_aid = data.get("aid")
+    file_keys = {
+        _cycle_dedupe_key(c)
+        for c in (data.get("c") or [])
+        if isinstance(c, dict)
+    }
+    state_keys = _completed_cycles_dedupe_keys(completed_cycles, symbol=symbol)
+    mismatch = False
+    if file_aid is not None and int(file_aid) != int(account_id):
+        mismatch = True
+    elif file_keys != state_keys:
+        mismatch = True
+    if mismatch:
+        rebuild_bot_cycles_file(bot_id, account_id, symbol, completed_cycles)
+        return True
+    return False
+
+
 def query_bot_cycles_by_date_range(
     bot_id: int,
     date_from: str,

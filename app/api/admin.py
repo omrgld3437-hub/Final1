@@ -48,20 +48,9 @@ async def _get_account_wallet_strip_kpis(account_id: int, db: Session) -> tuple:
         bot_locked_map = get_bot_locked_balances_for_account(db, account_id) or {}
 
         if is_test_account(account_id, db):
-            from app.services.test_spot_paper import load_balances
-            from app.services.wallet_display import apply_test_wallet_equity_totals
+            from app.services.wallet_display import build_test_account_wallet
 
-            paper = load_balances(account_id) or {}
-            balances = [
-                {"asset": asset, "free": float(qty), "locked": 0.0}
-                for asset, qty in paper.items()
-                if float(qty or 0) > 0
-            ]
-            if not balances:
-                balances = [{"asset": "USDT", "free": float(TEST_PAPER_BALANCE_USDT), "locked": 0.0}]
-            price_map = await build_wallet_price_map(balances, testnet=False)
-            resp = _wallet_response(account_id, balances, price_map, bot_locked=bot_locked_map)
-            apply_test_wallet_equity_totals(resp, db, account_id)
+            resp = build_test_account_wallet(account_id, db)
             return (
                 float(resp.get("total_usd") or TEST_PAPER_BALANCE_USDT),
                 float(resp.get("bot_locked_usd") or 0.0),
@@ -279,6 +268,14 @@ async def get_admin_accounts(
                         user_is_suspended = user.is_suspended
                         user_id = user.id
             
+            from app.services.test_account import is_test_account, TEST_PAPER_BALANCE_USDT
+
+            acct_is_test = is_test_account(account.id, db)
+            if acct_is_test and spot_balance_status != "ok":
+                spot_balance_status = "ok"
+            if acct_is_test and spot_balance <= 0:
+                spot_balance = float(TEST_PAPER_BALANCE_USDT)
+
             accounts_list.append({
                 "account_id": account.id,
                 "account_code": account.account_code,
@@ -311,6 +308,7 @@ async def get_admin_accounts(
                 "user_created_at": user_created_at,
                 "user_name": user_name,
                 "user_surname": user_surname,
+                "is_test_account": acct_is_test,
             })
     except Exception as e:
         logger.error(f"[Admin] Error processing account {account.id if 'account' in locals() else 'unknown'}: {e}", exc_info=True)

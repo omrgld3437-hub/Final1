@@ -2176,9 +2176,9 @@ async def api_dashboard_bootstrap(
         pass
     wallet_cached, wallet_cached_at = None, None
     try:
-        from app.api.routes.home import _get_last_wallet_snapshot_with_new_session
+        from app.api.routes.home import _get_wallet_cached_enriched_with_new_session
         wallet_cached, wallet_cached_at = await asyncio.get_running_loop().run_in_executor(
-            None, lambda: _get_last_wallet_snapshot_with_new_session(account_id, 20)
+            None, lambda: _get_wallet_cached_enriched_with_new_session(account_id, 20)
         )
     except Exception:
         pass
@@ -2459,14 +2459,20 @@ def _snapshot_wallet_from_asset_row(row) -> Dict[str, Any]:
             continue
         free = float(data.get("free") or 0)
         locked = float(data.get("locked") or 0)
+        bot_locked = float(data.get("bot_locked") or 0)
+        total = float(data.get("total") or 0)
+        if total <= 0:
+            total = free + locked + bot_locked
         usd_val = data.get("usdValue")
         usdt_value = float(usd_val) if usd_val is not None else None
-        if free <= 0 and locked <= 0:
+        if total <= 0 and free <= 0 and locked <= 0 and (usdt_value is None or usdt_value <= 0):
             continue
         assets.append({
             "asset": asset,
             "free": free,
             "locked": locked,
+            "total": total if total > 0 else None,
+            "bot_locked": bot_locked if bot_locked > 0 else None,
             "usdt_value": round(usdt_value, 2) if usdt_value is not None else None,
         })
     # Sort by usdt_value desc, cap
@@ -2479,7 +2485,17 @@ def _snapshot_wallet_from_asset_row(row) -> Dict[str, Any]:
 def _enrich_snapshot_wallet_with_bot_locked(wallet: Dict[str, Any], account_id: int, db: Session) -> None:
     """
     Snapshot cüzdanına bot kilitli ve kilitli USD alanlarını ekler (strip ve varlık tablosu doğru göstersin).
+    Test hesabında tek kaynak: build_test_account_wallet (paper 10k + bot satırları).
     """
+    from app.services.test_account import is_test_account
+    from app.services.wallet_display import build_test_account_wallet
+
+    if is_test_account(account_id, db):
+        rebuilt = build_test_account_wallet(account_id, db)
+        if rebuilt and wallet is not None:
+            wallet.clear()
+            wallet.update(rebuilt)
+        return
     from app.botengine.virtual_wallet import get_bot_locked_balances_for_account
     if not wallet or not isinstance(wallet.get("assets"), list):
         return
@@ -2685,7 +2701,14 @@ async def api_dashboard_snapshot(
             es = getattr(acc, "api_secret_enc", None)
             keys_configured = bool(ek and es and (not isinstance(ek, str) or ek.strip()) and (not isinstance(es, str) or es.strip()))
         wallet_cached, wallet_ts_iso, wallet_source, wallet_age_sec = _get_snapshot_wallet_cached(account_id, db)
-        if wallet_cached:
+        from app.services.test_account import is_test_account
+        if is_test_account(account_id, db):
+            from app.services.wallet_display import build_test_account_wallet
+
+            wallet = build_test_account_wallet(account_id, db)
+            wallet_ts_iso = wallet.get("ts")
+            wallet_source = "test_paper"
+        elif wallet_cached:
             wallet = dict(wallet_cached)
             if wallet_ts_iso:
                 wallet["ts"] = wallet_ts_iso
@@ -3071,18 +3094,9 @@ async def _fetch_wallet_uncached(account_id: int, db: Session):
     from app.services.test_account import is_test_account, TEST_PAPER_BALANCE_USDT
     from app.botengine.virtual_wallet import get_bot_locked_balances_for_account
     if is_test_account(account_id, db):
-        price_map = {}
-        try:
-            prices = data_hub.get_all_prices()
-            if prices:
-                price_map = {sym: float(d.get("price") or 0) for sym, d in prices.items()}
-        except Exception:
-            pass
-        bot_locked = get_bot_locked_balances_for_account(db, account_id)
-        balances = [{"asset": "USDT", "free": str(TEST_PAPER_BALANCE_USDT), "locked": "0"}]
-        out = _wallet_response(account_id, balances, price_map, bot_locked=bot_locked)
-        out["keys_configured"] = True
-        return out
+        from app.services.wallet_display import build_test_account_wallet
+
+        return build_test_account_wallet(account_id, db)
     from app.services.binance_assets import get_account_keys
     from app.services.binance_spot import get_wallet
     from app.services.wallet_pricing import build_wallet_price_map

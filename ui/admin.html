@@ -26,7 +26,7 @@ CHANGE: Fix navigation links + route pinning - ensure admin link works, update c
         location.replace('/ui/login.html');
         return;
       }
-      // Sayfayı boot_id doğrulandıktan sonra göstereceğiz (admin.js)
+      r.style.visibility = '';
     })();
     </script>
     <meta name="build-id" content="admin-locked-v2">
@@ -97,7 +97,7 @@ CHANGE: Fix navigation links + route pinning - ensure admin link works, update c
             
             <div id="tabAccounts" class="tab-content admin-tab-panel active" data-tab-panel="accounts">
                 <div id="tilesContainer" class="tile-grid">
-                    <div class="empty-state">Loading...</div>
+                    <div class="empty-state" data-skeleton>Yükleniyor...</div>
                 </div>
             </div>
             
@@ -541,12 +541,41 @@ CHANGE: Fix navigation links + route pinning - ensure admin link works, update c
         </div>
     </footer>
 
+    <script>
+    (function () {
+        var KEY = 'admin_accounts_cache_v2';
+        var MAX = 5 * 60 * 1000;
+        try {
+            var raw = sessionStorage.getItem(KEY) || localStorage.getItem(KEY);
+            if (!raw) return;
+            var c = JSON.parse(raw);
+            if (Date.now() - (c.ts || 0) > MAX) return;
+            if (!Array.isArray(c.accounts) || !c.accounts.length) return;
+            var tc = document.getElementById('tilesContainer');
+            if (tc) {
+                tc.innerHTML = c.accounts.map(function (acc) {
+                    var id = Number(acc.account_id) || 0;
+                    if (!id) return '';
+                    var code = (acc.account_code && String(acc.account_code).trim()) || '';
+                    var name = (acc.name || acc.user_username || code || 'Hesap').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                    return '<div class="acct-tile" data-account-id="' + id + '" data-boot-cache="1"><div class="acct-head"><div class="acct-name">' + name + (code ? ' <span style="font-size:12px;color:var(--ds-text-secondary);">[' + code + ']</span>' : '') + '</div></div></div>';
+                }).join('');
+            }
+            if (c.totals) {
+                var ka = document.getElementById('kpiAccounts');
+                var kb = document.getElementById('kpiActiveBots');
+                if (ka) ka.textContent = c.totals.total_accounts || 0;
+                if (kb) kb.textContent = c.totals.total_active_bots || 0;
+            }
+        } catch (e) {}
+    })();
+    </script>
     <script src="/ui/assets/utils/trTime.js?v=1"></script>
     <script src="/ui/assets/core/errorReporter.js?v=err1"></script>
     <script src="/ui/assets/core/apiClient.js?v=adminfix1"></script>
     <script src="/ui/assets/api.js?v=adminfix3"></script>
     <script src="/ui/assets/components.js?v=adminfix3"></script>
-    <script src="/ui/assets/admin.js?v=admin-bot-kpi-fix1" defer></script>
+    <script src="/ui/assets/admin.js?v=admin-instant-load2" defer></script>
     <script src="/ui/assets/ticker.js?v=adminfix1" defer></script>
 </body>
 </html>

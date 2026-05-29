@@ -29,12 +29,12 @@ Paylaşılan iş mantığı: Binance, fiyat, PnL, şifreleme, audit.
 | `finance_snapshot.py` | Finans snapshot |
 | `audit.py` | Audit log |
 | `test_account.py` | Paper test hesabı |
-| `wallet_display.py` | Strip/tablo bot_locked; `get_running_bots_equity_usd`; test `apply_test_wallet_equity_totals` |
+| `wallet_display.py` | Strip/tablo bot_locked; test paper USDT Toplam = 10k − config bütçesi (equity değil) |
 | `test_spot_paper.py` | Test hesabı manuel spot paper bakiye |
 | `transaction_history_service.py` | İşlem geçmişi API |
 | `transaction_history_file_store.py` | Şifreli işlem geçmişi (`.run/tx_history/`); `bootstrap_tx_history_from_binance` |
 | `binance_connectivity.py` | Upstream hata; probe OK → `on_connectivity_restored` (paused START + running pending `CONNECTIVITY_STABLE` → flush after loop restart + START `connectivity_resume`) |
-| `bot_perf_file_store.py` | Bot performans saatlik/günlük dosya deposu |
+| `bot_perf_file_store.py` | Bot performans dosyaları; `reconcile_bot_cycles_file_with_state` (state/arşiv ↔ `bots/{id}.json`) |
 | `ip_blocklist.py` | Manager'ın yazdığı `.run/blocked_ips.json` okuma; web middleware 403 |
 | `leaderboard_service.py` | Global/structure leaderboard; `running_since_iso` = `bot_run_started_at_iso` (bot detay süre ile aynı) |
 

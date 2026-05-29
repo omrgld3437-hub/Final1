@@ -720,7 +720,8 @@ export BOT_ENGINE_KILL_SWITCH=1
 
 | Constant | Value | Location |
 |----------|-------|----------|
-| BINANCE_REQUEST_TIMEOUT_SEC | 4.0 | binance_spot.py |
+| BINANCE_REQUEST_TIMEOUT_SEC | 8.0 | binance_spot.py |
+| DEPOSIT_WITHDRAW_FAILURE_CACHE_TTL_SEC | 90 | finance_reports.py (geçici SAPI hatasında boş cache) |
 | BINANCE_HTTP_TIMEOUT | 3.0 connect, 2.0 read | binance_spot.py |
 | BINANCE_TIME_FETCH_TIMEOUT | 15.0 connect, 5.0 read | binance_spot.py (`/api/v3/time`) |
 | BINANCE_TIME_STALE_MAX_SEC | 120 | binance_spot.py (stale cache extrapolation) |
@@ -732,6 +733,8 @@ export BOT_ENGINE_KILL_SWITCH=1
 | PRICE_TTL | 120 | data_hub.py |
 | WS_STALE_SEC | 60 | data_hub.py |
 | BULK_REFRESH_MIN_INTERVAL | 10 | data_hub.py |
+
+**Geçici upstream hataları (2026-05-29):** `is_transient_upstream_error()` — timeout, DNS, circuit breaker, IP ban. `reconcile_open_orders_for_bot` yalnızca `PENDING` intent varken Binance `openOrders` çağırır; geçici hatalar DEBUG. `finance_reports` deposit/withdraw SAPI geçici hatasında 90s boş cache + DEBUG (manager uyarı spam önleme). `binance_spot` `public_get_json` / `signed_json`: ara deneme hataları DEBUG; yalnızca retry bütçesi tükendiğinde WARNING (manager `#wrn-web` spam önleme).
 
 ---
 
@@ -1498,7 +1501,7 @@ Bot silinmeden önce `completed_cycle_dual_pnls` buraya yazılır; aktif botlar 
 
 | Path | TTL | İçerik |
 |------|-----|--------|
-| `.run/bot_perf/bots/{bot_id}.json` | Kalıcı | Yalnızca **kapanan** turlar (kompakt `c[]`, `px` kapanış kuru); tur kapanışında `record_closed_cycle_file` |
+| `.run/bot_perf/bots/{bot_id}.json` | Kalıcı | Yalnızca **kapanan** turlar (kompakt `c[]`, `px` kapanış kuru); tur kapanışında `record_closed_cycle_file`. **Okuma:** `aid` ≠ bot `account_id` veya tur kümesi state/arşivden farklıysa dosya state ile yeniden yazılır (bot sıfırlama / hesap taşıma sonrası stale perf önlenir). Bot start (connectivity_resume hariç): `sync_bot_cycles_file_from_state`. |
 | `.run/bot_perf/accounts/{account_id}.json` | Kalıcı | Hesap **ham tur** defteri `r[]`: `bid`, `sym`, `t` (ISO), `d` (TR gün), `h`, `pnl`/`fee` (USDT), ham `cp`/`iq`/`px` |
 | `.run/bot_perf/hourly/{account_id}_{date_tr}.json` | Gün başına yeni dosya (00:00 TR) | 24 saat `[pnl_usd, fees_usd]` (yedek; okuma önceliği hesap `accounts`) |
 | `.run/bot_perf/daily/{account_id}.json` | Kalıcı | `days[date_tr]` hesap + bot günlük K/Z (yedek) |
@@ -2946,7 +2949,7 @@ Kısmi yanıt: Bir görev hata verirse diğerleri döner; UI tarafında ilgili b
 
 /api/binance/wallet cache'li; /dashboard/snapshot wallet sadece DB/AssetSnapshot (cache-only). Canlı cüzdan sadece POST /api/home/wallet/refresh.
 
-Wallet sözleşmesi (strip ve varlık tablosu): Tüm wallet kaynakları (snapshot, wallet_live, wallet_cached) total_usd, free_usd, locked_usd (emirlerde kilitli), bot_locked_usd (botlarda kilitli), available_usd ve assets[].free, locked, bot_locked, available içermelidir; UI'da "Kullanılabilir", "Bot kilitli", "Kilitli (emirler)" doğru gösterilsin. Snapshot ve DB cache _enrich_*_with_bot_locked ile zenginleştirilir; wallet/refresh tam _wallet_response döner. **Admin hesap karosu** `BOT BAKİYESİ` = aynı hesabın dashboard strip `bot_locked_usd` (`GET /api/admin/accounts` → `_get_account_wallet_strip_kpis`, canlı hesapta Binance + virtual_wallet; testte `apply_test_wallet_equity_totals`).
+Wallet sözleşmesi (strip ve varlık tablosu): Tüm wallet kaynakları (snapshot, wallet_live, wallet_cached) total_usd, free_usd, locked_usd (emirlerde kilitli), bot_locked_usd (botlarda kilitli), available_usd ve assets[].free, locked, bot_locked, available içermelidir; UI'da "Kullanılabilir", "Bot kilitli", "Kilitli (emirler)" doğru gösterilsin. Snapshot ve DB cache _enrich_*_with_bot_locked ile zenginleştirilir; wallet/refresh tam _wallet_response döner. **Test hesabı:** `build_test_account_wallet` — paper 10k; tabloda USDT (kullanılabilir + bot quote kilitli) + base (ör. ETH bot kilitli); strip `available_usd` = 10k − bot equity, `bot_locked_usd` = running bot equity. **Admin hesap karosu** `BOT BAKİYESİ` = aynı hesabın dashboard strip `bot_locked_usd` (`GET /api/admin/accounts` → `_get_account_wallet_strip_kpis`, canlı hesapta Binance + virtual_wallet; testte `build_test_account_wallet`).
 
 ## Mevcut — Fiyat Kaynakları ve Cache
 
@@ -5764,7 +5767,8 @@ Step-by-step migration path for horizontal scaling. No code; design only.
 
 | Constant | Value | File |
 |----------|-------|------|
-| BINANCE_REQUEST_TIMEOUT_SEC | 4.0 | binance_spot.py |
+| BINANCE_REQUEST_TIMEOUT_SEC | 8.0 | binance_spot.py |
+| DEPOSIT_WITHDRAW_FAILURE_CACHE_TTL_SEC | 90 | finance_reports.py (geçici SAPI hatasında boş cache) |
 | MAX_RETRIES | 2 | binance_spot.py |
 | CircuitBreaker.FAILURE_THRESHOLD | 3 | binance_spot.py |
 | CircuitBreaker.OPEN_SECONDS | 30.0 | binance_spot.py |

@@ -291,10 +291,13 @@
     },
     {
       test: function (msg) { return /binance_spot public_get/i.test(msg); },
-      apply: function () {
+      apply: function (ctx) {
+        var path = (String(ctx.message || '').match(/path=([^\s]+)/) || [])[1] || '';
+        var endpoint = path ? (' (' + path + ')') : '';
         return {
           konu: 'Binance genel API isteği başarısız',
-          sebep: 'Fiyat, exchangeInfo veya sunucu saati gibi imzasız Binance isteği hata aldı; yeniden deneme yapılıyor olabilir.',
+          sebep: 'Fiyat, exchangeInfo veya sunucu saati gibi imzasız Binance isteği hata aldı'
+            + endpoint + '; yeniden deneme yapılıyor olabilir.',
           etki: 'Fiyat veya sembol filtresi güncellenemeyebilir; bot tick\'i gecikebilir.',
           oneri: 'Ağ ve SSL ayarlarını kontrol edin; sürekli tekrarlıyorsa Binance erişilebilirliğini doğrulayın.'
         };

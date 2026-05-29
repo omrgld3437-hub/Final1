@@ -80,14 +80,20 @@ def _minimal_wallet_from_breakdown(
             continue
         free = float(data.get("free") or 0)
         locked = float(data.get("locked") or 0)
+        bot_locked = float(data.get("bot_locked") or 0)
+        total = float(data.get("total") or 0)
+        if total <= 0:
+            total = free + locked + bot_locked
         usd_val = data.get("usdValue")
         usdt_value = float(usd_val) if usd_val is not None else None
-        if free <= 0 and locked <= 0:
+        if total <= 0 and free <= 0 and locked <= 0 and (usdt_value is None or usdt_value <= 0):
             continue
         assets.append({
             "asset": asset,
             "free": free,
             "locked": locked,
+            "total": total if total > 0 else None,
+            "bot_locked": bot_locked if bot_locked > 0 else None,
             "usdt_value": round(usdt_value, 2) if usdt_value is not None else None,
         })
     assets = _sort_and_cap_assets(assets, max_assets)
@@ -107,8 +113,43 @@ def _get_last_wallet_snapshot_with_new_session(account_id: int, max_assets: int)
         db.close()
 
 
+def _get_wallet_cached_enriched_sync(db: Session, account_id: int, max_assets: int) -> Tuple[Optional[Dict], Optional[str]]:
+    """Dashboard cüzdan cache: test hesapta build_test_account_wallet; diğerlerinde snapshot + bot_locked enrich."""
+    from app.services.test_account import is_test_account
+    from app.services.wallet_display import build_test_account_wallet
+
+    if is_test_account(account_id, db):
+        rebuilt = build_test_account_wallet(account_id, db)
+        if rebuilt:
+            return (rebuilt, rebuilt.get("ts"))
+        return (None, None)
+    wallet_cached, wallet_cached_at = _get_last_wallet_snapshot_sync(db, account_id, max_assets)
+    if wallet_cached:
+        _enrich_minimal_wallet_with_bot_locked(wallet_cached, account_id, db)
+    return (wallet_cached, wallet_cached_at)
+
+
+def _get_wallet_cached_enriched_with_new_session(account_id: int, max_assets: int) -> Tuple[Optional[Dict], Optional[str]]:
+    """Thread-safe enriched wallet for bootstrap/home (test paper satırları dahil)."""
+    from app.db.base import SessionLocal
+    db = SessionLocal()
+    try:
+        return _get_wallet_cached_enriched_sync(db, account_id, max_assets)
+    finally:
+        db.close()
+
+
 def _enrich_minimal_wallet_with_bot_locked(wallet: Dict[str, Any], account_id: int, db: Session) -> None:
     """Add locked_usd, bot_locked_usd, available_usd and per-asset bot_locked so strip/table show correctly."""
+    from app.services.test_account import is_test_account
+    from app.services.wallet_display import build_test_account_wallet
+
+    if is_test_account(account_id, db):
+        rebuilt = build_test_account_wallet(account_id, db)
+        if rebuilt and wallet is not None:
+            wallet.clear()
+            wallet.update(rebuilt)
+        return
     from app.botengine.virtual_wallet import get_bot_locked_balances_for_account
     if not wallet or not isinstance(wallet.get("assets"), list):
         return
@@ -311,10 +352,8 @@ async def home_fast(
 
     wallet_cached, wallet_cached_at = await asyncio.get_running_loop().run_in_executor(
         None,
-        lambda: _get_last_wallet_snapshot_with_new_session(account_id, max_assets),
+        lambda: _get_wallet_cached_enriched_with_new_session(account_id, max_assets),
     )
-    if wallet_cached:
-        _enrich_minimal_wallet_with_bot_locked(wallet_cached, account_id, db)
     kpis = await _get_kpis_minimal(account_id, db)
     inflight = _is_wallet_refresh_inflight(account_id)
 
@@ -516,13 +555,18 @@ async def _do_wallet_refresh(account_id: int, db: Session, request_id: str, forc
                 continue
             free = float(a.get("free") or 0)
             locked = float(a.get("locked") or 0)
+            bot_locked_qty = float(a.get("bot_locked") or 0)
+            total_qty = float(a.get("total") or 0)
+            if total_qty <= 0:
+                total_qty = free + locked + bot_locked_qty
             value_usd = a.get("total_usd") or a.get("value_usd")
             usd_val = float(value_usd) if value_usd is not None else None
             price_used = a.get("price_usd")
             breakdown[asset] = {
                 "free": free,
                 "locked": locked,
-                "total": free + locked,
+                "total": total_qty,
+                "bot_locked": bot_locked_qty,
                 "usdValue": usd_val,
                 "priceUsed": float(price_used) if price_used is not None else None,
             }

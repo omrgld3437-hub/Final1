@@ -70,6 +70,17 @@ def resolve_asset_price_usd(asset: str, qty: float, prices: Dict[str, float]) ->
     if raw_inv is not None and float(raw_inv) > 0:
         p = float(raw_inv)
         return (qty / p, p)
+    try:
+        from app.services.market_data import get_price
+
+        for quote in ("USDT", "BUSD", "FDUSD", "USDC"):
+            sym = f"{asset}{quote}"
+            px = get_price(sym)
+            if px is not None and float(px) > 0:
+                p = float(px)
+                return (qty * p, p)
+    except Exception:
+        pass
     return (None, None)
 
 
@@ -141,12 +152,44 @@ def _test_running_bots_usdt_budget(db: Any, account_id: int) -> float:
     return round(max(0.0, total), 2)
 
 
+def build_test_account_wallet(account_id: int, db: Any) -> Dict[str, Any]:
+    """Test paper cüzdanı — /api/binance/wallet ve dashboard snapshot ile aynı sözleşme."""
+    from datetime import datetime, timezone
+    import time
+
+    from app.services.test_account import is_test_account, TEST_PAPER_BALANCE_USDT
+    from app.botengine.virtual_wallet import get_bot_locked_balances_for_account
+
+    if not is_test_account(account_id, db):
+        return {}
+    prices = wallet_prices_map_from_datahub()
+    bot_locked = get_bot_locked_balances_for_account(db, account_id) or {}
+    from app.api.routes import _wallet_response
+
+    balances = [{"asset": "USDT", "free": str(TEST_PAPER_BALANCE_USDT), "locked": "0"}]
+    out = _wallet_response(account_id, balances, prices, bot_locked=bot_locked)
+    apply_test_wallet_equity_totals(out, db, account_id)
+    try:
+        from app.services.test_spot_paper import apply_paper_to_test_wallet
+
+        apply_paper_to_test_wallet(out, account_id)
+    except Exception:
+        pass
+    out["keys_configured"] = True
+    ts_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    out["ts"] = ts_iso
+    out["ts_ms"] = int(time.time() * 1000)
+    out["data_status"] = "fresh"
+    return out
+
+
 def apply_test_wallet_equity_totals(wallet: Dict[str, Any], db: Any, account_id: int) -> None:
     """
     Test paper: satır bazlı bot_locked / available / total_usd; strip = satır toplamları.
-    Çift sayım ve USDT satırında equity'nin tamamını bot_locked yapma hatası giderilir.
+    USDT (kullanılabilir + bot kilitli) + base (ör. ETH bot kilitli) satırları; toplam = 10k paper.
+    Strip ve USDT Toplam qty: çalışan botların config bütçesi (initial_capital_usdt); equity/mark-to-market kullanılmaz.
     """
-    from app.services.test_account import is_test_account
+    from app.services.test_account import is_test_account, TEST_PAPER_BALANCE_USDT
     from app.botengine.virtual_wallet import get_bot_locked_balances_for_account
 
     if not wallet or not is_test_account(account_id, db):
@@ -154,12 +197,17 @@ def apply_test_wallet_equity_totals(wallet: Dict[str, Any], db: Any, account_id:
 
     prices = wallet_prices_map_from_datahub()
     bot_locked = get_bot_locked_balances_for_account(db, account_id) or {}
-    equity = get_running_bots_equity_usd(db, account_id)
+    # Test paper: strip ve USDT satırı config bütçesi ile (mark-to-market equity değil — fiyat oynaklığı Toplam qty flicker yapar)
+    allocated = _test_running_bots_usdt_budget(db, account_id)
+    avail_pool = round(max(0.0, float(TEST_PAPER_BALANCE_USDT) - allocated), 2)
 
-    sum_available = 0.0
-    sum_bot_locked = 0.0
-    sum_total = 0.0
-    sum_free = 0.0
+    assets: List[Dict[str, Any]] = wallet.setdefault("assets", [])
+    processed: Set[str] = {
+        (a.get("asset") or "").strip()
+        for a in assets
+        if isinstance(a, dict) and (a.get("asset") or "").strip()
+    }
+    append_bot_only_wallet_asset_rows(assets, processed, bot_locked, prices)
 
     for a in wallet.get("assets") or []:
         if not isinstance(a, dict):
@@ -208,19 +256,6 @@ def apply_test_wallet_equity_totals(wallet: Dict[str, Any], db: Any, account_id:
             if price:
                 a["price_usd"] = round(price, 8)
 
-        sum_available += float(a.get("available_usd") or 0)
-        sum_bot_locked += float(a.get("bot_locked_usd") or 0)
-        sum_total += float(a.get("total_usd") or 0)
-        sum_free += float(a.get("free_usd") or 0)
-
-    from app.services.test_account import TEST_PAPER_BALANCE_USDT
-
-    avail_pool = round(max(0.0, float(TEST_PAPER_BALANCE_USDT) - equity), 2)
-    non_stable_rows = [
-        a
-        for a in wallet.get("assets") or []
-        if isinstance(a, dict) and (a.get("asset") or "").strip() not in STABLE_ASSETS
-    ]
     usdt_row = None
     for a in wallet.get("assets") or []:
         if not isinstance(a, dict):
@@ -232,11 +267,8 @@ def apply_test_wallet_equity_totals(wallet: Dict[str, Any], db: Any, account_id:
     if usdt_row is not None:
         usdt_locked = round(float(usdt_row.get("locked") or 0), 8)
         usdt_bl_qty = float(bot_locked.get("USDT", 0) or 0)
-        usdt_budget = _test_running_bots_usdt_budget(db, account_id)
-        if usdt_budget <= 0:
-            usdt_budget = round(max(usdt_bl_qty, float(TEST_PAPER_BALANCE_USDT) - equity), 2)
-        usdt_avail_qty = round(max(0.0, usdt_budget - usdt_bl_qty), 8)
-        usdt_total_qty = round(usdt_budget, 8)
+        usdt_avail_qty = round(avail_pool, 8)
+        usdt_total_qty = round(usdt_avail_qty + usdt_bl_qty + usdt_locked, 8)
         usdt_bl_usd = round(usdt_bl_qty, 2)
         usdt_avail_usd = round(usdt_avail_qty, 2)
         usdt_locked_usd = round(usdt_locked, 2)
@@ -273,29 +305,65 @@ def apply_test_wallet_equity_totals(wallet: Dict[str, Any], db: Any, account_id:
             },
         )
 
-    row_bl = round(
-        sum(float(a.get("bot_locked_usd") or 0) for a in wallet.get("assets") or [] if isinstance(a, dict)),
-        2,
-    )
-    row_av = round(
-        sum(float(a.get("available_usd") or 0) for a in wallet.get("assets") or [] if isinstance(a, dict)),
-        2,
-    )
+    usdt_bl_usd_val = float(bot_locked.get("USDT", 0) or 0)
+    non_stable_rows = [
+        a
+        for a in wallet.get("assets") or []
+        if isinstance(a, dict) and (a.get("asset") or "").strip() not in STABLE_ASSETS
+    ]
+    if non_stable_rows and allocated > usdt_bl_usd_val:
+        remaining_usd = round(max(0.0, allocated - usdt_bl_usd_val), 2)
+        priced: List[Tuple[Dict[str, Any], float]] = []
+        for base_row in non_stable_rows:
+            asset_sym = (base_row.get("asset") or "").strip()
+            bl_qty = float(base_row.get("bot_locked") or 0) or float(bot_locked.get(asset_sym, 0) or 0)
+            bl_usd, px = resolve_asset_price_usd(asset_sym, bl_qty, prices)
+            bl_usd = float(bl_usd or 0.0)
+            if bl_qty <= 0 and remaining_usd > 0:
+                _, px = resolve_asset_price_usd(asset_sym, 1.0, prices)
+                if px and px > 0:
+                    bl_qty = remaining_usd / len(non_stable_rows) / px
+                    bl_usd, _ = resolve_asset_price_usd(asset_sym, bl_qty, prices)
+                    bl_usd = float(bl_usd or 0.0)
+            priced.append((base_row, bl_usd))
+        total_non_stable_usd = sum(x[1] for x in priced)
+        for base_row, bl_usd in priced:
+            asset_sym = (base_row.get("asset") or "").strip()
+            if total_non_stable_usd > 0 and remaining_usd > 0:
+                share = bl_usd / total_non_stable_usd if bl_usd > 0 else 1.0 / len(priced)
+                base_bl_usd = round(remaining_usd * share, 2)
+            else:
+                base_bl_usd = round(bl_usd, 2)
+            base_bl_qty = float(base_row.get("bot_locked") or 0) or float(bot_locked.get(asset_sym, 0) or 0)
+            base_row["bot_locked"] = round(base_bl_qty, 8)
+            base_row["bot_locked_usd"] = base_bl_usd
+            base_row["total_usd"] = base_bl_usd
+            base_row["value_usd"] = base_bl_usd
+            base_row["available_usd"] = 0.0
+            base_row["available"] = 0.0
+            base_row["free_usd"] = 0.0
+            base_row["free"] = 0.0
+            base_row["locked_usd"] = 0.0
+            base_row["locked"] = 0.0
+            if base_bl_qty <= 0 and base_bl_usd > 0:
+                _, px = resolve_asset_price_usd(asset_sym, 1.0, prices)
+                if px and px > 0:
+                    base_bl_qty = base_bl_usd / px
+                    base_row["bot_locked"] = round(base_bl_qty, 8)
+            base_row["total"] = round(base_bl_qty, 8) if base_bl_qty > 0 else 0.0
+            if base_bl_qty > 0 and base_bl_usd > 0:
+                base_row["price_usd"] = round(base_bl_usd / base_bl_qty, 8)
+
     row_locked = round(
         sum(float(a.get("locked_usd") or 0) for a in wallet.get("assets") or [] if isinstance(a, dict)),
         2,
     )
-    wallet["bot_locked_usd"] = row_bl
-    wallet["available_usd"] = row_av
+    bot_equity = get_running_bots_equity_usd(db, account_id)
+    wallet["bot_locked_usd"] = bot_equity
+    wallet["available_usd"] = avail_pool
     wallet["locked_usd"] = row_locked
-    wallet["total_usd"] = round(row_av + row_bl + row_locked, 2)
-    if wallet["total_usd"] <= 0:
-        wallet["total_usd"] = round(float(TEST_PAPER_BALANCE_USDT), 2)
+    wallet["total_usd"] = round(float(TEST_PAPER_BALANCE_USDT), 2)
     wallet["free_usd"] = round(
         sum(float(a.get("free_usd") or 0) for a in wallet.get("assets") or [] if isinstance(a, dict)),
-        2,
-    )
-    wallet["locked_usd"] = round(
-        sum(float(a.get("locked_usd") or 0) for a in wallet.get("assets") or [] if isinstance(a, dict)),
         2,
     )

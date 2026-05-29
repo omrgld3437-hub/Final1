@@ -88,11 +88,11 @@ async def dashboard_bootstrap(
         except Exception:
             return {}
 
-    # Wallet: sync DB snapshot (thread-safe: new session in executor)
+    # Wallet: test paper veya snapshot+bot_locked enrich (bootstrap'ta ham snapshot ETH total=0 hatası önlenir)
     def _get_wallet():
         try:
-            from app.api.routes.home import _get_last_wallet_snapshot_with_new_session
-            return _get_last_wallet_snapshot_with_new_session(account_id, max_assets)
+            from app.api.routes.home import _get_wallet_cached_enriched_with_new_session
+            return _get_wallet_cached_enriched_with_new_session(account_id, max_assets)
         except Exception as e:
             logger.debug("[bootstrap] wallet snapshot error: %s", e)
             return (None, None)

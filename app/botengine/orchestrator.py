@@ -822,6 +822,12 @@ async def start_bot(bot_id: int, db: Session, *, connectivity_resume: bool = Fal
     db.commit()
     if not connectivity_resume:
         seed_perf_chart_state_on_bot_start(db, bot_id)
+        try:
+            from app.services.bot_performance_service import sync_bot_cycles_file_from_state
+
+            sync_bot_cycles_file_from_state(db, bot_id, account_id, state)
+        except Exception as e:
+            logger.debug("sync_bot_cycles_file_from_state bot_id=%s: %s", bot_id, e)
     logger.info("BOT_STATUS_CHANGED bot_id=%s account_id=%s status=running", bot_id, account_id)
     db.refresh(bot)
     if (bot.status or "").lower() != "running":
