@@ -9,7 +9,7 @@ Web panel — HTML + vanilla JS (FastAPI `/ui` mount).
 | Dosya | Kullanım |
 |-------|----------|
 | `dashboard.html` | Ana panel, bot listesi |
-| `bot.html` | Trailing DCA detay — grid warmup; tur raporu süre sayacı (`cycle_opened_at`, 1s poll, tur değişiminde sıfırlanır) |
+| `bot.html` | Trailing DCA detay — grid warmup; state hero (`/live` 2.5s + süre 1s tick, `syncStateHeroDurationPoll`; çalışan botta detail patch hero’yu ezmez); tur raporu süre sayacı (`cycle_opened_at`, 1s poll, tur değişiminde sıfırlanır) |
 | `bot_multi.html` | TRDCA / multi — aynı grid warmup + display fingerprint yenileme |
 | `admin.html` | Admin |
 | `login.html` | Giriş |

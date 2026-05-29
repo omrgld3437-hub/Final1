@@ -1281,6 +1281,25 @@
             var s = sec % 60;
             return h > 0 ? (h + 's ' + m + 'dk') : (m > 0 ? (m + 'dk ' + s + 'sn') : (s + 'sn'));
         }
+        /** stateHeroMeta «Süre» — canlı tick (applyLive shallowEqual erken çıkışında da çalışır). */
+        function tickStateHeroMetaDuration() {
+            if (!lastBotStartedAt) return;
+            var durEl = document.getElementById('stateHeroMetaDur');
+            if (!durEl) return;
+            var next = formatStartMetaDurationOnly(lastBotStartedAt);
+            if (next && durEl.textContent !== next) durEl.textContent = next;
+        }
+        function syncStateHeroDurationPoll(isRunning) {
+            if (!window.intervalRegistry) return;
+            if (!isRunning || !lastBotStartedAt) {
+                window.intervalRegistry.stop('bot-detail-duration');
+                return;
+            }
+            window.intervalRegistry.start('bot-detail-duration', function () {
+                tickStateHeroMetaDuration();
+                updateCycleReportDurationLive();
+            }, 1000, 'bot-detail');
+        }
         function getStateHeroDurationValue() {
             var heroEl = document.getElementById('stateHeroMetaDur');
             if (heroEl && heroEl.textContent) {
@@ -1504,6 +1523,12 @@
             if (stateDailyKzEl) {
                 var dailyUsdLive = heroKzLive.dailyUsd;
                 var dailyPctLive = heroKzLive.dailyPct;
+                if (newState.daily_pnl_usd != null && !isNaN(newState.daily_pnl_usd)) {
+                    dailyUsdLive = Number(newState.daily_pnl_usd);
+                    dailyPctLive = newState.daily_pnl_pct != null && !isNaN(newState.daily_pnl_pct)
+                        ? Number(newState.daily_pnl_pct)
+                        : dailyPctLive;
+                }
                 if (newState.first_buy_pending === true) {
                     dailyUsdLive = 0;
                     dailyPctLive = 0;
@@ -1812,8 +1837,6 @@
         window._lastHealthData = null;
         window._lastSeenHealthEventId = 0;
         window._lastConnLogReload = 0;
-        var _botDetailDurationActive = false;
-
         function isBotRunning() {
             var st = (lastBotDetail && (lastBotDetail.display_status || lastBotDetail.status)) ? String(lastBotDetail.display_status || lastBotDetail.status).toLowerCase() : '';
             return st === 'running' || st === 'starting';
@@ -2912,17 +2935,10 @@
             syncEngineAlertBlink(window._engineLogHasCritical && botStatus === 'running');
             lastBotStartedAt = pickEarlierStartedAt(lastBotStartedAt, data.started_at);
             if (stateHeroMetaInterval) { clearInterval(stateHeroMetaInterval); stateHeroMetaInterval = null; }
-            if (window.intervalRegistry) window.intervalRegistry.stop('bot-detail-duration');
             var stateHeroMetaEl = document.getElementById('stateHeroMeta');
             if (stateHeroMetaEl) {
-                setStateHeroMetaHtml(stateHeroMetaEl, data.started_at, botStatus);
-                if (botStatus === 'running' && data.started_at && window.intervalRegistry) {
-                    window.intervalRegistry.start('bot-detail-duration', function () {
-                        var durEl = document.getElementById('stateHeroMetaDur');
-                        if (durEl) durEl.textContent = formatStartMetaDurationOnly(lastBotStartedAt);
-                        updateCycleReportDurationLive();
-                    }, 1000, 'bot-detail');
-                }
+                setStateHeroMetaHtml(stateHeroMetaEl, lastBotStartedAt || data.started_at, botStatus);
+                syncStateHeroDurationPoll(botStatus === 'running' && !!(lastBotStartedAt || data.started_at));
             }
 
             var refPrice = data.reference_display != null && !isNaN(data.reference_display) ? Number(data.reference_display) : (data.state && data.state.reference_price != null ? Number(data.state.reference_price) : null);
@@ -3447,7 +3463,10 @@
                 _engineLogLiveOpts.cycleStartEquity = st.cycle_start_equity != null ? Number(st.cycle_start_equity) : _engineLogLiveOpts.cycleStartEquity;
                 _engineLogLiveOpts.cycleOpenTrades = st.cycle_open_trades || _engineLogLiveOpts.cycleOpenTrades || [];
             }
-            applyLive(liveStateFromDetail(data));
+            var detailStatus = (data.status || lastBotDetail.status || '').toLowerCase();
+            if (detailStatus !== 'running') {
+                applyLive(liveStateFromDetail(data));
+            }
             if (st.cycle_opened_at && st.cycle_id != null && Number(st.cycle_id) === Number(window._botDetailSelectedCycleId)) {
                 setCycleReportStartedAt(st.cycle_opened_at, st.cycle_id);
                 updateCycleReportDurationLive();
@@ -3864,7 +3883,12 @@
             if (newState && newState.cycle_id != null && !isNaN(newState.cycle_id)) {
                 onBotCycleChanged(Number(newState.cycle_id));
             }
-            if (shallowEqualLive(prevLiveState, newState)) return;
+            var pollStatusEarly = (newState && newState.status || lastBotDetail.status || 'stopped').toLowerCase();
+            syncStateHeroDurationPoll(pollStatusEarly === 'running' && !!lastBotStartedAt);
+            if (shallowEqualLive(prevLiveState, newState)) {
+                tickStateHeroMetaDuration();
+                return;
+            }
             var oldLive = prevLiveState;
             prevLiveState = newState;
             var price = newState.last_price;
@@ -3927,20 +3951,11 @@
                 if (typeof refreshAll === 'function') refreshAll();
             }
             if (stateHeroMetaInterval) { clearInterval(stateHeroMetaInterval); stateHeroMetaInterval = null; }
-            if (pollStatus === 'running' && lastBotStartedAt) {
-                var stateHeroMetaElPoll = document.getElementById('stateHeroMeta');
-                if (stateHeroMetaElPoll) setStateHeroMetaHtml(stateHeroMetaElPoll, lastBotStartedAt, pollStatus);
-                if (window.intervalRegistry && !_botDetailDurationActive) {
-                    _botDetailDurationActive = true;
-                    window.intervalRegistry.start('bot-detail-duration', function() {
-                        var durEl = document.getElementById('stateHeroMetaDur');
-                        if (durEl) durEl.textContent = formatStartMetaDurationOnly(lastBotStartedAt);
-                        updateCycleReportDurationLive();
-                    }, 1000, 'bot-detail');
-                }
-            } else if (_botDetailDurationActive && window.intervalRegistry) {
-                _botDetailDurationActive = false;
-                window.intervalRegistry.stop('bot-detail-duration');
+            syncStateHeroDurationPoll(pollStatus === 'running' && !!lastBotStartedAt);
+            var stateCycleEl = document.getElementById('stateCycleValue');
+            if (stateCycleEl && newState.cycle_id != null && !isNaN(newState.cycle_id)) {
+                var cidText = String(newState.cycle_id);
+                if (stateCycleEl.textContent !== cidText) stateCycleEl.textContent = cidText;
             }
             var stateBotBalanceEl = document.getElementById('stateBotBalanceValue');
             var eq = newState.equity;
@@ -4541,8 +4556,13 @@
                 if (document.body.classList.contains('modal-scroll-locked')) {
                     unlockBodyScroll();
                 }
+                if (window.intervalRegistry) {
+                    window.intervalRegistry.start('bot-detail-live', fetchLive, 2500, 'bot-detail');
+                    syncStateHeroDurationPoll((lastBotDetail.status || '').toLowerCase() === 'running' && !!lastBotStartedAt);
+                }
                 refreshAll();
                 fetchLive();
+                tickStateHeroMetaDuration();
                 if (botDetailGridTrailActive(lastBotDetail)) fetchGridPointsLive();
                 refreshTradesPanelPoll();
             }
