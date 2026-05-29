@@ -180,6 +180,14 @@
             oneri: 'İşlem bitene kadar bekleyin; üst bildirimde «Başka bir toplu işlem sürüyor» görünebilir.'
           };
         }
+        if (/\/api\/global\/(start|stop|restart)/.test(path) && status === '500') {
+          return {
+            konu: 'Toplu servis işlemi başarısız (500)',
+            sebep: 'Manager toplu start/stop/restart isteğini işlerken sunucu hatası oluştu (genelde kod hatası veya kilit durumu).',
+            etki: 'Web, engine ve HTML yeniden başlatılmadı veya yarım kaldı.',
+            oneri: 'Manager\'ı terminalden yeniden başlatın (.venv/bin/python -m manager_server); ardından tekrar deneyin. manager.log içinde UnboundLocalError veya traceback arayın.'
+          };
+        }
         if ((/\/api\/stack\/restart/.test(path) || /\/api\/server\/manager\/restart/.test(path)) && status === '404') {
           return {
             konu: 'Tam yeniden başlatma API\'si yok (404)',

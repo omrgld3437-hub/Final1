@@ -2096,6 +2096,7 @@ def global_action_busy() -> bool:
 
 def schedule_global_action(action: str) -> dict[str, Any]:
     """Toplu start/stop/restart — HTTP yanıtını bloklamadan arka planda çalıştır."""
+    global _global_action_running
     action = (action or "").strip().lower()
     if action not in ("start", "stop", "restart"):
         return {"ok": False, "error": "invalid_action"}
