@@ -17,10 +17,39 @@
     var _bootGuardTimer = null;
     var _bootDone = false;
 
+    function looksLikeNumericAccountCode(value) {
+        var s = String(value == null ? '' : value).trim();
+        return /^\d{5,7}$/.test(s);
+    }
+
     function getAccountId() {
         if (window.__ACTIVE_ACCOUNT_ID != null && window.__ACTIVE_ACCOUNT_ID !== '') {
             return Number(window.__ACTIVE_ACCOUNT_ID);
         }
+        try {
+            var qs = new URLSearchParams(location.search);
+            var idParam = qs.get('account_id');
+            if (idParam) {
+                var raw = String(idParam).trim();
+                if (!looksLikeNumericAccountCode(raw)) {
+                    var n = parseInt(raw, 10);
+                    if (Number.isFinite(n) && n > 0) return n;
+                }
+            }
+            var fromAdmin = qs.get('from_admin') === '1' || sessionStorage.getItem('dashboard_from_admin') === '1';
+            if (fromAdmin) {
+                var adminId = sessionStorage.getItem('dashboard_admin_account_id');
+                if (adminId) {
+                    var aid = parseInt(adminId, 10);
+                    if (Number.isFinite(aid) && aid > 0) return aid;
+                }
+            }
+            var storedId = localStorage.getItem('selectedAccountId');
+            if (storedId) {
+                var sid = parseInt(String(storedId).trim(), 10);
+                if (Number.isFinite(sid) && sid > 0) return sid;
+            }
+        } catch (e) {}
         try {
             var u = sessionStorage.getItem('user') || localStorage.getItem('user');
             if (!u) return null;

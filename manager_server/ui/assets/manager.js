@@ -52,13 +52,49 @@
     ids.forEach(function (id) {
       var b = qs("#" + id);
       if (!b) return;
-      b.disabled = loading;
-      b.style.pointerEvents = loading ? "none" : "";
-      b.style.opacity = loading ? "0.7" : "";
+      b.disabled = !!loading;
+      b.classList.toggle("is-loading", !!loading);
+      b.setAttribute("aria-busy", loading ? "true" : "false");
+      if (loading) {
+        b.style.pointerEvents = "none";
+        b.style.opacity = "0.7";
+      } else {
+        b.style.removeProperty("pointer-events");
+        b.style.removeProperty("opacity");
+      }
     });
+    var grp = qs(".manager-header-action-group");
+    if (grp) grp.classList.toggle("is-busy", !!loading);
   }
 
-  function showActionFeedback() {}
+  function showActionFeedback(msg, isError) {
+    if (msg) console.log(isError ? "[manager] " + msg : "[manager] " + msg);
+  }
+
+  var globalActionBusy = false;
+  var globalActionPollTimer = null;
+
+  function stopGlobalActionPoll() {
+    if (globalActionPollTimer) {
+      clearInterval(globalActionPollTimer);
+      globalActionPollTimer = null;
+    }
+  }
+
+  function pollAfterGlobalAction(seconds) {
+    stopGlobalActionPoll();
+    var left = Math.max(1, seconds || 45);
+    refreshStatus();
+    refreshMetrics();
+    refreshDiagnosis();
+    globalActionPollTimer = setInterval(function () {
+      left -= 1;
+      refreshStatus();
+      refreshMetrics();
+      refreshDiagnosis();
+      if (left <= 0) stopGlobalActionPoll();
+    }, 2000);
+  }
 
   function showApiConnectionError() {}
 
@@ -2183,20 +2219,33 @@
     setButtonsLoading(globalBtnIds, disabled);
   }
   function runGlobalAction(path, label) {
-    if (qs("#btnGlobalStart").disabled) return;
+    if (globalActionBusy) return;
+    if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+    globalActionBusy = true;
     disableGlobalBtns(true);
     showActionFeedback(label + " işleniyor…", false);
     api("POST", path)
       .then(function (r) {
+        if (r && r.busy) {
+          showActionFeedback("Başka bir toplu işlem sürüyor.", true);
+          return;
+        }
+        if (r && r.pending) {
+          showActionFeedback(label + " arka planda — durum güncelleniyor…", false);
+          pollAfterGlobalAction(60);
+          return;
+        }
         var applied = (r.applied || []).join(", ") || "—";
         var skipped = (r.skipped || []).join(", ") || "—";
         showActionFeedback("Uygulandı: " + applied + (skipped !== "—" ? " · Atlandı: " + skipped : ""), false);
+        pollAfterGlobalAction(30);
       })
       .catch(function (e) {
         showActionFeedback("Hata: " + (e.message || String(e)), true);
         alert(e.message || String(e));
       })
       .finally(function () {
+        globalActionBusy = false;
         disableGlobalBtns(false);
         refreshStatus();
         refreshMetrics();

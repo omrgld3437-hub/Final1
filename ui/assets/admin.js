@@ -561,7 +561,9 @@ function updateAccountTileStrips(accounts) {
             }
         }
         if (item1) {
+            const valEl = item1.querySelector(".bal-value");
             const pnlEl = item1.querySelector(".bal-pnl");
+            if (valEl) valEl.textContent = balDisplay(acc.bots_balance_usd);
             if (pnlEl) {
                 pnlEl.textContent = "Günlük PnL " + botPnl.html;
                 pnlEl.style.color = botPnl.color;
@@ -583,20 +585,29 @@ function handleAdminTileClick(event, accountIdOrCode, isIsolated) {
 }
 
 function navigateToAccount(accountIdOrCode) {
-    const code = typeof accountIdOrCode === "string" && /^\d{6}$/.test(accountIdOrCode.trim())
-        ? accountIdOrCode.trim()
-        : null;
+    const raw = String(accountIdOrCode == null ? "" : accountIdOrCode).trim();
     const fromAdmin = "from_admin=1";
-    if (code) {
-        localStorage.setItem("selectedAccountCode", code);
-        window.location.href = `/ui/dashboard.html?account_code=${encodeURIComponent(code)}&${fromAdmin}`;
-    } else {
-        const id = Number(accountIdOrCode) || 0;
-        if (id) {
+    if (!raw) return;
+    const id = Number(raw);
+    const isNumericId = /^\d+$/.test(raw) && Number.isFinite(id) && id > 0 && !/^\d{5,7}$/.test(raw);
+    try {
+        sessionStorage.setItem("dashboard_from_admin", "1");
+    } catch (e) {}
+    if (isNumericId) {
+        try {
             localStorage.setItem("selectedAccountId", String(id));
-            window.location.href = `/ui/dashboard.html?account_id=${id}&${fromAdmin}`;
-        }
+            sessionStorage.setItem("dashboard_admin_account_id", String(id));
+            sessionStorage.removeItem("dashboard_admin_account_code");
+        } catch (e) {}
+        window.location.href = `/ui/dashboard.html?account_id=${id}&${fromAdmin}`;
+        return;
     }
+    try {
+        localStorage.setItem("selectedAccountCode", raw);
+        sessionStorage.setItem("dashboard_admin_account_code", raw);
+        sessionStorage.removeItem("dashboard_admin_account_id");
+    } catch (e) {}
+    window.location.href = `/ui/dashboard.html?account_code=${encodeURIComponent(raw)}&${fromAdmin}`;
 }
 
 function openAccountSettingsModalFromTile(accountId) {

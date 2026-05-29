@@ -94,7 +94,7 @@ async def run_one_bot_tick(bot_id: int, tick_id: str) -> float:
         try:
             keys = await get_account_keys(account_id, db)
         except Exception as e:
-            logger.warning("bot_run get_account_keys bot_id=%s err=%s", bot_id, e)
+            logger.info("bot_run get_account_keys bot_id=%s err=%s (tick skipped, retry)", bot_id, e)
             keys = None
         has_keys = keys is not None
         # (A) Live bot + no keys => FAIL FAST: pause bot, do not run as paper
@@ -147,8 +147,15 @@ async def run_one_bot_tick(bot_id: int, tick_id: str) -> float:
                         if acquired and lease_still_valid(db, account_id, lock_symbol, bot_id):
                             await run_actions(bot_id, account_id, actions, state, cfg, adapter, db=db, loop_id=tick_id)
             save_state(db, bot_id, account_id, state)
+            if state.get("_pending_connectivity_stable"):
+                try:
+                    from app.services.binance_connectivity import flush_pending_connectivity_stable
+
+                    flush_pending_connectivity_stable(db, bot_id, after_loop_restart=True)
+                except Exception:
+                    pass
             return next_wake
-        price = adapter.get_price(symbol) if symbol and symbol != "MULTI" else None
+        price = adapter.get_price(symbol) if symbol != "MULTI" else None
         if symbol and symbol != "MULTI" and (not price or price <= 0):
             logger.debug("bot_run bot_id=%s tick_id=%s price=stale symbol=%s", bot_id, tick_id, symbol)
             return next_wake
@@ -177,6 +184,13 @@ async def run_one_bot_tick(bot_id: int, tick_id: str) -> float:
                 if acquired and lease_still_valid(db, account_id, lock_symbol, bot_id):
                     await run_actions(bot_id, account_id, actions, state, cfg, adapter, db=db, loop_id=tick_id)
         save_state(db, bot_id, account_id, state)
+        if state.get("_pending_connectivity_stable"):
+            try:
+                from app.services.binance_connectivity import flush_pending_connectivity_stable
+
+                flush_pending_connectivity_stable(db, bot_id, after_loop_restart=True)
+            except Exception:
+                pass
         return next_wake
     except Exception as e:
         logger.exception("bot_run bot_id=%s tick_id=%s: %s", bot_id, tick_id, e)

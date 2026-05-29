@@ -26,15 +26,31 @@
         });
     }
 
+    function eventMergeKey(e) {
+        if (!e) return '';
+        var id = e.id != null ? Number(e.id) : 0;
+        if (Number.isFinite(id) && id !== 0) return 'id:' + id;
+        var meta = e.meta || {};
+        if ((e.type || '') === 'CYCLE_START' && meta.cycle_id != null) {
+            return 'CYCLE_START:' + meta.cycle_id + ':' + (meta.synthetic ? 's' : 'd');
+        }
+        return 'anon:' + (e.type || '') + ':' + (e.ts || '') + ':' + (e.message || '').slice(0, 40);
+    }
+
     function mergeEvents(existing, incoming, limit) {
-        var byId = {};
+        var byKey = {};
         (existing || []).forEach(function (e) {
-            if (e && e.id != null) byId[String(e.id)] = e;
+            var k = eventMergeKey(e);
+            if (k) byKey[k] = e;
         });
         (incoming || []).forEach(function (e) {
-            if (e && e.id != null) byId[String(e.id)] = e;
+            var k = eventMergeKey(e);
+            if (k) byKey[k] = e;
         });
-        var merged = Object.keys(byId).map(function (k) { return byId[k]; });
+        var merged = Object.keys(byKey).map(function (k) { return byKey[k]; });
+        if (global.EngineLogFormat && global.EngineLogFormat.dedupeCycleStartForDisplay) {
+            merged = global.EngineLogFormat.dedupeCycleStartForDisplay(merged);
+        }
         merged = sortEventsForDisplay(merged);
         if (merged.length > limit) merged = merged.slice(0, limit);
         return merged;
@@ -42,7 +58,7 @@
 
     function wasScrolledToTop(el) {
         if (!el) return true;
-        return el.scrollTop < 48;
+        return el.scrollTop < 8;
     }
 
     function ensureLogScrollPin(container, opts) {
@@ -59,10 +75,31 @@
         container.scrollTop = 0;
     }
 
+    /** DOM yenilendikten sonra scrollTop=0 olur; yalnızca kullanıcı bayrağına güven. */
     function shouldStickLogTop(container, opts) {
         if (opts && opts._logForceTop) return true;
         if (opts && opts._logPinTop === false) return false;
+        if (opts && opts._logPinTop === true) return true;
         return wasScrolledToTop(container);
+    }
+
+    function restoreScrollAfterRender(container, stickTop, scrollTopBefore, scrollHeightBefore) {
+        if (!container) return;
+        if (stickTop) {
+            scrollLogToTop(container);
+            return;
+        }
+        if (scrollTopBefore <= 0) return;
+        var delta = container.scrollHeight - scrollHeightBefore;
+        container.scrollTop = Math.max(0, scrollTopBefore + delta);
+    }
+
+    function collapsedRenderSignature(collapsed) {
+        if (!collapsed || !collapsed.length) return '';
+        return collapsed.map(function (item) {
+            if (item.spacer) return '\x1fS\x1f';
+            return String(item.key || '') + '\x1f' + String(item.count || 1) + '\x1f' + String(item.message || '').slice(0, 120);
+        }).join('\n');
     }
 
     function trimEventsForDisplay(events, limit) {
@@ -92,7 +129,7 @@
         return true;
     }
 
-    function injectConnectivityFromHealth(events, healthData, fmtApi, botId, connectivityFailure) {
+    function injectConnectivityFromHealth(events, healthData, fmtApi, botId, connectivityFailure, opts) {
         var list = (events || []).filter(function (e) {
             return !(e && e.meta && e.meta.synthetic_live);
         });
@@ -121,20 +158,67 @@
         if (/^Binance bağlantı hatası/i.test(msg) === false && fail.error_code) {
             msg = 'Binance bağlantı hatası — ' + msg;
         }
-        var nextId = maxEventId(list) + 1;
+        var code = fail.error_code || 'BINANCE_UNREACHABLE';
+        var prev = opts && opts._connectivitySynthetic;
+        if (prev && prev.meta && prev.meta.error_code === code && prev.message === msg) {
+            return [prev].concat(list);
+        }
+        var anchorTs = (list[0] && list[0].ts) ? list[0].ts : null;
         var synthetic = {
-            id: nextId,
+            id: -990001,
             type: 'ERROR',
-            ts: new Date().toISOString(),
+            ts: anchorTs || (prev && prev.ts) || '',
             message: msg,
             meta: {
-                error_code: fail.error_code || 'BINANCE_UNREACHABLE',
+                error_code: code,
                 health_code: 'BINANCE_UNREACHABLE',
                 synthetic_live: true,
                 source: fail.source || 'connectivity'
             }
         };
+        if (opts) opts._connectivitySynthetic = synthetic;
         return [synthetic].concat(list);
+    }
+
+    function prepareLogDisplay(events, opts, fmtApi, botId) {
+        var healthData = typeof opts.getHealthData === 'function' ? opts.getHealthData() : opts.healthData;
+        var connFail = opts.connectivityFailure || null;
+        var displayEvents = injectConnectivityFromHealth(events, healthData, fmtApi, botId, connFail, opts);
+        displayEvents = mergeHealthForDisplay(botId, displayEvents, healthData, opts);
+        displayEvents = enrichStartEvents(displayEvents, opts);
+        var list = displayEvents || [];
+        if (fmtApi && fmtApi.dedupeCycleStartForDisplay) {
+            list = fmtApi.dedupeCycleStartForDisplay(list);
+        }
+        list = sortEventsForDisplay(list);
+        if (fmtApi && fmtApi.setLogContext) {
+            fmtApi.setLogContext({
+                botId: botId,
+                events: list,
+                healthData: healthData,
+                initialCapital: opts.initialCapital,
+                currentCycleId: opts.currentCycleId,
+                quoteBalance: opts.quoteBalance,
+                baseBalance: opts.baseBalance,
+                config: opts.config,
+                cycleStartEquity: opts.cycleStartEquity,
+                cycleOpenTrades: opts.cycleOpenTrades
+            });
+        }
+        var collapsed = [];
+        if (list.length && fmtApi && fmtApi.collapseEngineEvents) {
+            collapsed = fmtApi.collapseEngineEvents(list);
+        } else if (list.length) {
+            collapsed = list.map(function (ev) {
+                return { ts: ev.ts, typeLabel: ev.type || '—', message: ev.message || '—', severity: 'info', count: 1, key: 'raw\x1f' + (ev.id || '') };
+            });
+        }
+        return {
+            displayEvents: displayEvents,
+            list: list,
+            collapsed: collapsed,
+            signature: collapsedRenderSignature(collapsed) + '\x1e' + list.length + '\x1e' + maxEventId(list)
+        };
     }
 
     function enrichStartEvents(events, opts) {
@@ -190,12 +274,20 @@
         var healthData = typeof opts.getHealthData === 'function' ? opts.getHealthData() : opts.healthData;
         var connFail = opts.connectivityFailure || null;
         if (opts.botId && fmtApi && fmtApi.setLogContext) {
-            fmtApi.setLogContext({ botId: opts.botId, events: state.events, healthData: healthData });
+            fmtApi.setLogContext({
+                botId: opts.botId,
+                events: state.events,
+                healthData: healthData,
+                initialCapital: opts.initialCapital,
+                currentCycleId: opts.currentCycleId,
+                quoteBalance: opts.quoteBalance,
+                baseBalance: opts.baseBalance,
+                config: opts.config,
+                cycleStartEquity: opts.cycleStartEquity,
+                cycleOpenTrades: opts.cycleOpenTrades
+            });
         }
-        var displayEvents = injectConnectivityFromHealth(state.events, healthData, fmtApi, opts.botId, connFail);
-        displayEvents = mergeHealthForDisplay(opts.botId, displayEvents, healthData, opts);
-        archiveDisplayEvents(opts, displayEvents, state.events);
-        renderTable(opts.container, enrichStartEvents(displayEvents, opts), fmtApi, opts.botId, opts);
+        renderTable(opts.container, state.events, fmtApi, opts.botId, opts);
         if (typeof opts.onAfterRender === 'function') {
             opts.onAfterRender(state.events);
         }
@@ -206,34 +298,40 @@
         fmtApi = fmtApi || global.EngineLogFormat;
         opts = opts || {};
         ensureLogScrollPin(container, opts);
-        var list = sortEventsForDisplay(events || []);
-        if (fmtApi && fmtApi.setLogContext) {
-            fmtApi.setLogContext({ botId: botId, events: list });
-        }
+        var prep = prepareLogDisplay(events || [], opts, fmtApi, botId);
+        var list = prep.list;
+        var collapsed = prep.collapsed;
         if (!list.length) {
-            container.innerHTML = '<div class="muted" style="padding: 0.75rem;">Henüz event yok.</div>';
-            return { rendered: false, events: list };
-        }
-        var collapsed = fmtApi && fmtApi.collapseEngineEvents ? fmtApi.collapseEngineEvents(list) : [];
-        if (!collapsed.length && list.length && (!fmtApi || !fmtApi.collapseEngineEvents)) {
-            collapsed = list.map(function (ev) {
-                var msg = ev.message || '—';
-                return { ts: ev.ts, typeLabel: ev.type || '—', message: msg, severity: 'info', count: 1 };
-            });
+            if (opts._lastLogRenderSig !== 'empty') {
+                container.innerHTML = '<div class="muted" style="padding: 0.75rem;">Henüz event yok.</div>';
+                opts._lastLogRenderSig = 'empty';
+            }
+            return { rendered: false, events: list, skipped: true };
         }
         if (!collapsed.length) {
-            container.innerHTML = '<div class="muted" style="padding: 0.75rem;">Gösterilecek önemli kayıt yok (rutin uyarılar gizlendi).</div>';
-            return { rendered: false, events: list };
+            var emptySig = 'hidden\x1e' + prep.signature;
+            if (opts._lastLogRenderSig !== emptySig) {
+                container.innerHTML = '<div class="muted" style="padding: 0.75rem;">Gösterilecek önemli kayıt yok (rutin uyarılar gizlendi).</div>';
+                opts._lastLogRenderSig = emptySig;
+            }
+            return { rendered: false, events: list, skipped: true };
         }
+        if (opts._lastLogRenderSig === prep.signature && container.querySelector('table.engine-log-table')) {
+            return { rendered: false, events: list, collapsed: collapsed, skipped: true };
+        }
+        opts._lastLogRenderSig = prep.signature;
         var stickTop = shouldStickLogTop(container, opts);
+        var scrollTopBefore = container.scrollTop;
+        var scrollHeightBefore = container.scrollHeight;
         var html = '<table class="engine-log-table"><colgroup><col class="log-col-time"><col class="log-col-type"><col class="log-col-msg"></colgroup><thead><tr><th>Zaman</th><th>Tür</th><th>Mesaj</th></tr></thead><tbody>';
         collapsed.forEach(function (item) {
+            if (item.spacer) {
+                html += '<tr class="log-row-spacer" aria-hidden="true"><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td></tr>';
+                return;
+            }
             var ts = (fmtApi && fmtApi.formatEventTs)
                 ? fmtApi.formatEventTs(item.ts)
                 : (item.ts ? String(item.ts) : '—');
-            if (item.count > 1) {
-                ts += ' <span class="log-repeat-badge" title="Aynı kayıttan ' + item.count + ' adet">(' + item.count + '×)</span>';
-            }
             var ty = (item.typeLabel || '—').replace(/</g, '&lt;');
             var msg = (item.message || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
             var rowCl = fmtApi && fmtApi.rowClass ? fmtApi.rowClass(item.severity) : 'log-row-info';
@@ -244,8 +342,9 @@
         });
         html += '</tbody></table>';
         container.innerHTML = html;
-        if (stickTop) scrollLogToTop(container);
+        restoreScrollAfterRender(container, stickTop, scrollTopBefore, scrollHeightBefore);
         if (opts._logForceTop) opts._logForceTop = false;
+        archiveDisplayEvents(opts, prep.displayEvents, events);
         return { rendered: true, events: list, collapsed: collapsed };
     }
 
@@ -281,45 +380,57 @@
         return opts.apiClient.get(url).then(function (res) {
             opts._failCount = 0;
             opts.connectivityFailure = (res && res.connectivity_failure) ? res.connectivity_failure : null;
+            if (typeof global !== 'undefined') {
+                global._lastConnectivityProbeOk = !!(res && res.connectivity_ok !== false && !res.connectivity_failure);
+                global._lastConnectivityFailure = opts.connectivityFailure || null;
+            }
             var incoming = (res && res.events) ? res.events : [];
+            var didMerge = false;
             if (incremental && state.lastId > 0) {
                 if (incoming.length) {
                     state.events = mergeEvents(state.events, incoming, MAX_EVENTS);
                     state.lastId = maxEventId(state.events);
                     archiveIngest(opts, state.events, incoming);
+                    didMerge = true;
                 }
             } else {
                 state.events = trimEventsForDisplay(incoming, MAX_EVENTS);
                 state.lastId = maxEventId(state.events);
                 archiveIngest(opts, state.events, incoming);
+                didMerge = true;
             }
             if (typeof global !== 'undefined') {
                 global._lastEngineEvents = state.events;
             }
-            var fmtApi = global.EngineLogFormat;
-            var healthData = typeof opts.getHealthData === 'function' ? opts.getHealthData() : opts.healthData;
-            if (opts.botId && global.EngineLogFormat && global.EngineLogFormat.setLogContext) {
-                global.EngineLogFormat.setLogContext({
-                    botId: opts.botId,
-                    events: state.events,
-                    healthData: healthData
-                });
+            if (didMerge || !incremental || !(state.events && state.events.length)) {
+                renderTable(opts.container, state.events, global.EngineLogFormat, opts.botId, opts);
             }
-            var connFail = opts.connectivityFailure || null;
-            var displayEvents = injectConnectivityFromHealth(state.events, healthData, fmtApi, opts.botId, connFail);
-            displayEvents = mergeHealthForDisplay(opts.botId, displayEvents, healthData, opts);
-            archiveDisplayEvents(opts, displayEvents, state.events);
-            renderTable(opts.container, enrichStartEvents(displayEvents, opts), fmtApi, opts.botId, opts);
             if (typeof opts.onAfterRender === 'function') {
                 opts.onAfterRender(state.events);
             }
             return state.events;
-        }).catch(function () {
+        }).catch(function (err) {
             opts._failCount = (opts._failCount || 0) + 1;
             if (!incremental) {
-                opts.container.innerHTML = '<div class="muted" style="padding: 0.75rem;">Loglar yüklenemedi.</div>';
+                var retryBtn = opts._failCount < 3
+                    ? ' <button type="button" class="btn btn-sm" data-engine-log-retry style="margin-left:0.5rem;">Tekrar dene</button>'
+                    : '';
+                opts.container.innerHTML = '<div class="muted" style="padding: 0.75rem;">Loglar yüklenemedi.' + retryBtn + '</div>';
+                var retryEl = opts.container.querySelector('[data-engine-log-retry]');
+                if (retryEl) {
+                    retryEl.onclick = function () {
+                        opts._failCount = 0;
+                        fetchAndRender(opts, false);
+                    };
+                }
             } else if (opts._failCount >= 2 && typeof opts.onPollError === 'function') {
                 opts.onPollError(opts._failCount);
+            }
+            if (opts._failCount === 1 && !incremental) {
+                setTimeout(function () { fetchAndRender(opts, false); }, 2500);
+            }
+            if (typeof console !== 'undefined' && console.debug) {
+                console.debug('engineLog fetch failed', err);
             }
             return state.events;
         });
@@ -332,10 +443,12 @@
         opts._failCount = 0;
         opts._logPinTop = true;
         opts._logForceTop = true;
+        opts._lastLogRenderSig = null;
+        opts._connectivitySynthetic = null;
         opts._lastFullRefresh = Date.now();
         opts._pollTimer = setInterval(function () {
             if (document.hidden) return;
-            var forceFull = (opts._failCount || 0) >= 2
+            var forceFull = (opts._failCount || 0) >= 1
                 || (Date.now() - (opts._lastFullRefresh || 0) > FULL_REFRESH_MS);
             if (forceFull) opts._lastFullRefresh = Date.now();
             fetchAndRender(opts, !forceFull && opts.state.lastId > 0);

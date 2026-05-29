@@ -416,6 +416,12 @@ def emit_loop_auto_restart(
         state["_resilience_last_emit"] = emit_map
     now = time.time()
     if now - float(emit_map.get("BOT_LOOP_AUTO_RESTART") or 0) < 60.0:
+        try:
+            from app.services.binance_connectivity import flush_pending_connectivity_stable
+
+            flush_pending_connectivity_stable(db, bot_id, after_loop_restart=True)
+        except Exception:
+            pass
         return
     emit_map["BOT_LOOP_AUTO_RESTART"] = now
     meta = {
@@ -444,6 +450,12 @@ def emit_loop_auto_restart(
         save_state(db, bot_id, account_id, state)
     except Exception:
         pass
+    try:
+        from app.services.binance_connectivity import flush_pending_connectivity_stable
+
+        flush_pending_connectivity_stable(db, bot_id, after_loop_restart=True)
+    except Exception as flush_ex:
+        logger.debug("flush_pending_connectivity_stable bot_id=%s: %s", bot_id, flush_ex)
 
 
 def emit_price_stale(db: Session, bot_id: int, account_id: int, symbol: str) -> None:

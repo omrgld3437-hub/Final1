@@ -37,6 +37,16 @@ _AUTO_RESUME_ERROR_CODES = frozenset({
     "BINANCE_RATE_LIMIT",
 })
 
+_CONNECTIVITY_STABLE_MESSAGE = "Bağlantı kuruldu ve stabil · Bot sorunsuz çalışıyor"
+_CONNECTIVITY_OUTAGE_META_CODES = frozenset({
+    "API_UNAUTHORIZED",
+    "BINANCE_UNREACHABLE",
+    "BINANCE_RATE_LIMIT",
+    "CONNECTIVITY_LOST",
+    "CONNECTIVITY_PAUSED",
+    "ACCOUNT_KEYS_MISSING",
+})
+
 
 def _fail_path(account_id: int) -> Path:
     return _RUN_DIR / f"binance_fail_{int(account_id)}.json"
@@ -204,6 +214,53 @@ def _connectivity_resume_reason(state: Dict[str, Any], previous_error: str) -> T
     return " ".join(parts), ctx
 
 
+_CONNECTIVITY_STALE_ERROR_CODES = frozenset({
+    "API_UNAUTHORIZED",
+    "BINANCE_UNREACHABLE",
+    "BINANCE_RATE_LIMIT",
+    "ACCOUNT_KEYS_MISSING",
+})
+
+
+def clear_stale_connectivity_errors_for_account(db: "Session", account_id: int) -> int:
+    """
+    Binance probe başarılı — running/paused bot state'teki geçici bağlantı hata kodlarını temizle.
+    (paused_error ayrıca try_auto_resume_paused_bots ile START alır.)
+    """
+    from app.db.models import Bot
+    from app.botengine.state_store import load_state, save_state
+
+    if not account_id:
+        return 0
+    aid = int(account_id)
+    cleared = 0
+    bots = (
+        db.query(Bot)
+        .filter(
+            Bot.account_id == aid,
+            Bot.status.in_(("running", "paused_error", "paused_insufficient_balance")),
+        )
+        .all()
+    )
+    for bot in bots:
+        state = load_state(db, bot.id) or {}
+        err = (state.get("last_error_code") or "").strip()
+        if err not in _CONNECTIVITY_STALE_ERROR_CODES:
+            continue
+        state.pop("last_error_code", None)
+        state.pop("health_error_since", None)
+        state.pop("backoff_until", None)
+        save_state(db, bot.id, aid, state)
+        cleared += 1
+    if cleared:
+        logger.info(
+            "connectivity cleared stale last_error_code account_id=%s bots=%s",
+            aid,
+            cleared,
+        )
+    return cleared
+
+
 def try_auto_resume_paused_bots(db: "Session", account_id: int) -> int:
     """
     Binance erişimi düzeldiğinde API_UNAUTHORIZED vb. ile durmuş botları running + START komutu.
@@ -245,50 +302,293 @@ def try_auto_resume_paused_bots(db: "Session", account_id: int) -> int:
         if not getattr(bot, "started_at", None):
             bot.started_at = datetime.now(timezone.utc)
         db.commit()
-        conn_meta: Dict[str, Any] = {
-            "error_code": "CONNECTIVITY_RECOVERED",
-            "previous_error": err,
-            "connectivity_resume": True,
-            "resume_reason": resume_reason,
-            "cycle_id": grid_ctx.get("cycle_id"),
-            "active_buy_grids": grid_ctx.get("active_buy_grids"),
-            "active_sell_grids": grid_ctx.get("active_sell_grids"),
-            "symbol": state.get("symbol") or getattr(bot, "symbol", None),
-            "base_balance": round(float(state.get("base_balance") or 0), 10),
-            "quote_balance": round(float(state.get("quote_balance") or 0), 2),
-            "initial_allocation_done": bool(state.get("initial_allocation_done")),
-        }
-        cse = float(state.get("cycle_start_equity") or 0)
-        if cse > 0:
-            conn_meta["cycle_start_equity"] = round(cse, 2)
-        append_event(
-            db,
-            bot.id,
-            aid,
-            "INFO",
-            f"Tur {int(grid_ctx.get('cycle_id') or state.get('cycle_id') or 1)} tekrar aktif edildi — bot sorunsuz çalışmaya devam ediyor.",
-            conn_meta,
-        )
-        try:
-            from app.api.bots_engine import _insert_engine_command
-
-            start_payload = json.dumps(
-                {
-                    "connectivity_resume": True,
-                    "resume_reason": resume_reason,
-                    "cycle_id": grid_ctx.get("cycle_id"),
-                },
-                ensure_ascii=False,
-            )
-            _insert_engine_command(db, aid, bot.id, "START", payload_json=start_payload)
-        except Exception as cmd_ex:
-            logger.warning(
-                "connectivity auto-resume START cmd bot_id=%s: %s",
-                bot.id,
-                cmd_ex,
-            )
+        mark_pending_connectivity_stable(db, bot, state, previous_error=err)
+        _queue_connectivity_resume_start(db, bot, state, resume_reason=resume_reason)
         resumed += 1
     return resumed
+
+
+def _connectivity_stable_event_meta(
+    state: Dict[str, Any],
+    bot: Any,
+    *,
+    previous_error: Optional[str] = None,
+) -> Dict[str, Any]:
+    cycle_id = int(state.get("cycle_id") or 1)
+    meta: Dict[str, Any] = {
+        "error_code": "CONNECTIVITY_STABLE",
+        "health_code": "CONNECTIVITY_STABLE",
+        "connectivity_resume": True,
+        "connectivity_stable": True,
+        "severity": "ok",
+        "cycle_id": cycle_id,
+        "symbol": state.get("symbol") or getattr(bot, "symbol", None),
+        "initial_allocation_done": bool(state.get("initial_allocation_done")),
+    }
+    if previous_error:
+        meta["previous_error"] = previous_error
+    cse = float(state.get("cycle_start_equity") or 0)
+    if cse > 0:
+        meta["cycle_start_equity"] = round(cse, 2)
+    return meta
+
+
+def _append_connectivity_stable_event(
+    db: "Session",
+    bot: Any,
+    meta: Dict[str, Any],
+) -> None:
+    from app.botengine.state_store import append_event
+
+    append_event(
+        db,
+        int(bot.id),
+        int(bot.account_id),
+        "INFO",
+        _CONNECTIVITY_STABLE_MESSAGE,
+        meta,
+    )
+
+
+def _queue_connectivity_resume_start(
+    db: "Session",
+    bot: Any,
+    state: Dict[str, Any],
+    *,
+    resume_reason: str = "",
+) -> None:
+    try:
+        from app.api.bots_engine import _insert_engine_command
+
+        cycle_id = int(state.get("cycle_id") or 1)
+        start_payload = json.dumps(
+            {
+                "connectivity_resume": True,
+                "connectivity_stable": True,
+                "resume_reason": resume_reason or _CONNECTIVITY_STABLE_MESSAGE,
+                "cycle_id": cycle_id,
+            },
+            ensure_ascii=False,
+        )
+        _insert_engine_command(db, int(bot.account_id), int(bot.id), "START", payload_json=start_payload)
+    except Exception as cmd_ex:
+        logger.warning(
+            "connectivity auto-resume START cmd bot_id=%s: %s",
+            bot.id,
+            cmd_ex,
+        )
+
+
+def _bot_had_connectivity_outage(db: "Session", bot_id: int, within_sec: float = 21600.0) -> bool:
+    """Son kesinti kaydı (pause / connectivity ERROR·HEALTH)."""
+    if _recent_connectivity_pause_info(db, bot_id, within_sec=within_sec):
+        return True
+    try:
+        from app.botengine.state_store import list_events
+
+        cutoff = time.time() - within_sec
+        for ev in list_events(db, bot_id, limit=60):
+            ty = (ev.get("type") or "").upper()
+            if ty not in ("ERROR", "HEALTH_WARN", "HEALTH_CRITICAL", "INFO"):
+                continue
+            meta = ev.get("meta") or {}
+            code = (meta.get("error_code") or meta.get("health_code") or "").strip().upper()
+            if code not in _CONNECTIVITY_OUTAGE_META_CODES:
+                continue
+            if ty == "INFO" and code == "CONNECTIVITY_STABLE":
+                continue
+            ts = ev.get("ts")
+            if not ts:
+                return True
+            try:
+                from datetime import datetime, timezone
+
+                t = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+                if t.tzinfo is None:
+                    t = t.replace(tzinfo=timezone.utc)
+                if t.timestamp() >= cutoff:
+                    return True
+            except Exception:
+                return True
+        return False
+    except Exception:
+        return False
+
+
+def mark_pending_connectivity_stable(
+    db: "Session",
+    bot: Any,
+    state: Dict[str, Any],
+    *,
+    previous_error: Optional[str] = None,
+) -> None:
+    """Döngü kurtarma loglarından sonra yeşil stabil satır yazılacak (flush ile)."""
+    from app.botengine.state_store import save_state
+
+    state["_pending_connectivity_stable"] = True
+    state["_pending_connectivity_stable_at"] = time.time()
+    if previous_error:
+        state["_pending_connectivity_stable_prev_err"] = previous_error
+    save_state(db, int(bot.id), int(bot.account_id), state)
+
+
+def _connectivity_stable_flushed_for_pending(
+    db: "Session",
+    bot_id: int,
+    pending_at: float,
+) -> bool:
+    """Bu pending döngüsü için stabil satır zaten yazıldı mı (eski oturum stabilini sayma)."""
+    if pending_at <= 0:
+        return False
+    try:
+        from app.botengine.state_store import list_events
+
+        for ev in list_events(db, bot_id, limit=25):
+            if (ev.get("type") or "").upper() != "INFO":
+                continue
+            meta = ev.get("meta") or {}
+            code = (meta.get("error_code") or meta.get("health_code") or "").strip()
+            if code != "CONNECTIVITY_STABLE":
+                continue
+            ts = ev.get("ts")
+            if not ts:
+                continue
+            try:
+                from datetime import datetime, timezone
+
+                t = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+                if t.tzinfo is None:
+                    t = t.replace(tzinfo=timezone.utc)
+                if t.timestamp() >= pending_at - 2.0:
+                    return True
+            except Exception:
+                continue
+        return False
+    except Exception:
+        return False
+
+
+def _bot_loop_already_running(bot_id: int) -> bool:
+    """Legacy asyncio döngüsü zaten aktifse restart logu yok; stabil hemen yazılabilir."""
+    try:
+        import os
+
+        if os.getenv("BOT_ENGINE_V5_SCHEDULER", "").strip() == "1":
+            return False
+        from app.botengine.orchestrator import _tasks
+
+        t = _tasks.get(int(bot_id))
+        return t is not None and not t.done()
+    except Exception:
+        return False
+
+
+def flush_pending_connectivity_stable(
+    db: "Session",
+    bot_id: int,
+    *,
+    after_loop_restart: bool = False,
+) -> bool:
+    """
+    Bekleyen CONNECTIVITY_STABLE — döngü yeniden başlatma / kurtarma loglarından sonra yazılır.
+    """
+    from app.db.models import Bot
+    from app.botengine.state_store import load_state, save_state
+
+    bot = db.query(Bot).filter(Bot.id == int(bot_id)).first()
+    if not bot or (bot.status or "").lower() != "running":
+        return False
+    state = load_state(db, bot_id) or {}
+    if not state.get("_pending_connectivity_stable"):
+        return False
+    pending_at = float(state.get("_pending_connectivity_stable_at") or 0)
+    if _connectivity_stable_flushed_for_pending(db, bot_id, pending_at):
+        state.pop("_pending_connectivity_stable", None)
+        state.pop("_pending_connectivity_stable_at", None)
+        state.pop("_pending_connectivity_stable_prev_err", None)
+        save_state(db, bot_id, bot.account_id, state)
+        return False
+    prev_err = (state.pop("_pending_connectivity_stable_prev_err", None) or "").strip() or None
+    state.pop("_pending_connectivity_stable", None)
+    state.pop("_pending_connectivity_stable_at", None)
+    resume_reason, _ = _connectivity_resume_reason(state, prev_err or "")
+    meta = _connectivity_stable_event_meta(state, bot, previous_error=prev_err)
+    meta["resume_reason"] = resume_reason
+    meta["after_loop_restart"] = after_loop_restart
+    _append_connectivity_stable_event(db, bot, meta)
+    save_state(db, bot_id, bot.account_id, state)
+    logger.info("connectivity stable flushed bot_id=%s after_loop_restart=%s", bot_id, after_loop_restart)
+    return True
+
+
+def mark_pending_connectivity_stable_for_running_bots(
+    db: "Session",
+    account_id: int,
+    *,
+    account_had_failure: bool = False,
+) -> int:
+    """Bağlantı düzelince: state temizle, START kuyruğu; yeşil log döngü kurtarıldıktan sonra."""
+    from app.db.models import Bot
+    from app.botengine.state_store import load_state, save_state
+
+    if not account_id:
+        return 0
+    aid = int(account_id)
+    bots = (
+        db.query(Bot)
+        .filter(Bot.account_id == aid, Bot.status == "running")
+        .all()
+    )
+    marked = 0
+    for bot in bots:
+        had_outage = account_had_failure or _bot_had_connectivity_outage(db, bot.id)
+        if not had_outage:
+            if _recent_connectivity_recovered(db, bot.id, within_sec=300.0):
+                continue
+        state = load_state(db, bot.id) or {}
+        prev_err = (state.get("last_error_code") or "").strip() or None
+        state.pop("last_error_code", None)
+        state.pop("health_error_since", None)
+        state.pop("backoff_until", None)
+        state["_connectivity_auto_resume_at"] = time.time()
+        save_state(db, bot.id, aid, state)
+        resume_reason, _ = _connectivity_resume_reason(state, prev_err or "")
+        mark_pending_connectivity_stable(db, bot, state, previous_error=prev_err)
+        _queue_connectivity_resume_start(db, bot, state, resume_reason=resume_reason)
+        if _bot_loop_already_running(bot.id):
+            flush_pending_connectivity_stable(db, bot.id, after_loop_restart=False)
+        marked += 1
+    if marked:
+        logger.info(
+            "connectivity stable pending account_id=%s running_bots=%s",
+            aid,
+            marked,
+        )
+    return marked
+
+
+def on_connectivity_restored(db: "Session", account_id: int) -> int:
+    """Probe OK: state temizle, paused botları başlat, running botlara stabil log."""
+    aid = int(account_id)
+    had_failure = bool(_load_persisted_failure(aid))
+    with _lock:
+        had_failure = had_failure or bool(_by_account.get(aid))
+    try:
+        clear_stale_connectivity_errors_for_account(db, aid)
+    except Exception as clr_ex:
+        logger.debug("connectivity clear stale errors account_id=%s: %s", aid, clr_ex)
+    total = 0
+    try:
+        total += try_auto_resume_paused_bots(db, aid)
+    except Exception as ar_ex:
+        logger.debug("connectivity auto-resume paused account_id=%s: %s", aid, ar_ex)
+    try:
+        total += mark_pending_connectivity_stable_for_running_bots(
+            db, aid, account_had_failure=had_failure,
+        )
+    except Exception as st_ex:
+        logger.debug("connectivity stable pending account_id=%s: %s", aid, st_ex)
+    return total
 
 
 async def run_connectivity_auto_resume_pass(db: "Session") -> int:
@@ -308,7 +608,7 @@ async def run_connectivity_auto_resume_pass(db: "Session") -> int:
         ok, _, _ = await probe_account_binance(int(aid), db)
         if ok:
             note_binance_success(int(aid), schedule_resume=False)
-            total += try_auto_resume_paused_bots(db, int(aid))
+            total += on_connectivity_restored(db, int(aid))
     return total
 
 
@@ -370,7 +670,8 @@ def _recent_connectivity_recovered(db: "Session", bot_id: int, within_sec: float
             if (ev.get("type") or "") != "INFO":
                 continue
             meta = ev.get("meta") or {}
-            if (meta.get("error_code") or "").strip() != "CONNECTIVITY_RECOVERED":
+            code = (meta.get("error_code") or "").strip()
+            if code not in ("CONNECTIVITY_RECOVERED", "CONNECTIVITY_STABLE"):
                 continue
             ts = ev.get("ts")
             if not ts:
@@ -574,9 +875,9 @@ async def sync_bot_connectivity_on_view(
     if ok:
         note_binance_success(account_id, schedule_resume=False)
         try:
-            try_auto_resume_paused_bots(db, account_id)
+            on_connectivity_restored(db, account_id)
         except Exception as ar_ex:
-            logger.debug("connectivity auto-resume on_view account_id=%s: %s", account_id, ar_ex)
+            logger.debug("connectivity restored account_id=%s: %s", account_id, ar_ex)
         return None
 
     note_binance_failure(account_id, code, msg, source, emit_async=False)

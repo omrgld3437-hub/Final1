@@ -721,7 +721,39 @@
       }
     },
     {
-      test: function (msg) { return /BOT_TICK|bot_engine loop|BOT_START|BOT_ACCOUNT|BOT_EXECUTION|BOT_STRATEGY/i.test(msg) && /fail|err|error|invalid|skip/i.test(msg); },
+      test: function (msg) { return /BOT_START_SKIPPED_ALREADY_RUNNING/i.test(msg); },
+      apply: function () {
+        return {
+          konu: 'Bot zaten çalışıyor (yeni döngü açılmadı)',
+          sebep: 'START komutu geldi ancak asyncio döngüsü zaten aktifti; bağlantı devamı veya çift START sonrası normal.',
+          etki: 'Yok — mevcut bot çalışmaya devam eder.',
+          oneri: 'Manager uyarısı değil; gerekirse yok sayın.'
+        };
+      }
+    },
+    {
+      test: function (msg) {
+        return /BOT_LOOP_TRDCA_EXCEPTION|BOT_LOOP_TOPLEVEL_EXCEPTION|BOT_TICK_EXCEPTION|RUN_ACTION_EXCEPTION error_code=/i.test(msg);
+      },
+      apply: function (ctx) {
+        var msg = ctx.message || ctx.raw || '';
+        var m = msg.match(/error_id=([0-9a-f-]{36})/i);
+        return {
+          konu: 'Bot tick hatası emildi — bot çalışmaya devam ediyor',
+          sebep: 'Tick veya emir adımında istisna oluştu; worker döngüyü durdurmadı. Detay bot engine logunda (HEALTH_CRITICAL / BOT_RESILIENCE).',
+          etki: 'Tek tick atlanmış olabilir; bot durumu running kalır.',
+          oneri: (m ? 'error_id=' + m[1] + ' ile ' : '') + 'bot sayfası engine log ve aynı saniyedeki worker.log satırını karşılaştırın.'
+        };
+      }
+    },
+    {
+      test: function (msg) {
+        if (/BOT_START_SKIPPED|lease_not_valid.*skip submit|BOT_TICK_PRICE_MISSING.*skip_trade|WORKER_FIRST_TICK_FAILED|BOT_ACCOUNT_KEYS_FAIL|bot_engine release_symbol_lock|sync_virtual_wallet_from_state failed/i.test(msg)) {
+          return false;
+        }
+        if (/BOT_LOOP_|RUN_ACTION_EXCEPTION|BOT_TICK_EXCEPTION/i.test(msg)) return false;
+        return /BOT_TICK|bot_engine loop|BOT_START|BOT_ACCOUNT|BOT_EXECUTION|BOT_STRATEGY/i.test(msg) && /fail|err|error|invalid|skip/i.test(msg);
+      },
       apply: function () {
         return {
           konu: 'Bot engine tick / çalışma hatası',

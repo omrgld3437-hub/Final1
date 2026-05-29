@@ -17,6 +17,26 @@ from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
+
+def _bot_run_started_at_for_api(bot: Any, state: Optional[Dict[str, Any]], db: Session) -> Optional[str]:
+    """UI süre sayacı — oturum başlangıcı (connectivity/worker yeniden başlatmada sıfırlanmaz)."""
+    from app.botengine.bot_session import bot_run_started_at_iso
+
+    return bot_run_started_at_iso(bot, state, db)
+
+
+def _bot_run_started_at_dt(bot: Any, state: Optional[Dict[str, Any]], db: Session):
+    """datetime for daily PnL / perf chart session filter."""
+    iso = _bot_run_started_at_for_api(bot, state, db)
+    if not iso:
+        return getattr(bot, "started_at", None)
+    try:
+        s = iso.replace("Z", "+00:00")
+        return datetime.fromisoformat(s)
+    except Exception:
+        return getattr(bot, "started_at", None)
+
+
 # ---------------------------------------------------------------------------
 # Live snapshot cache: TTL 2s, key = bot_id. Thread-safe. No historical DB.
 # ---------------------------------------------------------------------------
@@ -294,66 +314,909 @@ def _sort_engine_events_desc(events: List[Dict[str, Any]]) -> List[Dict[str, Any
     )
 
 
-def _merge_synthetic_cycle_start_events(events: List[Dict[str, Any]], state: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Backfill CYCLE_START from state when DB has no row (legacy bots / pre-logging)."""
-    if not state:
-        return events
+def _synthetic_cycle_start_event_id(cycle_id: int) -> int:
+    """Stable negative id for UI merge (not persisted to bot_engine_events)."""
+    return -(int(cycle_id) * 100 + 1)
+
+
+def _synthetic_cycle_end_event_id(cycle_id: int) -> int:
+    """Stable negative id; distinct from CYCLE_START synthetic id."""
+    return -(int(cycle_id) * 100 + 2)
+
+
+def _logged_cycle_start_ids(events: List[Dict[str, Any]]) -> set:
     logged: set = set()
     for ev in events:
         if (ev.get("type") or "") != "CYCLE_START":
             continue
         meta = ev.get("meta") or {}
-        cid = meta.get("cycle_id")
-        if cid is not None:
-            try:
-                logged.add(int(cid))
-            except (TypeError, ValueError):
-                pass
-    synthetic: List[Dict[str, Any]] = []
-    symbol = state.get("symbol")
-    for row in state.get("cycle_open_trades") or []:
         try:
-            cid = int(row.get("cycle_id") or 0)
+            logged.add(int(meta.get("cycle_id") or 0))
+        except (TypeError, ValueError):
+            pass
+    return logged
+
+
+def _logged_cycle_end_ids(events: List[Dict[str, Any]]) -> set:
+    logged: set = set()
+    for ev in events:
+        if (ev.get("type") or "") != "CYCLE_END":
+            continue
+        meta = ev.get("meta") or {}
+        try:
+            logged.add(int(meta.get("cycle_id") or 0))
+        except (TypeError, ValueError):
+            pass
+    return logged
+
+
+def _ts_plus_ms(ts: Optional[str], ms: int) -> Optional[str]:
+    base = _parse_event_ts_ms(ts)
+    if base <= 0:
+        return normalize_event_ts_iso_z(ts) if ts else None
+    dt = datetime.fromtimestamp((base + ms) / 1000.0, tz=timezone.utc)
+    return normalize_event_ts_iso_z(dt.isoformat())
+
+
+def _infer_base_before_first_grid_fill_in_tur(
+    events: List[Dict[str, Any]],
+    cycle_id: int,
+    current_base: float,
+) -> Optional[float]:
+    """Aktif turda ilk grid satışından önceki base (mevcut base + satılan qty)."""
+    try:
+        cur_b = float(current_base or 0)
+    except (TypeError, ValueError):
+        return None
+    if cur_b <= 0:
+        return None
+    earliest_ms = 0
+    earliest_qty = 0.0
+    for ev in events or []:
+        if (ev.get("type") or "") != "ORDER_FILLED":
+            continue
+        meta = ev.get("meta") or {}
+        try:
+            if int(meta.get("cycle_id") or 0) != int(cycle_id):
+                continue
         except (TypeError, ValueError):
             continue
-        if cid < 2 or cid in logged:
+        if meta.get("grid_index") is None:
             continue
-        synthetic.append({
-            "id": None,
-            "ts": normalize_event_ts_iso_z(row.get("ts") or state.get("last_tick_at")),
-            "type": "CYCLE_START",
-            "message": "Tur başladı",
-            "meta": {
-                "cycle_id": cid,
-                "reference_price": row.get("reference_price") or row.get("price"),
-                "base_qty": row.get("qty"),
-                "equity_usdt": state.get("cycle_start_equity") if int(state.get("cycle_id") or 0) == cid else None,
-                "symbol": symbol,
-                "carry_over": True,
-                "synthetic": True,
-            },
-        })
-        logged.add(cid)
-    if not synthetic:
-        return events
-    merged = list(events) + synthetic
-    return _sort_engine_events_desc(merged)
+        if (meta.get("reason") or "").strip() != "trail_sell_grid":
+            continue
+        side = (meta.get("side") or "").upper()
+        if side and side != "SELL":
+            continue
+        try:
+            qty = float(meta.get("fill_qty") or 0)
+        except (TypeError, ValueError):
+            qty = 0.0
+        if qty <= 0:
+            continue
+        ms = _parse_event_ts_ms(ev.get("ts"))
+        if earliest_ms == 0 or (ms > 0 and ms < earliest_ms):
+            earliest_ms = ms
+            earliest_qty = qty
+    if earliest_qty <= 0:
+        return None
+    return round(cur_b + earliest_qty, 10)
 
 
-def _merge_synthetic_tur_after_initial_fill(
+def _find_cycle_close_fill(events: List[Dict[str, Any]], cycle_id: int) -> Optional[Dict[str, Any]]:
+    """Tur kapanış emri (kar satışı / re-entry) — sonraki tur açılış zamanı için."""
+    found: Optional[Dict[str, Any]] = None
+    for ev in events:
+        if (ev.get("type") or "") != "ORDER_FILLED":
+            continue
+        meta = ev.get("meta") or {}
+        if int(meta.get("cycle_id") or 0) != int(cycle_id):
+            continue
+        if (meta.get("reason") or "").strip() not in ("trail_profit_sell", "trail_reentry_buy"):
+            continue
+        eid = int(ev.get("id") or 0)
+        if found is None or eid > int(found.get("id") or 0):
+            found = ev
+    return found
+
+
+def _find_cycle_end_event(events: List[Dict[str, Any]], cycle_id: int) -> Optional[Dict[str, Any]]:
+    found: Optional[Dict[str, Any]] = None
+    for ev in events:
+        if (ev.get("type") or "") != "CYCLE_END":
+            continue
+        if int((ev.get("meta") or {}).get("cycle_id") or 0) != int(cycle_id):
+            continue
+        eid = int(ev.get("id") or 0)
+        if found is None or eid > int(found.get("id") or 0):
+            found = ev
+    return found
+
+
+def _cycle_open_trade_row(state: Dict[str, Any], cycle_id: int) -> Optional[Dict[str, Any]]:
+    for row in state.get("cycle_open_trades") or []:
+        if not isinstance(row, dict):
+            continue
+        if int(row.get("cycle_id") or 0) == int(cycle_id):
+            return row
+    return None
+
+
+def _initial_capital_usdt_from_state(
+    state: Dict[str, Any],
+    events: Optional[List[Dict[str, Any]]] = None,
+) -> float:
+    try:
+        cfg = state.get("config") if isinstance(state.get("config"), dict) else {}
+        c = float(
+            cfg.get("initial_capital_usdt")
+            or cfg.get("budget_usd")
+            or cfg.get("bot_budget_usdt")
+            or state.get("initial_capital_usdt")
+            or 0
+        )
+        if c > 0:
+            return c
+    except (TypeError, ValueError):
+        pass
+    for ev in events or []:
+        if (ev.get("type") or "") != "INFO":
+            continue
+        msg = ev.get("message") or ""
+        if "COMMAND_EXECUTED" not in msg or "START" not in msg:
+            continue
+        try:
+            ic = float((ev.get("meta") or {}).get("initial_capital_usdt") or 0)
+        except (TypeError, ValueError):
+            ic = 0.0
+        if ic > 0:
+            return ic
+    return 0.0
+
+
+def _tur1_wallet_snapshot(
+    state: Dict[str, Any],
     events: List[Dict[str, Any]],
-    state: Optional[Dict[str, Any]],
-) -> List[Dict[str, Any]]:
-    """İlk base alımından sonra Tur açıldı satırı yoksa (eski botlar) UI için sentetik CYCLE_START."""
-    if not state or not state.get("initial_allocation_done"):
-        return events
+) -> Optional[Dict[str, Any]]:
+    """Tur 1 açılış: initial_allocation fill + başlangıç sermayesi (güncel state değil)."""
+    fill_ev = _find_initial_allocation_fill(events)
+    if not fill_ev:
+        return None
+    fm = fill_ev.get("meta") or {}
+    try:
+        fill_qty = float(fm.get("fill_qty") or state.get("initial_alloc_base_qty") or 0)
+        fill_price = float(fm.get("fill_price") or state.get("initial_alloc_price") or 0)
+        fee = float(fm.get("fee") or 0)
+        cum_quote = float(fm.get("cum_quote") or 0)
+    except (TypeError, ValueError):
+        return None
+    if fill_qty <= 0 or fill_price <= 0:
+        return None
+    if cum_quote <= 0:
+        cum_quote = fill_qty * fill_price
+    capital = _initial_capital_usdt_from_state(state, events)
+    if capital <= 0:
+        try:
+            capital = float(state.get("cycle_start_equity") or 0)
+        except (TypeError, ValueError):
+            capital = 0.0
+    if capital <= 0:
+        capital = round(cum_quote + fee + fill_qty * fill_price, 2)
+    quote_bal = round(max(0.0, capital - cum_quote - fee), 2)
+    base_bal = round(fill_qty, 10)
+    equity = round(quote_bal + base_bal * fill_price, 2)
+    return {
+        "base_balance": base_bal,
+        "base_qty": base_bal,
+        "quote_balance": quote_bal,
+        "equity_usdt": equity,
+        "reference_price": round(fill_price, 10),
+        "symbol": fm.get("symbol") or state.get("symbol"),
+    }
+
+
+def _cycle_start_meta_stale_for_past_tur(
+    state: Dict[str, Any],
+    cycle_id: int,
+    meta: Dict[str, Any],
+) -> bool:
+    """Meta güncel cüzdanla aynıysa (tur içi işlem sonrası) tur açılış snapshot değildir."""
+    try:
+        cur_q = round(float(state.get("quote_balance") or 0), 2)
+        cur_b = round(float(state.get("base_balance") or 0), 10)
+        meta_q = meta.get("quote_balance")
+        meta_b = meta.get("base_balance") or meta.get("base_qty")
+        if meta_q is None or meta_b is None:
+            return False
+        if round(float(meta_q), 2) == cur_q and round(float(meta_b), 10) == cur_b:
+            return True
+    except (TypeError, ValueError):
+        pass
+    row = _cycle_open_trade_row(state, int(cycle_id))
+    if not row:
+        return False
+    try:
+        rq = row.get("quote_balance")
+        rb = row.get("qty")
+        if rq is None or rb is None:
+            return False
+        meta_q = meta.get("quote_balance")
+        meta_b = meta.get("base_balance") or meta.get("base_qty")
+        if meta_q is None or meta_b is None:
+            return False
+        return round(float(meta_q), 2) != round(float(rq), 2) or round(float(meta_b), 10) != round(float(rb), 10)
+    except (TypeError, ValueError):
+        return False
+
+
+def _snapshot_from_cycle_open_row(state: Dict[str, Any], cycle_id: int) -> Dict[str, Any]:
+    """Tur açılış anı — cycle_open_trades (tur içi fill ile değişmez)."""
+    row = _cycle_open_trade_row(state, int(cycle_id))
+    if not row:
+        return {}
+    out: Dict[str, Any] = {"symbol": row.get("symbol") or state.get("symbol")}
+    try:
+        base_f = float(row.get("qty") or 0)
+    except (TypeError, ValueError):
+        base_f = 0.0
+    try:
+        ref_f = float(row.get("reference_price") or row.get("price") or 0)
+    except (TypeError, ValueError):
+        ref_f = 0.0
+    if base_f > 0:
+        out["base_balance"] = round(base_f, 10)
+        out["base_qty"] = out["base_balance"]
+    if ref_f > 0:
+        out["reference_price"] = round(ref_f, 10)
+    for key in ("quote_balance", "equity_usdt", "target_quote_usdt", "target_base_usdt"):
+        if row.get(key) is not None:
+            try:
+                out[key] = round(float(row[key]), 2)
+            except (TypeError, ValueError):
+                pass
+    if out.get("equity_usdt") is None and out.get("quote_balance") is not None and base_f > 0 and ref_f > 0:
+        out["equity_usdt"] = round(float(out["quote_balance"]) + base_f * ref_f, 2)
+    elif out.get("quote_balance") is None and out.get("equity_usdt") is not None and base_f > 0 and ref_f > 0:
+        out["quote_balance"] = round(float(out["equity_usdt"]) - base_f * ref_f, 2)
+    return out
+
+
+def _snapshot_from_frozen_cycle_start_equity(
+    state: Dict[str, Any],
+    cycle_id: int,
+    events: List[Dict[str, Any]],
+    open_row_snap: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Aktif tur: cycle_start_equity + açılış base/ref (canlı quote/base kullanılmaz)."""
+    try:
+        cur_cid = int(state.get("cycle_id") or 0)
+        cid = int(cycle_id)
+    except (TypeError, ValueError):
+        return {}
+    if cur_cid != cid:
+        return {}
+    try:
+        cse = float(state.get("cycle_start_equity") or 0)
+    except (TypeError, ValueError):
+        cse = 0.0
+    if cse <= 0:
+        return {}
+    db_ev = _find_cycle_start_event(events, cid)
+    dm = (db_ev.get("meta") or {}) if db_ev else {}
+    try:
+        ref_f = float(
+            open_row_snap.get("reference_price")
+            or dm.get("reference_price")
+            or state.get("reference_price")
+            or 0
+        )
+    except (TypeError, ValueError):
+        ref_f = 0.0
+    try:
+        live_base = float(state.get("base_balance") or 0)
+    except (TypeError, ValueError):
+        live_base = 0.0
+    inferred_base = _infer_base_before_first_grid_fill_in_tur(events, cid, live_base)
+    try:
+        base_f = float(
+            open_row_snap.get("base_balance")
+            or open_row_snap.get("base_qty")
+            or inferred_base
+            or dm.get("base_qty")
+            or dm.get("base_balance")
+            or 0
+        )
+    except (TypeError, ValueError):
+        base_f = 0.0
+    if ref_f <= 0 or base_f <= 0:
+        return {}
+    quote_bal = round(cse - base_f * ref_f, 2)
+    return {
+        "base_balance": round(base_f, 10),
+        "base_qty": round(base_f, 10),
+        "quote_balance": max(0.0, quote_bal),
+        "equity_usdt": round(cse, 2),
+        "reference_price": round(ref_f, 10),
+        "symbol": dm.get("symbol") or state.get("symbol"),
+    }
+
+
+def _cycle_start_wallet_snapshot(
+    state: Dict[str, Any],
+    cycle_id: int,
+    events: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Tur açılış cüzdanı — cycle_open_trades / frozen equity / DB; asla canlı quote/base."""
+    cid = int(cycle_id)
+    open_row_snap = _snapshot_from_cycle_open_row(state, cid)
+    if open_row_snap.get("quote_balance") is not None and open_row_snap.get("base_balance") is not None:
+        return dict(open_row_snap)
+
+    if cid == 1:
+        snap = _tur1_wallet_snapshot(state, events)
+        if snap:
+            return dict(snap)
+
+    frozen = _snapshot_from_frozen_cycle_start_equity(state, cid, events, open_row_snap)
+    if frozen.get("quote_balance") is not None:
+        return frozen
+
+    out: Dict[str, Any] = dict(open_row_snap)
+    db_ev = _find_cycle_start_event(events, cid)
+    if db_ev and int(db_ev.get("id") or 0) > 0:
+        dm = db_ev.get("meta") or {}
+        for key in (
+            "base_balance", "base_qty", "quote_balance", "equity_usdt",
+            "reference_price", "symbol", "target_quote_usdt", "target_base_usdt",
+        ):
+            if out.get(key) is None and dm.get(key) is not None:
+                out[key] = dm[key]
+        if out.get("equity_usdt") is None and out.get("equity_usd") is not None:
+            out["equity_usdt"] = out.get("equity_usd")
+
+    if (
+        out.get("quote_balance") is not None
+        and (out.get("base_balance") is not None or out.get("base_qty") is not None)
+        and out.get("equity_usdt") is not None
+    ):
+        return out
+
+    if cid == 1:
+        snap = _tur1_wallet_snapshot(state, events)
+        if snap:
+            out.update({k: v for k, v in snap.items() if v is not None})
+    return out
+
+
+def _apply_cycle_start_wallet_snapshot(
+    meta: Dict[str, Any],
+    snap: Dict[str, Any],
+    *,
+    overwrite: bool = False,
+) -> None:
+    if not snap:
+        return
+    for key in (
+        "base_balance", "base_qty", "quote_balance", "equity_usdt",
+        "reference_price", "symbol", "target_quote_usdt", "target_base_usdt",
+    ):
+        val = snap.get(key)
+        if val is None:
+            continue
+        if overwrite or meta.get(key) is None:
+            meta[key] = val
+
+
+def _build_synthetic_cycle_start(
+    cycle_id: int,
+    ts: str,
+    state: Dict[str, Any],
+    *,
+    symbol: Optional[str],
+    events: Optional[List[Dict[str, Any]]] = None,
+    prev_close_reason: Optional[str] = None,
+    reference_price: Optional[float] = None,
+    base_qty: Optional[float] = None,
+) -> Dict[str, Any]:
+    cur_cid = int(state.get("cycle_id") or 0)
+    row = _cycle_open_trade_row(state, cycle_id)
+    if row:
+        reference_price = reference_price or row.get("reference_price") or row.get("price")
+        base_qty = base_qty or row.get("qty")
+        if not ts:
+            ts = normalize_event_ts_iso_z(row.get("ts") or state.get("cycle_opened_at"))
+    if cur_cid == cycle_id:
+        reference_price = reference_price or state.get("reference_price")
+        if base_qty is None:
+            base_qty = state.get("grid_reference_base")
+    try:
+        ref_f = float(reference_price) if reference_price is not None else 0.0
+    except (TypeError, ValueError):
+        ref_f = 0.0
+    try:
+        base_f = float(base_qty) if base_qty is not None else 0.0
+    except (TypeError, ValueError):
+        base_f = 0.0
+    meta: Dict[str, Any] = {
+        "cycle_id": cycle_id,
+        "reference_price": round(ref_f, 10) if ref_f > 0 else None,
+        "base_qty": round(base_f, 10) if base_f > 0 else None,
+        "symbol": symbol,
+        "carry_over": True,
+        "synthetic": True,
+    }
+    if prev_close_reason:
+        meta["prev_close_reason"] = prev_close_reason
+    snap = _cycle_start_wallet_snapshot(state, int(cycle_id), events or [])
+    _apply_cycle_start_wallet_snapshot(meta, snap, overwrite=True)
+    return {
+        "id": _synthetic_cycle_start_event_id(cycle_id),
+        "ts": normalize_event_ts_iso_z(ts),
+        "type": "CYCLE_START",
+        "message": "Tur başladı",
+        "meta": meta,
+    }
+
+
+def _completed_dual_pnl_entry(state: Dict[str, Any], cycle_id: int) -> Optional[Dict[str, Any]]:
+    for row in state.get("completed_cycle_dual_pnls") or []:
+        if not isinstance(row, dict):
+            continue
+        if int(row.get("cycle_id") or 0) == int(cycle_id):
+            return row
+    return None
+
+
+def _find_cycle_start_event(events: List[Dict[str, Any]], cycle_id: int) -> Optional[Dict[str, Any]]:
+    found: Optional[Dict[str, Any]] = None
     for ev in events:
         if (ev.get("type") or "") != "CYCLE_START":
             continue
+        if int((ev.get("meta") or {}).get("cycle_id") or 0) != int(cycle_id):
+            continue
+        eid = int(ev.get("id") or 0)
+        if found is None or eid > int(found.get("id") or 0):
+            found = ev
+    return found
+
+
+def _meta_from_cycle_pnl_entry(entry: Dict[str, Any], symbol: Optional[str]) -> Dict[str, Any]:
+    meta: Dict[str, Any] = {
+        "cycle_id": int(entry.get("cycle_id") or 0),
+        "symbol": symbol,
+        "synthetic": True,
+        "pnl_usdt_net": entry.get("pnl_usdt_net", entry.get("pnl_usdt")),
+        "realized_pnl_cycle_net": entry.get("pnl_usdt_net", entry.get("pnl_usdt")),
+        "fees_usdt": entry.get("fees_usdt"),
+        "pnl_mode": entry.get("pnl_mode"),
+        "pnl_primary_mode": entry.get("pnl_primary_mode"),
+        "cycle_type": entry.get("cycle_type"),
+        "close_reason": entry.get("close_reason"),
+        "close_side": entry.get("close_side"),
+        "matched_qty": entry.get("matched_qty"),
+        "base_delta": entry.get("base_delta"),
+        "inventory_coin_adv_qty": entry.get("inventory_coin_adv_qty"),
+        "inventory_fees_usdt": entry.get("inventory_fees_usdt"),
+        "cash_pnl_usdt": entry.get("cash_pnl_usdt"),
+        "cash_fees_usdt": entry.get("cash_fees_usdt"),
+    }
+    if entry.get("cash_pnl_usdt") is not None:
+        try:
+            meta["profit_usdt"] = round(float(entry["cash_pnl_usdt"]), 2)
+        except (TypeError, ValueError):
+            pass
+    return meta
+
+
+def _meta_from_dual_pnl_entry(dual: Dict[str, Any], symbol: Optional[str]) -> Dict[str, Any]:
+    cycle_type = (dual.get("cycle_type") or "CASH").strip().upper()
+    completed_reason = (dual.get("completed_reason") or "").strip()
+    if not completed_reason:
+        completed_reason = "trail_profit_sell" if cycle_type == "CASH" else "trail_reentry_buy"
+    pnl_primary_mode = "INVENTORY" if cycle_type == "INVENTORY" else "CASH"
+    meta: Dict[str, Any] = {
+        "cycle_id": int(dual.get("cycle_id") or 0),
+        "symbol": dual.get("symbol") or symbol,
+        "synthetic": True,
+        "cycle_type": cycle_type,
+        "pnl_primary_mode": pnl_primary_mode,
+        "close_reason": completed_reason,
+        "close_side": "SELL" if completed_reason == "trail_profit_sell" else "BUY",
+        "inventory_coin_adv_qty": dual.get("inventory_coin_adv_qty"),
+        "inventory_fees_usdt": dual.get("inventory_fees_usdt"),
+        "cash_pnl_usdt": dual.get("cash_pnl_usdt"),
+        "cash_fees_usdt": dual.get("cash_fees_usdt"),
+        "fees_usdt": dual.get("cash_fees_usdt"),
+    }
+    if dual.get("cash_pnl_usdt") is not None:
+        try:
+            gross = float(dual["cash_pnl_usdt"])
+            meta["profit_usdt"] = round(gross, 2)
+            fees = float(dual.get("cash_fees_usdt") or 0)
+            meta["pnl_usdt_net"] = round(gross - fees, 4)
+            meta["realized_pnl_cycle_net"] = meta["pnl_usdt_net"]
+        except (TypeError, ValueError):
+            pass
+    return meta
+
+
+def _cycle_has_closure_evidence(
+    events: List[Dict[str, Any]],
+    state: Dict[str, Any],
+    cycle_id: int,
+) -> bool:
+    if _cycle_pnl_entry(state, cycle_id):
+        return True
+    if _completed_dual_pnl_entry(state, cycle_id):
+        return True
+    if _find_cycle_close_fill(events, cycle_id):
+        return True
+    if _find_cycle_start_event(events, cycle_id + 1):
+        return True
+    try:
+        cur = int(state.get("cycle_id") or 0)
+    except (TypeError, ValueError):
+        cur = 0
+    return cur > int(cycle_id)
+
+
+def _build_synthetic_cycle_end(
+    cycle_id: int,
+    ts: str,
+    state: Dict[str, Any],
+    events: List[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    symbol = state.get("symbol")
+    entry = _cycle_pnl_entry(state, cycle_id)
+    dual = _completed_dual_pnl_entry(state, cycle_id)
+    if entry:
+        meta = _meta_from_cycle_pnl_entry(entry, symbol)
+    elif dual:
+        meta = _meta_from_dual_pnl_entry(dual, symbol)
+    else:
+        close_fill = _find_cycle_close_fill(events, cycle_id)
+        if not close_fill:
+            return None
+        fm = close_fill.get("meta") or {}
+        meta = {
+            "cycle_id": cycle_id,
+            "symbol": symbol or fm.get("symbol"),
+            "close_reason": (fm.get("reason") or "").strip(),
+            "synthetic": True,
+        }
+    return {
+        "id": _synthetic_cycle_end_event_id(cycle_id),
+        "ts": normalize_event_ts_iso_z(ts),
+        "type": "CYCLE_END",
+        "message": "Tur bitti",
+        "meta": meta,
+    }
+
+
+def _merge_synthetic_cycle_end_events(
+    events: List[Dict[str, Any]],
+    state: Optional[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Backfill CYCLE_END when DB row missing (exception after fill, legacy bots)."""
+    if not state:
+        return events
+    logged = _logged_cycle_end_ids(events)
+    needed: set = set()
+
+    for entry in state.get("cycle_pnls") or []:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            c = int(entry.get("cycle_id") or 0)
+        except (TypeError, ValueError):
+            continue
+        if c >= 1:
+            needed.add(c)
+
+    for dual in state.get("completed_cycle_dual_pnls") or []:
+        if not isinstance(dual, dict):
+            continue
+        try:
+            c = int(dual.get("cycle_id") or 0)
+        except (TypeError, ValueError):
+            continue
+        if c >= 1:
+            needed.add(c)
+
+    for ev in events:
+        ty = ev.get("type") or ""
         meta = ev.get("meta") or {}
-        if meta.get("reason") == "initial_allocation" or meta.get("first_tur"):
-            return events
-    fill_ev: Optional[Dict[str, Any]] = None
+        if ty == "ORDER_FILLED":
+            reason = (meta.get("reason") or "").strip()
+            if reason not in ("trail_profit_sell", "trail_reentry_buy"):
+                continue
+            try:
+                c = int(meta.get("cycle_id") or 0)
+            except (TypeError, ValueError):
+                c = 0
+            if c >= 1:
+                needed.add(c)
+        elif ty == "CYCLE_START":
+            try:
+                c = int(meta.get("cycle_id") or 0)
+            except (TypeError, ValueError):
+                c = 0
+            if c >= 2:
+                needed.add(c - 1)
+
+    synthetic: List[Dict[str, Any]] = []
+    for cid in sorted(needed):
+        if cid < 1 or cid in logged:
+            continue
+        if _find_cycle_end_event(events, cid):
+            continue
+        if not _cycle_has_closure_evidence(events, state, cid):
+            continue
+
+        ts: Optional[str] = None
+        close_fill = _find_cycle_close_fill(events, cid)
+        if close_fill:
+            ts = _ts_plus_ms(close_fill.get("ts"), 100)
+
+        entry = _cycle_pnl_entry(state, cid)
+        if entry and entry.get("ts"):
+            ts = ts or _ts_plus_ms(normalize_event_ts_iso_z(entry.get("ts")), 100)
+
+        dual = _completed_dual_pnl_entry(state, cid)
+        if dual and dual.get("completed_at"):
+            ts = ts or _ts_plus_ms(normalize_event_ts_iso_z(dual.get("completed_at")), 100)
+
+        next_start = _find_cycle_start_event(events, cid + 1)
+        if next_start and next_start.get("ts"):
+            ts = ts or _ts_plus_ms(next_start.get("ts"), -100)
+
+        if not ts:
+            continue
+
+        built = _build_synthetic_cycle_end(cid, ts, state, events)
+        if built:
+            synthetic.append(built)
+            logged.add(cid)
+
+    if not synthetic:
+        return events
+    return list(events) + synthetic
+
+
+def _merge_synthetic_cycle_start_events(events: List[Dict[str, Any]], state: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Backfill CYCLE_START when DB row missing (RUN_ACTION_EXCEPTION, legacy bots)."""
+    if not state:
+        return events
+    logged = _logged_cycle_start_ids(events)
+    symbol = state.get("symbol")
+    needed: set = set()
+    try:
+        cur = int(state.get("cycle_id") or 0)
+        if cur >= 2:
+            needed.add(cur)
+    except (TypeError, ValueError):
+        pass
+    for row in state.get("cycle_open_trades") or []:
+        try:
+            c = int(row.get("cycle_id") or 0)
+            if c >= 2:
+                needed.add(c)
+        except (TypeError, ValueError):
+            pass
+    for ev in events:
+        ty = ev.get("type") or ""
+        meta = ev.get("meta") or {}
+        if ty == "CYCLE_END":
+            try:
+                needed.add(int(meta.get("cycle_id") or 0) + 1)
+            except (TypeError, ValueError):
+                pass
+        elif ty == "ORDER_FILLED":
+            reason = (meta.get("reason") or "").strip()
+            try:
+                c = int(meta.get("cycle_id") or 0)
+            except (TypeError, ValueError):
+                c = 0
+            if c >= 2:
+                needed.add(c)
+            if reason in ("trail_profit_sell", "trail_reentry_buy") and c >= 1:
+                needed.add(c + 1)
+
+    synthetic: List[Dict[str, Any]] = []
+    for cid in sorted(needed):
+        if cid < 2 or cid in logged:
+            continue
+        if any(
+            (e.get("type") or "") == "CYCLE_START"
+            and int((e.get("meta") or {}).get("cycle_id") or 0) == int(cid)
+            for e in events
+        ):
+            continue
+        ts: Optional[str] = None
+        prev_close_reason: Optional[str] = None
+        ref_price: Optional[float] = None
+        base_qty: Optional[float] = None
+
+        end_ev = _find_cycle_end_event(events, cid - 1)
+        if end_ev:
+            ts = _ts_plus_ms(end_ev.get("ts"), 200)
+            em = end_ev.get("meta") or {}
+            prev_close_reason = em.get("close_reason")
+        close_fill = _find_cycle_close_fill(events, cid - 1)
+        if close_fill:
+            if not ts:
+                ts = _ts_plus_ms(close_fill.get("ts"), 200)
+            fm = close_fill.get("meta") or {}
+            prev_close_reason = prev_close_reason or fm.get("reason")
+            try:
+                ref_price = float(fm.get("fill_price") or 0) or None
+            except (TypeError, ValueError):
+                ref_price = None
+
+        if not ts:
+            earliest: Optional[Dict[str, Any]] = None
+            for ev in events:
+                if (ev.get("type") or "") != "ORDER_FILLED":
+                    continue
+                if int((ev.get("meta") or {}).get("cycle_id") or 0) != cid:
+                    continue
+                eid = int(ev.get("id") or 0)
+                if earliest is None or (eid > 0 and eid < int(earliest.get("id") or 0)):
+                    earliest = ev
+            if earliest:
+                ts = _ts_plus_ms(earliest.get("ts"), -200)
+                try:
+                    ref_price = float((earliest.get("meta") or {}).get("fill_price") or 0) or ref_price
+                except (TypeError, ValueError):
+                    pass
+
+        if not ts and int(state.get("cycle_id") or 0) == cid:
+            ledger = state.get("cycle_ledger_current") or {}
+            ts = normalize_event_ts_iso_z(
+                (ledger.get("started_at") if isinstance(ledger, dict) else None)
+                or state.get("cycle_opened_at")
+                or state.get("last_tick_at")
+            )
+
+        open_row = _cycle_open_trade_row(state, cid)
+        if open_row and open_row.get("ts"):
+            ts = normalize_event_ts_iso_z(open_row.get("ts")) or ts
+
+        if not ts:
+            continue
+
+        synthetic.append(
+            _build_synthetic_cycle_start(
+                cid,
+                ts,
+                state,
+                symbol=symbol,
+                events=events,
+                prev_close_reason=prev_close_reason,
+                reference_price=ref_price,
+                base_qty=base_qty,
+            )
+        )
+        logged.add(cid)
+
+    if not synthetic:
+        return _dedupe_cycle_start_events(events)
+    merged = list(events) + synthetic
+    return _dedupe_cycle_start_events(merged)
+
+
+def _cycle_start_is_complete(meta: Dict[str, Any]) -> bool:
+    return meta.get("quote_balance") is not None or meta.get("equity_usdt") is not None or meta.get("equity_usd") is not None
+
+
+def _enrich_cycle_start_events_meta(
+    events: List[Dict[str, Any]],
+    state: Optional[Dict[str, Any]],
+) -> None:
+    """CYCLE_START meta: tur açılış snapshot (geçmiş turda güncel cüzdan asla yazılmaz)."""
+    if not state:
+        return
+    for ev in events or []:
+        if (ev.get("type") or "") != "CYCLE_START":
+            continue
+        meta = ev.get("meta")
+        if not isinstance(meta, dict):
+            meta = {}
+            ev["meta"] = meta
+        try:
+            cid = int(meta.get("cycle_id") or 0)
+        except (TypeError, ValueError):
+            continue
+        if cid < 1:
+            continue
+        snap = _cycle_start_wallet_snapshot(state, cid, events)
+        is_first = bool(meta.get("first_tur") or (meta.get("reason") or "").strip() == "initial_allocation")
+        stale = _cycle_start_meta_stale_for_past_tur(state, cid, meta)
+        overwrite = is_first or stale or bool(meta.get("synthetic"))
+        if snap.get("quote_balance") is not None:
+            _apply_cycle_start_wallet_snapshot(meta, snap, overwrite=True)
+        elif overwrite or not _cycle_start_is_complete(meta):
+            _apply_cycle_start_wallet_snapshot(meta, snap, overwrite=overwrite)
+        if meta.get("symbol") is None and state.get("symbol"):
+            meta["symbol"] = state.get("symbol")
+
+
+def _cycle_start_richness_score(ev: Dict[str, Any]) -> int:
+    """Yüksek = UI'da tercih edilen satır (tam Quote/Bakiye, DB kaydı)."""
+    meta = ev.get("meta") or {}
+    score = 0
+    if int(ev.get("id") or 0) > 0:
+        score += 500
+    if not meta.get("synthetic"):
+        score += 200
+    if _cycle_start_is_complete(meta):
+        score += 150
+    if meta.get("equity_usdt") is not None or meta.get("equity_usd") is not None:
+        score += 100
+    if meta.get("quote_balance") is not None:
+        score += 50
+    if meta.get("base_balance") is not None:
+        score += 25
+    if meta.get("base_qty") is not None:
+        score += 10
+    if meta.get("synthetic") and not _cycle_start_is_complete(meta):
+        score -= 400
+    return score
+
+
+def _dedupe_cycle_start_events(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Aynı tur için birden fazla CYCLE_START → en zengin tek satır."""
+    best: Dict[int, Dict[str, Any]] = {}
+    for ev in events or []:
+        if (ev.get("type") or "") != "CYCLE_START":
+            continue
+        try:
+            cid = int((ev.get("meta") or {}).get("cycle_id") or 0)
+        except (TypeError, ValueError):
+            continue
+        if cid < 1:
+            continue
+        prev = best.get(cid)
+        if prev is None or _cycle_start_richness_score(ev) > _cycle_start_richness_score(prev):
+            best[cid] = ev
+    if not best:
+        return list(events or [])
+    out: List[Dict[str, Any]] = []
+    emitted: set = set()
+    for ev in events or []:
+        if (ev.get("type") or "") != "CYCLE_START":
+            out.append(ev)
+            continue
+        try:
+            cid = int((ev.get("meta") or {}).get("cycle_id") or 0)
+        except (TypeError, ValueError):
+            out.append(ev)
+            continue
+        if cid < 1:
+            out.append(ev)
+            continue
+        if cid in emitted:
+            continue
+        out.append(best[cid])
+        emitted.add(cid)
+    return out
+
+
+def _has_tur1_cycle_start(events: List[Dict[str, Any]]) -> bool:
+    for ev in events:
+        if (ev.get("type") or "") != "CYCLE_START":
+            continue
+        try:
+            if int((ev.get("meta") or {}).get("cycle_id") or 0) != 1:
+                continue
+        except (TypeError, ValueError):
+            continue
+        return True
+    return False
+
+
+def _find_initial_allocation_fill(events: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    found: Optional[Dict[str, Any]] = None
     for ev in events:
         if (ev.get("type") or "") != "ORDER_FILLED":
             continue
@@ -361,20 +1224,29 @@ def _merge_synthetic_tur_after_initial_fill(
         if (meta.get("reason") or "").strip() != "initial_allocation":
             continue
         fid = int(ev.get("id") or 0)
-        if fill_ev is None or fid > int(fill_ev.get("id") or 0):
-            fill_ev = ev
+        if found is None or fid > int(found.get("id") or 0):
+            found = ev
+    return found
+
+
+def _merge_synthetic_tur_after_initial_fill(
+    events: List[Dict[str, Any]],
+    state: Optional[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """İlk base alımından sonra Tur 1 açıldı satırı yoksa (eski botlar) UI için sentetik CYCLE_START."""
+    if _has_tur1_cycle_start(events):
+        return events
+    fill_ev = _find_initial_allocation_fill(events)
     if not fill_ev:
         return events
     fm = fill_ev.get("meta") or {}
-    fid = int(fill_ev.get("id") or 0)
-    if fid <= 0:
-        return events
-    synth_id = fid + 1
+    synth_id = _synthetic_cycle_start_event_id(1)
     if any(int(e.get("id") or 0) == synth_id for e in events):
         return events
-    cid = int(fm.get("cycle_id") or state.get("cycle_id") or 1)
-    fill_price = float(fm.get("fill_price") or state.get("reference_price") or state.get("initial_alloc_price") or 0)
-    fill_qty = float(fm.get("fill_qty") or state.get("initial_alloc_base_qty") or state.get("base_balance") or 0)
+    cid = 1
+    st = state or {}
+    fill_price = float(fm.get("fill_price") or st.get("reference_price") or st.get("initial_alloc_price") or 0)
+    fill_qty = float(fm.get("fill_qty") or st.get("initial_alloc_base_qty") or st.get("base_balance") or 0)
     fill_ts = fill_ev.get("ts")
     tur_ts = fill_ts
     try:
@@ -385,9 +1257,10 @@ def _merge_synthetic_tur_after_initial_fill(
             tur_ts = datetime.fromtimestamp((base_ms + 1000) / 1000.0, tz=timezone.utc).isoformat()
     except Exception:
         pass
+    snap = _tur1_wallet_snapshot(st, events) or {}
     synthetic = {
         "id": synth_id,
-        "ts": normalize_event_ts_iso_z(tur_ts or fill_ts or state.get("last_tick_at")),
+        "ts": normalize_event_ts_iso_z(tur_ts or fill_ts or st.get("last_tick_at")),
         "type": "CYCLE_START",
         "message": "Tur başladı",
         "meta": {
@@ -395,12 +1268,12 @@ def _merge_synthetic_tur_after_initial_fill(
             "reason": "initial_allocation",
             "first_tur": True,
             "synthetic": True,
-            "reference_price": round(fill_price, 10) if fill_price > 0 else None,
-            "base_qty": round(fill_qty, 10) if fill_qty > 0 else None,
-            "base_balance": round(float(state.get("base_balance") or fill_qty or 0), 10),
-            "quote_balance": round(float(state.get("quote_balance") or 0), 2),
-            "equity_usdt": round(float(state.get("cycle_start_equity") or 0), 2),
-            "symbol": fm.get("symbol") or state.get("symbol"),
+            "reference_price": snap.get("reference_price") or (round(fill_price, 10) if fill_price > 0 else None),
+            "base_qty": snap.get("base_qty") or (round(fill_qty, 10) if fill_qty > 0 else None),
+            "base_balance": snap.get("base_balance") or (round(fill_qty, 10) if fill_qty > 0 else None),
+            "quote_balance": snap.get("quote_balance"),
+            "equity_usdt": snap.get("equity_usdt"),
+            "symbol": snap.get("symbol") or fm.get("symbol") or st.get("symbol"),
         },
     }
     merged = list(events) + [synthetic]
@@ -915,7 +1788,7 @@ async def bots_detail(
                 state,
                 equity_from_state,
                 init_cap_detail,
-                getattr(bot, "started_at", None),
+                _bot_run_started_at_dt(bot, state, db),
                 db=db,
                 bot_id=bot.id,
                 account_id=bot.account_id,
@@ -946,7 +1819,7 @@ async def bots_detail(
         "daily_pnl_usd": round(daily_usd, 2) if daily_usd is not None else None,
         "daily_pnl_pct": round(daily_pnl_pct, 2) if daily_pnl_pct is not None else None,
         "price_24h_change_pct": price_24h_change_pct,
-        "started_at": bot.started_at.isoformat() + "Z" if getattr(bot, "started_at", None) else None,
+        "started_at": _bot_run_started_at_for_api(bot, state, db),
         "request_id": rid,
         "rebalancing_details": rebalancing_details,
     }
@@ -1112,6 +1985,50 @@ def _heal_cycle_opened_at_state(db: Session, bot: Any, state: Optional[Dict[str,
             save_state(db, bot.id, bot.account_id, state)
         except Exception as e:
             logger.debug("heal cycle_opened_at save failed bot_id=%s: %s", bot.id, e)
+
+
+def _backfill_trades_from_ledger_fills(
+    db: Session,
+    bot: Any,
+    fills: List[Dict[str, Any]],
+    cycle_id: int,
+    symbol: str,
+) -> None:
+    """Arşiv defterinde olup trades tablosunda eksik kalan işlemleri idempotent yazar (UI + raporlar)."""
+    from app.bot.ledger import Ledger
+
+    sym = (symbol or "").upper()
+    for f in fills or []:
+        if not isinstance(f, dict):
+            continue
+        oid = f.get("order_id")
+        if oid is None or not str(oid).strip():
+            continue
+        try:
+            fee = float(f.get("fee_usdt") if f.get("fee_usdt") is not None else f.get("fee") or 0)
+        except (TypeError, ValueError):
+            fee = 0.0
+        try:
+            Ledger.record_trade(
+                db,
+                bot.id,
+                bot.account_id,
+                (f.get("side") or "BUY").upper(),
+                float(f.get("qty") or 0),
+                float(f.get("price") or 0),
+                fee=fee,
+                fee_asset=(f.get("fee_asset") or "USDT"),
+                slot_id=f.get("slot_id"),
+                order_id=str(oid),
+                client_order_id=f.get("client_order_id"),
+                symbol=sym,
+                cycle_id=int(cycle_id),
+            )
+        except Exception as e:
+            logger.debug(
+                "backfill trade from ledger bot_id=%s cycle_id=%s order_id=%s: %s",
+                bot.id, cycle_id, oid, e,
+            )
 
 
 def _ledger_fills_to_trade_dicts(
@@ -1326,6 +2243,75 @@ def _merge_cycle_trades(*groups: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return out
 
 
+def _resolve_cycle_reference_price(
+    state: Optional[Dict[str, Any]],
+    cycle_id: int,
+    trades: List[Dict[str, Any]],
+) -> Optional[float]:
+    """Tur referans fiyatı (grid/kar satışı gerçekleşme % için)."""
+    ordered = sorted(trades or [], key=lambda x: str(x.get("ts") or ""))
+    for t in ordered:
+        try:
+            rp = float(t.get("reference_price") or 0)
+            if rp > 0:
+                return rp
+        except (TypeError, ValueError):
+            pass
+    if state:
+        for row in state.get("cycle_open_trades") or []:
+            if not isinstance(row, dict) or int(row.get("cycle_id") or 0) != int(cycle_id):
+                continue
+            try:
+                rp = float(row.get("reference_price") or row.get("price") or 0)
+                if rp > 0:
+                    return rp
+            except (TypeError, ValueError):
+                pass
+    for t in ordered:
+        if (t.get("side") or "").upper() != "BUY":
+            continue
+        cid = (t.get("client_order_id") or "").lower()
+        reason = (t.get("reason") or "").strip().lower()
+        if cid.startswith("cycle_open_") or reason == "initial_allocation":
+            try:
+                p = float(t.get("price") or 0)
+                if p > 0:
+                    return p
+            except (TypeError, ValueError):
+                pass
+    for t in ordered:
+        if (t.get("side") or "").upper() == "BUY":
+            try:
+                p = float(t.get("price") or 0)
+                if p > 0:
+                    return p
+            except (TypeError, ValueError):
+                pass
+    if state and int(state.get("cycle_id") or 0) == int(cycle_id):
+        try:
+            rp = float(state.get("reference_price") or 0)
+            if rp > 0:
+                return rp
+        except (TypeError, ValueError):
+            pass
+    return None
+
+
+def _enrich_trades_reference_prices(
+    trades: List[Dict[str, Any]],
+    state: Optional[Dict[str, Any]],
+    cycle_id: int,
+) -> None:
+    """Eksik reference_price → tur referansı (kar satışı / grid gerçekleşme %)."""
+    ref = _resolve_cycle_reference_price(state, cycle_id, trades)
+    if ref is None or ref <= 0:
+        return
+    ref_r = round(ref, 10)
+    for t in trades or []:
+        if t.get("reference_price") is None:
+            t["reference_price"] = ref_r
+
+
 def _hydrate_trades_from_cycle_ledger(
     trades: List[Dict[str, Any]],
     state: Optional[Dict[str, Any]],
@@ -1372,6 +2358,8 @@ def _hydrate_trades_from_cycle_ledger(
             t["reason"] = f.get("reason")
         if t.get("slot_id") is None and f.get("slot_id") is not None:
             t["slot_id"] = f.get("slot_id")
+        if t.get("reference_price") is None and f.get("reference_price") is not None:
+            t["reference_price"] = f.get("reference_price")
 
 
 def _cycle_pnl_entry(state: Optional[Dict[str, Any]], cycle_id: int) -> Optional[Dict[str, Any]]:
@@ -1584,7 +2572,7 @@ def _build_live_snapshot_from_state(bot: Bot, state: Optional[Dict[str, Any]], d
             state,
             equity,
             initial_capital,
-            getattr(bot, "started_at", None),
+            _bot_run_started_at_dt(bot, state, db),
             db=db,
             bot_id=bot.id,
             account_id=bot.account_id,
@@ -1818,9 +2806,9 @@ async def bots_perf_chart_data(
     if not bot:
         raise HTTPException(status_code=404, detail=_detail_err("NOT_FOUND", "Bot not found", rid))
 
-    started_ts = None
-    if getattr(bot, "started_at", None) is not None:
-        started_ts = int(bot.started_at.timestamp())
+    state_perf = load_state(db, bot.id) or {}
+    started_dt = _bot_run_started_at_dt(bot, state_perf, db)
+    started_ts = int(started_dt.timestamp()) if started_dt is not None else None
 
     cached = PerfLRUCache.get(bot.id, range, bucket)
     if cached is not None:
@@ -1863,10 +2851,11 @@ async def bots_get_perf_chart_state(
         baseline = payload.get("baseline")
         samples = payload.get("samples") if isinstance(payload.get("samples"), list) else []
         range_val = payload.get("range") if payload.get("range") in ("1m", "5m", "1h", "4h", "1d", "1w") else "4h"
-        # Sadece bu çalıştırma (started_at) sonrası veriyi göster; eski çalıştırmadan kalan veri 1 gün önce gibi görünmesin
-        started_at = getattr(bot, "started_at", None)
-        if started_at is not None:
-            started_ts = int(started_at.timestamp())
+        # Sadece bu çalıştırma (oturum started_at) sonrası veriyi göster
+        state_pc = load_state(db, bot.id) or {}
+        started_dt = _bot_run_started_at_dt(bot, state_pc, db)
+        if started_dt is not None:
+            started_ts = int(started_dt.timestamp())
             samples = [s for s in samples if isinstance(s, dict) and (s.get("ts") or 0) >= started_ts]
             if baseline and (baseline.get("ts0") or 0) < started_ts:
                 baseline = None
@@ -2098,10 +3087,11 @@ def append_perf_chart_sample(db: Session, bot_id: int) -> None:
         samples.append({"ts": now_sec, "botPct": bot_pct, "paritePct": parite_pct})
         cut = now_sec - PERF_CHART_MAX_AGE_SEC
         samples[:] = [s for s in samples if isinstance(s, dict) and (s.get("ts") or 0) >= cut]
-        # Sadece bu çalıştırma (started_at) sonrası örnekleri sakla
-        started_at = getattr(bot, "started_at", None)
-        if started_at is not None:
-            started_ts = int(started_at.timestamp())
+        # Sadece bu çalıştırma (oturum started_at) sonrası örnekleri sakla
+        state_pc = load_state(db, bot_id) or {}
+        started_dt = _bot_run_started_at_dt(bot, state_pc, db)
+        if started_dt is not None:
+            started_ts = int(started_dt.timestamp())
             samples[:] = [s for s in samples if (s.get("ts") or 0) >= started_ts]
             if baseline and (baseline.get("ts0") or 0) < started_ts:
                 baseline = {"bot0": 0.0, "parite0": 0.0, "ts0": started_ts}
@@ -2259,13 +3249,16 @@ async def bots_start(
             logger.warning("bots_start balance check failed bot_id=%s: %s", bot.id, e)
             # API/network hatasında başlatmayı engellemeyebiliriz; yine de dene
 
+    from app.botengine.bot_session import mark_bot_run_started, touch_bot_started_at
+
     bot.status = "running"
-    bot.started_at = datetime.now(timezone.utc)
+    touch_bot_started_at(bot, connectivity_resume=False)
     db.commit()
     seed_perf_chart_state_on_bot_start(db, bot.id)
     command_id = _insert_engine_command(db, bot.account_id, bot.id, "START", request_id=rid)
     state = load_state(db, bot.id) or {}
     state["run_id"] = f"cmd{command_id}"
+    mark_bot_run_started(state, connectivity_resume=False)
     save_state(db, bot.id, bot.account_id, state)
     logger.info("BOT_RUN_ID set bot_id=%s run_id=cmd%s", bot.id, command_id)
     account = db.query(Account).filter(Account.id == bot.account_id).first()
@@ -2307,7 +3300,12 @@ async def bots_stop(
     bot = _resolve_bot(bot_id, resolved_account_id, current, db)
     if not bot:
         raise HTTPException(status_code=404, detail=_detail_err("NOT_FOUND", "Bot not found", rid))
+    from app.botengine.bot_session import clear_bot_run_started
+
     bot.status = "stopped"
+    state = load_state(db, bot.id) or {}
+    clear_bot_run_started(state)
+    save_state(db, bot.id, bot.account_id, state)
     db.commit()
     command_id = _insert_engine_command(db, bot.account_id, bot.id, "STOP", request_id=rid)
     account = db.query(Account).filter(Account.id == bot.account_id).first()
@@ -2545,6 +3543,20 @@ async def bots_health(
     last_tick = _parse_last_tick_ts(state)
     tick_age = (now_ts - last_tick) if last_tick is not None else None
     interval_s = _expected_tick_interval_sec(bot)
+    conn_fail = None
+    connectivity_ok = True
+    try:
+        from app.services.binance_connectivity import active_failure
+        rec = active_failure(bot.account_id)
+        if rec:
+            connectivity_ok = False
+            conn_fail = {
+                "error_code": rec.get("error_code"),
+                "message": rec.get("message"),
+                "source": rec.get("source"),
+            }
+    except Exception:
+        pass
     return {
         "ok": True,
         "bot_id": bot.id,
@@ -2556,6 +3568,8 @@ async def bots_health(
         "last_error_code": state.get("last_error_code"),
         "health_ack_at": int(state.get("health_ack_at") or 0),
         "engine_log_dismiss_before_id": dismiss_id,
+        "connectivity_failure": conn_fail,
+        "connectivity_ok": connectivity_ok,
         "request_id": rid,
     }
 
@@ -2634,15 +3648,29 @@ async def bots_events(
             from app.botengine.engine_log_ack import filter_events_for_dismiss
 
             events = filter_events_for_dismiss(events, dismiss_before)
-    events = _enrich_command_start_events(events, bot, state)
-    events = _merge_synthetic_cycle_start_events(events, state)
-    events = _merge_synthetic_tur_after_initial_fill(events, state)[:limit]
-    events = _sort_engine_events_desc(events)
+    try:
+        events = _enrich_command_start_events(events, bot, state)
+        events = _merge_synthetic_cycle_end_events(events, state)
+        events = _merge_synthetic_cycle_start_events(events, state)
+        events = _merge_synthetic_tur_after_initial_fill(events, state)
+        _enrich_cycle_start_events_meta(events, state)
+        events = _dedupe_cycle_start_events(events)[:limit]
+        events = _sort_engine_events_desc(events)
+    except Exception as enrich_ex:
+        logger.exception(
+            "bots_events enrich failed bot_id=%s after_id=%s: %s",
+            bot.id,
+            after_id,
+            enrich_ex,
+        )
+        events = _sort_engine_events_desc(list(events or []))[:limit]
     conn_fail = None
+    connectivity_ok = True
     try:
         from app.services.binance_connectivity import active_failure
         rec = active_failure(bot.account_id)
         if rec:
+            connectivity_ok = False
             conn_fail = {
                 "error_code": rec.get("error_code"),
                 "message": rec.get("message"),
@@ -2650,7 +3678,12 @@ async def bots_events(
             }
     except Exception:
         pass
-    return {"events": events, "connectivity_failure": conn_fail, "request_id": rid}
+    return {
+        "events": events,
+        "connectivity_failure": conn_fail,
+        "connectivity_ok": connectivity_ok,
+        "request_id": rid,
+    }
 
 
 @router.get("/{bot_id}/cycles")
@@ -2989,10 +4022,11 @@ def _enrich_trades_grid_detail(
             fill_f = float(fill_p) if fill_p is not None else None
         except (TypeError, ValueError):
             fill_f = None
-        if exec_p is None and fill_f is not None:
+        if fill_f is not None:
             exec_p = fill_f
-        if extreme is None and exec_p is not None and trail_pct is not None:
-            extreme = _extreme_from_execution(side, float(exec_p), float(trail_pct))
+        extreme_basis = fill_f if fill_f is not None else exec_p
+        if extreme is None and extreme_basis is not None and trail_pct is not None:
+            extreme = _extreme_from_execution(side, float(extreme_basis), float(trail_pct))
         avg_buy_p: Optional[float] = None
         avg_buy_quote: Optional[float] = None
         if side == "SELL":
@@ -3288,6 +4322,43 @@ def _breakeven_from_avg(avg_cost: Optional[float], cfg: Dict[str, Any]) -> Optio
         return None
 
 
+def _close_trade_fill_price(
+    t: Dict[str, Any],
+    close_fill: Dict[str, Any],
+    archived: Optional[Dict[str, Any]],
+) -> Optional[float]:
+    """Binance fill (gerçekleşen) — trail eşiği değil."""
+    arch = archived if isinstance(archived, dict) else {}
+    for raw in (close_fill.get("price"), t.get("price"), arch.get("fill_price"), arch.get("price")):
+        if raw is None:
+            continue
+        try:
+            v = float(raw)
+            if v > 0:
+                return v
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _close_trade_trail_execution_price(
+    close_fill: Dict[str, Any],
+    archived: Optional[Dict[str, Any]],
+) -> Optional[float]:
+    """Trailing gerçekleşme eşiği (canlı/grid); dolu işlemde UI fill gösterir."""
+    arch = archived if isinstance(archived, dict) else {}
+    for raw in (arch.get("execution_price"), close_fill.get("execution_price")):
+        if raw is None:
+            continue
+        try:
+            v = float(raw)
+            if v > 0:
+                return v
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
 def _enrich_trades_close_detail(
     trades: List[Dict[str, Any]],
     config_raw: Dict[str, Any],
@@ -3313,7 +4384,8 @@ def _enrich_trades_close_detail(
         trigger = archived.get("trigger_price") if archived else None
         tepe = archived.get("tepe_price") if archived else None
         dip = archived.get("dip_price") if archived else None
-        exec_p = archived.get("execution_price") if archived else None
+        fill_p = _close_trade_fill_price(t, close_fill, archived)
+        trail_exec_p = _close_trade_trail_execution_price(close_fill, archived)
         if close_fill:
             if trade_type == "profit_exit" and avg_cost is None and close_fill.get("avg_cost_quote_per_base") is not None:
                 try:
@@ -3335,16 +4407,7 @@ def _enrich_trades_close_detail(
                     dip = float(close_fill["dip_price"])
                 except (TypeError, ValueError):
                     pass
-            if exec_p is None and close_fill.get("execution_price") is not None:
-                try:
-                    exec_p = float(close_fill["execution_price"])
-                except (TypeError, ValueError):
-                    pass
-        if exec_p is None:
-            try:
-                exec_p = float(t.get("price")) if t.get("price") is not None else None
-            except (TypeError, ValueError):
-                exec_p = None
+        exec_p = fill_p if fill_p is not None else trail_exec_p
         if state and int(state.get("cycle_id") or 1) == int(cycle_id):
             if trade_type == "profit_exit" and state.get("_profit_exit_done"):
                 anchor = state.get("trail_anchor_price")
@@ -3370,15 +4433,20 @@ def _enrich_trades_close_detail(
                 trigger = float(avg_cost) * (1.0 + float(trigger_pct) / 100.0)
             else:
                 trigger = float(avg_cost) * (1.0 - float(trigger_pct) / 100.0)
+        extreme_basis = fill_p if fill_p is not None else exec_p
         if trade_type == "profit_exit":
-            if tepe is None and exec_p is not None and trailing_pct is not None and trailing_pct > 0:
-                tepe = _extreme_from_execution("SELL", float(exec_p), float(trailing_pct))
+            if tepe is None and extreme_basis is not None and trailing_pct is not None and trailing_pct > 0:
+                tepe = _extreme_from_execution("SELL", float(extreme_basis), float(trailing_pct))
         else:
-            if dip is None and exec_p is not None and trailing_pct is not None and trailing_pct > 0:
-                dip = _extreme_from_execution("BUY", float(exec_p), float(trailing_pct))
+            if dip is None and extreme_basis is not None and trailing_pct is not None and trailing_pct > 0:
+                dip = _extreme_from_execution("BUY", float(extreme_basis), float(trailing_pct))
         label = "Kar satışı" if trade_type == "profit_exit" else "Kar alımı"
         pnl_net = (pnl_entry or {}).get("pnl_usdt_net")
         inv_adv = (pnl_entry or {}).get("inventory_coin_adv_qty")
+        if t.get("reference_price") is None:
+            cycle_ref = _resolve_cycle_reference_price(state, cycle_id, trades)
+            if cycle_ref is not None and cycle_ref > 0:
+                t["reference_price"] = round(cycle_ref, 10)
         t["trade_detail"] = {
             "trade_type": trade_type,
             "label": label,
@@ -3390,7 +4458,11 @@ def _enrich_trades_close_detail(
             "trigger_price": round(float(trigger), 8) if trigger is not None else None,
             "tepe_price": round(float(tepe), 8) if tepe is not None else None,
             "dip_price": round(float(dip), 8) if dip is not None else None,
-            "execution_price": round(float(exec_p), 8) if exec_p is not None else None,
+            "fill_price": round(float(fill_p), 8) if fill_p is not None else None,
+            "execution_price": round(float(fill_p), 8) if fill_p is not None else (
+                round(float(trail_exec_p), 8) if trail_exec_p is not None else None
+            ),
+            "trail_execution_price": round(float(trail_exec_p), 8) if trail_exec_p is not None else None,
             "realized_profit_usdt": round(float(pnl_net), 4) if pnl_net is not None else None,
             "inventory_coin_adv_qty": round(float(inv_adv), 8) if inv_adv is not None else None,
         }
@@ -3432,8 +4504,19 @@ async def bots_trades(
             ledger = state.get("cycle_ledger_current") or {}
             if isinstance(ledger, dict) and (not ledger.get("symbol") or ledger.get("symbol") == sym):
                 extra.extend(_ledger_fills_to_trade_dicts(ledger.get("fills") or [], sym, int(cycle_id)))
+        for block in state.get("cycle_ledger_fills_archive") or []:
+            if not isinstance(block, dict):
+                continue
+            if int(block.get("cycle_id") or 0) != int(cycle_id):
+                continue
+            arch_fills = block.get("fills") or []
+            _backfill_trades_from_ledger_fills(db, bot, arch_fills, int(cycle_id), sym)
+            extra.extend(_ledger_fills_to_trade_dicts(arch_fills, sym, int(cycle_id)))
     if cycle_id is not None and ct != "trb":
         trades = _merge_cycle_trades(trades, extra)
+        if extra:
+            trades = Ledger.get_trades_dict(db, bot.id, bot.account_id, limit=limit, cycle_id=cycle_id)
+            trades = _merge_cycle_trades(trades, extra)
     if cycle_id is not None and ct == "trb":
         cycle_summary = {"cycle_type": "trb", "trade_count": 0, "note": "Rebalancing tur işlemleri ayrı kaydedilmiyor."}
     elif cycle_id is not None:
@@ -3452,10 +4535,9 @@ async def bots_trades(
                     completed_snapshot = c
                     break
         if is_open_cycle:
-            from app.botengine.cycle_ledger import resolve_cycle_opened_at
+            from app.botengine.cycle_ledger import resolve_cycle_opened_at_for_cycle
 
-            ledger = state.get("cycle_ledger_current") or {}
-            started_at_iso = resolve_cycle_opened_at(state, ledger if isinstance(ledger, dict) else None)
+            started_at_iso = resolve_cycle_opened_at_for_cycle(state, int(cycle_id))
             start_dt = _parse_ts_utc(started_at_iso)
             if start_dt is not None:
                 duration_sec = max(0.0, (datetime.now(timezone.utc) - start_dt).total_seconds())
@@ -3531,6 +4613,7 @@ async def bots_trades(
         cfg_raw = json.loads(bot.config_json or "{}")
         _tag_cycle_close_trades(trades, state, int(cycle_id))
         _hydrate_trades_from_cycle_ledger(trades, state, int(cycle_id))
+        _enrich_trades_reference_prices(trades, state, int(cycle_id))
         _tag_cycle_close_trades(trades, state, int(cycle_id))
         _enrich_trades_fee(trades, sym, cfg_raw)
         _enrich_trades_grid_detail(trades, cfg_raw, state, int(cycle_id))

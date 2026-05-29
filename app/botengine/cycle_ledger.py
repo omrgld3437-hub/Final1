@@ -98,22 +98,50 @@ def resolve_cycle_opened_at(
 
 
 def heal_cycle_opened_at(state: Dict[str, Any]) -> None:
-    """cycle_opened_at eksik veya ilk grid zamanına kaymışsa düzelt (target_budgets / tur devri)."""
+    """cycle_opened_at eksik veya önceki tura ait kalmışsa düzelt (tur süresi sıfırdan başlasın)."""
     cid = int(state.get("cycle_id") or 1)
     candidates = _cycle_open_ts_candidates(state, cid)
     if not candidates:
         return
     best = min(candidates)
+    best_ms = _parse_iso_ts_ms(best)
     current = state.get("cycle_opened_at")
-    if not isinstance(current, str) or not str(current).strip():
+    cur_ms = _parse_iso_ts_ms(current) if isinstance(current, str) and str(current).strip() else 0
+    if cur_ms <= 0:
         state["cycle_opened_at"] = best
         return
     if not state.get("initial_allocation_done"):
         return
-    cur_ms = _parse_iso_ts_ms(current)
-    best_ms = _parse_iso_ts_ms(best)
-    if best_ms > 0 and cur_ms > 0 and cur_ms > best_ms + 60_000:
+    # Önceki turun açılışı veya >2 dk sapma → bu turun gerçek açılışına çek
+    if best_ms > 0 and (cur_ms < best_ms - 2000 or abs(cur_ms - best_ms) > 120_000):
         state["cycle_opened_at"] = best
+
+
+def resolve_cycle_opened_at_for_cycle(
+    state: Dict[str, Any],
+    cycle_id: int,
+) -> Optional[str]:
+    """Belirli tur için açılış zamanı (açık tur veya arşiv)."""
+    cid = int(cycle_id or 1)
+    cur_cid = int(state.get("cycle_id") or 1)
+    if cid == cur_cid:
+        ledger = state.get("cycle_ledger_current")
+        return resolve_cycle_opened_at(state, ledger if isinstance(ledger, dict) else None)
+    candidates: List[str] = []
+    for cot in state.get("cycle_open_trades") or []:
+        if not isinstance(cot, dict) or int(cot.get("cycle_id") or 0) != cid:
+            continue
+        if cot.get("ts"):
+            candidates.append(str(cot["ts"]))
+    for row in state.get("completed_cycle_dual_pnls") or []:
+        if not isinstance(row, dict) or int(row.get("cycle_id") or 0) != cid:
+            continue
+        sa = row.get("started_at")
+        if sa:
+            candidates.append(str(sa))
+    if candidates:
+        return min(candidates)
+    return None
 
 
 def sync_ledger_started_at(state: Dict[str, Any], ledger: Dict[str, Any]) -> None:

@@ -370,8 +370,11 @@
         #engineLogList .engine-log-table td:nth-child(3) { width: auto; white-space: normal; word-break: break-word; padding-left: 3ch; }
         #engineLogList { overflow-x: auto; width: 100%; box-sizing: border-box; }
         #engineLogList .log-row-warn { color: var(--ds-text-warning, #f0b90b); }
+        #engineLogList .log-row-success { color: #0ecb81; font-weight: 600; }
         #engineLogList .log-row-error { color: #f6465d; font-weight: 700; }
         #engineLogList .log-row-info { color: var(--ds-text-primary, #eaecef); }
+        #engineLogList .log-row-spacer td { color: transparent; user-select: none; padding: 0.35rem 0.45rem; line-height: 1.35; border-bottom: 1px solid var(--ds-border, #2b3139); }
+        #engineLogList .log-row-spacer:hover td { background: transparent; }
         @keyframes hero-alert-blink {
             0%, 100% { color: #0ecb81; }
             50% { color: #f6465d; }
@@ -842,9 +845,9 @@
     <script src="/ui/assets/core/apiClient.js?v=refactor1"></script>
     <script src="/ui/assets/utils/gridTrailEnvelope.js?v=2"></script>
     <script src="/ui/assets/utils/engineLogArchive.js?v=1"></script>
-    <script src="/ui/assets/utils/engineLogFormat.js?v=39"></script>
-    <script src="/ui/assets/utils/botHealthAlerts.js?v=23"></script>
-    <script src="/ui/assets/utils/engineLogLive.js?v=19"></script>
+    <script src="/ui/assets/utils/engineLogFormat.js?v=54"></script>
+    <script src="/ui/assets/utils/botHealthAlerts.js?v=24"></script>
+    <script src="/ui/assets/utils/engineLogLive.js?v=27"></script>
     <script src="/ui/vendor/lightweight-charts.standalone.production.js"></script>
     <script src="/ui/assets/perf_chart_tv.js?v=1"></script>
     <script>
@@ -896,10 +899,29 @@
         var loadingEl = document.getElementById('loadingEl');
         var errorEl = document.getElementById('errorEl');
         var lastKnownCycleId = null;
+        var _cycleTradesCache = {};
         var lastRefPriceForPerf = null;
         var initialCapForPerf = null;
         var lastBotStartedAt = null;
         var stateHeroMetaInterval = null;
+
+        function parseUtcMs(iso) {
+            if (!iso || typeof iso !== 'string') return 0;
+            var s = String(iso).trim();
+            if (s.indexOf('T') < 0 && s.indexOf(' ') > 0) s = s.replace(' ', 'T');
+            if (!/[zZ]|[+\-]\d{2}:?\d{2}$/.test(s)) s += 'Z';
+            var d = new Date(s);
+            return isNaN(d.getTime()) ? 0 : d.getTime();
+        }
+        function pickEarlierStartedAt(prevIso, nextIso) {
+            if (!nextIso) return prevIso || null;
+            if (!prevIso) return nextIso;
+            var p = parseUtcMs(prevIso);
+            var n = parseUtcMs(nextIso);
+            if (p <= 0) return nextIso;
+            if (n <= 0) return prevIso;
+            return n < p ? nextIso : prevIso;
+        }
 
         function fmtUsd(v) {
             if (v == null || v === '' || isNaN(v)) return '—';
@@ -925,7 +947,8 @@
             if (isNaN(d.getTime())) return { start: '', duration: null };
             var pad = function (n) { return (n < 10 ? '0' : '') + n; };
             var dateOnly = pad(d.getDate()) + '.' + pad(d.getMonth() + 1) + '.' + d.getFullYear();
-            if ((status || '').toLowerCase() === 'running') {
+            var stLow = (status || '').toLowerCase();
+            if (stLow === 'running' || stLow === 'paused_error' || stLow === 'starting') {
                 var sec = Math.max(0, Math.floor((Date.now() - d.getTime()) / 1000));
                 var h = Math.floor(sec / 3600);
                 var m = Math.floor((sec % 3600) / 60);
@@ -1145,6 +1168,12 @@
             if (!botId || !window.apiClient || document.hidden) return Promise.resolve();
             var q = accountCode ? '?account_code=' + encodeURIComponent(accountCode) : '?account_id=' + (accountId || '');
             return window.apiClient.get('/api/bots-engine/' + botId + '/health' + q).then(function (res) {
+                var prevFail = !!(window._lastConnectivityFailure && window._lastConnectivityFailure.error_code);
+                window._lastConnectivityProbeOk = !!(res && res.connectivity_ok !== false && !res.connectivity_failure);
+                window._lastConnectivityFailure = (res && res.connectivity_failure) ? res.connectivity_failure : null;
+                if (window._lastConnectivityProbeOk && prevFail && botId && typeof loadEngineEvents === 'function') {
+                    loadEngineEvents(botId, false);
+                }
                 window._lastHealthData = res || { alerts: [] };
                 if (window.EngineLogLive && _engineLogLiveOpts) {
                     window.EngineLogLive.renderDisplayEvents(_engineLogLiveOpts);
@@ -1688,7 +1717,9 @@
             var status = (data.status || 'stopped').toLowerCase();
             var stForError = data.state || {};
             var lastErrorCode = (stForError.last_error_code || '').trim();
-            var hasApiKeyError = lastErrorCode === 'API_UNAUTHORIZED' && status === 'running';
+            var connOk = window._lastConnectivityProbeOk === true
+                || (window._lastConnectivityProbeOk !== false && !window._lastConnectivityFailure);
+            var hasApiKeyError = lastErrorCode === 'API_UNAUTHORIZED' && status === 'running' && !connOk;
             var statusText = status === 'running' ? (hasApiKeyError ? 'Hata (API anahtarı)' : 'Çalışıyor') : status === 'error' || (status && status.indexOf('paused') === 0) ? 'Hata' : status === 'stopped' ? 'Durduruldu' : 'Bekliyor';
             statusBadge.textContent = statusText;
             statusBadge.className = 'status-badge ' + (hasApiKeyError || status === 'error' || (status && status.indexOf('paused') === 0) ? 'status-error' : status === 'running' ? 'status-running' : 'status-stopped');
@@ -1748,7 +1779,7 @@
             var stateHeroTitleEl = document.getElementById('stateHeroTitle');
             if (stateHeroTitleEl) stateHeroTitleEl.textContent = status === 'running' ? (hasApiKeyError ? 'Durum · Hata' : 'Durum · Canlı') : 'Durum · ' + statusText;
             syncEngineAlertBlink(window._engineLogHasCritical && status === 'running');
-            lastBotStartedAt = data.started_at || null;
+            lastBotStartedAt = pickEarlierStartedAt(lastBotStartedAt, data.started_at);
             if (stateHeroMetaInterval) { clearInterval(stateHeroMetaInterval); stateHeroMetaInterval = null; }
             var stateHeroMetaEl = document.getElementById('stateHeroMeta');
             if (stateHeroMetaEl) {
@@ -1816,6 +1847,34 @@
                     if (cid.indexOf('sell_grid') >= 0 || cid.indexOf('buy_grid') >= 0 || cid.indexOf('grid') >= 0) return (slot != null && slot >= 0) ? 'Grid #' + (slot + 1) : 'Grid';
                     return 'Grid';
                 }
+                function resolveTradeReferencePrice(t) {
+                    if (t.reference_price != null && !isNaN(Number(t.reference_price)) && Number(t.reference_price) > 0) {
+                        return Number(t.reference_price);
+                    }
+                    var list = window._botDetailCycleTrades || trades;
+                    for (var i = 0; i < list.length; i++) {
+                        var tr = list[i];
+                        if (tr.reference_price != null && !isNaN(Number(tr.reference_price)) && Number(tr.reference_price) > 0) {
+                            return Number(tr.reference_price);
+                        }
+                    }
+                    for (var j = 0; j < list.length; j++) {
+                        var tr2 = list[j];
+                        var cid2 = (tr2.client_order_id || '').toLowerCase();
+                        var rsn = (tr2.reason || '').toLowerCase();
+                        if ((tr2.side || '').toUpperCase() !== 'BUY') continue;
+                        if (cid2.indexOf('cycle_open_') === 0 || rsn === 'initial_allocation' || isInitialAllocationTrade(tr2)) {
+                            if (tr2.price != null && !isNaN(Number(tr2.price)) && Number(tr2.price) > 0) return Number(tr2.price);
+                        }
+                    }
+                    for (var k = 0; k < list.length; k++) {
+                        var tr3 = list[k];
+                        if ((tr3.side || '').toUpperCase() === 'BUY' && tr3.price != null && !isNaN(Number(tr3.price)) && Number(tr3.price) > 0) {
+                            return Number(tr3.price);
+                        }
+                    }
+                    return null;
+                }
                 trades.forEach(function(t) {
                     var div = document.createElement('div');
                     div.className = 'cycle-pnl-item';
@@ -1830,12 +1889,12 @@
                     var feeVal = t.fee != null ? t.fee : t.commission;
                     var feeStr = (feeVal != null && feeVal !== '') ? fmtUsd(Number(feeVal)) : '—';
                     var ts = t.ts ? (function() { var d = new Date(t.ts); return d.toLocaleString('tr-TR'); })() : '—';
-                    var refP = t.reference_price != null && !isNaN(Number(t.reference_price)) ? Number(t.reference_price) : null;
+                    var refP = resolveTradeReferencePrice(t);
                     var priceNum = t.price != null && !isNaN(Number(t.price)) ? Number(t.price) : null;
                     var realizedPctStr = '';
                     var skipRealizedPct = (reason === 'Tur başlangıç (Base)' || reason === 'İlk base alımı' || isInitialAllocationTrade(t));
                     if (!skipRealizedPct && refP != null && refP > 0 && priceNum != null) {
-                        var pct = (side === 'SELL') ? ((priceNum - refP) / refP * 100) : ((refP - priceNum) / refP * 100);
+                        var pct = ((priceNum - refP) / refP * 100);
                         realizedPctStr = ' · Gerçekleşme ' + (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%';
                     }
                     var midPart = reason + ' · ' + coin;
@@ -1872,6 +1931,17 @@
                     '<div class="cycle-report-item"><span class="cycle-report-label">Kar satışından kar</span><span class="cycle-report-value ' + pnlCl + '">' + pnl + '</span></div>';
                 cycleReportEl.style.display = 'flex';
             }
+            function renderCycleTradesFromCache(cycleId) {
+                var entry = _cycleTradesCache[String(cycleId)];
+                if (!entry) return false;
+                try {
+                    renderCycleTradesList(entry.trades || [], cycleId);
+                    renderCycleReport(entry.summary, cycleId);
+                    return true;
+                } catch (e) {
+                    return false;
+                }
+            }
             function loadCycleTrades(cycleId, opts) {
                 opts = opts || {};
                 var silent = opts.silent === true;
@@ -1882,15 +1952,19 @@
                     btn.classList.toggle('active', Number(btn.getAttribute('data-cycle')) === cycleId);
                 });
                 var cycleReportEl = document.getElementById('cycleReport');
-                if (!silent) {
+                var fromCache = renderCycleTradesFromCache(cycleId);
+                if (!silent && !fromCache) {
                     cycleTradesList.innerHTML = '<div class="cycle-pnl-item muted">Yükleniyor…</div>';
                     if (cycleReportEl) cycleReportEl.style.display = 'none';
                 }
                 var q = 'account_id=' + (accountId || '') + '&limit=100&cycle_id=' + cycleId;
                 window.apiClient.get('/api/bots-engine/' + botId + '/trades?' + q)
                     .then(function(res) {
-                        renderCycleTradesList(res.trades || [], cycleId);
-                        renderCycleReport(res.cycle_summary, cycleId);
+                        var trades = res.trades || [];
+                        var summary = res.cycle_summary;
+                        _cycleTradesCache[String(cycleId)] = { trades: trades, summary: summary };
+                        renderCycleTradesList(trades, cycleId);
+                        renderCycleReport(summary, cycleId);
                     })
                     .catch(function() {
                         if (!silent) {
@@ -1913,7 +1987,7 @@
                         btn.className = 'cycle-tur-btn' + (c === selectedCycleId ? ' active' : '');
                         btn.setAttribute('data-cycle', c);
                         btn.textContent = 'Tur ' + c;
-                        btn.onclick = function() { loadCycleTrades(c); };
+                        btn.onclick = function() { loadCycleTrades(c, { silent: true }); };
                         cycleTradesTurButtons.appendChild(btn);
                     });
                     loadCycleTrades(selectedCycleId);
@@ -1925,6 +1999,7 @@
 
             function refreshTradesPanel(newCycleId) {
                 if (!cycleTradesTurButtons || !cycleTradesList) return;
+                _cycleTradesCache = {};
                 currentCycleFromState = newCycleId != null ? Number(newCycleId) : 1;
                 selectedCycleId = currentCycleFromState;
                 cycleTradesTurButtons.innerHTML = '';
@@ -1941,7 +2016,7 @@
                             btn.className = 'cycle-tur-btn' + (c === selectedCycleId ? ' active' : '');
                             btn.setAttribute('data-cycle', c);
                             btn.textContent = 'Tur ' + c;
-                            btn.onclick = function() { loadCycleTrades(c); };
+                            btn.onclick = function() { loadCycleTrades(c, { silent: true }); };
                             cycleTradesTurButtons.appendChild(btn);
                         });
                         loadCycleTrades(selectedCycleId);
@@ -1992,11 +2067,21 @@
                 window.EngineLogFormat.setLogContext({
                     botId: botId,
                     initialCapital: initialCapital,
-                    cycleStartEquity: st.cycle_start_equity != null ? Number(st.cycle_start_equity) : null
+                    cycleStartEquity: st.cycle_start_equity != null ? Number(st.cycle_start_equity) : null,
+                    currentCycleId: st.cycle_id != null ? Number(st.cycle_id) : null,
+                    quoteBalance: st.quote_balance != null ? Number(st.quote_balance) : null,
+                    baseBalance: st.base_balance != null ? Number(st.base_balance) : null,
+                    config: cfg,
+                    cycleOpenTrades: st.cycle_open_trades || []
                 });
             }
             _engineLogLiveOpts.initialCapital = initialCapital;
             _engineLogLiveOpts.cycleStartEquity = st.cycle_start_equity != null ? Number(st.cycle_start_equity) : null;
+            _engineLogLiveOpts.currentCycleId = st.cycle_id != null ? Number(st.cycle_id) : null;
+            _engineLogLiveOpts.quoteBalance = st.quote_balance != null ? Number(st.quote_balance) : null;
+            _engineLogLiveOpts.baseBalance = st.base_balance != null ? Number(st.base_balance) : null;
+            _engineLogLiveOpts.config = data.config || cfg || {};
+            _engineLogLiveOpts.cycleOpenTrades = st.cycle_open_trades || [];
             startEngineLogLive();
             fetchBotHealth();
             if (!window._botHealthPollStarted) {
@@ -2465,7 +2550,7 @@
                         if (stateHeroTitleEl.textContent !== titleText) stateHeroTitleEl.textContent = titleText;
                         syncEngineAlertBlink(window._engineLogHasCritical && pollStatus === 'running');
                     }
-                    lastBotStartedAt = res.started_at || null;
+                    lastBotStartedAt = pickEarlierStartedAt(lastBotStartedAt, res.started_at);
                     if (stateHeroMetaInterval) { clearInterval(stateHeroMetaInterval); stateHeroMetaInterval = null; }
                     var stateHeroMetaElPoll = document.getElementById('stateHeroMeta');
                     if (stateHeroMetaElPoll) {

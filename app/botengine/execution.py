@@ -1044,6 +1044,24 @@ async def run_actions(
                             "target_base_usdt": round(equity_usdt * base_alloc, 2),
                             "ts": _ts_open,
                         }
+                        tb_row = state.get("target_budgets") if isinstance(state.get("target_budgets"), dict) else {}
+                        open_row = {
+                            "cycle_id": 1,
+                            "side": "BUY",
+                            "qty": round(float(exec_qty), 10),
+                            "price": round(float(fill_price), 10),
+                            "reference_price": round(float(fill_price), 10),
+                            "quote_balance": round(float(state["quote_balance"]), 2),
+                            "equity_usdt": equity_usdt,
+                            "ts": _ts_open,
+                            "fee": round(float(fee), 8),
+                        }
+                        if tb_row.get("target_quote_usdt") is not None:
+                            open_row["target_quote_usdt"] = round(float(tb_row["target_quote_usdt"]), 2)
+                        if tb_row.get("target_base_usdt") is not None:
+                            open_row["target_base_usdt"] = round(float(tb_row["target_base_usdt"]), 2)
+                        state.setdefault("cycle_open_trades", []).append(open_row)
+                        state["cycle_open_trades"] = state["cycle_open_trades"][-200:]
                         _initial_alloc_skip_count.pop((bot_id, key), None)
                 if reason == "trail_sell_grid":
                     idx = a.get("grid_index", 0)
@@ -1101,12 +1119,51 @@ async def run_actions(
                     )
                 fill_evt["event_logged"] = True
                 results.append(fill_evt)
+                # Persist fill before tur kapanışı (CYCLE_END hata verse bile trades tablosunda kalsın)
+                if db is not None:
+                    try:
+                        oid_early = res.get("orderId")
+                        _ref_pre = state.get("reference_price")
+                        ref_early = float(_ref_pre) if _ref_pre is not None else None
+                        trade_row_early, inserted_early = Ledger.record_trade(
+                            db,
+                            bot_id,
+                            account_id,
+                            side,
+                            exec_qty,
+                            fill_price,
+                            fee=fee,
+                            fee_asset=fee_asset,
+                            slot_id=a.get("grid_index"),
+                            reference_price=ref_early,
+                            order_id=str(oid_early) if oid_early is not None else None,
+                            client_order_id=client_order_id,
+                            symbol=symbol,
+                            cycle_id=cycle_id_for_trade,
+                        )
+                        if inserted_early:
+                            logger.info(
+                                "BOT_TRADE_RECORDED bot_id=%s side=%s qty=%s price=%s fee=%s order_id=%s request_id=-",
+                                bot_id, side, exec_qty, fill_price, fee, oid_early,
+                            )
+                            try:
+                                from app.services.transaction_history_file_store import record_bot_trade_fill
+
+                                record_bot_trade_fill(
+                                    db, account_id, bot_id, trade_row_early, symbol, quote_qty=cum_quote
+                                )
+                            except Exception as tx_ex:
+                                logger.debug("tx_history record_bot_trade_fill bot_id=%s: %s", bot_id, tx_ex)
+                    except Exception as ex:
+                        logger.warning(
+                            "bot_engine execution record_trade (early) failed bot_id=%s order_id=%s err=%s",
+                            bot_id, res.get("orderId"), ex,
+                        )
                 if reason == "initial_allocation" and exec_qty > 0 and db is not None:
                     save_state(db, bot_id, account_id, state)
                     cid_ia = int(state.get("cycle_id") or 1)
-                    from datetime import timedelta
-
                     tur_ts = fill_ts_utc + timedelta(seconds=1)
+                    tb_ia = state.get("target_budgets") if isinstance(state.get("target_budgets"), dict) else {}
                     append_event(
                         db,
                         bot_id,
@@ -1122,6 +1179,8 @@ async def run_actions(
                             "base_balance": round(float(state.get("base_balance") or 0), 10),
                             "quote_balance": round(float(state.get("quote_balance") or 0), 2),
                             "equity_usdt": round(float(state.get("cycle_start_equity") or 0), 2),
+                            "target_quote_usdt": tb_ia.get("target_quote_usdt"),
+                            "target_base_usdt": tb_ia.get("target_base_usdt"),
                             "symbol": symbol,
                         },
                         ts=tur_ts,
@@ -1295,25 +1354,54 @@ async def run_actions(
                     m = len(config.buy_grids)
                     cycle_reset_after_fill(state, fill_price, n, m, symbol=symbol)
                     if db is not None:
-                        cycle_end_ts = fill_ts_utc + timedelta(milliseconds=100)
-                        cycle_start_ts = fill_ts_utc + timedelta(milliseconds=200)
-                        append_event(db, bot_id, account_id, "CYCLE_END", "Tur bitti", meta, ts=cycle_end_ts)
-                        logger.info(
-                            "BOT_CYCLE_END bot_id=%s cycle_id=%s pnl_usdt_net=%.4f cycle_type=%s base_delta=%s matched_qty=%s fees_usdt=%.4f pnl_mode=%s",
-                            bot_id, cycle_id_for_trade, pnl, cycle_type, base_delta, matched_qty, fees, pnl_mode,
-                        )
-                        new_cid = int(state.get("cycle_id") or 1)
-                        append_event(db, bot_id, account_id, "CYCLE_START", "Tur başladı", {
-                            "cycle_id": new_cid,
-                            "reference_price": round(float(fill_price), 10),
-                            "base_qty": round(float(state.get("base_balance") or 0), 10),
-                            "base_balance": round(float(state.get("base_balance") or 0), 10),
-                            "quote_balance": round(float(state.get("quote_balance") or 0), 2),
-                            "equity_usdt": round(float(state.get("cycle_start_equity") or 0), 2),
-                            "symbol": symbol,
-                            "carry_over": True,
-                            "prev_close_reason": close_reason,
-                        }, ts=cycle_start_ts)
+                        try:
+                            cycle_end_ts = fill_ts_utc + timedelta(milliseconds=100)
+                            cycle_start_ts = fill_ts_utc + timedelta(milliseconds=200)
+                            append_event(db, bot_id, account_id, "CYCLE_END", "Tur bitti", meta, ts=cycle_end_ts)
+                            logger.info(
+                                "BOT_CYCLE_END bot_id=%s cycle_id=%s pnl_usdt_net=%.4f cycle_type=%s base_delta=%s matched_qty=%s fees_usdt=%.4f pnl_mode=%s",
+                                bot_id, cycle_id_for_trade, pnl, cycle_type, base_delta, matched_qty, fees, pnl_mode,
+                            )
+                            new_cid = int(state.get("cycle_id") or 1)
+                            quote_bal_cs = _num(state.get("quote_balance"))
+                            base_bal_cs = _num(state.get("base_balance"))
+                            equity_cs = round(quote_bal_cs + base_bal_cs * fill_price, 2)
+                            quote_alloc_cs = _num(getattr(config, "quote_alloc_pct", 50)) / 100.0
+                            base_alloc_cs = _num(getattr(config, "base_alloc_pct", 50)) / 100.0
+                            target_quote_cs = round(equity_cs * quote_alloc_cs, 2)
+                            target_base_cs = round(equity_cs * base_alloc_cs, 2)
+                            state["target_budgets"] = {
+                                "equity_usdt": equity_cs,
+                                "target_quote_usdt": target_quote_cs,
+                                "target_base_usdt": target_base_cs,
+                                "ts": datetime.now(timezone.utc).isoformat(),
+                            }
+                            append_event(db, bot_id, account_id, "CYCLE_START", "Tur başladı", {
+                                "cycle_id": new_cid,
+                                "reference_price": round(float(fill_price), 10),
+                                "base_qty": round(float(base_bal_cs), 10),
+                                "base_balance": round(float(base_bal_cs), 10),
+                                "quote_balance": round(float(quote_bal_cs), 2),
+                                "equity_usdt": round(float(state.get("cycle_start_equity") or equity_cs), 2),
+                                "target_quote_usdt": target_quote_cs,
+                                "target_base_usdt": target_base_cs,
+                                "symbol": symbol,
+                                "carry_over": True,
+                                "prev_close_reason": close_reason,
+                            }, ts=cycle_start_ts)
+                            for row in reversed(state.get("cycle_open_trades") or []):
+                                if not isinstance(row, dict):
+                                    continue
+                                if int(row.get("cycle_id") or 0) != int(new_cid):
+                                    continue
+                                row["target_quote_usdt"] = target_quote_cs
+                                row["target_base_usdt"] = target_base_cs
+                                break
+                        except Exception as cycle_evt_ex:
+                            logger.warning(
+                                "bot_engine CYCLE_END/START events failed bot_id=%s cycle_id=%s err=%s",
+                                bot_id, cycle_id_for_trade, cycle_evt_ex,
+                            )
                     # Reinvest policy: target budgets from equity (order sizing reference only; no rebalance order)
                     quote_bal = _num(state.get("quote_balance"))
                     base_bal = _num(state.get("base_balance"))
@@ -1322,12 +1410,13 @@ async def run_actions(
                     base_alloc = _num(getattr(config, "base_alloc_pct", 50)) / 100.0
                     target_quote_usdt = round(equity_usdt * quote_alloc, 2)
                     target_base_usdt = round(equity_usdt * base_alloc, 2)
-                    state["target_budgets"] = {
-                        "equity_usdt": equity_usdt,
-                        "target_quote_usdt": target_quote_usdt,
-                        "target_base_usdt": target_base_usdt,
-                        "ts": datetime.now(timezone.utc).isoformat(),
-                    }
+                    if not isinstance(state.get("target_budgets"), dict) or not state["target_budgets"].get("target_quote_usdt"):
+                        state["target_budgets"] = {
+                            "equity_usdt": equity_usdt,
+                            "target_quote_usdt": target_quote_usdt,
+                            "target_base_usdt": target_base_usdt,
+                            "ts": datetime.now(timezone.utc).isoformat(),
+                        }
                     logger.info(
                         "BOT_TARGET_BUDGETS_UPDATED bot_id=%s equity_usdt=%.2f target_quote=%.2f target_base=%.2f base_bal=%.6f quote_bal=%.2f price=%.4f",
                         bot_id, equity_usdt, target_quote_usdt, target_base_usdt, base_bal, quote_bal, fill_price,
@@ -1389,9 +1478,9 @@ async def run_actions(
                         logger.warning("BOT SLIPPAGE_WARN bot_id=%s slip_pct=%.2f trigger=%.2f fill=%.2f", bot_id, slip_pct, trigger_price, fill_price)
             except Exception as e:
                 error_id = str(uuid.uuid4())
-                logger.exception(
-                    "RUN_ACTION_EXCEPTION error_code=RUN_ACTION_EXCEPTION error_id=%s bot_id=%s account_id=%s action_key=%s loop_id=%s",
-                    error_id, bot_id, account_id, key, loop_id or "",
+                logger.warning(
+                    "RUN_ACTION_EXCEPTION error_code=RUN_ACTION_EXCEPTION error_id=%s bot_id=%s account_id=%s action_key=%s loop_id=%s err=%s",
+                    error_id, bot_id, account_id, key, loop_id or "", e,
                 )
                 if db is not None:
                     append_event(db, bot_id, account_id, "ERROR", f"RUN_ACTION_EXCEPTION {error_id} {e!s}", {

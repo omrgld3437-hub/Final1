@@ -711,62 +711,158 @@ function hideError() {
     if (banner) banner.style.display = "none";
 }
 
-/** Resolve account from URL (account_code or account_id), localStorage, or session user. Returns { accountId, accountCode }. */
+/** 5–7 haneli rakam: DB account_id değil, account_code. */
+function looksLikeNumericAccountCode(value) {
+    const s = String(value == null ? "" : value).trim();
+    return /^\d{5,7}$/.test(s);
+}
+
+function isDashboardAdminContext() {
+    const qs = new URLSearchParams(location.search);
+    if (qs.get("from_admin") === "1") return true;
+    try { return sessionStorage.getItem("dashboard_from_admin") === "1"; } catch (e) { return false; }
+}
+
+function persistSelectedAccount(accountId, accountCode) {
+    try {
+        if (accountCode) localStorage.setItem("selectedAccountCode", String(accountCode).trim());
+        if (accountId != null && accountId !== "") localStorage.setItem("selectedAccountId", String(accountId));
+    } catch (e) {}
+}
+
+async function resolveAccountByCode(code) {
+    const c = String(code || "").trim();
+    if (!c) return null;
+    const data = await window.apiClient.get("/api/accounts/by-code/" + encodeURIComponent(c));
+    return { accountId: data.id, accountCode: data.account_code || c };
+}
+
+async function resolveAccountById(idParam) {
+    const raw = String(idParam == null ? "" : idParam).trim();
+    if (!raw) return null;
+    if (looksLikeNumericAccountCode(raw)) {
+        return await resolveAccountByCode(raw);
+    }
+    const n = parseInt(raw, 10);
+    if (!Number.isFinite(n) || n <= 0) return null;
+    const data = await window.apiClient.get("/api/accounts/" + n);
+    return { accountId: n, accountCode: data.account_code || null };
+}
+
+async function resolveSessionUserAccount() {
+    try {
+        var userStr = sessionStorage.getItem("user") || localStorage.getItem("user");
+        if (!userStr) return null;
+        var user = JSON.parse(userStr);
+        if (user && user.is_admin) return null;
+        var sessionCode = user && (user.account_code || "").trim();
+        var sessionId = user && (user.account_id != null ? parseInt(user.account_id, 10) : NaN);
+        if (sessionCode) {
+            const resolved = await resolveAccountByCode(sessionCode);
+            persistSelectedAccount(resolved.accountId, resolved.accountCode);
+            return resolved;
+        }
+        if (Number.isFinite(sessionId) && sessionId > 0) {
+            const resolved = await resolveAccountById(String(sessionId));
+            if (resolved) persistSelectedAccount(resolved.accountId, resolved.accountCode);
+            return resolved;
+        }
+    } catch (e) {
+        if (typeof window.__DEBUG_DASH__ !== "undefined" && window.__DEBUG_DASH__) {
+            console.warn("[dashboard] resolve from session user failed:", e);
+        }
+    }
+    return null;
+}
+
+/** Resolve account from URL (account_code or account_id), admin session, localStorage, or session user. */
 async function resolveAccountFromUrl() {
     const qs = new URLSearchParams(location.search);
     const code = qs.get("account_code");
     const idParam = qs.get("account_id");
-    const stored = localStorage.getItem("selectedAccountCode") || localStorage.getItem("selectedAccountId");
+    const fromAdmin = isDashboardAdminContext();
+    const storedCode = localStorage.getItem("selectedAccountCode");
+    const storedId = localStorage.getItem("selectedAccountId");
 
-    if (code && /^\d{6}$/.test(String(code).trim())) {
-        const data = await window.apiClient.get("/api/accounts/by-code/" + encodeURIComponent(code.trim()));
-        return { accountId: data.id, accountCode: data.account_code || code.trim() };
+    if (code && String(code).trim()) {
+        const resolved = await resolveAccountByCode(code);
+        persistSelectedAccount(resolved.accountId, resolved.accountCode);
+        if (fromAdmin) {
+            try {
+                sessionStorage.setItem("dashboard_admin_account_id", String(resolved.accountId));
+                sessionStorage.setItem("dashboard_admin_account_code", resolved.accountCode || "");
+            } catch (e) {}
+        }
+        return resolved;
     }
     if (idParam) {
-        const n = parseInt(String(idParam).trim(), 10);
-        if (Number.isFinite(n) && n > 0) {
-            const data = await window.apiClient.get("/api/accounts/" + n);
-            return { accountId: n, accountCode: data.account_code || null };
+        const resolved = await resolveAccountById(idParam);
+        if (resolved) {
+            persistSelectedAccount(resolved.accountId, resolved.accountCode);
+            if (fromAdmin) {
+                try {
+                    sessionStorage.setItem("dashboard_admin_account_id", String(resolved.accountId));
+                    sessionStorage.setItem("dashboard_admin_account_code", resolved.accountCode || "");
+                } catch (e) {}
+            }
+            return resolved;
         }
     }
-    if (stored) {
-        const s = String(stored).trim();
-        if (/^\d{6}$/.test(s)) {
-            const data = await window.apiClient.get("/api/accounts/by-code/" + encodeURIComponent(s));
-            return { accountId: data.id, accountCode: data.account_code || s };
-        }
-        const n = parseInt(s, 10);
-        if (Number.isFinite(n) && n > 0) {
-            const data = await window.apiClient.get("/api/accounts/" + n);
-            return { accountId: n, accountCode: data.account_code || null };
+    if (!fromAdmin) {
+        const sessionResolved = await resolveSessionUserAccount();
+        if (sessionResolved) {
+            if (storedCode && String(storedCode).trim().toUpperCase() !== String(sessionResolved.accountCode || "").trim().toUpperCase()) {
+                try {
+                    localStorage.removeItem("selectedAccountCode");
+                    localStorage.removeItem("selectedAccountId");
+                } catch (e) {}
+            }
+            persistSelectedAccount(sessionResolved.accountId, sessionResolved.accountCode);
+            return sessionResolved;
         }
     }
-    // Oturumdaki kullanıcıdan hesap bilgisi (login sonrası session/localStorage'daki user)
-    try {
-        var userStr = sessionStorage.getItem("user") || localStorage.getItem("user");
-        if (userStr) {
-            var user = JSON.parse(userStr);
-            var sessionCode = user && (user.account_code || "").trim();
-            var sessionId = user && (user.account_id != null ? parseInt(user.account_id, 10) : NaN);
-            if (sessionCode && /^\d{6}$/.test(sessionCode)) {
-                const data = await window.apiClient.get("/api/accounts/by-code/" + encodeURIComponent(sessionCode));
-                try {
-                    localStorage.setItem("selectedAccountCode", sessionCode);
-                    localStorage.setItem("selectedAccountId", String(data.id));
-                } catch (e) {}
-                return { accountId: data.id, accountCode: data.account_code || sessionCode };
+    if (fromAdmin) {
+        try {
+            var adminCode = sessionStorage.getItem("dashboard_admin_account_code");
+            if (adminCode && String(adminCode).trim()) {
+                const resolved = await resolveAccountByCode(adminCode);
+                persistSelectedAccount(resolved.accountId, resolved.accountCode);
+                return resolved;
             }
-            if (Number.isFinite(sessionId) && sessionId > 0) {
-                const data = await window.apiClient.get("/api/accounts/" + sessionId);
-                try {
-                    localStorage.setItem("selectedAccountId", String(sessionId));
-                    if (data.account_code) localStorage.setItem("selectedAccountCode", data.account_code);
-                } catch (e) {}
-                return { accountId: sessionId, accountCode: data.account_code || null };
+            var adminId = sessionStorage.getItem("dashboard_admin_account_id");
+            if (adminId) {
+                const resolved = await resolveAccountById(adminId);
+                if (resolved) {
+                    persistSelectedAccount(resolved.accountId, resolved.accountCode);
+                    return resolved;
+                }
+            }
+        } catch (e) {}
+        if (storedCode && String(storedCode).trim()) {
+            try {
+                const resolved = await resolveAccountByCode(storedCode);
+                persistSelectedAccount(resolved.accountId, resolved.accountCode);
+                return resolved;
+            } catch (e) {
+                if (typeof window.__DEBUG_DASH__ !== "undefined" && window.__DEBUG_DASH__) {
+                    console.warn("[dashboard] stored account_code resolve failed:", storedCode, e);
+                }
             }
         }
-    } catch (e) {
-        if (typeof window.__DEBUG_DASH__ !== "undefined" && window.__DEBUG_DASH__) console.warn("[dashboard] resolve from session user failed:", e);
+        if (storedId) {
+            try {
+                const resolved = await resolveAccountById(storedId);
+                if (resolved) {
+                    persistSelectedAccount(resolved.accountId, resolved.accountCode);
+                    return resolved;
+                }
+            } catch (e) {
+                if (typeof window.__DEBUG_DASH__ !== "undefined" && window.__DEBUG_DASH__) {
+                    console.warn("[dashboard] stored account_id resolve failed:", storedId, e);
+                }
+            }
+        }
+        throw new Error("account_id veya account_code gerekli");
     }
     throw new Error("account_id veya account_code gerekli");
 }
@@ -10189,6 +10285,12 @@ async function initDashboard() {
     State.accountId = accountId;
     State.accountCode = accountCode;
     window.__ACTIVE_ACCOUNT_ID = accountId;
+    if (showAdminNav) {
+        try {
+            sessionStorage.setItem("dashboard_admin_account_id", String(accountId));
+            if (accountCode) sessionStorage.setItem("dashboard_admin_account_code", accountCode);
+        } catch (e) {}
+    }
     if (typeof resetTxHistoryClientState === 'function') resetTxHistoryClientState();
     if (typeof hydrateWalletFromStorageCache === 'function') hydrateWalletFromStorageCache(accountId);
     if (typeof hydrateKpisFromStorageCache === 'function') hydrateKpisFromStorageCache(accountId);

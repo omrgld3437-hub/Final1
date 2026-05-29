@@ -29,9 +29,11 @@ Paylaşılan iş mantığı: Binance, fiyat, PnL, şifreleme, audit.
 | `finance_snapshot.py` | Finans snapshot |
 | `audit.py` | Audit log |
 | `test_account.py` | Paper test hesabı |
+| `wallet_display.py` | Strip/tablo bot_locked; `get_running_bots_equity_usd`; test `apply_test_wallet_equity_totals` |
+| `test_spot_paper.py` | Test hesabı manuel spot paper bakiye |
 | `transaction_history_service.py` | İşlem geçmişi API |
 | `transaction_history_file_store.py` | Şifreli işlem geçmişi (`.run/tx_history/`); `bootstrap_tx_history_from_binance` |
-| `binance_connectivity.py` | Upstream hata; `try_auto_resume_paused_bots` → `CONNECTIVITY_RECOVERED` + START `payload_json.connectivity_resume` (çift Bismillah logu yok) |
+| `binance_connectivity.py` | Upstream hata; probe OK → `on_connectivity_restored` (paused START + running pending `CONNECTIVITY_STABLE` → flush after loop restart + START `connectivity_resume`) |
 | `bot_perf_file_store.py` | Bot performans saatlik/günlük dosya deposu |
 | `ip_blocklist.py` | Manager'ın yazdığı `.run/blocked_ips.json` okuma; web middleware 403 |
 

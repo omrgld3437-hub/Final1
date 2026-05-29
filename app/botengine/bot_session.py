@@ -1,0 +1,157 @@
+"""
+Bot çalışma oturumu süresi (started_at) — bağlantı/worker yeniden başlatmada sıfırlanmaz.
+"""
+from __future__ import annotations
+
+import json
+import re
+from datetime import datetime, timezone
+from typing import Any, Dict, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
+
+_STATE_KEY = "bot_run_started_at"
+_COLD_START_RE = re.compile(r"COMMAND_EXECUTED.*\bSTART\b", re.I)
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def is_connectivity_resume_start(
+    cmd_payload: Optional[Dict[str, Any]],
+    state: Optional[Dict[str, Any]],
+) -> bool:
+    payload = cmd_payload if isinstance(cmd_payload, dict) else {}
+    st = state if isinstance(state, dict) else {}
+    if payload.get("connectivity_resume"):
+        return True
+    if (st.get("_connectivity_resume_reason") or "").strip():
+        return True
+    return False
+
+
+def should_refresh_bot_started_at(bot: Any, *, connectivity_resume: bool = False) -> bool:
+    """Yalnızca durdurulmuş bot yeniden başlatılınca DB started_at yenilenir."""
+    if connectivity_resume:
+        return False
+    prev = (getattr(bot, "status", None) or "").strip().lower()
+    if prev in ("running", "paused_error"):
+        return False
+    return True
+
+
+def touch_bot_started_at(bot: Any, *, connectivity_resume: bool = False) -> None:
+    if getattr(bot, "started_at", None) is None:
+        bot.started_at = datetime.now(timezone.utc)
+        return
+    if should_refresh_bot_started_at(bot, connectivity_resume=connectivity_resume):
+        bot.started_at = datetime.now(timezone.utc)
+
+
+def mark_bot_run_started(state: Dict[str, Any], *, connectivity_resume: bool = False) -> None:
+    """State'te oturum başlangıcı — UI süre sayacı tek kaynak."""
+    if connectivity_resume:
+        return
+    state[_STATE_KEY] = _utc_now_iso()
+
+
+def clear_bot_run_started(state: Dict[str, Any]) -> None:
+    state.pop(_STATE_KEY, None)
+
+
+def _normalize_iso_z(iso: Optional[str]) -> Optional[str]:
+    if not iso or not isinstance(iso, str):
+        return None
+    s = iso.strip()
+    if not s:
+        return None
+    if s.endswith("+00:00"):
+        s = s[:-6] + "Z"
+    elif "T" in s and not s.endswith("Z") and "+" not in s[-7:] and "-" not in s[10:]:
+        s = s + "Z"
+    return s
+
+
+def _parse_iso_ms(iso: Optional[str]) -> int:
+    norm = _normalize_iso_z(iso)
+    if not norm:
+        return 0
+    try:
+        t = datetime.fromisoformat(norm.replace("Z", "+00:00"))
+        if t.tzinfo is None:
+            t = t.replace(tzinfo=timezone.utc)
+        return int(t.timestamp() * 1000)
+    except Exception:
+        return 0
+
+
+def infer_bot_run_started_at_from_events(db: "Session", bot_id: int) -> Optional[str]:
+    """Son STOP sonrası ilk soğuk START (connectivity_resume değil)."""
+    from app.botengine.state_store import list_events
+
+    events = list_events(db, int(bot_id), limit=500)
+    if not events:
+        return None
+    by_id = sorted(events, key=lambda e: int(e.get("id") or 0))
+    last_stop_id = 0
+    for ev in by_id:
+        raw = (ev.get("message") or "").upper()
+        if "COMMAND_EXECUTED" in raw and "STOP" in raw:
+            last_stop_id = max(last_stop_id, int(ev.get("id") or 0))
+    for ev in by_id:
+        if int(ev.get("id") or 0) <= last_stop_id:
+            continue
+        if (ev.get("type") or "").upper() != "INFO":
+            continue
+        raw = ev.get("message") or ""
+        if not _COLD_START_RE.search(raw):
+            continue
+        meta = ev.get("meta") or {}
+        if isinstance(meta, str):
+            try:
+                meta = json.loads(meta)
+            except Exception:
+                meta = {}
+        if meta.get("connectivity_resume"):
+            continue
+        ts = ev.get("ts")
+        if ts:
+            return _normalize_iso_z(str(ts))
+    return None
+
+
+def heal_bot_run_started_at(db: "Session", bot_id: int, account_id: int, state: Dict[str, Any]) -> Dict[str, Any]:
+    if (state.get(_STATE_KEY) or "").strip():
+        return state
+    inferred = infer_bot_run_started_at_from_events(db, bot_id)
+    if inferred:
+        state[_STATE_KEY] = inferred
+        try:
+            from app.botengine.state_store import save_state
+
+            save_state(db, int(bot_id), int(account_id), state)
+        except Exception:
+            pass
+    return state
+
+
+def bot_run_started_at_iso(bot: Any, state: Optional[Dict[str, Any]], db: Optional["Session"] = None) -> Optional[str]:
+    """
+    UI/API süre alanı: state oturum başlangıcı; yoksa DB; running ise event'ten heal.
+    """
+    st = state if isinstance(state, dict) else {}
+    if db is not None and (getattr(bot, "status", None) or "").lower() == "running":
+        st = heal_bot_run_started_at(db, int(bot.id), int(bot.account_id), st)
+    st_iso = _normalize_iso_z(st.get(_STATE_KEY))
+    db_dt = getattr(bot, "started_at", None)
+    db_iso = None
+    if db_dt is not None:
+        try:
+            db_iso = _normalize_iso_z(db_dt.isoformat())
+        except Exception:
+            db_iso = None
+    if st_iso and db_iso:
+        return st_iso if _parse_iso_ms(st_iso) <= _parse_iso_ms(db_iso) else db_iso
+    return st_iso or db_iso

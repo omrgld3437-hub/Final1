@@ -106,6 +106,22 @@ _401_WARN_PATTERN = re.compile(
     r"(401\s+Unauthorized|BINANCE_SIGNED_ERROR.*401|BOT_EXECUTION_SKIP|BOT_EXECUTION_BALANCE_CHECK_FAIL)",
     re.I,
 )
+# Emilen tick/loop hataları — engine log + resilience; wrn-engine gürültüsü
+_ABSORBED_ENGINE_WARN_RE = re.compile(
+    r"BOT_LOOP_TRDCA_EXCEPTION|"
+    r"BOT_LOOP_TOPLEVEL_EXCEPTION|"
+    r"BOT_TICK_EXCEPTION|"
+    r"RUN_ACTION_EXCEPTION error_code=RUN_ACTION_EXCEPTION|"
+    r"BOT_TICK bot_id=\d+ lease_not_valid.*skip submit|"
+    r"BOT_TICK_PRICE_MISSING.*skip_trade=True|"
+    r"BOT_START_SKIPPED_ALREADY_RUNNING|"
+    r"BOT_ACCOUNT_KEYS_FAIL|"
+    r"WORKER_FIRST_TICK_FAILED|"
+    r"bot_run get_account_keys|"
+    r"bot_engine release_symbol_lock|"
+    r"bot_engine sync_virtual_wallet_from_state failed",
+    re.I,
+)
 # Web access log: drop 200 OK lines from stream/export (SLOW_REQUEST WARN lines are kept)
 _HTML_STATS_RE = re.compile(r"Günlük:\s*\d+\s*\|\s*Aylık:\s*\d+\s*\|\s*Toplam:\s*\d+")
 _ACCESS_200_RE = re.compile(
@@ -840,6 +856,9 @@ def _is_noise_line(line: str, level: str) -> bool:
         if "wallet_refresh_attempt error_code=WALLET_MODULE_MISSING" in s:
             return True
         if "get_price_map_flat" in s and "wallet_refresh" in s:
+            return True
+        # Bot engine: emilen tick hataları (engine log + resilience; bot running kalır)
+        if _ABSORBED_ENGINE_WARN_RE.search(s):
             return True
     if level == "ERROR":
         # INFO yanlış sınıflandırma düzeltmesi öncesi: home_wallet_refresh error=...
@@ -2047,6 +2066,50 @@ def schedule_manager_restart() -> bool:
     audit_event("restart", {"service": "stack", "full_process": True, "includes": ["manager", "web", "engine", "html"]})
     _exit_manager_after_delay()
     return True
+
+
+_global_action_lock = threading.Lock()
+_global_action_running = False
+
+
+def global_action_busy() -> bool:
+    with _global_action_lock:
+        return _global_action_running
+
+
+def schedule_global_action(action: str) -> dict[str, Any]:
+    """Toplu start/stop/restart — HTTP yanıtını bloklamadan arka planda çalıştır."""
+    action = (action or "").strip().lower()
+    if action not in ("start", "stop", "restart"):
+        return {"ok": False, "error": "invalid_action"}
+    with _global_action_lock:
+        if _global_action_running:
+            return {"ok": False, "busy": True}
+        _global_action_running = True
+
+    runners = {
+        "start": global_start,
+        "stop": global_stop,
+        "restart": global_restart,
+    }
+
+    def _work() -> None:
+        global _global_action_running
+        try:
+            applied, skipped = runners[action]()
+            audit_event("global_" + action, {"applied": applied, "skipped": skipped})
+        except Exception as e:
+            logging.getLogger(__name__).exception("global %s failed", action)
+        finally:
+            try:
+                get_status()
+            except Exception:
+                pass
+            with _global_action_lock:
+                _global_action_running = False
+
+    threading.Thread(target=_work, daemon=True, name="global-" + action).start()
+    return {"ok": True, "pending": True, "action": action}
 
 
 def global_start() -> tuple[list, list]:

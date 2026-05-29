@@ -187,7 +187,7 @@ async def process_command(cmd: Dict[str, Any], db, v5_scheduler=None) -> None:
     """Process one command: assert account, then start_bot or stop_bot (or v5: register/unregister with scheduler)."""
     import json as _json
 
-    from app.botengine.state_store import append_event, load_state
+    from app.botengine.state_store import append_event, load_state, save_state
     from app.botengine.orchestrator import start_bot, stop_bot
     from app.db.models import Bot
 
@@ -293,11 +293,21 @@ async def process_command(cmd: Dict[str, Any], db, v5_scheduler=None) -> None:
         if command == "START":
             if v5_scheduler:
                 from app.botengine.orchestrator import cancel_orchestrator_loop
-                cancel_orchestrator_loop(bot_id)
+                from app.botengine.bot_session import (
+                    is_connectivity_resume_start,
+                    mark_bot_run_started,
+                    touch_bot_started_at,
+                )
+                st_pre = load_state(db, bot_id) or {}
+                conn_resume = is_connectivity_resume_start(cmd_payload, st_pre)
+                if not conn_resume:
+                    cancel_orchestrator_loop(bot_id)
                 bot = db.query(Bot).filter(Bot.id == bot_id).first()
                 if bot:
                     bot.status = "running"
-                    bot.started_at = datetime.now(timezone.utc)
+                    touch_bot_started_at(bot, connectivity_resume=conn_resume)
+                    mark_bot_run_started(st_pre, connectivity_resume=conn_resume)
+                    save_state(db, bot_id, account_id, st_pre)
                     db.commit()
                 v5_scheduler.register_bot(bot_id, time.monotonic())
                 mark_command_done(db, cmd_id)
@@ -321,9 +331,20 @@ async def process_command(cmd: Dict[str, Any], db, v5_scheduler=None) -> None:
                         await run_one_bot_tick(bot_id, f"cmd{cmd_id}_immediate")
                         logger.info("WORKER_FIRST_TICK_EXECUTED bot_id=%s (initial allocation submitted)", bot_id)
                     except Exception as tick_err:
-                        logger.warning("WORKER_FIRST_TICK_FAILED bot_id=%s err=%s (scheduler will retry)", bot_id, tick_err)
+                        logger.info(
+                            "WORKER_FIRST_TICK_FAILED bot_id=%s err=%s (scheduler will retry)",
+                            bot_id, tick_err,
+                        )
             else:
-                await start_bot(bot_id, db)
+                st_pre = load_state(db, bot_id) or {}
+                conn_resume = False
+                try:
+                    from app.botengine.bot_session import is_connectivity_resume_start
+
+                    conn_resume = is_connectivity_resume_start(cmd_payload, st_pre)
+                except Exception:
+                    pass
+                await start_bot(bot_id, db, connectivity_resume=conn_resume)
                 mark_command_done(db, cmd_id)
                 logger.info("WORKER_COMMAND_EXECUTED command_id=%s bot_id=%s command=START", cmd_id, bot_id)
                 start_meta = _command_event_meta(bot_id)
@@ -344,7 +365,10 @@ async def process_command(cmd: Dict[str, Any], db, v5_scheduler=None) -> None:
                         await run_one_bot_tick(bot_id, f"cmd{cmd_id}_immediate")
                         logger.info("WORKER_FIRST_TICK_EXECUTED bot_id=%s (initial allocation submitted)", bot_id)
                     except Exception as tick_err:
-                        logger.warning("WORKER_FIRST_TICK_FAILED bot_id=%s err=%s (loop will retry)", bot_id, tick_err)
+                        logger.info(
+                            "WORKER_FIRST_TICK_FAILED bot_id=%s err=%s (loop will retry)",
+                            bot_id, tick_err,
+                        )
         elif command == "STOP":
             if v5_scheduler:
                 v5_scheduler.unregister_bot(bot_id)

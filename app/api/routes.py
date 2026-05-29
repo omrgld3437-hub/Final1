@@ -1325,15 +1325,20 @@ async def start_bot(
         return {"message": "Bot is already running", "status": bot.status}
     
     try:
-        from app.botengine.state_store import ensure_state_row
+        from app.botengine.state_store import ensure_state_row, load_state, save_state
         from app.services.perf_chart_state import seed_perf_chart_state_on_bot_start
         from app.api.bots_engine import _insert_engine_command
+        from app.botengine.bot_session import mark_bot_run_started, touch_bot_started_at
         ensure_state_row(db, bot.id, account_id, (bot.symbol or "").upper() or "BTCUSDT")
+
         bot.status = "running"
-        bot.started_at = datetime.now(timezone.utc)
+        touch_bot_started_at(bot, connectivity_resume=False)
         db.commit()
         seed_perf_chart_state_on_bot_start(db, bot.id)
         cmd_id = _insert_engine_command(db, account_id, bot.id, "START", request_id=getattr(request.state, "request_id", None))
+        st = load_state(db, bot.id) or {}
+        mark_bot_run_started(st, connectivity_resume=False)
+        save_state(db, bot.id, account_id, st)
         account = db.query(Account).filter(Account.id == account_id).first()
         audit_svc.log_event(
             db, actor_type="admin" if current.get("is_admin") else "user", event_type="BOT_START", severity="INFO",

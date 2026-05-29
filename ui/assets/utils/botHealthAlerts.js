@@ -224,7 +224,8 @@
         'LOT_SIZE', 'MIN_NOTIONAL', 'MIN_NOTIONAL_AFTER_CAP', 'ORDER_FAILED',
         'INSUFFICIENT_QUOTE', 'ORDER_TIMEOUT',
         'BOT_CONTINUES_ON_ERROR', 'BOT_LOOP_AUTO_RESTART', 'PRICE_STALE_OR_MISSING',
-        'REPEATED_LOCK_BUSY', 'REPEATED_SLIPPAGE', 'CONNECTIVITY_DEGRADED'
+        'REPEATED_LOCK_BUSY', 'REPEATED_SLIPPAGE', 'CONNECTIVITY_DEGRADED',
+        'OUTAGE_RECOVERY', 'RUN_ACTION_EXCEPTION'
     ];
 
     var RESETTABLE_SKIP = {
@@ -254,7 +255,7 @@
         if (!ev) return false;
         var meta = ev.meta || {};
         var code = String(meta.error_code || '').toUpperCase();
-        if (code === 'CONNECTIVITY_RECOVERED' || code === 'CONNECTIVITY_PAUSED') return true;
+        if (code === 'CONNECTIVITY_RECOVERED' || code === 'CONNECTIVITY_STABLE' || code === 'CONNECTIVITY_PAUSED') return true;
         return /tekrar aktif edildi|beklemeye alındı/i.test(String(ev.message || ''));
     }
 
@@ -276,8 +277,23 @@
         if (!ev) return false;
         if (isResilienceLogEvent(ev)) return true;
         var ty = (ev.type || '').toUpperCase();
-        if (ty === 'INFO' && isReconnectLogEvent(ev)) return true;
-        if (ty === 'ERROR' && isConnectivityLogEvent(ev)) return true;
+        if (ty === 'INFO') {
+            if (isReconnectLogEvent(ev)) return true;
+            var infoMeta = ev.meta || {};
+            if (String(infoMeta.health_code || '').toUpperCase() === 'OUTAGE_RECOVERY') return true;
+            var infoRaw = String(ev.message || '');
+            if (/kopma sonrası|devam ediyor.*kopma|Bağlantı\/tick boşluğu|grid değerlendirmesi/i.test(infoRaw)) return true;
+        }
+        if (ty === 'ERROR') {
+            if (isConnectivityLogEvent(ev)) return true;
+            var errMeta = ev.meta || {};
+            var errCode = String(errMeta.error_code || errMeta.health_code || '').toUpperCase();
+            if (/^(RUN_ACTION_EXCEPTION|BOT_LOOP_TOPLEVEL_EXCEPTION|BOT_LOOP_TRDCA_EXCEPTION|BOT_TICK_EXCEPTION)$/.test(errCode)) {
+                return true;
+            }
+            var errRaw = String(ev.message || '');
+            if (/RUN_ACTION_EXCEPTION|BOT_LOOP|BOT_TICK/i.test(errRaw)) return true;
+        }
         if (ty === 'HEALTH_WARN' || ty === 'HEALTH_CRITICAL') return true;
         if (ty === 'SLIPPAGE_WARN') return true;
         if (ty === 'SKIP_REASON') {
@@ -719,8 +735,9 @@
         KNOWN_HEALTH_CODES.forEach(function (code) {
             codes[code] = true;
         });
-        ['CONNECTIVITY_RECOVERED', 'CONNECTIVITY_PAUSED', 'LOT_SIZE', 'MIN_NOTIONAL',
-            'ORDER_FAILED', 'INSUFFICIENT_QUOTE'].forEach(function (code) {
+        ['CONNECTIVITY_RECOVERED', 'CONNECTIVITY_STABLE', 'CONNECTIVITY_PAUSED', 'LOT_SIZE', 'MIN_NOTIONAL',
+            'ORDER_FAILED', 'INSUFFICIENT_QUOTE', 'OUTAGE_RECOVERY', 'RUN_ACTION_EXCEPTION',
+            'BOT_CONTINUES_ON_ERROR'].forEach(function (code) {
             codes[code] = true;
         });
         var synthetic = Object.keys(codes).map(function (code) {

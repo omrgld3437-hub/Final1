@@ -125,6 +125,16 @@ body {
   background: #1a1d23;
   border: 1px solid #3a3d44;
 }
+.manager-header-action-group.is-busy {
+  opacity: 0.92;
+}
+.manager-action-btn.is-loading {
+  cursor: wait;
+}
+.manager-action-btn:not(:disabled):not(.is-loading) {
+  pointer-events: auto;
+  opacity: 1;
+}
 .manager-header-divider {
   width: 1px;
   height: 32px;

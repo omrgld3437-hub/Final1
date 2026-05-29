@@ -1104,6 +1104,8 @@ def cycle_reset_after_fill(
             "qty": round(base_bal, 10),
             "price": round(price, 10),
             "reference_price": round(price, 10),
+            "quote_balance": round(quote_bal, 2),
+            "equity_usdt": round(current_equity, 2),
             "ts": ts_open,
             "fee": 0.0,
         })

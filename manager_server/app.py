@@ -254,20 +254,26 @@ async def api_server_restart(key: str):
 
 @app.post("/api/global/start")
 async def api_global_start():
-    applied, skipped = state.global_start()
-    return {"ok": True, "skipped": skipped, "applied": applied}
+    body = state.schedule_global_action("start")
+    if body.get("busy"):
+        return JSONResponse(status_code=409, content={"detail": "Başka bir toplu işlem sürüyor", "ok": False})
+    return body
 
 
 @app.post("/api/global/stop")
 async def api_global_stop():
-    applied, skipped = state.global_stop()
-    return {"ok": True, "skipped": skipped, "applied": applied}
+    body = state.schedule_global_action("stop")
+    if body.get("busy"):
+        return JSONResponse(status_code=409, content={"detail": "Başka bir toplu işlem sürüyor", "ok": False})
+    return body
 
 
 @app.post("/api/global/restart")
 async def api_global_restart():
-    applied, skipped = state.global_restart()
-    return {"ok": True, "skipped": skipped, "applied": applied}
+    body = state.schedule_global_action("restart")
+    if body.get("busy"):
+        return JSONResponse(status_code=409, content={"detail": "Başka bir toplu işlem sürüyor", "ok": False})
+    return body
 
 
 @app.get("/api/logs/{key}")

@@ -12,6 +12,18 @@ _RESILIENCE_CODES = frozenset({
     "BOT_CONTINUES_ON_ERROR",
 })
 
+_RECOVERABLE_ACTION_ERRORS = frozenset({
+    "RUN_ACTION_EXCEPTION",
+    "BOT_LOOP_TOPLEVEL_EXCEPTION",
+    "BOT_LOOP_TRDCA_EXCEPTION",
+    "BOT_TICK_EXCEPTION",
+})
+
+_OUTAGE_RECOVERY_RAW = re.compile(
+    r"kopma sonrası|devam ediyor.*kopma|Bağlantı/tick boşluğu|grid değerlendirmesi",
+    re.I,
+)
+
 
 def _is_health_event_type(ty: str) -> bool:
     return (ty or "").upper() in ("HEALTH_WARN", "HEALTH_CRITICAL")
@@ -56,13 +68,17 @@ def is_resettable_log_event(ev: Dict[str, Any]) -> bool:
     if ty == "ERROR":
         meta = ev.get("meta") or {}
         code = str(meta.get("error_code") or meta.get("health_code") or "").upper()
+        if code in _RECOVERABLE_ACTION_ERRORS:
+            return True
         if re.search(
             r"API_UNAUTHORIZED|BINANCE_UNREACHABLE|BINANCE_RATE|ACCOUNT_KEYS",
             code,
         ):
             return True
         raw = str(ev.get("message") or "")
-        return bool(re.search(r"binance|401|-2015|ulaşılamıyor|api anahtar", raw, re.I))
+        if re.search(r"binance|401|-2015|ulaşılamıyor|api anahtar", raw, re.I):
+            return True
+        return bool(re.search(r"RUN_ACTION_EXCEPTION|BOT_LOOP|BOT_TICK", raw, re.I))
     if ty == "SKIP_REASON":
         meta = ev.get("meta") or {}
         skip = str(meta.get("skip_reason") or meta.get("error_code") or "").upper()
@@ -77,11 +93,18 @@ def is_resettable_log_event(ev: Dict[str, Any]) -> bool:
             return True
     if ty == "INFO":
         meta = ev.get("meta") or {}
+        hc = str(meta.get("health_code") or "").upper()
+        if hc == "OUTAGE_RECOVERY":
+            return True
         code = str(meta.get("error_code") or "").upper()
-        if code in ("CONNECTIVITY_RECOVERED", "CONNECTIVITY_PAUSED"):
+        if code in ("CONNECTIVITY_RECOVERED", "CONNECTIVITY_STABLE", "CONNECTIVITY_PAUSED"):
+            return True
+        if meta.get("connectivity_stable") is True:
             return True
         raw = str(ev.get("message") or "")
         if re.search(r"tekrar aktif edildi|beklemeye alındı", raw, re.I):
+            return True
+        if _OUTAGE_RECOVERY_RAW.search(raw):
             return True
     return False
 

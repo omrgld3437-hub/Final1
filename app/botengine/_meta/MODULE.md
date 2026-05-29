@@ -21,7 +21,8 @@ python -m app.botengine.worker_main
 | `scheduler.py` | v5 heap (`BOT_ENGINE_V5_SCHEDULER=1`) |
 | `execution.py` | `run_actions` → Binance; 401 → `paused_error`; SELL LOT_SIZE preflight; `RUN_ACTION_EXCEPTION` → resilience log |
 | `health_watch.py` | `evaluate_bot_health`, `emit_resilience_continue`, `emit_loop_auto_restart`; worker ~60s emit |
-| `orchestrator.py` | Tick hatalarında running kalır; döngü crash → auto-restart; `ensure_running_bots` |
+| `bot_session.py` | `bot_run_started_at` oturum saati; connectivity START sıfırlamaz; event heal |
+| `orchestrator.py` | Tick hatalarında running kalır; emilen TRDCA/tick → INFO worker log; döngü crash → auto-restart; `ensure_running_bots` |
 | `engine_log_ack.py` | Reset/ack sonrası motor log event filtreleme |
 | `order_qty.py` | Decimal `stepSize` floor + `validate_market_sell_qty` |
 | `health_watch.py` | Sağlık uyarıları (otomatik durdurmaz) |

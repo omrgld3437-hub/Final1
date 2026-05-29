@@ -368,7 +368,10 @@ async def _bot_loop(bot_id: int) -> None:
                     keys = await get_account_keys(account_id, db)
                     has_keys = keys is not None
                 except Exception as e:
-                    logger.warning("BOT_ACCOUNT_KEYS_FAIL bot_id=%s account_id=%s err=%s", bot_id, account_id, e)
+                    logger.info(
+                        "BOT_ACCOUNT_KEYS_FAIL bot_id=%s account_id=%s err=%s (tick skipped, retry)",
+                        bot_id, account_id, e,
+                    )
                     keys = None
                     has_keys = False
                 # (A) Live bot + no keys => FAIL FAST: do not run as paper, pause bot
@@ -454,7 +457,10 @@ async def _bot_loop(bot_id: int) -> None:
                                     except Exception:
                                         pass
                                     append_event(db, bot_id, account_id, "LOCK_LEASE_EXPIRED", "lease not valid before submit skip trade", {"account_id": account_id, "symbol": lock_sym})
-                                    logger.warning("BOT_TICK bot_id=%s lease_not_valid symbol=%s skip submit", bot_id, lock_sym)
+                                    logger.info(
+                                        "BOT_TICK bot_id=%s lease_not_valid symbol=%s skip submit (expected during lock handoff)",
+                                        bot_id, lock_sym,
+                                    )
                                 else:
                                     run_result = await run_actions(bot_id, account_id, trdca_actions, state, cfg, adapter, db=db, loop_id=loop_instance_id)
                                     pending_fills = []
@@ -481,15 +487,25 @@ async def _bot_loop(bot_id: int) -> None:
                                     try:
                                         release_symbol_lock(db, account_id, lock_sym, bot_id)
                                     except Exception as ex:
-                                        logger.warning("bot_engine release_symbol_lock bot_id=%s err=%s", bot_id, ex)
+                                        logger.debug("bot_engine release_symbol_lock bot_id=%s err=%s", bot_id, ex)
                         # Paper mode: ilk tick veya NOOP sonrası virtual_balances yoksa adapter'dan başlat
                         if paper_mode and not state.get("virtual_balances"):
                             state["virtual_balances"] = dict(snapshot.get("balances_free") or {})
                         save_state(db, bot_id, account_id, state)
                         tick_count += 1
+                        if tick_count == 1 and state.get("_pending_connectivity_stable"):
+                            try:
+                                from app.services.binance_connectivity import flush_pending_connectivity_stable
+
+                                flush_pending_connectivity_stable(db, bot_id, after_loop_restart=True)
+                            except Exception:
+                                pass
                     except Exception as tick_err:
                         error_id = str(uuid.uuid4())
-                        logger.exception("BOT_LOOP_TRDCA_EXCEPTION error_id=%s bot_id=%s %s", error_id, bot_id, tick_err)
+                        logger.info(
+                            "BOT_LOOP_TRDCA_EXCEPTION error_id=%s bot_id=%s %s (absorbed, loop continues)",
+                            error_id, bot_id, tick_err,
+                        )
                         state["last_error_code"] = "BOT_LOOP_TRDCA_EXCEPTION"
                         state["health_error_since"] = int(time.time())
                         save_state(db, bot_id, account_id, state)
@@ -532,7 +548,7 @@ async def _bot_loop(bot_id: int) -> None:
                             save_state(db, bot_id, account_id, state)
                         if (now_ts - _last_stale_event_ts.get(bot_id, 0)) >= _STALE_EVENT_THROTTLE_SEC:
                             _last_stale_event_ts[bot_id] = now_ts
-                            logger.warning(
+                            logger.info(
                                 "BOT_TICK_PRICE_MISSING bot_id=%s loop=%s tick=%s symbol=%s price=%s skip_trade=True next_wake=%.1f",
                                 bot_id, loop_instance_id, tick_count, symbol, price, next_wake,
                             )
@@ -605,7 +621,10 @@ async def _bot_loop(bot_id: int) -> None:
                             except Exception:
                                 pass
                             append_event(db, bot_id, account_id, "LOCK_LEASE_EXPIRED", "lease not valid before submit skip trade", {"account_id": account_id, "symbol": lock_sym})
-                            logger.warning("BOT_TICK bot_id=%s lease_not_valid symbol=%s skip submit", bot_id, lock_sym)
+                            logger.info(
+                                "BOT_TICK bot_id=%s lease_not_valid symbol=%s skip submit (expected during lock handoff)",
+                                bot_id, lock_sym,
+                            )
                         else:
                             for a in actions:
                                 ak = (a.get("reason") or "unknown") + "_" + str(a.get("grid_index", ""))
@@ -657,7 +676,7 @@ async def _bot_loop(bot_id: int) -> None:
                             try:
                                 release_symbol_lock(db, account_id, lock_sym, bot_id)
                             except Exception as ex:
-                                logger.warning("bot_engine release_symbol_lock bot_id=%s err=%s", bot_id, ex)
+                                logger.debug("bot_engine release_symbol_lock bot_id=%s err=%s", bot_id, ex)
                             lock_held = False
                     save_state(db, bot_id, account_id, state)
                     try:
@@ -667,7 +686,7 @@ async def _bot_loop(bot_id: int) -> None:
                             float(state.get("quote_balance") or 0),
                         )
                     except Exception as sync_err:
-                        logger.warning("bot_engine sync_virtual_wallet_from_state failed bot_id=%s err=%s", bot_id, sync_err)
+                        logger.debug("bot_engine sync_virtual_wallet_from_state failed bot_id=%s err=%s", bot_id, sync_err)
                     # Günlük K/Z referansı: gece 00:00 (Türkiye) veya bot açılış gününde initial_capital
                     if state.get("initial_allocation_done"):
                         equity = float(state.get("base_balance") or 0) * float(price or 0) + float(state.get("quote_balance") or 0)
@@ -697,8 +716,8 @@ async def _bot_loop(bot_id: int) -> None:
                     logger.debug("BOT_TICK bot_id=%s state_ver=%s", bot_id, state_ver)
                 except Exception as tick_err:
                     error_id = str(uuid.uuid4())
-                    logger.exception(
-                        "BOT_LOOP_TOPLEVEL_EXCEPTION error_id=%s bot_id=%s account_id=%s loop_id=%s error=%s",
+                    logger.info(
+                        "BOT_LOOP_TOPLEVEL_EXCEPTION error_id=%s bot_id=%s account_id=%s loop_id=%s error=%s (absorbed)",
                         error_id, bot_id, account_id or 0, loop_instance_id, tick_err,
                     )
                     try:
@@ -786,17 +805,23 @@ async def _try_restart_bot_loop(bot_id: int, loop_instance_id: str, reason: str)
     return True
 
 
-async def start_bot(bot_id: int, db: Session) -> bool:
+async def start_bot(bot_id: int, db: Session, *, connectivity_resume: bool = False) -> bool:
     from app.db.models import Bot
+    from app.botengine.bot_session import mark_bot_run_started, touch_bot_started_at
+    from app.botengine.state_store import load_state, save_state
     from app.services.perf_chart_state import seed_perf_chart_state_on_bot_start
     bot = db.query(Bot).filter(Bot.id == bot_id).first()
     if not bot:
         return False
     account_id = bot.account_id
     bot.status = "running"
-    bot.started_at = datetime.now(timezone.utc)
+    touch_bot_started_at(bot, connectivity_resume=connectivity_resume)
+    state = load_state(db, bot_id) or {}
+    mark_bot_run_started(state, connectivity_resume=connectivity_resume)
+    save_state(db, bot_id, account_id, state)
     db.commit()
-    seed_perf_chart_state_on_bot_start(db, bot_id)
+    if not connectivity_resume:
+        seed_perf_chart_state_on_bot_start(db, bot_id)
     logger.info("BOT_STATUS_CHANGED bot_id=%s account_id=%s status=running", bot_id, account_id)
     db.refresh(bot)
     if (bot.status or "").lower() != "running":
@@ -805,7 +830,10 @@ async def start_bot(bot_id: int, db: Session) -> bool:
     async with _task_create_lock:
         if bot_id in _tasks:
             existing_loop = _loop_instances.get(bot_id, "unknown")
-            logger.warning("BOT_START_SKIPPED_ALREADY_RUNNING bot_id=%s existing_loop=%s", bot_id, existing_loop)
+            logger.info(
+                "BOT_START_SKIPPED_ALREADY_RUNNING bot_id=%s existing_loop=%s (expected)",
+                bot_id, existing_loop,
+            )
             return True
         t = asyncio.create_task(_bot_loop(bot_id))
         _tasks[bot_id] = t
@@ -829,10 +857,15 @@ def cancel_orchestrator_loop(bot_id: int) -> None:
 
 async def stop_bot(bot_id: int, db: Session) -> bool:
     from app.db.models import Bot
+    from app.botengine.bot_session import clear_bot_run_started
+    from app.botengine.state_store import load_state, save_state
     _stop_requested.add(bot_id)
     bot = db.query(Bot).filter(Bot.id == bot_id).first()
     if bot:
         bot.status = "stopped"
+        st = load_state(db, bot_id) or {}
+        clear_bot_run_started(st)
+        save_state(db, bot_id, bot.account_id, st)
         db.commit()
     task = _tasks.get(bot_id)
     if task:

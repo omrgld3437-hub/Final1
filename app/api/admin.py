@@ -32,30 +32,58 @@ _admin_spot_balance_error_lock = asyncio.Lock()
 _ADMIN_SPOT_ERROR_THROTTLE_SEC = 300.0
 
 
-async def _get_spot_balance_for_account(account_id: int, db: Session) -> tuple:
-    """Fetch Binance wallet total_usd for an account. Returns (total_usd, status).
-    status: "ok" | "no_keys" | "error" (no_keys = ACCOUNT_KEYS_MISSING/ACCOUNT_NOT_FOUND, error = API/other).
+async def _get_account_wallet_strip_kpis(account_id: int, db: Session) -> tuple:
+    """
+    Dashboard Binance strip ile aynı kaynak: total_usd + bot_locked_usd (/api/binance/wallet).
+    Returns (total_usd, bot_locked_usd, status). status: ok | no_keys | error.
     """
     try:
         from app.services.test_account import is_test_account, TEST_PAPER_BALANCE_USDT
-        if is_test_account(account_id, db):
-            return (float(TEST_PAPER_BALANCE_USDT), "ok")
+        from app.botengine.virtual_wallet import get_bot_locked_balances_for_account
         from app.services.binance_assets import get_account_keys, KEY_ERROR_CODES, ACCOUNT_NOT_FOUND
         from app.services.binance_spot import get_wallet
         from app.services.wallet_pricing import build_wallet_price_map
         from app.api.routes import _wallet_response
+
+        bot_locked_map = get_bot_locked_balances_for_account(db, account_id) or {}
+
+        if is_test_account(account_id, db):
+            from app.services.test_spot_paper import load_balances
+            from app.services.wallet_display import apply_test_wallet_equity_totals
+
+            paper = load_balances(account_id) or {}
+            balances = [
+                {"asset": asset, "free": float(qty), "locked": 0.0}
+                for asset, qty in paper.items()
+                if float(qty or 0) > 0
+            ]
+            if not balances:
+                balances = [{"asset": "USDT", "free": float(TEST_PAPER_BALANCE_USDT), "locked": 0.0}]
+            price_map = await build_wallet_price_map(balances, testnet=False)
+            resp = _wallet_response(account_id, balances, price_map, bot_locked=bot_locked_map)
+            apply_test_wallet_equity_totals(resp, db, account_id)
+            return (
+                float(resp.get("total_usd") or TEST_PAPER_BALANCE_USDT),
+                float(resp.get("bot_locked_usd") or 0.0),
+                "ok",
+            )
+
         keys = await get_account_keys(account_id, db)
         wallet_data = await get_wallet(keys, tag="admin_spot_balance")
         balances = wallet_data.get("balances") or []
         price_map = await build_wallet_price_map(balances, testnet=keys.testnet)
-        resp = _wallet_response(account_id, balances, price_map)
-        return (float(resp.get("total_usd") or 0.0), "ok")
+        resp = _wallet_response(account_id, balances, price_map, bot_locked=bot_locked_map)
+        return (
+            float(resp.get("total_usd") or 0.0),
+            float(resp.get("bot_locked_usd") or 0.0),
+            "ok",
+        )
     except ValueError as e:
         msg = str(e).upper()
         if ACCOUNT_NOT_FOUND in msg or any(c in msg for c in KEY_ERROR_CODES):
             logger.info("[Admin] spot balance account_id=%s: %s", account_id, msg)
-            return (0.0, "no_keys")
-        return (0.0, "error")
+            return (0.0, 0.0, "no_keys")
+        return (0.0, 0.0, "error")
     except Exception as e:
         now = time.time()
         async with _admin_spot_balance_error_lock:
@@ -66,7 +94,13 @@ async def _get_spot_balance_for_account(account_id: int, db: Session) -> tuple:
                     "[Admin] spot balance account_id=%s error: %s (API anahtari gecersiz/izin yok olabilir)",
                     account_id, e,
                 )
-    return (0.0, "error")
+    return (0.0, 0.0, "error")
+
+
+async def _get_spot_balance_for_account(account_id: int, db: Session) -> tuple:
+    """Fetch Binance wallet total_usd. Returns (total_usd, status)."""
+    total, _bot_locked, status = await _get_account_wallet_strip_kpis(account_id, db)
+    return (total, status)
 
 
 router = APIRouter()
@@ -139,6 +173,7 @@ async def get_admin_accounts(
     total_spot_balance_usd = 0.0
     
     admin_user_id = current.get("user_id")
+    today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
     try:
         for account in accounts:
             # Admin kendi hesabini hesap listesinde gosterme (tile olarak gorunmesin)
@@ -148,71 +183,43 @@ async def get_admin_accounts(
             active_bots_count = len([b for b in bots if b.status == "running"])
             total_active_bots += active_bots_count
             
-            # Calculate bots balance and P/L
-            bots_balance = 0.0
-            total_initial_usd = 0.0
-            total_pnl_usd = 0.0
+            # Bot bakiye: dashboard strip "Bot kilitli" (wallet bot_locked_usd)
+            spot_balance, bot_locked_usd, spot_balance_status = await _get_account_wallet_strip_kpis(
+                account.id, db
+            )
+            bots_balance = float(bot_locked_usd or 0.0)
+
+            # Günlük bot PnL: snapshot (daily_ref + tamamlanan tur)
             daily_pnl_usd = 0.0
-            
-            today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-            yesterday_end = today_start - timedelta(seconds=1)
-            
-            for bot in bots:
-                try:
-                    pnl_data = PnlService.calculate_bot_pnl(db, bot.id, account.id)
-                except Exception as e:
-                    logger.warning(f"[Admin] Error calculating PnL for bot {bot.id}: {e}")
-                    pnl_data = {"error": True, "total_usd": 0.0}
-                
-                initial_usd = 0.0
-                try:
-                    import json
-                    config = json.loads(bot.config_json or "{}")
-                    initial_usd = float(config.get("bot_budget_quote", 0) or config.get("initial_usd", 0))
-                except:
-                    pass
-                
-                current_usd = pnl_data.get("total_usd", initial_usd) if not pnl_data.get("error") else initial_usd
-                bots_balance += current_usd
-                total_initial_usd += initial_usd
-                
-                # Total P/L for this bot
-                bot_pnl = current_usd - initial_usd
-                total_pnl_usd += bot_pnl
-                
-                # Daily P/L for this bot
-                # Get latest snapshot today
-                today_snapshot = db.query(PnlSnapshot).filter(
-                    PnlSnapshot.bot_id == bot.id,
-                    PnlSnapshot.account_id == account.id,
-                    PnlSnapshot.ts >= today_start
-                ).order_by(desc(PnlSnapshot.ts)).first()
-                
-                # Get latest snapshot before today (yesterday close)
-                yesterday_snapshot = db.query(PnlSnapshot).filter(
-                    PnlSnapshot.bot_id == bot.id,
-                    PnlSnapshot.account_id == account.id,
-                    PnlSnapshot.ts < today_start
-                ).order_by(desc(PnlSnapshot.ts)).first()
-                
-                today_current = today_snapshot.total_usd if today_snapshot else current_usd
-                yesterday_close = yesterday_snapshot.total_usd if yesterday_snapshot else current_usd
-                
-                bot_daily_pnl = today_current - yesterday_close
-                daily_pnl_usd += bot_daily_pnl
-            
-            # Calculate percentages
-            total_pnl_pct = 0.0
-            if total_initial_usd > 1e-9:
-                total_pnl_pct = (total_pnl_usd / total_initial_usd) * 100.0
-            
             daily_pnl_pct = 0.0
-            if bots_balance > 1e-9:
-                daily_pnl_pct = (daily_pnl_usd / bots_balance) * 100.0
-            
+            try:
+                from app.services.dashboard_snapshot import fetch_bots_and_account_kpis
+
+                bot_raw = await fetch_bots_and_account_kpis(account.id, db)
+                if not bot_raw.get("_error"):
+                    bots_array = bot_raw.get("bots") or []
+                    daily_pnl_usd = float(bot_raw.get("daily_bot_pnl_usd_kpi") or 0)
+                    ak = bot_raw.get("account") or {}
+                    if ak.get("daily_bot_pnl_usd") is not None:
+                        daily_pnl_usd = float(ak.get("daily_bot_pnl_usd") or 0)
+                    daily_sum = sum(float(b.get("daily_pnl_usd") or 0) for b in bots_array)
+                    if abs(daily_sum) > 1e-6:
+                        daily_pnl_usd = daily_sum
+                    ref_sum = 0.0
+                    for b in bots_array:
+                        d_usd = float(b.get("daily_pnl_usd") or 0)
+                        d_pct = float(b.get("daily_pnl_pct") or 0)
+                        if abs(d_pct) > 1e-6:
+                            ref_sum += d_usd / (d_pct / 100.0)
+                    if ref_sum > 1e-9:
+                        daily_pnl_pct = daily_pnl_usd / ref_sum * 100.0
+                    elif bots_balance > abs(daily_pnl_usd) + 1e-6:
+                        ref_open = bots_balance - daily_pnl_usd
+                        daily_pnl_pct = (daily_pnl_usd / ref_open * 100.0) if ref_open > 1e-9 else 0.0
+            except Exception as bot_kpi_ex:
+                logger.warning("[Admin] fetch_bots_and_account_kpis account_id=%s: %s", account.id, bot_kpi_ex)
+
             total_bots_balance_usd += bots_balance
-            
-            spot_balance, spot_balance_status = await _get_spot_balance_for_account(account.id, db)
             total_spot_balance_usd += spot_balance
             total_usd = bots_balance + spot_balance
             
@@ -281,6 +288,7 @@ async def get_admin_accounts(
                 "active_bots": active_bots_count,
                 "total_bots": len(bots),
                 "bots_balance_usd": round(bots_balance, 2),
+                "bot_locked_usd": round(bots_balance, 2),
                 "spot_balance_usd": round(spot_balance, 2),
                 "spot_balance_status": spot_balance_status,
                 "total_usd": round(total_usd, 2),
