@@ -1134,6 +1134,10 @@
         else base += 'account_id=';
         base += '&tab=bots';
         backLink.href = base;
+        backLink.addEventListener('click', function () {
+            if (_botDetailHydrated && botId) persistBotDetailUiCache(botId);
+            try { localStorage.setItem('dashboard_active_tab', 'bots'); } catch (e) {}
+        });
 
         var botTopStrip = document.getElementById('botTopStrip');
         var botLogoWrap = document.getElementById('botLogoWrap');
@@ -1257,7 +1261,12 @@
                     gridDisplayFp: _lastGridDisplayFp,
                     perfFp: _lastPerfRenderFp,
                     engineLogSig: _engineLogLiveOpts ? _engineLogLiveOpts._lastLogRenderSig : null,
-                    selectedCycleId: window._botDetailSelectedCycleId
+                    selectedCycleId: window._botDetailSelectedCycleId,
+                    stripMiniChartSymbol: (lastBotDetail && lastBotDetail.symbol) ? lastBotDetail.symbol : (botSymbolEl ? botSymbolEl.textContent : ''),
+                    stripMiniChartHtml: (function () {
+                        var el = document.getElementById('botStripMiniChartSvg');
+                        return el && el.querySelector('svg') ? el.innerHTML : '';
+                    })()
                 };
                 var key = BOT_DETAIL_UI_CACHE_PREFIX + id;
                 sessionStorage.setItem(key, JSON.stringify(payload));
@@ -1316,10 +1325,17 @@
                     if (o.engineLogSig && _engineLogLiveOpts) _engineLogLiveOpts._lastLogRenderSig = o.engineLogSig;
                 }
                 if (loadingEl) loadingEl.style.display = 'none';
+                restoreStripMiniChartFromUiCache(o);
+                var chartSym = (lastBotDetail && lastBotDetail.symbol) || o.stripMiniChartSymbol || (botSymbolEl ? botSymbolEl.textContent : '');
+                if (chartSym) ensureStripMiniChart(chartSym);
                 return panelsOk || !!(o.stateGridHtml && o.stateGridHtml.indexOf('state-hero-item') !== -1);
             } catch (e) {
                 return false;
             }
+        }
+        function wrapHasStripSvg() {
+            var wrap = document.getElementById('botStripMiniChartSvg');
+            return !!(wrap && wrap.querySelector('svg'));
         }
         var _lastGridStructureFp = '';
         var _lastGridDisplayFp = '';
@@ -1857,10 +1873,24 @@
             if (!wrap || !closes || closes.length < 2) return;
             wrap.innerHTML = buildStripKlinesSvgHtml(closes, sym);
         }
+        function ensureStripMiniChart(symbol, opts) {
+            if (!symbol) return;
+            var sym = String(symbol).trim().toUpperCase();
+            if (!sym || sym === 'MULTI' || sym === '?' || sym === '—') return;
+            loadStripKlinesChart(sym, opts);
+        }
+        function restoreStripMiniChartFromUiCache(o) {
+            if (!o || !o.stripMiniChartSymbol) return false;
+            var wrap = document.getElementById('botStripMiniChartSvg');
+            if (!wrap || !o.stripMiniChartHtml || o.stripMiniChartHtml.indexOf('<svg') < 0) return false;
+            wrap.innerHTML = o.stripMiniChartHtml;
+            _stripKlinesSymbol = String(o.stripMiniChartSymbol).trim().toUpperCase();
+            return true;
+        }
         function loadStripKlinesChart(symbol, opts) {
             opts = opts || {};
             var wrap = document.getElementById('botStripMiniChartSvg');
-            if (!wrap || !symbol || !window.apiClient) return;
+            if (!wrap || !symbol) return;
             var sym = (symbol || '').toString().trim().toUpperCase();
             if (STRIP_KLINES_INVALID.indexOf(sym) >= 0) {
                 wrap.innerHTML = '';
@@ -1876,6 +1906,7 @@
             }
             _stripKlinesSymbol = sym;
             if (!opts.force && cacheFresh && wrap.querySelector('svg')) return;
+            if (!window.apiClient) return;
             if (_stripKlinesInflight === sym) return;
             _stripKlinesInflight = sym;
             window.apiClient.get('/api/spot/klines?symbol=' + encodeURIComponent(sym) + '&interval=5m&limit=288')
@@ -2073,7 +2104,7 @@
             if (botTopStrip) botTopStrip.style.display = 'flex';
             renderBotLogo(cached.base);
             if (botSymbolEl && cached.symbol) botSymbolEl.textContent = cached.symbol;
-            if (cached.symbol) loadStripKlinesChart(cached.symbol);
+            if (cached.symbol) ensureStripMiniChart(cached.symbol);
         }
 
         window._lastEngineEvents = [];
@@ -3121,7 +3152,7 @@
                 lastPriceForBlink = (price != null && !isNaN(price) && price > 0) ? Number(price) : null;
                 refreshGridPointsLivePrice(lastPriceForBlink);
             }
-            if (symbol) loadStripKlinesChart(symbol);
+            ensureStripMiniChart(symbol);
             updateBot24hDisplay(data.price_24h_change_pct);
 
             var botStatus = (data.status || 'stopped').toLowerCase();
@@ -3790,6 +3821,7 @@
             }
             _lastGridTrailActive = trailNow;
             loadPerfMetrics({ silent: true });
+            ensureStripMiniChart(data.symbol || lastBotDetail.symbol);
             persistBotDetailUiCache(botId);
         }
 
@@ -4180,12 +4212,15 @@
 
         function loadDetail() {
             if (!botId || !window.apiClient) return;
-            restoreBotDetailUiCache(botId);
+            var restoredFromCache = restoreBotDetailUiCache(botId);
             if (_botDetailHydrated) {
                 if (loadingEl) loadingEl.style.display = 'none';
-            } else {
+            } else if (!restoredFromCache) {
                 resetBotDetailUi();
+            } else if (loadingEl) {
+                loadingEl.style.display = 'none';
             }
+            if (lastBotDetail.symbol && !wrapHasStripSvg()) ensureStripMiniChart(lastBotDetail.symbol);
             _botStatusGraceUntil = Date.now() + 8000;
             var q = accountCode ? '?account_code=' + encodeURIComponent(accountCode) : '?account_id=' + (accountId || '');
             window.apiClient.get('/api/bots-engine/' + botId + q)
@@ -4878,12 +4913,12 @@
         if (window.intervalRegistry) {
             window.intervalRegistry.start('bot-detail-klines', function () {
                 if (document.hidden || !lastBotDetail.symbol) return;
-                loadStripKlinesChart(lastBotDetail.symbol);
+                ensureStripMiniChart(lastBotDetail.symbol);
             }, stripKlinesRefreshMs, 'bot-detail');
         } else {
             setInterval(function () {
                 if (document.hidden || !lastBotDetail.symbol) return;
-                loadStripKlinesChart(lastBotDetail.symbol);
+                ensureStripMiniChart(lastBotDetail.symbol);
             }, stripKlinesRefreshMs);
         }
         window.addEventListener('pageshow', function (e) {
@@ -4896,14 +4931,17 @@
             }
             if (e.persisted && botId) {
                 if (_botDetailHydrated) {
-                    refreshAll();
                     fetchLive();
                     fetchBotHealth();
                     loadPerfMetrics({ silent: true });
+                    if (lastBotDetail.symbol) ensureStripMiniChart(lastBotDetail.symbol);
                 } else {
                     loadDetail();
                 }
             }
+        });
+        window.addEventListener('pagehide', function () {
+            if (_botDetailHydrated && botId) persistBotDetailUiCache(botId);
         });
         window.addEventListener('visibilitychange', function () {
             if (!document.hidden && botId) {
@@ -4914,11 +4952,20 @@
                     window.intervalRegistry.start('bot-detail-live', fetchLive, BOT_DETAIL_LIVE_POLL_MS, 'bot-detail');
                     syncStateHeroDurationPoll((lastBotDetail.status || '').toLowerCase() === 'running' && !!lastBotStartedAt);
                 }
-                refreshAll();
-                fetchLive();
-                tickStateHeroMetaDuration();
-                if (botDetailGridTrailActive(lastBotDetail)) fetchGridPointsLive();
-                refreshTradesPanelPoll();
+                if (_botDetailHydrated) {
+                    fetchLive();
+                    fetchBotHealth();
+                    tickStateHeroMetaDuration();
+                    if (botDetailGridTrailActive(lastBotDetail)) fetchGridPointsLive();
+                    refreshTradesPanelPoll();
+                    loadPerfMetrics({ silent: true });
+                } else {
+                    refreshAll();
+                    fetchLive();
+                    tickStateHeroMetaDuration();
+                    if (botDetailGridTrailActive(lastBotDetail)) fetchGridPointsLive();
+                    refreshTradesPanelPoll();
+                }
             }
         });
     })();

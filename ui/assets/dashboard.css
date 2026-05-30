@@ -962,11 +962,11 @@ h1, h2, h3, h4 {
     }
 }
 
-/* Tabs – sola yaslı */
+/* Tabs – yatay orta */
 .page-dashboard .dm-tabs {
     display: flex;
     align-items: center;
-    justify-content: flex-start;
+    justify-content: center;
     flex-wrap: wrap;
     gap: 8px;
     margin-bottom: 2rem;

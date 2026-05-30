@@ -22,7 +22,7 @@ Web panel — HTML + vanilla JS (FastAPI `/ui` mount).
 | `stores/` | dashboardStore, financeStore |
 | `services/` | marketData, finance |
 | `utils/` | trTime, coinLogo, botHealthAlerts (aktif uyarı log; çözülen HEALTH gizlenir) |
-| *(kök)* | dashboard.js (test: strip toplamı → TOPLAM SPOT BAKİYESİ KPI, canlı), admin.js, chart.js |
+| *(kök)* | dashboard.js (**Botlar sekmesi** `activateBotsTab` + `financeBotsDom_v1_*` HTML önbelleği — bot detaydan dönüşte tablo yeniden çizilmez; `bot.html` `bot_detail_ui_v2_*` + `pagehide` persist), admin.js, chart.js |
 
 ## Bot oluşturma
 

@@ -38,7 +38,8 @@ CHANGE: Fix navigation links + route pinning - ensure admin link works, update c
     <link rel="stylesheet" href="/ui/assets/theme.css?v=adminfix1">
     <link rel="stylesheet" href="/ui/assets/ui.css?v=adminfix1">
     <link rel="stylesheet" href="/ui/assets/design.css?v=adminfix1">
-    <link rel="stylesheet" href="/ui/assets/admin-login-theme.css?v=1">
+    <link rel="stylesheet" href="/ui/assets/dashboard-login-theme.css?v=clean1">
+    <link rel="stylesheet" href="/ui/assets/admin-login-theme.css?v=admin-header14">
 </head>
 <body class="binance-theme page-admin">
     <!-- ADMIN_FINGERPRINT: admin-pin-001 -->
@@ -53,32 +54,65 @@ CHANGE: Fix navigation links + route pinning - ensure admin link works, update c
     </div>
     <div id="topTicker" class="top-ticker"></div>
     
-    <div class="admin-appbar">
-        <div class="admin-appbar-brand">TraderTrailing</div>
-        <div class="admin-appbar-row">
-            <div class="admin-appbar-left">
-                <span id="adminAppbarUserName" class="admin-appbar-user-name">—</span>
+    <header class="admin-appbar" role="banner">
+        <div class="admin-appbar-inner">
+            <div class="admin-appbar-start">
+                <span class="admin-appbar-role">Admin</span>
             </div>
-            <div class="admin-appbar-right">
-                <button id="btnCreate" class="btn primary btn-create-account" onclick="openCreateModal()">Yeni Hesap</button>
+            <div class="admin-appbar-logo" aria-label="TraderTrailing">
+                <span class="admin-appbar-logo-mark" aria-hidden="true">
+                    <svg class="admin-appbar-logo-svg" width="36" height="36" viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg" focusable="false">
+                        <defs>
+                            <linearGradient id="adminLogoRing" x1="0" y1="0" x2="40" y2="40" gradientUnits="userSpaceOnUse">
+                                <stop offset="0%" stop-color="#848e9c">
+                                    <animate attributeName="stop-color" values="#848e9c;#f0b90b;#848e9c" dur="6s" repeatCount="indefinite" calcMode="spline" keyTimes="0;0.5;1" keySplines="0.4 0 0.2 1;0.4 0 0.2 1"/>
+                                </stop>
+                                <stop offset="100%" stop-color="#eaecef">
+                                    <animate attributeName="stop-color" values="#eaecef;#fff8e0;#eaecef" dur="6s" repeatCount="indefinite" calcMode="spline" keyTimes="0;0.5;1" keySplines="0.4 0 0.2 1;0.4 0 0.2 1"/>
+                                </stop>
+                            </linearGradient>
+                        </defs>
+                        <circle class="admin-appbar-logo-ring" cx="20" cy="20" r="17.5" fill="rgba(201,162,39,0.08)" stroke="url(#adminLogoRing)" stroke-width="1.5">
+                            <animate attributeName="fill-opacity" values="0.06;0.18;0.06" dur="6s" repeatCount="indefinite" calcMode="spline" keyTimes="0;0.5;1" keySplines="0.4 0 0.2 1;0.4 0 0.2 1"/>
+                        </circle>
+                        <path class="admin-appbar-logo-chart" d="M11 27 L17 19 L23 23 L29 13" fill="none" stroke="#848e9c" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round">
+                            <animate attributeName="stroke" values="#848e9c;#f0b90b;#fff8e0;#f0b90b;#848e9c" dur="6s" repeatCount="indefinite" calcMode="spline" keyTimes="0;0.35;0.5;0.65;1" keySplines="0.4 0 0.2 1;0.4 0 0.2 1;0.4 0 0.2 1;0.4 0 0.2 1"/>
+                        </path>
+                    </svg>
+                </span>
+                <span class="tt-logo-text">TraderTrailing</span>
+            </div>
+            <div class="admin-appbar-actions">
+                <button id="btnCreate" type="button" class="btn primary btn-create-account" onclick="openCreateModal()">Yeni Hesap</button>
                 <button type="button" id="btnAdminLogout" class="btn-logout" title="Çıkış" aria-label="Çıkış" onclick="adminLogout()">
                     <span class="btn-logout-icon" aria-hidden="true">⏻</span>
                 </button>
             </div>
         </div>
-    </div>
+    </header>
 
     <div class="container admin-container">
-        <div class="kpi-strip">
-            <div class="kpi-card-compact">
-                <div class="kpi-label-small">TOPLAM HESAP</div>
-                <div id="kpiAccounts" class="kpi-value-small">0</div>
+        <section class="admin-overview kpi-strip" aria-label="Özet istatistikler">
+            <div class="admin-overview-stat">
+                <div class="admin-overview-stat__icon" aria-hidden="true">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+                </div>
+                <div class="admin-overview-stat__content">
+                    <span class="admin-overview-stat__label kpi-label-small">Toplam Hesap</span>
+                    <span id="kpiAccounts" class="admin-overview-stat__value kpi-value-small">0</span>
+                </div>
             </div>
-            <div class="kpi-card-compact">
-                <div class="kpi-label-small">AKTİF BOT</div>
-                <div id="kpiActiveBots" class="kpi-value-small">0</div>
+            <div class="admin-overview-stat__divider" aria-hidden="true"></div>
+            <div class="admin-overview-stat admin-overview-stat--bots">
+                <div class="admin-overview-stat__icon" aria-hidden="true">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M12 10V6"/><circle cx="12" cy="4" r="2"/><circle cx="9" cy="15" r="1" fill="currentColor" stroke="none"/><circle cx="15" cy="15" r="1" fill="currentColor" stroke="none"/></svg>
+                </div>
+                <div class="admin-overview-stat__content">
+                    <span class="admin-overview-stat__label kpi-label-small">Aktif Bot</span>
+                    <span id="kpiActiveBots" class="admin-overview-stat__value kpi-value-small">0</span>
+                </div>
             </div>
-        </div>
+        </section>
 
         <div id="tabsContainer" class="tabs-container">
             <div id="adminTabsHeader" class="tabs-header">
@@ -575,7 +609,7 @@ CHANGE: Fix navigation links + route pinning - ensure admin link works, update c
     <script src="/ui/assets/core/apiClient.js?v=adminfix1"></script>
     <script src="/ui/assets/api.js?v=adminfix3"></script>
     <script src="/ui/assets/components.js?v=adminfix3"></script>
-    <script src="/ui/assets/admin.js?v=admin-test-spot-live2" defer></script>
+    <script src="/ui/assets/admin.js?v=admin-tabs-indicator1" defer></script>
     <script src="/ui/assets/ticker.js?v=adminfix1" defer></script>
 </body>
 </html>

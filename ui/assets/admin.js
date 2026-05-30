@@ -1223,10 +1223,14 @@ function getTabIndex(key) {
 }
 
 function positionIndicatorToButton(list, indicator, btn, immediate) {
-    var listRect = list.getBoundingClientRect();
-    var btnRect = btn.getBoundingClientRect();
-    var left = btnRect.left - listRect.left;
-    var width = btnRect.width;
+    var left = btn.offsetLeft;
+    var width = btn.offsetWidth;
+    if (!width || left < 0) {
+        var listRect = list.getBoundingClientRect();
+        var btnRect = btn.getBoundingClientRect();
+        left = btnRect.left - listRect.left;
+        width = btnRect.width;
+    }
     if (immediate) {
         var prev = indicator.style.transition;
         indicator.style.transition = 'none';

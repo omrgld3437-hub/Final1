@@ -2266,7 +2266,18 @@ function applySnapshotToUI(data) {
             };
             State.summary = summaryShape;
             State.lastSummaryHash = computeHash(summaryShape);
-            if (typeof renderBotsList === 'function') renderBotsList(State.bots);
+            if (typeof renderBotsList === 'function') {
+                if (isBotsTabActive() && isBotsTabCacheReady()) {
+                    var snapIds = State.bots.map(function (b) { return String(b.bot_id || b.id || ''); }).sort().join(',');
+                    if (snapIds === _financeBotsIdsSignature) {
+                        patchFinanceBotsMetrics(State.bots);
+                    } else {
+                        renderBotsList(State.bots);
+                    }
+                } else {
+                    renderBotsList(State.bots);
+                }
+            }
             if (typeof updateKPIs === 'function') updateKPIs(summaryShape);
             if (typeof maybeRefreshWalletOnBotsChange === 'function') maybeRefreshWalletOnBotsChange(State.bots, data.account);
             if (typeof updateAccountName === 'function') updateAccountName(data.account.name || "Hesap Dashboard");
@@ -2278,7 +2289,7 @@ function applySnapshotToUI(data) {
         loadBotPerformance(State.botPerformancePeriod || 'all');
     }
     if (State.accountId && typeof loadGlobalLeaderboard === 'function') {
-        loadGlobalLeaderboard();
+        loadGlobalLeaderboard(isBotsTabActive() && isBotsTabCacheReady());
     }
     if (State.accountId && typeof loadTransactionHistory === 'function') {
         loadTransactionHistory(State.txHistoryPeriod || 'daily', State.txHistoryType || 'buysell', State.txHistoryPage || 1, false);
@@ -2304,6 +2315,184 @@ function isBotsTabActive() {
     return !!(t && t.classList.contains('is-active'));
 }
 
+/** Botlar sekmesi: ilk açılışta tam DOM; sonraki geçişlerde yalnızca metrik/fiyat güncellemesi. */
+var _botsTabCache = { accountId: null, initialized: false };
+
+function botsTabCacheSessionKey(accountId) {
+    return 'dashboard_bots_tab_ready_v1_' + (accountId || '');
+}
+
+function clearBotsTabCache() {
+    _botsTabCache.initialized = false;
+    _botsTabCache.accountId = null;
+    if (State.accountId) {
+        try {
+            sessionStorage.removeItem(botsTabCacheSessionKey(State.accountId));
+            sessionStorage.removeItem(financeBotsDomCacheKey(State.accountId));
+        } catch (e) {}
+    }
+}
+
+function isBotsTabCacheReady() {
+    if (!_botsTabCache.initialized || _botsTabCache.accountId !== State.accountId) return false;
+    return _financeBotsPanelHasRows(document.getElementById('financeBotsListBots'));
+}
+
+function markBotsTabCacheReady() {
+    if (!State.accountId) return;
+    _botsTabCache.initialized = true;
+    _botsTabCache.accountId = State.accountId;
+    try { sessionStorage.setItem(botsTabCacheSessionKey(State.accountId), '1'); } catch (e) {}
+    if (typeof persistFinanceBotsDomCache === 'function') persistFinanceBotsDomCache();
+}
+
+function financeBotsDomCacheKey(accountId) {
+    return 'financeBotsDom_v1_' + (accountId || '');
+}
+
+/** Bot detaydan dönüşte tablo HTML — renderFinanceBots yerine enjekte. */
+function persistFinanceBotsDomCache() {
+    if (!State.accountId) return;
+    var home = document.getElementById('financeBotsList');
+    var tab = document.getElementById('financeBotsListBots');
+    var src = (_financeBotsPanelHasRows(tab) && tab) ? tab : ((_financeBotsPanelHasRows(home) && home) ? home : null);
+    if (!src || !src.innerHTML || src.innerHTML.indexOf('data-bot-id') < 0) return;
+    try {
+        sessionStorage.setItem(financeBotsDomCacheKey(State.accountId), JSON.stringify({
+            ts: Date.now(),
+            html: src.innerHTML,
+            structureSig: _financeBotsStructureSignature,
+            idsSig: _financeBotsIdsSignature,
+            sortBy: typeof financeBotsSortBy !== 'undefined' ? financeBotsSortBy : 'pct'
+        }));
+    } catch (e) { /* quota */ }
+}
+
+function restoreFinanceBotsDomFromSessionCache(accountId, bots) {
+    if (!accountId) return false;
+    try {
+        var raw = sessionStorage.getItem(financeBotsDomCacheKey(accountId));
+        if (!raw) return false;
+        var data = JSON.parse(raw);
+        if (!data || !data.html || data.html.indexOf('data-bot-id') < 0) return false;
+        if (data.ts && Date.now() - data.ts > 86400000) return false;
+        bots = Array.isArray(bots) ? bots : [];
+        var sortBy = data.sortBy || (typeof financeBotsSortBy !== 'undefined' ? financeBotsSortBy : 'pct');
+        var structureSig = bots.length ? financeBotsStructureSignature(bots, sortBy) : data.structureSig;
+        var idsSig = bots.length
+            ? bots.map(function (b) { return String(b.bot_id || b.id || ''); }).sort().join(',')
+            : data.idsSig;
+        if (data.idsSig && idsSig && data.idsSig !== idsSig) return false;
+        if (data.structureSig && structureSig && data.structureSig !== structureSig) return false;
+        var home = document.getElementById('financeBotsList');
+        var tab = document.getElementById('financeBotsListBots');
+        if (!home && !tab) return false;
+        if (home) {
+            home.innerHTML = data.html;
+            bindFinanceBotsRowClicks(home);
+        }
+        if (tab) {
+            tab.innerHTML = data.html;
+            bindFinanceBotsRowClicks(tab);
+        }
+        _financeBotsStructureSignature = structureSig || data.structureSig;
+        _financeBotsIdsSignature = idsSig || data.idsSig;
+        if (data.sortBy) financeBotsSortBy = data.sortBy;
+        markBotsTabCacheReady();
+        return true;
+    } catch (e) {
+        return false;
+    }
+}
+
+function persistDashboardBeforeBotDetailNav() {
+    try { localStorage.setItem('dashboard_active_tab', 'bots'); } catch (e) {}
+    if (typeof persistFinanceBotsDomCache === 'function') persistFinanceBotsDomCache();
+    if (State.accountId) {
+        try { sessionStorage.setItem(botsTabCacheSessionKey(State.accountId), '1'); } catch (e) {}
+    }
+}
+
+function tryRestoreBotsTabCacheFlag(accountId) {
+    if (!accountId) return false;
+    try {
+        if (sessionStorage.getItem(botsTabCacheSessionKey(accountId)) !== '1') return false;
+    } catch (e) { return false; }
+    if (!_financeBotsPanelHasRows(document.getElementById('financeBotsListBots'))) return false;
+    _botsTabCache.initialized = true;
+    _botsTabCache.accountId = accountId;
+    return true;
+}
+
+/** Tablo yeniden çizilmeden canlı fiyat, bakiye, K/Z, leaderboard, performans. */
+function refreshBotsTabDataOnly() {
+    if (State.bots && State.bots.length) {
+        patchFinanceBotsMetrics(State.bots);
+    } else {
+        updateFinanceBotsLivePrices();
+    }
+    if (typeof ensureFinanceBotsLiveEquity === 'function') ensureFinanceBotsLiveEquity();
+    if (State.accountId && typeof loadBotPerformance === 'function') {
+        loadBotPerformance(State.botPerformancePeriod || 'all');
+    }
+    if (typeof loadGlobalLeaderboard === 'function') loadGlobalLeaderboard(true);
+}
+
+/**
+ * Botlar sekmesi açılışı — force:true hesap değişimi veya bot listesi yapısal değişiminde.
+ */
+function activateBotsTab(opts) {
+    opts = opts || {};
+    if (opts.force) clearBotsTabCache();
+    if (!opts.force && tryRestoreBotsTabCacheFlag(State.accountId)) {
+        refreshBotsTabDataOnly();
+        if (typeof _bindFinanceBotsSortButtons === 'function') _bindFinanceBotsSortButtons();
+        return;
+    }
+    if (!opts.force && isBotsTabCacheReady()) {
+        refreshBotsTabDataOnly();
+        if (typeof _bindFinanceBotsSortButtons === 'function') _bindFinanceBotsSortButtons();
+        return;
+    }
+
+    if (typeof _bindFinanceBotsSortButtons === 'function') _bindFinanceBotsSortButtons();
+
+    if (State.accountId && typeof restoreFinanceBotsFromSessionCache === 'function') {
+        restoreFinanceBotsFromSessionCache(State.accountId);
+    }
+
+    var tabList = document.getElementById('financeBotsListBots');
+    if (_financeBotsPanelHasRows(tabList)) {
+        markBotsTabCacheReady();
+        refreshBotsTabDataOnly();
+        return;
+    }
+
+    if (typeof syncFinanceBotsTabFromHome === 'function') syncFinanceBotsTabFromHome();
+    if (_financeBotsPanelHasRows(tabList)) {
+        markBotsTabCacheReady();
+        refreshBotsTabDataOnly();
+        return;
+    }
+
+    if (State.bots && State.bots.length && typeof renderFinanceBots === 'function') {
+        renderFinanceBots(State.bots, { forceFullRender: true });
+    } else if (State.accountId) {
+        if (typeof loadBotsListFast === 'function') loadBotsListFast(State.accountId);
+        if (!State.bots || !State.bots.length) {
+            if (typeof loadSummary === 'function') loadSummary(State.accountId);
+        }
+    }
+
+    if (State.accountId && typeof loadBotPerformance === 'function') {
+        loadBotPerformance(State.botPerformancePeriod || 'all');
+    }
+    if (typeof loadGlobalLeaderboard === 'function') loadGlobalLeaderboard(false);
+
+    if (_financeBotsPanelHasRows(tabList)) markBotsTabCacheReady();
+}
+window.activateBotsTab = activateBotsTab;
+
 /** Hızlı bot listesi: /api/bots-engine ile hemen listeyi doldurur; summary gelene kadar "Yükleniyor" kalmaz. */
 function loadBotsListFast(accountId) {
     if (!accountId || !window.apiClient) return;
@@ -2311,6 +2500,40 @@ function loadBotsListFast(accountId) {
         .then(function(res) {
             // Summary zaten geldiyse (current_usd dahil) onu ezme; sadece henüz veri yoksa doldur
             if (State.summary && Array.isArray(State.summary.bots) && State.summary.bots.length > 0) return;
+            if (_financeBotsTableHasRows() && isBotsTabCacheReady()) {
+                var list = Array.isArray(res.bots) ? res.bots : [];
+                if (!list.length) return;
+                var mapped = list.map(function(r) {
+                    var cfg = r.config || {};
+                    var budget = Number(cfg.initial_capital_usdt || cfg.budget_usd || cfg.bot_budget_usdt) || 0;
+                    var existing = (State.bots || []).find(function(b) { return (b.bot_id || b.id) === r.bot_id; });
+                    var base = {
+                        bot_id: r.bot_id, id: r.bot_id, symbol: r.symbol || 'N/A',
+                        status: (r.status || 'stopped').toLowerCase(),
+                        display_status: r.display_status || r.status || 'stopped',
+                        initial_allocation_done: r.initial_allocation_done === true,
+                        account_id: r.account_id, config: cfg,
+                        budget_usd: budget, initial_usd: budget,
+                        total_pnl_usd: 0, total_pnl_pct: 0, daily_pnl_usd: 0,
+                        last_trade_at: r.last_tick_at || r.created_at || null
+                    };
+                    if (!existing) return base;
+                    return Object.assign({}, base, {
+                        current_usd: existing.current_usd,
+                        total_pnl_usd: existing.total_pnl_usd != null ? existing.total_pnl_usd : base.total_pnl_usd,
+                        total_pnl_pct: existing.total_pnl_pct != null ? existing.total_pnl_pct : base.total_pnl_pct,
+                        total_cycles_completed: existing.total_cycles_completed,
+                        cycle_id: existing.cycle_id,
+                        daily_pnl_usd: existing.daily_pnl_usd != null ? existing.daily_pnl_usd : base.daily_pnl_usd
+                    });
+                });
+                var idsSig = mapped.map(function (b) { return String(b.bot_id || b.id || ''); }).sort().join(',');
+                if (idsSig === _financeBotsIdsSignature) {
+                    State.bots = hydrateBotsWithMetricsCache(mapped);
+                    patchFinanceBotsMetrics(State.bots);
+                    return;
+                }
+            }
             var list = Array.isArray(res.bots) ? res.bots : [];
             var mapped = list.map(function(r) {
                 var cfg = r.config || {};
@@ -3286,9 +3509,19 @@ function setFinanceBotsSortBy(sortBy) {
 }
 
 // Botlar sekmesi + Anasayfa aynı tablo: renderFinanceBots hem financeBotsList hem financeBotsListBots günceller
-function renderBotsList(bots) {
+function renderBotsList(bots, opts) {
     if (typeof window.__DEBUG_DASH__ !== 'undefined' && window.__DEBUG_DASH__) console.count('renderBotsList');
-    renderFinanceBots(Array.isArray(bots) ? bots : []);
+    bots = Array.isArray(bots) ? bots : [];
+    if (!(opts && opts.forceFullRender) && isBotsTabActive() && isBotsTabCacheReady()) {
+        var idsSig = bots.map(function (b) { return String(b.bot_id || b.id || ''); }).sort().join(',');
+        if (idsSig === _financeBotsIdsSignature) {
+            State.bots = hydrateBotsWithMetricsCache(bots);
+            refreshBotsTabDataOnly();
+            return;
+        }
+        clearBotsTabCache();
+    }
+    renderFinanceBots(bots, opts);
 }
 
 // Compatibility
@@ -4265,14 +4498,7 @@ function initMobileBottomNav(currentDesktopTab) {
             var tabBotsEl = document.getElementById("tabBots");
             if (tabBotsEl) { tabBotsEl.classList.add("is-active"); tabBotsEl.style.display = "block"; }
             setDesktopTabActiveWithoutClick("bots");
-            if (typeof syncFinanceBotsTabFromHome === "function") syncFinanceBotsTabFromHome();
-            if (State.accountId) {
-                if (typeof loadSummary === "function") loadSummary(State.accountId);
-                if (typeof loadBotPerformance === "function") loadBotPerformance(State.botPerformancePeriod || "all");
-                if (typeof loadGlobalLeaderboard === "function") loadGlobalLeaderboard();
-            } else if (State.bots && typeof renderFinanceBots === "function") {
-                renderFinanceBots(State.bots);
-            }
+            if (typeof activateBotsTab === "function") activateBotsTab();
         } else if (tab === "ayarlar") {
             setDesktopTabActiveWithoutClick("settings");
             document.body.classList.add("tab-settings-active");
@@ -4811,22 +5037,7 @@ function bindTabs() {
                     }
                     if (typeof startMobileTradeFavPriceUpdates === "function") startMobileTradeFavPriceUpdates();
                 } else if (targetTab === "bots") {
-                    if (State.accountId) {
-                        if (typeof loadBotsListFast === "function") loadBotsListFast(State.accountId);
-                        if (typeof loadSummary === "function") loadSummary(State.accountId);
-                        if (typeof loadBotPerformance === "function") {
-                            loadBotPerformance(State.botPerformancePeriod || "all");
-                        }
-                        if (typeof loadGlobalLeaderboard === "function") loadGlobalLeaderboard();
-                    }
-                    if (typeof syncFinanceBotsTabFromHome === "function") syncFinanceBotsTabFromHome();
-                    if (typeof renderFinanceBots === "function") {
-                        renderFinanceBots(State.bots || []);
-                    } else if (typeof renderBotsList === "function") {
-                        renderBotsList(State.bots || []);
-                    }
-                    if (typeof syncFinanceBotsTabFromHome === "function") syncFinanceBotsTabFromHome();
-                    if (typeof _bindFinanceBotsSortButtons === "function") _bindFinanceBotsSortButtons();
+                    if (typeof activateBotsTab === "function") activateBotsTab();
                 } else {
                     stopCoinListUpdates();
                 }
@@ -11703,14 +11914,6 @@ async function initDashboard() {
             var txPanelInit = document.getElementById('transactionHistoryPanel');
             if (txPanelInit) txPanelInit.style.display = 'block';
         }
-        if (savedTab === 'bots') {
-            if (typeof _bindFinanceBotsSortButtons === 'function') _bindFinanceBotsSortButtons();
-            if (typeof syncFinanceBotsTabFromHome === 'function') syncFinanceBotsTabFromHome();
-            if (State.accountId) {
-                if (typeof loadBotPerformance === 'function') loadBotPerformance(State.botPerformancePeriod || 'all');
-                if (typeof loadGlobalLeaderboard === 'function') loadGlobalLeaderboard();
-            }
-        }
     } else {
         // Geçersiz veya eksik sekme (örn. eski "reports"): tek bir içerik görünsün diye Anasayfa’yı aç
         const allContents = document.querySelectorAll(".dm-tab-content");
@@ -11766,6 +11969,7 @@ async function initDashboard() {
         _botPerformanceLastSig = '';
         _botPerformanceLastPeriod = null;
         if (typeof resetTxHistoryClientState === 'function') resetTxHistoryClientState();
+        if (typeof clearBotsTabCache === 'function') clearBotsTabCache();
         _dashboardPanelsAccountId = accountId;
     }
     if (typeof hydrateWalletFromStorageCache === 'function') hydrateWalletFromStorageCache(accountId);
@@ -11776,8 +11980,13 @@ async function initDashboard() {
         showFirstLoginModal = await shouldShowFirstLoginModal(accountId, true);
     }
     restoreFinanceBotsFromSessionCache(accountId);
+    if (savedTab === 'bots' && typeof activateBotsTab === 'function') {
+        activateBotsTab();
+    }
     // En İyi 5 Bot: hesap hazır olur olmaz yükle (snapshot beklemeden); snapshot geldiğinde de yenilenecek
-    if (typeof loadGlobalLeaderboard === 'function') loadGlobalLeaderboard();
+    if (typeof loadGlobalLeaderboard === 'function') {
+        loadGlobalLeaderboard(savedTab === 'bots' && isBotsTabCacheReady());
+    }
     await loadSpotFavoritesFromStorage();
     if (typeof prefetchMobileTradeFavTickerCache === 'function') prefetchMobileTradeFavTickerCache();
     if (typeof window.__DEBUG_DASH__ !== 'undefined' && window.__DEBUG_DASH__) console.log("[dashboard] initDashboard: accountId =", accountId, "accountCode =", accountCode);
@@ -13744,6 +13953,12 @@ function restoreFinanceBotsFromSessionCache(accountId) {
         if (data.bots && Array.isArray(data.bots) && data.bots.length) {
             State.bots = hydrateBotsWithMetricsCache(data.bots);
             if (Object.keys(_financeBotsMetricsCache).length > 0) _financeBotsLiveHydrated = true;
+            if (typeof restoreFinanceBotsDomFromSessionCache === 'function' && restoreFinanceBotsDomFromSessionCache(accountId, State.bots)) {
+                patchFinanceBotsMetrics(State.bots);
+                updateFinanceBotsLivePrices();
+                if (!_financeBotsLiveHydrated) ensureFinanceBotsLiveEquity();
+                return true;
+            }
             if (typeof renderFinanceBots === 'function') renderFinanceBots(State.bots);
             return true;
         }
@@ -13777,7 +13992,10 @@ function bindFinanceBotsRowClicks(container) {
             e.preventDefault();
             e.stopPropagation();
             var href = this.getAttribute('href');
-            if (href) location.href = href;
+            if (href) {
+                if (typeof persistDashboardBeforeBotDetailNav === 'function') persistDashboardBeforeBotDetailNav();
+                location.href = href;
+            }
         });
     });
     container.querySelectorAll('tbody tr').forEach(function (tr) {
@@ -13786,6 +14004,7 @@ function bindFinanceBotsRowClicks(container) {
             var botId = tr.dataset.botId;
             var page = tr.dataset.detailPage || '/ui/bot.html';
             var q = State.accountCode ? 'account_code=' + encodeURIComponent(State.accountCode) : 'account_id=' + State.accountId;
+            if (typeof persistDashboardBeforeBotDetailNav === 'function') persistDashboardBeforeBotDetailNav();
             location.href = page + '?bot_id=' + botId + '&' + q;
         });
     });
@@ -13795,6 +14014,7 @@ function bindFinanceBotsRowClicks(container) {
             var botId = card.dataset.botId;
             var page = card.dataset.detailPage || '/ui/bot.html';
             var q = State.accountCode ? 'account_code=' + encodeURIComponent(State.accountCode) : 'account_id=' + State.accountId;
+            if (typeof persistDashboardBeforeBotDetailNav === 'function') persistDashboardBeforeBotDetailNav();
             location.href = page + '?bot_id=' + botId + '&' + q;
         });
     });
@@ -13813,7 +14033,11 @@ function syncFinanceBotsTabFromHome() {
         return;
     }
     if (State.bots && State.bots.length && typeof renderFinanceBots === 'function') {
-        renderFinanceBots(State.bots);
+        if (isBotsTabCacheReady() && _financeBotsPanelHasRows(tab)) {
+            patchFinanceBotsMetrics(State.bots);
+        } else {
+            renderFinanceBots(State.bots);
+        }
     }
 }
 
@@ -13821,10 +14045,13 @@ function clearFinanceBotsSessionCache(accountId) {
     if (!accountId) return;
     try {
         sessionStorage.removeItem(financeBotsSessionCacheKey(accountId));
+        sessionStorage.removeItem(botsTabCacheSessionKey(accountId));
+        sessionStorage.removeItem(financeBotsDomCacheKey(accountId));
     } catch (e) {}
     _financeBotsMetricsCache = {};
     _financeBotsStructureSignature = null;
     _financeBotsIdsSignature = null;
+    if (State.accountId === accountId && typeof clearBotsTabCache === 'function') clearBotsTabCache();
 }
 window.clearFinanceBotsSessionCache = clearFinanceBotsSessionCache;
 
@@ -14054,7 +14281,8 @@ function patchFinanceBotsMetrics(bots) {
     persistFinanceBotsSessionCache(State.bots);
 }
 
-function renderFinanceBots(bots) {
+function renderFinanceBots(bots, opts) {
+    opts = opts || {};
     bots = hydrateBotsWithMetricsCache(Array.isArray(bots) ? bots : []);
     const containerAnasayfa = document.getElementById('financeBotsList');
     const containerBotsTab = document.getElementById('financeBotsListBots');
@@ -14069,6 +14297,7 @@ function renderFinanceBots(bots) {
         if (_financeBotsTableHasRows() || (State.bots && State.bots.length)) return;
         _financeBotsStructureSignature = null;
         _financeBotsIdsSignature = null;
+        clearBotsTabCache();
         if (containerAnasayfa) containerAnasayfa.innerHTML = emptyHtml;
         if (containerBotsTab) containerBotsTab.innerHTML = emptyHtml;
         _bindFinanceBotsSortButtons();
@@ -14086,6 +14315,7 @@ function renderFinanceBots(bots) {
         patchFinanceBotsMetrics(bots);
         if (!_financeBotsLiveHydrated) ensureFinanceBotsLiveEquity();
         syncFinanceBotsTabFromHome();
+        if (containerBotsTab && _financeBotsPanelHasRows(containerBotsTab)) markBotsTabCacheReady();
         return;
     }
     if (_financeBotsStructureSignature === structureSig && _financeBotsBothTablesReady()) {
@@ -14093,6 +14323,7 @@ function renderFinanceBots(bots) {
         patchFinanceBotsMetrics(bots);
         if (!_financeBotsLiveHydrated) ensureFinanceBotsLiveEquity();
         syncFinanceBotsTabFromHome();
+        if (containerBotsTab && _financeBotsPanelHasRows(containerBotsTab)) markBotsTabCacheReady();
         return;
     }
     _financeBotsStructureSignature = structureSig;
@@ -14280,6 +14511,7 @@ function renderFinanceBots(bots) {
     updateFinanceBotsLivePrices();
     ensureFinanceBotsLiveEquity();
     persistFinanceBotsSessionCache(sorted);
+    if (containerBotsTab && _financeBotsPanelHasRows(containerBotsTab)) markBotsTabCacheReady();
 }
 
 var financeBotLastPrices = {};
