@@ -1175,6 +1175,8 @@
         var lastKnownCycleId = null;
         var _botDetailHydrated = false;
         var BOT_DETAIL_UI_CACHE_PREFIX = 'bot_detail_ui_v2_';
+        var BOT_DETAIL_LIVE_POLL_MS = 3000;
+        var BOT_DETAIL_HEALTH_POLL_MS = 10000;
         var _lastPerfRenderFp = '';
 
         function setTextIfChanged(el, text) {
@@ -4199,11 +4201,10 @@
                     fetchBotHealth();
                     fetchBot24h();
                     if (window.intervalRegistry) {
-                        window.intervalRegistry.start('bot-detail-live', fetchLive, 2500, 'bot-detail');
-                        window.intervalRegistry.start('bot-detail-health', fetchBotHealth, 8000, 'bot-detail');
+                        window.intervalRegistry.start('bot-detail-live', fetchLive, BOT_DETAIL_LIVE_POLL_MS, 'bot-detail');
+                        window.intervalRegistry.start('bot-detail-health', fetchBotHealth, BOT_DETAIL_HEALTH_POLL_MS, 'bot-detail');
                     }
                     if (lastBotDetail.symbol && lastBotDetail.symbol !== 'MULTI' && accountId && window.intervalRegistry) {
-                        window.intervalRegistry.start('bot-detail-strip-price', fetchStripPrice, 1500, 'bot-detail');
                         window.intervalRegistry.start('bot-detail-strip-24h', fetchBot24h, 5000, 'bot-detail');
                     }
                     return res;
@@ -4910,7 +4911,7 @@
                     unlockBodyScroll();
                 }
                 if (window.intervalRegistry) {
-                    window.intervalRegistry.start('bot-detail-live', fetchLive, 2500, 'bot-detail');
+                    window.intervalRegistry.start('bot-detail-live', fetchLive, BOT_DETAIL_LIVE_POLL_MS, 'bot-detail');
                     syncStateHeroDurationPoll((lastBotDetail.status || '').toLowerCase() === 'running' && !!lastBotStartedAt);
                 }
                 refreshAll();

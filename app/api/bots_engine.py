@@ -42,7 +42,14 @@ def _bot_run_started_at_dt(bot: Any, state: Optional[Dict[str, Any]], db: Sessio
 # ---------------------------------------------------------------------------
 _LIVE_CACHE: Dict[int, Tuple[dict, float]] = {}
 _LIVE_CACHE_LOCK = threading.Lock()
-_LIVE_CACHE_TTL_SEC = 2.0
+_LIVE_CACHE_TTL_SEC = 3.0
+_LIVE_BATCH_MAX_BOTS = 50
+
+
+def invalidate_live_snapshot_cache(bot_id: int) -> None:
+    """State kaydedildiğinde live TTL önbelleğini temizle."""
+    with _LIVE_CACHE_LOCK:
+        _LIVE_CACHE.pop(int(bot_id), None)
 
 
 def _live_snapshot_get_cached(bot_id: int) -> Optional[dict]:
@@ -1477,11 +1484,14 @@ async def bots_list(
     rid = _request_id(request)
     get_account_or_403(current, account_id, db)
     rows = db.query(Bot).filter(Bot.account_id == account_id).order_by(Bot.id.desc()).all()
+    from app.botengine.state_store import load_states_list_meta
+
+    state_meta = load_states_list_meta(db, [r.id for r in rows])
     out = []
     for r in rows:
         raw = json.loads(r.config_json or "{}")
-        state = load_state(db, r.id)
-        ia_done = bool(state and state.get("initial_allocation_done"))
+        meta = state_meta.get(r.id) or {}
+        ia_done = bool(meta.get("initial_allocation_done"))
         st = (r.status or "stopped").lower()
         display_status = st
         if st == "running" and not ia_done:
@@ -1495,7 +1505,7 @@ async def bots_list(
             "display_status": display_status,
             "initial_allocation_done": ia_done,
             "config": raw,
-            "last_tick_at": state.get("last_tick_at") if state else None,
+            "last_tick_at": meta.get("last_tick_at"),
             "created_at": r.started_at.isoformat() + "Z" if getattr(r, "started_at", None) else None,
         })
     return {"bots": out, "request_id": rid}
@@ -2849,6 +2859,50 @@ async def bots_grid_points(
     }
 
 
+@router.get("/batch/live")
+async def bots_live_batch(
+    request: Request,
+    account_id: int = Query(..., description="Account scope"),
+    bot_ids: str = Query(..., description="Comma-separated bot ids (max 50)"),
+    current: dict = Depends(require_auth),
+    db: Session = Depends(get_db),
+):
+    """Batch live snapshots: one HTTP round-trip for dashboard equity polls."""
+    rid = _request_id(request)
+    get_account_or_403(current, account_id, db)
+    id_list: List[int] = []
+    for part in (bot_ids or "").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            id_list.append(int(part))
+        except ValueError:
+            continue
+    id_list = id_list[:_LIVE_BATCH_MAX_BOTS]
+    if not id_list:
+        return {"live": {}, "request_id": rid}
+    bots = (
+        db.query(Bot)
+        .filter(Bot.account_id == account_id, Bot.id.in_(id_list))
+        .all()
+    )
+    from app.botengine.state_store import load_states_bulk
+
+    states = load_states_bulk(db, [b.id for b in bots])
+    live_out: Dict[str, dict] = {}
+    for bot in bots:
+        cached = _live_snapshot_get_cached(bot.id)
+        if cached is not None:
+            live_out[str(bot.id)] = cached
+            continue
+        state = states.get(bot.id)
+        data = _build_live_snapshot_from_state(bot, state, db)
+        _live_snapshot_set_cached(bot.id, data)
+        live_out[str(bot.id)] = data
+    return {"live": live_out, "request_id": rid}
+
+
 @router.get("/{bot_id}/live")
 async def bots_live(
     request: Request,
@@ -3689,7 +3743,7 @@ async def bots_health(
     if not dismiss_id and int(state.get("health_ack_at") or 0) > 0:
         from app.botengine.engine_log_ack import max_resettable_event_id
 
-        dismiss_id = max_resettable_event_id(list_events(db, bot.id, limit=500))
+        dismiss_id = max_resettable_event_id(list_events(db, bot.id, limit=120))
     alerts = evaluate_bot_health(bot, state, db)
     now_ts = int(datetime.now(timezone.utc).timestamp())
     last_tick = _parse_last_tick_ts(state)

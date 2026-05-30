@@ -30,7 +30,7 @@ python -m app.botengine.worker_main
 | `locks.py` | Hesap kilidi, lease 10s |
 | `reconcile.py` | Binance truth |
 | `state_trim.py` | `save_state`/`load_state` öncesi JSON RAM sınırları |
-| `state_store.py` | Snapshot; `load_state_json_extract` tek alan okuma |
+| `state_store.py` | Snapshot; `load_states_list_meta` / `load_states_bulk`; `save_state` → live cache invalidate; `load_state_json_extract` |
 
 ## Alt klasörler
 

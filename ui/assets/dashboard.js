@@ -11899,7 +11899,7 @@ async function initDashboard() {
     window.intervalRegistry.start('dashboard.market.prices', tickDashboardLiveMarketPrices, PRICE_UI_TICK_MS, 'dashboard');
     window.intervalRegistry.start('finance.bots.live', function () {
         if (typeof pollFinanceBotsLiveEquity === 'function') pollFinanceBotsLiveEquity();
-    }, 2500, 'dashboard');
+    }, 3000, 'dashboard');
     
     // Auth ping: update activity, handle admin kick → redirect to login
     (function setupAuthPing() {
@@ -13687,47 +13687,60 @@ function applyFinanceBotsLiveEquityToDom() {
     }
 }
 
+function applyFinanceBotLiveSnapshot(botId, live) {
+    if (!live || typeof live !== 'object') return;
+    if (live.equity == null || isNaN(live.equity)) return;
+    if (!State.botLiveEquity) State.botLiveEquity = {};
+    var ic = live.initial_capital != null && !isNaN(live.initial_capital)
+        ? Number(live.initial_capital) : 0;
+    var eq = Number(live.equity);
+    State.botLiveEquity[String(botId)] = {
+        equity: eq,
+        equity_unavailable: !!live.equity_unavailable,
+        first_buy_pending: live.first_buy_pending === true,
+        base_balance: live.base_balance != null ? Number(live.base_balance) : null,
+        initial_capital: ic,
+        pnl_pct: live.pnl_pct != null && !isNaN(live.pnl_pct) ? Number(live.pnl_pct) : null,
+        last_price: live.last_price != null && !isNaN(live.last_price) ? Number(live.last_price) : null,
+        ts: Date.now()
+    };
+}
+
 async function pollFinanceBotsLiveEquity() {
     if (document.hidden || !State.accountId || !window.apiClient || !State.bots || !State.bots.length) {
         _financeBotsLiveHydrated = true;
         return;
     }
-    var q = State.accountCode
-        ? '?account_code=' + encodeURIComponent(State.accountCode)
-        : '?account_id=' + encodeURIComponent(State.accountId);
-    if (!State.botLiveEquity) State.botLiveEquity = {};
-    var jobs = [];
+    var ids = [];
     State.bots.forEach(function (bot) {
         if (!botNeedsLiveEquity(bot)) return;
         var botId = bot.bot_id || bot.id;
-        if (!botId) return;
-        jobs.push(
-            window.apiClient.get('/api/bots-engine/' + botId + '/live' + q)
-                .then(function (live) {
-                    if (!live || typeof live !== 'object') return;
-                    if (live.equity == null || isNaN(live.equity)) return;
-                    var ic = live.initial_capital != null && !isNaN(live.initial_capital)
-                        ? Number(live.initial_capital) : 0;
-                    var eq = Number(live.equity);
-                    State.botLiveEquity[String(botId)] = {
-                        equity: eq,
-                        equity_unavailable: !!live.equity_unavailable,
-                        first_buy_pending: live.first_buy_pending === true,
-                        base_balance: live.base_balance != null ? Number(live.base_balance) : null,
-                        initial_capital: ic,
-                        pnl_pct: live.pnl_pct != null && !isNaN(live.pnl_pct) ? Number(live.pnl_pct) : null,
-                        last_price: live.last_price != null && !isNaN(live.last_price) ? Number(live.last_price) : null,
-                        ts: Date.now()
-                    };
-                })
-                .catch(function () {})
-        );
+        if (botId) ids.push(String(botId));
     });
-    if (!jobs.length) {
+    if (!ids.length) {
         _financeBotsLiveHydrated = true;
         return;
     }
-    await Promise.all(jobs);
+    var accountQ = State.accountCode
+        ? 'account_code=' + encodeURIComponent(State.accountCode)
+        : 'account_id=' + encodeURIComponent(State.accountId);
+    var batchUrl = '/api/bots-engine/batch/live?' + accountQ + '&bot_ids=' + encodeURIComponent(ids.join(','));
+    try {
+        var res = await window.apiClient.get(batchUrl);
+        var liveMap = (res && res.live) || {};
+        ids.forEach(function (botId) {
+            applyFinanceBotLiveSnapshot(botId, liveMap[String(botId)]);
+        });
+    } catch (e) {
+        var q = State.accountCode
+            ? '?account_code=' + encodeURIComponent(State.accountCode)
+            : '?account_id=' + encodeURIComponent(State.accountId);
+        await Promise.all(ids.map(function (botId) {
+            return window.apiClient.get('/api/bots-engine/' + botId + '/live' + q)
+                .then(function (live) { applyFinanceBotLiveSnapshot(botId, live); })
+                .catch(function () {});
+        }));
+    }
     _financeBotsLiveHydrated = true;
     applyFinanceBotsLiveEquityToDom();
     persistFinanceBotsSessionCache(State.bots);

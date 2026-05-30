@@ -176,6 +176,80 @@ def save_state(db: Session, bot_id: int, account_id: int, state: Dict[str, Any])
         )
     else:
         logger.warning("BOT_STATE_SAVED bot_id=%s verify_failed=row_not_found", bot_id)
+    try:
+        from app.api.bots_engine import invalidate_live_snapshot_cache
+
+        invalidate_live_snapshot_cache(bot_id)
+    except Exception:
+        pass
+
+
+def load_states_list_meta(db: Session, bot_ids: List[int]) -> Dict[int, Dict[str, Any]]:
+    """Bots list için minimal alanlar — bot başına tam state_json parse yok."""
+    if not bot_ids:
+        return {}
+    ids = [int(b) for b in bot_ids if b is not None]
+    if not ids:
+        return {}
+    placeholders = ",".join(str(i) for i in ids)
+    rows = db.execute(
+        text(
+            f"""
+            SELECT bot_id,
+                   json_extract(state_json, '$.initial_allocation_done'),
+                   last_tick_at
+            FROM bot_engine_state
+            WHERE bot_id IN ({placeholders})
+            """
+        ),
+    ).fetchall()
+    out: Dict[int, Dict[str, Any]] = {}
+    for row in rows:
+        bid = int(row[0])
+        ia_raw = row[1]
+        ia_done = ia_raw in (1, True, "true", "1")
+        lt = row[2]
+        out[bid] = {"initial_allocation_done": ia_done, "last_tick_at": lt}
+    return out
+
+
+def load_states_bulk(db: Session, bot_ids: List[int]) -> Dict[int, Dict[str, Any]]:
+    """Çoklu bot için tek sorguda state snapshot (live batch)."""
+    if not bot_ids:
+        return {}
+    ids = [int(b) for b in bot_ids if b is not None]
+    if not ids:
+        return {}
+    placeholders = ",".join(str(i) for i in ids)
+    rows = db.execute(
+        text(
+            f"""
+            SELECT bot_id, state_json, cycle_id, mode, last_tick_at, last_error_code, retry_at, updated_at
+            FROM bot_engine_state
+            WHERE bot_id IN ({placeholders})
+            """
+        ),
+    ).fetchall()
+    out: Dict[int, Dict[str, Any]] = {}
+    for row in rows:
+        bid = int(row[0])
+        raw = row[1]
+        state = json.loads(raw) if isinstance(raw, str) and raw else {}
+        try:
+            from app.botengine.state_trim import trim_bot_state_for_persist
+
+            trim_bot_state_for_persist(state)
+        except Exception:
+            pass
+        state["cycle_id"] = state.get("cycle_id") or row[2] or 1
+        state["mode"] = state.get("mode") or row[3] or "IDLE"
+        state["last_tick_at"] = row[4]
+        state["last_error_code"] = row[5]
+        state["retry_at"] = row[6]
+        if "state_version" not in state:
+            state["state_version"] = 0
+        out[bid] = state
+    return out
 
 
 # Event types we log to DB (skip noisy routine events)
