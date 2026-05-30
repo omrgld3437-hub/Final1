@@ -831,6 +831,57 @@
             <div class="state-hero-meta" id="stateHeroMeta"></div>
             <div class="state-hero-grid" id="stateGrid"></div>
         </div>
+        <script>
+        (function () {
+            try {
+                var qs = new URLSearchParams(location.search);
+                var botId = qs.get('bot_id') || qs.get('id');
+                if (!botId) return;
+                var raw = sessionStorage.getItem('bot_detail_ui_v2_' + botId) || localStorage.getItem('bot_detail_ui_v2_' + botId)
+                    || sessionStorage.getItem('bot_detail_ui_v1_' + botId) || localStorage.getItem('bot_detail_ui_v1_' + botId);
+                if (!raw) return;
+                var o = JSON.parse(raw);
+                if (!o || !o.ts || Date.now() - o.ts > 604800000) return;
+                var statePanel = document.getElementById('statePanel');
+                var stateGrid = document.getElementById('stateGrid');
+                var botTopStrip = document.getElementById('botTopStrip');
+                var botTypeHeader = document.getElementById('botTypeHeader');
+                if (statePanel && o.statePanelDisplay) statePanel.style.display = o.statePanelDisplay;
+                if (o.stateHeroTitle) {
+                    var t = document.getElementById('stateHeroTitle');
+                    if (t) t.textContent = o.stateHeroTitle;
+                }
+                if (o.stateHeroMetaHtml) {
+                    var m = document.getElementById('stateHeroMeta');
+                    if (m) m.innerHTML = o.stateHeroMetaHtml;
+                }
+                if (stateGrid && o.stateGridHtml) stateGrid.innerHTML = o.stateGridHtml;
+                if (botTopStrip && o.botTopStripDisplay) botTopStrip.style.display = o.botTopStripDisplay;
+                if (botTypeHeader && o.botTypeHeaderDisplay) botTypeHeader.style.display = o.botTypeHeaderDisplay;
+                if (o.botTypeHeaderName) {
+                    var n = document.getElementById('botTypeHeaderName');
+                    if (n) n.textContent = o.botTypeHeaderName;
+                }
+                if (o.botSymbol) {
+                    var s = document.getElementById('botSymbolEl');
+                    if (s) s.textContent = o.botSymbol;
+                }
+                if (o.botPrice) {
+                    var p = document.getElementById('botPriceEl');
+                    if (p) p.textContent = o.botPrice;
+                }
+                if (o.bot24h) {
+                    var h = document.getElementById('bot24hEl');
+                    if (h) {
+                        h.textContent = o.bot24h;
+                        if (o.bot24hClass) h.className = o.bot24hClass;
+                    }
+                }
+                var loadingEl = document.getElementById('loadingEl');
+                if (loadingEl) loadingEl.style.display = 'none';
+            } catch (e) {}
+        })();
+        </script>
 
         <div class="panel" id="headerPanel">
             <div id="botTopStrip" class="bot-top-strip" style="display: none;">
@@ -1123,6 +1174,151 @@
         var lastPriceForBlink = null;
         var lastKnownCycleId = null;
         var _botDetailHydrated = false;
+        var BOT_DETAIL_UI_CACHE_PREFIX = 'bot_detail_ui_v2_';
+        var _lastPerfRenderFp = '';
+
+        function setTextIfChanged(el, text) {
+            if (!el) return false;
+            var s = text == null ? '' : String(text);
+            if (el.textContent === s) return false;
+            el.textContent = s;
+            return true;
+        }
+
+        function applyBotDetailPanelsFromCache(o) {
+            if (!o || !o.panelsReady) return false;
+            if (gridPointsPanel && o.gridPanelDisplay) gridPointsPanel.style.display = o.gridPanelDisplay;
+            if (profitPointsPanel && o.profitPanelDisplay) profitPointsPanel.style.display = o.profitPanelDisplay;
+            if (tradesPanel && o.tradesPanelDisplay) tradesPanel.style.display = o.tradesPanelDisplay;
+            if (perfPanel && o.perfPanelDisplay) perfPanel.style.display = o.perfPanelDisplay;
+            if (engineLogPanel && o.engineLogPanelDisplay) engineLogPanel.style.display = o.engineLogPanelDisplay;
+            if (gridSellBody && o.gridSellHtml != null) gridSellBody.innerHTML = o.gridSellHtml;
+            if (gridBuyBody && o.gridBuyHtml != null) gridBuyBody.innerHTML = o.gridBuyHtml;
+            if (profitPointsBody && o.profitHtml != null) profitPointsBody.innerHTML = o.profitHtml;
+            if (perfMetrics && o.perfMetricsHtml) perfMetrics.innerHTML = o.perfMetricsHtml;
+            var cycleReportEl = document.getElementById('cycleReport');
+            if (cycleReportEl && o.cycleReportHtml) {
+                cycleReportEl.innerHTML = o.cycleReportHtml;
+                cycleReportEl.style.display = o.cycleReportDisplay || 'block';
+            }
+            if (cycleTradesList && o.cycleTradesHtml) cycleTradesList.innerHTML = o.cycleTradesHtml;
+            var turBtns = document.getElementById('cycleTradesTurButtons');
+            if (turBtns && o.cycleTurBtnsHtml) turBtns.innerHTML = o.cycleTurBtnsHtml;
+            if (engineLogList && o.engineLogHtml) engineLogList.innerHTML = o.engineLogHtml;
+            if (o.gridRefText) {
+                var refEl = document.getElementById('gridPointsRefPrice');
+                if (refEl) refEl.textContent = o.gridRefText;
+            }
+            return true;
+        }
+
+        function persistBotDetailUiCache(id) {
+            if (!id) return;
+            try {
+                var stateHeroTitleEl = document.getElementById('stateHeroTitle');
+                var stateHeroMetaEl = document.getElementById('stateHeroMeta');
+                var statusBadgeEl = document.getElementById('statusBadge');
+                var cycleReportEl = document.getElementById('cycleReport');
+                var turBtns = document.getElementById('cycleTradesTurButtons');
+                var refEl = document.getElementById('gridPointsRefPrice');
+                var payload = {
+                    ts: Date.now(),
+                    panelsReady: _botDetailHydrated,
+                    statePanelDisplay: statePanel ? statePanel.style.display : '',
+                    stateHeroTitle: stateHeroTitleEl ? stateHeroTitleEl.textContent : '',
+                    stateHeroMetaHtml: stateHeroMetaEl ? stateHeroMetaEl.innerHTML : '',
+                    stateGridHtml: stateGrid ? stateGrid.innerHTML : '',
+                    botTopStripDisplay: botTopStrip ? botTopStrip.style.display : '',
+                    botTypeHeaderDisplay: document.getElementById('botTypeHeader') ? document.getElementById('botTypeHeader').style.display : '',
+                    botTypeHeaderName: document.getElementById('botTypeHeaderName') ? document.getElementById('botTypeHeaderName').textContent : '',
+                    botSymbol: botSymbolEl ? botSymbolEl.textContent : '',
+                    botPrice: botPriceEl ? botPriceEl.textContent : '',
+                    bot24h: bot24hEl ? bot24hEl.textContent : '',
+                    bot24hClass: bot24hEl ? bot24hEl.className : '',
+                    statusBadgeHtml: statusBadgeEl ? statusBadgeEl.outerHTML : '',
+                    gridPanelDisplay: gridPointsPanel ? gridPointsPanel.style.display : '',
+                    profitPanelDisplay: profitPointsPanel ? profitPointsPanel.style.display : '',
+                    tradesPanelDisplay: tradesPanel ? tradesPanel.style.display : '',
+                    perfPanelDisplay: perfPanel ? perfPanel.style.display : '',
+                    engineLogPanelDisplay: engineLogPanel ? engineLogPanel.style.display : '',
+                    gridSellHtml: gridSellBody ? gridSellBody.innerHTML : '',
+                    gridBuyHtml: gridBuyBody ? gridBuyBody.innerHTML : '',
+                    profitHtml: profitPointsBody ? profitPointsBody.innerHTML : '',
+                    perfMetricsHtml: perfMetrics ? perfMetrics.innerHTML : '',
+                    cycleReportHtml: cycleReportEl ? cycleReportEl.innerHTML : '',
+                    cycleReportDisplay: cycleReportEl ? cycleReportEl.style.display : '',
+                    cycleTradesHtml: cycleTradesList ? cycleTradesList.innerHTML : '',
+                    cycleTurBtnsHtml: turBtns ? turBtns.innerHTML : '',
+                    engineLogHtml: engineLogList ? engineLogList.innerHTML : '',
+                    gridRefText: refEl ? refEl.textContent : '',
+                    gridStructureFp: _lastGridStructureFp,
+                    gridDisplayFp: _lastGridDisplayFp,
+                    perfFp: _lastPerfRenderFp,
+                    engineLogSig: _engineLogLiveOpts ? _engineLogLiveOpts._lastLogRenderSig : null,
+                    selectedCycleId: window._botDetailSelectedCycleId
+                };
+                var key = BOT_DETAIL_UI_CACHE_PREFIX + id;
+                sessionStorage.setItem(key, JSON.stringify(payload));
+                localStorage.setItem(key, JSON.stringify(payload));
+            } catch (e) {}
+        }
+
+        function restoreBotDetailUiCache(id) {
+            if (!id) return false;
+            try {
+                var raw = sessionStorage.getItem(BOT_DETAIL_UI_CACHE_PREFIX + id) || localStorage.getItem(BOT_DETAIL_UI_CACHE_PREFIX + id);
+                if (!raw) {
+                    raw = sessionStorage.getItem('bot_detail_ui_v1_' + id) || localStorage.getItem('bot_detail_ui_v1_' + id);
+                }
+                if (!raw) return false;
+                var o = JSON.parse(raw);
+                if (!o || !o.ts) return false;
+                if (Date.now() - o.ts > 604800000 && !sessionStorage.getItem(BOT_DETAIL_UI_CACHE_PREFIX + id)) return false;
+                if (statePanel && o.statePanelDisplay) statePanel.style.display = o.statePanelDisplay;
+                var stateHeroTitleEl = document.getElementById('stateHeroTitle');
+                if (stateHeroTitleEl && o.stateHeroTitle) stateHeroTitleEl.textContent = o.stateHeroTitle;
+                var stateHeroMetaEl = document.getElementById('stateHeroMeta');
+                if (stateHeroMetaEl && o.stateHeroMetaHtml) stateHeroMetaEl.innerHTML = o.stateHeroMetaHtml;
+                if (stateGrid && o.stateGridHtml) stateGrid.innerHTML = o.stateGridHtml;
+                if (botTopStrip && o.botTopStripDisplay) botTopStrip.style.display = o.botTopStripDisplay;
+                var botTypeHeaderEl = document.getElementById('botTypeHeader');
+                var botTypeHeaderNameEl = document.getElementById('botTypeHeaderName');
+                if (botTypeHeaderEl && o.botTypeHeaderDisplay) botTypeHeaderEl.style.display = o.botTypeHeaderDisplay;
+                if (botTypeHeaderNameEl && o.botTypeHeaderName) botTypeHeaderNameEl.textContent = o.botTypeHeaderName;
+                if (botSymbolEl && o.botSymbol) {
+                    botSymbolEl.textContent = o.botSymbol;
+                    if (o.botSymbol !== '?' && o.botSymbol !== '—') lastBotDetail.symbol = String(o.botSymbol).toUpperCase();
+                }
+                if (lastBotDetail.symbol) {
+                    var stateBaseCached = document.getElementById('stateBaseValue');
+                    if (stateBaseCached && / —$/.test(stateBaseCached.textContent)) {
+                        var balCached = parseFloat(String(stateBaseCached.textContent).replace(/ —$/, '').trim());
+                        if (!isNaN(balCached)) stateBaseCached.textContent = formatStateBaseBalance(balCached, lastBotDetail.symbol);
+                    }
+                    if (perfMetrics && / —/.test(perfMetrics.textContent || '')) _lastPerfRenderFp = '';
+                }
+                if (botPriceEl && o.botPrice) botPriceEl.textContent = o.botPrice;
+                if (bot24hEl && o.bot24h) {
+                    bot24hEl.textContent = o.bot24h;
+                    if (o.bot24hClass) bot24hEl.className = o.bot24hClass;
+                }
+                var statusBadgeEl = document.getElementById('statusBadge');
+                if (statusBadgeEl && o.statusBadgeHtml) applyCachedStatusBadgeHtml(statusBadgeEl, o.statusBadgeHtml);
+                var panelsOk = applyBotDetailPanelsFromCache(o);
+                if (panelsOk) {
+                    _botDetailHydrated = true;
+                    _lastGridStructureFp = o.gridStructureFp || _lastGridStructureFp;
+                    _lastGridDisplayFp = o.gridDisplayFp || _lastGridDisplayFp;
+                    _lastPerfRenderFp = o.perfFp || _lastPerfRenderFp;
+                    if (o.selectedCycleId != null) window._botDetailSelectedCycleId = o.selectedCycleId;
+                    if (o.engineLogSig && _engineLogLiveOpts) _engineLogLiveOpts._lastLogRenderSig = o.engineLogSig;
+                }
+                if (loadingEl) loadingEl.style.display = 'none';
+                return panelsOk || !!(o.stateGridHtml && o.stateGridHtml.indexOf('state-hero-item') !== -1);
+            } catch (e) {
+                return false;
+            }
+        }
         var _lastGridStructureFp = '';
         var _lastGridDisplayFp = '';
         var _lastHealthLogRenderKey = '';
@@ -1558,13 +1754,12 @@
                 }
             }
         }
-        function applyLiveHeroBalances(newState) {
-            var sym = lastBotDetail.symbol || '';
-            var baseAsset = typeof baseFromSymbol === 'function' ? baseFromSymbol(sym) : '';
+        function applyLiveHeroBalances(newState, symbolHint) {
+            var sym = symbolHint || lastBotDetail.symbol || (botSymbolEl && botSymbolEl.textContent) || '';
             var stateBaseEl = document.getElementById('stateBaseValue');
             var stateQuoteEl = document.getElementById('stateQuoteValue');
             if (stateBaseEl && newState.base_balance != null && !isNaN(Number(newState.base_balance))) {
-                var baseStr = fmtBaseCompact(newState.base_balance) + (baseAsset ? ' ' + baseAsset : '');
+                var baseStr = formatStateBaseBalance(newState.base_balance, sym);
                 if (stateBaseEl.textContent !== baseStr) stateBaseEl.textContent = baseStr;
             }
             if (stateQuoteEl && newState.quote_balance != null && !isNaN(Number(newState.quote_balance))) {
@@ -1788,7 +1983,38 @@
         }
 
         function baseFromSymbol(sym) {
-            return (sym || '').replace(/USDT$|FDUSD$|BUSD$/i, '') || (sym || '').substring(0, 4) || '—';
+            var s = String(sym || '').trim().toUpperCase();
+            if (!s || s === '?' || s === '—' || s === 'MULTI') return '';
+            var base = s.replace(/USDT$|FDUSD$|BUSD$|TUSD$/i, '');
+            return base || '';
+        }
+        function formatStateBaseBalance(balance, symbol) {
+            if (balance == null || balance === '' || isNaN(Number(balance))) return '—';
+            var asset = baseFromSymbol(symbol);
+            return fmtBaseCompact(balance) + (asset ? ' ' + asset : '');
+        }
+        /** Performans / tur raporu coin etiketi; '—' truthy olduğu için `|| 'BASE'` kullanılmaz. */
+        function perfBaseAssetLabel(symbolHint) {
+            var sym = symbolHint || lastBotDetail.symbol || (botSymbolEl && botSymbolEl.textContent) || '';
+            var a = baseFromSymbol(sym);
+            return (a && a !== '—') ? a : 'BASE';
+        }
+        function formatPerfInventoryPnlHtml(invPnl, invPct, symbolHint, res) {
+            var baseAsset = perfBaseAssetLabel(symbolHint);
+            var invColor = invPnl >= 0 ? '#0ecb81' : '#f6465d';
+            var invSign = invPnl >= 0 ? '+' : '';
+            var invStr = '<span style="color:' + invColor + '">' + invSign + fmtBaseCompact(invPnl) + ' ' + baseAsset + '</span>';
+            if (invPct == null || isNaN(invPct)) {
+                var px = res && res.current_price != null ? Number(res.current_price) : 0;
+                if ((!px || px <= 0) && lastRefPriceForPerf != null) px = Number(lastRefPriceForPerf);
+                if (initialCapForPerf > 0 && px > 0) {
+                    invPct = invPnl * px / initialCapForPerf * 100;
+                }
+            }
+            if (invPct != null && !isNaN(invPct)) {
+                invStr += ' <span class="perf-pnl-pct">(' + (invPct >= 0 ? '+' : '') + invPct.toFixed(2) + '%)</span>';
+            }
+            return invStr;
         }
 
         function botLogoStorageKey(id) {
@@ -1936,8 +2162,26 @@
             return window.EngineLogLive.fetchAndRender(_engineLogLiveOpts, !!incremental);
         }
 
-        function startEngineLogLive() {
+        var _engineLogPollingOn = false;
+
+        function startEngineLogLive(preserveDisplay) {
             if (!window.EngineLogLive || !botId) return;
+            if (preserveDisplay && engineLogList && engineLogList.querySelector('table.engine-log-table')) {
+                if (_engineLogPollingOn) return;
+                _engineLogPollingOn = true;
+                _engineLogLiveOpts._logBootstrapping = false;
+                var resumeLogs = function () {
+                    loadEngineEvents(botId, true).then(function (events) {
+                        if (window.BotHealthAlerts) {
+                            window._lastSeenHealthEventId = window.BotHealthAlerts.maxHealthEventId(events || window._lastEngineEvents);
+                        }
+                        window.EngineLogLive.renderDisplayEvents(_engineLogLiveOpts);
+                        window.EngineLogLive.startPolling(_engineLogLiveOpts, true);
+                    });
+                };
+                fetchBotHealth().finally(resumeLogs);
+                return;
+            }
             stopEngineLogLive();
             _engineLogLiveOpts._logBootstrapping = true;
             _engineLogLiveOpts._lastLogRenderSig = null;
@@ -1951,12 +2195,14 @@
                         window.EngineLogLive.renderDisplayEvents(_engineLogLiveOpts);
                     }
                     window.EngineLogLive.startPolling(_engineLogLiveOpts, true);
+                    _engineLogPollingOn = true;
                 });
             };
             fetchBotHealth().finally(bootLogs);
         }
 
         function stopEngineLogLive() {
+            _engineLogPollingOn = false;
             if (window.EngineLogLive) window.EngineLogLive.stopPolling(_engineLogLiveOpts);
         }
 
@@ -1981,7 +2227,15 @@
             _cycleTradesCache = {};
             _botDetailHydrated = false;
             _lastGridStructureFp = '';
+            _lastGridDisplayFp = '';
+            _lastPerfRenderFp = '';
             _lastGridTrailActive = false;
+            try {
+                if (botId) {
+                    sessionStorage.removeItem(BOT_DETAIL_UI_CACHE_PREFIX + botId);
+                    localStorage.removeItem(BOT_DETAIL_UI_CACHE_PREFIX + botId);
+                }
+            } catch (e) {}
             if (cycleTradesList) cycleTradesList.innerHTML = '<div class="cycle-pnl-item muted">Yükleniyor…</div>';
             var turBtns = document.getElementById('cycleTradesTurButtons');
             if (turBtns) turBtns.innerHTML = '';
@@ -2056,6 +2310,19 @@
             return false;
         }
 
+        function applyCachedStatusBadgeHtml(el, html) {
+            if (!el || !html) return;
+            try {
+                var wrap = document.createElement('div');
+                wrap.innerHTML = html;
+                var src = wrap.firstElementChild;
+                if (!src) return;
+                el.className = src.className;
+                el.textContent = src.textContent;
+                el.title = src.title || '';
+            } catch (e) {}
+        }
+
         function applyStatusBadge(status, opts) {
             opts = opts || {};
             var st = (status || 'stopped').toLowerCase();
@@ -2065,10 +2332,11 @@
                 : st === 'running' ? (showAsError ? 'Hata (bağlantı)' : waitingFirstBuy ? 'Alım bekliyor' : 'Çalışıyor')
                 : st === 'error' || (st && st.indexOf('paused') === 0) ? 'Hata'
                 : st === 'stopped' ? 'Durduruldu' : 'Bekliyor';
-            if (statusBadge) {
-                statusBadge.textContent = statusText;
-                statusBadge.className = 'status-badge ' + (showAsError || st === 'error' || (st && st.indexOf('paused') === 0) ? 'status-error' : st === 'running' ? 'status-running' : 'status-stopped');
-                statusBadge.title = showAsError
+            var badgeEl = document.getElementById('statusBadge');
+            if (badgeEl) {
+                badgeEl.textContent = statusText;
+                badgeEl.className = 'status-badge ' + (showAsError || st === 'error' || (st && st.indexOf('paused') === 0) ? 'status-error' : st === 'running' ? 'status-running' : 'status-stopped');
+                badgeEl.title = showAsError
                     ? (opts.stale === true
                         ? 'Güncel veri alınamıyor; son tick eski veya fiyat/bakiye güncellenemiyor.'
                         : 'Binance API anahtarı geçersiz veya IP/Spot izni yok. API Key, IP beyaz listesi ve Spot izinlerini kontrol edin.')
@@ -2937,8 +3205,7 @@
                 ? 'var(--ds-text-secondary)'
                 : (totalPnlUsd != null ? (totalPnlUsd >= 0 ? '#0ecb81' : '#f6465d') : 'var(--ds-text-secondary)');
             var cycleVal = st.cycle_id != null ? st.cycle_id : '—';
-            var baseAsset = baseFromSymbol(symbol) || '';
-            var baseVal = st.base_balance != null ? fmtBaseCompact(st.base_balance) + (baseAsset ? ' ' + baseAsset : '') : '—';
+            var baseVal = formatStateBaseBalance(st.base_balance, symbol);
             var quoteVal = st.quote_balance != null ? fmtUsd(st.quote_balance) : '—';
             stateGrid.innerHTML =
                 '<div class="state-hero-item state-bot-bakiye"><span class="state-label">Bot bakiyesi (USD)</span><span class="state-value" id="stateBotBalanceValue" title="Base + Quote (USD toplam)">' + botBalanceUsd + '</span></div>' +
@@ -3370,7 +3637,7 @@
                     var invQtyTotal = ag.inventory_coin_adv_qty_total != null ? Number(ag.inventory_coin_adv_qty_total) : 0;
                     var invFeesTotal = ag.inventory_fees_usdt_total != null ? Number(ag.inventory_fees_usdt_total) : 0;
                     var invUsdtEquiv = ag.inventory_usdt_equiv_total != null ? Number(ag.inventory_usdt_equiv_total) : (invQtyTotal * (priceForBot || 0) - invFeesTotal);
-                    var baseA = baseFromSymbol(symbol) || 'BASE';
+                    var baseA = perfBaseAssetLabel(symbol);
                     var cashStr = (cashTotal >= 0 ? '+' : '') + fmtUsd(cashTotal) + '  |  Komisyon: ' + fmtUsd(cashFeesTotal);
                     var invQtyStr = (invQtyTotal >= 0 ? '+' : '') + fmtNum(invQtyTotal, 8) + ' ' + baseA + '  |  Komisyon: ' + fmtUsd(invFeesTotal);
                     var invUsdtStr = (invUsdtEquiv >= 0 ? '+' : '') + fmtUsd(invUsdtEquiv) + ' (≈ @ güncel fiyat)';
@@ -3429,6 +3696,7 @@
             startEngineLogLive();
             loadPerfMetrics();
             _botDetailHydrated = true;
+            persistBotDetailUiCache(botId);
         }
 
         function liveStateFromDetail(data) {
@@ -3459,6 +3727,7 @@
             if (!data) return;
             if (data.bot_id != null && String(data.bot_id) !== String(botId)) return;
             var st = data.state || {};
+            if (data.symbol) lastBotDetail.symbol = String(data.symbol).toUpperCase();
             lastBotDetail.state = st;
             lastBotDetail.config = data.config || lastBotDetail.config || {};
             lastBotDetail.grid_points = data.grid_points || lastBotDetail.grid_points || [];
@@ -3478,10 +3747,8 @@
                 _engineLogLiveOpts.cycleStartEquity = st.cycle_start_equity != null ? Number(st.cycle_start_equity) : _engineLogLiveOpts.cycleStartEquity;
                 _engineLogLiveOpts.cycleOpenTrades = st.cycle_open_trades || _engineLogLiveOpts.cycleOpenTrades || [];
             }
-            var detailStatus = (data.status || lastBotDetail.status || '').toLowerCase();
-            if (detailStatus !== 'running') {
-                applyLive(liveStateFromDetail(data));
-            }
+            applyLive(liveStateFromDetail(data));
+            if (lastBotDetail.symbol) applyLiveHeroBalances(st, lastBotDetail.symbol);
             if (st.cycle_opened_at && st.cycle_id != null && Number(st.cycle_id) === Number(window._botDetailSelectedCycleId)) {
                 setCycleReportStartedAt(st.cycle_opened_at, st.cycle_id);
                 updateCycleReportDurationLive();
@@ -3505,6 +3772,9 @@
                     renderGridPointsPanel(merged, { applyLive: false });
                     renderProfitPointsPanel(merged, { applyLive: false });
                 }
+            } else if (gridPointsPanel && gridPointsPanel.style.display !== 'none') {
+                updateGridPointsRefPriceLine(data.current_price);
+                refreshGridPointsLivePrice(data.current_price != null ? Number(data.current_price) : null);
             }
             syncGridWarmupPoll();
             var sel = window._botDetailSelectedCycleId;
@@ -3517,6 +3787,8 @@
                 syncGridPointsPoll();
             }
             _lastGridTrailActive = trailNow;
+            loadPerfMetrics({ silent: true });
+            persistBotDetailUiCache(botId);
         }
 
         function getPerfPeriod() {
@@ -3524,14 +3796,64 @@
             return btn ? btn.getAttribute('data-period') : 'all';
         }
 
-        function buildPerfMetricCard(label, valueHtml) {
-            return '<div class="perf-metric-card"><div class="perf-metric-label">' + label + '</div><div class="perf-metric-value">' + valueHtml + '</div></div>';
+        function buildPerfMetricCard(label, valueHtml, perfKey) {
+            var keyAttr = perfKey ? ' data-perf-key="' + perfKey + '"' : '';
+            return '<div class="perf-metric-card"><div class="perf-metric-label">' + label + '</div><div class="perf-metric-value"' + keyAttr + '>' + valueHtml + '</div></div>';
+        }
+
+        function perfMetricsFingerprint(res) {
+            if (!res) return '';
+            var dp = res.dual_perf;
+            if (dp && dp.aggregates) {
+                var ag = dp.aggregates;
+                return 'dual:' + [
+                    ag.cash_pnl_usdt_total, ag.cash_fees_usdt_total, ag.cash_closed_cycles_total,
+                    ag.inventory_coin_adv_qty_total, ag.inventory_fees_usdt_total, ag.inventory_closed_cycles_total
+                ].join(':');
+            }
+            return 'single:' + (res.pnl_usd != null ? res.pnl_usd : '') + ':' + (res.fees_usd != null ? res.fees_usd : '');
+        }
+
+        function patchDualPerfMetricsInPlace(res) {
+            if (!perfMetrics || !res || !res.dual_perf || !res.dual_perf.aggregates) return false;
+            var dp = res.dual_perf;
+            var ag = dp.aggregates;
+            var baseAsset = perfBaseAssetLabel();
+            var cashPnl = ag.cash_pnl_usdt_total != null ? Number(ag.cash_pnl_usdt_total) : 0;
+            var cashFees = ag.cash_fees_usdt_total != null ? Number(ag.cash_fees_usdt_total) : 0;
+            var cashClosed = ag.cash_closed_cycles_total != null ? Number(ag.cash_closed_cycles_total) : 0;
+            var invPnl = ag.inventory_coin_adv_qty_total != null ? Number(ag.inventory_coin_adv_qty_total) : 0;
+            var invPct = ag.inventory_pnl_pct_total != null ? Number(ag.inventory_pnl_pct_total) : null;
+            var invFees = ag.inventory_fees_usdt_total != null ? Number(ag.inventory_fees_usdt_total) : 0;
+            var invClosed = ag.inventory_closed_cycles_total != null ? Number(ag.inventory_closed_cycles_total) : 0;
+            var cashColor = cashPnl >= 0 ? '#0ecb81' : '#f6465d';
+            var cashPct = dp.cash_pnl_pct != null ? Number(dp.cash_pnl_pct) : null;
+            var cashStr = '<span style="color:' + cashColor + '">' + (cashPnl >= 0 ? '+' : '') + cashPnl.toFixed(2) + ' USDT</span>';
+            if (cashPct != null && !isNaN(cashPct)) {
+                cashStr += ' <span class="perf-pnl-pct">(' + (cashPct >= 0 ? '+' : '') + cashPct.toFixed(2) + '%)</span>';
+            }
+            var invStr = formatPerfInventoryPnlHtml(invPnl, invPct, null, null);
+            var map = {
+                cash_pnl: cashStr,
+                cash_cycles: String(cashClosed),
+                cash_fees: cashFees.toFixed(2),
+                inv_pnl: invStr,
+                inv_cycles: String(invClosed),
+                inv_fees: invFees.toFixed(2)
+            };
+            var keys = Object.keys(map);
+            for (var i = 0; i < keys.length; i++) {
+                var el = perfMetrics.querySelector('.perf-metric-value[data-perf-key="' + keys[i] + '"]');
+                if (!el) return false;
+                if (el.innerHTML !== map[keys[i]]) el.innerHTML = map[keys[i]];
+            }
+            return true;
         }
 
         function renderDualPerfMetrics(res) {
             if (!perfMetrics) return;
             var dp = res.dual_perf;
-            var baseAsset = baseFromSymbol(lastBotDetail.symbol || '') || 'BASE';
+            var baseAsset = perfBaseAssetLabel();
 
             if (dp) {
                 var cashPnl = dp.cash_pnl_usdt != null ? Number(dp.cash_pnl_usdt) : 0;
@@ -3550,33 +3872,22 @@
                     cashStr += ' <span class="perf-pnl-pct">(' + (cashPct >= 0 ? '+' : '') + cashPct.toFixed(2) + '%)</span>';
                 }
 
-                var invColor = invPnl >= 0 ? '#0ecb81' : '#f6465d';
-                var invSign = invPnl >= 0 ? '+' : '';
-                var invStr = '<span style="color:' + invColor + '">' + invSign + fmtBaseCompact(invPnl) + ' ' + baseAsset + '</span>';
-                if (invPct == null || isNaN(invPct)) {
-                    var px = res.current_price != null ? Number(res.current_price) : 0;
-                    if ((!px || px <= 0) && lastRefPriceForPerf != null) px = Number(lastRefPriceForPerf);
-                    if (initialCapForPerf > 0 && px > 0) {
-                        invPct = invPnl * px / initialCapForPerf * 100;
-                    }
-                }
-                if (invPct != null && !isNaN(invPct)) {
-                    invStr += ' <span class="perf-pnl-pct">(' + (invPct >= 0 ? '+' : '') + invPct.toFixed(2) + '%)</span>';
-                }
+                var invStr = formatPerfInventoryPnlHtml(invPnl, invPct, null, res);
 
                 perfMetrics.innerHTML =
                     '<div class="perf-metrics-row">' +
                     '<div class="perf-metrics-row-label">Aşağı yön</div>' +
-                    buildPerfMetricCard('PnL', cashStr) +
-                    buildPerfMetricCard('Tamamlanan tur', String(cashClosed)) +
-                    buildPerfMetricCard('Komisyon (USDT)', cashFees.toFixed(2)) +
+                    buildPerfMetricCard('PnL', cashStr, 'cash_pnl') +
+                    buildPerfMetricCard('Tamamlanan tur', String(cashClosed), 'cash_cycles') +
+                    buildPerfMetricCard('Komisyon (USDT)', cashFees.toFixed(2), 'cash_fees') +
                     '</div>' +
                     '<div class="perf-metrics-row">' +
                     '<div class="perf-metrics-row-label">Yukarı yön</div>' +
-                    buildPerfMetricCard('PnL (' + baseAsset + ')', invStr) +
-                    buildPerfMetricCard('Tamamlanan tur', String(invClosed)) +
-                    buildPerfMetricCard('Komisyon (USDT)', invFees.toFixed(2)) +
+                    buildPerfMetricCard('PnL (' + baseAsset + ')', invStr, 'inv_pnl') +
+                    buildPerfMetricCard('Tamamlanan tur', String(invClosed), 'inv_cycles') +
+                    buildPerfMetricCard('Komisyon (USDT)', invFees.toFixed(2), 'inv_fees') +
                     '</div>';
+                _lastPerfRenderFp = perfMetricsFingerprint(res);
                 return;
             }
 
@@ -3595,17 +3906,25 @@
                 '</div>';
         }
 
-        function loadPerfMetrics() {
+        function loadPerfMetrics(opts) {
+            opts = opts || {};
             var period = getPerfPeriod();
             var q = 'account_id=' + (accountId || '') + '&period=' + encodeURIComponent(period);
             window.apiClient.get('/api/bots-engine/' + botId + '/performance?' + q)
                 .then(function(res) {
-                    renderDualPerfMetrics(res);
+                    var fp = perfMetricsFingerprint(res);
+                    if (!(_botDetailHydrated && fp === _lastPerfRenderFp && patchDualPerfMetricsInPlace(res))) {
+                        renderDualPerfMetrics(res);
+                    }
+                    _lastPerfRenderFp = fp;
                     window._lastPerfChartSeries = res.chart_series || [];
                     window._lastPerfPairSeries = res.pair_series || [];
+                    if (_botDetailHydrated) persistBotDetailUiCache(botId);
                 })
                 .catch(function() {
-                    if (perfMetrics) perfMetrics.innerHTML = '<p class="muted">Metrikler yüklenemedi.</p>';
+                    if (!opts.silent && perfMetrics && !perfMetrics.querySelector('[data-perf-key]')) {
+                        perfMetrics.innerHTML = '<p class="muted">Metrikler yüklenemedi.</p>';
+                    }
                 });
         }
 
@@ -3859,13 +4178,23 @@
 
         function loadDetail() {
             if (!botId || !window.apiClient) return;
-            resetBotDetailUi();
+            restoreBotDetailUiCache(botId);
+            if (_botDetailHydrated) {
+                if (loadingEl) loadingEl.style.display = 'none';
+            } else {
+                resetBotDetailUi();
+            }
             _botStatusGraceUntil = Date.now() + 8000;
             var q = accountCode ? '?account_code=' + encodeURIComponent(accountCode) : '?account_id=' + (accountId || '');
             window.apiClient.get('/api/bots-engine/' + botId + q)
                 .then(function (res) {
                     if (res && res.bot_id != null && String(res.bot_id) !== String(botId)) return;
-                    showDetail(res);
+                    if (_botDetailHydrated && typeof patchBotDetail === 'function') {
+                        patchBotDetail(res);
+                        startEngineLogLive(true);
+                    } else {
+                        showDetail(res);
+                    }
                     fetchLive();
                     fetchBotHealth();
                     fetchBot24h();
@@ -4564,7 +4893,16 @@
                 loadDetail();
                 return;
             }
-            if (e.persisted && botId) loadDetail();
+            if (e.persisted && botId) {
+                if (_botDetailHydrated) {
+                    refreshAll();
+                    fetchLive();
+                    fetchBotHealth();
+                    loadPerfMetrics({ silent: true });
+                } else {
+                    loadDetail();
+                }
+            }
         });
         window.addEventListener('visibilitychange', function () {
             if (!document.hidden && botId) {

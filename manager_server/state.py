@@ -312,6 +312,98 @@ MAX_METRICS_HISTORY = 180
 _metrics_history: deque = deque(maxlen=MAX_METRICS_HISTORY)
 _metrics_history_lock = threading.Lock()
 
+# Saatlik tick: son 60 dakikadaki olay sayısı (servis bazlı, manager metrics döngüsünde güncellenir)
+_TICK_WINDOW_SEC = 3600
+_service_tick_ts: dict[str, deque] = {
+    "manager": deque(),
+    "web": deque(),
+    "html": deque(),
+}
+_last_web_request_total: Optional[int] = None
+_last_web_metrics_pid: Optional[int] = None
+
+
+def _prune_tick_deque(dq: deque, now: float) -> None:
+    cutoff = now - _TICK_WINDOW_SEC
+    while dq and dq[0] < cutoff:
+        dq.popleft()
+
+
+def _record_service_ticks(service: str, count: int, now: Optional[float] = None) -> None:
+    if count <= 0 or service not in _service_tick_ts:
+        return
+    ts = now if now is not None else time.time()
+    dq = _service_tick_ts[service]
+    for _ in range(min(count, 5000)):
+        dq.append(ts)
+    _prune_tick_deque(dq, ts)
+
+
+def _ticks_last_60m(service: str, min_ts: Optional[float] = None) -> int:
+    if service not in _service_tick_ts:
+        return 0
+    now = time.time()
+    dq = _service_tick_ts[service]
+    cutoff = now - _TICK_WINDOW_SEC
+    if min_ts is not None and min_ts > cutoff:
+        cutoff = min_ts
+    while dq and dq[0] < cutoff:
+        dq.popleft()
+    return len(dq)
+
+
+def _update_hourly_ticks(
+    manager_proc: dict,
+    web_proc: dict,
+    engine_proc: dict,
+    html_proc: dict,
+    web_app: dict,
+    engine_app: dict,
+    html_running: bool,
+    web_started_at: Optional[float] = None,
+) -> None:
+    """Son 60 dk tick sayacını servis proc dict'lerine yazar."""
+    global _last_web_request_total, _last_web_metrics_pid
+    now = time.time()
+    if manager_proc.get("pid"):
+        _record_service_ticks("manager", 1, now)
+    manager_proc["ticks_last_60m"] = _ticks_last_60m("manager")
+
+    web_pid = web_proc.get("pid")
+    if web_pid != _last_web_metrics_pid:
+        _last_web_metrics_pid = web_pid
+        _last_web_request_total = None
+        _service_tick_ts["web"].clear()
+    total = int(web_app.get("request_total") or 0)
+    if web_pid:
+        if _last_web_request_total is None:
+            _last_web_request_total = total
+        elif total >= _last_web_request_total:
+            _record_service_ticks("web", total - _last_web_request_total, now)
+            _last_web_request_total = total
+        else:
+            _last_web_request_total = total
+    web_min_ts = web_started_at if web_pid else None
+    web_proc["ticks_last_60m"] = _ticks_last_60m("web", web_min_ts)
+    if web_pid and web_app.get("requests_per_min") is not None:
+        try:
+            web_proc["requests_per_min"] = float(web_app["requests_per_min"])
+        except (TypeError, ValueError):
+            pass
+
+    eng_ticks = engine_app.get("ticks_last_60m")
+    if eng_ticks is not None and engine_proc.get("pid"):
+        try:
+            engine_proc["ticks_last_60m"] = int(eng_ticks)
+        except (TypeError, ValueError):
+            engine_proc["ticks_last_60m"] = 0
+    else:
+        engine_proc["ticks_last_60m"] = 0
+
+    if html_running and html_proc.get("pid"):
+        _record_service_ticks("html", 1, now)
+    html_proc["ticks_last_60m"] = _ticks_last_60m("html")
+
 
 def _read_pid(path: Path) -> Optional[int]:
     if not path.exists():
@@ -516,6 +608,9 @@ def _collect_metrics() -> None:
     html_proc = _process_metrics(html_pid, html_started)
     web_app = _read_json_capped(_WEB_METRICS_FILE)
     engine_app = _read_json_capped(_ENGINE_METRICS_FILE)
+    _update_hourly_ticks(
+        manager_proc, web_proc, engine_proc, html_proc, web_app, engine_app, html_running, web_started
+    )
     with _metrics_lock:
         metrics_cache.clear()
         metrics_cache.update({
@@ -2131,13 +2226,14 @@ def schedule_global_action(action: str) -> dict[str, Any]:
 
 
 def global_start() -> tuple[list, list]:
+    get_status()
     locks = load_locks()
     applied, skipped = [], []
     for key in ("web", "engine"):
         if locks.get(key):
             skipped.append(key)
             continue
-        if not status[key]["running"]:
+        if not status.get(key, {}).get("running"):
             do_start(key)
             applied.append(key)
     if not status.get("html", {}).get("running"):
@@ -2147,13 +2243,14 @@ def global_start() -> tuple[list, list]:
 
 
 def global_stop() -> tuple[list, list]:
+    get_status()
     locks = load_locks()
     applied, skipped = [], []
     for key in ("web", "engine"):
         if locks.get(key):
             skipped.append(key)
             continue
-        if status[key]["running"]:
+        if status.get(key, {}).get("running"):
             do_stop(key)
             applied.append(key)
     if status.get("html", {}).get("running"):
@@ -2163,6 +2260,7 @@ def global_stop() -> tuple[list, list]:
 
 
 def global_restart() -> tuple[list, list]:
+    get_status()
     locks = load_locks()
     applied, skipped = [], []
     for key in ("web", "engine"):

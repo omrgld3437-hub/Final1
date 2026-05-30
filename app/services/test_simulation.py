@@ -19,6 +19,8 @@ TEST_SLIPPAGE_BPS = 5
 TEST_ORDER_LATENCY_MS_MIN = 120
 TEST_ORDER_LATENCY_MS_MAX = 450
 TEST_TICK_JITTER_FRAC = 0.10
+# Test hesabı: worker tick/log gürültüsünü azalt (yerel test)
+TEST_ACCOUNT_TICK_MIN_SEC = 3.0
 
 
 def taker_fee_rate(config_fee: Optional[float] = None) -> float:
@@ -198,10 +200,17 @@ def sync_paper_order_latency() -> None:
     time.sleep(random.randint(lo, hi) / 1000.0)
 
 
-def paper_tick_sleep_seconds(base_wake: float, paper_mode: bool) -> float:
-    """Bot tick aralığına hafif jitter (paper)."""
+def paper_tick_sleep_seconds(
+    base_wake: float,
+    paper_mode: bool,
+    *,
+    test_account: bool = False,
+) -> float:
+    """Bot tick aralığına hafif jitter (paper). Test hesabında minimum aralık daha uzun."""
     base = max(0.5, float(base_wake or 1.0))
     if not paper_mode:
         return base
+    if test_account:
+        base = max(base, TEST_ACCOUNT_TICK_MIN_SEC)
     jitter = base * random.uniform(0, TEST_TICK_JITTER_FRAC)
     return base + jitter

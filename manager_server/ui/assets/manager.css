@@ -367,6 +367,7 @@ body {
   line-height: 1.4;
   overflow-y: auto;
   overflow-x: hidden;
+  overflow-anchor: none;
   -webkit-overflow-scrolling: touch;
   overscroll-behavior: contain;
   white-space: pre-wrap;

@@ -144,8 +144,23 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
     (function () {
         try {
             var params = new URLSearchParams(window.location.search);
-            var accountCode = params.get('account_code') || '';
-            var accountId = params.get('account_id') || '';
+            var accountCode = (params.get('account_code') || '').trim();
+            var accountId = (params.get('account_id') || '').trim();
+            if (!accountCode) {
+                try { accountCode = (sessionStorage.getItem('dashboard_admin_account_code') || localStorage.getItem('selectedAccountCode') || '').trim(); } catch (e0) {}
+            }
+            if (!accountId) {
+                try {
+                    var adminId = sessionStorage.getItem('dashboard_admin_account_id');
+                    if (adminId) accountId = String(adminId).trim();
+                } catch (e1) {}
+            }
+            if (!accountId) {
+                try {
+                    var storedId = localStorage.getItem('selectedAccountId');
+                    if (storedId) accountId = String(storedId).trim();
+                } catch (e2) {}
+            }
             if (!accountId) {
                 var userStr = sessionStorage.getItem('user') || localStorage.getItem('user');
                 if (userStr) {
@@ -154,38 +169,49 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
                 }
             }
             if (!accountId && !accountCode) return;
-            var cacheKey = accountId ? ('dashboardAppbar_' + accountId) : '';
-            var cached = null;
-            if (cacheKey) {
-                var raw = sessionStorage.getItem(cacheKey);
-                if (raw) cached = JSON.parse(raw);
+            function parseCache(raw, maxAge) {
+                if (!raw) return null;
+                try {
+                    var o = JSON.parse(raw);
+                    if (!o) return null;
+                    if (maxAge && o.ts && Date.now() - o.ts > maxAge) return null;
+                    return o;
+                } catch (e) { return null; }
             }
+            function readCache(id, code) {
+                var list = [];
+                if (id) {
+                    list.push(parseCache(sessionStorage.getItem('dashboardAppbar_' + id), null));
+                    list.push(parseCache(localStorage.getItem('dashboardAppbar_ls_' + id), 604800000));
+                    var leg = sessionStorage.getItem('appbarUserName_' + id);
+                    if (leg && leg !== '—') list.push({ displayName: leg, accountCode: code });
+                }
+                if (code) {
+                    list.push(parseCache(sessionStorage.getItem('dashboardAppbar_code_' + code), null));
+                    list.push(parseCache(localStorage.getItem('dashboardAppbar_code_ls_' + code), 604800000));
+                }
+                for (var i = 0; i < list.length; i++) {
+                    if (list[i] && list[i].displayName && list[i].displayName !== '—') return list[i];
+                }
+                return null;
+            }
+            var cached = readCache(accountId, accountCode);
             var nameEl = document.getElementById('appbarUserName');
-            if (nameEl) {
-                var lockedName = accountId ? localStorage.getItem('appbarDisplayName_' + accountId) : '';
-                if (lockedName && lockedName !== '—') {
-                    nameEl.textContent = lockedName;
-                } else {
-                    var userStr = sessionStorage.getItem('user') || localStorage.getItem('user');
-                    if (userStr) {
-                        var user = JSON.parse(userStr);
-                        if (!accountId && user && user.account_id != null) accountId = String(user.account_id);
-                        var userName = [user.name, user.surname].filter(Boolean).map(function (s) { return String(s).trim(); }).join(' ').trim();
-                        if (userName && (!accountId || String(user.account_id) === String(accountId))) {
-                            nameEl.textContent = userName;
-                            if (accountId) {
-                                try { localStorage.setItem('appbarDisplayName_' + accountId, userName); } catch (eName) {}
-                            }
-                        }
-                    }
-                    if (nameEl.textContent === '—' && cached && cached.displayName && cached.displayName !== '—') {
-                        nameEl.textContent = cached.displayName;
-                    } else if (nameEl.textContent === '—' && accountId) {
-                        var legacyName = sessionStorage.getItem('appbarUserName_' + accountId);
-                        if (legacyName && legacyName !== '—') nameEl.textContent = legacyName;
-                    }
+            var displayName = '';
+            if (accountId) {
+                var lockedName = localStorage.getItem('appbarDisplayName_' + accountId);
+                if (lockedName && lockedName !== '—') displayName = lockedName;
+            }
+            if (!displayName && cached && cached.displayName) displayName = cached.displayName;
+            if (!displayName) {
+                var userStr = sessionStorage.getItem('user') || localStorage.getItem('user');
+                if (userStr) {
+                    var user = JSON.parse(userStr);
+                    var userName = [user.name, user.surname].filter(Boolean).map(function (s) { return String(s).trim(); }).join(' ').trim();
+                    if (userName && accountId && String(user.account_id) === String(accountId)) displayName = userName;
                 }
             }
+            if (displayName && nameEl) nameEl.textContent = displayName;
             var idEl = document.getElementById('appbarAccountId');
             if (idEl) {
                 var idLabel = accountCode ? ('ID: ' + accountCode) : ((cached && cached.idLabel) || (accountId ? ('ID: ' + accountId) : 'ID: —'));
@@ -268,6 +294,81 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
                 </div>
             </div>
         </div>
+        <script>
+        (function () {
+            function earlyAccountId() {
+                try {
+                    var qs = new URLSearchParams(location.search);
+                    var idParam = qs.get('account_id');
+                    if (idParam && !/^\d{5,7}$/.test(String(idParam).trim())) {
+                        var n = parseInt(idParam, 10);
+                        if (n > 0) return n;
+                    }
+                    var fromAdmin = qs.get('from_admin') === '1' || sessionStorage.getItem('dashboard_from_admin') === '1';
+                    if (fromAdmin) {
+                        var adminId = sessionStorage.getItem('dashboard_admin_account_id');
+                        if (adminId) { var aid = parseInt(adminId, 10); if (aid > 0) return aid; }
+                    }
+                    var storedId = localStorage.getItem('selectedAccountId');
+                    if (storedId) { var sid = parseInt(String(storedId).trim(), 10); if (sid > 0) return sid; }
+                    var u = sessionStorage.getItem('user') || localStorage.getItem('user');
+                    if (u) { var user = JSON.parse(u); if (user && user.account_id > 0) return Number(user.account_id); }
+                } catch (e) {}
+                return null;
+            }
+            function fmtUsdEarly(v) {
+                var n = Number(v);
+                if (!isFinite(n)) return '$0.00';
+                return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            }
+            function paintKpi(spot, pnl, pct) {
+                var strip = document.getElementById('unifiedKpiStrip');
+                if (strip) strip.style.display = 'block';
+                if (spot > 0) {
+                    var w = document.getElementById('kpiCuzdan');
+                    if (w) w.textContent = fmtUsdEarly(spot);
+                }
+                if (pnl != null && isFinite(Number(pnl))) {
+                    var pnlEl = document.getElementById('kpiCuzdanPnl');
+                    var n = Number(pnl);
+                    if (pnlEl) {
+                        pnlEl.textContent = (n >= 0 ? '' : '-') + fmtUsdEarly(Math.abs(n));
+                        pnlEl.style.color = n >= 0 ? '#0ecb81' : '#f6465d';
+                    }
+                    if (pct != null && isFinite(Number(pct))) {
+                        var pe = document.getElementById('kpiCuzdanPnlPct');
+                        var p = Number(pct);
+                        if (pe) {
+                            pe.textContent = (p >= 0 ? '+' : '') + p.toFixed(2) + '%';
+                            pe.style.color = n >= 0 ? '#0ecb81' : '#f6465d';
+                        }
+                    }
+                }
+            }
+            function loadSnap(aid) {
+                try {
+                    var sess = sessionStorage.getItem('kpi_cuzdan_snap_v1_' + aid);
+                    if (sess) {
+                        var o = JSON.parse(sess);
+                        if (o && o.spot > 0 && (!o.ts || Date.now() - o.ts < 86400000)) {
+                            paintKpi(o.spot, o.pnl, o.pct);
+                            return;
+                        }
+                    }
+                    var raw = localStorage.getItem('tt_home_cache_v1:' + aid);
+                    if (!raw) return;
+                    var data = JSON.parse(raw);
+                    if (!data || !data.kpis) return;
+                    if (data.stored_at && Date.now() - data.stored_at > 604800000) return;
+                    var k = data.kpis;
+                    var spot = k.spot_balance_usd != null ? Number(k.spot_balance_usd) : Number(k.spot_kpi_total_usd);
+                    if (spot > 0) paintKpi(spot, k.daily_wallet_pnl_usd, k.daily_wallet_pnl_pct);
+                } catch (e) {}
+            }
+            var aid = earlyAccountId();
+            if (aid) loadSnap(aid);
+        })();
+        </script>
 
         <!-- Tab Content: Anasayfa (Binance - cüzdan, varlıklar, coin listesi) -->
         <div id="tabBinance" class="dm-tab-content is-active">
@@ -288,6 +389,63 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
                     </div>
                 </div>
             </div>
+            <script>
+            (function () {
+                function earlyAccountId() {
+                    try {
+                        var qs = new URLSearchParams(location.search);
+                        var idParam = qs.get('account_id');
+                        if (idParam && !/^\d{5,7}$/.test(String(idParam).trim())) {
+                            var n = parseInt(idParam, 10);
+                            if (n > 0) return n;
+                        }
+                        var adminId = sessionStorage.getItem('dashboard_admin_account_id');
+                        if (adminId) { var aid = parseInt(adminId, 10); if (aid > 0) return aid; }
+                        var storedId = localStorage.getItem('selectedAccountId');
+                        if (storedId) { var sid = parseInt(String(storedId).trim(), 10); if (sid > 0) return sid; }
+                        var u = sessionStorage.getItem('user') || localStorage.getItem('user');
+                        if (u) { var user = JSON.parse(u); if (user && user.account_id > 0) return Number(user.account_id); }
+                    } catch (e) {}
+                    return null;
+                }
+                function fmtUsdEarly(v) {
+                    var n = Number(v);
+                    if (!isFinite(n)) return '$0.00';
+                    return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                }
+                function paintStrip(strip) {
+                    if (!strip) return;
+                    var map = [
+                        ['binanceAvailableAssets', strip.available],
+                        ['binanceBotLockedAssets', strip.botLocked],
+                        ['binanceLockedAssets', strip.locked]
+                    ];
+                    map.forEach(function (pair) {
+                        var el = document.getElementById(pair[0]);
+                        if (!el || pair[1] == null || !isFinite(Number(pair[1]))) return;
+                        el.classList.remove('binance-assets-strip-value--loading');
+                        el.setAttribute('data-value', pair[1]);
+                        el.textContent = fmtUsdEarly(pair[1]);
+                    });
+                }
+                function loadCache(aid) {
+                    var raw = sessionStorage.getItem('binance_wallet_v1_' + aid) || localStorage.getItem('binance_wallet_v1_' + aid);
+                    if (!raw) return;
+                    try {
+                        var o = JSON.parse(raw);
+                        if (!o) return;
+                        if (o.ts && Date.now() - o.ts > 604800000 && !sessionStorage.getItem('binance_wallet_v1_' + aid)) return;
+                        paintStrip(o.strip);
+                        if (o.tbodyHtml && o.tbodyHtml.indexOf('data-asset') !== -1) {
+                            var tbody = document.getElementById('varliklarTableBody');
+                            if (tbody) tbody.innerHTML = o.tbodyHtml;
+                        }
+                    } catch (e2) {}
+                }
+                var aid = earlyAccountId();
+                if (aid) loadCache(aid);
+            })();
+            </script>
 
             <!-- Cüzdan varlıkları tablosu (1 USD üstü, Al/Sat ortak modal) -->
             <div class="panel binance-varliklar-panel">
@@ -389,11 +547,78 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
                         <button type="button" class="btn tx-type-btn" data-type="depositwithdraw">Yatırım / Çekim</button>
                     </div>
                 </div>
-                <div id="txHistoryList" class="tx-history-list" style="min-height: 120px;">
-                    <div class="tx-history-loading" style="text-align: center; padding: 2rem; color: var(--ds-text-secondary);">Yükleniyor...</div>
-                </div>
-                <div id="txHistoryPagination" class="tx-history-pagination" style="display: flex; justify-content: center; align-items: center; gap: 0.5rem; margin-top: 1rem; flex-wrap: wrap;"></div>
+                <div id="txHistoryList" class="tx-history-list" style="min-height: 120px;"></div>
+                <div id="txHistoryPagination" class="tx-history-pagination" style="display: flex; justify-content: center; align-items: center; gap: 0.5rem; margin-top: 1rem; flex-wrap: wrap;">                </div>
             </div>
+            <script>
+            (function () {
+                function earlyAccountId() {
+                    try {
+                        var qs = new URLSearchParams(location.search);
+                        var idParam = qs.get('account_id');
+                        if (idParam && !/^\d{5,7}$/.test(String(idParam).trim())) {
+                            var n = parseInt(idParam, 10);
+                            if (n > 0) return n;
+                        }
+                        var adminId = sessionStorage.getItem('dashboard_admin_account_id');
+                        if (adminId) { var aid = parseInt(adminId, 10); if (aid > 0) return aid; }
+                        var storedId = localStorage.getItem('selectedAccountId');
+                        if (storedId) { var sid = parseInt(String(storedId).trim(), 10); if (sid > 0) return sid; }
+                        var u = sessionStorage.getItem('user') || localStorage.getItem('user');
+                        if (u) { var user = JSON.parse(u); if (user && user.account_id > 0) return Number(user.account_id); }
+                    } catch (e) {}
+                    return null;
+                }
+                function parseCache(raw, maxAge) {
+                    if (!raw) return null;
+                    try {
+                        var o = JSON.parse(raw);
+                        if (!o || !o.ts) return null;
+                        if (maxAge && Date.now() - o.ts > maxAge) return null;
+                        return o;
+                    } catch (e2) { return null; }
+                }
+                function fmtUsd(v) {
+                    var n = Number(v);
+                    if (!isFinite(n)) return '—';
+                    var sign = n >= 0 ? '+' : '';
+                    return sign + n.toFixed(2) + ' USDT';
+                }
+                function fmtUsdPlain(v) {
+                    var n = Number(v);
+                    return isFinite(n) ? n.toFixed(2) + ' USDT' : '—';
+                }
+                var aid = earlyAccountId();
+                if (!aid) return;
+                var perfPeriod = sessionStorage.getItem('dashboard_bot_perf_period_' + aid) || 'all';
+                var perfKey = 'dashboard_bot_perf_v1_' + aid + '_' + perfPeriod;
+                var perf = parseCache(sessionStorage.getItem(perfKey), null) || parseCache(localStorage.getItem(perfKey), 604800000);
+                if (perf && perf.data) {
+                    var totals = perf.data.totals || {};
+                    var pnl = totals.pnl_usd != null ? Number(totals.pnl_usd) : (perf.data.pnl_usd != null ? Number(perf.data.pnl_usd) : 0);
+                    var fees = totals.fees_usd != null ? Number(totals.fees_usd) : 0;
+                    var rangeEl = document.getElementById('botPerformanceRange');
+                    var pnlEl = document.getElementById('botPerfTotalPnl');
+                    var feesEl = document.getElementById('botPerfTotalFees');
+                    if (rangeEl && perf.data.date_from) {
+                        rangeEl.textContent = 'Başlangıç: ' + String(perf.data.date_from).slice(0, 10) + ' · Bitiş: ' + String(perf.data.date_to || perf.data.date_from).slice(0, 10);
+                    }
+                    if (pnlEl) pnlEl.textContent = fmtUsd(pnl);
+                    if (feesEl) feesEl.textContent = fmtUsdPlain(fees);
+                }
+                var txPeriod = sessionStorage.getItem('dashboard_tx_period_' + aid) || 'daily';
+                var txType = sessionStorage.getItem('dashboard_tx_type_' + aid) || 'buysell';
+                var txPage = sessionStorage.getItem('dashboard_tx_page_' + aid) || '1';
+                var txKey = 'dashboard_tx_history_v1_' + aid + '_' + txPeriod + '_' + txType + '_p' + txPage;
+                var tx = parseCache(sessionStorage.getItem(txKey), null) || parseCache(localStorage.getItem(txKey), 604800000);
+                if (tx && tx.listHtml) {
+                    var listEl = document.getElementById('txHistoryList');
+                    if (listEl) listEl.innerHTML = tx.listHtml;
+                    var pagEl = document.getElementById('txHistoryPagination');
+                    if (pagEl && tx.paginationHtml) pagEl.innerHTML = tx.paginationHtml;
+                }
+            })();
+            </script>
 
             <!-- Aktif Emirler (bekleyen / kısmen gerçekleşen) – Binance API openOrders; en altta -->
             <div id="bnActiveOrdersPanel" class="panel binance-active-orders-panel" style="margin-top: 2rem; margin-bottom: 2rem; width: 100%; max-width: 100%; display: none;">
@@ -1743,7 +1968,7 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
     <script src="/ui/assets/renderHome.js?v=wallet-stable6"></script>
     <script src="/ui/assets/homeFlash.js?v=wallet-stable4"></script>
     <!-- Main dashboard (refactored) -->
-    <script src="/ui/assets/dashboard.js?v=bot-perf-usdt-value1"></script>
+    <script src="/ui/assets/dashboard.js?v=dashboard-panels-flash1"></script>
     <script src="/ui/assets/ticker.js?v=mobile1" defer></script>
 </body>
 </html>

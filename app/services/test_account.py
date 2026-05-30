@@ -38,6 +38,14 @@ def is_test_account(account_id: Optional[int], db: "Session") -> bool:
     return bool(user and is_test_account_username(getattr(user, "username", None)))
 
 
+def test_account_paper_execution(account_id: Optional[int], db: "Session") -> bool:
+    """
+    Worker yürütmesi: test hesabında Binance API anahtarı istenmez; yalnızca paper simülasyon.
+    bot.mode=live olsa bile test hesabında paper kabul edilir (yerel test).
+    """
+    return is_test_account(account_id, db)
+
+
 def account_has_binance_keys(account) -> bool:
     """True if account has both encrypted API key and secret stored."""
     if not account:

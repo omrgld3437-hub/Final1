@@ -3403,7 +3403,7 @@ Mevcut indeksler schema'da kontrol edilmeli; yukarıdakiler öneri.
 | 1 | Bot row, status running/paused_error; config parse; strategy_id (multi / trdca / dca) | DB: Bot 1 |
 | 2 | load_state(db, bot_id) | DB: bot_engine_state 1 |
 | 3 | Config cache (_config_cache[bot_id]) veya config_from_ui_payload | Bellek |
-| 4 | get_account_keys(account_id, db); paper_mode (User + is_test_account_username) | DB: Account/User; Binance keys |
+| 4 | paper_mode; test hesabında keys yok (get_account_keys atlanır), diğer hesaplarda get_account_keys | DB: Account/User; Binance keys |
 | 5 | BinanceAdapter(account_id, keys, paper_mode) | — |
 | 6 | next_wake: tick_interval_ms/1000 (dca) veya interval_sec (multi) | Config |
 | 7 | Fiyat: adapter.get_price(symbol) — DataHub only | DataHub bellek |
@@ -3521,7 +3521,7 @@ Aynı (account_id, symbol) için aynı anda tek bot işlem yapabilir; diğer bot
 | process_command(cmd) | assert_bot_belongs_to_account; START → start_bot; STOP → stop_bot; mark_command_done |
 | ensure_running_bots(db) | Her 10× loop_count; Bot.status='running' olanlar için _tasks'da yoksa _bot_loop task başlat |
 | perf_sample_interval | 60 (loop_count % 60 == 0); append_perf_chart_sample her running bot |
-| engine.metrics.json | Her 2 iteration; active_bots, last_tick_ts, tick_rate_10s, pending_jobs, ts |
+| engine.metrics.json | Her 2 iteration; active_bots, last_tick_ts, tick_rate_10s, ticks_last_60m, pending_jobs, ts |
 
 Worker tek process; komutlar sırayla işlenir; ensure_running_bots ile eksik bot loop'ları başlatılır.
 
@@ -3866,7 +3866,8 @@ get_strategy_safe(raw): config.strategy_id veya raw["strategy_id"]; registry'den
 | Koşul | Davranış |
 |-------|----------|
 | get_account_keys testnet | Sadece test hesabı (is_test_account) için account.mode kullanılır; gerçek hesaplar her zaman testnet=False (mainnet). binance_assets.get_account_keys. |
-| paper_mode | Bot `mode=paper` (test hesabı); BinanceAdapter(..., paper_mode=True) |
+| paper_mode | Bot `mode=paper` veya `test_account_paper_execution` (kullanıcı test); BinanceAdapter(..., paper_mode=True); test hesabında `get_account_keys` çağrılmaz |
+| test worker tick | `paper_tick_sleep_seconds(..., test_account=True)` min 3s; BOT_RUN_ID / BOT_MODE_CHECK → DEBUG |
 | place_market_buy/sell | paper_mode ise `test_simulation.build_paper_market_fill` + emir gecikmesi (`await_paper_order_latency` 120–450 ms); gerçek API yok |
 | paper komisyon | Taker %0,1 (`TEST_TAKER_FEE_RATE=0.001`); BUY komisyon base coin, SELL USDT — `fills[]` + `parse_fill_commission` + `apply_fill_to_state` / `update_virtual_after_fill` |
 | paper kayma | Market slippage `TEST_SLIPPAGE_BPS=5` (alış +bps, satış −bps) |
@@ -3902,6 +3903,7 @@ get_strategy_safe(raw): config.strategy_id veya raw["strategy_id"]; registry'den
 | last_tick_ts | Son worker loop başlangıç zamanı |
 | last_tick_age_s | now - last_tick_ts |
 | tick_rate_10s | Son 10s içinde worker iteration sayısı |
+| ticks_last_60m | Manager özet: **engine** = son 60 dk worker iteration; **web** = son 60 dk HTTP istek (`request_total` delta, kart **Saatlik istek**); **manager/html** = metrics poll; web PID değişince manager sayacı sıfırlanır |
 | pending_jobs | Son fetch_pending_commands uzunluğu |
 | queue_len | Aynı |
 | open_orders | 0 (placeholder) |

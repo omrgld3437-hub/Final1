@@ -354,29 +354,33 @@ async def _bot_loop(bot_id: int) -> None:
                     state["bot_id"] = bot_id
                     # initial_allocation_done sadece execution'da gerçek fill sonrası set edilir.
                     # Paper modda kaydedilen simüle init trade'leri sayma; yoksa live'a geçince gerçek alım atlanır.
-                if state.get("run_id"):
-                    logger.info("BOT_RUN_ID run_id=%s bot_id=%s", state.get("run_id"), bot_id)
-
-                from app.db.models import User
-                from app.services.test_account import is_test_account_username
+                from app.services.test_account import test_account_paper_execution
                 from app.core.config import is_worker_role
                 bot_mode = (str(getattr(row, "mode", None) or "").strip().lower())
-                # Production rule: paper_mode only from DB; live bot never simulated
-                paper_mode = (bot_mode == "paper")
-                test_user = db.query(User).filter(User.account_id == account_id).first()
-                try:
-                    from app.services.binance_assets import get_account_keys
-                    keys = await get_account_keys(account_id, db)
-                    has_keys = keys is not None
-                except Exception as e:
-                    logger.info(
-                        "BOT_ACCOUNT_KEYS_FAIL bot_id=%s account_id=%s err=%s (tick skipped, retry)",
-                        bot_id, account_id, e,
-                    )
-                    keys = None
-                    has_keys = False
-                # (A) Live bot + no keys => FAIL FAST: do not run as paper, pause bot
-                if bot_mode == "live" and not has_keys:
+                acct_test = test_account_paper_execution(account_id, db)
+                if state.get("run_id"):
+                    if acct_test:
+                        logger.debug("BOT_RUN_ID run_id=%s bot_id=%s (test)", state.get("run_id"), bot_id)
+                    else:
+                        logger.info("BOT_RUN_ID run_id=%s bot_id=%s", state.get("run_id"), bot_id)
+                # Production: paper_mode from DB; test hesabı her zaman paper, API anahtarı yok
+                paper_mode = acct_test or (bot_mode == "paper")
+                keys = None
+                has_keys = False
+                if not acct_test:
+                    try:
+                        from app.services.binance_assets import get_account_keys
+                        keys = await get_account_keys(account_id, db)
+                        has_keys = keys is not None
+                    except Exception as e:
+                        logger.info(
+                            "BOT_ACCOUNT_KEYS_FAIL bot_id=%s account_id=%s err=%s (tick skipped, retry)",
+                            bot_id, account_id, e,
+                        )
+                        keys = None
+                        has_keys = False
+                # (A) Live bot + no keys => FAIL FAST: do not run as paper, pause bot (test hesabı hariç)
+                if bot_mode == "live" and not has_keys and not acct_test:
                     row.status = "paused_error"
                     db.commit()
                     state["last_error_code"] = "ACCOUNT_KEYS_MISSING"
@@ -395,10 +399,14 @@ async def _bot_loop(bot_id: int) -> None:
                     continue
 
                 adapter = BinanceAdapter(account_id, keys, paper_mode=paper_mode)
-                logger.info(
-                    "BOT_MODE_CHECK bot_id=%s account_id=%s bot.mode=%s paper_mode=%s has_keys=%s is_worker_role=%s",
-                    bot_id, account_id, bot_mode, paper_mode, has_keys, is_worker_role(),
+                mode_log = (
+                    "BOT_MODE_CHECK bot_id=%s account_id=%s bot.mode=%s paper_mode=%s has_keys=%s is_worker_role=%s test_account=%s",
+                    bot_id, account_id, bot_mode, paper_mode, has_keys, is_worker_role(), acct_test,
                 )
+                if acct_test:
+                    logger.debug(*mode_log)
+                else:
+                    logger.info(*mode_log)
                 if not paper_mode and not is_trdca and symbol and symbol != "MULTI":
                     try:
                         from app.botengine.intent_ledger import reconcile_open_orders_for_bot
@@ -526,7 +534,7 @@ async def _bot_loop(bot_id: int) -> None:
                             pass
                     from app.services.test_simulation import paper_tick_sleep_seconds
 
-                    await asyncio.sleep(paper_tick_sleep_seconds(next_wake, paper_mode))
+                    await asyncio.sleep(paper_tick_sleep_seconds(next_wake, paper_mode, test_account=acct_test))
                     continue
                 if is_multi or symbol == "MULTI":
                     # Multi-asset rebalance: no single symbol price; strategy uses per-asset prices later
@@ -565,7 +573,7 @@ async def _bot_loop(bot_id: int) -> None:
                                 pass
                         from app.services.test_simulation import paper_tick_sleep_seconds
 
-                        await asyncio.sleep(paper_tick_sleep_seconds(next_wake, paper_mode))
+                        await asyncio.sleep(paper_tick_sleep_seconds(next_wake, paper_mode, test_account=acct_test))
                         continue
                     if state.pop("price_stale_since", None):
                         save_state(db, bot_id, account_id, state)
@@ -752,7 +760,7 @@ async def _bot_loop(bot_id: int) -> None:
 
             from app.services.test_simulation import paper_tick_sleep_seconds
 
-            await asyncio.sleep(paper_tick_sleep_seconds(next_wake, paper_mode))
+            await asyncio.sleep(paper_tick_sleep_seconds(next_wake, paper_mode, test_account=acct_test))
     except asyncio.CancelledError:
         logger.info("bot_engine loop cancelled bot_id=%s", bot_id)
     except Exception as e:

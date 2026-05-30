@@ -75,30 +75,34 @@ async def run_one_bot_tick(bot_id: int, tick_id: str) -> float:
         from app.botengine.orchestrator import _config_cache_put
 
         _config_cache_put(bot_id, cfg)
+        from app.services.test_account import test_account_paper_execution
+        from app.core.config import is_worker_role
+        bot_mode = (str(getattr(bot, "mode", None) or "").strip().lower())
+        acct_test = test_account_paper_execution(account_id, db)
         if state and state.get("run_id"):
-            logger.info("BOT_RUN_ID run_id=%s bot_id=%s", state.get("run_id"), bot_id)
+            if acct_test:
+                logger.debug("BOT_RUN_ID run_id=%s bot_id=%s (test)", state.get("run_id"), bot_id)
+            else:
+                logger.info("BOT_RUN_ID run_id=%s bot_id=%s", state.get("run_id"), bot_id)
         if not state:
             if is_trdca:
                 state = build_trdca_pro_state_skeleton(bot_id, account_id, getattr(cfg, "quote_asset", "USDT"))
             else:
                 state = {"bot_id": bot_id, "account_id": account_id, "symbol": symbol, "status": "running", "cycle_id": 1, "state_version": 0}
             save_state(db, bot_id, account_id, state)
-
-        from app.services.binance_assets import get_account_keys
-        from app.db.models import User
-        from app.services.test_account import is_test_account_username
-        from app.core.config import is_worker_role
-        bot_mode = (str(getattr(bot, "mode", None) or "").strip().lower())
-        # Production rule: paper_mode only from DB; live bot never simulated
-        paper_mode = (bot_mode == "paper")
-        try:
-            keys = await get_account_keys(account_id, db)
-        except Exception as e:
-            logger.info("bot_run get_account_keys bot_id=%s err=%s (tick skipped, retry)", bot_id, e)
-            keys = None
-        has_keys = keys is not None
-        # (A) Live bot + no keys => FAIL FAST: pause bot, do not run as paper
-        if bot_mode == "live" and not has_keys:
+        paper_mode = acct_test or (bot_mode == "paper")
+        keys = None
+        has_keys = False
+        if not acct_test:
+            from app.services.binance_assets import get_account_keys
+            try:
+                keys = await get_account_keys(account_id, db)
+            except Exception as e:
+                logger.info("bot_run get_account_keys bot_id=%s err=%s (tick skipped, retry)", bot_id, e)
+                keys = None
+            has_keys = keys is not None
+        # (A) Live bot + no keys => FAIL FAST: pause bot (test hesabı hariç)
+        if bot_mode == "live" and not has_keys and not acct_test:
             state["last_error_code"] = "ACCOUNT_KEYS_MISSING"
             save_state(db, bot_id, account_id, state)
             bot.status = "paused_error"
@@ -111,10 +115,14 @@ async def run_one_bot_tick(bot_id: int, tick_id: str) -> float:
             return time.monotonic() + 30.0
         adapter = BinanceAdapter(account_id, keys, paper_mode=paper_mode)
         testnet = getattr(keys, "testnet", None) if keys else None
-        logger.info(
-            "BOT_MODE_CHECK bot_id=%s account_id=%s bot.mode=%s paper_mode=%s has_keys=%s is_worker_role=%s",
-            bot_id, account_id, bot_mode, paper_mode, has_keys, is_worker_role(),
+        mode_log = (
+            "BOT_MODE_CHECK bot_id=%s account_id=%s bot.mode=%s paper_mode=%s has_keys=%s is_worker_role=%s test_account=%s",
+            bot_id, account_id, bot_mode, paper_mode, has_keys, is_worker_role(), acct_test,
         )
+        if acct_test:
+            logger.debug(*mode_log)
+        else:
+            logger.info(*mode_log)
         lock_symbol = trade_lock_symbol(account_id, symbol)
         next_wake = time.monotonic() + (getattr(cfg, "tick_interval_ms", 5000) / 1000.0)
         if is_trdca:

@@ -250,6 +250,14 @@
       if (scope === "overview") {
         setTextIfChanged(qs(prefix + "cpu"), formatCpuPct(proc));
         setTextIfChanged(qs(prefix + "ram"), formatRamMb(proc));
+        var tickEl = qs(prefix + "hourly-tick");
+        setTextIfChanged(tickEl, formatHourlyTick(proc, running));
+        if (tickEl && key === "web") {
+          var rpm = proc.requests_per_min != null ? Number(proc.requests_per_min) : null;
+          var hint = "Son 60 dk HTTP istek (bot canlı, dashboard, API). Engine tick değil.";
+          if (rpm != null && !isNaN(rpm)) hint += " Şu an ~" + rpm.toFixed(0) + " istek/dk.";
+          tickEl.title = hint;
+        }
       } else {
         var resourceEl = qs(prefix + "resource");
         setTextIfChanged(resourceEl, formatResource(proc));
@@ -321,6 +329,13 @@
   function formatResource(proc) {
     if (!proc || (proc.cpu_pct == null && proc.rss_mb == null)) return "—";
     return formatCpuPct(proc) + " · " + formatRamMb(proc);
+  }
+
+  function formatHourlyTick(proc, running) {
+    if (proc && proc.ticks_last_60m != null && proc.ticks_last_60m !== "") {
+      return String(proc.ticks_last_60m);
+    }
+    return running ? "0" : "—";
   }
 
   function mergeMetricsPayload(incoming) {
@@ -1348,18 +1363,96 @@
     threshold = threshold == null ? 32 : threshold;
     return el.scrollHeight - el.scrollTop - el.clientHeight <= threshold;
   }
+  function logPreDistanceFromBottom(el) {
+    if (!el) return 0;
+    return Math.max(0, el.scrollHeight - el.scrollTop - el.clientHeight);
+  }
+  function logPreLineHeight(el) {
+    if (!el) return 18;
+    var lh = parseFloat(window.getComputedStyle(el).lineHeight);
+    return isNaN(lh) ? 18 : lh;
+  }
+  /** Okuma konumunu korumak: görünür ilk anlamlı satır metni. */
+  function getLogScrollAnchor(el) {
+    if (!el || logPreWasAtBottom(el) || el.scrollTop <= 0) return null;
+    var text = el.textContent || "";
+    if (!text) return null;
+    var lines = text.split("\n");
+    var idx = Math.min(lines.length - 1, Math.max(0, Math.floor(el.scrollTop / logPreLineHeight(el))));
+    var i;
+    for (i = idx; i < lines.length; i++) {
+      if (lines[i] && lines[i].trim()) return lines[i];
+    }
+    for (i = idx; i >= 0; i--) {
+      if (lines[i] && lines[i].trim()) return lines[i];
+    }
+    return null;
+  }
+  function restoreLogScroll(el, wasAtBottom, distBottom, anchorLine) {
+    if (!el) return;
+    if (wasAtBottom) {
+      el.scrollTop = el.scrollHeight;
+      return;
+    }
+    if (anchorLine) {
+      var text = el.textContent || "";
+      var pos = text.indexOf(anchorLine);
+      if (pos >= 0) {
+        var before = text.slice(0, pos);
+        var lineIdx = (before.match(/\n/g) || []).length;
+        el.scrollTop = Math.max(0, lineIdx * logPreLineHeight(el));
+        return;
+      }
+    }
+    el.scrollTop = Math.max(0, el.scrollHeight - el.clientHeight - distBottom);
+  }
   function patchLogPre(el, text) {
     if (!el) return;
     var next = text || "";
     if (el.textContent === next) return;
-    var atBottom = logPreWasAtBottom(el);
-    var prevTop = el.scrollTop;
+    var distBottom = logPreDistanceFromBottom(el);
+    var wasAtBottom = distBottom <= 32;
+    var anchorLine = getLogScrollAnchor(el);
     el.textContent = next;
-    if (atBottom) {
-      el.scrollTop = el.scrollHeight;
-    } else {
-      el.scrollTop = prevTop;
+    restoreLogScroll(el, wasAtBottom, distBottom, anchorLine);
+  }
+  function logHasActiveFilter(key) {
+    if ((searchQuery[key] || "").trim()) return true;
+    return !!(filterLevel[key] || "").trim();
+  }
+  function filterDisplayLogLines(key, lines) {
+    var level = (filterLevel[key] || "").toUpperCase();
+    var q = (searchQuery[key] || "").toLowerCase();
+    var out = (lines || []).slice();
+    if (level === "WARN+") {
+      var ewAll = errWrnLineSet(key);
+      out = out.filter(function (l) {
+        return ewAll.has(l) || /WARN|ERROR|Traceback|Exception|CRITICAL/i.test(l);
+      });
+    } else if (level === "ERROR") {
+      var ewErr = errWrnLineSet(key, "ERROR");
+      out = out.filter(function (l) {
+        return ewErr.has(l) || /ERROR|Traceback|Exception|CRITICAL/i.test(l);
+      });
+    } else if (level === "WARN") {
+      var ewWrn = errWrnLineSet(key, "WARN");
+      out = out.filter(function (l) {
+        return ewWrn.has(l) || /WARN/i.test(l);
+      });
+    } else if (level) {
+      out = out.filter(function (l) { return l.indexOf(level) >= 0; });
     }
+    if (q) out = out.filter(function (l) { return l.toLowerCase().indexOf(q) >= 0; });
+    return out.slice(-logMaxLines);
+  }
+  function syncAutoscrollFromLogScroll(key) {
+    var logEl = qs("#log-" + key);
+    if (!logEl) return;
+    var atBottom = logPreWasAtBottom(logEl);
+    if (autoscroll[key] === atBottom) return;
+    autoscroll[key] = atBottom;
+    var autoscrollCb = qs("#autoscroll-" + key);
+    if (autoscrollCb) autoscrollCb.checked = atBottom;
   }
   function normalizeLogLine(l) {
     if (typeof l === "string") return l.trim();
@@ -1468,33 +1561,11 @@
   function renderLog(key) {
     const logEl = qs("#log-" + key);
     if (!logEl) return;
-    const level = (filterLevel[key] || "").toUpperCase();
-    const q = (searchQuery[key] || "").toLowerCase();
-    let lines = mergedLogLinesFor(key);
-    if (level === "WARN+") {
-      var ewAll = errWrnLineSet(key);
-      lines = lines.filter(function (l) {
-        return ewAll.has(l) || /WARN|ERROR|Traceback|Exception|CRITICAL/i.test(l);
-      });
-    } else if (level === "ERROR") {
-      var ewErr = errWrnLineSet(key, "ERROR");
-      lines = lines.filter(function (l) {
-        return ewErr.has(l) || /ERROR|Traceback|Exception|CRITICAL/i.test(l);
-      });
-    } else if (level === "WARN") {
-      var ewWrn = errWrnLineSet(key, "WARN");
-      lines = lines.filter(function (l) {
-        return ewWrn.has(l) || /WARN/i.test(l);
-      });
-    } else if (level) {
-      lines = lines.filter(function (l) { return l.indexOf(level) >= 0; });
-    }
-    if (q) lines = lines.filter(l => l.toLowerCase().indexOf(q) >= 0);
-    lines = lines.slice(-logMaxLines);
+    let lines = filterDisplayLogLines(key, mergedLogLinesFor(key));
     lines = lines.map(function (l) { return humanizeLogLineIfNeeded(l, key); });
     var logText = lines.join("\n") + (lines.length ? "\n" : "");
     patchLogPre(logEl, logText);
-    if (autoscroll[key]) logEl.scrollTop = logEl.scrollHeight;
+    logEl._logIncrementalOk = true;
   }
 
   function toLogText(l) {
@@ -1508,13 +1579,34 @@
     if (pause[key] || !lines || !lines.length) return;
     var arr = rawLogLines[key] || [];
     var statsPattern = /Günlük:\s*\d+\s*\|\s*Aylık:\s*\d+\s*\|\s*Toplam:\s*\d+/;
+    var added = [];
     lines.forEach(function (l) {
       var lineStr = normalizeLogLine(l);
       if (!lineStr) return;
       if (key === "html" && statsPattern.test(lineStr) && arr.length && arr[arr.length - 1] === lineStr) return;
       arr.push(lineStr);
+      added.push(lineStr);
     });
+    if (!added.length) return;
+    var beforeLen = arr.length - added.length;
+    var trimmed = Math.max(0, arr.length - logMaxLines);
     rawLogLines[key] = arr.slice(-logMaxLines);
+    var logEl = qs("#log-" + key);
+    if (!logEl) return;
+    var atBottom = logPreWasAtBottom(logEl);
+    if (!atBottom && trimmed === 0 && !logHasActiveFilter(key) && logEl._logIncrementalOk) {
+      var displayAdded = filterDisplayLogLines(key, added);
+      if (displayAdded.length) {
+        var chunk = displayAdded.map(function (l) { return humanizeLogLineIfNeeded(l, key); }).join("\n") + "\n";
+        var distBottom = logPreDistanceFromBottom(logEl);
+        var cur = logEl.textContent || "";
+        logEl.textContent = cur + (cur && !cur.endsWith("\n") ? "\n" : "") + chunk;
+        logEl.scrollTop = Math.max(0, logEl.scrollHeight - logEl.clientHeight - distBottom);
+        return;
+      }
+      return;
+    }
+    logEl._logIncrementalOk = false;
     renderLog(key);
   }
 
@@ -2238,6 +2330,10 @@
     if (pauseCb) pauseCb.addEventListener("change", function () { pause[k] = pauseCb.checked; });
     const autoscrollCb = qs("#autoscroll-" + k);
     if (autoscrollCb) autoscrollCb.addEventListener("change", function () { autoscroll[k] = autoscrollCb.checked; });
+    const logPre = qs("#log-" + k);
+    if (logPre) {
+      logPre.addEventListener("scroll", function () { syncAutoscrollFromLogScroll(k); }, { passive: true });
+    }
     const filterSel = qs("#filter-level-" + k);
     if (filterSel) filterSel.addEventListener("change", function () { filterLevel[k] = filterSel.value; renderLog(k); });
     const searchInp = qs("#search-" + k);

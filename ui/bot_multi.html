@@ -1160,7 +1160,10 @@
         }
 
         function baseFromSymbol(sym) {
-            return (sym || '').replace(/USDT$|FDUSD$|BUSD$/i, '') || (sym || '').substring(0, 4) || '—';
+            var s = String(sym || '').trim().toUpperCase();
+            if (!s || s === '?' || s === '—' || s === 'MULTI') return '';
+            var base = s.replace(/USDT$|FDUSD$|BUSD$|TUSD$/i, '');
+            return base || '';
         }
 
         window._lastEngineEvents = [];

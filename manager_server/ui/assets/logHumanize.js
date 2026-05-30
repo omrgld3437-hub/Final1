@@ -183,9 +183,9 @@
         if (/\/api\/global\/(start|stop|restart)/.test(path) && status === '500') {
           return {
             konu: 'Toplu servis işlemi başarısız (500)',
-            sebep: 'Manager toplu start/stop/restart isteğini işlerken sunucu hatası oluştu (genelde kod hatası veya kilit durumu).',
-            etki: 'Web, engine ve HTML yeniden başlatılmadı veya yarım kaldı.',
-            oneri: 'Manager\'ı terminalden yeniden başlatın (.venv/bin/python -m manager_server); ardından tekrar deneyin. manager.log içinde UnboundLocalError veya traceback arayın.'
+            sebep: '«Tümünü başlat/durdur/yeniden başlat» isteği HTTP 500 döndü. 29.05.2026 öncesi sürümde schedule_global_action içinde UnboundLocalError biliniyordu; güncel kodda global _global_action_running ile düzeltildi.',
+            etki: 'O anda toplu işlem uygulanmamış olabilir; servisler çalışıyorsa etki geçicidir.',
+            oneri: 'Manager\'ı güncel kodla yeniden başlatın (.venv/bin/python -m manager_server), Ctrl+F5, tekrar deneyin. Eski uyarı için Yönetici → log sıfırla. Yine 500 ise manager.log traceback.'
           };
         }
         if ((/\/api\/stack\/restart/.test(path) || /\/api\/server\/manager\/restart/.test(path)) && status === '404') {

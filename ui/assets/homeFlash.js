@@ -76,8 +76,14 @@
         if (cached && cached.wallet_cached) {
             renderHome.walletCachedToAssetsState(cached.wallet_cached, cached.wallet_cached_at);
         }
-        if (cached && cached.kpis && typeof window.updateKPIs === 'function') {
-            window.updateKPIs({ account: cached.kpis, total_bots: cached.kpis.total_bots, active_bots: cached.kpis.active_bots, daily_bot_pnl_usd: cached.kpis.daily_bot_pnl_usd, total_pnl_usd: cached.kpis.total_pnl_usd });
+        if (cached && cached.kpis) {
+            var k = cached.kpis;
+            var spot = k.spot_balance_usd != null ? Number(k.spot_balance_usd) : (k.spot_kpi_total_usd != null ? Number(k.spot_kpi_total_usd) : null);
+            if (typeof window.applyKpiCuzdanSnapshot === 'function') {
+                window.applyKpiCuzdanSnapshot(spot, k.daily_wallet_pnl_usd, k.daily_wallet_pnl_pct, { showStrip: true });
+            } else if (typeof window.updateKPIs === 'function') {
+                window.updateKPIs({ account: cached.kpis, total_bots: cached.kpis.total_bots, active_bots: cached.kpis.active_bots, daily_bot_pnl_usd: cached.kpis.daily_bot_pnl_usd, total_pnl_usd: cached.kpis.total_pnl_usd });
+            }
         }
         renderHome.hideSkeleton();
 

@@ -943,9 +943,147 @@ async function fetchSnapshot() {
     }
 }
 
+var BOT_PERF_CACHE_PREFIX = 'dashboard_bot_perf_v1_';
+var TX_HISTORY_CACHE_PREFIX = 'dashboard_tx_history_v1_';
+var DASHBOARD_PANEL_CACHE_LOCAL_MAX_MS = 7 * 24 * 60 * 60 * 1000;
+var _dashboardPanelsAccountId = null;
 var _botPerformanceLoaded = false;
 var _botPerformanceLastPeriod = null;
 var _botPerformanceLastSig = '';
+
+function _parseDashboardPanelCache(raw, maxAgeMs) {
+    if (!raw) return null;
+    try {
+        var o = JSON.parse(raw);
+        if (!o || o.ts == null) return null;
+        if (maxAgeMs != null && Date.now() - Number(o.ts) > maxAgeMs) return null;
+        return o;
+    } catch (e) {
+        return null;
+    }
+}
+
+function _readBotPerfCache(accountId, period) {
+    if (!accountId) return null;
+    var suffix = (period || 'all').toLowerCase();
+    var key = BOT_PERF_CACHE_PREFIX + accountId + '_' + suffix;
+    return _parseDashboardPanelCache(sessionStorage.getItem(key), null)
+        || _parseDashboardPanelCache(localStorage.getItem(key), DASHBOARD_PANEL_CACHE_LOCAL_MAX_MS);
+}
+
+function _persistBotPerfCache(accountId, period, data) {
+    if (!accountId || !data) return;
+    try {
+        var suffix = (period || 'all').toLowerCase();
+        var key = BOT_PERF_CACHE_PREFIX + accountId + '_' + suffix;
+        var payload = { ts: Date.now(), period: suffix, data: data };
+        sessionStorage.setItem(key, JSON.stringify(payload));
+        localStorage.setItem(key, JSON.stringify(payload));
+    } catch (e) { /* ignore */ }
+}
+
+function hydrateBotPerformanceFromCache(accountId, period) {
+    period = (period || State.botPerformancePeriod || 'all').toLowerCase();
+    var cached = _readBotPerfCache(accountId, period);
+    if (!cached || !cached.data) return false;
+    State.botPerformancePeriod = period;
+    document.querySelectorAll('.bot-perf-btn').forEach(function (b) {
+        b.classList.toggle('active', (b.getAttribute('data-period') || '').toLowerCase() === period);
+    });
+    renderBotPerformancePanel(cached.data, period);
+    _botPerformanceLastPeriod = period;
+    _botPerformanceLastSig = period + '|cache';
+    _botPerformanceLoaded = true;
+    return true;
+}
+
+function _readTxHistoryCache(accountId, period, typeFilter, page) {
+    if (!accountId) return null;
+    var key = TX_HISTORY_CACHE_PREFIX + accountId + '_' + (period || 'daily') + '_' + (typeFilter || 'buysell') + '_p' + (page || 1);
+    return _parseDashboardPanelCache(sessionStorage.getItem(key), null)
+        || _parseDashboardPanelCache(localStorage.getItem(key), DASHBOARD_PANEL_CACHE_LOCAL_MAX_MS);
+}
+
+function _persistTxHistoryCache(accountId, period, typeFilter, page, listHtml, paginationHtml, sig, revision) {
+    if (!accountId || !listHtml) return;
+    try {
+        var key = TX_HISTORY_CACHE_PREFIX + accountId + '_' + period + '_' + typeFilter + '_p' + page;
+        var payload = {
+            ts: Date.now(),
+            period: period,
+            typeFilter: typeFilter,
+            page: page,
+            listHtml: listHtml,
+            paginationHtml: paginationHtml || '',
+            sig: sig || '',
+            revision: revision || ''
+        };
+        sessionStorage.setItem(key, JSON.stringify(payload));
+        localStorage.setItem(key, JSON.stringify(payload));
+    } catch (e) { /* ignore */ }
+}
+
+function hydrateTransactionHistoryFromCache(accountId, period, typeFilter, page) {
+    period = period || State.txHistoryPeriod || 'daily';
+    typeFilter = typeFilter || State.txHistoryType || 'buysell';
+    page = page || State.txHistoryPage || 1;
+    var cached = _readTxHistoryCache(accountId, period, typeFilter, page);
+    if (!cached || !cached.listHtml) return false;
+    var listEl = document.getElementById('txHistoryList');
+    var paginationEl = document.getElementById('txHistoryPagination');
+    if (!listEl) return false;
+    listEl.innerHTML = cached.listHtml;
+    if (paginationEl) paginationEl.innerHTML = cached.paginationHtml || '';
+    if (cached.sig) _txHistoryLastSig = cached.sig;
+    if (cached.revision) _txHistoryRevision = cached.revision;
+    _txHistoryLoaded = true;
+    State.txHistoryPeriod = period;
+    State.txHistoryType = typeFilter;
+    State.txHistoryPage = page;
+    document.querySelectorAll('.tx-period-btn').forEach(function (b) {
+        b.classList.toggle('active', b.getAttribute('data-period') === period);
+    });
+    document.querySelectorAll('.tx-type-btn').forEach(function (b) {
+        b.classList.toggle('active', b.getAttribute('data-type') === typeFilter);
+    });
+    listEl.querySelectorAll('.tx-history-item').forEach(function (el) {
+        el.onclick = function () {
+            try {
+                var raw = el.getAttribute('data-tx');
+                var tx = raw ? JSON.parse(decodeURIComponent(raw)) : null;
+                if (tx && typeof openTxDetailModal === 'function') openTxDetailModal(tx);
+            } catch (e) {}
+        };
+    });
+    if (paginationEl) {
+        paginationEl.querySelectorAll('.tx-pg-btn').forEach(function (btn) {
+            btn.onclick = function () {
+                var p = parseInt(btn.getAttribute('data-page'), 10);
+                if (typeof loadTransactionHistory === 'function') {
+                    loadTransactionHistory(State.txHistoryPeriod, State.txHistoryType, p, false, { silent: _txHistoryLoaded });
+                }
+            };
+        });
+    }
+    return true;
+}
+
+function hydrateDashboardPanelsFromCache(accountId) {
+    if (!accountId) return;
+    var perfPeriod = State.botPerformancePeriod || 'all';
+    try {
+        var savedPerf = sessionStorage.getItem('dashboard_bot_perf_period_' + accountId);
+        if (savedPerf) perfPeriod = savedPerf;
+    } catch (e) {}
+    hydrateBotPerformanceFromCache(accountId, perfPeriod);
+    hydrateTransactionHistoryFromCache(
+        accountId,
+        State.txHistoryPeriod || 'daily',
+        State.txHistoryType || 'buysell',
+        State.txHistoryPage || 1
+    );
+}
+window.hydrateDashboardPanelsFromCache = hydrateDashboardPanelsFromCache;
 
 function _fmtPerfUsdt(v) {
     var n = Number(v);
@@ -1085,6 +1223,10 @@ function renderBotPerformancePanel(data, forPeriod) {
         feesEl.textContent = _fmtPerfUsdtPlain(totalFees);
         feesEl.className = 'bot-perf-summary-value bot-perf-summary-value--muted';
     }
+    if (State.accountId) {
+        _persistBotPerfCache(State.accountId, forPeriod, data);
+        try { sessionStorage.setItem('dashboard_bot_perf_period_' + State.accountId, forPeriod); } catch (e) {}
+    }
 }
 
 async function loadBotPerformance(period) {
@@ -1096,9 +1238,10 @@ async function loadBotPerformance(period) {
     if (requestedPeriod !== _botPerformanceLastPeriod) {
         _botPerformanceLastSig = '';
     }
+    var hadCache = hydrateBotPerformanceFromCache(State.accountId, requestedPeriod);
     var pnlEl = document.getElementById('botPerfTotalPnl');
     var feesEl = document.getElementById('botPerfTotalFees');
-    if (!_botPerformanceLoaded) {
+    if (!hadCache && !_botPerformanceLoaded) {
         if (pnlEl) pnlEl.textContent = '…';
         if (feesEl) feesEl.textContent = '…';
     }
@@ -1794,12 +1937,14 @@ async function loadTransactionHistory(period, typeFilter, page, sync, opts) {
     var listEl = document.getElementById('txHistoryList');
     var paginationEl = document.getElementById('txHistoryPagination');
     if (!listEl) return;
+    var hadCache = hydrateTransactionHistoryFromCache(State.accountId, period, typeFilter, page);
+    if (hadCache) silent = true;
     if (!silent) _txHistoryLastSig = '';
-    var doSync = !!sync || (!_txHistoryInitialSyncDone && (typeFilter || 'buysell') === 'buysell');
+    var doSync = !!sync || (!_txHistoryInitialSyncDone && (typeFilter || 'buysell') === 'buysell' && !hadCache);
     if (doSync) _txHistoryInitialSyncDone = true;
     var txHistoryRequestDone = false;
     var loadingTimer = null;
-    if (!silent) {
+    if (!silent && !hadCache) {
         loadingTimer = setTimeout(function () {
             if (txHistoryRequestDone) return;
             listEl.innerHTML = '<div class="tx-history-loading" style="text-align:center;padding:2rem;color:var(--ds-text-secondary);">Yükleniyor...</div>';
@@ -1884,6 +2029,21 @@ async function loadTransactionHistory(period, typeFilter, page, sync, opts) {
         }
         document.querySelectorAll('.tx-period-btn').forEach(function (b) { b.classList.toggle('active', b.getAttribute('data-period') === period); });
         document.querySelectorAll('.tx-type-btn').forEach(function (b) { b.classList.toggle('active', b.getAttribute('data-type') === typeFilter); });
+        _persistTxHistoryCache(
+            State.accountId,
+            period,
+            typeFilter,
+            page,
+            listEl.innerHTML,
+            paginationEl ? paginationEl.innerHTML : '',
+            sig,
+            _txHistoryRevision
+        );
+        try {
+            sessionStorage.setItem('dashboard_tx_period_' + State.accountId, period);
+            sessionStorage.setItem('dashboard_tx_type_' + State.accountId, typeFilter);
+            sessionStorage.setItem('dashboard_tx_page_' + State.accountId, String(page));
+        } catch (eSave) {}
     } catch (e) {
         txHistoryRequestDone = true;
         if (loadingTimer) clearTimeout(loadingTimer);
@@ -2168,16 +2328,8 @@ function ensureAppbarDisplayNameLocked(accountId) {
 function getAppbarCachedDisplayName(accountId) {
     var locked = getLockedAppbarDisplayName(accountId);
     if (locked) return locked;
-    if (accountId == null || accountId === '') return '';
-    try {
-        var raw = sessionStorage.getItem('dashboardAppbar_' + accountId);
-        if (raw) {
-            var cached = JSON.parse(raw);
-            if (cached && cached.displayName && cached.displayName !== '—') return cached.displayName;
-        }
-        var legacy = sessionStorage.getItem('appbarUserName_' + accountId);
-        if (legacy && legacy !== '—') return legacy;
-    } catch (e) {}
+    var cached = _readAppbarCache(accountId, State.accountCode || '');
+    if (cached && cached.displayName && cached.displayName !== '—') return cached.displayName;
     return '';
 }
 
@@ -2205,6 +2357,63 @@ function resolveAppbarDisplayName(data, accountId) {
     return '—';
 }
 
+var APPBAR_CACHE_LOCAL_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
+function _parseAppbarCacheRaw(raw, maxAgeMs) {
+    if (!raw) return null;
+    try {
+        var o = JSON.parse(raw);
+        if (!o) return null;
+        if (o.ts != null && maxAgeMs != null && Date.now() - Number(o.ts) > maxAgeMs) return null;
+        return o;
+    } catch (e) {
+        return null;
+    }
+}
+
+function _readAppbarCache(accountId, accountCode) {
+    var code = accountCode != null && accountCode !== '' ? String(accountCode).trim() : '';
+    var id = accountId != null && accountId !== '' ? String(accountId) : '';
+    var candidates = [];
+    if (id) {
+        candidates.push(_parseAppbarCacheRaw(sessionStorage.getItem('dashboardAppbar_' + id), null));
+        candidates.push(_parseAppbarCacheRaw(localStorage.getItem('dashboardAppbar_ls_' + id), APPBAR_CACHE_LOCAL_MAX_AGE_MS));
+        candidates.push({ displayName: sessionStorage.getItem('appbarUserName_' + id), accountCode: code });
+    }
+    if (code) {
+        candidates.push(_parseAppbarCacheRaw(sessionStorage.getItem('dashboardAppbar_code_' + code), null));
+        candidates.push(_parseAppbarCacheRaw(localStorage.getItem('dashboardAppbar_code_ls_' + code), APPBAR_CACHE_LOCAL_MAX_AGE_MS));
+    }
+    for (var i = 0; i < candidates.length; i++) {
+        var c = candidates[i];
+        if (c && c.displayName && c.displayName !== '—') return c;
+    }
+    return null;
+}
+
+/** Appbar isim + ID — flicker önleme; yenilemede anında. */
+function applyAppbarSnapshot(displayName, accountCode, accountId, idLabel) {
+    var nameEl = document.getElementById('appbarUserName');
+    var idEl = document.getElementById('appbarAccountId');
+    var code = accountCode != null && accountCode !== '' ? String(accountCode).trim() : '';
+    var id = accountId != null && accountId !== '' ? String(accountId) : '';
+    var name = (displayName || '').trim();
+    if (!name && id) name = getLockedAppbarDisplayName(id) || getAppbarCachedDisplayName(id);
+    if (!name && code) {
+        var byCode = _readAppbarCache(null, code);
+        if (byCode && byCode.displayName) name = byCode.displayName;
+    }
+    if (name && name !== '—' && nameEl) setTextIfChanged(nameEl, name);
+    if (name && name !== '—' && id) State.appbarNameAccountId = Number(id) || id;
+    if (idEl) {
+        var label = idLabel || (code ? ('ID: ' + code) : (id ? ('ID: ' + id) : 'ID: —'));
+        if (label !== 'ID: —') {
+            setTextIfChanged(idEl, label);
+            if (idEl.style.display !== 'block') idEl.style.display = 'block';
+        }
+    }
+}
+
 function paintAppbarDisplayName(accountId) {
     var nameEl = document.getElementById('appbarUserName');
     if (!nameEl) return '';
@@ -2220,53 +2429,56 @@ function setAppbarAccountHolderName(data) {
     var locked = getLockedAppbarDisplayName(accountId);
     var displayName = locked || resolveAppbarDisplayName(data, accountId);
     if (!locked && displayName && displayName !== '—') lockAppbarDisplayName(accountId, displayName);
-    paintAppbarDisplayName(accountId);
-    const idEl = document.getElementById('appbarAccountId');
-    if (idEl) {
-        const aid = accountCode != null && accountCode !== '' ? accountCode : (State.accountId ?? data.account_id ?? (data.account && data.account.id));
-        var idLabel = aid != null && aid !== '' ? 'ID: ' + aid : 'ID: —';
-        setTextIfChanged(idEl, idLabel);
-        if (idEl.style.display !== 'block') idEl.style.display = 'block';
-    }
+    applyAppbarSnapshot(displayName, accountCode, accountId);
     if (displayName && displayName !== '—') persistAppbarSessionCache(accountId, displayName, accountCode);
 }
 
 function persistAppbarSessionCache(accountId, displayName, accountCode) {
-    if (accountId == null || accountId === '') return;
+    if ((accountId == null || accountId === '') && (accountCode == null || accountCode === '')) return;
     try {
-        var code = accountCode != null && accountCode !== '' ? String(accountCode) : '';
-        var idLabel = code ? ('ID: ' + code) : ('ID: ' + accountId);
-        sessionStorage.setItem('dashboardAppbar_' + accountId, JSON.stringify({
+        var code = accountCode != null && accountCode !== '' ? String(accountCode).trim() : '';
+        var id = accountId != null && accountId !== '' ? String(accountId) : '';
+        var idLabel = code ? ('ID: ' + code) : (id ? ('ID: ' + id) : 'ID: —');
+        var payload = {
             ts: Date.now(),
             displayName: displayName || '',
             accountCode: code,
             idLabel: idLabel
-        }));
-        if (displayName && displayName !== '—') {
-            sessionStorage.setItem('appbarUserName_' + accountId, displayName);
+        };
+        if (id) {
+            sessionStorage.setItem('dashboardAppbar_' + id, JSON.stringify(payload));
+            localStorage.setItem('dashboardAppbar_ls_' + id, JSON.stringify(payload));
+        }
+        if (code) {
+            sessionStorage.setItem('dashboardAppbar_code_' + code, JSON.stringify(payload));
+            localStorage.setItem('dashboardAppbar_code_ls_' + code, JSON.stringify(payload));
+        }
+        if (displayName && displayName !== '—' && id) {
+            sessionStorage.setItem('appbarUserName_' + id, displayName);
         }
     } catch (e) {}
 }
 
 function restoreAppbarFromSessionCache(accountId, accountCode) {
-    if (accountId == null || accountId === '') return false;
-    var idEl = document.getElementById('appbarAccountId');
-    var restored = false;
-    paintAppbarDisplayName(accountId);
-    if (getLockedAppbarDisplayName(accountId)) restored = true;
-    try {
-        var raw = sessionStorage.getItem('dashboardAppbar_' + accountId);
-        var cached = raw ? JSON.parse(raw) : null;
-        if (idEl) {
-            var idLabel = (accountCode != null && accountCode !== '')
-                ? ('ID: ' + accountCode)
-                : ((cached && cached.idLabel) || ('ID: ' + accountId));
-            if (setTextIfChanged(idEl, idLabel)) restored = true;
-            if (idEl.style.display !== 'block') idEl.style.display = 'block';
-        }
-    } catch (e) {}
-    return restored;
+    if ((accountId == null || accountId === '') && (accountCode == null || accountCode === '')) return false;
+    var cached = _readAppbarCache(accountId, accountCode);
+    var locked = accountId != null ? getLockedAppbarDisplayName(accountId) : '';
+    var displayName = locked || (cached && cached.displayName) || '';
+    var code = (accountCode != null && accountCode !== '') ? String(accountCode).trim()
+        : ((cached && cached.accountCode) || '');
+    if (!displayName && accountId) displayName = paintAppbarDisplayName(accountId);
+    if (displayName || code || accountId) {
+        applyAppbarSnapshot(displayName, code, accountId, cached && cached.idLabel);
+        return !!(displayName || code);
+    }
+    return false;
 }
+
+function restoreAppbarEarlyFromStorage(accountId, accountCode) {
+    return restoreAppbarFromSessionCache(accountId, accountCode);
+}
+window.applyAppbarSnapshot = applyAppbarSnapshot;
+window.restoreAppbarEarlyFromStorage = restoreAppbarEarlyFromStorage;
 
 function shouldShowAdminNav(user) {
     var fromAdminUrl = new URLSearchParams(window.location.search).get('from_admin') === '1';
@@ -2334,6 +2546,10 @@ var lastSpotUpdateTs = 0;
 var _walletLiveOkAt = 0;
 var _walletLiveFailedAt = 0;
 var _kpiCuzdanPnlDisplay = { pnlUsd: null, pnlPct: null };
+var _kpiCuzdanLastSpot = 0;
+var KPI_CUZDAN_SESSION_PREFIX = "kpi_cuzdan_snap_v1_";
+var KPI_CUZDAN_SESSION_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+var KPI_CUZDAN_LOCAL_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 var _walletStaleUi = { wasStale: false, liveSince: null };
 var WALLET_LIVE_OK_TTL_MS = 60000;
 var WALLET_STALE_HIDE_AFTER_LIVE_MS = 15000;
@@ -2564,7 +2780,17 @@ function updateKPIs(data) {
 
     var walletEl = document.getElementById("kpiCuzdan");
     if (typeof State !== 'undefined' && State.isTestAccount && typeof updateTestAccountKpiCuzdanFromStrip === 'function') {
-        updateTestAccountKpiCuzdanFromStrip();
+        var apiSpot = (account.spot_balance_usd != null && Number(account.spot_balance_usd) > 0)
+            ? Number(account.spot_balance_usd)
+            : ((data && data.spot_balance_usd != null && Number(data.spot_balance_usd) > 0) ? Number(data.spot_balance_usd) : 0);
+        if (apiSpot > 0) {
+            _kpiCuzdanLastSpot = apiSpot;
+            updateKpiCuzdanBalance(walletEl, apiSpot);
+            if (typeof updateTestAccountCuzdanDailyPnlLive === 'function') updateTestAccountCuzdanDailyPnlLive(apiSpot);
+            _persistKpiCuzdanSessionCache(State.accountId, apiSpot, _kpiCuzdanPnlDisplay.pnlUsd, _kpiCuzdanPnlDisplay.pnlPct);
+        } else {
+            updateTestAccountKpiCuzdanFromStrip();
+        }
     } else {
         updateKpiCuzdanBalance(walletEl, walletTotal);
     }
@@ -2681,18 +2907,133 @@ function _applyWalletRefreshAfterBotPayload(pending) {
     }
 }
 
+function _readKpiCuzdanSessionCache(accountId) {
+    if (!accountId) return null;
+    try {
+        var raw = sessionStorage.getItem(KPI_CUZDAN_SESSION_PREFIX + accountId);
+        if (!raw) return null;
+        var o = JSON.parse(raw);
+        if (!o || o.ts == null || Date.now() - Number(o.ts) > KPI_CUZDAN_SESSION_MAX_AGE_MS) return null;
+        return o;
+    } catch (e) {
+        return null;
+    }
+}
+
+function _loadPersistedKpiCuzdanFields(accountId) {
+    var sess = _readKpiCuzdanSessionCache(accountId);
+    if (sess && sess.spot != null && Number(sess.spot) > 0) return sess;
+    try {
+        var raw = localStorage.getItem("tt_home_cache_v1:" + accountId);
+        if (!raw) return null;
+        var data = JSON.parse(raw);
+        if (!data || !data.kpis || typeof data.kpis !== "object") return null;
+        var age = Date.now() - (data.stored_at || 0);
+        if (age > KPI_CUZDAN_LOCAL_MAX_AGE_MS) return null;
+        var k = data.kpis;
+        var spot = k.spot_balance_usd != null ? Number(k.spot_balance_usd) : (k.spot_kpi_total_usd != null ? Number(k.spot_kpi_total_usd) : null);
+        if (spot == null || !Number.isFinite(spot) || spot <= 0) return null;
+        return {
+            spot: spot,
+            pnl: k.daily_wallet_pnl_usd != null ? Number(k.daily_wallet_pnl_usd) : null,
+            pct: k.daily_wallet_pnl_pct != null ? Number(k.daily_wallet_pnl_pct) : null,
+            ts: data.stored_at || Date.now()
+        };
+    } catch (e2) {
+        return null;
+    }
+}
+
+function _persistKpiCuzdanSessionCache(accountId, spotUsd, pnlUsd, pnlPct) {
+    if (!accountId) return;
+    var spot = spotUsd != null && Number.isFinite(Number(spotUsd)) ? Number(spotUsd) : null;
+    var pnl = pnlUsd != null && Number.isFinite(Number(pnlUsd)) ? Number(pnlUsd) : null;
+    var pct = pnlPct != null && Number.isFinite(Number(pnlPct)) ? Number(pnlPct) : null;
+    if (spot == null && pnl == null) return;
+    try {
+        sessionStorage.setItem(KPI_CUZDAN_SESSION_PREFIX + accountId, JSON.stringify({
+            spot: spot,
+            pnl: pnl,
+            pct: pct,
+            ts: Date.now()
+        }));
+    } catch (e) { /* ignore */ }
+    if (window.storageCache && spot != null && spot > 0) {
+        try {
+            window.storageCache.mergeSaved(accountId, {
+                kpis: {
+                    spot_balance_usd: spot,
+                    daily_wallet_pnl_usd: pnl,
+                    daily_wallet_pnl_pct: pct
+                }
+            });
+        } catch (e2) { /* ignore */ }
+    }
+}
+
+/** KPI cüzdan bloğunu doğrudan boyar (test strip hazır olmadan; yenilemede anında). */
+function applyKpiCuzdanSnapshot(spotUsd, pnlUsd, pnlPct, opts) {
+    opts = opts || {};
+    var strip = document.getElementById("unifiedKpiStrip");
+    if (strip && opts.showStrip !== false) strip.style.display = "block";
+    var spot = spotUsd != null && Number.isFinite(Number(spotUsd)) ? Number(spotUsd) : null;
+    if (spot != null && spot > 0) {
+        _kpiCuzdanLastSpot = spot;
+        var walletEl = document.getElementById("kpiCuzdan");
+        if (walletEl && typeof fmtUsd === "function") {
+            setTextIfChanged(walletEl, fmtUsd(spot));
+            walletEl.classList.remove("blink-positive", "blink-negative");
+        }
+    }
+    if (pnlUsd != null && Number.isFinite(Number(pnlUsd))) {
+        _kpiCuzdanPnlDisplay.pnlUsd = Number(pnlUsd);
+        if (pnlPct != null && Number.isFinite(Number(pnlPct))) {
+            _kpiCuzdanPnlDisplay.pnlPct = Number(pnlPct).toFixed(2);
+        }
+        var cuzdanPnlEl = document.getElementById("kpiCuzdanPnl");
+        if (cuzdanPnlEl && typeof fmtUsd === "function") {
+            setTextIfChanged(cuzdanPnlEl, fmtUsd(_kpiCuzdanPnlDisplay.pnlUsd));
+            var pnlColor = _kpiCuzdanPnlDisplay.pnlUsd >= 0 ? "#0ecb81" : "#f6465d";
+            if (cuzdanPnlEl.style.color !== pnlColor) cuzdanPnlEl.style.color = pnlColor;
+            cuzdanPnlEl.classList.remove("blink-positive", "blink-negative");
+        }
+        var pctShow = _kpiCuzdanPnlDisplay.pnlPct;
+        if (pctShow != null) {
+            var pctNum = parseFloat(pctShow);
+            patchText("kpiCuzdanPnlPct", (pctNum >= 0 ? "+" : "") + pctShow + "%");
+            var pe = document.getElementById("kpiCuzdanPnlPct");
+            if (pe) {
+                var pctColor = _kpiCuzdanPnlDisplay.pnlUsd >= 0 ? "#0ecb81" : "#f6465d";
+                if (pe.style.color !== pctColor) pe.style.color = pctColor;
+                pe.classList.remove("blink-positive", "blink-negative");
+            }
+        }
+    }
+}
+window.applyKpiCuzdanSnapshot = applyKpiCuzdanSnapshot;
+
+function restoreKpiCuzdanEarlyFromStorage(accountId) {
+    var snap = _loadPersistedKpiCuzdanFields(accountId);
+    if (!snap) return false;
+    applyKpiCuzdanSnapshot(snap.spot, snap.pnl, snap.pct, { showStrip: true });
+    return true;
+}
+window.restoreKpiCuzdanEarlyFromStorage = restoreKpiCuzdanEarlyFromStorage;
+
 function _persistKpisStorageCache(account, data) {
     if (!State.accountId || !window.storageCache) return;
     account = account || {};
     data = data || {};
-    var spot = account.spot_balance_usd ?? data.spot_balance_usd ?? assetsState.wallet?.total_usd;
+    var spot = account.spot_balance_usd ?? data.spot_balance_usd ?? (_kpiCuzdanLastSpot > 0 ? _kpiCuzdanLastSpot : assetsState.wallet?.total_usd);
     if (account.daily_wallet_pnl_usd == null && data.daily_wallet_pnl_usd == null && spot == null) return;
+    var pnl = account.daily_wallet_pnl_usd ?? data.daily_wallet_pnl_usd ?? _kpiCuzdanPnlDisplay.pnlUsd;
+    var pct = account.daily_wallet_pnl_pct ?? data.daily_wallet_pnl_pct ?? _kpiCuzdanPnlDisplay.pnlPct;
     try {
         window.storageCache.mergeSaved(State.accountId, {
             kpis: Object.assign({}, account, {
                 spot_balance_usd: spot,
-                daily_wallet_pnl_usd: account.daily_wallet_pnl_usd ?? data.daily_wallet_pnl_usd,
-                daily_wallet_pnl_pct: account.daily_wallet_pnl_pct ?? data.daily_wallet_pnl_pct,
+                daily_wallet_pnl_usd: pnl,
+                daily_wallet_pnl_pct: pct,
                 daily_bot_pnl_usd: account.daily_bot_pnl_usd ?? data.daily_bot_pnl_usd,
                 daily_bot_pnl_pct: account.daily_bot_pnl_pct ?? data.daily_bot_pnl_pct,
                 bots_balance_usd: account.bots_balance_usd ?? data.bots_balance_usd,
@@ -2701,27 +3042,29 @@ function _persistKpisStorageCache(account, data) {
             })
         });
     } catch (e) { /* ignore */ }
+    if (spot != null && Number(spot) > 0) {
+        _persistKpiCuzdanSessionCache(State.accountId, spot, pnl, pct);
+    }
 }
 
 function hydrateKpisFromStorageCache(accountId) {
-    if (!accountId || !window.storageCache) return false;
-    var cached = window.storageCache.load(accountId);
-    if (!cached || !cached.kpis || typeof cached.kpis !== 'object') return false;
-    var k = cached.kpis;
-    if (k.daily_wallet_pnl_usd != null && Number.isFinite(Number(k.daily_wallet_pnl_usd))) {
-        _kpiCuzdanPnlDisplay.pnlUsd = Number(k.daily_wallet_pnl_usd);
-        if (k.daily_wallet_pnl_pct != null && Number.isFinite(Number(k.daily_wallet_pnl_pct))) {
-            _kpiCuzdanPnlDisplay.pnlPct = Number(k.daily_wallet_pnl_pct).toFixed(2);
+    if (!accountId) return false;
+    var snap = _loadPersistedKpiCuzdanFields(accountId);
+    if (!snap) return false;
+    applyKpiCuzdanSnapshot(snap.spot, snap.pnl, snap.pct, { showStrip: true });
+    var cached = window.storageCache && window.storageCache.load(accountId);
+    var k = (cached && cached.kpis) ? cached.kpis : {};
+    if (k.total_bots != null || k.active_bots != null || k.daily_bot_pnl_usd != null) {
+        var botBakiye = k.bots_balance_usd != null && Number.isFinite(Number(k.bots_balance_usd)) ? Number(k.bots_balance_usd) : null;
+        if (botBakiye != null) {
+            document.querySelectorAll("#kpiBotBakiye").forEach(function (el) {
+                if (typeof fmtUsd === "function") setTextIfChanged(el, fmtUsd(botBakiye));
+            });
         }
-    }
-    if (typeof updateKPIs === 'function') {
-        updateKPIs({
-            account: k,
-            total_bots: k.total_bots,
-            active_bots: k.active_bots,
-            daily_bot_pnl_usd: k.daily_bot_pnl_usd,
-            total_pnl_usd: k.total_pnl_usd
-        });
+        if (k.daily_bot_pnl_usd != null && Number.isFinite(Number(k.daily_bot_pnl_usd)) && typeof fmtUsd === "function") {
+            var botPnlEl = document.getElementById("kpiBotPnl");
+            if (botPnlEl) setTextIfChanged(botPnlEl, fmtUsd(Number(k.daily_bot_pnl_usd)));
+        }
     }
     return true;
 }
@@ -3737,10 +4080,7 @@ function initMobileBottomNav(currentDesktopTab) {
             } else {
                 if (typeof renderMobileTradeFavorites === "function") renderMobileTradeFavorites();
             }
-            if (window.intervalRegistry) {
-                window.intervalRegistry.stopByOwner("tab.trade");
-                window.intervalRegistry.start("tab.trade.prices", tickMobileTradeFavoritesPrices, 2000, "tab.trade");
-            }
+            if (typeof startMobileTradeFavPriceUpdates === "function") startMobileTradeFavPriceUpdates();
         } else if (tab === "bots") {
             const desktopTab = document.querySelector('.dm-tab[data-tab="bots"]');
             if (desktopTab) desktopTab.click();
@@ -3839,6 +4179,192 @@ function initMobileTradeSearch() {
     ensureCoinListSearchSymbolsLoaded("all").then(function () { buildCoinListSearchSymbols(); fillDropdown(); });
 }
 
+var MOBILE_TRADE_FAV_TICKER_CACHE_KEY = "mobileTradeFavTicker_v1";
+var _mobileTradeFavBatchInflight = null;
+var _mobileTradeFavStoreSub = null;
+
+function _readMobileTradeFavTickerCache() {
+    try {
+        var raw = sessionStorage.getItem(MOBILE_TRADE_FAV_TICKER_CACHE_KEY);
+        return raw ? JSON.parse(raw) : {};
+    } catch (e) {
+        return {};
+    }
+}
+
+function _writeMobileTradeFavTickerCache(symbol, price, changePct) {
+    try {
+        var sym = (symbol || "").toUpperCase();
+        if (!sym || price == null || !Number.isFinite(price)) return;
+        var cache = _readMobileTradeFavTickerCache();
+        cache[sym] = { price: price, changePct: changePct, ts: Date.now() };
+        sessionStorage.setItem(MOBILE_TRADE_FAV_TICKER_CACHE_KEY, JSON.stringify(cache));
+    } catch (e) {}
+}
+
+function _getMobileTradeFavQuote(symbol) {
+    var sym = (symbol || "").toUpperCase();
+    var mini = window.marketStore && window.marketStore.getMini(sym);
+    if (mini && mini.last != null && Number.isFinite(mini.last)) {
+        return { price: mini.last, changePct: Number.isFinite(mini.changePct) ? mini.changePct : null };
+    }
+    var storePrice = window.marketStore && window.marketStore.getPrice && window.marketStore.getPrice(sym);
+    if (storePrice != null && Number.isFinite(storePrice)) {
+        return { price: storePrice, changePct: null };
+    }
+    if (typeof coinListSearchAllSymbols !== "undefined" && Array.isArray(coinListSearchAllSymbols)) {
+        for (var i = 0; i < coinListSearchAllSymbols.length; i++) {
+            var row = coinListSearchAllSymbols[i];
+            if ((row.symbol || "").toUpperCase() === sym && row.last != null && Number.isFinite(row.last)) {
+                return {
+                    price: row.last,
+                    changePct: row.changePct != null && Number.isFinite(row.changePct) ? row.changePct : null
+                };
+            }
+        }
+    }
+    var cached = _readMobileTradeFavTickerCache()[sym];
+    if (cached && cached.price != null && Number.isFinite(cached.price)) {
+        return {
+            price: cached.price,
+            changePct: cached.changePct != null && Number.isFinite(cached.changePct) ? cached.changePct : null
+        };
+    }
+    return { price: null, changePct: null };
+}
+
+function _fmtMobileTradeFavPriceDisplay(price) {
+    if (price == null || !Number.isFinite(price)) return "—";
+    return typeof fmtCoinPrice === "function"
+        ? fmtCoinPrice(price)
+        : ("$" + Number(price).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 4 }));
+}
+
+function _applyMobileTradeFavItemQuote(symbol, price, changePct) {
+    if (price == null || !Number.isFinite(price) || price <= 0) return;
+    var sym = (symbol || "").toUpperCase();
+    var item = document.querySelector('#mobileTradeFavoritesList .mobile-trade-fav-item[data-symbol="' + sym + '"]');
+    if (!item) return;
+    var priceRow = item.querySelector(".mobile-trade-fav-price-row");
+    var changeSpan = item.querySelector(".mobile-trade-fav-change");
+    if (!priceRow || !changeSpan) return;
+    var oldPrice = parseFloat(priceRow.getAttribute("data-price") || "") || 0;
+    var priceDisplay = _fmtMobileTradeFavPriceDisplay(price);
+    var changeStr = changePct != null && Number.isFinite(changePct)
+        ? (changePct >= 0 ? "+" : "") + Number(changePct).toFixed(2) + "%"
+        : "—";
+    var changeColor = changePct != null && Number.isFinite(changePct)
+        ? (changePct >= 0 ? "#0ecb81" : "#f6465d")
+        : "var(--ds-text-secondary)";
+    priceRow.setAttribute("data-price", price);
+    priceRow.setAttribute("data-change-pct", changePct != null && Number.isFinite(changePct) ? changePct : "");
+    var priceVal = priceRow.querySelector(".mobile-trade-fav-price-val");
+    if (priceVal) priceVal.textContent = priceDisplay;
+    changeSpan.textContent = changeStr;
+    changeSpan.style.color = changeColor;
+    _writeMobileTradeFavTickerCache(sym, price, changePct);
+    if (Number.isFinite(oldPrice) && oldPrice > 0 && Math.abs(oldPrice - price) > 0.0001) {
+        priceRow.classList.remove("mobile-trade-fav-price-blink-up", "mobile-trade-fav-price-blink-down");
+        priceRow.classList.add(price > oldPrice ? "mobile-trade-fav-price-blink-up" : "mobile-trade-fav-price-blink-down");
+        setTimeout(function () {
+            priceRow.classList.remove("mobile-trade-fav-price-blink-up", "mobile-trade-fav-price-blink-down");
+        }, 700);
+    }
+}
+
+function _parseDataPricesPayload(res) {
+    if (!res || typeof res !== "object") return {};
+    if (res.prices && typeof res.prices === "object") return res.prices;
+    if (res.data && typeof res.data === "object") {
+        if (res.data.prices && typeof res.data.prices === "object") return res.data.prices;
+        return res.data;
+    }
+    return res;
+}
+
+function _fetchMobileTradeFavTickerFallback(symbol) {
+    return fetch(window.location.origin + "/api/spot/ticker_24h?symbol=" + encodeURIComponent(symbol))
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+            var price = parseFloat(data.lastPrice || 0);
+            var changePct = parseFloat(data.priceChangePercent || 0);
+            if (price > 0 && Number.isFinite(price)) {
+                _applyMobileTradeFavItemQuote(symbol, price, Number.isFinite(changePct) ? changePct : null);
+            }
+        })
+        .catch(function () {});
+}
+
+function fetchMobileTradeFavPricesBatch(symbols) {
+    symbols = (symbols || []).map(function (s) { return (s || "").toUpperCase(); }).filter(Boolean);
+    if (!symbols.length) return Promise.resolve();
+    symbols.forEach(function (sym) {
+        var q = _getMobileTradeFavQuote(sym);
+        if (q.price != null) _applyMobileTradeFavItemQuote(sym, q.price, q.changePct);
+    });
+    if (!window.apiClient || typeof window.apiClient.get !== "function") return Promise.resolve();
+    if (_mobileTradeFavBatchInflight) return _mobileTradeFavBatchInflight;
+    _mobileTradeFavBatchInflight = window.apiClient
+        .get("/api/data/prices?slim=1&symbols=" + encodeURIComponent(symbols.join(",")))
+        .then(function (res) {
+            var prices = _parseDataPricesPayload(res);
+            var missing = [];
+            symbols.forEach(function (sym) {
+                var row = prices[sym];
+                var price = row && row.price != null ? Number(row.price) : NaN;
+                var changePct = row && row.change24h != null ? Number(row.change24h) : null;
+                if (price > 0 && Number.isFinite(price)) {
+                    _applyMobileTradeFavItemQuote(sym, price, Number.isFinite(changePct) ? changePct : null);
+                } else {
+                    missing.push(sym);
+                }
+            });
+            return Promise.all(missing.map(_fetchMobileTradeFavTickerFallback));
+        })
+        .catch(function () {
+            return Promise.all(symbols.map(_fetchMobileTradeFavTickerFallback));
+        })
+        .finally(function () {
+            _mobileTradeFavBatchInflight = null;
+        });
+    return _mobileTradeFavBatchInflight;
+}
+
+function prefetchMobileTradeFavTickerCache() {
+    var favs = (typeof spotFavorites !== "undefined" && Array.isArray(spotFavorites)) ? spotFavorites.slice() : [];
+    if (!favs.length) return;
+    fetchMobileTradeFavPricesBatch(favs);
+}
+
+function refreshMobileTradeFavPricesFromStore() {
+    var items = document.querySelectorAll("#mobileTradeFavoritesList .mobile-trade-fav-item");
+    if (!items.length) return;
+    items.forEach(function (item) {
+        var sym = item.getAttribute("data-symbol");
+        if (!sym) return;
+        var q = _getMobileTradeFavQuote(sym);
+        if (q.price != null) _applyMobileTradeFavItemQuote(sym, q.price, q.changePct);
+    });
+}
+
+function ensureMobileTradeFavMarketStoreHook() {
+    if (_mobileTradeFavStoreSub || !window.marketStore || typeof window.marketStore.subscribe !== "function") return;
+    _mobileTradeFavStoreSub = window.marketStore.subscribe(function () {
+        var view = document.getElementById("mobileTradeView");
+        if (!view || !view.classList.contains("is-active")) return;
+        refreshMobileTradeFavPricesFromStore();
+    });
+}
+
+function startMobileTradeFavPriceUpdates() {
+    ensureMobileTradeFavMarketStoreHook();
+    if (window.intervalRegistry) {
+        window.intervalRegistry.stopByOwner("tab.trade");
+        tickMobileTradeFavoritesPrices();
+        window.intervalRegistry.start("tab.trade.prices", tickMobileTradeFavoritesPrices, 2000, "tab.trade");
+    }
+}
+
 // Mobil Trade: Favori coinler listesini doldur; tıklayınca alım satım modalı açılır
 function renderMobileTradeFavorites() {
     var listEl = document.getElementById("mobileTradeFavoritesList");
@@ -3872,10 +4398,10 @@ function renderMobileTradeFavorites() {
             : '<span class="varlik-logo-initials" style="width:32px;height:32px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:0.7rem;font-weight:600;background:var(--ds-bg-tertiary);color:var(--ds-text-secondary);">' + initials + "</span>";
     };
     var html = favs.map(function (symbol) {
-        var mini = window.marketStore && window.marketStore.getMini(symbol);
-        var price = (mini && mini.last != null) ? mini.last : (window.marketStore && window.marketStore.getPrice ? window.marketStore.getPrice(symbol) : null);
-        var changePct = mini && Number.isFinite(mini.changePct) ? mini.changePct : null;
-        var priceDisplay = price != null && Number.isFinite(price) ? (typeof fmtCoinPrice === "function" ? fmtCoinPrice(price) : ("$" + Number(price).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 4 }))) : "—";
+        var quote = _getMobileTradeFavQuote(symbol);
+        var price = quote.price;
+        var changePct = quote.changePct;
+        var priceDisplay = _fmtMobileTradeFavPriceDisplay(price);
         var changeStr = changePct != null ? (changePct >= 0 ? "+" : "") + Number(changePct).toFixed(2) + "%" : "—";
         var changeColor = changePct != null ? (changePct >= 0 ? "#0ecb81" : "#f6465d") : "var(--ds-text-secondary)";
         var base = baseFromSymbol(symbol);
@@ -3907,6 +4433,10 @@ function renderMobileTradeFavorites() {
             }
         };
     });
+    var view = document.getElementById("mobileTradeView");
+    if (view && view.classList.contains("is-active")) {
+        fetchMobileTradeFavPricesBatch(favs);
+    }
 }
 
 function tickMobileTradeFavoritesPrices() {
@@ -3919,38 +4449,7 @@ function tickMobileTradeFavoritesPrices() {
         var sym = item.getAttribute("data-symbol");
         if (sym) symbols.push(sym);
     });
-    symbols.forEach(function (symbol) {
-        fetch(window.location.origin + '/api/spot/ticker_24h?symbol=' + encodeURIComponent(symbol))
-            .then(function (r) { return r.json(); })
-            .then(function (data) {
-                var price = parseFloat(data.lastPrice || 0);
-                var changePct = parseFloat(data.priceChangePercent || 0);
-                if (price <= 0 || !Number.isFinite(price)) return;
-                var item = document.querySelector('#mobileTradeFavoritesList .mobile-trade-fav-item[data-symbol="' + symbol + '"]');
-                if (!item) return;
-                var priceRow = item.querySelector(".mobile-trade-fav-price-row");
-                var changeSpan = item.querySelector(".mobile-trade-fav-change");
-                if (!priceRow || !changeSpan) return;
-                var oldPrice = parseFloat(priceRow.getAttribute("data-price") || "") || 0;
-                var priceDisplay = typeof fmtCoinPrice === "function" ? fmtCoinPrice(price) : ("$" + Number(price).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 4 }));
-                var changeStr = Number.isFinite(changePct) ? (changePct >= 0 ? "+" : "") + Number(changePct).toFixed(2) + "%" : "—";
-                var changeColor = Number.isFinite(changePct) ? (changePct >= 0 ? "#0ecb81" : "#f6465d") : "var(--ds-text-secondary)";
-                priceRow.setAttribute("data-price", price);
-                priceRow.setAttribute("data-change-pct", changePct);
-                var priceVal = priceRow.querySelector(".mobile-trade-fav-price-val");
-                if (priceVal) priceVal.textContent = priceDisplay;
-                changeSpan.textContent = changeStr;
-                changeSpan.style.color = changeColor;
-                if (Number.isFinite(oldPrice) && Math.abs(oldPrice - price) > 0.0001) {
-                    priceRow.classList.remove("mobile-trade-fav-price-blink-up", "mobile-trade-fav-price-blink-down");
-                    priceRow.classList.add(price > oldPrice ? "mobile-trade-fav-price-blink-up" : "mobile-trade-fav-price-blink-down");
-                    setTimeout(function () {
-                        priceRow.classList.remove("mobile-trade-fav-price-blink-up", "mobile-trade-fav-price-blink-down");
-                    }, 700);
-                }
-            })
-            .catch(function () {});
-    });
+    fetchMobileTradeFavPricesBatch(symbols);
 }
 
 // Tabs
@@ -4121,8 +4620,7 @@ function bindTabs() {
                     } else {
                         if (typeof renderMobileTradeFavorites === "function") renderMobileTradeFavorites();
                     }
-                    window.intervalRegistry.stopByOwner("tab.trade");
-                    window.intervalRegistry.start("tab.trade.prices", tickMobileTradeFavoritesPrices, 2000, "tab.trade");
+                    if (typeof startMobileTradeFavPriceUpdates === "function") startMobileTradeFavPriceUpdates();
                 } else {
                     stopCoinListUpdates();
                 }
@@ -5639,26 +6137,145 @@ let walletBackoffMs = WALLET_BACKOFF_MIN;
 let lastWalletHash = null;
 let assetsPanelRenderCount = 0;
 var _varliklarHasRenderedRows = false;
+var BINANCE_WALLET_CACHE_PREFIX = 'binance_wallet_v1_';
+var BINANCE_WALLET_CACHE_LOCAL_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+var BINANCE_WALLET_TBODY_HTML_MAX = 120000;
+var _walletBinanceCacheHydrated = false;
 
-function hydrateWalletFromStorageCache(accountId) {
-    if (!accountId || !window.storageCache) return false;
-    if (assetsState.wallet.assets && assetsState.wallet.assets.length) return false;
-    var cached = window.storageCache.load(accountId);
-    if (!cached || !cached.wallet_cached || !Array.isArray(cached.wallet_cached.assets) || !cached.wallet_cached.assets.length) return false;
-    if (window.renderHome && typeof window.renderHome.walletCachedToAssetsState === 'function') {
-        window.renderHome.walletCachedToAssetsState(cached.wallet_cached, cached.wallet_cached_at);
-    } else if (typeof normalizeAndApplyWallet === 'function') {
-        normalizeAndApplyWallet(Object.assign({}, cached.wallet_cached, {
-            ts: cached.wallet_cached_at ? new Date(cached.wallet_cached_at).getTime() : Date.now(),
-            data_status: 'cached'
-        }), { source: 'storage_cache_hydrate' });
+function _parseBinanceWalletCacheRaw(raw, maxAgeMs) {
+    if (!raw) return null;
+    try {
+        var o = JSON.parse(raw);
+        if (!o || !o.ts) return null;
+        if (maxAgeMs != null && Date.now() - Number(o.ts) > maxAgeMs) return null;
+        return o;
+    } catch (e) {
+        return null;
     }
-    assetsState.wallet.status = 'ready';
-    if (typeof renderVarliklarList === 'function') renderVarliklarList();
-    if (window.renderHome && typeof window.renderHome.hideSkeleton === 'function') window.renderHome.hideSkeleton();
+}
+
+function _readBinanceWalletCache(accountId) {
+    if (!accountId) return null;
+    var id = String(accountId);
+    var sess = _parseBinanceWalletCacheRaw(sessionStorage.getItem(BINANCE_WALLET_CACHE_PREFIX + id), null);
+    if (sess && ((sess.wallet_cached && sess.wallet_cached.assets && sess.wallet_cached.assets.length) || sess.tbodyHtml)) return sess;
+    var local = _parseBinanceWalletCacheRaw(localStorage.getItem(BINANCE_WALLET_CACHE_PREFIX + id), BINANCE_WALLET_CACHE_LOCAL_MAX_AGE_MS);
+    if (local && ((local.wallet_cached && local.wallet_cached.assets && local.wallet_cached.assets.length) || local.tbodyHtml)) return local;
+    if (window.storageCache) {
+        var sc = window.storageCache.load(accountId);
+        if (sc && sc.wallet_cached && Array.isArray(sc.wallet_cached.assets) && sc.wallet_cached.assets.length) {
+            return { ts: sc.stored_at || Date.now(), wallet_cached: sc.wallet_cached, wallet_cached_at: sc.wallet_cached_at, strip: null, tbodyHtml: '' };
+        }
+    }
+    return null;
+}
+
+function applyBinanceStripSnapshot(availableUsd, botLockedUsd, lockedUsd) {
+    var stripAvailable = document.getElementById('binanceAvailableAssets');
+    var stripBotLocked = document.getElementById('binanceBotLockedAssets');
+    var stripLocked = document.getElementById('binanceLockedAssets');
+    var isTest = typeof State !== 'undefined' && State.isTestAccount;
+    function paint(el, val) {
+        if (!el || val == null || !Number.isFinite(Number(val))) return;
+        el.classList.remove('binance-assets-strip-value--loading');
+        var n = Number(val);
+        el.setAttribute('data-value', n);
+        var txt = typeof fmtUsd === 'function' ? fmtUsd(n) : ('$' + n.toFixed(2));
+        if (isTest && typeof updateTestAccountStripCell === 'function') updateTestAccountStripCell(el, n);
+        else if (typeof setTextIfChanged === 'function') setTextIfChanged(el, txt);
+        else el.textContent = txt;
+    }
+    paint(stripAvailable, availableUsd);
+    paint(stripBotLocked, botLockedUsd);
+    paint(stripLocked, lockedUsd);
+}
+
+function _applyBinanceVarliklarTableHtml(html) {
+    var tbody = document.getElementById('varliklarTableBody');
+    if (!tbody || !html || html.indexOf('data-asset') === -1) return false;
+    tbody.innerHTML = html;
+    _varliklarHasRenderedRows = true;
     return true;
 }
+
+function _persistBinanceWalletCache(accountId) {
+    if (!accountId) return;
+    try {
+        var tbody = document.getElementById('varliklarTableBody');
+        var tbodyHtml = '';
+        if (tbody && tbody.querySelector('tr[data-asset]')) {
+            tbodyHtml = tbody.innerHTML;
+            if (tbodyHtml.length > BINANCE_WALLET_TBODY_HTML_MAX) tbodyHtml = '';
+        }
+        var strip = {
+            available: testAccountReadStripUsdValue(document.getElementById('binanceAvailableAssets')),
+            botLocked: testAccountReadStripUsdValue(document.getElementById('binanceBotLockedAssets')),
+            locked: testAccountReadStripUsdValue(document.getElementById('binanceLockedAssets'))
+        };
+        var walletSnap = null;
+        if (assetsState.wallet.assets && assetsState.wallet.assets.length) {
+            walletSnap = {
+                assets: assetsState.wallet.assets,
+                total_usd: assetsState.wallet.total_usd,
+                free_usd: assetsState.wallet.free_usd,
+                locked_usd: assetsState.wallet.locked_usd,
+                bot_locked_usd: assetsState.wallet.bot_locked_usd,
+                available_usd: assetsState.wallet.available_usd,
+                keys_configured: assetsState.wallet.keys_configured !== false
+            };
+        }
+        if (!walletSnap && !tbodyHtml && !(strip.available > 0 || strip.botLocked > 0)) return;
+        var payload = {
+            ts: Date.now(),
+            strip: strip,
+            wallet_cached: walletSnap,
+            wallet_cached_at: assetsState.wallet.ts ? new Date(assetsState.wallet.ts).toISOString() : new Date().toISOString(),
+            tbodyHtml: tbodyHtml
+        };
+        sessionStorage.setItem(BINANCE_WALLET_CACHE_PREFIX + accountId, JSON.stringify(payload));
+        localStorage.setItem(BINANCE_WALLET_CACHE_PREFIX + accountId, JSON.stringify(payload));
+    } catch (e) { /* ignore */ }
+}
+
+function hydrateWalletFromStorageCache(accountId) {
+    if (!accountId) return false;
+    if (assetsState.wallet.assets && assetsState.wallet.assets.length && _varliklarTableHasRows()) return false;
+    var cached = _readBinanceWalletCache(accountId);
+    if (!cached) return false;
+    var restored = false;
+    if (cached.strip) {
+        applyBinanceStripSnapshot(cached.strip.available, cached.strip.botLocked, cached.strip.locked);
+        restored = true;
+    }
+    if (cached.tbodyHtml && _applyBinanceVarliklarTableHtml(cached.tbodyHtml)) {
+        restored = true;
+        _walletBinanceCacheHydrated = true;
+    }
+    if (cached.wallet_cached && Array.isArray(cached.wallet_cached.assets) && cached.wallet_cached.assets.length) {
+        if (window.renderHome && typeof window.renderHome.walletCachedToAssetsState === 'function') {
+            window.renderHome.walletCachedToAssetsState(cached.wallet_cached, cached.wallet_cached_at);
+        } else if (typeof normalizeAndApplyWallet === 'function') {
+            normalizeAndApplyWallet(Object.assign({}, cached.wallet_cached, {
+                ts: cached.wallet_cached_at ? new Date(cached.wallet_cached_at).getTime() : Date.now(),
+                data_status: 'cached'
+            }), { source: 'storage_cache_hydrate' });
+        }
+        assetsState.wallet.status = 'ready';
+        if (!_varliklarTableHasRows() && typeof renderVarliklarList === 'function') renderVarliklarList();
+        restored = true;
+        _walletBinanceCacheHydrated = true;
+    }
+    if (restored) {
+        if (window.renderHome && typeof window.renderHome.hideSkeleton === 'function') window.renderHome.hideSkeleton();
+        if (typeof State !== 'undefined' && State.isTestAccount && typeof updateTestAccountKpiCuzdanFromStrip === 'function') {
+            updateTestAccountKpiCuzdanFromStrip();
+        }
+    }
+    return restored;
+}
 window.hydrateWalletFromStorageCache = hydrateWalletFromStorageCache;
+window.applyBinanceStripSnapshot = applyBinanceStripSnapshot;
+window.restoreBinanceWalletEarlyFromStorage = hydrateWalletFromStorageCache;
 
 function _persistWalletStorageCache() {
     if (!State.accountId || !window.storageCache || !assetsState.wallet.assets || !assetsState.wallet.assets.length) return;
@@ -5676,6 +6293,7 @@ function _persistWalletStorageCache() {
             wallet_cached_at: assetsState.wallet.ts ? new Date(assetsState.wallet.ts).toISOString() : new Date().toISOString()
         });
     } catch (e) { /* ignore */ }
+    _persistBinanceWalletCache(State.accountId);
 }
 
 function _varliklarTableHasRows() {
@@ -5747,7 +6365,7 @@ async function pollWallet(isManualRefresh = false) {
     const empty = document.getElementById("varliklarEmpty");
     let didUpdateBody = false;
     const hasExisting = _walletHasDisplayableAssets();
-    const isFirst = (assetsState.wallet.status === 'idle' || isManualRefresh) && !hasExisting;
+    const isFirst = (assetsState.wallet.status === 'idle' || isManualRefresh) && !hasExisting && !_walletBinanceCacheHydrated;
     if (body && isFirst) { body.innerHTML = LOADING_HTML_VARLIKLAR; didUpdateBody = true; }
     if (empty) empty.style.display = 'none';
     if (isFirst && !hasExisting) assetsState.wallet.status = 'loading';
@@ -5876,7 +6494,8 @@ function renderAssetsSummary() {
     const stripAvailable = document.getElementById('binanceAvailableAssets');
     const stripBotLocked = document.getElementById('binanceBotLockedAssets');
     const stripLocked = document.getElementById('binanceLockedAssets');
-    const walletLoading = (assetsState.wallet.status === 'idle' || assetsState.wallet.status === 'loading') && !_walletHasDisplayableAssets();
+    const walletLoading = (assetsState.wallet.status === 'idle' || assetsState.wallet.status === 'loading')
+        && !_walletHasDisplayableAssets() && !_walletBinanceCacheHydrated;
     if (walletLoading) {
         const loadingText = 'Yükleniyor…';
         if (totalEl) totalEl.textContent = loadingText;
@@ -6614,6 +7233,13 @@ function updateTestAccountKpiCuzdanFromStrip() {
         var locked = typeof assetsState.wallet.locked_usd === 'number' ? assetsState.wallet.locked_usd : 0;
         total = avail + botEq + locked;
     }
+    if (!(total > 0) && _kpiCuzdanLastSpot > 0) total = _kpiCuzdanLastSpot;
+    if (!(total > 0) && State.accountId) {
+        var snap = _loadPersistedKpiCuzdanFields(State.accountId);
+        if (snap && snap.spot > 0) total = snap.spot;
+    }
+    if (!(total > 0)) return;
+    _kpiCuzdanLastSpot = total;
     var el = document.getElementById('kpiCuzdan');
     if (typeof updateKpiCuzdanBalance === 'function') updateKpiCuzdanBalance(el, total);
     if (typeof updateTestAccountCuzdanDailyPnlLive === 'function') updateTestAccountCuzdanDailyPnlLive(total);
@@ -6689,6 +7315,7 @@ function updateTestAccountCuzdanDailyPnlLive(currentTotal) {
         if (pe.style.color !== pctColor) pe.style.color = pctColor;
         pe.classList.remove('blink-positive', 'blink-negative');
     }
+    _persistKpiCuzdanSessionCache(State.accountId, total, pnlUsd, pnlPct);
 }
 
 /** Test paper: strip = tablo satırlarından canlı (Kullanılabilir qty×fiyat, Bot kilitli qty×fiyat). */
@@ -6744,6 +7371,7 @@ function updateTestAccountStripFromTable(tbody) {
     var stripLocked = document.getElementById('binanceLockedAssets');
     if (stripLocked) updateTestAccountStripCell(stripLocked, lockedSum);
     if (typeof updateTestAccountKpiCuzdanFromStrip === 'function') updateTestAccountKpiCuzdanFromStrip();
+    if (State.accountId) _persistBinanceWalletCache(State.accountId);
 }
 
 function updateTestAccountAvailableStripFromTable(tbody) {
@@ -6986,6 +7614,7 @@ function renderVarliklarList() {
             renderAssetsSummary();
         }
     }
+    if (State.accountId && list.length > 0) _persistBinanceWalletCache(State.accountId);
 }
 
 function tickVarliklarPrices() {
@@ -10910,32 +11539,39 @@ async function initDashboard() {
     State.accountId = accountId;
     State.accountCode = accountCode;
     window.__ACTIVE_ACCOUNT_ID = accountId;
+    if (typeof restoreAppbarFromSessionCache === 'function') restoreAppbarFromSessionCache(accountId, accountCode);
     if (showAdminNav) {
         try {
             sessionStorage.setItem("dashboard_admin_account_id", String(accountId));
             if (accountCode) sessionStorage.setItem("dashboard_admin_account_code", accountCode);
         } catch (e) {}
     }
-    if (typeof resetTxHistoryClientState === 'function') resetTxHistoryClientState();
+    if (_dashboardPanelsAccountId !== accountId) {
+        _botPerformanceLoaded = false;
+        _botPerformanceLastSig = '';
+        _botPerformanceLastPeriod = null;
+        if (typeof resetTxHistoryClientState === 'function') resetTxHistoryClientState();
+        _dashboardPanelsAccountId = accountId;
+    }
     if (typeof hydrateWalletFromStorageCache === 'function') hydrateWalletFromStorageCache(accountId);
     if (typeof hydrateKpisFromStorageCache === 'function') hydrateKpisFromStorageCache(accountId);
+    if (typeof hydrateDashboardPanelsFromCache === 'function') hydrateDashboardPanelsFromCache(accountId);
     var showFirstLoginModal = isFirstLogin;
     if (isFirstLogin && accountId) {
         showFirstLoginModal = await shouldShowFirstLoginModal(accountId, true);
     }
     restoreFinanceBotsFromSessionCache(accountId);
-    restoreAppbarFromSessionCache(accountId, accountCode);
     // En İyi 5 Bot: hesap hazır olur olmaz yükle (snapshot beklemeden); snapshot geldiğinde de yenilenecek
     if (typeof loadGlobalLeaderboard === 'function') loadGlobalLeaderboard();
     await loadSpotFavoritesFromStorage();
+    if (typeof prefetchMobileTradeFavTickerCache === 'function') prefetchMobileTradeFavTickerCache();
     if (typeof window.__DEBUG_DASH__ !== 'undefined' && window.__DEBUG_DASH__) console.log("[dashboard] initDashboard: accountId =", accountId, "accountCode =", accountCode);
     updateBinanceConnectionNotice();
     var activeTabName = document.querySelector('.dm-tab.is-active')?.getAttribute('data-tab');
     if (activeTabName === 'trade') {
         initMobileTradeSearch();
         if (typeof renderMobileTradeFavorites === 'function') renderMobileTradeFavorites();
-        window.intervalRegistry.stopByOwner('tab.trade');
-        window.intervalRegistry.start('tab.trade.prices', tickMobileTradeFavoritesPrices, 2000, 'tab.trade');
+        if (typeof startMobileTradeFavPriceUpdates === 'function') startMobileTradeFavPriceUpdates();
     }
     if (new URLSearchParams(window.location.search).get('debug_wallet') === '1' && typeof window.renderWalletDebugOverlay === 'function') {
         window.renderWalletDebugOverlay();
@@ -10956,7 +11592,14 @@ async function initDashboard() {
     }
     // İşlem geçmişi: ilk yüklemede sync=1 (Binance geçmişi → dosya)
     if (accountId && typeof loadTransactionHistory === 'function') {
-        loadTransactionHistory(State.txHistoryPeriod || 'daily', State.txHistoryType || 'buysell', 1, true);
+        var txHadCache = _txHistoryLoaded;
+        loadTransactionHistory(
+            State.txHistoryPeriod || 'daily',
+            State.txHistoryType || 'buysell',
+            State.txHistoryPage || 1,
+            !txHadCache,
+            { silent: txHadCache }
+        );
     }
 
     // Keep URL with account, tab, first_login/from_admin – yenilemede sayfa ve sekme aynı kalsın

@@ -69,7 +69,7 @@ _LOGS_DIR.mkdir(parents=True, exist_ok=True)
 _RUN_DIR.mkdir(parents=True, exist_ok=True)
 
 # Engine metrics for Manager v3: bounded, written every 2s
-_ENGINE_METRICS_TICK_TIMES: deque = deque(maxlen=20)  # last ~10s of tick timestamps
+_ENGINE_METRICS_TICK_TIMES: deque = deque(maxlen=5000)  # worker ticks; 60m window for manager Saatlik tick
 _ENGINE_LAST_ERROR_TS: Optional[float] = None
 _ENGINE_LAST_TICK_TS: Optional[float] = None
 _ENGINE_LAST_PENDING_LEN: int = 0
@@ -674,12 +674,14 @@ async def worker_loop():
                 except Exception:
                     pass
                 tick_rate_10s = sum(1 for t in _ENGINE_METRICS_TICK_TIMES if t >= now - 10)
+                ticks_last_60m = sum(1 for t in _ENGINE_METRICS_TICK_TIMES if t >= now - 3600)
                 last_tick_age = (now - _ENGINE_LAST_TICK_TS) if _ENGINE_LAST_TICK_TS else None
                 snap = {
                     "active_bots": n_bots,
                     "last_tick_ts": _ENGINE_LAST_TICK_TS,
                     "last_tick_age_s": round(last_tick_age, 1) if last_tick_age is not None else None,
                     "tick_rate_10s": tick_rate_10s,
+                    "ticks_last_60m": ticks_last_60m,
                     "pending_jobs": _ENGINE_LAST_PENDING_LEN,
                     "queue_len": _ENGINE_LAST_PENDING_LEN,
                     "open_orders": 0,
