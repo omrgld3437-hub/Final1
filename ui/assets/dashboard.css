@@ -208,10 +208,12 @@ h1, h2, h3, h4 {
     40% { background-color: rgba(246, 70, 93, 0.14); color: #f6465d; }
     100% { background-color: transparent; color: inherit; }
 }
-.page-dashboard .finance-bot-live-price.mevcut-bot-blink-up {
+.page-dashboard .finance-bot-live-price.mevcut-bot-blink-up,
+.page-dashboard .binance-varliklar-panel .varliklar-table--wallet .price-cell.mevcut-bot-blink-up {
     animation: mevcutBotPriceBlinkUp 0.75s ease-out 1 forwards;
 }
-.page-dashboard .finance-bot-live-price.mevcut-bot-blink-down {
+.page-dashboard .finance-bot-live-price.mevcut-bot-blink-down,
+.page-dashboard .binance-varliklar-panel .varliklar-table--wallet .price-cell.mevcut-bot-blink-down {
     animation: mevcutBotPriceBlinkDown 0.75s ease-out 1 forwards;
 }
 .page-dashboard .mevcut-botlar-table .col-pnl {
@@ -1310,7 +1312,7 @@ h1, h2, h3, h4 {
 .page-dashboard .kpi-spot-status--offline {
     color: #f6465d;
 }
-.page-dashboard .binance-varliklar-panel__title-meta .kpi-spot-status {
+.page-dashboard .binance-varliklar-panel__meta .kpi-spot-status {
     font-size: 0.65rem;
     margin-top: 0;
     margin-left: 0.35rem;
@@ -1546,6 +1548,9 @@ h1, h2, h3, h4 {
     white-space: nowrap;
     vertical-align: middle;
 }
+.page-dashboard .binance-varliklar-panel .varliklar-table--wallet .varlik-fiyat-cell {
+    min-width: 6.5rem;
+}
 .page-dashboard .varliklar-table .price-cell {
     font-weight: 600;
     font-variant-numeric: tabular-nums;
@@ -1560,7 +1565,7 @@ h1, h2, h3, h4 {
     min-width: 4.75rem;
     min-height: 1em;
     line-height: 1.2;
-    text-align: right;
+    text-align: left;
 }
 
 /* Cüzdan varlıkları – logo hücresi (ikon veya baş harfler) */
@@ -1594,49 +1599,185 @@ h1, h2, h3, h4 {
     letter-spacing: -0.02em;
 }
 
-/* Cüzdan Varlıkları paneli – viewport’a sığar, bölümde ortala */
+/* ========== Cüzdan Varlıkları — düzenli tablo (9 sütun, hizalı) ========== */
 .page-dashboard .binance-varliklar-panel {
     width: 100%;
     max-width: 100%;
     margin-top: 2rem;
+    padding: 1rem 1.25rem 1.25rem;
     box-sizing: border-box;
 }
-.page-dashboard .binance-varliklar-panel__title {
-    display: grid;
-    grid-template-columns: 1fr auto 1fr;
+.page-dashboard .binance-varliklar-panel__top {
+    margin-bottom: 0.85rem;
+    padding-bottom: 0.75rem;
+    border-bottom: 1px solid var(--ds-border, #2b3139);
+}
+.page-dashboard .binance-varliklar-panel__title-row {
+    display: flex;
     align-items: center;
-    margin: 0 0 1rem 0;
-    font-size: 1.2rem;
+    justify-content: space-between;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+}
+.page-dashboard .binance-varliklar-panel__title {
+    margin: 0;
+    font-size: 1.1rem;
     font-weight: 600;
     color: var(--ds-text-primary);
-    text-align: center;
+    line-height: 1.3;
 }
-.page-dashboard .binance-varliklar-panel__title-text {
-    grid-column: 2;
-    grid-row: 1;
+.page-dashboard .binance-varliklar-panel__hint {
+    margin: 0.35rem 0 0;
+    font-size: 0.8rem;
+    color: var(--ds-text-secondary);
+    line-height: 1.4;
 }
-.page-dashboard .binance-varliklar-panel__title-meta {
-    grid-column: 3;
-    grid-row: 1;
-    justify-self: start;
+.page-dashboard .binance-varliklar-panel__meta {
     display: inline-flex;
     align-items: center;
     flex-wrap: wrap;
     gap: 0.35rem;
     font-size: 0.75rem;
-    font-weight: normal;
-    line-height: 1.25;
-    min-height: 1.25rem;
+}
+.page-dashboard .binance-varliklar-panel__badge {
+    padding: 0.15rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    border: 1px solid var(--ds-border, #2b3139);
 }
 .page-dashboard .binance-varliklar-panel__badge--stale {
     color: #f0b90b;
+    border-color: rgba(240, 185, 11, 0.35);
 }
 .page-dashboard .binance-varliklar-panel__badge--updating {
-    color: var(--ds-text-tertiary);
+    color: var(--ds-text-secondary);
+}
+.page-dashboard .binance-varliklar-panel__body {
+    margin: 0;
 }
 .page-dashboard .binance-varliklar-panel .varliklar-table-wrap {
-    overflow-x: auto;
     width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+}
+.page-dashboard .binance-varliklar-panel .varliklar-table--wallet {
+    width: 100%;
+    table-layout: fixed;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+}
+/* Varlık + 6 veri sütunu + işlem */
+.page-dashboard .binance-varliklar-panel .varliklar-col--asset { width: 15%; }
+.page-dashboard .binance-varliklar-panel .varliklar-col--data { width: 10%; }
+.page-dashboard .binance-varliklar-panel .varliklar-col--act { width: 18%; }
+.page-dashboard .binance-varliklar-panel .varliklar-table--wallet .varliklar-th,
+.page-dashboard .binance-varliklar-panel .varliklar-table--wallet tbody td {
+    padding: 0.5rem;
+    text-align: left;
+    vertical-align: middle;
+}
+.page-dashboard .binance-varliklar-panel .varliklar-table--wallet .varliklar-th {
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: var(--ds-text-secondary);
+    background: var(--ds-bg-tertiary, #2b3139);
+    border-bottom: 1px solid var(--ds-border, #2b3139);
+    white-space: nowrap;
+    line-height: 1.25;
+}
+.page-dashboard .binance-varliklar-panel .varliklar-table--wallet tbody td {
+    border-bottom: 1px solid var(--ds-border, #2b3139);
+    line-height: 1.35;
+}
+.page-dashboard .binance-varliklar-panel .varliklar-table--wallet tbody tr:hover {
+    background: rgba(255, 255, 255, 0.02);
+}
+.page-dashboard .binance-varliklar-panel .varlik-asset {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    min-width: 0;
+}
+.page-dashboard .binance-varliklar-panel .varlik-asset .varlik-logo {
+    flex: 0 0 32px;
+    width: 32px;
+    height: 32px;
+}
+.page-dashboard .binance-varliklar-panel .varlik-asset-text {
+    min-width: 0;
+    overflow: hidden;
+}
+.page-dashboard .binance-varliklar-panel .varlik-asset-text .varlik-symbol {
+    font-weight: 700;
+    color: var(--ds-text-primary);
+    line-height: 1.25;
+}
+.page-dashboard .binance-varliklar-panel .varlik-asset-text .varlik-name {
+    margin-top: 0.1rem;
+    font-size: 0.78rem;
+    color: var(--ds-text-secondary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.page-dashboard .binance-varliklar-panel .varlik-fiyat-cell {
+    white-space: nowrap;
+}
+.page-dashboard .binance-varliklar-panel .varlik-fiyat-stack {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.12rem;
+}
+.page-dashboard .binance-varliklar-panel .varlik-fiyat-stack .price-cell {
+    display: inline-block;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum";
+    padding: 2px 5px;
+    border-radius: 3px;
+    box-sizing: border-box;
+    line-height: 1.3;
+    vertical-align: middle;
+}
+.page-dashboard .binance-varliklar-panel .varlik-fiyat-stack .change-pct {
+    font-size: 0.78rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}
+.page-dashboard .binance-varliklar-panel .varlik-num-cell {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum";
+    color: var(--ds-text-primary);
+    white-space: nowrap;
+}
+.page-dashboard .binance-varliklar-panel .varlik-num-cell.value-cell {
+    font-weight: 600;
+}
+.page-dashboard .binance-varliklar-panel .varliklar-th--act,
+.page-dashboard .binance-varliklar-panel .varlik-card-actions {
+    text-align: center;
+}
+.page-dashboard .binance-varliklar-panel .varlik-card-actions {
+    overflow: hidden;
+}
+.page-dashboard .binance-varliklar-panel .varlik-card-actions .btn-al-sat-wrap {
+    display: inline-flex;
+    flex-wrap: nowrap;
+    justify-content: center;
+    gap: 0.5rem;
+    max-width: 100%;
+    margin: 0 auto;
+}
+.page-dashboard .binance-varliklar-panel .varliklar-empty {
+    margin-top: 1rem;
+    padding: 1.5rem;
+    text-align: center;
+    color: var(--ds-text-secondary);
+}
+.page-dashboard .binance-varliklar-panel .varliklar-unpriced-notice {
+    margin-top: 0.75rem;
 }
 .page-dashboard .varliklar-table-wrap {
     overflow-x: auto;
@@ -2403,6 +2544,21 @@ h1, h2, h3, h4 {
     cursor: pointer;
 }
 
+.page-dashboard .global-leaderboard-view-params-btn {
+    background: #1a1f26 !important;
+    color: var(--ds-text-primary, #eaecef) !important;
+    border: 1px solid #3d4550 !important;
+    font-weight: 600;
+}
+.page-dashboard .global-leaderboard-view-params-btn:hover {
+    background: #252b33 !important;
+    border-color: #4a5563 !important;
+    color: #fff !important;
+}
+.page-dashboard .global-leaderboard-view-params-btn:active {
+    background: #14181d !important;
+}
+
 .global-leaderboard-apply-btn {
     background: var(--ds-accent, #f0b90b) !important;
     color: #000 !important;
@@ -2658,7 +2814,10 @@ body.tab-trade-active #transactionHistoryPanel,
 body.tab-trade-active #globalLeaderboardPanel,
 body.tab-trade-active #globalLeaderboardPanelBots,
 body.tab-trade-active .global-leaderboard-panel,
-body.tab-bots-active #transactionHistoryPanel {
+body.tab-bots-active #transactionHistoryPanel,
+body.tab-bots-active #tabBinance .mevcut-botlar-panel,
+body.tab-bots-active #tabBinance #botPerformancePanel,
+body.tab-bots-active #tabBinance #globalLeaderboardPanel {
     display: none !important;
 }
 
@@ -4318,29 +4477,12 @@ body.tab-bots-active #transactionHistoryPanel {
         box-sizing: border-box;
         overflow: hidden;
     }
-    .page-dashboard .binance-varliklar-panel__title {
-        display: flex;
-        flex-wrap: wrap;
-        align-items: center;
-        gap: 0.35rem;
-        font-size: 1.1rem;
-        font-weight: 600;
-        color: var(--ds-text-primary);
-        margin: 0 0 0.75rem 0;
-        text-align: left;
+    .page-dashboard .binance-varliklar-panel__title-row {
+        flex-direction: column;
+        align-items: flex-start;
     }
-    .page-dashboard .binance-varliklar-panel__title-text {
-        flex: 0 0 auto;
-    }
-    .page-dashboard .binance-varliklar-panel__title-meta {
-        flex: 0 0 auto;
-        display: inline-flex;
-        align-items: center;
-        flex-wrap: wrap;
-        gap: 0.35rem;
-        font-size: 0.75rem;
-        font-weight: normal;
-        min-height: 1.25rem;
+    .page-dashboard .binance-varliklar-panel__meta {
+        width: 100%;
     }
     .page-dashboard .binance-varliklar-panel .varliklar-table-wrap {
         width: 100%;
@@ -4371,21 +4513,17 @@ body.tab-bots-active #transactionHistoryPanel {
         margin-bottom: 0.75rem;
         box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
     }
-    .page-dashboard .binance-varliklar-panel .varliklar-table tbody tr[data-asset] > td:first-child,
-    .page-dashboard .binance-varliklar-panel .varliklar-table tbody tr[data-asset] > td:nth-child(2) {
-        display: flex;
-        flex-direction: row;
-        align-items: center;
-        gap: 0.75rem;
+    .page-dashboard .binance-varliklar-panel .varliklar-table tbody tr[data-asset] > td.varlik-asset-cell {
+        display: block;
         padding: 0 0 0.75rem 0 !important;
         margin-bottom: 0.75rem;
         border-bottom: 1px solid var(--ds-border);
+        text-align: left;
     }
-    .page-dashboard .binance-varliklar-panel .varliklar-table tbody tr[data-asset] > td:nth-child(2) {
-        flex: 1;
-        margin-bottom: 0;
-        padding-bottom: 0 !important;
-        border-bottom: none;
+    .page-dashboard .binance-varliklar-panel .varliklar-table tbody tr[data-asset] .varlik-asset {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
     }
     .page-dashboard .binance-varliklar-panel .varliklar-table tbody tr[data-asset] > td[data-label] {
         display: flex !important;

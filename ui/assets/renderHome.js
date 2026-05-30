@@ -152,10 +152,16 @@
     }
 
     function showUpdatingBadge(show) {
+        if (typeof window.setWalletPanelUpdating === 'function') {
+            window.setWalletPanelUpdating(!!show);
+            return;
+        }
         var badge = document.getElementById('flashHomeUpdatingBadge');
         if (!badge) return;
         badge.hidden = !show;
         badge.setAttribute('aria-hidden', show ? 'false' : 'true');
+        var staleEl = document.getElementById('bnAssetsStaleBadge');
+        if (staleEl && show) staleEl.hidden = true;
     }
 
     return {

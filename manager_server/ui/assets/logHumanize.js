@@ -21,6 +21,8 @@
     'app.botengine.adapters.binance_adapter': 'Binance adapter',
     'app.botengine.health_watch': 'Bot sağlık izleme',
     'app.botengine.intent_ledger': 'Emir intent defteri',
+    'app.api.spot_routes': 'Spot API (Al/Sat modal)',
+    'app.services.spot_engine': 'Spot engine',
     'uvicorn.error': 'Web sunucusu',
     'uvicorn.access': 'Web erişim günlüğü'
   };
@@ -915,6 +917,62 @@
       }
     },
     {
+      test: function (msg) { return /Spot quick_data error for/i.test(msg); },
+      apply: function (ctx) {
+        var m = (ctx.message || ctx.raw || '').match(/Spot quick_data error for\s+(\S+):\s*(.+)$/i);
+        var sym = m ? m[1] : (ctx.params.symbol || '—');
+        var detail = m ? m[2].trim() : technicalDetail(ctx);
+        var transient = /timeout|timed out|ConnectError|Connection refused|circuit breaker|retry budget|nodename nor servname/i.test(detail);
+        return {
+          konu: 'Al/Sat modal verisi alınamadı',
+          sebep: sym + ' için quick_data (fiyat, filtre, bakiye) hatası: ' + detail.slice(0, 200),
+          etki: 'Modal sıfırlı/varsayılan değer döner; sayfa veya modal yenilenince tekrar denenir.',
+          oneri: transient
+            ? 'Geçici ağ veya Binance erişim sorunu; birkaç dakika bekleyin. Sürekli tekrarlıyorsa API anahtarı ve IP whitelist kontrol edin.'
+            : 'Hesap API anahtarı, Binance bağlantısı ve sembol adını kontrol edin; aynı anda binance_spot uyarıları varsa onlara bakın.'
+        };
+      }
+    },
+    {
+      test: function (msg) { return /get_quick_data error for/i.test(msg); },
+      apply: function (ctx) {
+        var m = (ctx.message || ctx.raw || '').match(/get_quick_data error for\s+(\S+):\s*(.+)$/i);
+        var sym = m ? m[1] : '—';
+        var detail = m ? m[2].trim() : technicalDetail(ctx);
+        return {
+          konu: 'Spot engine — quick_data hatası',
+          sebep: sym + ' için iç spot veri toplama başarısız: ' + detail.slice(0, 200),
+          etki: 'Fiyat veya bakiye 0 gösterilebilir; spot_routes varsayılan yanıt döner.',
+          oneri: 'Binance public/signed erişimini ve hesap anahtarlarını kontrol edin; geçici ağ hatasıysa kısa süre sonra düzelir.'
+        };
+      }
+    },
+    {
+      test: function (msg) { return /spot_order_403/i.test(msg); },
+      apply: function (ctx) {
+        var p = ctx.params || {};
+        var acct = p.account_id || '—';
+        return {
+          konu: 'Spot emir — hesap erişimi reddedildi (403)',
+          sebep: 'Oturumdaki kullanıcı account_id=' + acct + ' hesabına spot emir gönderemiyor (yetki veya hesap uyuşmazlığı).',
+          etki: 'Emir borsaya iletilmedi.',
+          oneri: 'Doğru hesapla giriş yaptığınızı doğrulayın; oturumu yenileyin (çıkış/giriş); paylaşımlı hesap ve admin yetkilerini kontrol edin.'
+        };
+      }
+    },
+    {
+      test: function (msg) { return /Spot order validation error/i.test(msg); },
+      apply: function (ctx) {
+        var detail = technicalDetail(ctx);
+        return {
+          konu: 'Spot emir doğrulama hatası',
+          sebep: 'Gönderilen emir parametreleri geçersiz: ' + (detail ? detail.slice(0, 160) : 'doğrulama kuralı ihlali'),
+          etki: 'Emir borsaya iletilmedi.',
+          oneri: 'Minimum tutar (notional), lot/step size ve kullanılabilir bakiyeyi kontrol edin; miktarı düzeltip tekrar deneyin.'
+        };
+      }
+    },
+    {
       test: function (msg) { return /ValueError|TypeError|AttributeError|KeyError|IndexError|RuntimeError/i.test(msg); },
       apply: function (ctx) {
         var msg = ctx.message || ctx.raw || '';
@@ -959,12 +1017,17 @@
   }
 
   function genericFallback(ctx) {
-    var isErr = /ERROR|CRITICAL|Exception|Traceback/i.test(ctx.raw);
+    var level = ctx.level ? String(ctx.level).toUpperCase() : '';
+    var isErr = level
+      ? (level === 'ERROR' || level === 'CRITICAL')
+      : (/ERROR|CRITICAL|Traceback/i.test(ctx.raw) && !/WARNING/i.test(ctx.raw));
     var mod = ctx.module || '';
     var msg = ctx.message || ctx.raw || '';
     var konu = isErr ? 'Sistem hatası' : 'Sistem uyarısı';
     if (/app\.botengine\.execution/i.test(mod)) {
       konu = isErr ? 'Bot emir yürütme hatası' : 'Bot emir yürütme uyarısı';
+    } else if (/app\.api\.spot_routes/i.test(mod)) {
+      konu = isErr ? 'Spot API hatası' : 'Spot API uyarısı';
     } else if (/binance_spot|binance_adapter/i.test(mod)) {
       konu = 'Binance API uyarısı';
     } else if (/botengine/i.test(mod)) {

@@ -261,7 +261,9 @@ async def get_spot_quick_data(
                 now = time.time()
                 if now - _ERROR_LOG_LAST.get(sym, 0) > _ERROR_LOG_INTERVAL:
                     _ERROR_LOG_LAST[sym] = now
-                    logger.warning("Spot quick_data error for %s: %s", sym, e)
+                    from app.services.binance_spot import is_transient_upstream_error
+                    log_fn = logger.debug if is_transient_upstream_error(e) else logger.warning
+                    log_fn("Spot quick_data error for %s: %s", sym, e)
             return _default_quick_data_response(sym)
         finally:
             _SPOT_INFLIGHT.pop(key, None)

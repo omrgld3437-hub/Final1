@@ -62,7 +62,7 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
     <link rel="stylesheet" href="/ui/assets/theme.css?v=clean1">
     <link rel="stylesheet" href="/ui/assets/ui.css?v=clean1">
     <link rel="stylesheet" href="/ui/assets/design.css?v=clean1">
-    <link rel="stylesheet" href="/ui/assets/dashboard.css?v=mevcut-botlar-align5">
+    <link rel="stylesheet" href="/ui/assets/dashboard.css?v=varlik-blink-bot1">
     <link rel="stylesheet" href="/ui/assets/binance-colors.css?v=bin1">
     <link rel="stylesheet" href="/ui/assets/blink.css?v=1">
     <link rel="stylesheet" href="/ui/assets/dashboard-login-theme.css?v=1">
@@ -449,46 +449,50 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
 
             <!-- Cüzdan varlıkları tablosu (1 USD üstü, Al/Sat ortak modal) -->
             <div class="panel binance-varliklar-panel">
-                <h3 class="binance-varliklar-panel__title">
-                    <span class="binance-varliklar-panel__title-text">Cüzdan Varlıkları</span>
-                    <span class="binance-varliklar-panel__title-meta">
-                        <span id="bnWalletLiveBadge" class="kpi-value-sub kpi-spot-status" hidden></span>
-                        <span id="bnAssetsStaleBadge" class="binance-varliklar-panel__badge binance-varliklar-panel__badge--stale" hidden>Güncel değil</span>
-                        <span id="flashHomeUpdatingBadge" class="binance-varliklar-panel__badge binance-varliklar-panel__badge--updating" hidden aria-hidden="true">Güncelleniyor…</span>
-                    </span>
-                </h3>
-                <div id="flashHomeWalletContent"><div class="varliklar-table-wrap">
-                <table class="varliklar-table">
-                    <thead>
-                        <tr style="border-bottom: 1px solid var(--ds-border); text-align: left;">
-                            <th style="padding: 0.75rem; font-size: 0.8rem; font-weight: 600; color: var(--ds-text-secondary); width: 48px;">Logo</th>
-                            <th style="padding: 0.75rem; font-size: 0.8rem; font-weight: 600; color: var(--ds-text-secondary);">Sembol</th>
-                            <th style="padding: 0.75rem; font-size: 0.8rem; font-weight: 600; color: var(--ds-text-secondary); text-align: right;">Fiyat</th>
-                            <th style="padding: 0.75rem; font-size: 0.8rem; font-weight: 600; color: var(--ds-text-secondary); text-align: right;" title="Toplam miktar">Toplam</th>
-                            <th style="padding: 0.75rem; font-size: 0.8rem; font-weight: 600; color: var(--ds-text-secondary); text-align: right;" title="Bot bakiyelerinde kilitli">Bot kilitli</th>
-                            <th style="padding: 0.75rem; font-size: 0.8rem; font-weight: 600; color: var(--ds-text-secondary); text-align: right;" title="Açık emirlerde kilitli">Kilitli</th>
-                            <th style="padding: 0.75rem; font-size: 0.8rem; font-weight: 600; color: var(--ds-text-secondary); text-align: right;" title="Manuel işlem için kullanılabilir">Kullanılabilir</th>
-                            <th style="padding: 0.75rem; font-size: 0.8rem; font-weight: 600; color: var(--ds-text-secondary); text-align: right;">Değer</th>
-                            <th style="padding: 0.75rem; font-size: 0.8rem; font-weight: 600; color: var(--ds-text-secondary); text-align: right;" title="Portföyümüze dağılım yüzdesi">Dağılım %</th>
-                            <th style="padding: 0.75rem; font-size: 0.8rem; font-weight: 600; color: var(--ds-text-secondary); text-align: center;">Alış / Satış</th>
-                        </tr>
-                    </thead>
-                    <tbody id="varliklarTableBody">
-                    </tbody>
-                </table>
+                <div class="binance-varliklar-panel__top">
+                    <div class="binance-varliklar-panel__title-row">
+                        <h3 class="binance-varliklar-panel__title">Cüzdan Varlıkları</h3>
+                        <div class="binance-varliklar-panel__meta" id="binanceVarliklarPanelMeta">
+                            <span id="bnWalletLiveBadge" class="binance-varliklar-panel__live kpi-value-sub kpi-spot-status" hidden></span>
+                            <span id="bnAssetsStaleBadge" class="binance-varliklar-panel__badge binance-varliklar-panel__badge--stale" hidden>Güncel değil</span>
+                            <span id="flashHomeUpdatingBadge" class="binance-varliklar-panel__badge binance-varliklar-panel__badge--updating" hidden aria-hidden="true">Güncelleniyor…</span>
+                        </div>
+                    </div>
+                    <p class="binance-varliklar-panel__hint">Spot bakiye · 1 USDT altı gizli</p>
                 </div>
-                <div id="varliklarEmpty" class="varliklar-empty">Varlık bulunamadı veya 1 USDT altı varlıklar gizlidir.</div>
-                <div id="varliklarUnpricedNotice" class="varliklar-unpriced-notice"></div>
-                </div></div>
+                <div id="flashHomeWalletContent" class="binance-varliklar-panel__body">
+                    <div class="varliklar-table-wrap">
+                        <table class="varliklar-table varliklar-table--wallet" aria-label="Cüzdan varlıkları">
+                            <colgroup>
+                                <col class="varliklar-col varliklar-col--asset" />
+                                <col class="varliklar-col varliklar-col--data" span="6" />
+                                <col class="varliklar-col varliklar-col--act" />
+                            </colgroup>
+                            <thead>
+                                <tr>
+                                    <th scope="col" class="varliklar-th varliklar-th--asset">Varlık</th>
+                                    <th scope="col" class="varliklar-th varliklar-th--num">Fiyat</th>
+                                    <th scope="col" class="varliklar-th varliklar-th--num">Toplam</th>
+                                    <th scope="col" class="varliklar-th varliklar-th--num">Bot kilitli</th>
+                                    <th scope="col" class="varliklar-th varliklar-th--num">Kilitli</th>
+                                    <th scope="col" class="varliklar-th varliklar-th--num">Kullanılabilir</th>
+                                    <th scope="col" class="varliklar-th varliklar-th--num">Değer</th>
+                                    <th scope="col" class="varliklar-th varliklar-th--act">Al / Sat</th>
+                                </tr>
+                            </thead>
+                            <tbody id="varliklarTableBody">
+                            </tbody>
+                        </table>
+                    </div>
+                    <div id="varliklarEmpty" class="varliklar-empty">Varlık bulunamadı veya 1 USDT altı varlıklar gizlidir.</div>
+                    <div id="varliklarUnpricedNotice" class="varliklar-unpriced-notice"></div>
+                </div>
             </div>
 
-            <!-- Mevcut Botlar (Anasayfa altında – Botlar sekmesiyle aynı veri) -->
+            <!-- Mevcut Botlar (Anasayfa önizleme; + Bot Oluştur yalnızca Botlar sekmesinde) -->
             <div class="panel mevcut-botlar-panel" style="margin-bottom: 2rem; margin-top: 2rem; width: 100%; max-width: 100%;">
-                <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1rem;">
-                    <div style="display: flex; align-items: center; gap: 0.75rem;">
-                        <h3 style="margin: 0; font-size: 1.2rem; font-weight: 600; color: var(--ds-text-primary);">Mevcut Botlar</h3>
-                        <button type="button" class="btn primary" id="btnCreateBotBotsTab" onclick="window.openCreateBotModal()" style="padding: 8px 16px; font-weight: 600; background: var(--ds-accent); color: #000;">+ Bot Oluştur</button>
-                    </div>
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                    <h3 style="margin: 0; font-size: 1.2rem; font-weight: 600; color: var(--ds-text-primary);">Mevcut Botlar</h3>
                     <button type="button" id="btnSortBotsBy" class="btn btn-sm profit-sort-btn" title="Kâra göre sırala: oran (%) veya tutar ($)" aria-label="Kâra göre sırala">
                         <span id="btnSortBotsByIcon" aria-hidden="true">⇅</span>
                     </button>
@@ -597,14 +601,17 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
                     var totals = perf.data.totals || {};
                     var pnl = totals.pnl_usd != null ? Number(totals.pnl_usd) : (perf.data.pnl_usd != null ? Number(perf.data.pnl_usd) : 0);
                     var fees = totals.fees_usd != null ? Number(totals.fees_usd) : 0;
-                    var rangeEl = document.getElementById('botPerformanceRange');
-                    var pnlEl = document.getElementById('botPerfTotalPnl');
-                    var feesEl = document.getElementById('botPerfTotalFees');
-                    if (rangeEl && perf.data.date_from) {
-                        rangeEl.textContent = 'Başlangıç: ' + String(perf.data.date_from).slice(0, 10) + ' · Bitiş: ' + String(perf.data.date_to || perf.data.date_from).slice(0, 10);
-                    }
-                    if (pnlEl) pnlEl.textContent = fmtUsd(pnl);
-                    if (feesEl) feesEl.textContent = fmtUsdPlain(fees);
+                    var rangeTxt = perf.data.date_from
+                        ? ('Başlangıç: ' + String(perf.data.date_from).slice(0, 10) + ' · Bitiş: ' + String(perf.data.date_to || perf.data.date_from).slice(0, 10))
+                        : '';
+                    ['', 'Bots'].forEach(function (suf) {
+                        var rangeEl = document.getElementById('botPerformanceRange' + suf);
+                        var pnlEl = document.getElementById('botPerfTotalPnl' + suf);
+                        var feesEl = document.getElementById('botPerfTotalFees' + suf);
+                        if (rangeEl && rangeTxt) rangeEl.textContent = rangeTxt;
+                        if (pnlEl) pnlEl.textContent = fmtUsd(pnl);
+                        if (feesEl) feesEl.textContent = fmtUsdPlain(fees);
+                    });
                 }
                 var txPeriod = sessionStorage.getItem('dashboard_tx_period_' + aid) || 'daily';
                 var txType = sessionStorage.getItem('dashboard_tx_type_' + aid) || 'buysell';
@@ -630,8 +637,57 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
 
         </div>
 
-        <!-- Tab Content: Botlar -->
-        <div id="tabBots" class="dm-tab-content" style="display: none;"></div>
+        <!-- Tab Content: Botlar (Bot oluştur + Mevcut Botlar) -->
+        <div id="tabBots" class="dm-tab-content" style="display: none;">
+            <div style="display: flex; justify-content: flex-end; align-items: center; margin-bottom: 1rem; width: 100%;">
+                <button type="button" class="btn primary" id="btnCreateBotBotsTab" onclick="window.openCreateBotModal()" style="padding: 8px 16px; font-weight: 600; background: var(--ds-accent); color: #000;">+ Bot Oluştur</button>
+            </div>
+            <div class="panel mevcut-botlar-panel" style="margin-bottom: 2rem; margin-top: 0; width: 100%; max-width: 100%;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                    <h3 style="margin: 0; font-size: 1.2rem; font-weight: 600; color: var(--ds-text-primary);">Mevcut Botlar</h3>
+                    <button type="button" id="btnSortBotsByBotsTab" class="btn btn-sm profit-sort-btn" title="Kâra göre sırala: oran (%) veya tutar ($)" aria-label="Kâra göre sırala">
+                        <span id="btnSortBotsByBotsTabIcon" aria-hidden="true">⇅</span>
+                    </button>
+                </div>
+                <div id="financeBotsListBots" class="mevcut-botlar-list" style="display: flex; flex-direction: column; gap: 0; width: 100%;">
+                    <div style="text-align: center; padding: 2rem; color: var(--ds-text-secondary);">Yükleniyor...</div>
+                </div>
+            </div>
+
+            <!-- En İyi 5 Bot (Anasayfa ile aynı veri) -->
+            <div id="globalLeaderboardPanelBots" class="panel global-leaderboard-panel" style="margin-top: 2rem; margin-bottom: 0; width: 100%; max-width: 100%; display: none;">
+                <h3 style="margin: 0 0 1rem 0; font-size: 1.2rem; font-weight: 600; color: var(--ds-text-primary);">En İyi 5 Bot</h3>
+                <div id="globalLeaderboardListBots" class="global-leaderboard-list" style="display: flex; flex-direction: column; gap: 0.75rem;">
+                    <div style="text-align: center; color: var(--ds-text-secondary); padding: 1rem;">Yükleniyor…</div>
+                </div>
+            </div>
+
+            <!-- Bot Performansı (Anasayfa ile aynı veri) -->
+            <div id="botPerformancePanelBots" class="panel bot-performance-panel" style="margin-top: 2rem; margin-bottom: 2rem; width: 100%; max-width: 100%;">
+                <div class="bot-performance-header">
+                    <h3 class="bot-performance-title">Bot Performansı</h3>
+                    <span id="botPerformanceRangeBots" class="bot-performance-range"></span>
+                </div>
+                <div class="bot-performance-buttons">
+                    <button type="button" class="btn bot-perf-btn" data-period="daily">Günlük</button>
+                    <button type="button" class="btn bot-perf-btn" data-period="weekly">Haftalık</button>
+                    <button type="button" class="btn bot-perf-btn" data-period="monthly">Aylık</button>
+                    <button type="button" class="btn bot-perf-btn active" data-period="all">Genel</button>
+                </div>
+                <div id="botPerformanceSummaryBots" class="bot-performance-summary">
+                    <div class="bot-perf-summary-row bot-perf-summary-row--single">
+                        <div class="bot-perf-summary-card bot-perf-summary-card--primary">
+                            <div id="botPerfPnlLabelBots" class="bot-perf-summary-label">K/Z (komisyon hariç)</div>
+                            <div id="botPerfTotalPnlBots" class="bot-perf-summary-value">—</div>
+                        </div>
+                        <div class="bot-perf-summary-card">
+                            <div id="botPerfFeesLabelBots" class="bot-perf-summary-label">Komisyon</div>
+                            <div id="botPerfTotalFeesBots" class="bot-perf-summary-value bot-perf-summary-value--muted">—</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
 
         <!-- Tab Content: Finansal Hesap (Portföy Yönetimi) -->
         <div id="tabFinance" class="dm-tab-content" style="display: none;">
@@ -1968,7 +2024,7 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
     <script src="/ui/assets/renderHome.js?v=wallet-stable6"></script>
     <script src="/ui/assets/homeFlash.js?v=wallet-stable4"></script>
     <!-- Main dashboard (refactored) -->
-    <script src="/ui/assets/dashboard.js?v=dashboard-panels-flash1"></script>
+    <script src="/ui/assets/dashboard.js?v=tab-bots-panels1"></script>
     <script src="/ui/assets/ticker.js?v=mobile1" defer></script>
 </body>
 </html>

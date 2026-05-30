@@ -187,6 +187,7 @@
             var data = res && res.data;
             if (!ok || !data) {
                 renderHome.showUpdatingBadge(false);
+                if (typeof window.markWalletLiveFetchFailed === 'function') window.markWalletLiveFetchFailed();
                 return;
             }
             if (data.inflight) {
