@@ -210,9 +210,14 @@ def compute_grid_profit_view(
 
     sell_fired = state.get("sell_grid_fired") or []
     buy_fired = state.get("buy_grid_fired") or []
-    cycle_side = state.get("cycle_grid_side")
-    if cycle_side not in ("SELL", "BUY"):
-        cycle_side = None
+    try:
+        from app.botengine.strategies.dca_grid_trailing import infer_cycle_grid_side
+
+        cycle_side = infer_cycle_grid_side(state)
+    except Exception:
+        cycle_side = state.get("cycle_grid_side")
+        if cycle_side not in ("SELL", "BUY"):
+            cycle_side = None
     meta["cycle_grid_side"] = cycle_side
     sell_grids_enabled = cycle_side != "BUY"
     buy_grids_enabled = cycle_side != "SELL"

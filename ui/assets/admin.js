@@ -185,10 +185,22 @@ function adminAuthHeaders() {
     return h;
 }
 
+function adminFetchTransientStatus(status) {
+    return status === 499 || status === 502 || status === 503 || status === 504;
+}
+
+function adminFetchTransientError(err) {
+    if (!err) return false;
+    if (err.name === 'AbortError') return true;
+    var msg = String(err.message || '');
+    return /\bHTTP (499|502|503|504)\b/.test(msg);
+}
+
 function adminFetchJSON(url, opts) {
     opts = opts || {};
     var tab = opts.tab || '';
     var signal = opts.signal || null;
+    var attempt = opts._attempt || 0;
     var requestId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : 'r' + Date.now();
     var headers = Object.assign({}, adminAuthHeaders());
     headers['X-Request-ID'] = requestId;
@@ -197,7 +209,16 @@ function adminFetchJSON(url, opts) {
         .then(function (r) {
             var dur = Math.round(performance.now() - start);
             if (window.__ADMIN_DEBUG && console && console.debug) console.debug('[ADMIN_PERF] FETCH_END', { tab: tab, url: url, status: r.status, duration_ms: dur, request_id: requestId });
-            if (!r.ok) throw new Error('HTTP ' + r.status);
+            if (!r.ok) {
+                if (adminFetchTransientStatus(r.status) && attempt < 2 && !(signal && signal.aborted)) {
+                    return new Promise(function (resolve) {
+                        setTimeout(resolve, 350 + attempt * 400);
+                    }).then(function () {
+                        return adminFetchJSON(url, Object.assign({}, opts, { _attempt: attempt + 1 }));
+                    });
+                }
+                throw new Error('HTTP ' + r.status);
+            }
             return r.json();
         });
 }
@@ -1334,7 +1355,15 @@ function loadTab(tabKey) {
     }).catch(function (err) {
         if (state.currentTab !== tabKey) return;
         if (window.__ADMIN_DEBUG && console && console.error) console.error('[ADMIN] loadTab error', tabKey, err);
-        if (tabKey === 'accounts' && window.Toast) window.Toast.error('Hesaplar yüklenemedi: ' + (err && err.message ? err.message : ''));
+        if (tabKey === 'accounts' && window.Toast) {
+            if (adminFetchTransientError(err)) {
+                var hasAccountsCache = AdminStore.cache.accounts && AdminStore.cache.accounts.data;
+                if (hasAccountsCache) return;
+                window.Toast.warning('Hesaplar yenilenemedi (bağlantı kesildi). Tekrar deneniyor…');
+                return;
+            }
+            window.Toast.error('Hesaplar yüklenemedi: ' + (err && err.message ? err.message : ''));
+        }
     });
 }
 

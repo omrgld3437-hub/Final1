@@ -9,6 +9,32 @@
 
 const API_BASE_URL = window.location.origin || 'http://127.0.0.1:8000';
 const DEFAULT_TIMEOUT = 15000; // 15s – dashboard/summary and account meta can be slow; avoid 499/timeout
+const RATE_LIMIT_TOAST_DEBOUNCE_MS = 30000;
+var _lastRateLimitToastAt = 0;
+
+/** FastAPI detail: object { message } or plain string. */
+function extractHttpDetailMessage(data) {
+    if (!data) return null;
+    var d = data.detail;
+    if (typeof d === 'string' && d.trim()) return d.trim();
+    if (d && typeof d === 'object' && d.message) return String(d.message);
+    if (data.message) return String(data.message);
+    return null;
+}
+
+function maybeShowRateLimitToast(message, options) {
+    if (options && options.suppressRateLimitToast) return;
+    if (typeof window.Toast === 'undefined' || !window.Toast.warning) return;
+    var now = Date.now();
+    if (now - _lastRateLimitToastAt < RATE_LIMIT_TOAST_DEBOUNCE_MS) return;
+    _lastRateLimitToastAt = now;
+    var msg = (message && String(message).trim())
+        || 'Çok fazla istek. Lütfen bekleyin.';
+    try { window.Toast.warning(msg); } catch (e) {}
+    if (window.__DEBUG_NET__) {
+        console.warn('[apiClient] 429 rate limit:', msg);
+    }
+}
 
 /** Global concurrency limiter: max 2 active HTTP requests at once */
 const MAX_CONCURRENT_REQUESTS = 2;
@@ -379,9 +405,9 @@ async function apiClient(endpoint, options = {}) {
                     try { window.Toast.warning(d403.message || 'Binance API anahtarı veya IP izni geçersiz. Ayarlar üzerinden kontrol edin.'); } catch (e) {}
                 }
             }
-            // 429 RATE_LIMITED
-            if (response.status === 429 && typeof window.Toast !== 'undefined' && window.Toast.warning) {
-                try { window.Toast.warning((data?.detail && data.detail.message) || data?.message || 'Çok fazla istek. Lütfen bekleyin.'); } catch (e) {}
+            // 429 RATE_LIMITED (FastAPI detail may be string — show server text; debounce spam)
+            if (response.status === 429) {
+                maybeShowRateLimitToast(extractHttpDetailMessage(data), options);
             }
             // Sunucu kapalı/erişilemez: 502, 503, 504 → login'e atma, toast + sunucu geri gelince kontrol
             if (response.status === 503 || response.status === 502 || response.status === 504) {

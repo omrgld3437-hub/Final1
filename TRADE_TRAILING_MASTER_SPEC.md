@@ -601,7 +601,7 @@ export BOT_ENGINE_KILL_SWITCH=1
 | 2 | Token | secrets.token_urlsafe(32) | — | — |
 | 3 | _session_set(token, user_id, account_id, is_admin) | In-memory _sessions | — | — |
 | 4 | Response | Set-Cookie auth_token | — | — |
-| 5 | Subsequent request | Bearer or Cookie → require_auth | _session_get (auth_sessions DB; no boot_id in acceptance) | — |
+| 5 | Subsequent request | Bearer or Cookie → require_auth | _session_get (per-worker cache `AUTH_SESSION_CACHE_SEC` default 45s, then auth_sessions DB; sliding TTL write ≥60s; no boot_id in acceptance) | — |
 
 **Failure:** Session not found / expired / revoked → 401; user must re-login. boot_id is diagnostics-only (multi-worker safe). Dashboard/admin init: on boot_id mismatch do soft-refresh (update localStorage boot_id, optional toast "Sunucu güncellendi. Bağlantı yenilendi.", run whoami); only if whoami returns 401 SESSION_NOT_FOUND/UNAUTHORIZED then clear auth and redirect with ?session_expired=1. apiClient 401 logout reasons: only UNAUTHORIZED and SESSION_NOT_FOUND (BOOT_ID_MISMATCH removed). redirectToLoginOnce(true) sets ?session_expired=1 so login shows "Oturumunuz sona erdi (sunucu yeniden başladı)" only when actual auth failed.
 
@@ -734,7 +734,7 @@ export BOT_ENGINE_KILL_SWITCH=1
 | WS_STALE_SEC | 60 | data_hub.py |
 | BULK_REFRESH_MIN_INTERVAL | 10 | data_hub.py |
 
-**Geçici upstream hataları (2026-05-29):** `is_transient_upstream_error()` — timeout, DNS, circuit breaker, IP ban. `reconcile_open_orders_for_bot` yalnızca `PENDING` intent varken Binance `openOrders` çağırır; geçici hatalar DEBUG. `finance_reports` deposit/withdraw SAPI geçici hatasında 90s boş cache + DEBUG (manager uyarı spam önleme). `binance_spot` `public_get_json` / `signed_json`: ara deneme hataları DEBUG; 4xx istemci hatası ve geçici final hata DEBUG; kalıcı upstream final hata WARNING. `spot_routes` `/api/spot/quick_data`: geçici hata DEBUG (10 dk/sembol rate); kalıcı WARNING + varsayılan yanıt. Manager `logHumanize`: `Spot quick_data`, `spot_order_403`, `Spot order validation` şablonları. `/api/spot/klines`: `_normalize_spot_trading_symbol` (BTC→BTCUSDT); geçersiz sembolde Binance çağrılmaz. Web `asyncio` DNS gürültüsü `AsyncioTransientErrorFilter` ile filtrelenir. **Admin AKTİF BOT:** `count_admin_active_bots` = `running` + `paused` (case-insensitive); dashboard KPI `active_bots` = yalnızca `running` (`bot_status_utils`).
+**Geçici upstream hataları (2026-05-29):** `is_transient_upstream_error()` — timeout, DNS, circuit breaker, IP ban. `reconcile_open_orders_for_bot` yalnızca `PENDING` intent varken Binance `openOrders` çağırır; geçici hatalar DEBUG. `finance_reports` deposit/withdraw SAPI geçici hatasında 90s boş cache + DEBUG (manager uyarı spam önleme). `binance_spot` `public_get_json` / `signed_json`: ara deneme hataları DEBUG; 4xx istemci hatası ve geçici final hata DEBUG; kalıcı upstream final hata WARNING. `spot_routes` `/api/spot/quick_data`: geçici hata DEBUG (10 dk/sembol rate); kalıcı WARNING + varsayılan yanıt. Manager `logHumanize`: `Spot quick_data`, `spot_order_403`, `Spot order validation` şablonları. `/api/spot/klines` ve `/api/spot/price`: `_normalize_spot_trading_symbol` — exchangeInfo `scope=all` TRADING seti (örn. `XRPETH`, `SOLBNB`); yalnızca base ise `+USDT`; geçersiz sembolde Binance çağrılmaz. Web `asyncio` DNS gürültüsü `AsyncioTransientErrorFilter` ile filtrelenir. **Admin AKTİF BOT:** `count_admin_active_bots` = `running` + `paused` (case-insensitive); dashboard KPI `active_bots` = yalnızca `running` (`bot_status_utils`).
 
 ---
 
@@ -1123,6 +1123,7 @@ Snapshot wallet is cache-only; "[snapshot] wallet timeout" no longer occurs. Liv
 | GET | /api/home/fast | Yes | Yes | No | Homepage cached payload (no Binance; Patch H) |
 | POST | /api/home/wallet/refresh | Yes | Yes | Yes (account) | Wallet refresh TTL+dedup (Patch H) |
 | GET | /api/home/wallet/status | Yes | Yes | No | Wallet refresh status + keys_configured, last_snapshot_at (Patch H) |
+| GET | /api/home/connectivity-check | Yes | Yes | Yes | Live Binance probe + `server_public_ip`; clears persisted failure on OK (2026-05-30) |
 | GET | /api/dashboard/snapshot | Yes | Yes | Yes (account) | Aggregated dashboard |
 | GET | /api/datahub/status | Yes | No | No | DataHub status |
 | GET | /api/datahub/prices | Yes | No | No | DataHub get_all_prices |
@@ -1149,7 +1150,7 @@ Snapshot wallet is cache-only; "[snapshot] wallet timeout" no longer occurs. Liv
 | app/main.py | FastAPI app, lifespan, middleware | startup_event, shutdown_event | — | — | — | Async | — |
 | app/boot_id.py | Boot ID for session invalidation | get_boot_id | — | — | — | Sync | — |
 | app/api/routes.py | REST routes, snapshot, accounts, bots | api_dashboard_snapshot, etc. | Binance, DataHub | Account, Bot, Trade | DataHub | Async | Per-route |
-| app/api/auth.py | Login, session, require_auth | require_auth, _session_get | — | User, Account | auth_sessions (DB), _sessions fallback | Async | Multi-worker safe (no boot_id in validation) |
+| app/api/auth.py | Login, session, require_auth | require_auth, _session_get | — | User, Account | auth_sessions (DB), _sessions fallback; `AUTH_VALIDATE` OK → DEBUG | Async | Multi-worker safe (no boot_id in validation); session cache per worker |
 | app/api/admin.py | Admin panel, breach, server control | get_admin_accounts, etc. | — | Many | — | Async | — |
 | app/api/bots_engine.py | Bot CRUD, start/stop, perf chart | bots_create, bots_start, bots_stop | Binance (prices) | Bot, bot_engine_commands | — | Async | — |
 | app/api/data_hub_routes.py | DataHub status, prices | get_datahub_status | DataHub | — | DataHub | Async | — |
@@ -3481,7 +3482,7 @@ run_actions sıralı; her action için lock, idempotency, adapter çağrı, stat
 | cycle_ledger_trigger_price | breakeven * (1 + max(min_net_profit_rate, profit_exit_rise_pct/100)) |
 | cycle_ledger_from_state | state.cycle_ledger_current veya build_cycle_ledger_empty |
 | cycle_opened_at | Tur açılış ISO zamanı (initial_allocation veya cycle_reset); **açık tur süresi** bununla ölçülür — `cycle_ledger_current.started_at` ilk grid fill'de sıfırlanmaz |
-| ensure_cycle_ledger / heal_cycle_opened_at | Ledger yoksa `cycle_opened_at` korunur; heal yalnız `target_budgets.ts` / tur devri (grid fill değil); geç kalmış `cycle_opened_at` düzeltilir |
+| ensure_cycle_ledger / heal_cycle_opened_at | `target_budgets.ts` yalnız **tur 1**; tur ≥2 `cycle_opened_at` bot başlangıcına yapışmışsa heal **ileri** alır; tur 1 yalnızca daha erken. UI: `cycle_summary.duration_sec` |
 | get_cycle_type_and_base_delta | close_reason trail_profit_sell → LONG_SCALP; trail_reentry_buy → INVENTORY_REBALANCE, base_delta |
 
 **Dual PnL (Inventory vs Cash):** Tek USDT metrik yanıltıcı olabildiği için iki ayrı ledger tutulur. (A) **InventoryPnL**: trail_sell_grid (SELL) + trail_reentry_buy (BUY) → FIFO eşleşme; metrik: **inventory_coin_adv_qty** (base qty) = (sell_proceeds_net / buy_price) - qty_sold; inventory_fees_usdt ayrı. (B) **CashPnL**: trail_buy_grid (BUY) + trail_profit_sell (SELL) → FIFO eşleşme; metrik: **cash_pnl_usdt** = gross - fee_alloc (USDT). Cycle kapanışında pnl_primary_mode: close_reason=trail_profit_sell → CASH_USDT_V1 (Cash öne çıkar); trail_reentry_buy → INVENTORY_QTY_V1 (Envanter öne çıkar). cycle_entry ve API cycle_summary: inventory_coin_adv_qty, inventory_fees_usdt, cash_pnl_usdt, cash_fees_usdt, pnl_primary_mode, cycle_grid_side (açık tur). Kapanış snapshot: `state.completed_cycle_dual_pnls[]` (`cycle_type` CASH|INVENTORY, `completed_at`). UI `#cycleReport`: CSS grid; açık turda **Tur karı** yok; kapalı turda yön `BUY` → USDT, `SELL` → coin adet. Yön kilidi gelene kadar yalnızca süre/işlem/yön (Belirlenmedi). **`GET /performance` `dual_perf`:** yalnızca kapanmış turlar — `cash_*` = aşağı alım (BUY) toplamı; `inventory_*` = yukarı satış (SELL) coin adet toplamı; açık tur dahil değil. `#perfMetrics` iki satır (nakit / envanter).
@@ -3496,7 +3497,7 @@ Ledger bellekte state içinde; fill sonrası cycle_reset_after_fill ile yeni cyc
 | ensure_virtual_wallet(db, bot_id, account_id, symbol, initial_quote_usdt) | INSERT IF NOT EXISTS (virtual_quote=initial_quote_usdt, virtual_base=0) |
 | sync_virtual_wallet_from_state(db, bot_id, account_id, symbol, base, quote) | UPDATE bot_virtual_wallet SET virtual_base, virtual_quote WHERE bot_id, symbol |
 | get_bot_locked_balances_for_account(db, account_id) | SELECT symbol, virtual_base, virtual_quote FROM bot_virtual_wallet WHERE account_id; toplam per asset. Tablo boş/0 ise fallback: account'ın running botlarının bot_engine_state (base_balance, quote_balance) ile hesaplanır (UI "Bot kilitli" doğru görünsün). |
-| check_virtual_budget | quote_balance >= required; epsilon karşılaştırma |
+| check_virtual_budget | BUY: `quote_amount <= virtual_quote * (1 - fee_buffer_pct)`; SELL: base epsilon. `run_actions` cap: `min(free_quote, virtual_quote) * (1 - max(buffer_pct, fee_buffer_pct))` (2026-05-30) |
 | update_virtual_after_fill | Fill sonrası base/quote güncelle |
 
 Her tick: get_virtual_wallet okuma; save_state sonrası sync_virtual_wallet_from_state yazma.
@@ -3933,6 +3934,8 @@ Worker 10 iteration'da bir ensure_running_bots çağırır; web tarafında start
 | 3 | _tasks.pop; _config_cache.pop; _stop_requested.discard |
 
 Orchestrator.delete_bot_fully; tam silme işlemi.
+
+**POST /api/bots-engine/{id}/delete (`convert_base_to_quote`):** Test/paper hesapta (`is_test_account`) base→quote dönüşümü atlanır; bot doğrudan silinir. Dönüşüm hatası worker-only / API anahtarı yok / test hesabı ise silme devam eder (400 yalnızca gerçek convert hatalarında).
 
 ## Mevcut — DCA Strategy Mod Geçişleri
 
@@ -4454,7 +4457,7 @@ Modül: `app/botengine/strategies/grid_outage_recovery.py` — `tick_dca_grid_tr
 | 4 Grid kaçtı | Tetikli alım: P &gt; tetik fiyatı; tetikli satış: P &lt; tetik fiyatı | Tetik sıfırlanır (bekleme modu); işlem yok |
 | 5 Kısmi tur | Bir grid fill, diğerleri tetikli + kar alım aktif | Her açık grid ve TRAIL_PROFIT_SELL / TRAIL_REENTRY_BUY için yukarı kurallar bağımsız uygulanır |
 
-**Engine log (bot_engine_events):** Soğuk başlatma `COMMAND START` (Tür: **Start**) → Bismillah + bakiye + kısa config (`Base/Quote %`, Yukarı/Aşağı grid adet, `Y#n`/`A#n` seviye, trail, KA/KS); yalnızca `initial_allocation_done=false` (`start_log_brief.py`). İlk tur kümesi (DESC): `Tur 1 açıldı` → boş satır → `İlk base alımı` → `Bot başlatıldı` (ardışık, arada boşluk yok); `CYCLE_START` fill +1sn (yoksa sentetik `id=-101`). **`Tur N açıldı` cüzdan snapshot:** Tur 1 = `initial_allocation` fill + `initial_capital_usdt` (kalan quote = C − cum_quote − fee); Tur 2+ = DB `CYCLE_START` veya `state.cycle_open_trades` (`quote_balance`, `equity_usdt` tur açılışında yazılır); geçmiş turda güncel `state.quote_balance` / `base_balance` asla overlay edilmez (`bots_engine._cycle_start_wallet_snapshot`, stale meta düzeltmesi). Tur kapanışı: `ORDER_FILLED` `trail_reentry_buy`/`trail_profit_sell` → `CYCLE_END` (+100ms) → `CYCLE_START` (+200ms); fill `ts` Binance `transactTime`. API `ts` → UTC `…Z` (`normalize_event_ts_iso_z`); **UI yeni→eski DESC** (en yeni üstte, start altta); üstteyken canlı pin. Tur sınırı (UI): listede bitişik **Açılış Tur N** ile **Kapanış Tur N−1** arasında tek boş satır (`engineLogFormat.insertTurBoundarySpacersInCollapsed`; sentetik event yok). Sentetik `CYCLE_END` yoksa backfill (tüm tamamlanan turlar): `state.cycle_pnls` / `completed_cycle_dual_pnls`, kar satışı `ORDER_FILLED` (+100ms), sonraki `CYCLE_START` (−100ms); negatif `id` (`bots_engine._merge_synthetic_cycle_end_events`, `id=-(cycle_id*100+2)`). Sentetik `CYCLE_START` yoksa backfill: Tur 1 `id=fill_id+1`; Tur 2+ `cycle_open_trades`, önceki tur `CYCLE_END`/kar satışı `ORDER_FILLED` (+200ms) veya ilk grid emri (−200ms); negatif sentetik `id` (`bots_engine._merge_synthetic_cycle_start_events`, `id=-(cycle_id*100+1)`). UI: `CYCLE_START` tür sütunu **Açılış**, `CYCLE_END` **Kapanış** (mesajda `Tur N açıldı` / `Tur N tamamlandı`). Kesinti: `CONNECTIVITY_PAUSED` / `CONNECTIVITY_RECOVERED`. `OUTAGE_RECOVERY` — grid özeti.
+**Engine log (bot_engine_events):** Soğuk başlatma `COMMAND START` (Tür: **Start**) → Bismillah + bakiye + kısa config (`Base/Quote %`, Yukarı/Aşağı grid adet, `Y#n`/`A#n` seviye, trail, KA/KS); yalnızca `initial_allocation_done=false` (`start_log_brief.py`). İlk tur kümesi (DESC): `Tur 1 açıldı` → boş satır → `İlk base alımı` → `Bot başlatıldı` (ardışık, arada boşluk yok); `CYCLE_START` fill +1sn (yoksa sentetik `id=-101`). **`Tur N açıldı` cüzdan snapshot:** Tur 1 = `initial_allocation` fill + `initial_capital_usdt` (kalan quote = C − cum_quote − fee); Tur 2+ = DB `CYCLE_START` veya `state.cycle_open_trades` (`quote_balance`, `equity_usdt` tur açılışında yazılır); geçmiş turda güncel `state.quote_balance` / `base_balance` asla overlay edilmez (`bots_engine._cycle_start_wallet_snapshot`, stale meta düzeltmesi). Tur kapanışı: `ORDER_FILLED` `trail_reentry_buy`/`trail_profit_sell` → `CYCLE_END` (+100ms) → `CYCLE_START` (+200ms); fill `ts` Binance `transactTime`. API `ts` → UTC `…Z` (`normalize_event_ts_iso_z`); **UI yeni→eski DESC** (en yeni üstte, start altta); üstteyken canlı pin. Tur sınırı (UI): listede bitişik **Açılış Tur N** ile **Kapanış Tur N−1** arasında tek boş satır (`engineLogFormat.insertTurBoundarySpacersInCollapsed`; sentetik event yok). Sentetik `CYCLE_END` yoksa backfill (tüm tamamlanan turlar): `state.cycle_pnls` / `completed_cycle_dual_pnls`, kar satışı `ORDER_FILLED` (+100ms), sonraki `CYCLE_START` (−100ms); negatif `id` (`bots_engine._merge_synthetic_cycle_end_events`, `id=-(cycle_id*100+2)`). **Incremental `/events?after_id=`:** sentetik backfill yalnızca DB’de o `cycle_id` için `CYCLE_END` yoksa (`_db_logged_cycle_end_ids`); aksi halde poll yanıtına ikinci “Tur N tamamlandı” eklenir. API/UI: `_dedupe_cycle_end_events` + `dedupeCycleEndForDisplay` (tur başına tek Kapanış). Sentetik `CYCLE_START` yoksa backfill: Tur 1 `id=fill_id+1`; Tur 2+ `cycle_open_trades`, önceki tur `CYCLE_END`/kar satışı `ORDER_FILLED` (+200ms) veya ilk grid emri (−200ms); negatif sentetik `id` (`bots_engine._merge_synthetic_cycle_start_events`, `id=-(cycle_id*100+1)`). UI: `CYCLE_START` tür sütunu **Açılış**, `CYCLE_END` **Kapanış** (mesajda `Tur N açıldı` / `Tur N tamamlandı`). Kesinti: `CONNECTIVITY_PAUSED` / `CONNECTIVITY_RECOVERED`. `OUTAGE_RECOVERY` — grid özeti.
 | Kopma sırasında tetiksiz grid | P tetik seviyesini geçmiş (ör. alım tetik altında) | Tetik + dip/tepe canlı P ile kaydedilir; uygunsa favorable execute |
 
 Bayraklar (tek tick): `_outage_favorable_buy`, `_outage_favorable_sell`, `_outage_force_profit_sell`, `_outage_force_reentry_buy` — tick sonunda temizlenir.
@@ -5724,6 +5727,7 @@ Step-by-step migration path for horizontal scaling. No code; design only.
 | SPOT_PRICE_RATE_LIMIT | 90 | `/api/spot/price` per user / 10s | spot_routes.py |
 | TX_HISTORY_RATE_LIMIT | 30 | transaction-history per user+account / 60s | routes.py |
 | TX_HISTORY_SYNC_RATE_LIMIT | 3 | `sync=1` per 5 dk | routes.py |
+| apiClient 429 toast debounce | 30s | FastAPI `detail` string veya `{message}`; sessiz poll `suppressRateLimitToast` | apiClient.js |
 | ENDPOINT_RATE_LIMIT_ENABLED | 1 | Endpoint rate limiter | endpoint_rate_limit.py |
 | SPOT_CACHE_PRICE_TTL | 4s | spot_cache fiyat TTL | spot_engine.py |
 | TX_HISTORY_QUERY_CACHE_TTL | 8s | Dosya sorgu LRU (max 48) | transaction_history_file_store.py |
@@ -5787,6 +5791,8 @@ Step-by-step migration path for horizontal scaling. No code; design only.
 | MAX_SNAPSHOT_BYTES | 150000 | env / routes.py |
 | DEFAULT_TIMEOUT | 5000 | apiClient.js |
 | MAX_CONCURRENT_REQUESTS | 2 | apiClient.js |
+| AUTH_SESSION_CACHE_SEC | 45 (0=off) | auth.py |
+| SESSION_SLIDING_UPDATE_MIN_SEC | 60 | auth.py |
 | SNAPSHOT_POLL_MS | 5000 | dashboard.js |
 | Snapshot timeout | 12000 | dashboard.js (override) |
 | BOT_ENGINE_V5_SCHEDULER | 0 (env) | worker_main — set 1 for event-driven scheduler |

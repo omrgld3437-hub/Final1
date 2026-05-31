@@ -354,6 +354,63 @@ def _logged_cycle_end_ids(events: List[Dict[str, Any]]) -> set:
             logged.add(int(meta.get("cycle_id") or 0))
         except (TypeError, ValueError):
             pass
+    logged.discard(0)
+    return logged
+
+
+def _db_logged_cycle_end_ids(db: Session, bot_id: int) -> set:
+    """Persisted CYCLE_END cycle_ids — incremental /events slice için sentetik tekrarını önler."""
+    logged: set = set()
+    try:
+        rows = db.execute(
+            text("""
+                SELECT meta_json FROM bot_engine_events
+                WHERE bot_id = :bid AND event_type = 'CYCLE_END' AND id > 0
+            """),
+            {"bid": bot_id},
+        ).fetchall()
+        for row in rows:
+            if not row or not row[0]:
+                continue
+            try:
+                meta = json.loads(row[0]) if isinstance(row[0], str) else (row[0] or {})
+            except Exception:
+                meta = {}
+            try:
+                logged.add(int(meta.get("cycle_id") or 0))
+            except (TypeError, ValueError):
+                pass
+    except Exception as e:
+        logger.debug("_db_logged_cycle_end_ids bot_id=%s: %s", bot_id, e)
+    logged.discard(0)
+    return logged
+
+
+def _db_logged_cycle_start_ids(db: Session, bot_id: int) -> set:
+    """Persisted CYCLE_START cycle_ids — incremental poll sentetik tekrarını önler."""
+    logged: set = set()
+    try:
+        rows = db.execute(
+            text("""
+                SELECT meta_json FROM bot_engine_events
+                WHERE bot_id = :bid AND event_type = 'CYCLE_START' AND id > 0
+            """),
+            {"bid": bot_id},
+        ).fetchall()
+        for row in rows:
+            if not row or not row[0]:
+                continue
+            try:
+                meta = json.loads(row[0]) if isinstance(row[0], str) else (row[0] or {})
+            except Exception:
+                meta = {}
+            try:
+                logged.add(int(meta.get("cycle_id") or 0))
+            except (TypeError, ValueError):
+                pass
+    except Exception as e:
+        logger.debug("_db_logged_cycle_start_ids bot_id=%s: %s", bot_id, e)
+    logged.discard(0)
     return logged
 
 
@@ -970,11 +1027,15 @@ def _build_synthetic_cycle_end(
 def _merge_synthetic_cycle_end_events(
     events: List[Dict[str, Any]],
     state: Optional[Dict[str, Any]],
+    db: Optional[Session] = None,
+    bot_id: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     """Backfill CYCLE_END when DB row missing (exception after fill, legacy bots)."""
     if not state:
         return events
     logged = _logged_cycle_end_ids(events)
+    if db is not None and bot_id is not None:
+        logged |= _db_logged_cycle_end_ids(db, bot_id)
     needed: set = set()
 
     for entry in state.get("cycle_pnls") or []:
@@ -1057,11 +1118,18 @@ def _merge_synthetic_cycle_end_events(
     return list(events) + synthetic
 
 
-def _merge_synthetic_cycle_start_events(events: List[Dict[str, Any]], state: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _merge_synthetic_cycle_start_events(
+    events: List[Dict[str, Any]],
+    state: Optional[Dict[str, Any]],
+    db: Optional[Session] = None,
+    bot_id: Optional[int] = None,
+) -> List[Dict[str, Any]]:
     """Backfill CYCLE_START when DB row missing (RUN_ACTION_EXCEPTION, legacy bots)."""
     if not state:
         return events
     logged = _logged_cycle_start_ids(events)
+    if db is not None and bot_id is not None:
+        logged |= _db_logged_cycle_start_ids(db, bot_id)
     symbol = state.get("symbol")
     needed: set = set()
     try:
@@ -1328,6 +1396,64 @@ def _dedupe_cycle_start_events(events: List[Dict[str, Any]]) -> List[Dict[str, A
     emitted: set = set()
     for ev in events or []:
         if (ev.get("type") or "") != "CYCLE_START":
+            out.append(ev)
+            continue
+        try:
+            cid = int((ev.get("meta") or {}).get("cycle_id") or 0)
+        except (TypeError, ValueError):
+            out.append(ev)
+            continue
+        if cid < 1:
+            out.append(ev)
+            continue
+        if cid in emitted:
+            continue
+        out.append(best[cid])
+        emitted.add(cid)
+    return out
+
+
+def _cycle_end_richness_score(ev: Dict[str, Any]) -> int:
+    score = 0
+    try:
+        eid = int(ev.get("id") or 0)
+    except (TypeError, ValueError):
+        eid = 0
+    if eid > 0:
+        score += 1000 + eid
+    elif eid < 0:
+        score += 200 + abs(eid)
+    meta = ev.get("meta") or {}
+    if not meta.get("synthetic"):
+        score += 300
+    if meta.get("pnl_usdt_net") is not None or meta.get("inventory_coin_adv_qty") is not None:
+        score += 120
+    if meta.get("realized_pnl_cycle_net") is not None or meta.get("fees_usdt") is not None:
+        score += 60
+    return score
+
+
+def _dedupe_cycle_end_events(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Aynı tur için birden fazla CYCLE_END (DB + sentetik / çift yazım) → tek satır."""
+    best: Dict[int, Dict[str, Any]] = {}
+    for ev in events or []:
+        if (ev.get("type") or "") != "CYCLE_END":
+            continue
+        try:
+            cid = int((ev.get("meta") or {}).get("cycle_id") or 0)
+        except (TypeError, ValueError):
+            continue
+        if cid < 1:
+            continue
+        prev = best.get(cid)
+        if prev is None or _cycle_end_richness_score(ev) > _cycle_end_richness_score(prev):
+            best[cid] = ev
+    if not best:
+        return list(events or [])
+    out: List[Dict[str, Any]] = []
+    emitted: set = set()
+    for ev in events or []:
+        if (ev.get("type") or "") != "CYCLE_END":
             out.append(ev)
             continue
         try:
@@ -2177,6 +2303,102 @@ def _backfill_trades_from_ledger_fills(
             )
 
 
+def _synthetic_trades_from_state(
+    state: Dict[str, Any],
+    symbol: str,
+    cycle_id: int,
+) -> List[Dict[str, Any]]:
+    """Paper/test: DB boşken state history + grid fired → tur işlem listesi."""
+    if not state or int(state.get("cycle_id") or 1) != int(cycle_id):
+        return []
+    sym = (symbol or "").upper()
+    out: List[Dict[str, Any]] = []
+    seq = 0
+
+    def _append_hist(rows: List[Dict[str, Any]], side: str, default_reason: str) -> None:
+        nonlocal seq
+        for h in rows or []:
+            if not isinstance(h, dict):
+                continue
+            try:
+                qty = float(h.get("qty") or 0)
+            except (TypeError, ValueError):
+                qty = 0.0
+            if qty <= 0:
+                continue
+            reason = str(h.get("reason") or default_reason or "").strip() or default_reason
+            gi = h.get("grid_index")
+            slot = int(gi) if gi is not None and str(gi).strip() != "" else None
+            out.append({
+                "id": f"state_{cycle_id}_{seq}",
+                "ts": h.get("ts") or h.get("time"),
+                "side": side,
+                "qty": qty,
+                "price": h.get("price"),
+                "fee": h.get("fee") if h.get("fee") is not None else 0,
+                "symbol": sym,
+                "cycle_id": int(cycle_id),
+                "reason": reason,
+                "slot_id": slot,
+                "client_order_id": f"state_{side.lower()}_{cycle_id}_{seq}",
+                "synthetic_from_state": True,
+            })
+            seq += 1
+
+    _append_hist(state.get("sell_history") or [], "SELL", "trail_sell_grid")
+    _append_hist(state.get("buy_history") or [], "BUY", "trail_buy_grid")
+
+    hist_slots = {
+        ((t.get("side") or "").upper(), int(t["slot_id"]))
+        for t in out
+        if t.get("slot_id") is not None
+    }
+
+    def _append_fired(fired: Any, fills: Any, side: str, reason: str) -> None:
+        nonlocal seq
+        if not isinstance(fired, list):
+            return
+        fill_list = fills if isinstance(fills, list) else []
+        side_u = (side or "").upper()
+        for i, flag in enumerate(fired):
+            if not flag:
+                continue
+            if (side_u, i) in hist_slots:
+                continue
+            price = None
+            if i < len(fill_list) and fill_list[i] is not None:
+                try:
+                    price = float(fill_list[i])
+                except (TypeError, ValueError):
+                    price = None
+            if price is None or price <= 0:
+                continue
+            out.append({
+                "id": f"gridfired_{cycle_id}_{seq}",
+                "ts": None,
+                "side": side,
+                "qty": None,
+                "price": price,
+                "fee": 0,
+                "symbol": sym,
+                "cycle_id": int(cycle_id),
+                "reason": reason,
+                "slot_id": i,
+                "client_order_id": f"gridfired_{side.lower()}_{cycle_id}_{i}",
+                "synthetic_from_state": True,
+                "grid_detail": {
+                    "grid_index": i,
+                    "grid_label": f"Grid #{i + 1}",
+                    "display_label": f"{'Grid satış' if side == 'SELL' else 'Grid alım'} #{i + 1}",
+                },
+            })
+            seq += 1
+
+    _append_fired(state.get("sell_grid_fired"), state.get("sell_grid_fill_price"), "SELL", "trail_sell_grid")
+    _append_fired(state.get("buy_grid_fired"), state.get("buy_grid_fill_price"), "BUY", "trail_buy_grid")
+    return _merge_cycle_trades(out) if out else out
+
+
 def _ledger_fills_to_trade_dicts(
     fills: List[Dict[str, Any]],
     symbol: str,
@@ -2351,10 +2573,21 @@ def _trade_alias_keys(t: Dict[str, Any]) -> List[str]:
     if cid:
         keys.append(f"cid:{str(cid)}")
     side = (t.get("side") or "").upper()
+    slot = t.get("slot_id")
+    if side and slot is not None:
+        try:
+            keys.append(f"slot:{side}:{int(slot)}")
+        except (TypeError, ValueError):
+            pass
     qty, price = t.get("qty"), t.get("price")
     if side and qty is not None and price is not None:
         try:
             keys.append(f"row:{side}:{float(qty):.8f}:{float(price):.4f}")
+        except (TypeError, ValueError):
+            pass
+    elif side and slot is not None and price is not None:
+        try:
+            keys.append(f"slotp:{side}:{int(slot)}:{float(price):.4f}")
         except (TypeError, ValueError):
             pass
     return keys
@@ -3545,6 +3778,16 @@ def _is_worker_only_order_error(e: Exception) -> bool:
     return "only allowed on worker" in s or "web/api cannot place" in s
 
 
+def _delete_convert_error_skippable(e: Exception, is_test_account: bool) -> bool:
+    """Convert başarısız olsa da silmeye devam (test/paper, API yok, worker-only)."""
+    if is_test_account:
+        return True
+    if _is_worker_only_order_error(e):
+        return True
+    s = str(e).lower()
+    return "api anahtarı" in s or "api anahtari" in s or "api key" in s or "api keys" in s
+
+
 async def _sell_symbol_base_on_delete(db: Session, account_id: int, bot_id: int, symbol: str) -> None:
     """Bot silinmeden önce Binance base → quote (açık emirleri iptal et, free+locked sat)."""
     from app.services.binance_assets import get_account_keys
@@ -3634,6 +3877,12 @@ async def bots_delete(
     if not isinstance(body, dict):
         body = {}
     convert_base = body.get("convert_base_to_quote") is True
+    from app.services.test_account import is_test_account
+
+    is_test = is_test_account(bot.account_id, db)
+    if convert_base and is_test:
+        logger.info("bots_delete skip convert (test/paper account) bot_id=%s", bot.id)
+        convert_base = False
     if convert_base:
         bot.status = "stopped"
         db.commit()
@@ -3684,7 +3933,8 @@ async def bots_delete(
                 await _sell_symbol_base_on_delete(db, bot.account_id, bot.id, symbol)
             except Exception as e:
                 logger.warning("bots_delete convert_base_to_quote failed bot_id=%s err=%s", bot.id, e)
-                raise HTTPException(status_code=400, detail=_detail_err("CONVERT_FAILED", str(e), rid))
+                if not _is_worker_only_order_error(e) and not _delete_convert_error_skippable(e, is_test):
+                    raise HTTPException(status_code=400, detail=_detail_err("CONVERT_FAILED", str(e), rid))
         try:
             from app.api.routes import invalidate_open_orders_cache, invalidate_wallet_cache
             await invalidate_wallet_cache(bot.account_id)
@@ -3856,10 +4106,11 @@ async def bots_events(
             events = filter_events_for_dismiss(events, dismiss_before)
     try:
         events = _enrich_command_start_events(events, bot, state)
-        events = _merge_synthetic_cycle_end_events(events, state)
-        events = _merge_synthetic_cycle_start_events(events, state)
+        events = _merge_synthetic_cycle_end_events(events, state, db=db, bot_id=bot.id)
+        events = _merge_synthetic_cycle_start_events(events, state, db=db, bot_id=bot.id)
         events = _merge_synthetic_tur_after_initial_fill(events, state)
         _enrich_cycle_start_events_meta(events, state)
+        events = _dedupe_cycle_end_events(events)
         events = _dedupe_cycle_start_events(events)[:limit]
         events = _sort_engine_events_desc(events)
     except Exception as enrich_ex:
@@ -4048,7 +4299,8 @@ def _resolve_trade_grid_index(
     archived = _archive_lookup_trade(state, cycle_id, side, t.get("qty"), t.get("price"))
     if archived and archived.get("grid_index") is not None:
         return int(archived["grid_index"])
-    if state:
+    cur_cid = int(state.get("cycle_id") or 1) if state else None
+    if state and cur_cid is not None and int(cur_cid) == int(cycle_id):
         hist_key = "sell_history" if side == "SELL" else "buy_history"
         try:
             tq = float(t.get("qty") or 0)
@@ -4240,9 +4492,12 @@ def _enrich_trades_grid_detail(
         elif side == "BUY" and fill_f is not None:
             avg_buy_p = fill_f
             avg_buy_quote = (fill_f * float(t.get("qty") or 0)) if t.get("qty") is not None else None
+        grid_side_label = "Grid satış" if side == "SELL" else "Grid alım"
+        display_label = f"{grid_side_label} #{idx + 1}"
         t["grid_detail"] = {
             "grid_index": idx,
             "grid_label": f"Grid #{idx + 1}",
+            "display_label": display_label,
             "grid_type": "Satış gridi" if side == "SELL" else "Alış gridi",
             "side": side,
             "grid_pct": grid_pct,
@@ -4723,6 +4978,10 @@ async def bots_trades(
         if extra:
             trades = Ledger.get_trades_dict(db, bot.id, bot.account_id, limit=limit, cycle_id=cycle_id)
             trades = _merge_cycle_trades(trades, extra)
+        if state and int(state.get("cycle_id") or 1) == int(cycle_id) and not trades:
+            synth = _synthetic_trades_from_state(state, sym, int(cycle_id))
+            if synth:
+                trades = _merge_cycle_trades(trades, synth)
     if cycle_id is not None and ct == "trb":
         cycle_summary = {"cycle_type": "trb", "trade_count": 0, "note": "Rebalancing tur işlemleri ayrı kaydedilmiyor."}
     elif cycle_id is not None:
@@ -4735,6 +4994,7 @@ async def bots_trades(
         duration_sec = 0.0
         started_at_iso: Optional[str] = None
         completed_snapshot: Optional[Dict[str, Any]] = None
+        completed_snapshot_side: Optional[str] = None
         if state and isinstance(state.get("completed_cycle_dual_pnls"), list):
             for c in state["completed_cycle_dual_pnls"]:
                 if isinstance(c, dict) and int(c.get("cycle_id") or 0) == int(cycle_id):
@@ -4758,6 +5018,11 @@ async def bots_trades(
                     duration_sec = (max(ts_list) - min(ts_list)).total_seconds()
                 except Exception as e:
                     logger.warning("bots_trades duration_sec failed bot_id=%s cycle_id=%s: %s", bot.id, cycle_id, e)
+            from app.services.bot_performance_service import _completed_cycle_side
+
+            snap_side = _completed_cycle_side(completed_snapshot)
+            if snap_side in ("SELL", "BUY"):
+                completed_snapshot_side = snap_side
         elif len(ts_list) >= 2:
             try:
                 duration_sec = (max(ts_list) - min(ts_list)).total_seconds()
@@ -4806,7 +5071,9 @@ async def bots_trades(
                 cycle_summary["cash_fees_usdt"] = ledger.get("cash_fifo_fees_usdt") if ledger.get("cash_fifo_fees_usdt") is not None else ledger.get("cash_fees_usdt")
                 cycle_summary["inventory_coin_adv_qty"] = ledger.get("inventory_coin_adv_qty")
                 cycle_summary["inventory_fees_usdt"] = ledger.get("inventory_fees_usdt")
-            side = state.get("cycle_grid_side")
+            from app.botengine.strategies.dca_grid_trailing import infer_cycle_grid_side
+
+            side = infer_cycle_grid_side(state)
             if side in ("SELL", "BUY"):
                 cycle_summary["cycle_grid_side"] = side
         if cycle_entry is not None and not cycle_summary.get("cycle_grid_side"):
@@ -4815,6 +5082,14 @@ async def bots_trades(
                 cycle_summary["cycle_grid_side"] = "BUY"
             elif ct == "INVENTORY_REBALANCE":
                 cycle_summary["cycle_grid_side"] = "SELL"
+            else:
+                from app.services.bot_performance_service import _completed_cycle_side
+
+                entry_side = _completed_cycle_side(cycle_entry)
+                if entry_side in ("SELL", "BUY"):
+                    cycle_summary["cycle_grid_side"] = entry_side
+        if completed_snapshot_side and not cycle_summary.get("cycle_grid_side"):
+            cycle_summary["cycle_grid_side"] = completed_snapshot_side
     if cycle_id is not None and ct != "trb" and trades:
         cfg_raw = json.loads(bot.config_json or "{}")
         _tag_cycle_close_trades(trades, state, int(cycle_id))

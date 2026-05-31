@@ -89,6 +89,14 @@ def _classify_binance_error(exc: Exception) -> Tuple[str, str]:
     s = str(exc or "").lower()
     resp = getattr(exc, "response", None)
     sc = getattr(resp, "status_code", None) if resp else None
+    code_attr = getattr(exc, "code", None)
+    if code_attr == -1021 or "-1021" in s or ("timestamp" in s and "recvwindow" in s):
+        try:
+            from app.services.binance_spot import clock_sync_hint
+            hint = clock_sync_hint()
+        except Exception:
+            hint = "Sunucu saatini NTP ile senkronize edin."
+        return ("CLOCK_DRIFT", f"Sunucu saati Binance ile uyuşmuyor (-1021). {hint}")
     if sc in (401, 403) or "401" in s or "unauthorized" in s or "-2015" in s or "invalid api-key" in s:
         return (
             "API_UNAUTHORIZED",

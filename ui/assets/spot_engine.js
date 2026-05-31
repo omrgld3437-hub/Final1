@@ -80,12 +80,15 @@ class SpotEngine {
         }
         // Geçersiz semboller için istek atma (FDUSDUSDT vb. – backend 500 önlemi)
         if (INVALID_QUICK_DATA_SYMBOLS.has(cacheKey)) {
+            const pqInv = (typeof window.parseTradingPairSymbol === 'function')
+                ? window.parseTradingPairSymbol(cacheKey)
+                : { valid: false, base: cacheKey.replace(/USDT$/i, '') || 'BTC', quote: 'USDT' };
             const fallback = {
                 symbol: cacheKey,
                 price: this.getCachedPrice(cacheKey) || 0,
                 priceChange24h: 0,
-                baseAsset: cacheKey.replace(/USDT$/i, '') || 'BTC',
-                quoteAsset: 'USDT',
+                baseAsset: pqInv.valid ? pqInv.base : (cacheKey.replace(/USDT$/i, '') || 'BTC'),
+                quoteAsset: pqInv.valid ? pqInv.quote : 'USDT',
                 baseBalance: 0,
                 quoteBalance: 0,
                 filters: { tickSize: '0.01', stepSize: '0.00001', minNotional: '5' },
@@ -100,12 +103,15 @@ class SpotEngine {
             const url = `/api/spot/quick_data?account_id=${this.accountId}&symbol=${encodeURIComponent(cacheKey)}`;
             const data = await window.apiClient.get(url, { signal });
             if (data && data.ok === false && data.error_code === 'INVALID_SYMBOL') {
+              const pqBad = (typeof window.parseTradingPairSymbol === 'function')
+                ? window.parseTradingPairSymbol(cacheKey)
+                : { valid: false, base: cacheKey.replace(/USDT$/i, '') || 'BTC', quote: 'USDT' };
               const fallback = {
                 symbol: cacheKey,
                 price: this.getCachedPrice(cacheKey) || 0,
                 priceChange24h: 0,
-                baseAsset: cacheKey.replace(/USDT$/i, '') || 'BTC',
-                quoteAsset: 'USDT',
+                baseAsset: pqBad.valid ? pqBad.base : (cacheKey.replace(/USDT$/i, '') || 'BTC'),
+                quoteAsset: pqBad.valid ? pqBad.quote : 'USDT',
                 baseBalance: 0,
                 quoteBalance: 0,
                 filters: { tickSize: '0.01', stepSize: '0.00001', minNotional: '5' },
@@ -122,12 +128,15 @@ class SpotEngine {
             }
             console.error(`[SpotEngine] Quick data error for ${cacheKey}:`, error);
             // Return minimal data on error
+            const pqErr = (typeof window.parseTradingPairSymbol === 'function')
+                ? window.parseTradingPairSymbol(cacheKey)
+                : { valid: false, base: cacheKey.replace(/USDT$/i, '') || 'BTC', quote: 'USDT' };
             return {
                 symbol: cacheKey,
                 price: this.getCachedPrice(cacheKey) || 0,
                 priceChange24h: 0,
-                baseAsset: cacheKey.replace("USDT", ""),
-                quoteAsset: "USDT",
+                baseAsset: pqErr.valid ? pqErr.base : (cacheKey.replace(/USDT$/i, '') || 'BTC'),
+                quoteAsset: pqErr.valid ? pqErr.quote : 'USDT',
                 baseBalance: 0,
                 quoteBalance: 0,
                 filters: {

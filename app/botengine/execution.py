@@ -561,20 +561,25 @@ async def run_actions(
                     )
                     skip_virtual_check = adapter.paper_mode and is_trdca_or_multi
                     if side == "BUY" and not skip_virtual_check:
-                        # Cap BUY to available_quote_for_orders = free_quote * (1 - buffer); prefer real free_quote from last fill snapshot
+                        # Cap BUY: min(state free_quote, virtual_quote) * (1 - buffer); virtual sub-wallet is hard ceiling
                         _vb, _vq = get_virtual_wallet(db, bot_id, symbol)
                         free_quote = state.get("free_quote")
                         if free_quote is None:
                             free_quote = float(_vq)
-                        available_quote = max(0.0, float(free_quote) * (1.0 - buffer_pct))
+                        vq_cap = float(_vq)
+                        effective_quote = (
+                            min(float(free_quote), vq_cap) if vq_cap > 0 else float(free_quote)
+                        )
+                        combined_buffer = max(buffer_pct, fee_buffer_pct)
+                        available_quote = max(0.0, effective_quote * (1.0 - combined_buffer))
                         if quote_qty > available_quote and available_quote > 0:
                             old_qty = quote_qty
                             quote_qty = round(available_quote, 2)
                             logger.info(
-                                "BOT_EXECUTION_CAP_QUOTE bot_id=%s reason=%s quote_qty_capped %.2f -> %.2f (virtual available) free_quote=%.2f buffer_pct=%.4f",
-                                bot_id, reason, old_qty, quote_qty, free_quote, buffer_pct,
+                                "BOT_EXECUTION_CAP_QUOTE bot_id=%s reason=%s quote_qty_capped %.2f -> %.2f effective_quote=%.2f virtual_quote=%.2f free_quote=%.2f buffer=%.4f",
+                                bot_id, reason, old_qty, quote_qty, effective_quote, vq_cap, float(free_quote), combined_buffer,
                             )
-                            append_event(db, bot_id, account_id, "INFO", f"quote_qty_capped {old_qty:.2f} -> {quote_qty:.2f} (virtual available)", {"reason": reason, "old_qty": old_qty, "quote_qty": quote_qty, "virtual_quote": _vq, "free_quote": free_quote})
+                            append_event(db, bot_id, account_id, "INFO", f"quote_qty_capped {old_qty:.2f} -> {quote_qty:.2f} (virtual available)", {"reason": reason, "old_qty": old_qty, "quote_qty": quote_qty, "virtual_quote": _vq, "free_quote": free_quote, "effective_quote": effective_quote})
                             notional_capped = quote_qty if price and price > 0 else quote_qty
                             if not guard_min_notional(notional_capped, config.min_notional_guard):
                                 logger.info(
@@ -603,11 +608,18 @@ async def run_actions(
                     else:
                         ok = True
                     if not ok:
+                        _vq_skip = None
+                        try:
+                            _vq_skip = float(get_virtual_wallet(db, bot_id, symbol)[1])
+                        except Exception:
+                            pass
                         payload = {
                             "skip_reason": "VIRTUAL_BUDGET_INSUFFICIENT",
                             "error_code": "VIRTUAL_BUDGET_INSUFFICIENT",
                             "required": required,
                             "available": available,
+                            "virtual_quote": _vq_skip,
+                            "fee_buffer_pct": fee_buffer_pct if side == "BUY" else None,
                             "side": side,
                             "symbol": symbol,
                             "reason": reason,

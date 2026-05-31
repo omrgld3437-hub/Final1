@@ -25,6 +25,8 @@ from app.services.encryption import encrypt_text
 from app.services import audit as audit_svc
 from app.core.auth.token_utils import hash_token, short_session_id
 import logging
+import time
+import threading
 import unicodedata
 
 logger = logging.getLogger(__name__)
@@ -32,6 +34,10 @@ logger = logging.getLogger(__name__)
 # Sliding TTL: only update last_seen_at/expires_at if last activity was > this many seconds ago (avoid DB write on every request)
 SESSION_SLIDING_ENABLED = os.environ.get("AUTH_SLIDING_TTL", "1").strip() in ("1", "true", "yes")
 SESSION_SLIDING_UPDATE_MIN_SEC = int(os.environ.get("SESSION_SLIDING_UPDATE_MIN_SEC", "60"))
+# Per-worker session validation cache (reduces auth_sessions SELECT on hot paths; < sliding window)
+AUTH_SESSION_CACHE_SEC = max(0, int(os.environ.get("AUTH_SESSION_CACHE_SEC", "45")))
+_session_cache_lock = threading.Lock()
+_session_cache: dict[str, tuple[dict, float]] = {}
 
 
 def _normalize_password(s: str) -> str:
@@ -52,6 +58,39 @@ SESSION_TTL_DAYS = int(os.environ.get("SESSION_TTL_DAYS", "7"))
 # Alias: use central token hashing (never log raw token; use short_session_id for logs)
 def _token_hash(token: str) -> str:
     return hash_token(token)
+
+
+def _session_cache_get(token_hash: str) -> Optional[dict]:
+    if AUTH_SESSION_CACHE_SEC <= 0:
+        return None
+    now = time.monotonic()
+    with _session_cache_lock:
+        entry = _session_cache.get(token_hash)
+        if not entry:
+            return None
+        data, exp = entry
+        if now >= exp:
+            _session_cache.pop(token_hash, None)
+            return None
+        return dict(data)
+
+
+def _session_cache_set(token_hash: str, session: dict) -> None:
+    if AUTH_SESSION_CACHE_SEC <= 0:
+        return
+    exp = time.monotonic() + AUTH_SESSION_CACHE_SEC
+    with _session_cache_lock:
+        _session_cache[token_hash] = (dict(session), exp)
+
+
+def _session_cache_invalidate(token_hash: str) -> None:
+    with _session_cache_lock:
+        _session_cache.pop(token_hash, None)
+
+
+def _session_cache_clear() -> None:
+    with _session_cache_lock:
+        _session_cache.clear()
 
 
 def _session_set(token: str, user_id: int, account_id: Optional[int], is_admin: bool, device_id: Optional[str] = None, db: Optional[Session] = None) -> None:
@@ -105,12 +144,15 @@ def _session_get(token: str, db: Optional[Session] = None) -> Optional[dict]:
     """Validate token against shared store (DB). No boot_id in acceptance criteria (diagnostics only); multi-worker safe."""
     from app.boot_id import get_boot_id
     boot_id = get_boot_id()
+    th = _token_hash(token)
+    cached = _session_cache_get(th)
+    if cached is not None:
+        return cached
     if db is not None:
         try:
             from sqlalchemy import text
             now = datetime.utcnow()
             now_iso = now.isoformat()
-            th = _token_hash(token)
             # Session valid if token_hash exists, not revoked, not expired. boot_id not used in WHERE.
             r = None
             try:
@@ -166,7 +208,9 @@ def _session_get(token: str, db: Optional[Session] = None) -> Optional[dict]:
                         except Exception:
                             pass
                         logger.warning("auth_sessions sliding TTL update failed (session still valid): %s", slide_err)
-                return {"user_id": r[0], "account_id": r[1], "is_admin": bool(r[2]), "boot_id": boot_id, "device_id": r[3]}
+                session = {"user_id": r[0], "account_id": r[1], "is_admin": bool(r[2]), "boot_id": boot_id, "device_id": r[3]}
+                _session_cache_set(th, session)
+                return session
         except Exception as e:
             logger.warning(
                 "auth_sessions get failed (SESSION_NOT_FOUND sebebi olabilir), fallback to memory: %s",
@@ -177,10 +221,13 @@ def _session_get(token: str, db: Optional[Session] = None) -> Optional[dict]:
     data = _sessions.get(token)
     if not data:
         return None
-    return {"user_id": data["user_id"], "account_id": data.get("account_id"), "is_admin": data.get("is_admin", False), "boot_id": boot_id, "device_id": data.get("device_id")}
+    session = {"user_id": data["user_id"], "account_id": data.get("account_id"), "is_admin": data.get("is_admin", False), "boot_id": boot_id, "device_id": data.get("device_id")}
+    _session_cache_set(th, session)
+    return session
 
 
 def _session_drop_by_user_id(user_id: int, db: Optional[Session] = None) -> None:
+    _session_cache_clear()
     if db is not None:
         try:
             from sqlalchemy import text
@@ -194,6 +241,7 @@ def _session_drop_by_user_id(user_id: int, db: Optional[Session] = None) -> None
 
 
 def _session_drop_by_device_id(user_id: int, device_id: str, db: Optional[Session] = None) -> None:
+    _session_cache_clear()
     if db is not None:
         try:
             from sqlalchemy import text
@@ -209,6 +257,7 @@ def _session_drop_by_device_id(user_id: int, device_id: str, db: Optional[Sessio
 def _session_drop_by_token(token: str, db: Optional[Session] = None) -> None:
     """Invalidate session (logout): set revoked=1 when column exists, else delete row. Also clear in-memory."""
     th = _token_hash(token)
+    _session_cache_invalidate(th)
     if db is not None:
         try:
             from sqlalchemy import text
@@ -265,7 +314,7 @@ def _auth_validate_log(request: Request, outcome: str, reason: str, session_id: 
         bid = ""
     pid = os.getpid()
     log_args = (rid or "", pid, bid, session_id or "", outcome, reason, user_id if user_id is not None else "")
-    if outcome == "FAIL" and reason == "MISSING_TOKEN":
+    if (outcome == "FAIL" and reason == "MISSING_TOKEN") or (outcome == "OK" and reason == "OK"):
         logger.debug(
             "AUTH_VALIDATE request_id=%s worker_pid=%s boot_id=%s session_id=%s outcome=%s reason=%s user_id=%s",
             *log_args,

@@ -464,13 +464,41 @@ def _cooldown_sec_for_rate_limit(e: Exception, default_sec: float = 30) -> float
     return default_sec
 
 
+def _note_wallet_refresh_failure(account_id: int, code: str, err_str: str = "") -> None:
+    """Persist connectivity failure so bot/dashboard probes stay consistent."""
+    try:
+        from app.services.binance_connectivity import note_binance_failure
+
+        code = (code or "BINANCE_UNREACHABLE").strip()
+        hints = {
+            "BINANCE_TIMEOUT": "Binance API zaman aşımı — sunucu çıkış IP ve ağ bağlantısını kontrol edin.",
+            "BINANCE_IP_BANNED": "Binance bu sunucu IP'sini geçici engelledi (418).",
+            "BINANCE_RATE_LIMIT": "Binance istek limiti aşıldı; kısa süre sonra tekrar denenecek.",
+            "CLOCK_DRIFT": "Sunucu saati Binance ile uyuşmuyor (-1021); NTP senkronu gerekli.",
+            "API_UNAUTHORIZED": "API anahtarı geçersiz veya IP beyaz listesinde değil (401/-2015).",
+            "ACCOUNT_KEYS_MISSING": "Hesap için Binance API anahtarı tanımlı değil.",
+            "ACCOUNT_KEYS_EMPTY": "Binance API anahtarı boş.",
+            "ACCOUNT_KEYS_DECRYPT_FAIL": "API anahtarı çözülemedi.",
+        }
+        msg = hints.get(code) or (err_str[:500] if err_str else code)
+        ec = code if code in hints or code.startswith("ACCOUNT_KEYS") else "BINANCE_UNREACHABLE"
+        if code in ("BINANCE_TIMEOUT", "BINANCE_IP_BANNED", "BINANCE_RATE_LIMIT"):
+            ec = code
+        elif "401" in err_str or "Unauthorized" in err_str or "-2015" in err_str or "Invalid API" in err_str:
+            ec = "API_UNAUTHORIZED"
+            msg = hints["API_UNAUTHORIZED"]
+        note_binance_failure(int(account_id), ec, msg, "wallet_refresh")
+    except Exception as ex:
+        logger.debug("_note_wallet_refresh_failure account_id=%s: %s", account_id, ex)
+
+
 async def _do_wallet_refresh(account_id: int, db: Session, request_id: str, force: bool) -> Dict[str, Any]:
-    """Call Binance wallet fetch, write AssetSnapshot, update in-memory state. Used inside lock. Timeout 6s (2.5s connect + 3s read)."""
+    """Call Binance wallet fetch, write AssetSnapshot, update in-memory state. Used inside lock."""
     from app.api.routes import _fetch_wallet_uncached
 
     cfg = get_config()
     max_assets = cfg.get("home_fast_max_assets", 20)
-    WALLET_REFRESH_TIMEOUT = 6.0  # 2.5s connect + 3s read total budget
+    WALLET_REFRESH_TIMEOUT = 10.0
     t0 = time.perf_counter()
     try:
         wallet_raw = await asyncio.wait_for(_fetch_wallet_uncached(account_id, db), timeout=WALLET_REFRESH_TIMEOUT)
@@ -482,6 +510,7 @@ async def _do_wallet_refresh(account_id: int, db: Session, request_id: str, forc
         )
         _wallet_last_error_code[account_id] = "BINANCE_TIMEOUT"
         _wallet_cooldown_until[account_id] = time.monotonic() + cfg.get("wallet_cooldown_sec", 30)
+        _note_wallet_refresh_failure(account_id, "BINANCE_TIMEOUT")
         return {"_error": "timeout", "code": "BINANCE_TIMEOUT"}
     except Exception as e:
         duration_ms = (time.perf_counter() - t0) * 1000
@@ -497,6 +526,7 @@ async def _do_wallet_refresh(account_id: int, db: Session, request_id: str, forc
                     "wallet_refresh_attempt error_code=%s cooldown_sec=%.0f duration_ms=%.0f request_id=%s account_id=%s",
                     code, cooldown_sec, duration_ms, request_id, account_id,
                 )
+                _note_wallet_refresh_failure(account_id, code, err_str)
                 return {"_error": err_str}
         except Exception:
             pass
@@ -509,6 +539,7 @@ async def _do_wallet_refresh(account_id: int, db: Session, request_id: str, forc
                 "wallet_refresh_attempt error_code=%s cooldown_sec=%.0f duration_ms=%.0f request_id=%s account_id=%s",
                 code, cooldown_sec, duration_ms, request_id, account_id,
             )
+            _note_wallet_refresh_failure(account_id, code, err_str)
             return {"_error": err_str}
         elif _is_clock_drift_error(e):
             from app.services.binance_spot import clock_sync_hint
@@ -519,6 +550,7 @@ async def _do_wallet_refresh(account_id: int, db: Session, request_id: str, forc
                 "wallet_refresh_attempt error_code=%s duration_ms=%.0f request_id=%s account_id=%s",
                 code, duration_ms, request_id, account_id,
             )
+            _note_wallet_refresh_failure(account_id, code, err_str)
             return {
                 "_error": f"Sunucu saati Binance ile uyuşmuyor (-1021). {clock_sync_hint()}",
                 "code": code,
@@ -536,6 +568,13 @@ async def _do_wallet_refresh(account_id: int, db: Session, request_id: str, forc
                 "wallet_refresh_attempt error_code=%s duration_ms=%.0f request_id=%s account_id=%s err=%s",
                 code, duration_ms, request_id, account_id, err_str[:300],
             )
+            fail_code = code if isinstance(e, ValueError) and code in KEY_ERROR_CODES else type(e).__name__
+            if fail_code not in KEY_ERROR_CODES:
+                from app.services.binance_connectivity import _classify_binance_error
+                fail_code, fail_msg = _classify_binance_error(e)
+                _note_wallet_refresh_failure(account_id, fail_code, fail_msg)
+            else:
+                _note_wallet_refresh_failure(account_id, fail_code, err_str)
             out = {"_error": err_str}
             if isinstance(e, ValueError) and code in KEY_ERROR_CODES:
                 out["code"] = code
@@ -543,6 +582,9 @@ async def _do_wallet_refresh(account_id: int, db: Session, request_id: str, forc
             return out
 
     if not isinstance(wallet_raw, dict) or wallet_raw.get("_error"):
+        if isinstance(wallet_raw, dict):
+            wc = wallet_raw.get("code") or wallet_raw.get("_error_code") or "BINANCE_UNREACHABLE"
+            _note_wallet_refresh_failure(account_id, str(wc), str(wallet_raw.get("_error", "")))
         return wallet_raw
 
     # Write AssetSnapshot
@@ -717,9 +759,11 @@ async def home_wallet_refresh(
         _wallet_refresh_inflight[account_id] = task
 
     try:
-        result = await asyncio.wait_for(task, timeout=8.0)  # inner budget 6s + margin
+        result = await asyncio.wait_for(task, timeout=12.0)
     except asyncio.TimeoutError:
-        result = {"_error": "timeout"}
+        result = {"_error": "timeout", "code": "BINANCE_TIMEOUT"}
+        _wallet_last_error_code[account_id] = "BINANCE_TIMEOUT"
+        _note_wallet_refresh_failure(account_id, "BINANCE_TIMEOUT")
     finally:
         if account_id in _wallet_refresh_inflight and _wallet_refresh_inflight[account_id] == task:
             _wallet_refresh_inflight.pop(account_id, None)
@@ -829,6 +873,64 @@ async def home_wallet_status(
             "last_error_code": _wallet_last_error_code.get(account_id),
             "keys_configured": keys_configured,
             "last_snapshot_at": last_snapshot_at,
+        },
+        "meta": {"request_id": request_id},
+    }
+
+
+@router.get("/home/connectivity-check")
+async def home_connectivity_check(
+    request: Request,
+    account_id: int = Query(..., description="Account ID"),
+    db: Session = Depends(get_db),
+    current: dict = Depends(require_auth),
+):
+    """
+    Live Binance probe for dashboard diagnostics (server egress IP, not browser IP).
+    Clears persisted failure on success; does not write bot log events.
+    """
+    request_id = getattr(request.state, "request_id", None) or ""
+    require_account_access(current, account_id)
+    from app.api.routes import _fetch_server_public_ip
+    from app.services.binance_connectivity import (
+        active_failure,
+        note_binance_failure,
+        note_binance_success,
+        probe_account_binance,
+    )
+    from app.services.binance_spot import clock_sync_hint
+
+    server_ip = await _fetch_server_public_ip()
+    persisted = active_failure(account_id)
+    ok, code, msg = await probe_account_binance(account_id, db)
+    if ok:
+        note_binance_success(account_id, schedule_resume=True)
+        err_code = ""
+        message = ""
+    else:
+        note_binance_failure(account_id, code, msg, "connectivity_check", emit_async=False)
+        err_code = code
+        message = msg
+
+    hint = None
+    if err_code == "CLOCK_DRIFT" or (message and "-1021" in message):
+        hint = clock_sync_hint()
+    elif err_code == "API_UNAUTHORIZED" and server_ip and server_ip != "—":
+        hint = (
+            f"Binance API → IP kısıtı varsa yalnızca sunucu dış IP ekleyin: {server_ip} "
+            "(ev/PC IP'si yetmez)."
+        )
+
+    return {
+        "ok": True,
+        "data": {
+            "connectivity_ok": ok,
+            "error_code": err_code or (persisted or {}).get("error_code") or _wallet_last_error_code.get(account_id),
+            "message": message or (persisted or {}).get("message"),
+            "server_public_ip": server_ip or "—",
+            "clock_sync_hint": hint,
+            "wallet_last_error_code": _wallet_last_error_code.get(account_id),
+            "persisted_failure": persisted,
         },
         "meta": {"request_id": request_id},
     }

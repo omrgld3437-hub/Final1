@@ -209,19 +209,49 @@
             } else if (data.wallet_error || (data.error && data.error.error_code)) {
                 if (typeof window.markWalletLiveFetchFailed === 'function') window.markWalletLiveFetchFailed();
                 if (typeof window.updateKpiCuzdanLiveStatus === 'function') window.updateKpiCuzdanLiveStatus();
+                notifyWalletRefreshFailure(data.last_error_code || (data.error && data.error.error_code));
+            } else if (data.stale && data.last_error_code) {
+                if (typeof window.markWalletLiveFetchFailed === 'function') window.markWalletLiveFetchFailed();
+                if (typeof window.updateKpiCuzdanLiveStatus === 'function') window.updateKpiCuzdanLiveStatus();
+                notifyWalletRefreshFailure(data.last_error_code);
             }
         }).catch(function () {
             clearRefreshLock(accountId);
             renderHome.showUpdatingBadge(false);
             if (typeof window.markWalletLiveFetchFailed === 'function') window.markWalletLiveFetchFailed();
             if (typeof window.updateKpiCuzdanLiveStatus === 'function') window.updateKpiCuzdanLiveStatus();
+            notifyWalletRefreshFailure('BINANCE_UNREACHABLE');
         });
+    }
+
+    /** Ağ kesintisi sonrası: localStorage refresh kilidini ve debounce’u sıfırla. */
+    function resetRefreshThrottle(accountId) {
+        if (accountId) clearRefreshLock(accountId);
+        lastRefreshAttemptAt = 0;
+    }
+
+    function notifyWalletRefreshFailure(code) {
+        if (typeof window.Toast === 'undefined' || !window.Toast.warning) return;
+        var c = String(code || '').toUpperCase();
+        var msg = 'Cüzdan canlı yenilenemedi.';
+        if (c === 'BINANCE_TIMEOUT' || c === 'BINANCE_UNREACHABLE') {
+            msg = 'Binance\'e bağlanılamadı. Ayarlar → Sunucu dış IP\'yi API beyaz listesine ekleyin (kendi bilgisayar IP\'niz değil).';
+        } else if (c === 'API_UNAUTHORIZED' || c.indexOf('KEY') >= 0 || c.indexOf('401') >= 0) {
+            msg = 'Binance API anahtarı veya IP beyaz liste hatalı. Sunucu dış IP + Spot izinlerini kontrol edin.';
+        } else if (c === 'BINANCE_RATE_LIMIT' || c === 'BINANCE_IP_BANNED') {
+            msg = 'Binance istek limiti; birkaç dakika bekleyip sayfayı yenileyin.';
+        } else if (c === 'CLOCK_DRIFT') {
+            msg = 'Sunucu saati Binance ile uyuşmuyor (-1021). macOS: sudo sntp -sS time.apple.com';
+        }
+        try { window.Toast.warning(msg); } catch (e) {}
     }
 
     return {
         init: init,
         loadFast: loadFast,
         triggerRefresh: triggerRefresh,
-        getAccountId: getAccountId
+        getAccountId: getAccountId,
+        clearRefreshLock: clearRefreshLock,
+        resetRefreshThrottle: resetRefreshThrottle
     };
 });

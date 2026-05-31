@@ -59,19 +59,28 @@ def _parse_iso_ts_ms(ts: Any) -> int:
         return 0
 
 
+def _cycle_open_trade_row(state: Dict[str, Any], cycle_id: int) -> Optional[Dict[str, Any]]:
+    """Tur açılış satırı (cycle_open_trades içinde tek kayıt / tur)."""
+    cid = int(cycle_id or 1)
+    for row in state.get("cycle_open_trades") or []:
+        if isinstance(row, dict) and int(row.get("cycle_id") or 0) == cid:
+            return row
+    return None
+
+
 def _cycle_open_ts_candidates(state: Dict[str, Any], cycle_id: int) -> List[str]:
-    """Tur açılış adayları — grid fill zamanları hariç (yalnızca initial / tur devri)."""
+    """Tur açılış adayları — yalnızca bu tur (target_budgets yalnızca tur 1)."""
     candidates: List[str] = []
-    tb = state.get("target_budgets")
-    if isinstance(tb, dict) and tb.get("ts"):
-        candidates.append(str(tb["ts"]))
-    for cot in state.get("cycle_open_trades") or []:
-        if not isinstance(cot, dict) or int(cot.get("cycle_id") or 0) != cycle_id:
-            continue
-        if cot.get("ts"):
-            candidates.append(str(cot["ts"]))
+    cid = int(cycle_id or 1)
+    if cid <= 1:
+        tb = state.get("target_budgets")
+        if isinstance(tb, dict) and tb.get("ts"):
+            candidates.append(str(tb["ts"]))
+    row = _cycle_open_trade_row(state, cid)
+    if row and row.get("ts"):
+        candidates.append(str(row["ts"]))
     ledger = state.get("cycle_ledger_current")
-    if isinstance(ledger, dict) and int(ledger.get("cycle_id") or 0) == cycle_id:
+    if isinstance(ledger, dict) and int(ledger.get("cycle_id") or 0) == cid:
         sa = ledger.get("started_at")
         if sa:
             candidates.append(str(sa))
@@ -112,8 +121,12 @@ def heal_cycle_opened_at(state: Dict[str, Any]) -> None:
         return
     if not state.get("initial_allocation_done"):
         return
-    # Önceki turun açılışı veya >2 dk sapma → bu turun gerçek açılışına çek
-    if best_ms > 0 and (cur_ms < best_ms - 2000 or abs(cur_ms - best_ms) > 120_000):
+    # Tur ≥2: cycle_opened_at bot başlangıcına yapışmışsa (target_budgets kalıntısı) düzelt
+    if cid > 1 and best_ms > 0 and cur_ms > 0 and best_ms > cur_ms + 2000:
+        state["cycle_opened_at"] = best
+        return
+    # Tur 1: yalnızca daha erken adaya çek (grid fill ile ileri kaydırma yok)
+    if best_ms > 0 and best_ms < cur_ms - 2000:
         state["cycle_opened_at"] = best
 
 
@@ -127,12 +140,9 @@ def resolve_cycle_opened_at_for_cycle(
     if cid == cur_cid:
         ledger = state.get("cycle_ledger_current")
         return resolve_cycle_opened_at(state, ledger if isinstance(ledger, dict) else None)
-    candidates: List[str] = []
-    for cot in state.get("cycle_open_trades") or []:
-        if not isinstance(cot, dict) or int(cot.get("cycle_id") or 0) != cid:
-            continue
-        if cot.get("ts"):
-            candidates.append(str(cot["ts"]))
+    row = _cycle_open_trade_row(state, cid)
+    if row and row.get("ts"):
+        candidates.append(str(row["ts"]))
     for row in state.get("completed_cycle_dual_pnls") or []:
         if not isinstance(row, dict) or int(row.get("cycle_id") or 0) != cid:
             continue

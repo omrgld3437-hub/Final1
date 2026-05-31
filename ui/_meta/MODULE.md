@@ -9,7 +9,7 @@ Web panel — HTML + vanilla JS (FastAPI `/ui` mount).
 | Dosya | Kullanım |
 |-------|----------|
 | `dashboard.html` | Ana panel, bot listesi |
-| `bot.html` | Trailing DCA detay — grid warmup; state hero (`/live` 2.5s + süre 1s tick, `syncStateHeroDurationPoll`; çalışan botta detail patch hero’yu ezmez); tur raporu süre sayacı (`cycle_opened_at`, 1s poll, tur değişiminde sıfırlanır) |
+| `bot.html` | Tur işlemleri tek kaynak: `mergeTradesForCyclePanel` → API + `dedupeTradesForPanel`; grid etiketi `grid_detail.display_label` (API enrich); `cycleSideFromDualSnapshot`; grid satış tablosu fiyatları `fmtGridPrice` (= `#botPriceEl` ondalığı), miktar `fmtGridBaseQty` |
 | `bot_multi.html` | TRDCA / multi — aynı grid warmup + display fingerprint yenileme |
 | `admin.html` | Admin — anında önbellek (inline + localStorage), boot-id bloklamaz |
 | `login.html` | Giriş |
@@ -18,7 +18,7 @@ Web panel — HTML + vanilla JS (FastAPI `/ui` mount).
 
 | Alt klasör | İçerik |
 |------------|--------|
-| `core/` | apiClient, appBoot, intervalRegistry |
+| `core/` | apiClient (HTTP 429: `extractHttpDetailMessage` + 30s toast debounce; `suppressRateLimitToast` sessiz poll), appBoot, intervalRegistry |
 | `stores/` | dashboardStore, financeStore |
 | `services/` | marketData, finance |
 | `utils/` | trTime, coinLogo, botHealthAlerts (aktif uyarı log; çözülen HEALTH gizlenir) |
@@ -27,6 +27,12 @@ Web panel — HTML + vanilla JS (FastAPI `/ui` mount).
 ## Bot oluşturma
 
 `dashboard.js` → `createAndStartBot` → `/api/bots/create` + `/api/bots-engine/{id}/start`
+
+**Sembol arama (`#fSymbol`, `#mobileTradeSearchInput`, coin list):** `scope=all` → Binance TRADING tüm çiftler; `fetchCoinSearchPricesBatch` + `ticker_24h` yedek — arama sonuçlarında tüm paritelerin fiyatı (`formatCoinSearchItemPrice`, quote’a göre); `queueCoinSearchPriceFetch` mobil/desktop dropdown canlı doldurma. Bot oluştur `#dmSymbolSearchDropdown`: fiyat poll bitince yalnızca input odaktayken yenilenir; dışarı tıklama / Escape / parite seçimi → `hideCreateModalSymbolDropdown` (`_dmSymbolSearchPriceGen`).
+
+**Cüzdan varlıkları:** `renderVarliklarList` — stabil sıralama, patch-only; `varlikRowTradeState` Al/Sat her zaman aktif; `fmtVarlikQty` (Toplam/Bot kilitli/Kilitli/Kullanılabilir — miktar büyüklüğü + LOT_SIZE üst sınırı, dinamik ondalık) / `walletAssetTotalQty`; `refreshVarliklarWalletMarketData` slim prices. **KPI cüzdan (`#kpiCuzdan`, günlük PnL):** `setKpiUsdTextIfChanged` / `setKpiPctTextIfChanged` (cent altı DOM yok); test strip→KPI `scheduleTestAccountKpiCuzdanRefresh` (~450 ms) — canlı fiyat tick flicker azaltma. **Bağlantı dönüşü:** `recoverDashboardAfterConnectivity` — `online` / focus / sekme görünür + stale iken `homeFlash.resetRefreshThrottle`, `POST /api/home/wallet/refresh?force=1`, `GET /api/home/connectivity-check` (toast: sunucu IP / CLOCK_DRIFT / 401), `fetchSnapshot`. **Binance IP:** işlemler sunucudan gider; Ayarlar → Sunucu dış IP beyaz listeye eklenmeli (PC IP yetmez). `home.py` hata → `note_binance_failure`; manager `logHumanize` v26 (Ham satırdan yeniden şablon). **Bot detay:** `bot.html?symbol=` + `syncBotStripSymbol` — strip sembolü API ile senkron (cache/patch drift önlemi).
+
+**En İyi 5 Bot:** `loadGlobalLeaderboard` — yapı değişmedikçe tam `innerHTML` yok (`structureSig`); K/Z/süre `patchGlobalLeaderboardMetrics` (logo DOM dokunulmaz, `coinLogoCache` + lazy logo). Boş liste `patchOnly`; 10 sn timeout → `LEADERBOARD_NO_PROFIT_HTML`; `filterLeaderboardItemsForDisplay` + `scheduleLeaderboardSyncFromBots`.
 
 ## Eksik asset
 

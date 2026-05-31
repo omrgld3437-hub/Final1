@@ -759,6 +759,49 @@
         return out;
     }
 
+    function cycleEndRichnessScore(ev) {
+        var meta = (ev && ev.meta) || {};
+        var score = 0;
+        var eid = Number(ev.id || 0);
+        if (eid > 0) score += 1000 + eid;
+        else if (eid < 0) score += 200 + Math.abs(eid);
+        if (!meta.synthetic) score += 300;
+        if (meta.pnl_usdt_net != null || meta.inventory_coin_adv_qty != null) score += 120;
+        if (meta.realized_pnl_cycle_net != null || meta.fees_usdt != null) score += 60;
+        return score;
+    }
+
+    function dedupeCycleEndForDisplay(events) {
+        var list = events || [];
+        var best = {};
+        list.forEach(function (ev) {
+            if ((ev.type || '') !== 'CYCLE_END') return;
+            var cid = Number((ev.meta || {}).cycle_id);
+            if (!cid || cid < 1) return;
+            if (!best[cid] || cycleEndRichnessScore(ev) > cycleEndRichnessScore(best[cid])) {
+                best[cid] = ev;
+            }
+        });
+        if (!Object.keys(best).length) return list;
+        var emitted = {};
+        var out = [];
+        list.forEach(function (ev) {
+            if ((ev.type || '') !== 'CYCLE_END') {
+                out.push(ev);
+                return;
+            }
+            var cid = Number((ev.meta || {}).cycle_id);
+            if (!cid || cid < 1) {
+                out.push(ev);
+                return;
+            }
+            if (emitted[cid]) return;
+            out.push(best[cid]);
+            emitted[cid] = true;
+        });
+        return out;
+    }
+
     function shouldHideRedundantCycleStart(ev, meta) {
         if ((ev.type || '') !== 'CYCLE_START' || meta.cycle_id == null) return false;
         if (meta.quote_balance != null || meta.equity_usdt != null || meta.equity_usd != null) return false;
@@ -891,8 +934,14 @@
                 : 'Yetersiz USDT — ilk alım yapılamadı');
             var req = num(meta.required);
             var av = num(meta.available);
+            var vq = num(meta.virtual_quote);
             if (req != null && av != null) {
-                parts.push('gerekli ' + fmtUsd(req, false) + ', mevcut ' + fmtUsd(av, false));
+                if (skip === 'VIRTUAL_BUDGET_INSUFFICIENT' && vq != null && vq > av + 0.001) {
+                    parts.push('emir ' + fmtUsd(req, false) + ', kullanılabilir ' + fmtUsd(av, false)
+                        + ' (sanal USDT ' + fmtUsd(vq, false) + ', komisyon payı ayrıldı)');
+                } else {
+                    parts.push('gerekli ' + fmtUsd(req, false) + ', mevcut ' + fmtUsd(av, false));
+                }
             }
             var rd2 = reasonDetail(meta);
             if (rd2) parts.push(rd2);
@@ -1411,6 +1460,8 @@
                 key = (ev.type || '') + '\0' + ec + '\0' + fmt.severity;
             } else if ((ev.type || '') === 'CYCLE_START') {
                 key = 'CYCLE_START\0' + String(meta.cycle_id != null ? meta.cycle_id : '') + '\0' + String(ev.id != null ? ev.id : (ev.ts || '') + '\0' + (fmt.message || ''));
+            } else if ((ev.type || '') === 'CYCLE_END') {
+                key = 'CYCLE_END\0' + String(meta.cycle_id != null ? meta.cycle_id : '');
             } else {
                 key = (ev.type || '') + '\0' + (meta.error_code || '') + '\0' + fmt.message + '\0' + fmt.severity;
             }
@@ -1481,6 +1532,7 @@
         sortEngineEventsAsc: sortEngineEventsAsc,
         sortEngineEventsDesc: sortEngineEventsDesc,
         dedupeCycleStartForDisplay: dedupeCycleStartForDisplay,
+        dedupeCycleEndForDisplay: dedupeCycleEndForDisplay,
         parseEventTsMs: parseEventTsMs,
         formatEventTs: formatEventTs
     };

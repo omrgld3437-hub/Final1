@@ -34,6 +34,9 @@
         if ((e.type || '') === 'CYCLE_START' && meta.cycle_id != null) {
             return 'CYCLE_START:' + meta.cycle_id + ':' + (meta.synthetic ? 's' : 'd');
         }
+        if ((e.type || '') === 'CYCLE_END' && meta.cycle_id != null) {
+            return 'CYCLE_END:' + meta.cycle_id;
+        }
         return 'anon:' + (e.type || '') + ':' + (e.ts || '') + ':' + (e.message || '').slice(0, 40);
     }
 
@@ -50,6 +53,9 @@
         var merged = Object.keys(byKey).map(function (k) { return byKey[k]; });
         if (global.EngineLogFormat && global.EngineLogFormat.dedupeCycleStartForDisplay) {
             merged = global.EngineLogFormat.dedupeCycleStartForDisplay(merged);
+        }
+        if (global.EngineLogFormat && global.EngineLogFormat.dedupeCycleEndForDisplay) {
+            merged = global.EngineLogFormat.dedupeCycleEndForDisplay(merged);
         }
         merged = sortEventsForDisplay(merged);
         if (merged.length > limit) merged = merged.slice(0, limit);
@@ -189,6 +195,9 @@
         var list = displayEvents || [];
         if (fmtApi && fmtApi.dedupeCycleStartForDisplay) {
             list = fmtApi.dedupeCycleStartForDisplay(list);
+        }
+        if (fmtApi && fmtApi.dedupeCycleEndForDisplay) {
+            list = fmtApi.dedupeCycleEndForDisplay(list);
         }
         list = sortEventsForDisplay(list);
         if (fmtApi && fmtApi.setLogContext) {

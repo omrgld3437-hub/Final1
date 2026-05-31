@@ -22,6 +22,8 @@
     'app.botengine.health_watch': 'Bot sağlık izleme',
     'app.botengine.intent_ledger': 'Emir intent defteri',
     'app.api.spot_routes': 'Spot API (Al/Sat modal)',
+    'app.api.routes.home': 'Anasayfa cüzdan API (home/fast, wallet/refresh)',
+    'app.api.bots_engine': 'Bot API (oluştur/sil/performans)',
     'app.services.spot_engine': 'Spot engine',
     'uvicorn.error': 'Web sunucusu',
     'uvicorn.access': 'Web erişim günlüğü'
@@ -540,6 +542,108 @@
       }
     },
     {
+      test: function (msg) { return /wallet_refresh_attempt error_code=BINANCE_TIMEOUT/i.test(msg); },
+      apply: function (ctx) {
+        var acct = (ctx.params && ctx.params.account_id) || (ctx.message || '').match(/account_id=(\d+)/i);
+        return {
+          konu: 'Cüzdan yenileme — Binance zaman aşımı',
+          sebep: 'Canlı cüzdan çekimi ' + (acct ? ('(hesap ' + (acct[1] || acct) + ') ') : '') + 'süre içinde tamamlanamadı. İnternet kesintisi, yavaş ağ veya Binance yanıt gecikmesi olabilir.',
+          etki: 'Dashboard «Güncel değil» gösterir; önbellekli bakiye ($) görünür ama canlı değildir.',
+          oneri: 'Ayarlar → Sunucu dış IP\'yi Binance API beyaz listesine ekleyin (kendi PC IP\'si değil). Ağ düzeldikten sonra sayfayı yenileyin veya Portföy → Yenile.'
+        };
+      }
+    },
+    {
+      test: function (msg) { return /wallet_refresh_attempt error_code=BINANCE_IP_BANNED/i.test(msg); },
+      apply: function () {
+        return {
+          konu: 'Cüzdan yenileme — Binance IP ban (418)',
+          sebep: 'Binance bu sunucu IP\'sinden gelen istekleri geçici olarak engelledi (rate limit / ban).',
+          etki: 'Cüzdan canlı yenilenmez; cooldown sonrası tekrar denenecek.',
+          oneri: '15–30 dk bekleyin; istek sıklığını azaltın. Kalıcıysa Binance destek veya farklı çıkış IP.'
+        };
+      }
+    },
+    {
+      test: function (msg) { return /wallet_refresh_attempt error_code=BINANCE_RATE_LIMIT/i.test(msg); },
+      apply: function () {
+        return {
+          konu: 'Cüzdan yenileme — Binance istek limiti',
+          sebep: 'Çok sık cüzdan/API isteği; Binance 429 veya ağırlık limiti döndü.',
+          etki: 'Kısa cooldown; önbellekli cüzdan gösterilir.',
+          oneri: 'Birkaç dakika bekleyin; eşzamanlı sekme/poll sayısını azaltın.'
+        };
+      }
+    },
+    {
+      test: function (msg) { return /wallet_refresh_attempt error_code=CLOCK_DRIFT/i.test(msg); },
+      apply: function () {
+        return {
+          konu: 'Cüzdan yenileme — sunucu saati sapması (-1021)',
+          sebep: 'Sunucu saati Binance ile uyuşmuyor; imzalı API istekleri reddedilir.',
+          etki: 'Canlı cüzdan ve emirler başarısız olabilir.',
+          oneri: 'Sunucuda NTP/chrony ile saat senkronu; macOS/Linux: sudo sntp -sS time.apple.com veya systemctl restart chronyd.'
+        };
+      }
+    },
+    {
+      test: function (msg) {
+        return /wallet_refresh_attempt error_code=/i.test(msg)
+          && (/API_UNAUTHORIZED|ACCOUNT_KEYS|401|2015|invalid.api/i.test(msg) || /err=.*(?:401|Unauthorized|Invalid API)/i.test(msg));
+      },
+      apply: function (ctx) {
+        var acct = (ctx.params && ctx.params.account_id) || (ctx.message || '').match(/account_id=(\d+)/i);
+        return {
+          konu: 'Cüzdan yenileme — API anahtarı veya IP beyaz liste',
+          sebep: 'Binance 401/-2015 veya hesapta API anahtarı eksik/geçersiz. Binance kısıtı varsa yalnızca sunucunun dış IP\'si whitelist\'te olmalı (tarayıcı/PC IP\'si yetmez).',
+          etki: '«Güncel değil»; bot sayfasında bağlantı hatası görülebilir.',
+          oneri: (acct ? 'Hesap ' + (acct[1] || acct) + ': ' : '') + 'Dashboard Ayarlar → Sunucu dış IP\'yi Binance\'e ekleyin; API key Spot+Read; secret doğru.'
+        };
+      }
+    },
+    {
+      test: function (msg) { return /wallet_refresh_attempt error_code=/i.test(msg); },
+      apply: function (ctx) {
+        var codeM = (ctx.message || ctx.raw || '').match(/error_code=([^\s]+)/i);
+        var code = codeM ? codeM[1] : 'bilinmeyen';
+        var errM = (ctx.message || ctx.raw || '').match(/err=([^\n]{0,200})/i);
+        var detail = errM ? errM[1].trim() : '';
+        return {
+          konu: 'Cüzdan yenileme başarısız (' + code + ')',
+          sebep: 'Canlı Binance cüzdan snapshot alınamadı.' + (detail ? ' ' + detail : ''),
+          etki: 'Dashboard önbellek kullanır; KPI «Güncel değil» kalabilir.',
+          oneri: 'Sunucu dış IP + API anahtarı kontrolü; web servisini yeniden başlatın; ağ düzelince sayfayı yenileyin.'
+        };
+      }
+    },
+    {
+      test: function (msg) {
+        return /home_wallet_refresh/i.test(msg) && /\berror=/i.test(msg) && !/error=api_key_invalid/i.test(msg);
+      },
+      apply: function (ctx) {
+        var errM = (ctx.message || ctx.raw || '').match(/\berror=([^\s]+(?:\s+[^\s]+){0,8})/i);
+        var detail = errM ? errM[1].trim() : 'bağlantı hatası';
+        return {
+          konu: 'Anasayfa cüzdan yenileme tamamlanamadı',
+          sebep: 'POST /api/home/wallet/refresh başarısız: ' + detail,
+          etki: 'Önbellekli bakiye gösterilir; canlı rozeti «Güncel değil».',
+          oneri: 'Binance beyaz listeye sunucu IP ekleyin; birkaç dakika sonra dashboard yenileyin.'
+        };
+      }
+    },
+    {
+      test: function (msg) { return /\[home\]\s*home_fast\s+payload_bytes=/i.test(msg); },
+      apply: function (ctx) {
+        var m = (ctx.message || ctx.raw || '').match(/payload_bytes=(\d+).*warn=(\d+)/i);
+        return {
+          konu: 'Anasayfa hızlı yükleme — büyük yanıt',
+          sebep: 'home/fast JSON yanıtı uyarı eşiğini aştı' + (m ? (' (' + m[1] + ' bayt, eşik ' + m[2] + ')') : '') + '.',
+          etki: 'Yavaş yükleme; işlev bozulmaz.',
+          oneri: 'Gerekirse home_fast_max_assets veya fiyat sembol sayısını düşürün; kritik değil.'
+        };
+      }
+    },
+    {
       test: function (msg) {
         return /wallet_refresh_attempt error_code=(?:ImportError|WALLET_MODULE_MISSING)/i.test(msg);
       },
@@ -917,6 +1021,83 @@
       }
     },
     {
+      test: function (msg) { return /bots_delete skip convert \(test\/paper account\)/i.test(msg); },
+      apply: function (ctx) {
+        var bid = (ctx.params && ctx.params.bot_id) || (ctx.message || '').match(/bot_id=(\d+)/i);
+        bid = bid ? (bid[1] || bid) : '—';
+        return {
+          konu: 'Bot silme — test hesabı (dönüştürme yok)',
+          sebep: 'Test/paper hesabında Binance\'e base satışı yapılmaz; bot doğrudan silinir.',
+          etki: 'Sanal bakiye değişmez; bot kaydı ve state temizlenir.',
+          oneri: 'Beklenen davranış — ek işlem gerekmez.'
+        };
+      }
+    },
+    {
+      test: function (msg) { return /bots_delete convert skip bot_id=/i.test(msg); },
+      apply: function (ctx) {
+        var m = (ctx.message || '').match(/symbol=(\S+).*notional=([\d.]+).*min=([\d.]+)/i);
+        return {
+          konu: 'Bot silme — base USDT\'ye çevrilmedi (min tutar)',
+          sebep: m
+            ? (m[1] + ' bakiyesi minimum işlem tutarının (' + m[3] + ' USDT) altında (' + m[2] + ' USDT).')
+            : 'Kalan coin tutarı borsa minimum notional altında.',
+          etki: 'Coin hesapta kalır; bot yine de silinir.',
+          oneri: 'Küçük bakiyeyi manuel kapatabilir veya «bakiye olduğu gibi kalsın» ile silin.'
+        };
+      }
+    },
+    {
+      test: function (msg) { return /bots_delete convert_base_to_quote.*failed bot_id=/i.test(msg); },
+      apply: function (ctx) {
+        var msg = ctx.message || ctx.raw || '';
+        var bid = (ctx.params && ctx.params.bot_id) || (msg.match(/bot_id=(\d+)/i) || [])[1] || '—';
+        var detail = technicalDetail(ctx);
+        var workerOnly = /only allowed on worker|web\/api cannot place/i.test(detail);
+        var noKeys = /api anahtar/i.test(detail);
+        return {
+          konu: 'Bot silme — base → USDT dönüşümü başarısız',
+          sebep: workerOnly
+            ? 'Piyasa satışı yalnızca bot worker sürecinde yapılabilir; web silme isteği convert denedi.'
+            : (noKeys
+              ? 'Hesapta Binance API anahtarı yok (test/paper hesap olabilir).'
+              : ('Dönüştürme hatası: ' + detail.slice(0, 180))),
+          etki: workerOnly || noKeys
+            ? 'Uyarı kaydedildi; bot silme işlemi genelde devam eder.'
+            : 'Bot silinmemiş olabilir; kullanıcıya hata dönmüş olabilir.',
+          oneri: workerOnly || noKeys
+            ? 'Test hesabında «bakiye olduğu gibi kalsın» ile silin veya canlı hesapta worker çalıştığından emin olun.'
+            : 'API anahtarı, bakiye ve sembolü kontrol edin; gerekirse convert olmadan silin.'
+        };
+      }
+    },
+    {
+      test: function (msg) { return /bots_delete convert cancel_order|bots_delete convert list_orders/i.test(msg); },
+      apply: function (ctx) {
+        var sym = (ctx.params && ctx.params.symbol) || (ctx.message || '').match(/symbol=(\S+)/i);
+        sym = sym ? (sym[1] || sym) : '—';
+        return {
+          konu: 'Bot silme — açık emir iptali uyarısı',
+          sebep: sym + ' için silme öncesi emir iptali veya emir listesi alınamadı: ' + technicalDetail(ctx).slice(0, 160),
+          etki: 'Dönüştürme veya silme kısmen gecikebilir; bot silme süreci devam edebilir.',
+          oneri: 'Binance’te manuel açık emir var mı bakın; tekrarlıysa API erişimini kontrol edin.'
+        };
+      }
+    },
+    {
+      test: function (msg) { return /delete_bot_fully archive bot_id=/i.test(msg); },
+      apply: function (ctx) {
+        var bid = (ctx.params && ctx.params.bot_id) || (ctx.message || '').match(/bot_id=(\d+)/i);
+        bid = bid ? (bid[1] || bid) : '—';
+        return {
+          konu: 'Bot silme — performans arşivi yazılamadı',
+          sebep: 'Bot silinirken günlük performans arşivi güncellenemedi: ' + technicalDetail(ctx).slice(0, 160),
+          etki: 'Bot ve state silinir; performans dosyası eksik kalabilir.',
+          oneri: 'Tek seferlik uyarıysa yok sayılabilir. Tekrarlıysa disk izinleri ve .run/bot_cycles yolunu kontrol edin.'
+        };
+      }
+    },
+    {
       test: function (msg) { return /Spot quick_data error for/i.test(msg); },
       apply: function (ctx) {
         var m = (ctx.message || ctx.raw || '').match(/Spot quick_data error for\s+(\S+):\s*(.+)$/i);
@@ -1030,10 +1211,20 @@
       konu = isErr ? 'Spot API hatası' : 'Spot API uyarısı';
     } else if (/binance_spot|binance_adapter/i.test(mod)) {
       konu = 'Binance API uyarısı';
+    } else if (/bots_engine/i.test(mod)) {
+      konu = isErr ? 'Bot API hatası' : 'Bot API uyarısı';
     } else if (/botengine/i.test(mod)) {
       konu = isErr ? 'Bot engine hatası' : 'Bot engine uyarısı';
+    } else if (/app\.api\.routes\.home|routes\.home/i.test(mod)) {
+      konu = isErr ? 'Anasayfa cüzdan API hatası' : 'Anasayfa cüzdan uyarısı';
     }
     var sebep = 'Bu log satırı için özel Türkçe şablon yok; tam kaynak metin en altta (Ham satır).';
+    if (/wallet_refresh|home_wallet_refresh|home_fast/i.test(msg)) {
+      sebep = 'Anasayfa canlı cüzdan yenilemesi (Binance) ile ilgili kayıt; çoğunlukla IP beyaz liste, API anahtarı veya ağ kesintisi.';
+    }
+    if (/bots_delete|delete_bot_fully/i.test(msg)) {
+      sebep = 'Bot silme veya silme öncesi dönüştürme aşamasında uyarı kaydedildi.';
+    }
     if (/BOT_EXECUTION|run_actions|EXEC_ORDER/i.test(msg)) {
       sebep = 'Bot emir yürütme aşamasında uyarı veya hata kaydedildi.';
     } else if (/binance_spot|BINANCE_/i.test(msg)) {
@@ -1082,12 +1273,14 @@
     return lines.join('\n');
   }
 
-  function alreadyHumanized(raw) {
-    return /^\s*Konu:\s/m.test(String(raw || ''));
+  function extractHamLine(raw) {
+    var m = String(raw || '').match(/(?:^|\n)Ham satır:\s*(.+)$/m);
+    return m ? m[1].trim() : null;
   }
 
   function humanize(rawLine, serviceKey) {
-    if (alreadyHumanized(rawLine)) return String(rawLine).trim();
+    var ham = extractHamLine(rawLine);
+    if (ham) rawLine = ham;
     var ctx = parseLine(rawLine);
     var msg = ctx.message || ctx.raw;
     var tr = null;

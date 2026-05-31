@@ -62,7 +62,7 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
     <link rel="stylesheet" href="/ui/assets/theme.css?v=clean1">
     <link rel="stylesheet" href="/ui/assets/ui.css?v=clean1">
     <link rel="stylesheet" href="/ui/assets/design.css?v=clean1">
-    <link rel="stylesheet" href="/ui/assets/dashboard.css?v=varlik-blink-bot1">
+    <link rel="stylesheet" href="/ui/assets/dashboard.css?v=varliklar-antiflicker1">
     <link rel="stylesheet" href="/ui/assets/binance-colors.css?v=bin1">
     <link rel="stylesheet" href="/ui/assets/blink.css?v=1">
     <link rel="stylesheet" href="/ui/assets/dashboard-login-theme.css?v=1">
@@ -843,7 +843,7 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
         <div id="mobileTradeView" class="mobile-trade-view dm-tab-content" style="display: none;">
             <h3 style="margin: 0 0 0.75rem 0; font-size: 1.2rem; font-weight: 600; color: var(--ds-text-primary);">İşlem</h3>
             <div class="coin-list-search-wrap" style="position: relative; width: 100%; max-width: 100%; margin-bottom: 1rem;" role="search">
-                <input type="search" id="mobileTradeSearchInput" class="form-input" placeholder="BTCUSDT, ETHUSDT… ara" autocomplete="off" style="width: 100%; padding: 0.6rem 1rem;" aria-label="Coin ara" />
+                <input type="search" id="mobileTradeSearchInput" class="form-input" placeholder="BTCUSDT, XRP/ETH, SOL BTC… ara" autocomplete="off" style="width: 100%; padding: 0.6rem 1rem;" aria-label="Coin ara" />
                 <div id="mobileTradeSearchDropdown" class="coin-list-search-dropdown" style="display: none; position: absolute; left: 0; right: 0; top: 100%; margin-top: 4px; max-height: 280px; overflow-y: auto; background: var(--ds-bg-panel); border: 1px solid var(--ds-border); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.3); z-index: 100;"></div>
             </div>
             <h4 style="margin: 0 0 0.5rem 0; font-size: 0.95rem; font-weight: 600; color: var(--ds-text-secondary);">Favori Coinler</h4>
@@ -1999,7 +1999,7 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
     <!-- Core infrastructure (must load first) -->
     <script src="/ui/assets/utils/trTime.js?v=1"></script>
     <script src="/ui/assets/js/maintenanceOverlay.js?v=1"></script>
-    <script src="/ui/assets/core/apiClient.js?v=timeout20"></script>
+    <script src="/ui/assets/core/apiClient.js?v=429-toast-fix1"></script>
     <script src="/ui/assets/core/errorReporter.js?v=refactor1"></script>
     <script src="/ui/assets/core/intervalRegistry.js?v=refactor1"></script>
     <!-- Stores -->
@@ -2022,9 +2022,9 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
     <!-- Flash Home (Patch H). Deploy ui/assets/ so storageCache, renderHome, homeFlash exist (else 404). -->
     <script src="/ui/assets/storageCache.js?v=flash1"></script>
     <script src="/ui/assets/renderHome.js?v=wallet-stable6"></script>
-    <script src="/ui/assets/homeFlash.js?v=wallet-stable4"></script>
+    <script src="/ui/assets/homeFlash.js?v=clock-drift-hint1"></script>
     <!-- Main dashboard (refactored) -->
-    <script src="/ui/assets/dashboard.js?v=bots-tab-cache2"></script>
+    <script src="/ui/assets/dashboard.js?v=dm-symbol-dropdown-fix2"></script>
     <script src="/ui/assets/ticker.js?v=mobile1" defer></script>
 </body>
 </html>

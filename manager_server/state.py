@@ -917,6 +917,11 @@ def _is_web_access_200_line(line: str) -> bool:
     return bool(_ACCESS_200_RE.search(line))
 
 
+def _is_auth_validate_ok_line(line: str) -> bool:
+    """Başarılı oturum doğrulama INFO gürültüsü (dosyada DEBUG; eski/geçmiş satırlar için)."""
+    return "AUTH_VALIDATE" in line and " outcome=OK " in line
+
+
 def _is_noise_line(line: str, level: str) -> bool:
     """True if line should not be added to errors_ring/warns_ring (gürültü)."""
     s = line.strip()
@@ -1668,7 +1673,7 @@ def _tail_loop(key: str) -> None:
         with open(log_path, "r", encoding="utf-8", errors="replace") as f:
             for line in _read_file_tail_lines(log_path, RING_LINES):
                 line = _truncate_line(line)
-                if key == "web" and _is_web_access_200_line(line):
+                if key == "web" and (_is_web_access_200_line(line) or _is_auth_validate_ok_line(line)):
                     continue
                 if key == "html" and _should_skip_html_stats_duplicate(key, line):
                     continue
@@ -1683,7 +1688,7 @@ def _tail_loop(key: str) -> None:
                     time.sleep(0.2)
                     continue
                 line = _truncate_line(line.rstrip("\n\r"))
-                if key == "web" and _is_web_access_200_line(line):
+                if key == "web" and (_is_web_access_200_line(line) or _is_auth_validate_ok_line(line)):
                     continue
                 if key == "html" and _should_skip_html_stats_duplicate(key, line):
                     continue

@@ -69,10 +69,40 @@ def _is_invalid_spot_symbol(symbol: str) -> bool:
     return False
 
 
+def _valid_spot_symbols_sync() -> Set[str]:
+    """ExchangeInfo TRADING sembolleri (DataHub cache); klines/price için senkron."""
+    global _VALID_SPOT_SYMBOLS, _VALID_SPOT_SYMBOLS_TS
+    now = time.time()
+    if _VALID_SPOT_SYMBOLS is not None and (now - _VALID_SPOT_SYMBOLS_TS) < _VALID_SPOT_SYMBOLS_TTL:
+        return _VALID_SPOT_SYMBOLS
+    try:
+        from app.services.market_data import get_symbols
+
+        symbols = get_symbols("all")
+        if symbols:
+            _VALID_SPOT_SYMBOLS = set(symbols)
+            _VALID_SPOT_SYMBOLS_TS = now
+            return _VALID_SPOT_SYMBOLS
+    except Exception:
+        pass
+    _VALID_SPOT_SYMBOLS = _VALID_SPOT_SYMBOLS or set()
+    _VALID_SPOT_SYMBOLS_TS = now
+    return _VALID_SPOT_SYMBOLS
+
+
 def _normalize_spot_trading_symbol(symbol: str) -> Optional[str]:
-    """BTC → BTCUSDT; geçersiz/boş sembolde None (Binance çağrısı yapılmaz)."""
+    """BTC → BTCUSDT; XRP/ETH → XRPETH. Geçersiz/boş sembolde None (Binance çağrısı yapılmaz)."""
     sym = (symbol or "").upper().strip()
     if not sym or _is_invalid_spot_symbol(sym):
+        return None
+    valid = _valid_spot_symbols_sync()
+    if valid:
+        if sym in valid:
+            return sym
+        if re.match(r"^[A-Z0-9]{2,12}$", sym):
+            candidate = sym + "USDT"
+            if candidate in valid:
+                return candidate
         return None
     if _SPOT_SYMBOL_RE.match(sym):
         return sym
@@ -102,16 +132,34 @@ async def _get_valid_spot_symbols_async() -> Set[str]:
     _VALID_SPOT_SYMBOLS_TS = now
     return _VALID_SPOT_SYMBOLS
 
+def _base_quote_from_symbol(sym: str) -> Tuple[str, str]:
+    """exchangeInfo cache; yoksa USDT sonek kırılımı."""
+    sym = (sym or "").upper().strip()
+    try:
+        from app.services.binance_spot import get_symbol_filters_sync
+
+        flt = get_symbol_filters_sync(sym, testnet=False) or {}
+        base = (flt.get("baseAsset") or "").strip().upper()
+        quote = (flt.get("quoteAsset") or "").strip().upper()
+        if base and quote:
+            return base, quote
+    except Exception:
+        pass
+    if sym.endswith("USDT") and len(sym) > 4:
+        return sym[:-4], "USDT"
+    return sym.replace("USDT", "") or "BTC", "USDT"
+
+
 def _default_quick_data_response(symbol: str):
     import time
     sym = (symbol or "BTCUSDT").upper()
-    base = sym.replace("USDT", "") or "BTC"
+    base, quote = _base_quote_from_symbol(sym)
     return {
         "symbol": sym,
         "price": 0.0,
         "priceChange24h": 0.0,
         "baseAsset": base,
-        "quoteAsset": "USDT",
+        "quoteAsset": quote,
         "baseBalance": 0.0,
         "quoteBalance": 0.0,
         "baseLockedByBots": 0.0,
@@ -166,8 +214,7 @@ async def get_spot_quick_data(
 
                 wallet = build_test_account_wallet(account_id, db)
                 bot_locked = get_bot_locked_balances_for_account(db, account_id) or {}
-                base_asset = sym.replace("USDT", "") if sym.endswith("USDT") else sym
-                quote_asset = "USDT"
+                base_asset, quote_asset = _base_quote_from_symbol(sym)
                 bal = spot_balances_from_wallet(wallet, base_asset, quote_asset, bot_locked)
                 price = 0.0
                 try:
@@ -672,7 +719,13 @@ async def get_spot_price(
     """
     get_account_or_403(current, account_id, db)
     sym = (symbol or "").upper().strip()
-    if _is_invalid_spot_symbol(sym) or not _SPOT_SYMBOL_RE.match(sym):
+    if _is_invalid_spot_symbol(sym):
+        return {"ok": False, "error_code": "INVALID_SYMBOL", "symbol": sym}
+    valid = _valid_spot_symbols_sync()
+    if valid:
+        if sym not in valid:
+            return {"ok": False, "error_code": "INVALID_SYMBOL", "symbol": sym}
+    elif not _SPOT_SYMBOL_RE.match(sym):
         return {"ok": False, "error_code": "INVALID_SYMBOL", "symbol": sym}
 
     from app.core.security.endpoint_rate_limit import check_endpoint_rate_limit

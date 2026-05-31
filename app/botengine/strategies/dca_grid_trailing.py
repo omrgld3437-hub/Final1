@@ -188,10 +188,11 @@ def _lock_cycle_grid_side(state: Dict[str, Any], side: str) -> None:
     )
 
 
-def _heal_cycle_grid_side(state: Dict[str, Any]) -> None:
-    """Mevcut turda grid fill var ama cycle_grid_side yoksa yönü geçmiş fill'lerden çıkar (migrate)."""
-    if state.get("cycle_grid_side"):
-        return
+def infer_cycle_grid_side(state: Dict[str, Any]) -> Optional[str]:
+    """Tur yönü: state veya grid fill geçmişinden (persist etmez)."""
+    side = state.get("cycle_grid_side")
+    if side in ("SELL", "BUY"):
+        return side
     sell_fired = state.get("sell_grid_fired") or []
     buy_fired = state.get("buy_grid_fired") or []
     sell_h = [h for h in (state.get("sell_history") or []) if isinstance(h, dict) and h.get("grid_index") is not None]
@@ -199,19 +200,28 @@ def _heal_cycle_grid_side(state: Dict[str, Any]) -> None:
     sell_any = any(sell_fired) or bool(sell_h)
     buy_any = any(buy_fired) or bool(buy_h)
     if not sell_any and not buy_any:
-        return
+        return None
     if sell_any and not buy_any:
-        state["cycle_grid_side"] = "SELL"
-    elif buy_any and not sell_any:
-        state["cycle_grid_side"] = "BUY"
-    else:
-        first_sell_i = next((i for i, f in enumerate(sell_fired) if f), 999)
-        first_buy_j = next((j for j, f in enumerate(buy_fired) if f), 999)
-        if first_sell_i == 999 and sell_h:
-            first_sell_i = int(sell_h[0].get("grid_index") or 0)
-        if first_buy_j == 999 and buy_h:
-            first_buy_j = int(buy_h[0].get("grid_index") or 0)
-        state["cycle_grid_side"] = "SELL" if first_sell_i <= first_buy_j else "BUY"
+        return "SELL"
+    if buy_any and not sell_any:
+        return "BUY"
+    first_sell_i = next((i for i, f in enumerate(sell_fired) if f), 999)
+    first_buy_j = next((j for j, f in enumerate(buy_fired) if f), 999)
+    if first_sell_i == 999 and sell_h:
+        first_sell_i = int(sell_h[0].get("grid_index") or 0)
+    if first_buy_j == 999 and buy_h:
+        first_buy_j = int(buy_h[0].get("grid_index") or 0)
+    return "SELL" if first_sell_i <= first_buy_j else "BUY"
+
+
+def _heal_cycle_grid_side(state: Dict[str, Any]) -> None:
+    """Mevcut turda grid fill var ama cycle_grid_side yoksa yönü geçmiş fill'lerden çıkar (migrate)."""
+    if state.get("cycle_grid_side"):
+        return
+    inferred = infer_cycle_grid_side(state)
+    if not inferred:
+        return
+    state["cycle_grid_side"] = inferred
     logger.info(
         "BOT_CYCLE_SIDE_HEALED bot_id=%s cycle_id=%s side=%s",
         state.get("bot_id"), state.get("cycle_id"), state.get("cycle_grid_side"),

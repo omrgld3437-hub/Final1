@@ -229,13 +229,34 @@ function varlikSpotFilters(asset) {
     var sym = varlikTradingSymbol(asset);
     return (typeof SpotCache !== 'undefined' && SpotCache.getFilters && sym) ? SpotCache.getFilters(sym) : null;
 }
-function varlikQtyFallbackDecimals(asset, abs) {
+/** Miktar büyüklüğüne göre gösterim ondalığı (cüzdan tablosu). */
+function inferVarlikQtyDecimalsFromMagnitude(absQty) {
+    if (!Number.isFinite(absQty) || absQty <= 0) return 2;
+    if (absQty >= 10000) return 2;
+    if (absQty >= 1000) return 3;
+    if (absQty >= 100) return 4;
+    if (absQty >= 1) return 4;
+    if (absQty >= 0.01) return 6;
+    if (absQty >= 0.000001) return 8;
+    return 8;
+}
+function varlikQtyMaxDecimals(asset) {
     var a = String(asset || '').toUpperCase();
-    if (a === 'USDT' || a === 'BUSD' || a === 'FDUSD' || a === 'USDC') return 2;
+    if (a === 'USDT' || a === 'BUSD' || a === 'FDUSD' || a === 'USDC' || a === 'TUSD' || a === 'DAI') return 2;
+    var f = varlikSpotFilters(asset);
+    if (f && (f.stepSize != null || f.stepSizeStr)) {
+        return Math.min(8, Math.max(0, getStepDecimals(f.stepSizeStr || f.stepSize)));
+    }
     if (a === 'BTC') return 8;
     if (a === 'ETH') return 6;
     if (a === 'BNB') return 4;
-    return abs >= 1000 ? 2 : abs >= 1 ? 4 : abs >= 0.01 ? 4 : 6;
+    return 8;
+}
+function varlikQtyDisplayDecimals(asset, absQty) {
+    return Math.min(varlikQtyMaxDecimals(asset), inferVarlikQtyDecimalsFromMagnitude(absQty));
+}
+function varlikQtyFallbackDecimals(asset, abs) {
+    return varlikQtyDisplayDecimals(asset, abs);
 }
 /** Filtre yokken tipik minimum adım (işe yaramaz toz). */
 function varlikQtyMinStepFallback(asset) {
@@ -246,24 +267,28 @@ function varlikQtyMinStepFallback(asset) {
     if (a === 'BNB') return 0.001;
     return 0.0001;
 }
-/** Cüzdan tablosu miktarı — coin step/min altı toz → 0; ondalık sembole göre. */
+/** Cüzdan tablosu miktarı — miktar + LOT_SIZE üst sınırı; büyük bakiyeler kısa, küçükler anlamlı ondalık. */
 function fmtVarlikQty(v, asset) {
     var n = Number(v);
     if (!Number.isFinite(n)) return '—';
     if (n === 0) return '0';
     var abs = Math.abs(n);
-    var f = varlikSpotFilters(asset);
-    var step = f && f.stepSize != null ? Number(f.stepSize) : 0;
-    var minQ = f && f.minQty != null ? Number(f.minQty) : (step > 0 ? step : 0);
-    if (minQ > 0 && abs < minQ) return '0';
-    if (step > 0 && abs < step) return '0';
-    if (!(minQ > 0) && !(step > 0) && abs < varlikQtyMinStepFallback(asset)) return '0';
-    var dec = (f && (f.stepSize != null || f.stepSizeStr))
-        ? Math.min(8, Math.max(0, getStepDecimals(f.stepSizeStr || f.stepSize)))
-        : varlikQtyFallbackDecimals(asset, abs);
+    if (abs < 1e-12) return '0';
+    var dec = varlikQtyDisplayDecimals(asset, abs);
     var rounded = parseFloat(n.toFixed(dec));
+    if (!Number.isFinite(rounded)) return '—';
+    if (rounded === 0 && abs > 0) {
+        dec = Math.min(varlikQtyMaxDecimals(asset), dec + 2);
+        rounded = parseFloat(n.toFixed(dec));
+    }
     if (!Number.isFinite(rounded) || rounded === 0) return '0';
-    return rounded.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: dec });
+    var s = rounded.toFixed(dec);
+    if (dec > 0) {
+        s = s.replace(/(\.\d*?[1-9])0+$/, '$1').replace(/\.0+$/, '');
+    }
+    var parts = s.split('.');
+    parts[0] = Number(parts[0]).toLocaleString('en-US');
+    return parts.length > 1 ? parts[0] + '.' + parts[1] : parts[0];
 }
 function varlikAssetCellHtml(d) {
     var logoInner = (d.logoUrl
@@ -1560,7 +1585,125 @@ function applyTrailingDcaConfigToForm(p, opts) {
 
 /** En İyi 5 Bot: tek kaynak state – flicker yok. Sadece içerik gerçekten değişince DOM güncellenir. */
 var LEADERBOARD_EMPTY_HTML = '<div style="text-align: center; color: var(--ds-text-secondary); font-size: 0.9rem; padding: 1rem;">Henüz listelenecek aktif bot yok. Bu sıralama yalnızca çalışan ve toplam K/Z\'si sıfır veya pozitif olan botları gösterir.</div>';
+var LEADERBOARD_NO_PROFIT_HTML = '<div style="text-align: center; color: var(--ds-text-secondary); font-size: 0.9rem; padding: 1rem;">Karda olan bot bulunamadı. Liste yalnızca çalışan ve toplam K/Z\'si sıfır veya pozitif olan botları gösterir.</div>';
 var LEADERBOARD_LOADING_HTML = '<div style="text-align: center; color: var(--ds-text-secondary); padding: 1rem;">Yükleniyor…</div>';
+var LEADERBOARD_LOAD_TIMEOUT_MS = 10000;
+var _leaderboardLoadTimeoutId = null;
+var _leaderboardSyncDebounce = null;
+
+function clearLeaderboardLoadTimeout() {
+    if (_leaderboardLoadTimeoutId) {
+        clearTimeout(_leaderboardLoadTimeoutId);
+        _leaderboardLoadTimeoutId = null;
+    }
+}
+
+function scheduleLeaderboardLoadTimeout() {
+    clearLeaderboardLoadTimeout();
+    _leaderboardLoadTimeoutId = setTimeout(function () {
+        _leaderboardLoadTimeoutId = null;
+        if (State.leaderboardLastState !== 'loading') return;
+        var listEls = _globalLeaderboardListEls();
+        if (!listEls.length) return;
+        State.leaderboardLastState = 'empty';
+        State.leaderboardItems = [];
+        State.leaderboardStructureSig = null;
+        State.leaderboardMetricsSig = null;
+        listEls.forEach(function (el) { el.innerHTML = LEADERBOARD_NO_PROFIT_HTML; });
+        if (window.intervalRegistry) window.intervalRegistry.stop('dashboard.leaderboard');
+    }, LEADERBOARD_LOAD_TIMEOUT_MS);
+}
+
+function setGlobalLeaderboardEmpty(html, stopPoll) {
+    var listEls = _globalLeaderboardListEls();
+    var msg = html || LEADERBOARD_EMPTY_HTML;
+    State.leaderboardLastState = 'empty';
+    State.leaderboardItems = [];
+    State.leaderboardStructureSig = null;
+    State.leaderboardMetricsSig = null;
+    listEls.forEach(function (el) {
+        if (el.innerHTML !== msg) el.innerHTML = msg;
+    });
+    if (stopPoll !== false && window.intervalRegistry) window.intervalRegistry.stop('dashboard.leaderboard');
+}
+
+/** API + hesaptaki canlı K/Z: ekside kalan botları listeden çıkar. */
+function filterLeaderboardItemsForDisplay(items) {
+    if (!Array.isArray(items) || !items.length) return [];
+    return items.filter(function (item) {
+        var pct = item.profit_pct != null ? Number(item.profit_pct) : null;
+        var pnl = item.total_pnl_usd != null ? Number(item.total_pnl_usd) : null;
+        if (pnl != null && Number.isFinite(pnl) && pnl < 0) return false;
+        if (pct != null && Number.isFinite(pct) && pct < 0) return false;
+        var sym = (item.symbol || (item.params && item.params.symbol) || '').toUpperCase().replace(/\s/g, '');
+        if (!sym || !State.bots || !State.bots.length) return true;
+        for (var i = 0; i < State.bots.length; i++) {
+            var b = State.bots[i];
+            if ((b.symbol || '').toUpperCase() !== sym) continue;
+            if (String(b.status || '').toLowerCase() !== 'running') continue;
+            var kz = typeof resolveBotHeroKz === 'function' ? resolveBotHeroKz(b) : null;
+            if (!kz) return true;
+            if (kz.pct != null && Number.isFinite(kz.pct) && kz.pct < 0) return false;
+            if (kz.usd != null && Number.isFinite(kz.usd) && kz.usd < 0) return false;
+            break;
+        }
+        return true;
+    });
+}
+
+function buildGlobalLeaderboardMetricsSignature(items) {
+    if (!Array.isArray(items)) return '';
+    return items.map(function (item, index) {
+        return index + ':' + (item.symbol || '') + ':' + (item.profit_pct != null ? item.profit_pct : '') + ':' + (item.total_pnl_usd != null ? item.total_pnl_usd : '');
+    }).join('|');
+}
+
+/** Leaderboard coin logos — DOM yeniden kurulunca cache'den src; yoksa lazy observer. */
+function buildLeaderboardSymbolLogoHtml(symbolStr) {
+    var sym = (typeof symbolStr === 'string' ? symbolStr : '').trim() || '—';
+    var logoUrl = (typeof getCoinLogoUrl === 'function' ? getCoinLogoUrl(sym) : null);
+    var initials = sym.length >= 2 ? sym.substring(0, 2) : '—';
+    if (typeof escapeHtml === 'function') initials = escapeHtml(initials);
+    if (!logoUrl) {
+        return '<span class="global-leaderboard-symbol-initials">' + initials + '</span>';
+    }
+    var escUrl = (typeof escapeHtml === 'function' ? escapeHtml(logoUrl) : logoUrl);
+    if (window.coinLogoCache && window.coinLogoCache.get(logoUrl)) {
+        return '<img src="' + escUrl + '" alt="" class="global-leaderboard-symbol-logo" decoding="async" />';
+    }
+    return '<img class="global-leaderboard-symbol-logo lazy-coin-logo" data-src="' + escUrl + '" alt="" decoding="async" />';
+}
+
+function hydrateLeaderboardListLogos(listEl) {
+    if (!listEl) return;
+    ensureLazyLogoObserver();
+    listEl.querySelectorAll('.global-leaderboard-symbol-logo').forEach(function (img) {
+        var dataSrc = img.getAttribute('data-src');
+        if (!dataSrc) {
+            if (img.src && window.coinLogoCache) window.coinLogoCache.set(img.src, true);
+            return;
+        }
+        if (window.coinLogoCache && window.coinLogoCache.get(dataSrc)) {
+            img.src = dataSrc;
+            img.removeAttribute('data-src');
+            img.classList.remove('lazy-coin-logo');
+            return;
+        }
+        if (window._lazyLogoObserver) window._lazyLogoObserver.observe(img);
+    });
+}
+
+function scheduleLeaderboardSyncFromBots() {
+    clearTimeout(_leaderboardSyncDebounce);
+    _leaderboardSyncDebounce = setTimeout(function () {
+        _leaderboardSyncDebounce = null;
+        if (State.leaderboardLastState !== 'items' || !State.leaderboardItems || !State.leaderboardItems.length) return;
+        var filtered = filterLeaderboardItemsForDisplay(State.leaderboardItems);
+        if (filtered.length < State.leaderboardItems.length && typeof loadGlobalLeaderboard === 'function') {
+            loadGlobalLeaderboard(false);
+        }
+    }, 350);
+}
 
 var LEADERBOARD_PARAM_LABELS = {
     symbol: 'Sembol',
@@ -1719,10 +1862,7 @@ function buildGlobalLeaderboardItemHtml(item, index) {
     }
     var symbolRaw = item.symbol || params.symbol || '';
     var symbolStr = (typeof symbolRaw === 'string' ? symbolRaw : '').trim() || '—';
-    var logoUrl = (typeof getCoinLogoUrl === 'function' ? getCoinLogoUrl(symbolStr) : null);
-    var symbolLogoHtml = logoUrl
-        ? '<img src="' + (typeof escapeHtml === 'function' ? escapeHtml(logoUrl) : logoUrl) + '" alt="" class="global-leaderboard-symbol-logo" />'
-        : '<span class="global-leaderboard-symbol-initials">' + (symbolStr.length >= 2 ? (typeof escapeHtml === 'function' ? escapeHtml(symbolStr.substring(0, 2)) : symbolStr.substring(0, 2)) : '—') + '</span>';
+    var symbolLogoHtml = buildLeaderboardSymbolLogoHtml(symbolStr);
     var runningSinceNorm = normalizeRunningSinceIso(item.running_since_iso || '');
     var runningStr = formatLeaderboardRunningDuration(runningSinceNorm);
     var paramsJsonAttr = JSON.stringify(params).replace(/"/g, '&quot;');
@@ -1823,12 +1963,13 @@ function patchGlobalLeaderboardMetrics(items) {
         var durEl = row.querySelector('.global-leaderboard-item-duration');
         var pnlMeta = formatLeaderboardTotalPnl(item);
         if (pnlEl) {
-            pnlEl.textContent = pnlMeta.text;
-            pnlEl.style.color = pnlMeta.color;
+            if (pnlEl.textContent !== pnlMeta.text) pnlEl.textContent = pnlMeta.text;
+            if (pnlEl.style.color !== pnlMeta.color) pnlEl.style.color = pnlMeta.color;
         }
         if (durEl) {
             var isoNorm = normalizeRunningSinceIso(item.running_since_iso || row.getAttribute('data-running-since'));
-            durEl.textContent = 'Çalışma süresi: ' + formatLeaderboardRunningDuration(isoNorm);
+            var durText = 'Çalışma süresi: ' + formatLeaderboardRunningDuration(isoNorm);
+            if (durEl.textContent !== durText) durEl.textContent = durText;
         }
         if (item.running_since_iso) row.setAttribute('data-running-since', normalizeRunningSinceIso(item.running_since_iso));
         var params = stripLeaderboardBudgetFromParams(normalizeLeaderboardParamsToFormConfig(item.params || {}));
@@ -1868,64 +2009,62 @@ async function loadGlobalLeaderboard(patchOnly) {
     _globalLeaderboardPanelEls().forEach(function (panel) { panel.style.display = 'block'; });
     var lastState = State.leaderboardLastState || 'idle';
     if (lastState !== 'empty' && lastState !== 'error' && lastState !== 'items') {
-        if (primaryList.innerHTML !== LEADERBOARD_LOADING_HTML) {
-            listEls.forEach(function (el) { el.innerHTML = LEADERBOARD_LOADING_HTML; });
-            State.leaderboardLastState = 'loading';
-        }
+        listEls.forEach(function (el) { el.innerHTML = LEADERBOARD_LOADING_HTML; });
+        State.leaderboardLastState = 'loading';
+        scheduleLeaderboardLoadTimeout();
     }
     try {
         var res = await window.apiClient.get('/api/leaderboard/global/top?limit=5');
+        clearLeaderboardLoadTimeout();
         var items = (res && Array.isArray(res.items)) ? res.items
             : (res && res.data && Array.isArray(res.data.items)) ? res.data.items
             : [];
+        items = filterLeaderboardItemsForDisplay(items);
         if (!items.length) {
-            if (!patchOnly) {
-                if (State.leaderboardLastState !== 'empty' || primaryList.innerHTML !== LEADERBOARD_EMPTY_HTML) {
-                    State.leaderboardLastState = 'empty';
-                    State.leaderboardLastHtml = null;
-                    State.leaderboardItems = [];
-                    listEls.forEach(function (el) { el.innerHTML = LEADERBOARD_EMPTY_HTML; });
-                }
-            }
-            if (window.intervalRegistry) window.intervalRegistry.stop('dashboard.leaderboard');
+            setGlobalLeaderboardEmpty(
+                State.leaderboardLastState === 'loading' ? LEADERBOARD_NO_PROFIT_HTML : LEADERBOARD_EMPTY_HTML,
+                true
+            );
             return;
         }
         State.leaderboardItems = items;
         var structureSig = buildGlobalLeaderboardStructureSignature(items);
+        var metricsSig = buildGlobalLeaderboardMetricsSignature(items);
+        var domCount = primaryList.querySelectorAll('.global-leaderboard-item').length;
         if (patchOnly && State.leaderboardLastState === 'items') {
-            if (State.leaderboardStructureSig && State.leaderboardStructureSig !== structureSig) {
-                patchOnly = false;
-            } else {
+            if (State.leaderboardStructureSig === structureSig && domCount === items.length) {
                 patchGlobalLeaderboardMetrics(items);
+                State.leaderboardMetricsSig = metricsSig;
+                startGlobalLeaderboardPoll();
                 return;
             }
+        }
+        var structureUnchanged = State.leaderboardStructureSig === structureSig
+            && domCount === items.length
+            && State.leaderboardLastState === 'items';
+        if (structureUnchanged) {
+            patchGlobalLeaderboardMetrics(items);
+            State.leaderboardMetricsSig = metricsSig;
+            startGlobalLeaderboardPoll();
+            return;
         }
         var html = '';
         items.forEach(function (item, index) {
             html += buildGlobalLeaderboardItemHtml(item, index);
         });
-        if (!State.leaderboardStructureSig || State.leaderboardStructureSig !== structureSig) {
-            State.leaderboardLastState = 'items';
-            State.leaderboardLastHtml = html;
-            State.leaderboardStructureSig = structureSig;
-            listEls.forEach(function (el) {
-                el.innerHTML = html;
-                bindGlobalLeaderboardItemActions(el);
-            });
-        } else {
-            patchGlobalLeaderboardMetrics(items);
-        }
+        State.leaderboardLastState = 'items';
+        State.leaderboardStructureSig = structureSig;
+        State.leaderboardMetricsSig = metricsSig;
+        listEls.forEach(function (el) {
+            el.innerHTML = html;
+            bindGlobalLeaderboardItemActions(el);
+            hydrateLeaderboardListLogos(el);
+        });
         startGlobalLeaderboardPoll();
     } catch (e) {
+        clearLeaderboardLoadTimeout();
         if (window.errorReporter) window.errorReporter.report(e, { tab: 'dashboard', action: 'loadGlobalLeaderboard' });
-        if (!patchOnly) {
-            if (State.leaderboardLastState !== 'error' || primaryList.innerHTML !== LEADERBOARD_EMPTY_HTML) {
-                State.leaderboardLastState = 'error';
-                State.leaderboardLastHtml = null;
-                State.leaderboardItems = [];
-                listEls.forEach(function (el) { el.innerHTML = LEADERBOARD_EMPTY_HTML; });
-            }
-        }
+        setGlobalLeaderboardEmpty(LEADERBOARD_NO_PROFIT_HTML, true);
     }
 }
 window.loadGlobalLeaderboard = loadGlobalLeaderboard;
@@ -1938,6 +2077,7 @@ var _txHistoryLastSig = '';
 var _txHistoryPollInFlight = false;
 var _txHistoryLoaded = false;
 const TX_HISTORY_POLL_MS = 3500;
+var _txHistoryRateLimitUntil = 0;
 
 var _txHistoryInitialSyncDone = false;
 
@@ -1987,11 +2127,12 @@ function _txHistoryItemsSig(d) {
 async function pollTransactionHistoryRevision() {
     if (!State.accountId || !window.apiClient || _txHistoryPollInFlight) return;
     if (!isTransactionHistoryPanelVisible()) return;
+    if (Date.now() < _txHistoryRateLimitUntil) return;
     _txHistoryPollInFlight = true;
     try {
         var res = await window.apiClient.get(
             '/api/accounts/' + State.accountId + '/transaction-history/revision',
-            { timeout: 6000 }
+            { timeout: 6000, suppressRateLimitToast: true }
         );
         var body = res && (res.data || res);
         var rev = body && body.revision != null ? String(body.revision) : '';
@@ -2007,7 +2148,10 @@ async function pollTransactionHistoryRevision() {
             );
         }
     } catch (e) {
-        /* poll hatası — sessiz */
+        if (e && e.status === 429) {
+            var ra = (e.retry_after != null) ? Number(e.retry_after) : 60;
+            _txHistoryRateLimitUntil = Date.now() + Math.min(120000, Math.max(15000, ra * 1000));
+        }
     } finally {
         _txHistoryPollInFlight = false;
     }
@@ -2037,9 +2181,10 @@ async function loadTransactionHistory(period, typeFilter, page, sync, opts) {
     State.txHistoryPeriod = period;
     State.txHistoryType = typeFilter;
     State.txHistoryPage = page;
+    if (Date.now() < _txHistoryRateLimitUntil) return;
     var q = '/api/accounts/' + State.accountId + '/transaction-history?period=' + encodeURIComponent(period) + '&type_filter=' + encodeURIComponent(typeFilter) + '&page=' + page + (doSync ? '&sync=1' : '');
     try {
-        var res = await window.apiClient.get(q);
+        var res = await window.apiClient.get(q, { suppressRateLimitToast: !!silent });
         txHistoryRequestDone = true;
         if (loadingTimer) clearTimeout(loadingTimer);
         var d = _txHistoryPayload(res);
@@ -2130,6 +2275,10 @@ async function loadTransactionHistory(period, typeFilter, page, sync, opts) {
     } catch (e) {
         txHistoryRequestDone = true;
         if (loadingTimer) clearTimeout(loadingTimer);
+        if (e && e.status === 429) {
+            var raTx = (e.retry_after != null) ? Number(e.retry_after) : 60;
+            _txHistoryRateLimitUntil = Date.now() + Math.min(120000, Math.max(15000, raTx * 1000));
+        }
         if (!silent) {
             if (window.errorReporter) window.errorReporter.report(e, { account_id: State.accountId, action: 'loadTransactionHistory' });
             listEl.innerHTML = '<div class="tx-history-error" style="text-align:center;padding:2rem;color:var(--ds-loss,#f6465d);">Yüklenemedi.</div>';
@@ -2814,6 +2963,45 @@ function setTextIfChanged(el, newText) {
 }
 window.setTextIfChanged = setTextIfChanged;
 
+/** KPI / strip USD: 2 ondalık gösterim — cent altı DOM güncellemesi yok (canlı fiyat tick flicker). */
+function kpiUsdCents(n) {
+    if (n == null || !Number.isFinite(Number(n))) return null;
+    return Math.round(Number(n) * 100);
+}
+function kpiUsdDisplayChanged(prevNum, nextNum) {
+    var a = kpiUsdCents(prevNum);
+    var b = kpiUsdCents(nextNum);
+    if (a == null && b == null) return false;
+    if (a == null || b == null) return true;
+    return a !== b;
+}
+function setKpiUsdTextIfChanged(el, value) {
+    if (!el) return false;
+    var next = Number(value);
+    if (!Number.isFinite(next)) return false;
+    var prevAttr = parseFloat(el.getAttribute('data-kpi-value') || '');
+    var prev = Number.isFinite(prevAttr) ? prevAttr : (parseFloat(String(el.textContent).replace(/[^0-9.-]/g, '')) || 0);
+    if (!kpiUsdDisplayChanged(prev, next)) return false;
+    el.setAttribute('data-kpi-value', String(next));
+    return setTextIfChanged(el, fmtUsd(next));
+}
+function kpiPctDisplayChanged(prevPct, nextPct) {
+    var a = Math.round((Number(prevPct) || 0) * 100);
+    var b = Math.round((Number(nextPct) || 0) * 100);
+    return a !== b;
+}
+function setKpiPctTextIfChanged(el, pctNum) {
+    if (!el) return false;
+    var next = Number(pctNum);
+    if (!Number.isFinite(next)) return false;
+    var prevAttr = parseFloat(el.getAttribute('data-kpi-pct') || '');
+    var prev = Number.isFinite(prevAttr) ? prevAttr : (parseFloat(String(el.textContent).replace(/[^0-9.+\-]/g, '')) || 0);
+    if (!kpiPctDisplayChanged(prev, next)) return false;
+    el.setAttribute('data-kpi-pct', String(next));
+    var txt = (next >= 0 ? '+' : '') + next.toFixed(2) + '%';
+    return setTextIfChanged(el, txt);
+}
+
 var _blinkCooldownUntil = 0;
 var BLINK_COOLDOWN_MS = 400;
 
@@ -2863,6 +3051,7 @@ var _walletPanelStaleFailureAt = 0;
 var WALLET_LIVE_OK_TTL_MS = 60000;
 var WALLET_STALE_HIDE_AFTER_LIVE_MS = 15000;
 var WALLET_PANEL_STALE_DELAY_MS = 10000;
+var _dashboardWalletForceTick = 0;
 
 function cancelWalletPanelStaleBadgeTimer() {
     if (_walletPanelStaleTimer) {
@@ -3078,6 +3267,79 @@ function applyWalletStaleWarningEl(el) {
 }
 window.applyWalletStaleWarningEl = applyWalletStaleWarningEl;
 
+function connectivityCheckToastMessage(d) {
+    if (!d) return 'Binance bağlantısı kontrol edilemedi.';
+    var code = String(d.error_code || d.wallet_last_error_code || '').toUpperCase();
+    var ip = (d.server_public_ip && d.server_public_ip !== '—') ? d.server_public_ip : '';
+    if (code === 'CLOCK_DRIFT') {
+        return 'Sunucu saati Binance ile uyuşmuyor (-1021). ' + (d.clock_sync_hint || 'NTP ile saat senkronu gerekli.');
+    }
+    if (code === 'API_UNAUTHORIZED' || code.indexOf('KEY') >= 0) {
+        return (ip
+            ? 'Binance 401: API anahtarı veya IP beyaz liste. Sunucu dış IP: ' + ip + ' (PC IP değil).'
+            : 'Binance 401: API anahtarı veya IP beyaz liste hatası.');
+    }
+    if (code === 'BINANCE_TIMEOUT' || code === 'BINANCE_UNREACHABLE') {
+        return (ip
+            ? 'Binance\'e ulaşılamıyor. Sunucu dış IP\'yi beyaz listeye ekleyin: ' + ip
+            : 'Binance\'e ulaşılamıyor; sunucu ağı ve API anahtarını kontrol edin.');
+    }
+    if (d.message) return String(d.message).slice(0, 220);
+    return 'Canlı cüzdan yenilenemedi.';
+}
+
+/** İnternet / API geri gelince: kilit + stale bayrak sıfırla, canlı cüzdan + snapshot yenile. */
+function recoverDashboardAfterConnectivity(opts) {
+    opts = opts || {};
+    if (!State.accountId) return;
+    var aid = State.accountId;
+    try {
+        localStorage.removeItem('tt_wallet_refresh_lock:' + aid);
+    } catch (e) {}
+    if (window.homeFlash && typeof window.homeFlash.resetRefreshThrottle === 'function') {
+        window.homeFlash.resetRefreshThrottle(aid);
+    }
+    if (window.marketDataService) {
+        if (typeof window.marketDataService.stop === 'function') window.marketDataService.stop();
+        if (typeof window.marketDataService.start === 'function') window.marketDataService.start();
+    }
+    if (typeof fetchSnapshot === 'function') fetchSnapshot();
+    if (window.FLASH_HOME_ENABLED && window.homeFlash && typeof window.homeFlash.triggerRefresh === 'function') {
+        window.homeFlash.triggerRefresh(aid, true);
+    }
+    if (typeof triggerWalletRefreshForVarliklar === 'function') {
+        triggerWalletRefreshForVarliklar(aid, { force: true });
+    }
+    if (opts.summary !== false && typeof loadSummary === 'function') loadSummary(aid);
+    if (typeof updateKpiCuzdanLiveStatus === 'function') updateKpiCuzdanLiveStatus();
+    if (window.apiClient && typeof window.apiClient.get === 'function') {
+        window.apiClient.get('/api/home/connectivity-check?account_id=' + aid, { timeout: 20000 })
+            .then(function (res) {
+                var d = res && res.data;
+                if (!d || typeof window.Toast === 'undefined') return;
+                if (d.connectivity_ok && window.Toast.success) {
+                    window.Toast.success('Binance bağlantısı kuruldu.');
+                    if (typeof markWalletLiveFetchOk === 'function') markWalletLiveFetchOk();
+                    return;
+                }
+                if (window.Toast.warning) window.Toast.warning(connectivityCheckToastMessage(d));
+            })
+            .catch(function () {});
+    }
+}
+window.recoverDashboardAfterConnectivity = recoverDashboardAfterConnectivity;
+window.connectivityCheckToastMessage = connectivityCheckToastMessage;
+
+function shouldRecoverWalletAfterConnectivity() {
+    if (typeof State !== 'undefined' && State.isTestAccount) return false;
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) return false;
+    if (assetsState.wallet.keys_configured !== true) return false;
+    return !isWalletDataLive() || _walletLiveFailedAfterOk()
+        || assetsState.wallet.data_status === 'stale'
+        || assetsState.wallet.status === 'error'
+        || !!assetsState.wallet.error;
+}
+
 function updateCuzdanPnlKpi(dailyWalletPnl, account, data) {
     var spotUsd = (account && account.spot_balance_usd != null) ? Number(account.spot_balance_usd)
         : (data && data.spot_balance_usd != null) ? Number(data.spot_balance_usd)
@@ -3103,15 +3365,15 @@ function updateCuzdanPnlKpi(dailyWalletPnl, account, data) {
     if (pnlShow == null) return;
     var cuzdanPnlEl = document.getElementById('kpiCuzdanPnl');
     if (cuzdanPnlEl) {
-        var textChanged = setTextIfChanged(cuzdanPnlEl, fmtUsd(pnlShow));
+        var textChanged = setKpiUsdTextIfChanged(cuzdanPnlEl, pnlShow);
         var newColor = pnlShow >= 0 ? '#0ecb81' : '#f6465d';
         if (cuzdanPnlEl.style.color !== newColor) cuzdanPnlEl.style.color = newColor;
         if (textChanged && liveOk && !bogusZeroSpot) triggerValueBlink(cuzdanPnlEl, pnlShow);
     }
     var pctNum = parseFloat(pctShow);
-    patchText('kpiCuzdanPnlPct', (pctNum >= 0 ? '+' : '') + pctShow + '%');
     var pe = document.getElementById('kpiCuzdanPnlPct');
-    if (pe) {
+    if (pe && Number.isFinite(pctNum)) {
+        setKpiPctTextIfChanged(pe, pctNum);
         var ec = pnlShow >= 0 ? '#0ecb81' : '#f6465d';
         if (pe.style.color !== ec) pe.style.color = ec;
     }
@@ -3125,10 +3387,10 @@ function updateKpiCuzdanBalance(el, walletTotal) {
     if (next != null && next < 0) return;
     if ((next == null || next <= 0) && prev > 0) return;
     if (next == null || next <= 0) {
-        if (prev <= 0) setTextIfChanged(el, fmtUsd(0));
+        if (prev <= 0) setKpiUsdTextIfChanged(el, 0);
         return;
     }
-    setTextIfChanged(el, fmtUsd(next));
+    setKpiUsdTextIfChanged(el, next);
     if (prev > 0 && !(typeof State !== 'undefined' && State.isTestAccount && el.id === 'kpiCuzdan')) {
         triggerValueBlink(el, next);
     }
@@ -3381,8 +3643,8 @@ function applyKpiCuzdanSnapshot(spotUsd, pnlUsd, pnlPct, opts) {
     if (spot != null && spot > 0) {
         _kpiCuzdanLastSpot = spot;
         var walletEl = document.getElementById("kpiCuzdan");
-        if (walletEl && typeof fmtUsd === "function") {
-            setTextIfChanged(walletEl, fmtUsd(spot));
+        if (walletEl) {
+            setKpiUsdTextIfChanged(walletEl, spot);
             walletEl.classList.remove("blink-positive", "blink-negative");
         }
     }
@@ -3392,8 +3654,8 @@ function applyKpiCuzdanSnapshot(spotUsd, pnlUsd, pnlPct, opts) {
             _kpiCuzdanPnlDisplay.pnlPct = Number(pnlPct).toFixed(2);
         }
         var cuzdanPnlEl = document.getElementById("kpiCuzdanPnl");
-        if (cuzdanPnlEl && typeof fmtUsd === "function") {
-            setTextIfChanged(cuzdanPnlEl, fmtUsd(_kpiCuzdanPnlDisplay.pnlUsd));
+        if (cuzdanPnlEl) {
+            setKpiUsdTextIfChanged(cuzdanPnlEl, _kpiCuzdanPnlDisplay.pnlUsd);
             var pnlColor = _kpiCuzdanPnlDisplay.pnlUsd >= 0 ? "#0ecb81" : "#f6465d";
             if (cuzdanPnlEl.style.color !== pnlColor) cuzdanPnlEl.style.color = pnlColor;
             cuzdanPnlEl.classList.remove("blink-positive", "blink-negative");
@@ -3401,8 +3663,8 @@ function applyKpiCuzdanSnapshot(spotUsd, pnlUsd, pnlPct, opts) {
         var pctShow = _kpiCuzdanPnlDisplay.pnlPct;
         if (pctShow != null) {
             var pctNum = parseFloat(pctShow);
-            patchText("kpiCuzdanPnlPct", (pctNum >= 0 ? "+" : "") + pctShow + "%");
             var pe = document.getElementById("kpiCuzdanPnlPct");
+            if (pe && Number.isFinite(pctNum)) setKpiPctTextIfChanged(pe, pctNum);
             if (pe) {
                 var pctColor = _kpiCuzdanPnlDisplay.pnlUsd >= 0 ? "#0ecb81" : "#f6465d";
                 if (pe.style.color !== pctColor) pe.style.color = pctColor;
@@ -4535,6 +4797,7 @@ function initMobileBottomNav(currentDesktopTab) {
 
 // Mobil Trade sekmesi: coin ara, seçince alım satım modalı aç
 var _mobileTradeSearchBound = false;
+var _mobileTradeSearchPriceGen = 0;
 function initMobileTradeSearch() {
     var input = document.getElementById("mobileTradeSearchInput");
     var dropdown = document.getElementById("mobileTradeSearchDropdown");
@@ -4546,29 +4809,21 @@ function initMobileTradeSearch() {
             dropdown.style.display = "none";
             return;
         }
-        var filtered = (typeof coinListSearchAllSymbols !== "undefined" && Array.isArray(coinListSearchAllSymbols))
-            ? coinListSearchAllSymbols.filter(function (c) {
-                var s = (c.symbol || "").toUpperCase();
-                return s && s.indexOf(q) !== -1;
-            })
+        var list = (typeof filterCoinListForSearch === "function")
+            ? filterCoinListForSearch(input.value, 50)
             : [];
-        var list = filtered.sort(function (a, b) {
-            var sa = (a.symbol || "").toUpperCase();
-            var sb = (b.symbol || "").toUpperCase();
-            var aUsdt = sa.endsWith("USDT") ? 0 : (sa.endsWith("FDUSD") ? 1 : 2);
-            var bUsdt = sb.endsWith("USDT") ? 0 : (sb.endsWith("FDUSD") ? 1 : 2);
-            if (aUsdt !== bUsdt) return aUsdt - bUsdt;
-            return sa.localeCompare(sb);
-        }).slice(0, 50);
         dropdown.innerHTML = list.map(function (item) {
-            var sym = item.symbol || "";
-            var pct = item.changePct != null ? item.changePct : 0;
-            var pctColor = pct >= 0 ? "#0ecb81" : "#f6465d";
-            var pctStr = (pct >= 0 ? "+" : "") + (Number(pct).toFixed(2)) + "%";
-            var priceStr = item.last != null && Number.isFinite(item.last) && typeof fmtUsd === "function" ? fmtUsd(item.last) : "—";
-            return "<div class=\"coin-list-search-item mobile-trade-search-item\" data-symbol=\"" + sym + "\" style=\"padding: 0.6rem 1rem; cursor: pointer; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--ds-border);\"><span style=\"font-weight: 600;\">" + sym + "</span><span style=\"display: flex; gap: 0.5rem; align-items: center;\"><span style=\"color: var(--ds-text-secondary);\">" + priceStr + "</span><span style=\"color: " + pctColor + "\">" + pctStr + "</span></span></div>";
+            return renderCoinSearchDropdownItemHtml(item, "mobile-trade-search-item");
         }).join("");
         dropdown.style.display = list.length ? "block" : "none";
+        if (list.length > 0 && typeof queueCoinSearchPriceFetch === "function") {
+            var gen = ++_mobileTradeSearchPriceGen;
+            queueCoinSearchPriceFetch(list.map(function (it) { return it.symbol; }), function () {
+                if (gen !== _mobileTradeSearchPriceGen) return;
+                if (!(input.value || "").trim()) return;
+                fillDropdown();
+            });
+        }
     }
 
     if (!_mobileTradeSearchBound) {
@@ -4617,42 +4872,8 @@ function _writeMobileTradeFavTickerCache(symbol, price, changePct) {
     } catch (e) {}
 }
 
-function _getMobileTradeFavQuote(symbol) {
-    var sym = (symbol || "").toUpperCase();
-    var mini = window.marketStore && window.marketStore.getMini(sym);
-    if (mini && mini.last != null && Number.isFinite(mini.last)) {
-        return { price: mini.last, changePct: Number.isFinite(mini.changePct) ? mini.changePct : null };
-    }
-    var storePrice = window.marketStore && window.marketStore.getPrice && window.marketStore.getPrice(sym);
-    if (storePrice != null && Number.isFinite(storePrice)) {
-        return { price: storePrice, changePct: null };
-    }
-    if (typeof coinListSearchAllSymbols !== "undefined" && Array.isArray(coinListSearchAllSymbols)) {
-        for (var i = 0; i < coinListSearchAllSymbols.length; i++) {
-            var row = coinListSearchAllSymbols[i];
-            if ((row.symbol || "").toUpperCase() === sym && row.last != null && Number.isFinite(row.last)) {
-                return {
-                    price: row.last,
-                    changePct: row.changePct != null && Number.isFinite(row.changePct) ? row.changePct : null
-                };
-            }
-        }
-    }
-    var cached = _readMobileTradeFavTickerCache()[sym];
-    if (cached && cached.price != null && Number.isFinite(cached.price)) {
-        return {
-            price: cached.price,
-            changePct: cached.changePct != null && Number.isFinite(cached.changePct) ? cached.changePct : null
-        };
-    }
-    return { price: null, changePct: null };
-}
-
-function _fmtMobileTradeFavPriceDisplay(price) {
-    if (price == null || !Number.isFinite(price)) return "—";
-    return typeof fmtCoinPrice === "function"
-        ? fmtCoinPrice(price)
-        : ("$" + Number(price).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 4 }));
+function _fmtMobileTradeFavPriceDisplay(price, symbol) {
+    return formatCoinSearchItemPrice(symbol, price);
 }
 
 function _applyMobileTradeFavItemQuote(symbol, price, changePct) {
@@ -4664,7 +4885,7 @@ function _applyMobileTradeFavItemQuote(symbol, price, changePct) {
     var changeSpan = item.querySelector(".mobile-trade-fav-change");
     if (!priceRow || !changeSpan) return;
     var oldPrice = parseFloat(priceRow.getAttribute("data-price") || "") || 0;
-    var priceDisplay = _fmtMobileTradeFavPriceDisplay(price);
+    var priceDisplay = _fmtMobileTradeFavPriceDisplay(price, sym);
     var changeStr = changePct != null && Number.isFinite(changePct)
         ? (changePct >= 0 ? "+" : "") + Number(changePct).toFixed(2) + "%"
         : "—";
@@ -4697,52 +4918,205 @@ function _parseDataPricesPayload(res) {
     return res;
 }
 
-function _fetchMobileTradeFavTickerFallback(symbol) {
+function _updateCoinSearchSymbolQuote(symbol, price, changePct) {
+    var sym = (symbol || "").toUpperCase();
+    if (!sym || price == null || !Number.isFinite(price) || price <= 0) return;
+    if (window.marketStore && window.marketStore.updateMini) {
+        window.marketStore.updateMini(sym, { last: price, changePct: changePct });
+    }
+    if (typeof coinListSearchAllSymbols !== "undefined" && Array.isArray(coinListSearchAllSymbols)) {
+        for (var i = 0; i < coinListSearchAllSymbols.length; i++) {
+            if ((coinListSearchAllSymbols[i].symbol || "").toUpperCase() === sym) {
+                coinListSearchAllSymbols[i].last = price;
+                if (changePct != null && Number.isFinite(changePct)) {
+                    coinListSearchAllSymbols[i].changePct = changePct;
+                }
+                return;
+            }
+        }
+        coinListSearchAllSymbols.push({ symbol: sym, last: price, changePct: changePct });
+    }
+}
+
+function _getSymbolSearchQuote(symbol) {
+    var sym = (symbol || "").toUpperCase();
+    var mini = window.marketStore && window.marketStore.getMini && window.marketStore.getMini(sym);
+    if (mini && mini.last != null && Number.isFinite(mini.last) && mini.last > 0) {
+        return { price: mini.last, changePct: Number.isFinite(mini.changePct) ? mini.changePct : null };
+    }
+    var storePrice = window.marketStore && window.marketStore.getPrice && window.marketStore.getPrice(sym);
+    if (storePrice != null && Number.isFinite(storePrice) && storePrice > 0) {
+        return { price: storePrice, changePct: null };
+    }
+    if (typeof coinListSearchAllSymbols !== "undefined" && Array.isArray(coinListSearchAllSymbols)) {
+        for (var i = 0; i < coinListSearchAllSymbols.length; i++) {
+            var row = coinListSearchAllSymbols[i];
+            if ((row.symbol || "").toUpperCase() === sym && row.last != null && Number.isFinite(row.last) && row.last > 0) {
+                return {
+                    price: row.last,
+                    changePct: row.changePct != null && Number.isFinite(row.changePct) ? row.changePct : null
+                };
+            }
+        }
+    }
+    var cached = _readMobileTradeFavTickerCache()[sym];
+    if (cached && cached.price != null && Number.isFinite(cached.price) && cached.price > 0) {
+        return {
+            price: cached.price,
+            changePct: cached.changePct != null && Number.isFinite(cached.changePct) ? cached.changePct : null
+        };
+    }
+    return { price: null, changePct: null };
+}
+
+function formatCoinSearchItemPrice(symbol, price) {
+    if (price == null || !Number.isFinite(Number(price)) || Number(price) <= 0) return "—";
+    if (typeof formatModalPriceForSymbol === "function") {
+        return formatModalPriceForSymbol(Number(price), symbol);
+    }
+    var pq = typeof parseTradingPairSymbol === "function" ? parseTradingPairSymbol(symbol) : null;
+    if (pq && pq.valid && pq.quote) {
+        var q = pq.quote;
+        if (q === "USDT" || q === "FDUSD" || q === "BUSD" || q === "USDC") {
+            return typeof fmtCoinPrice === "function" ? fmtCoinPrice(Number(price)) : ("$" + price);
+        }
+        if (q === "BTC") return fmtNum(price, 8) + " BTC";
+        if (q === "ETH") return fmtNum(price, 6) + " ETH";
+        if (q === "BNB") return fmtNum(price, 4) + " BNB";
+        return fmtNum(price, 8) + " " + q;
+    }
+    return typeof fmtCoinPrice === "function" ? fmtCoinPrice(Number(price)) : ("$" + price);
+}
+
+function renderCoinSearchDropdownItemHtml(item, itemClass) {
+    var sym = item.symbol || "";
+    var label = typeof formatTradingPairDisplay === "function" ? formatTradingPairDisplay(sym) : sym;
+    var pct = item.changePct != null && Number.isFinite(item.changePct) ? item.changePct : null;
+    var pctStr = pct != null ? (pct >= 0 ? "+" : "") + pct.toFixed(2) + "%" : "—";
+    var pctColor = pct != null ? (pct >= 0 ? "#0ecb81" : "#f6465d") : "var(--ds-text-secondary)";
+    var priceStr = formatCoinSearchItemPrice(sym, item.last);
+    var cls = "coin-list-search-item" + (itemClass ? " " + itemClass : "");
+    return "<div class=\"" + cls + "\" data-symbol=\"" + sym + "\" style=\"padding: 0.6rem 1rem; cursor: pointer; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--ds-border);\"><span style=\"font-weight: 600;\">" + label + "</span><span style=\"display: flex; gap: 0.5rem; align-items: center;\"><span style=\"color: var(--ds-text-secondary);\">" + priceStr + "</span><span style=\"color: " + pctColor + "\">" + pctStr + "</span></span></div>";
+}
+
+var _coinSearchPriceFetchInflight = null;
+var _coinSearchPricePending = [];
+var _coinSearchPriceTimer = null;
+
+function _fetchCoinSearchTickerFallback(symbol) {
     return fetch(window.location.origin + "/api/spot/ticker_24h?symbol=" + encodeURIComponent(symbol))
         .then(function (r) { return r.json(); })
         .then(function (data) {
-            var price = parseFloat(data.lastPrice || 0);
+            var price = parseFloat(data.lastPrice || data.weightedAvgPrice || 0);
             var changePct = parseFloat(data.priceChangePercent || 0);
             if (price > 0 && Number.isFinite(price)) {
-                _applyMobileTradeFavItemQuote(symbol, price, Number.isFinite(changePct) ? changePct : null);
+                var pct = Number.isFinite(changePct) ? changePct : null;
+                _updateCoinSearchSymbolQuote(symbol, price, pct);
+                _writeMobileTradeFavTickerCache(symbol, price, pct);
+                return { symbol: symbol, price: price, changePct: pct };
             }
+            return null;
         })
-        .catch(function () {});
+        .catch(function () { return null; });
+}
+
+function fetchCoinSearchPricesBatch(symbols, opts) {
+    opts = opts || {};
+    var seen = {};
+    symbols = (symbols || []).map(function (s) { return (s || "").toUpperCase(); }).filter(function (s) {
+        if (!s || seen[s]) return false;
+        seen[s] = true;
+        return true;
+    });
+    if (!symbols.length) return Promise.resolve();
+    var missing = [];
+    symbols.forEach(function (sym) {
+        var q = _getSymbolSearchQuote(sym);
+        if (q.price != null && q.price > 0) {
+            _updateCoinSearchSymbolQuote(sym, q.price, q.changePct);
+            if (opts.onEach) opts.onEach(sym, q.price, q.changePct);
+        } else {
+            missing.push(sym);
+        }
+    });
+    if (!missing.length) {
+        if (opts.onUpdated) opts.onUpdated();
+        return Promise.resolve();
+    }
+    if (!window.apiClient || typeof window.apiClient.get !== "function") {
+        return Promise.all(missing.map(_fetchCoinSearchTickerFallback)).then(function () {
+            if (opts.onUpdated) opts.onUpdated();
+        });
+    }
+    var run = function () {
+        return window.apiClient
+            .get("/api/data/prices?slim=1&symbols=" + encodeURIComponent(missing.join(",")))
+            .then(function (res) {
+                var prices = _parseDataPricesPayload(res);
+                var stillMissing = [];
+                missing.forEach(function (sym) {
+                    var row = prices[sym];
+                    var price = row && row.price != null ? Number(row.price) : NaN;
+                    var changePct = row && row.change24h != null ? Number(row.change24h) : null;
+                    if (price > 0 && Number.isFinite(price)) {
+                        var pct = Number.isFinite(changePct) ? changePct : null;
+                        _updateCoinSearchSymbolQuote(sym, price, pct);
+                        _writeMobileTradeFavTickerCache(sym, price, pct);
+                        if (opts.onEach) opts.onEach(sym, price, pct);
+                    } else {
+                        stillMissing.push(sym);
+                    }
+                });
+                return Promise.all(stillMissing.map(_fetchCoinSearchTickerFallback));
+            })
+            .catch(function () {
+                return Promise.all(missing.map(_fetchCoinSearchTickerFallback));
+            })
+            .then(function () {
+                if (opts.onUpdated) opts.onUpdated();
+            });
+    };
+    if (_coinSearchPriceFetchInflight) {
+        return _coinSearchPriceFetchInflight.then(run);
+    }
+    _coinSearchPriceFetchInflight = run().finally(function () {
+        _coinSearchPriceFetchInflight = null;
+    });
+    return _coinSearchPriceFetchInflight;
+}
+
+function queueCoinSearchPriceFetch(symbols, onUpdated) {
+    (symbols || []).forEach(function (s) {
+        var u = (s || "").toUpperCase();
+        if (u && _coinSearchPricePending.indexOf(u) === -1) _coinSearchPricePending.push(u);
+    });
+    if (_coinSearchPriceTimer) clearTimeout(_coinSearchPriceTimer);
+    _coinSearchPriceTimer = setTimeout(function () {
+        _coinSearchPriceTimer = null;
+        var batch = _coinSearchPricePending.slice();
+        _coinSearchPricePending = [];
+        fetchCoinSearchPricesBatch(batch, { onUpdated: onUpdated });
+    }, 150);
+}
+
+function _getMobileTradeFavQuote(symbol) {
+    return _getSymbolSearchQuote(symbol);
+}
+
+function _fetchMobileTradeFavTickerFallback(symbol) {
+    return _fetchCoinSearchTickerFallback(symbol).then(function (row) {
+        if (row && row.price > 0) {
+            _applyMobileTradeFavItemQuote(symbol, row.price, row.changePct);
+        }
+    });
 }
 
 function fetchMobileTradeFavPricesBatch(symbols) {
-    symbols = (symbols || []).map(function (s) { return (s || "").toUpperCase(); }).filter(Boolean);
-    if (!symbols.length) return Promise.resolve();
-    symbols.forEach(function (sym) {
-        var q = _getMobileTradeFavQuote(sym);
-        if (q.price != null) _applyMobileTradeFavItemQuote(sym, q.price, q.changePct);
+    return fetchCoinSearchPricesBatch(symbols, {
+        onEach: function (sym, price, changePct) {
+            _applyMobileTradeFavItemQuote(sym, price, changePct);
+        }
     });
-    if (!window.apiClient || typeof window.apiClient.get !== "function") return Promise.resolve();
-    if (_mobileTradeFavBatchInflight) return _mobileTradeFavBatchInflight;
-    _mobileTradeFavBatchInflight = window.apiClient
-        .get("/api/data/prices?slim=1&symbols=" + encodeURIComponent(symbols.join(",")))
-        .then(function (res) {
-            var prices = _parseDataPricesPayload(res);
-            var missing = [];
-            symbols.forEach(function (sym) {
-                var row = prices[sym];
-                var price = row && row.price != null ? Number(row.price) : NaN;
-                var changePct = row && row.change24h != null ? Number(row.change24h) : null;
-                if (price > 0 && Number.isFinite(price)) {
-                    _applyMobileTradeFavItemQuote(sym, price, Number.isFinite(changePct) ? changePct : null);
-                } else {
-                    missing.push(sym);
-                }
-            });
-            return Promise.all(missing.map(_fetchMobileTradeFavTickerFallback));
-        })
-        .catch(function () {
-            return Promise.all(symbols.map(_fetchMobileTradeFavTickerFallback));
-        })
-        .finally(function () {
-            _mobileTradeFavBatchInflight = null;
-        });
-    return _mobileTradeFavBatchInflight;
 }
 
 function prefetchMobileTradeFavTickerCache() {
@@ -4790,19 +5164,11 @@ function renderMobileTradeFavorites() {
         return;
     }
     var baseFromSymbol = function (sym) {
-        var q = ["USDT", "FDUSD", "BUSD", "BTC", "ETH", "BNB", "TRY"];
-        for (var i = 0; i < q.length; i++) {
-            if (sym.endsWith(q[i])) return sym.slice(0, -q[i].length) || sym;
-        }
-        return sym.substring(0, 4) || sym;
+        var pq = parseTradingPairSymbol(sym);
+        return pq.valid ? pq.base : sym;
     };
     var symbolDisplay = function (sym) {
-        var base = baseFromSymbol(sym);
-        if (!base || base === sym) return sym;
-        if ((sym || "").endsWith("USDT")) return base + "/USDT";
-        if ((sym || "").endsWith("FDUSD")) return base + "/FDUSD";
-        if ((sym || "").endsWith("BUSD")) return base + "/BUSD";
-        return base + "/" + (sym.slice(base.length) || "USDT");
+        return formatTradingPairDisplay(sym);
     };
     var getLogoHtml = function (base) {
         if (!base || typeof getCoinLogoUrl !== "function") return '<span class="varlik-logo-initials" style="width:32px;height:32px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:0.7rem;font-weight:600;background:var(--ds-bg-tertiary);color:var(--ds-text-secondary);">' + (base || "").substring(0, 2).toUpperCase() + "</span>";
@@ -4816,7 +5182,7 @@ function renderMobileTradeFavorites() {
         var quote = _getMobileTradeFavQuote(symbol);
         var price = quote.price;
         var changePct = quote.changePct;
-        var priceDisplay = _fmtMobileTradeFavPriceDisplay(price);
+        var priceDisplay = _fmtMobileTradeFavPriceDisplay(price, sym);
         var changeStr = changePct != null ? (changePct >= 0 ? "+" : "") + Number(changePct).toFixed(2) + "%" : "—";
         var changeColor = changePct != null ? (changePct >= 0 ? "#0ecb81" : "#f6465d") : "var(--ds-text-secondary)";
         var base = baseFromSymbol(symbol);
@@ -5181,6 +5547,9 @@ var dmModalLastLogoBase = null;
 var dmModalOpenTs = 0;
 var dmModalLastChartSymbol = null;  // Grafik sadece sembol değişince yeniden yüklensin (flicker önleme)
 var dmModalLastTahminSymbol = null;
+var _dmSymbolSearchPriceGen = 0;
+var _dmSymbolSearchOutsideBound = false;
+var _dmModalStripSymbol = null;
 var dmModalTahminFetchTs = 0;
 var dmModalTahminHigh = null;
 var dmModalTahminLow = null;
@@ -5299,6 +5668,7 @@ function openCreateBotModal(botId = null, accountId = null, skipLastCreateParams
         if (tahminStrip) tahminStrip.style.display = "none";
     }
     hideCreateModalSymbolDropdown();
+    ensureCoinListSearchSymbolsLoaded("all").then(function () { buildCoinListSearchSymbols(); });
     var fBudgetReset = document.getElementById("fBudget");
     if (fBudgetReset) fBudgetReset.placeholder = "Kullanılabilir: —";
     if (State.accountId && typeof pollWallet === "function" && (!assetsState.wallet.assets || !assetsState.wallet.assets.length)) pollWallet(true);
@@ -5410,6 +5780,7 @@ function closeCreateBotModal() {
     if (strip) strip.style.display = "none";
     if (tahminStrip) tahminStrip.style.display = "none";
     hideCreateModalSymbolDropdown();
+    _dmModalStripSymbol = null;
     dmModalLastChartSymbol = null;
     dmModalLastTahminSymbol = null;
     dmModalTahminHigh = null;
@@ -5478,12 +5849,18 @@ function bindCreateBotModal() {
     }
     
     // fSymbol: yazarken arama dropdown, seçince strip + tahmin güncelle
+    bindDmSymbolSearchOutsideClose();
     const fSymbol = document.getElementById("fSymbol");
     const dmSymbolSearchDropdown = document.getElementById("dmSymbolSearchDropdown");
     if (fSymbol) {
         let dmSymbolInputDebounce = null;
         fSymbol.addEventListener("focus", function () {
-            ensureCoinListSearchSymbolsLoaded("all").then(function () { buildCoinListSearchSymbols(); });
+            ensureCoinListSearchSymbolsLoaded("all").then(function () {
+                buildCoinListSearchSymbols();
+                var v = (fSymbol.value || "").trim();
+                if (v.length >= 2) showCreateModalSymbolDropdown(v);
+                else showCreateModalSymbolDropdownSuggestions();
+            });
         });
         fSymbol.addEventListener("input", function () {
             const v = (fSymbol.value || "").trim();
@@ -5495,6 +5872,13 @@ function bindCreateBotModal() {
                         showCreateModalSymbolDropdown(v);
                     });
                 }, 200);
+            } else if (v.length === 1) {
+                dmSymbolInputDebounce = setTimeout(function () {
+                    ensureCoinListSearchSymbolsLoaded("all").then(function () {
+                        buildCoinListSearchSymbols();
+                        showCreateModalSymbolDropdown(v, 1);
+                    });
+                }, 120);
             } else {
                 hideCreateModalSymbolDropdown();
                 if (v.length === 0) {
@@ -5502,6 +5886,7 @@ function bindCreateBotModal() {
                     const tahminStrip = document.getElementById("dmTahminStrip");
                     if (strip) strip.style.display = "none";
                     if (tahminStrip) tahminStrip.style.display = "none";
+                    _dmModalStripSymbol = null;
                 }
             }
         });
@@ -5510,6 +5895,10 @@ function bindCreateBotModal() {
         });
         // Enter: parite onayla → strip ve tahmin göster (dropdown açıksa ilk sonucu seç, yoksa yazılanı normalize et)
         fSymbol.addEventListener("keydown", function (e) {
+            if (e.key === "Escape") {
+                hideCreateModalSymbolDropdown();
+                return;
+            }
             if (e.key !== "Enter") return;
             const dropdown = document.getElementById("dmSymbolSearchDropdown");
             const firstItem = dropdown && dropdown.querySelector(".dm-symbol-search-item, .coin-list-search-item");
@@ -5713,18 +6102,14 @@ function normalizeSymbol(symbol) {
 
 /** Parite sembolünden base/quote çıkar (BTCUSDT → { base: 'BTC', quote: 'USDT' }) */
 function parseBaseQuote(symbol) {
-    if (!symbol || typeof symbol !== 'string') return { base: '', quote: 'USDT' };
-    const s = symbol.toUpperCase().replace(/\s/g, '');
-    if (s.endsWith('USDT')) return { base: s.slice(0, -4) || '', quote: 'USDT' };
-    if (s.endsWith('FDUSD')) return { base: s.slice(0, -5) || '', quote: 'FDUSD' };
-    if (s.endsWith('BTC')) return { base: s.slice(0, -3) || '', quote: 'BTC' };
-    if (s.endsWith('ETH')) return { base: s.slice(0, -3) || '', quote: 'ETH' };
-    if (s.endsWith('BNB')) return { base: s.slice(0, -3) || '', quote: 'BNB' };
-    return { base: s, quote: 'USDT' };
+    var pq = parseTradingPairSymbol(symbol);
+    if (pq.valid) return { base: pq.base, quote: pq.quote };
+    return { base: (symbol || '').toUpperCase().replace(/[\s\/\-]/g, ''), quote: 'USDT' };
 }
 
 /** Create bot modal: seçilen parite strip'ini (logo, fiyat, 24h %, grafik) ve tahmin alanını güncelle */
-function updateCreateBotModalPairStrip(symbol) {
+function updateCreateBotModalPairStrip(symbol, opts) {
+    opts = opts || {};
     const strip = document.getElementById('dmSelectedPairStrip');
     const tahminStrip = document.getElementById('dmTahminStrip');
     const logoEl = document.getElementById('dmPairLogo');
@@ -5744,6 +6129,10 @@ function updateCreateBotModalPairStrip(symbol) {
         return;
     }
     const sym = norm.normalized;
+    if (!opts.preserveDropdown && sym && sym !== _dmModalStripSymbol) {
+        hideCreateModalSymbolDropdown();
+        _dmModalStripSymbol = sym;
+    }
     const { base, quote } = parseBaseQuote(sym);
     strip.style.display = 'flex';
     tahminStrip.style.display = 'block';
@@ -5800,8 +6189,9 @@ function updateCreateBotModalPairStrip(symbol) {
             var modal = document.getElementById('dmModal');
             var fSym = document.getElementById('fSymbol');
             if (!modal || modal.style.display === 'none' || !fSym || !fSym.value.trim()) return;
+            if (document.activeElement === fSym || isCreateModalSymbolDropdownOpen()) return;
             var currentSym = normalizeModalSymbol(fSym.value.trim());
-            if (currentSym.normalized) updateCreateBotModalPairStrip(currentSym.normalized);
+            if (currentSym.normalized) updateCreateBotModalPairStrip(currentSym.normalized, { preserveDropdown: true });
         }, DM_MODAL_LIVE_PRICE_MS);
     }
 }
@@ -5887,55 +6277,289 @@ async function loadCreateBotModalChart(symbol) {
     }
 }
 
-/** Create modal: sembol arama dropdown göster (fSymbol için) */
-function showCreateModalSymbolDropdown(query) {
+var SYMBOL_SEARCH_STOP_WORDS = { COIN: 1, TOKEN: 1, PARITE: 1, PAIR: 1, CRYPTO: 1, KRIPTO: 1, PARITY: 1 };
+/** Binance quote varlıkları (uzun sonek önce denenir) — USDT + çapraz (ETH/BTC/BNB/…) */
+var SYMBOL_SEARCH_QUOTE_SUFFIXES = [
+    'USDT', 'FDUSD', 'USDC', 'BUSD', 'TUSD', 'DAI', 'USDD',
+    'BTC', 'ETH', 'BNB', 'SOL', 'XRP', 'DOGE', 'TRX', 'TRY', 'EUR', 'GBP', 'BRL', 'AUD', 'RUB', 'IDR', 'UAH'
+];
+var INVALID_TRADING_PAIR_SYMBOLS = new Set(['USDTUSDT', 'USDCUSDT', 'FDUSDUSDT', 'BUSDUSDT', 'TUSDUSDT', 'DAIUSDT']);
+/** scope=all coin-list sembolleri — geçerli parite doğrulama */
+var binanceTradingSymbolsSet = null;
+
+function tradingPairQuotesByLength() {
+    return SYMBOL_SEARCH_QUOTE_SUFFIXES.slice().sort(function (a, b) { return b.length - a.length; });
+}
+
+/** Binance paritesi: quote sonekleri uzundan kısaya; tabanda ikinci quote yok (BNBFDUSD+USDT engeli). */
+function parseTradingPairSymbol(symbol) {
+    var s = (symbol || '').toUpperCase().replace(/[\s\/\-]/g, '');
+    if (!s) return { base: '', quote: '', normalized: '', valid: false };
+    if (s === 'USDTUSD') return { base: 'USDT', quote: 'USD', normalized: 'USDTUSD', valid: true };
+    if (INVALID_TRADING_PAIR_SYMBOLS.has(s)) return { base: '', quote: '', normalized: s, valid: false };
+    var quotes = tradingPairQuotesByLength();
+    for (var i = 0; i < quotes.length; i++) {
+        var q = quotes[i];
+        if (!s.endsWith(q) || s.length <= q.length) continue;
+        var base = s.slice(0, -q.length);
+        if (!base || base === q) continue;
+        var nested = false;
+        for (var j = 0; j < quotes.length; j++) {
+            var q2 = quotes[j];
+            if (base.endsWith(q2) && base.length > q2.length) {
+                nested = true;
+                break;
+            }
+        }
+        if (!nested) {
+            return { base: base, quote: q, normalized: base + q, valid: true };
+        }
+    }
+    return { base: s, quote: '', normalized: s, valid: false };
+}
+
+function rebuildBinanceTradingSymbolSet() {
+    var syms = coinListAllScopeSymbols.length > 0
+        ? coinListAllScopeSymbols
+        : (coinListAllBinanceSymbols.length > 0 ? coinListAllBinanceSymbols : []);
+    binanceTradingSymbolsSet = syms.length > 0 ? new Set(syms) : null;
+}
+
+function isValidTradingPairSymbol(symbol) {
+    var s = (symbol || '').toUpperCase().replace(/[\s\/\-]/g, '');
+    if (!s || INVALID_TRADING_PAIR_SYMBOLS.has(s)) return false;
+    if (binanceTradingSymbolsSet && binanceTradingSymbolsSet.size > 0) {
+        return binanceTradingSymbolsSet.has(s);
+    }
+    return parseTradingPairSymbol(s).valid;
+}
+
+function formatTradingPairDisplay(symbol) {
+    var pq = parseTradingPairSymbol(symbol);
+    if (!pq.valid) return (symbol || '').toUpperCase() || '—';
+    if (pq.normalized === 'USDTUSD') return 'USDT/USD';
+    return pq.base + '/' + pq.quote;
+}
+
+function normalizeSymbolSearchQuery(raw) {
+    var s = (raw || '').trim().toUpperCase();
+    if (!s) return { compact: '', tokens: [], primary: '' };
+    var tokens = s.split(/[\s,\/\-]+/).filter(Boolean).filter(function (t) { return !SYMBOL_SEARCH_STOP_WORDS[t]; });
+    var compact = (tokens.length ? tokens.join('') : s.replace(/[\s,\/\-]+/g, ''));
+    var primary = tokens[0] || compact;
+    return { compact: compact, tokens: tokens, primary: primary };
+}
+
+function parseBaseQuoteForSearch(symbol) {
+    var pq = parseTradingPairSymbol(symbol);
+    return { base: pq.base || '', quote: pq.quote || '' };
+}
+
+function coinListSearchQuoteOrder(sym) {
+    if ((sym || '').endsWith('USDT')) return 0;
+    if ((sym || '').endsWith('FDUSD')) return 1;
+    if ((sym || '').endsWith('USDC')) return 2;
+    if ((sym || '').endsWith('BTC')) return 3;
+    if ((sym || '').endsWith('ETH')) return 4;
+    if ((sym || '').endsWith('BNB')) return 5;
+    return 6;
+}
+
+/** "xrp eth", "XRP/ETH" → XRPETH vb. aday semboller */
+function resolveSearchSymbolCandidates(qn) {
+    var out = [];
+    var seen = {};
+    function add(sym) {
+        var s = (sym || '').toUpperCase();
+        if (!s || seen[s] || !isValidTradingPairSymbol(s)) return;
+        seen[s] = true;
+        out.push(s);
+    }
+    var tokens = (qn && qn.tokens) ? qn.tokens : [];
+    if (tokens.length >= 2) {
+        add(tokens[0] + tokens[1]);
+        add(tokens[1] + tokens[0]);
+    }
+    var needle = (qn && (qn.primary || qn.compact)) || '';
+    if (needle && /^[A-Z0-9]{2,12}$/.test(needle)) {
+        for (var i = 0; i < SYMBOL_SEARCH_QUOTE_SUFFIXES.length; i++) {
+            add(needle + SYMBOL_SEARCH_QUOTE_SUFFIXES[i]);
+        }
+    }
+    return out;
+}
+
+function symbolSearchMatchScore(symbol, qn) {
+    var sym = (symbol || '').toUpperCase();
+    if (!sym || !qn) return -1;
+    var compact = qn.compact || '';
+    var primary = qn.primary || compact;
+    if (!primary && !compact) return -1;
+    var pq = parseBaseQuoteForSearch(sym);
+    var base = pq.base || '';
+    var quote = pq.quote || '';
+    if (qn.tokens.length >= 2) {
+        var t0 = qn.tokens[0];
+        var t1 = qn.tokens[1];
+        if (base === t0 && quote === t1) return 99;
+        if (sym === t0 + t1 || sym === t1 + t0) return 92;
+    }
+    if (compact && sym.indexOf(compact) !== -1) return 100;
+    if (qn.tokens.length) {
+        if (base === primary) return 95;
+        if (base.indexOf(primary) === 0) return 88;
+        if (primary.length >= 2 && base.indexOf(primary) !== -1) return 82;
+        var allInSym = qn.tokens.every(function (t) { return sym.indexOf(t) !== -1; });
+        if (allInSym) return 75;
+        return -1;
+    }
+    if (base === primary) return 95;
+    if (primary.length >= 2 && base.indexOf(primary) === 0) return 88;
+    if (primary.length >= 2 && base.indexOf(primary) !== -1) return 82;
+    if (compact && sym.indexOf(compact) !== -1) return 70;
+    return -1;
+}
+
+function getCoinListSearchRows() {
+    if (coinListSearchAllSymbols.length > 0) return coinListSearchAllSymbols;
+    var fromScope = (coinListAllScopeSymbols || []).map(function (symbol) {
+        var mini = window.marketStore && window.marketStore.getMini && window.marketStore.getMini(symbol);
+        return { symbol: symbol, last: mini && mini.last, changePct: mini && mini.changePct };
+    });
+    if (fromScope.length > 0) return fromScope;
+    if (window.marketStore && window.marketStore.getAllMini) {
+        return (window.marketStore.getAllMini() || []).map(function (m) {
+            return { symbol: (m.symbol || '').toUpperCase(), last: m.last, changePct: m.changePct };
+        }).filter(function (x) { return x.symbol; });
+    }
+    return [];
+}
+
+function filterCoinListForSearch(query, maxResults, minLen) {
+    maxResults = maxResults || 60;
+    minLen = minLen != null ? minLen : 2;
+    var qn = normalizeSymbolSearchQuery(query);
+    var needle = qn.primary || qn.compact || '';
+    if (needle.length < minLen) return [];
+    var rows = getCoinListSearchRows();
+    var scored = [];
+    for (var i = 0; i < rows.length; i++) {
+        var row = rows[i];
+        var score = symbolSearchMatchScore(row.symbol, qn);
+        if (score < 0 || !isValidTradingPairSymbol(row.symbol)) continue;
+        scored.push({ row: row, score: score });
+    }
+    scored.sort(function (a, b) {
+        if (b.score !== a.score) return b.score - a.score;
+        var qA = coinListSearchQuoteOrder(a.row.symbol);
+        var qB = coinListSearchQuoteOrder(b.row.symbol);
+        if (qA !== qB) return qA - qB;
+        return (a.row.symbol || '').localeCompare(b.row.symbol || '');
+    });
+    var list = scored.slice(0, maxResults).map(function (x) { return x.row; });
+    if (list.length === 0) {
+        list = resolveSearchSymbolCandidates(qn).map(function (sym) {
+            var mini = window.marketStore && window.marketStore.getMini && window.marketStore.getMini(sym);
+            return { symbol: sym, last: mini && mini.last, changePct: mini && mini.changePct };
+        });
+    }
+    return list.slice(0, maxResults);
+}
+
+if (typeof window !== 'undefined') {
+    window.parseTradingPairSymbol = parseTradingPairSymbol;
+    window.isValidTradingPairSymbol = isValidTradingPairSymbol;
+    window.formatTradingPairDisplay = formatTradingPairDisplay;
+}
+
+function isCreateModalSymbolDropdownOpen() {
+    const dropdown = document.getElementById('dmSymbolSearchDropdown');
+    return !!(dropdown && dropdown.style.display === 'block');
+}
+
+function paintCreateModalSymbolDropdown(list, emptyHtml) {
     const dropdown = document.getElementById('dmSymbolSearchDropdown');
     if (!dropdown) return;
-    const q = (query || '').trim().toUpperCase();
-    if (!q || q.length < 2) {
-        dropdown.style.display = 'none';
-        return;
+    if (!list || !list.length) {
+        dropdown.innerHTML = emptyHtml || '<div style="padding: 1rem; color: var(--ds-text-secondary); font-size: 0.9rem;">Sonuç yok. Pariteyi elle yazın (örn. BTCUSDT, XRPETH).</div>';
+    } else {
+        dropdown.innerHTML = list.map(function (item) {
+            return renderCoinSearchDropdownItemHtml(item, 'dm-symbol-search-item');
+        }).join('');
     }
-    function quoteOrder(sym) {
-        if ((sym || '').endsWith('USDT')) return 0;
-        if ((sym || '').endsWith('FDUSD')) return 1;
-        return 2;
-    }
-    let list = coinListSearchAllSymbols.length > 0
-        ? coinListSearchAllSymbols.filter(x => (x.symbol || '').toUpperCase().includes(q)).slice(0, 40)
-        : (window.marketStore && window.marketStore.getAllMini && window.marketStore.getAllMini()) ? (window.marketStore.getAllMini() || [])
-            .filter(m => {
-                const s = (m.symbol || '').toUpperCase();
-                return (s.endsWith('USDT') || s.endsWith('FDUSD')) && s.includes(q);
-            })
-            .slice(0, 40)
-            .map(m => ({ symbol: (m.symbol || '').toUpperCase(), last: m.last, changePct: m.changePct }))
-        : [];
-    list = list.sort((a, b) => {
-        const qA = quoteOrder(a.symbol);
-        const qB = quoteOrder(b.symbol);
-        if (qA !== qB) return qA - qB;
-        return (a.symbol || '').localeCompare(b.symbol || '');
-    });
-    if (list.length === 0) {
-        dropdown.innerHTML = '<div style="padding: 1rem; color: var(--ds-text-secondary); font-size: 0.9rem;">Sonuç yok. Pariteyi elle yazın (örn. BTCUSDT).</div>';
-        dropdown.style.display = 'block';
-        return;
-    }
-    dropdown.innerHTML = list.map(item => {
-        const sym = item.symbol || '';
-        const priceStr = item.last != null && Number.isFinite(item.last) ? fmtUsd(item.last) : '…';
-        const pct = item.changePct != null && Number.isFinite(item.changePct) ? item.changePct : null;
-        const pctStr = pct != null ? (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%' : '—';
-        const pctColor = pct != null ? (pct >= 0 ? '#0ecb81' : '#f6465d') : 'var(--ds-text-secondary)';
-        return '<div class="coin-list-search-item dm-symbol-search-item" data-symbol="' + sym + '" style="padding: 0.6rem 1rem; cursor: pointer; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--ds-border);"><span style="font-weight: 600;">' + sym + '</span><span style="display: flex; gap: 1rem;"><span>' + priceStr + '</span><span style="color: ' + pctColor + '">' + pctStr + '</span></span></div>';
-    }).join('');
     dropdown.style.display = 'block';
 }
 
+function showCreateModalSymbolDropdownSuggestions() {
+    const fSym = document.getElementById('fSymbol');
+    var rows = getCoinListSearchRows();
+    if (!rows.length) {
+        paintCreateModalSymbolDropdown(null, '<div style="padding: 1rem; color: var(--ds-text-secondary); font-size: 0.9rem;">Sembol listesi yükleniyor…</div>');
+        ensureCoinListSearchSymbolsLoaded('all').then(function () {
+            buildCoinListSearchSymbols();
+            if (fSym && document.activeElement === fSym) showCreateModalSymbolDropdownSuggestions();
+        });
+        return;
+    }
+    var list = rows.slice(0, 50);
+    paintCreateModalSymbolDropdown(list);
+    var priceGen = _dmSymbolSearchPriceGen;
+    queueCoinSearchPriceFetch(list.map(function (it) { return it.symbol; }), function () {
+        if (priceGen !== _dmSymbolSearchPriceGen) return;
+        if (!fSym || document.activeElement !== fSym) return;
+        if (!isCreateModalSymbolDropdownOpen()) return;
+        showCreateModalSymbolDropdownSuggestions();
+    });
+}
+
+/** Create modal: sembol arama dropdown göster (fSymbol için) */
+function showCreateModalSymbolDropdown(query, minLen) {
+    const fSym = document.getElementById('fSymbol');
+    const dropdown = document.getElementById('dmSymbolSearchDropdown');
+    if (!dropdown) return;
+    minLen = minLen != null ? minLen : 2;
+    const qn = normalizeSymbolSearchQuery(query);
+    const needle = qn.primary || qn.compact || '';
+    if (!needle || needle.length < minLen) {
+        if (minLen <= 1 && needle.length === 0) showCreateModalSymbolDropdownSuggestions();
+        else hideCreateModalSymbolDropdown();
+        return;
+    }
+    let list = filterCoinListForSearch(query, 60, minLen);
+    if (list.length === 0) {
+        paintCreateModalSymbolDropdown(null);
+        return;
+    }
+    paintCreateModalSymbolDropdown(list);
+    var priceGen = _dmSymbolSearchPriceGen;
+    queueCoinSearchPriceFetch(list.map(function (it) { return it.symbol; }), function () {
+        if (priceGen !== _dmSymbolSearchPriceGen) return;
+        if (!fSym || document.activeElement !== fSym) return;
+        if (!isCreateModalSymbolDropdownOpen()) return;
+        var v = (fSym.value || '').trim();
+        if (v.length < minLen) return;
+        showCreateModalSymbolDropdown(v, minLen);
+    });
+}
+
 function hideCreateModalSymbolDropdown() {
+    _dmSymbolSearchPriceGen++;
     const dropdown = document.getElementById('dmSymbolSearchDropdown');
     if (dropdown) dropdown.style.display = 'none';
+}
+
+function bindDmSymbolSearchOutsideClose() {
+    if (_dmSymbolSearchOutsideBound) return;
+    _dmSymbolSearchOutsideBound = true;
+    document.addEventListener('mousedown', function (e) {
+        var modal = document.getElementById('dmModal');
+        if (!modal || modal.style.display === 'none') return;
+        if (!isCreateModalSymbolDropdownOpen()) return;
+        var fSym = document.getElementById('fSymbol');
+        var wrap = fSym && fSym.closest('.coin-list-search-wrap');
+        if (wrap && wrap.contains(e.target)) return;
+        hideCreateModalSymbolDropdown();
+    });
 }
 
 var _dmMultiSearchTargetInput = null;
@@ -5944,47 +6568,28 @@ var _dmMultiSearchTargetIdx = null;
 function showMultiSymbolSearchDropdown(query, anchorInputEl) {
     const dropdown = document.getElementById('dmMultiSymbolSearchDropdown');
     if (!dropdown || !anchorInputEl) return;
-    const q = (query || '').trim().toUpperCase();
-    if (!q || q.length < 2) {
+    const qn = normalizeSymbolSearchQuery(query);
+    const needle = qn.primary || qn.compact || '';
+    if (!needle || needle.length < 2) {
         dropdown.style.display = 'none';
         return;
     }
     _dmMultiSearchTargetInput = anchorInputEl;
     _dmMultiSearchTargetIdx = anchorInputEl.getAttribute('data-idx');
-    function quoteOrder(sym) {
-        if ((sym || '').endsWith('USDT')) return 0;
-        if ((sym || '').endsWith('FDUSD')) return 1;
-        return 2;
-    }
-    var list = coinListSearchAllSymbols.length > 0
-        ? coinListSearchAllSymbols.filter(function (x) { return (x.symbol || '').toUpperCase().includes(q); }).slice(0, 40)
-        : (window.marketStore && window.marketStore.getAllMini && window.marketStore.getAllMini()) ? (window.marketStore.getAllMini() || [])
-            .filter(function (m) {
-                var s = (m.symbol || '').toUpperCase();
-                return (s.endsWith('USDT') || s.endsWith('FDUSD')) && s.includes(q);
-            })
-            .slice(0, 40)
-            .map(function (m) { return { symbol: (m.symbol || '').toUpperCase(), last: m.last, changePct: m.changePct }; })
-        : [];
-    list = list.sort(function (a, b) {
-        var qA = quoteOrder(a.symbol);
-        var qB = quoteOrder(b.symbol);
-        if (qA !== qB) return qA - qB;
-        return (a.symbol || '').localeCompare(b.symbol || '');
-    });
+    var list = filterCoinListForSearch(query, 60);
     if (list.length === 0) {
         dropdown.innerHTML = '<div style="padding: 1rem; color: var(--ds-text-secondary); font-size: 0.9rem;">Sonuç yok. Sembolü elle yazın (örn. BTC).</div>';
         dropdown.style.display = 'block';
     } else {
         dropdown.innerHTML = list.map(function (item) {
-            var sym = item.symbol || '';
-            var priceStr = item.last != null && Number.isFinite(item.last) ? fmtUsd(item.last) : '…';
-            var pct = item.changePct != null && Number.isFinite(item.changePct) ? item.changePct : null;
-            var pctStr = pct != null ? (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%' : '—';
-            var pctColor = pct != null ? (pct >= 0 ? '#0ecb81' : '#f6465d') : 'var(--ds-text-secondary)';
-            return '<div class="coin-list-search-item dm-multi-symbol-item" data-symbol="' + sym + '" style="padding: 0.6rem 1rem; cursor: pointer; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--ds-border);"><span style="font-weight: 600;">' + sym + '</span><span style="display: flex; gap: 1rem;"><span>' + priceStr + '</span><span style="color: ' + pctColor + '">' + pctStr + '</span></span></div>';
+            return renderCoinSearchDropdownItemHtml(item, 'dm-multi-symbol-item');
         }).join('');
         dropdown.style.display = 'block';
+        queueCoinSearchPriceFetch(list.map(function (it) { return it.symbol; }), function () {
+            if (_dmMultiSearchTargetInput && (anchorInputEl.value || '').trim()) {
+                showMultiSymbolSearchDropdown(anchorInputEl.value, anchorInputEl);
+            }
+        });
     }
     var rect = anchorInputEl.getBoundingClientRect();
     dropdown.style.left = rect.left + 'px';
@@ -6324,18 +6929,22 @@ function normalizeAssetToSymbol(asset, quote = QUOTE) {
     return a + quote;
 }
 
-/** Modal için sembol normalize; USDT/USD → USDTUSD (Binance'te geçerli). Sadece base===quote (USDTUSDT) geçersiz. */
+/** Modal için sembol normalize; USDT/USD → USDTUSD; çapraz parite XRPETH vb. */
 function normalizeModalSymbol(symbol) {
     if (!symbol || typeof symbol !== 'string') return { normalized: '', invalid: true };
     const s = String(symbol).replace(/[\s\/\-]/g, '').toUpperCase();
     if (!s) return { normalized: '', invalid: true };
-    if (s === 'USDTUSDT') return { normalized: 'USDTUSDT', invalid: true };
-    if (s.endsWith('USDT')) {
-        const base = s.slice(0, -4) || '';
-        if (base === 'USDT' || !base) return { normalized: s, invalid: true };
+    if (binanceTradingSymbolsSet && binanceTradingSymbolsSet.size > 0 && !binanceTradingSymbolsSet.has(s)) {
+        return { normalized: s, invalid: true };
     }
-    const invalidSet = new Set(['USDTUSDT', 'USDCUSDT', 'FDUSDUSDT', 'BUSDUSDT', 'TUSDUSDT', 'DAIUSDT']);
-    return { normalized: s, invalid: invalidSet.has(s) };
+    const pq = parseTradingPairSymbol(s);
+    if (!pq.valid || pq.base === 'USDT' || !pq.base) {
+        if (binanceTradingSymbolsSet && binanceTradingSymbolsSet.has(s)) {
+            return { normalized: s, invalid: false };
+        }
+        return { normalized: s, invalid: true };
+    }
+    return { normalized: pq.normalized, invalid: false };
 }
 
 function normalizeUiSymbolToStoreKey(uiSymbol) {
@@ -6475,8 +7084,11 @@ function normalizeAndApplyWallet(payload, meta) {
     pushWalletEvent({ source: source, status: status, total_usd: totalUsd, asset_count: assets.length, request_id: meta.request_id, note: meta.note });
     if (!err && assets.length) _persistWalletStorageCache();
     if (typeof updateKpiCuzdanLiveStatus === 'function') updateKpiCuzdanLiveStatus();
-    if (window.BinanceAssetsPanel?.render) window.BinanceAssetsPanel.render();
-    if (typeof renderVarliklarList === 'function') renderVarliklarList();
+    if (window.BinanceAssetsPanel?.render) {
+        window.BinanceAssetsPanel.render();
+    } else if (typeof renderVarliklarList === 'function') {
+        renderVarliklarList();
+    }
     if (typeof updateDcaBudgetPlaceholder === 'function') updateDcaBudgetPlaceholder();
     if (typeof updateMultiBudgetPlaceholder === 'function') updateMultiBudgetPlaceholder();
     if (typeof updateTrdcaBalancePlaceholder === 'function') updateTrdcaBalancePlaceholder();
@@ -6724,10 +7336,36 @@ function _walletHasDisplayableAssets() {
 
 function hashWalletAssets(assets) {
     if (!Array.isArray(assets)) return '';
-    // Round to 8 decimals to avoid re-render flicker from float noise in API responses
-    const round8 = (v) => (v != null && Number.isFinite(Number(v))) ? Number(Number(v).toFixed(8)) : v;
-    const rows = assets.map(a => [a.asset, round8(a.free), round8(a.locked), round8(a.bot_locked), round8(a.available)]).sort((a, b) => (a[0] || '').localeCompare(b[0] || ''));
+    var roundQty = function (v) {
+        if (v == null || !Number.isFinite(Number(v))) return 0;
+        var n = Number(v);
+        if (n >= 1000) return Math.round(n * 100) / 100;
+        if (n >= 1) return Math.round(n * 10000) / 10000;
+        return Math.round(n * 1e8) / 1e8;
+    };
+    var rows = assets.map(function (a) {
+        return [a.asset, roundQty(a.free), roundQty(a.locked), roundQty(a.bot_locked)];
+    }).sort(function (a, b) { return (a[0] || '').localeCompare(b[0] || ''); });
     return JSON.stringify(rows);
+}
+
+/** Cüzdan tablosu sırası: tam USD değil, kaba kova + sembol (fiyat oynayınca satır sırası zıplamasın). */
+function sortVarliklarListForDisplay(list) {
+    if (!Array.isArray(list) || !list.length) return list;
+    return list.slice().sort(function (a, b) {
+        var va = Number(a._valueUsd) || 0;
+        var vb = Number(b._valueUsd) || 0;
+        var ba = va >= 1000 ? Math.round(va) : Math.round(va * 10) / 10;
+        var bb = vb >= 1000 ? Math.round(vb) : Math.round(vb * 10) / 10;
+        if (bb !== ba) return bb - ba;
+        return (a.asset || '').localeCompare(b.asset || '');
+    });
+}
+
+function varlikRowActionsHtml(d) {
+    return '<div class="btn-al-sat-wrap">' +
+        '<button type="button" class="btn-al"' + d.buyDisabled + ' onclick="event.stopPropagation(); ' + (d.canBuy ? "openSpotTradeModal('" + d.symbol + "', 'BUY')" : '') + '" title="' + d.buyTitle + '">Alış</button>' +
+        '<button type="button" class="btn-sat"' + d.sellDisabled + ' onclick="event.stopPropagation(); ' + (d.canSell ? "openSpotTradeModal('" + d.symbol + "', 'SELL')" : '') + '" title="' + d.sellTitle + '">Satış</button></div>';
 }
 
 function _bnAssetsErrorRow(msg, showRetry = true) {
@@ -6897,7 +7535,7 @@ function tickPricesUI() {
     }
     
     if (document.getElementById("tabBinance")?.classList.contains("is-active")) {
-        if (typeof tickVarliklarPrices === 'function') tickVarliklarPrices();
+        if (typeof tickVarliklarPrices === 'function') tickVarliklarPrices({ skipThrottle: true });
     }
     if (!window.BinanceUI || !document.getElementById("tabBinance")?.classList.contains("is-active")) {
         BinanceAssetsPanel.tickPrices();
@@ -7099,7 +7737,7 @@ function renderAssetsList() {
 
 function tickAssetsPrices() {
     var tabActive = document.getElementById("tabBinance")?.classList.contains("is-active");
-    if (tabActive && typeof tickVarliklarPrices === 'function') tickVarliklarPrices();
+    if (tabActive && typeof tickVarliklarPrices === 'function') tickVarliklarPrices({ skipThrottle: true });
     if (window.BinanceUI && tabActive) return;
     renderAssetsSummary();
 }
@@ -7252,10 +7890,92 @@ function syncFavoriteButtonUI() {
     btn.disabled = !State.accountId;
 }
 
+function rememberVarlikDisplayChange(asset, pct) {
+    var sym = (asset || '').toUpperCase();
+    if (!sym || pct == null || !Number.isFinite(Number(pct))) return;
+    _varlikDisplayChangeCache[sym] = Number(pct);
+}
+
 function getAssetChangePct(asset) {
     const symbol = normalizeAssetToSymbol(asset, QUOTE);
     const mini = window.marketStore?.getMini(symbol);
-    return mini && Number.isFinite(mini.changePct) ? mini.changePct : null;
+    if (mini && Number.isFinite(mini.changePct)) {
+        rememberVarlikDisplayChange(asset, mini.changePct);
+        return mini.changePct;
+    }
+    if (mini && Number.isFinite(mini.open) && mini.open > 0 && Number.isFinite(mini.last) && mini.last > 0) {
+        var derived = ((mini.last - mini.open) / mini.open) * 100;
+        rememberVarlikDisplayChange(asset, derived);
+        return derived;
+    }
+    var sym = (asset || '').toUpperCase();
+    if (sym && _varlikDisplayChangeCache[sym] != null && Number.isFinite(_varlikDisplayChangeCache[sym])) {
+        return _varlikDisplayChangeCache[sym];
+    }
+    return null;
+}
+
+function formatVarlikChangePctDisplay(asset, changePct) {
+    var pct = changePct;
+    if (pct == null || !Number.isFinite(pct)) pct = getAssetChangePct(asset);
+    if (pct != null && Number.isFinite(pct)) {
+        return { text: (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%', color: pct >= 0 ? '#0ecb81' : '#f6465d' };
+    }
+    return { text: '—', color: 'var(--ds-text-secondary)' };
+}
+
+function pushVarlikMarketMini(symbol, price, changePct) {
+    if (!window.marketStore || !symbol || !(price > 0)) return;
+    var sym = String(symbol).toUpperCase();
+    var mini = { last: price, open: price };
+    if (changePct != null && Number.isFinite(changePct)) mini.changePct = Number(changePct);
+    window.marketStore.updateMini(sym, mini);
+    var base = sym.replace(/USDT|FDUSD|BUSD|USDC$/i, '') || sym;
+    rememberVarlikDisplayPrice(base, price);
+    if (mini.changePct != null) rememberVarlikDisplayChange(base, mini.changePct);
+}
+
+var _varliklarWalletMarketInflight = null;
+var _varliklarWalletMarketLastFetch = 0;
+var VARLIKLAR_WALLET_MARKET_FETCH_MS = 6000;
+
+function refreshVarliklarWalletMarketData(force) {
+    var tbody = document.getElementById('varliklarTableBody');
+    if (!tbody || !window.apiClient) return Promise.resolve();
+    var symbols = [];
+    tbody.querySelectorAll('tr[data-symbol]').forEach(function (row) {
+        var s = (row.getAttribute('data-symbol') || '').toUpperCase();
+        if (s) symbols.push(s);
+    });
+    if (!symbols.length && assetsState.wallet && Array.isArray(assetsState.wallet.assets)) {
+        assetsState.wallet.assets.forEach(function (a) {
+            if (a && a.asset) symbols.push(normalizeAssetToSymbol(a.asset, QUOTE));
+        });
+    }
+    var seen = {};
+    symbols = symbols.filter(function (s) { if (seen[s]) return false; seen[s] = true; return true; });
+    if (!symbols.length) return Promise.resolve();
+    var now = Date.now();
+    if (!force && (now - _varliklarWalletMarketLastFetch < VARLIKLAR_WALLET_MARKET_FETCH_MS)) return Promise.resolve();
+    if (_varliklarWalletMarketInflight) return _varliklarWalletMarketInflight;
+    _varliklarWalletMarketLastFetch = now;
+    _varliklarWalletMarketInflight = window.apiClient
+        .get('/api/data/prices?slim=1&symbols=' + encodeURIComponent(symbols.join(',')))
+        .then(function (res) {
+            var prices = _parseDataPricesPayload(res);
+            symbols.forEach(function (sym) {
+                var row = prices[sym];
+                if (!row || row.price == null) return;
+                var price = Number(row.price);
+                if (!(price > 0) || !Number.isFinite(price)) return;
+                var pct = row.change24h != null && Number.isFinite(Number(row.change24h)) ? Number(row.change24h) : null;
+                pushVarlikMarketMini(sym, price, pct);
+            });
+            if (typeof tickVarliklarPrices === 'function') tickVarliklarPrices({ skipThrottle: true });
+        })
+        .catch(function () {})
+        .finally(function () { _varliklarWalletMarketInflight = null; });
+    return _varliklarWalletMarketInflight;
 }
 
 /** Varlıklar tablosu: marketStore anlık boşalsa son bilinen fiyat/% (… flicker önleme). */
@@ -7330,14 +8050,12 @@ function walletAssetTotalQty(a) {
     var free = Number(a.free) || 0;
     var locked = Number(a.locked) || 0;
     var botLocked = Number(a.bot_locked) || 0;
-    var derived = free + locked + botLocked;
-    if (typeof State !== 'undefined' && State.isTestAccount) {
-        if (derived > 0) return derived;
-        var explicit = (a.total != null && Number.isFinite(Number(a.total))) ? Number(a.total) : null;
-        if (explicit != null && explicit > 0) return explicit;
-        if (explicit != null) return explicit;
-    }
-    return free + locked;
+    var isTest = typeof State !== 'undefined' && State.isTestAccount;
+    var derived = isTest ? (free + locked + botLocked) : (free + locked);
+    var explicit = (a.total != null && Number.isFinite(Number(a.total))) ? Number(a.total) : null;
+    if (derived > 0) return derived;
+    if (explicit != null && explicit > 0) return explicit;
+    return derived;
 }
 
 function testWalletAssetQtyBroken(a) {
@@ -7523,12 +8241,12 @@ function testAccountVarlikPortfolioTotal(list) {
 
 function testAccountVarlikBotLockedDisplay(asset, botLocked, price) {
     var qty = Number(botLocked) || 0;
-    if (qty <= 0) return fmtNum(0, 8);
+    if (qty <= 0) return '0';
     if (isTestWalletStableAsset(asset)) {
         var usd = testAccountVarlikBotLockedUsd(asset, qty, price);
-        return (usd != null && Number.isFinite(usd)) ? fmtUsd(usd) : fmtNum(qty, 8);
+        return (usd != null && Number.isFinite(usd)) ? fmtUsd(usd) : fmtVarlikQty(qty, asset);
     }
-    return fmtNum(qty, 8);
+    return fmtVarlikQty(qty, asset);
 }
 
 function testAccountVarlikAvailableQty(a) {
@@ -7591,33 +8309,74 @@ function testAccountUsdtAvailablePool(assets) {
     return sum;
 }
 
-/** Test paper: Al/Sat — butonlar her zaman aktif (pasif görünüm yok); yetersiz bakiye emir gönderiminde doğrulanır. */
-function testAccountVarlikRowTradeState(a, assets) {
+/** Cüzdan satırı Al/Sat — her zaman aktif; yetersiz bakiye spot modal / emirde doğrulanır. */
+function varlikRowTradeState(a, assets) {
+    assets = assets || [];
     var asset = (a && a.asset) || '';
-    var isQuote = isTestWalletStableAsset(asset);
-    var available = testAccountVarlikAvailableQty(a);
-    var usdtPool = testAccountUsdtAvailablePool(assets);
-    var sellTitle = 'Satış (test paper' + (available > 0 ? ', kullanılabilir: ' + fmtNum(available, 8) : '') + ')';
-    var buyTitle = isQuote
-        ? 'Alış (test paper — stable satır)'
-        : ('Alış (test paper' + (usdtPool > 0 ? ', USDT havuzu: ' + fmtNum(usdtPool, 2) : '') + ')');
+    var sym = asset.toUpperCase();
+    var isQuote = (typeof isTestWalletStableAsset === 'function' && isTestWalletStableAsset(asset))
+        || sym === 'USDT' || sym === 'BUSD' || sym === 'FDUSD';
+    var isTest = typeof State !== 'undefined' && State.isTestAccount;
+    var available = isTest
+        ? testAccountVarlikAvailableQty(a)
+        : ((a.available != null && Number.isFinite(Number(a.available)))
+            ? Number(a.available)
+            : Math.max(0, (Number(a.free) || 0) - (Number(a.bot_locked) || 0)));
+    var total = typeof walletAssetTotalQty === 'function' ? walletAssetTotalQty(a) : ((Number(a.free) || 0) + (Number(a.locked) || 0));
+    var usdtPool = isTest && typeof testAccountUsdtAvailablePool === 'function'
+        ? testAccountUsdtAvailablePool(assets)
+        : null;
+    if (usdtPool == null && Array.isArray(assets)) {
+        var usdtRow = assets.find(function (x) { return x && (x.asset || '').toUpperCase() === 'USDT'; });
+        if (usdtRow) {
+            usdtPool = (usdtRow.available != null && Number.isFinite(Number(usdtRow.available)))
+                ? Number(usdtRow.available)
+                : Math.max(0, (Number(usdtRow.free) || 0) - (Number(usdtRow.bot_locked) || 0));
+        }
+    }
+    var sellHint = available > 0
+        ? ('kullanılabilir: ' + fmtNum(available, 8))
+        : (total > 0 ? 'miktar emir ekranında' : 'bakiye yok');
+    var buyHint = isQuote
+        ? 'quote bakiyesi'
+        : (usdtPool > 0 ? ('USDT: ' + fmtNum(usdtPool, 2)) : 'USDT ile alış');
+    var prefix = isTest ? 'test paper — ' : '';
     return {
         canBuy: true,
         canSell: true,
-        sellTitle: sellTitle,
-        buyTitle: buyTitle,
+        sellTitle: 'Satış (' + prefix + sellHint + ')',
+        buyTitle: 'Alış (' + prefix + buyHint + ')',
         sellDisabled: '',
         buyDisabled: '',
     };
 }
 
+function testAccountVarlikRowTradeState(a, assets) {
+    return varlikRowTradeState(a, assets);
+}
+
 function updateTestAccountStripCell(stripEl, sum) {
     if (!stripEl) return;
-    stripEl.classList.remove('binance-assets-strip-value--loading', 'blink-positive', 'blink-negative', 'value-blink');
-    stripEl.setAttribute('data-value', sum);
-    var txt = typeof fmtUsd === 'function' ? fmtUsd(sum) : String(sum);
+    var next = Number(sum);
+    if (!Number.isFinite(next)) next = 0;
+    var prev = parseFloat(stripEl.getAttribute('data-value') || '');
+    if (Number.isFinite(prev) && !kpiUsdDisplayChanged(prev, next)) return;
+    stripEl.classList.remove('binance-assets-strip-value--loading', 'blink-positive', 'blink-negative');
+    stripEl.setAttribute('data-value', String(next));
+    var txt = typeof fmtUsd === 'function' ? fmtUsd(next) : String(next);
     if (typeof setTextIfChanged === 'function') setTextIfChanged(stripEl, txt);
     else stripEl.textContent = txt;
+}
+
+var _testKpiRefreshTimer = null;
+var TEST_KPI_REFRESH_MS = 450;
+
+function scheduleTestAccountKpiCuzdanRefresh() {
+    if (_testKpiRefreshTimer) return;
+    _testKpiRefreshTimer = setTimeout(function () {
+        _testKpiRefreshTimer = null;
+        if (typeof updateTestAccountKpiCuzdanFromStrip === 'function') updateTestAccountKpiCuzdanFromStrip();
+    }, TEST_KPI_REFRESH_MS);
 }
 
 function testAccountReadStripUsdValue(el) {
@@ -7716,15 +8475,14 @@ function updateTestAccountCuzdanDailyPnlLive(currentTotal) {
     _kpiCuzdanPnlDisplay.pnlPct = pnlPct.toFixed(2);
     var cuzdanPnlEl = document.getElementById('kpiCuzdanPnl');
     if (cuzdanPnlEl) {
-        setTextIfChanged(cuzdanPnlEl, fmtUsd(pnlUsd));
+        setKpiUsdTextIfChanged(cuzdanPnlEl, pnlUsd);
         var pnlColor = pnlUsd >= 0 ? '#0ecb81' : '#f6465d';
         if (cuzdanPnlEl.style.color !== pnlColor) cuzdanPnlEl.style.color = pnlColor;
         cuzdanPnlEl.classList.remove('blink-positive', 'blink-negative');
     }
-    var pctStr = (pnlPct >= 0 ? '+' : '') + pnlPct.toFixed(2) + '%';
-    patchText('kpiCuzdanPnlPct', pctStr);
     var pe = document.getElementById('kpiCuzdanPnlPct');
     if (pe) {
+        setKpiPctTextIfChanged(pe, pnlPct);
         var pctColor = pnlUsd >= 0 ? '#0ecb81' : '#f6465d';
         if (pe.style.color !== pctColor) pe.style.color = pctColor;
         pe.classList.remove('blink-positive', 'blink-negative');
@@ -7733,7 +8491,8 @@ function updateTestAccountCuzdanDailyPnlLive(currentTotal) {
 }
 
 /** Test paper: strip = tablo satırlarından canlı (Kullanılabilir qty×fiyat, Bot kilitli qty×fiyat). */
-function updateTestAccountStripFromTable(tbody) {
+function updateTestAccountStripFromTable(tbody, opts) {
+    opts = opts || {};
     if (typeof State === 'undefined' || !State.isTestAccount) return;
     var stripAvailable = document.getElementById('binanceAvailableAssets');
     var stripBotLocked = document.getElementById('binanceBotLockedAssets');
@@ -7784,7 +8543,15 @@ function updateTestAccountStripFromTable(tbody) {
     updateTestAccountStripCell(stripBotLocked, botSum);
     var stripLocked = document.getElementById('binanceLockedAssets');
     if (stripLocked) updateTestAccountStripCell(stripLocked, lockedSum);
-    if (typeof updateTestAccountKpiCuzdanFromStrip === 'function') updateTestAccountKpiCuzdanFromStrip();
+    if (opts.immediateKpi) {
+        if (_testKpiRefreshTimer) {
+            clearTimeout(_testKpiRefreshTimer);
+            _testKpiRefreshTimer = null;
+        }
+        if (typeof updateTestAccountKpiCuzdanFromStrip === 'function') updateTestAccountKpiCuzdanFromStrip();
+    } else if (typeof scheduleTestAccountKpiCuzdanRefresh === 'function') {
+        scheduleTestAccountKpiCuzdanRefresh();
+    }
     if (State.accountId) _persistBinanceWalletCache(State.accountId);
 }
 
@@ -7854,7 +8621,7 @@ function renderVarliklarList() {
         return (x.total_usd != null ? Number(x.total_usd) : 0) >= VARLIKLAR_MIN_USD;
     };
     list = list.filter(filterUsd);
-    list.sort((a, b) => (Number(b._valueUsd) || 0) - (Number(a._valueUsd) || 0));
+    list = sortVarliklarListForDisplay(list);
     const totalPortfolio = (typeof State !== 'undefined' && State.isTestAccount)
         ? testAccountKpiTotalUsd(document.getElementById('varliklarTableBody'))
         : (typeof assetsState.wallet.total_usd === 'number' ? assetsState.wallet.total_usd : list.reduce((sum, x) => sum + (x._valueUsd || 0), 0));
@@ -7909,20 +8676,19 @@ function renderVarliklarList() {
             : '0.00';
         const priceDisplay = formatVarlikPriceDisplay(asset, price);
         const changePct = getVarlikDisplayChangePct(asset, rowEl);
-        const changeStr = changePct != null ? (changePct >= 0 ? '+' : '') + changePct.toFixed(2) + '%' : '—';
-        const changeColor = changePct != null ? (changePct >= 0 ? '#0ecb81' : '#f6465d') : 'var(--ds-text-secondary)';
+        const chFmt = formatVarlikChangePctDisplay(asset, changePct);
+        const changeStr = chFmt.text;
+        const changeColor = chFmt.color;
         const name = assetNameMap[asset] || asset;
         const initials = logoInitials(a);
         const logoUrl = (typeof getCoinLogoUrl === 'function' && getCoinLogoUrl(a.asset)) || null;
-        var trade = (typeof State !== 'undefined' && State.isTestAccount)
-            ? testAccountVarlikRowTradeState(a, assetsState.wallet.assets || [])
-            : null;
-        const canSell = trade ? trade.canSell : (available > 0);
-        const canBuy = trade ? trade.canBuy : (isQuote ? available > 0 : true);
-        const sellTitle = trade ? trade.sellTitle : (canSell ? 'Satış (kullanılabilir: ' + fmtNum(available, 8) + ')' : 'Satış yapılamaz: tutar bot veya açık emirde kilitli');
-        const buyTitle = trade ? trade.buyTitle : (canBuy ? 'Alış' : 'Alış yapılamaz: kullanılabilir bakiye yok (bot/emir kilitli)');
-        const sellDisabled = trade ? trade.sellDisabled : (!canSell ? ' disabled' : '');
-        const buyDisabled = trade ? trade.buyDisabled : (!canBuy ? ' disabled' : '');
+        var trade = varlikRowTradeState(a, assetsState.wallet.assets || []);
+        const canSell = trade.canSell;
+        const canBuy = trade.canBuy;
+        const sellTitle = trade.sellTitle;
+        const buyTitle = trade.buyTitle;
+        const sellDisabled = trade.sellDisabled;
+        const buyDisabled = trade.buyDisabled;
         var botLockedUsdLive = isTest && botLocked > 0 ? testAccountVarlikBotLockedUsd(asset, botLocked, price) : null;
         var botLockedDisplay = isTest
             ? testAccountVarlikBotLockedDisplay(asset, botLocked, price)
@@ -7938,10 +8704,9 @@ function renderVarliklarList() {
     var sameOrder = currentOrder.length === newOrder.length && currentOrder.every(function(asset, i) { return asset === newOrder[i]; });
 
     if (sameOrder && currentOrder.length > 0) {
-        var isTestAcct = typeof State !== 'undefined' && State.isTestAccount;
         function patchTd(el, txt) {
             if (!el) return;
-            if (isTestAcct && typeof setTextIfChanged === 'function') setTextIfChanged(el, txt);
+            if (typeof setTextIfChanged === 'function') setTextIfChanged(el, txt);
             else el.textContent = txt;
         }
         list.forEach(function(a, i) {
@@ -7966,12 +8731,18 @@ function renderVarliklarList() {
             var priceCell = row.querySelector('.price-cell');
             if (priceCell && d.price != null && Number.isFinite(d.price)) {
                 var oldPricePatch = parseFloat(priceCell.getAttribute('data-price') || '') || 0;
-                applyVarlikPriceBlink(priceCell, d.price, oldPricePatch);
-                priceCell.setAttribute('data-price', d.price);
+                if (Math.abs(oldPricePatch - d.price) >= 1e-10) {
+                    applyVarlikPriceBlink(priceCell, d.price, oldPricePatch, d.asset);
+                    priceCell.setAttribute('data-price', d.price);
+                }
                 patchTd(priceCell, d.priceDisplay);
             }
             var changeCell = row.querySelector('.change-pct');
-            if (changeCell && d.changePct != null) { changeCell.setAttribute('data-change-pct', d.changePct); changeCell.style.color = d.changeColor; patchTd(changeCell, d.changeStr); }
+            if (changeCell) {
+                if (d.changePct != null) changeCell.setAttribute('data-change-pct', d.changePct);
+                if (changeCell.style.color !== d.changeColor) changeCell.style.color = d.changeColor;
+                patchTd(changeCell, d.changeStr);
+            }
             var tds = row.querySelectorAll('td');
             if (tds[2]) patchTd(tds[2], fmtVarlikQty(d.total, d.asset));
             if (tds[3]) {
@@ -7991,9 +8762,14 @@ function renderVarliklarList() {
             }
             var actionsCell = row.querySelector('.varlik-card-actions');
             if (actionsCell) {
-                actionsCell.innerHTML = '<div class="btn-al-sat-wrap">' +
-                    '<button type="button" class="btn-al"' + d.buyDisabled + ' onclick="event.stopPropagation(); ' + (d.canBuy ? "openSpotTradeModal('" + d.symbol + "', 'BUY')" : '') + '" title="' + d.buyTitle + '">Alış</button>' +
-                    '<button type="button" class="btn-sat"' + d.sellDisabled + ' onclick="event.stopPropagation(); ' + (d.canSell ? "openSpotTradeModal('" + d.symbol + "', 'SELL')" : '') + '" title="' + d.sellTitle + '">Satış</button></div>';
+                var actionsHtml = varlikRowActionsHtml(d);
+                var prevActions = row.getAttribute('data-actions-sig') || '';
+                var nextSig = (d.canBuy ? '1' : '0') + (d.canSell ? '1' : '0') + d.symbol;
+                if (prevActions !== nextSig || !actionsCell.querySelector('.btn-al-sat-wrap')
+                    || actionsCell.querySelector('button:disabled')) {
+                    actionsCell.innerHTML = actionsHtml;
+                    row.setAttribute('data-actions-sig', nextSig);
+                }
             }
         });
         lastWalletHash = hashWalletAssets(assetsState.wallet.assets);
@@ -8001,7 +8777,8 @@ function renderVarliklarList() {
     } else {
         tbody.innerHTML = list.map(function(a) {
             var d = rowData(a);
-            return '<tr class="varlik-row" data-asset="' + d.asset + '" data-symbol="' + d.symbol + '" data-free="' + d.free + '" data-locked="' + d.locked + '" data-total="' + d.total + '" data-available="' + d.available + '" data-bot-locked="' + d.botLocked + '"' + (d.botLockedUsdStored != null && Number.isFinite(d.botLockedUsdStored) ? ' data-bot-locked-usd="' + d.botLockedUsdStored + '"' : '') + '>' +
+            var actionsSig = (d.canBuy ? '1' : '0') + (d.canSell ? '1' : '0') + d.symbol;
+            return '<tr class="varlik-row" data-asset="' + d.asset + '" data-symbol="' + d.symbol + '" data-free="' + d.free + '" data-locked="' + d.locked + '" data-total="' + d.total + '" data-available="' + d.available + '" data-bot-locked="' + d.botLocked + '" data-actions-sig="' + actionsSig + '"' + (d.botLockedUsdStored != null && Number.isFinite(d.botLockedUsdStored) ? ' data-bot-locked-usd="' + d.botLockedUsdStored + '"' : '') + '>' +
                 varlikAssetCellHtml(d) +
                 '<td class="varlik-fiyat-cell" data-label="Fiyat">' +
                 '<div class="varlik-fiyat-stack">' +
@@ -8012,9 +8789,7 @@ function renderVarliklarList() {
                 '<td class="varlik-num-cell" data-label="Kilitli">' + fmtVarlikQty(d.locked, d.asset) + '</td>' +
                 '<td class="varlik-num-cell" data-label="Kullanılabilir">' + fmtVarlikQty(d.available, d.asset) + '</td>' +
                 '<td class="varlik-num-cell value-cell" data-value="' + d.valueUsd + '" data-label="Değer">' + d.valueDisplay + '</td>' +
-                '<td class="varlik-card-actions" data-label="İşlem">' +
-                '<div class="btn-al-sat-wrap"><button type="button" class="btn-al"' + d.buyDisabled + ' onclick="event.stopPropagation(); ' + (d.canBuy ? "openSpotTradeModal('" + d.symbol + "', 'BUY')" : '') + '" title="' + d.buyTitle + '">Alış</button>' +
-                '<button type="button" class="btn-sat"' + d.sellDisabled + ' onclick="event.stopPropagation(); ' + (d.canSell ? "openSpotTradeModal('" + d.symbol + "', 'SELL')" : '') + '" title="' + d.sellTitle + '">Satış</button></div></td></tr>';
+                '<td class="varlik-card-actions" data-label="İşlem">' + varlikRowActionsHtml(d) + '</td></tr>';
         }).join('');
     }
     _varliklarHasRenderedRows = list.length > 0;
@@ -8023,18 +8798,32 @@ function renderVarliklarList() {
     if (unpricedEl) unpricedEl.style.display = 'none';
     if (typeof State !== 'undefined' && State.isTestAccount) {
         if (typeof updateTestAccountStripFromTable === 'function') {
-            updateTestAccountStripFromTable(tbody);
+            updateTestAccountStripFromTable(tbody, { immediateKpi: true });
         } else if (typeof renderAssetsSummary === 'function') {
             renderAssetsSummary();
         }
     }
     if (State.accountId && list.length > 0) _persistBinanceWalletCache(State.accountId);
+    if (list.length > 0 && typeof refreshVarliklarWalletMarketData === 'function') {
+        refreshVarliklarWalletMarketData(true);
+    }
 }
 
-/** Cüzdan tablosu fiyat blink — mevcut-botlar ile aynı (mevcut-bot-blink-up/down). */
-function applyVarlikPriceBlink(priceCell, newPrice, oldPrice) {
+var _varlikPriceBlinkUntil = {};
+var VARLIK_PRICE_BLINK_MIN_REL = 0.0005;
+var VARLIK_PRICE_BLINK_COOLDOWN_MS = 1200;
+
+/** Cüzdan tablosu fiyat blink — anlamlı değişim + hücre cooldown (flicker azaltma). */
+function applyVarlikPriceBlink(priceCell, newPrice, oldPrice, asset) {
     if (!priceCell || !Number.isFinite(newPrice) || !Number.isFinite(oldPrice)) return;
     if (Math.abs(newPrice - oldPrice) < 1e-10) return;
+    if (typeof isTestWalletStableAsset === 'function' && asset && isTestWalletStableAsset(asset)) return;
+    var rel = oldPrice > 0 ? Math.abs(newPrice - oldPrice) / oldPrice : 1;
+    if (rel < VARLIK_PRICE_BLINK_MIN_REL) return;
+    var key = (asset || '') + '|' + (priceCell.closest('tr') && priceCell.closest('tr').getAttribute('data-asset') || '');
+    var now = Date.now();
+    if (_varlikPriceBlinkUntil[key] && now < _varlikPriceBlinkUntil[key]) return;
+    _varlikPriceBlinkUntil[key] = now + VARLIK_PRICE_BLINK_COOLDOWN_MS;
     priceCell.classList.remove('mevcut-bot-blink-up', 'mevcut-bot-blink-down', 'varlik-price-flash-up', 'varlik-price-flash-down', 'price-up', 'price-down', 'price-neutral', 'blink-positive', 'blink-negative');
     void priceCell.offsetWidth;
     priceCell.classList.add(newPrice > oldPrice ? 'mevcut-bot-blink-up' : 'mevcut-bot-blink-down');
@@ -8044,13 +8833,22 @@ function applyVarlikPriceBlink(priceCell, newPrice, oldPrice) {
 }
 window.applyVarlikPriceBlink = applyVarlikPriceBlink;
 
-function tickVarliklarPrices() {
+var _varliklarPriceTickLastAt = 0;
+var VARLIKLAR_PRICE_TICK_MIN_MS = 350;
+
+function tickVarliklarPrices(opts) {
+    opts = opts || {};
     const tbody = document.getElementById('varliklarTableBody');
     if (!tbody || !tbody.querySelector('tr[data-asset]')) return;
+    var now = Date.now();
+    if (!opts.skipThrottle && (now - _varliklarPriceTickLastAt < VARLIKLAR_PRICE_TICK_MIN_MS)) return;
+    _varliklarPriceTickLastAt = now;
     const isTestAcct = typeof State !== 'undefined' && State.isTestAccount;
     const rows = tbody.querySelectorAll('tr[data-asset]');
-    const symbolAttr = row => row.getAttribute('data-symbol') || normalizeAssetToSymbol(row.getAttribute('data-asset') || '', QUOTE);
-    rows.forEach(row => {
+    const symbolAttr = function (row) {
+        return row.getAttribute('data-symbol') || normalizeAssetToSymbol(row.getAttribute('data-asset') || '', QUOTE);
+    };
+    rows.forEach(function (row) {
         const asset = row.getAttribute('data-asset');
         const symbol = symbolAttr(row);
         const priceCell = row.querySelector('.price-cell');
@@ -8060,35 +8858,33 @@ function tickVarliklarPrices() {
         const price = getVarlikDisplayPrice(asset, row);
         const oldPrice = parseFloat(priceCell.getAttribute('data-price') || '') || 0;
         if (price == null || !Number.isFinite(price)) return;
-        const samePrice = Number.isFinite(oldPrice) && Math.abs(oldPrice - price) < 1e-9;
-        if (!samePrice) applyVarlikPriceBlink(priceCell, price, oldPrice);
-        priceCell.setAttribute('data-price', price);
-        if (typeof setTextIfChanged === 'function' && isTestAcct) setTextIfChanged(priceCell, fmtCoinPrice(price));
-        else priceCell.textContent = fmtCoinPrice(price);
-        // 24s değişim %: marketStore mini ticker ile canlı güncelle
-        let changePct = null;
-        if (changeCell) {
-            const mini = window.marketStore?.getMini(symbol);
-            changePct = getVarlikDisplayChangePct(asset, row);
-            if (changePct == null && mini && Number.isFinite(mini.changePct)) changePct = mini.changePct;
-            const oldChangePct = parseFloat(changeCell.getAttribute('data-change-pct') || '');
-            if (changePct != null) {
-                changeCell.setAttribute('data-change-pct', changePct);
-                var changeTxt = (changePct >= 0 ? '+' : '') + changePct.toFixed(2) + '%';
-                if (isTestAcct && typeof setTextIfChanged === 'function') setTextIfChanged(changeCell, changeTxt);
-                else changeCell.textContent = changeTxt;
-                changeCell.style.color = changePct >= 0 ? '#0ecb81' : '#f6465d';
-            }
+        const priceTxt = typeof formatVarlikPriceDisplay === 'function'
+            ? formatVarlikPriceDisplay(asset, price)
+            : fmtCoinPrice(price);
+        if (Math.abs(oldPrice - price) >= 1e-10) {
+            applyVarlikPriceBlink(priceCell, price, oldPrice, asset);
+            priceCell.setAttribute('data-price', price);
         }
-        if (typeof updateTestVarlikRowLiveMetrics === 'function') {
+        if (typeof setTextIfChanged === 'function') setTextIfChanged(priceCell, priceTxt);
+        else if (priceCell.textContent !== priceTxt) priceCell.textContent = priceTxt;
+        if (changeCell) {
+            var changePct = getVarlikDisplayChangePct(asset, row);
+            if (changePct == null) {
+                var miniRow = window.marketStore && window.marketStore.getMini ? window.marketStore.getMini(symbol) : null;
+                if (miniRow && Number.isFinite(miniRow.changePct)) changePct = miniRow.changePct;
+            }
+            var chDisp = formatVarlikChangePctDisplay(asset, changePct);
+            if (changePct != null) changeCell.setAttribute('data-change-pct', changePct);
+            if (typeof setTextIfChanged === 'function') setTextIfChanged(changeCell, chDisp.text);
+            else if (changeCell.textContent !== chDisp.text) changeCell.textContent = chDisp.text;
+            if (changeCell.style.color !== chDisp.color) changeCell.style.color = chDisp.color;
+        }
+        if (isTestAcct && typeof updateTestVarlikRowLiveMetrics === 'function') {
             updateTestVarlikRowLiveMetrics(row, tbody);
         }
     });
-    if (typeof updateTestAccountStripFromTable === 'function') {
+    if (isTestAcct && typeof updateTestAccountStripFromTable === 'function') {
         updateTestAccountStripFromTable(tbody);
-    }
-    if (isTestAcct && typeof testAccountRefreshVarlikPctColumn === 'function') {
-        testAccountRefreshVarlikPctColumn(tbody);
     }
 }
 
@@ -8142,10 +8938,29 @@ function triggerWalletRefreshForVarliklar(accountId, opts) {
                 window.__walletDebugMeta.last_refresh_at = (res && res.data && res.data.wallet_live_at) ? res.data.wallet_live_at : new Date().toISOString();
             }
         })
-        .catch(function () {})
+        .catch(function () {
+            if (force && typeof scheduleWalletConnectivityRetry === 'function') {
+                scheduleWalletConnectivityRetry(accountId);
+            }
+        })
         .finally(function () { _varliklarWalletRefreshInflight = false; });
 }
 window.triggerWalletRefreshForVarliklar = triggerWalletRefreshForVarliklar;
+
+var _walletConnectivityRetryTimer = null;
+function scheduleWalletConnectivityRetry(accountId) {
+    if (!accountId || _walletConnectivityRetryTimer) return;
+    _walletConnectivityRetryTimer = setTimeout(function () {
+        _walletConnectivityRetryTimer = null;
+        if (!State.accountId || Number(State.accountId) !== Number(accountId)) return;
+        if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
+        if (typeof shouldRecoverWalletAfterConnectivity === 'function' && !shouldRecoverWalletAfterConnectivity()) return;
+        if (typeof triggerWalletRefreshForVarliklar === 'function') {
+            triggerWalletRefreshForVarliklar(accountId, { force: true });
+        }
+    }, 2500);
+}
+window.scheduleWalletConnectivityRetry = scheduleWalletConnectivityRetry;
 
 /** Bot silme / spot trade sonrası cüzdan tablosunu kademeli yenile (Binance settlement gecikmesi). */
 function scheduleWalletRefreshAfterTrade(accountId, opts) {
@@ -8206,6 +9021,7 @@ function initVarliklarTab() {
     }
     // pollWallet startBinanceTabPolling tarafından tek seferde çağrılıyor; burada çağırma (429 önlemek için)
     renderVarliklarList();
+    if (typeof refreshVarliklarWalletMarketData === 'function') refreshVarliklarWalletMarketData(true);
 }
 
 // --- Coin Listesi (Binance sekmesi): sabit liste + arama ile tüm çiftler ---
@@ -8363,11 +9179,15 @@ async function ensureCoinListSearchSymbolsLoaded(scope) {
     try {
         const data = await window.apiClient.get('/api/data/coin-list?scope=' + (wantAll ? 'all' : 'usdt'));
         const syms = (data.symbols || []).map(s => (s || '').toUpperCase()).filter(Boolean).sort((a, b) => a.localeCompare(b));
-        if (wantAll) {
-            coinListAllScopeSymbols = syms;
-            coinListAllBinanceSymbols = syms;
-        } else {
-            coinListAllBinanceSymbols = syms;
+        if (syms.length > 0) {
+            if (wantAll) {
+                coinListAllScopeSymbols = syms;
+                coinListAllBinanceSymbols = syms;
+            } else {
+                coinListAllBinanceSymbols = syms;
+            }
+        } else if (wantAll && coinListAllBinanceSymbols.length > 0) {
+            coinListAllScopeSymbols = coinListAllBinanceSymbols.slice();
         }
         buildCoinListSearchSymbols();
     } catch (e) {
@@ -8376,60 +9196,50 @@ async function ensureCoinListSearchSymbolsLoaded(scope) {
 }
 
 function buildCoinListSearchSymbols() {
-    const allSymbols = coinListAllBinanceSymbols.length > 0
-        ? coinListAllBinanceSymbols
-        : (window.marketStore?.getAllMini?.() || [])
-            .filter(m => {
-                const s = (m.symbol || '').toUpperCase();
-                return s.endsWith('USDT') || s.endsWith('FDUSD');
-            })
-            .map(m => (m.symbol || '').toUpperCase());
-    function quoteOrder(sym) {
-        if ((sym || '').endsWith('USDT')) return 0;
-        if ((sym || '').endsWith('FDUSD')) return 1;
-        return 2;
-    }
+    const allSymbols = coinListAllScopeSymbols.length > 0
+        ? coinListAllScopeSymbols
+        : coinListAllBinanceSymbols.length > 0
+            ? coinListAllBinanceSymbols
+            : (window.marketStore?.getAllMini?.() || [])
+                .map(m => (m.symbol || '').toUpperCase())
+                .filter(Boolean);
     coinListSearchAllSymbols = allSymbols.map(symbol => {
         const mini = window.marketStore?.getMini?.(symbol);
         return { symbol, last: mini?.last, changePct: mini?.changePct };
     }).sort((a, b) => {
-        const qA = quoteOrder(a.symbol);
-        const qB = quoteOrder(b.symbol);
+        const qA = coinListSearchQuoteOrder(a.symbol);
+        const qB = coinListSearchQuoteOrder(b.symbol);
         if (qA !== qB) return qA - qB;
         return (a.symbol || '').localeCompare(b.symbol || '');
     });
+    rebuildBinanceTradingSymbolSet();
 }
 
 function showCoinListSearchDropdown(query) {
     const dropdown = document.getElementById('coinListSearchDropdown');
     if (!dropdown) return;
-    const q = (query || '').trim().toUpperCase();
-    if (!q) {
+    const qn = normalizeSymbolSearchQuery(query);
+    const needle = qn.primary || qn.compact || '';
+    if (!needle) {
         dropdown.style.display = 'none';
         return;
     }
-    const list = coinListSearchAllSymbols
-        .filter(x => (x.symbol || '').toUpperCase().includes(q))
-        .slice(0, 50);
+    const list = filterCoinListForSearch(query, 50);
     if (list.length === 0) {
         dropdown.innerHTML = '<div style="padding: 1rem; color: var(--ds-text-secondary);">Sonuç bulunamadı.</div>';
         dropdown.style.display = 'block';
         return;
     }
-    dropdown.innerHTML = list.map(item => {
-        const priceStr = item.last != null && Number.isFinite(item.last) ? fmtUsd(item.last) : '…';
-        const pct = item.changePct != null && Number.isFinite(item.changePct) ? item.changePct : null;
-        const pctStr = pct != null ? (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%' : '—';
-        const pctColor = pct != null ? (pct >= 0 ? '#0ecb81' : '#f6465d') : 'var(--ds-text-secondary)';
-        return `<div class="coin-list-search-item" data-symbol="${item.symbol}" style="padding: 0.6rem 1rem; cursor: pointer; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--ds-border);" onmouseenter="this.style.background='var(--ds-bg-tertiary)'" onmouseleave="this.style.background='transparent'">
-            <span style="font-weight: 600;">${item.symbol}</span>
-            <span style="display: flex; gap: 1rem;">
-                <span>${priceStr}</span>
-                <span style="color: ${pctColor}">${pctStr}</span>
-            </span>
-        </div>`;
+    dropdown.innerHTML = list.map(function (item) {
+        return renderCoinSearchDropdownItemHtml(item, '');
     }).join('');
     dropdown.style.display = 'block';
+    queueCoinSearchPriceFetch(list.map(function (it) { return it.symbol; }), function () {
+        var inp = document.getElementById('coinListSearchInput');
+        if (inp && (inp.value || '').trim() && typeof showCoinListSearchDropdown === 'function') {
+            showCoinListSearchDropdown(inp.value);
+        }
+    });
 }
 function hideCoinListSearchDropdown() {
     const dropdown = document.getElementById('coinListSearchDropdown');
@@ -8512,11 +9322,13 @@ function initBinanceCoinList() {
 
 function updateBinancePricesTick() {
     var tab = document.getElementById("tabBinance");
-    if (!tab?.classList.contains("is-active")) return;
-    if (typeof tickVarliklarPrices === 'function') tickVarliklarPrices();
+    if (!tab || !tab.classList.contains("is-active")) return;
+    if (typeof tickVarliklarPrices === 'function') tickVarliklarPrices({ skipThrottle: true });
     if (typeof tickBinanceCoinListPrices === 'function') tickBinanceCoinListPrices();
     if (window.BinanceUI) return;
-    BinanceAssetsPanel.tickPricesUI();
+    if (window.BinanceAssetsPanel && typeof BinanceAssetsPanel.tickPrices === 'function') {
+        BinanceAssetsPanel.tickPrices();
+    }
 }
 
 /** Tab kapanınca unsubscribe – memory leak yok */
@@ -8561,12 +9373,16 @@ function startBinanceTabPolling() {
                 const n = (store.prices && typeof store.prices.size === 'number') ? store.prices.size : 0;
                 console.log("[BINANCE][STORE UPDATE] prices_count:", n);
             }
-            updateBinancePricesTick();
+            if (typeof tickVarliklarPrices === 'function') tickVarliklarPrices({ skipThrottle: true });
+            if (typeof tickBinanceCoinListPrices === 'function') tickBinanceCoinListPrices();
+            if (!window.BinanceUI && window.BinanceAssetsPanel && typeof BinanceAssetsPanel.tickPrices === 'function') {
+                BinanceAssetsPanel.tickPrices();
+            }
         });
         if (window.__DEBUG_BINANCE__) console.log("[BINANCE] Subscribed to marketStore");
     }
     
-    var priceTickMs = isMobileView() ? 2000 : PRICE_UI_TICK_MS;
+    var priceTickMs = isMobileView() ? 1500 : 500;
     window.intervalRegistry.stop('wallet:poll');
     window.intervalRegistry.stop('orders:poll');
     // wallet from dashboard_snapshot; no wallet:poll
@@ -8578,6 +9394,10 @@ function startBinanceTabPolling() {
     }, FINANCE_TRADES_POLL_MS, 'binanceTab');
 
     updateBinancePricesTick();
+    window.intervalRegistry.start('tab.binance.walletMarket', function () {
+        if (!document.getElementById('tabBinance')?.classList.contains('is-active')) return;
+        if (typeof refreshVarliklarWalletMarketData === 'function') refreshVarliklarWalletMarketData(false);
+    }, VARLIKLAR_WALLET_MARKET_FETCH_MS, 'binanceTab');
     // wallet from dashboard_snapshot (no pollWallet)
     // open-orders ilk yükleme: 1.5 sn sonra (429 önlemek)
     setTimeout(function () {
@@ -8790,25 +9610,9 @@ async function openSpotTradeModal(symbol, side) {
         
         const engine = getSpotEngine(State.accountId);
         spotTradeState.symbol = normalizedSymbol;
-        if (normalizedSymbol === 'USDTUSD') {
-            spotTradeState.baseAsset = 'USDT';
-            spotTradeState.quoteAsset = 'USD';
-        } else {
-            const quoteAssets = ['USDT', 'BUSD', 'FDUSD', 'BTC', 'ETH', 'BNB', 'TRY', 'EUR', 'GBP'];
-            let found = false;
-            for (const quote of quoteAssets) {
-                if (normalizedSymbol.endsWith(quote)) {
-                    spotTradeState.baseAsset = normalizedSymbol.replace(quote, '');
-                    spotTradeState.quoteAsset = quote;
-                    found = true;
-                    break;
-                }
-            }
-            if (!found) {
-                spotTradeState.baseAsset = normalizedSymbol.replace(/USDT$/i, '') || 'BTC';
-                spotTradeState.quoteAsset = 'USDT';
-            }
-        }
+        const pqOpen = parseTradingPairSymbol(normalizedSymbol);
+        spotTradeState.baseAsset = pqOpen.base || normalizedSymbol.replace(/USDT$/i, '') || 'BTC';
+        spotTradeState.quoteAsset = pqOpen.quote || 'USDT';
         spotTradeState.side = (side === 'SELL' || side === 'sell') ? 'SELL' : 'BUY';
         spotTradeState.type = 'MARKET';
         
@@ -9340,12 +10144,7 @@ function updateTradeSummary() {
 }
 
 function updateSpotTradeModal() {
-    var symbolDisplay = spotTradeState.symbol || '-';
-    if ((spotTradeState.symbol || '').toUpperCase() === 'USDTUSD') {
-        symbolDisplay = 'USDT/USD';
-    } else if (spotTradeState.baseAsset && spotTradeState.quoteAsset) {
-        symbolDisplay = spotTradeState.baseAsset + '/' + spotTradeState.quoteAsset;
-    }
+    var symbolDisplay = formatTradingPairDisplay(spotTradeState.symbol || '');
     var symbolEl = document.getElementById("bnTradeSymbol");
     if (symbolEl) symbolEl.textContent = symbolDisplay;
     
@@ -9520,6 +10319,21 @@ function updateSpotTradeModal() {
     updateTradeSummary();
 }
 
+/** Spot modal fiyat metni — quote USDT/ETH/BTC… */
+function formatModalPriceForSymbol(price, symbol) {
+    if (price == null || !Number.isFinite(Number(price)) || Number(price) <= 0) return '—';
+    var num = Number(price);
+    var pq = parseTradingPairSymbol(symbol || spotTradeState.symbol || '');
+    var quoteAsset = (pq.valid && pq.quote) ? pq.quote : (spotTradeState.quoteAsset || 'USDT');
+    if (quoteAsset === 'USDT' || quoteAsset === 'FDUSD' || quoteAsset === 'BUSD' || quoteAsset === 'USDC' || quoteAsset === 'TUSD' || quoteAsset === 'DAI') {
+        return fmtCoinPrice(num);
+    }
+    if (quoteAsset === 'BTC') return fmtNum(num, 8) + ' BTC';
+    if (quoteAsset === 'ETH') return fmtNum(num, 6) + ' ETH';
+    if (quoteAsset === 'BNB') return fmtNum(num, 4) + ' BNB';
+    return fmtNum(num, 8) + ' ' + quoteAsset;
+}
+
 /** Alım/Satım modalı: sembole ait son 24 saat grafiği (5m x 288). Geçersiz paritede Binance çağrılmaz. */
 async function loadTradeModalChart(symbol) {
     const wrap = document.getElementById('bnTradeChartWrap');
@@ -9545,7 +10359,7 @@ async function loadTradeModalChart(symbol) {
     if (dailyHighEl) dailyHighEl.textContent = '—';
     if (yearlyLowEl) yearlyLowEl.textContent = '—';
     if (yearlyHighEl) yearlyHighEl.textContent = '—';
-    const formatPrice = (v) => (v != null && Number.isFinite(v) && v > 0) ? (spotTradeState.quoteAsset === 'USDT' || !spotTradeState.quoteAsset ? fmtUsd(v) : (fmtNum(v, 8) + ' ' + (spotTradeState.quoteAsset || ''))) : '—';
+    const formatPrice = (v) => formatModalPriceForSymbol(v, chartSymbol);
     try {
         const interval = '5m';
         const limit = 288;
@@ -9745,20 +10559,7 @@ function updatePriceDisplay(price) {
     }
     spotTradeState.currentPrice = num;
     
-    const quoteAsset = spotTradeState.quoteAsset || 'USDT';
-    let priceDisplay = '';
-    if (quoteAsset === 'USDT' || quoteAsset === 'FDUSD' || quoteAsset === 'BUSD' || quoteAsset === 'USDC' || quoteAsset === 'TUSD' || quoteAsset === 'DAI') {
-        priceDisplay = fmtCoinPrice(num);
-    } else if (quoteAsset === 'BTC') {
-        priceDisplay = `${fmtNum(num, 8)} BTC`;
-    } else if (quoteAsset === 'ETH') {
-        priceDisplay = `${fmtNum(num, 6)} ETH`;
-    } else if (quoteAsset === 'BNB') {
-        priceDisplay = `${fmtNum(num, 4)} BNB`;
-    } else {
-        priceDisplay = `${fmtNum(num, 8)} ${quoteAsset}`;
-    }
-    priceEl.textContent = priceDisplay;
+    priceEl.textContent = formatModalPriceForSymbol(num, spotTradeState.symbol);
     priceEl.classList.remove("price-up", "price-down");
     
     if (prevPrice > 0 && prevPrice !== num) {
@@ -12149,7 +12950,6 @@ async function initDashboard() {
     // Flash Home (Patch H): when enabled, use /api/home/fast + wallet/refresh; no Binance on critical path
     window.FLASH_HOME_ENABLED = typeof window.FLASH_HOME_ENABLED !== 'undefined' ? window.FLASH_HOME_ENABLED : true;
     var _binanceWalletIdleCycles = 0;
-    var _dashboardWalletForceTick = 0;
     function dashboardDataRefresh() {
         if (!State.accountId || State.inFlight || (typeof isSpotModalOpen === 'function' && isSpotModalOpen())) return;
         var activeTab = document.querySelector('.dm-tab.is-active');
@@ -12388,6 +13188,12 @@ async function initDashboard() {
     // Mobilde arka plana geçince sekme interval'larını durdur (donma önlemi); görünür olunca özet yenile (throttle)
     var visibilityThrottledRefresh = throttle(function () {
         if (!State.accountId || isSpotModalOpen()) return;
+        if (typeof shouldRecoverWalletAfterConnectivity === 'function' && shouldRecoverWalletAfterConnectivity()) {
+            if (typeof recoverDashboardAfterConnectivity === 'function') {
+                recoverDashboardAfterConnectivity({ summary: false });
+                return;
+            }
+        }
         loadSummary(State.accountId);
         if (isBinanceTabActive() && typeof triggerWalletRefreshForVarliklar === 'function') {
             triggerWalletRefreshForVarliklar(State.accountId, { force: true });
@@ -12412,9 +13218,21 @@ async function initDashboard() {
     
     window.addEventListener("focus", () => {
         if (!State.accountId || isSpotModalOpen()) return;
+        if (typeof shouldRecoverWalletAfterConnectivity === 'function' && shouldRecoverWalletAfterConnectivity()) {
+            if (typeof recoverDashboardAfterConnectivity === 'function') {
+                recoverDashboardAfterConnectivity({ summary: false });
+                return;
+            }
+        }
         loadSummary(State.accountId);
         if (isBinanceTabActive() && typeof triggerWalletRefreshForVarliklar === 'function') {
             triggerWalletRefreshForVarliklar(State.accountId, { force: true });
+        }
+    });
+    window.addEventListener('online', function () {
+        if (!State.accountId || isSpotModalOpen()) return;
+        if (typeof recoverDashboardAfterConnectivity === 'function') {
+            recoverDashboardAfterConnectivity({ summary: false });
         }
     });
     
@@ -14005,7 +14823,9 @@ function bindFinanceBotsRowClicks(container) {
             var page = tr.dataset.detailPage || '/ui/bot.html';
             var q = State.accountCode ? 'account_code=' + encodeURIComponent(State.accountCode) : 'account_id=' + State.accountId;
             if (typeof persistDashboardBeforeBotDetailNav === 'function') persistDashboardBeforeBotDetailNav();
-            location.href = page + '?bot_id=' + botId + '&' + q;
+            var symNav = (tr.dataset.symbol || '').trim();
+            var symQ = symNav ? '&symbol=' + encodeURIComponent(symNav) : '';
+            location.href = page + '?bot_id=' + botId + symQ + '&' + q;
         });
     });
     container.querySelectorAll('.mevcut-botlar-mobile-card').forEach(function (card) {
@@ -14015,7 +14835,9 @@ function bindFinanceBotsRowClicks(container) {
             var page = card.dataset.detailPage || '/ui/bot.html';
             var q = State.accountCode ? 'account_code=' + encodeURIComponent(State.accountCode) : 'account_id=' + State.accountId;
             if (typeof persistDashboardBeforeBotDetailNav === 'function') persistDashboardBeforeBotDetailNav();
-            location.href = page + '?bot_id=' + botId + '&' + q;
+            var symNav = (card.dataset.symbol || '').trim();
+            var symQ = symNav ? '&symbol=' + encodeURIComponent(symNav) : '';
+            location.href = page + '?bot_id=' + botId + symQ + '&' + q;
         });
     });
 }
@@ -14184,6 +15006,7 @@ function applyFinanceBotsLiveEquityToDom() {
             updateTestAccountKpiCuzdanFromStrip();
         }
     }
+    if (typeof scheduleLeaderboardSyncFromBots === 'function') scheduleLeaderboardSyncFromBots();
 }
 
 function applyFinanceBotLiveSnapshot(botId, live) {
@@ -14410,7 +15233,7 @@ function renderFinanceBots(bots, opts) {
         '<col class="mevcut-botlar-col"><col class="mevcut-botlar-col"><col class="mevcut-botlar-col"><col class="mevcut-botlar-col">' +
         '</colgroup>';
     const thead = '<thead><tr>' +
-        '<th class="col-symbol col-center">Sembol</th>' +
+        '<th class="col-symbol col-left">Sembol</th>' +
         '<th class="col-price col-center">Fiyat</th>' +
         '<th class="col-status col-center">Durum</th>' +
         '<th class="col-budget col-center">Bütçe</th>' +
@@ -14429,7 +15252,7 @@ function renderFinanceBots(bots, opts) {
         const multiCoins = isMulti ? getMultiBotCoins(bot) : [];
         const logoHtml = isMulti && multiCoins.length > 0 ? getMultiLogoHtml(multiCoins) : getLogoHtml(base);
         const q = State.accountCode ? 'account_code=' + encodeURIComponent(State.accountCode) : 'account_id=' + (State.accountId || '');
-        const href = detailPage + '?bot_id=' + botId + '&' + q;
+        const href = detailPage + '?bot_id=' + botId + '&symbol=' + encodeURIComponent(sym) + '&' + q;
         const statusMeta = getFinanceBotStatusMeta(bot);
         const kz = resolveBotHeroKz(bot);
         const currentUsd = kz.equity != null ? kz.equity : resolveBotCurrentUsd(bot);
@@ -14441,14 +15264,14 @@ function renderFinanceBots(bots, opts) {
         const sc = rowPnl != null && rowPnl >= 0 ? '#0ecb81' : (rowPnl != null ? '#f6465d' : 'var(--ds-text-secondary)');
         var liveRow = getBotLiveRow(bot);
         var symbolCell = isMulti && multiCoins.length > 0
-            ? '<a href="' + href + '" style="color:inherit;text-decoration:none;display:inline-flex;align-items:center;gap:6px">' + getMultiLogoHtml(multiCoins) + '</a>'
-            : '<a href="' + href + '" style="color:inherit;text-decoration:none;display:inline-flex;align-items:center;gap:6px">' + logoHtml + (bot.symbol || 'N/A') + '</a>';
+            ? '<a href="' + href + '" class="mevcut-bot-symbol-link"><span class="mevcut-bot-symbol-logo-slot mevcut-bot-symbol-logo-slot--multi">' + getMultiLogoHtml(multiCoins) + '</span></a>'
+            : '<a href="' + href + '" class="mevcut-bot-symbol-link"><span class="mevcut-bot-symbol-logo-slot">' + logoHtml + '</span><span class="mevcut-bot-symbol-text">' + (bot.symbol || 'N/A') + '</span></a>';
         var livePrice = isMulti ? null : (liveRow && liveRow.last_price != null ? liveRow.last_price : getLivePrice(sym));
         var priceCell = isMulti
             ? '<span class="mevcut-bot-portfolio-balance" title="Çoklu sembol">—</span>'
             : '<span class="finance-bot-live-price mevcut-bot-portfolio-balance" data-symbol="' + sym + '" data-bot-id="' + botId + '" title="Sembol canlı fiyatı (bot detay /live)">' + (livePrice != null ? fmtCoinPrice(livePrice) : '—') + '</span>';
         return '<tr style="cursor:pointer" data-bot-id="' + botId + '" data-symbol="' + sym + '" data-detail-page="' + detailPage + '">' +
-            '<td class="col-symbol col-center" style="font-weight:600">' + symbolCell + '</td>' +
+            '<td class="col-symbol col-left" style="font-weight:600">' + symbolCell + '</td>' +
             '<td class="mevcut-botlar-price-cell col-price col-center">' + priceCell + '</td>' +
             '<td class="col-status col-center"><span class="mevcut-botlar-status ' + statusMeta.className + '">' + statusMeta.text + '</span></td>' +
             '<td class="col-budget col-center">' + fmtUsd(bot.budget_usd || 0) + '</td>' +
@@ -14469,7 +15292,7 @@ function renderFinanceBots(bots, opts) {
         const multiCoins = isMulti ? getMultiBotCoins(bot) : [];
         const logoHtml = isMulti && multiCoins.length > 0 ? getMultiLogoHtml(multiCoins) : getLogoHtml(base);
         const q = State.accountCode ? 'account_code=' + encodeURIComponent(State.accountCode) : 'account_id=' + (State.accountId || '');
-        const href = detailPage + '?bot_id=' + botId + '&' + q;
+        const href = detailPage + '?bot_id=' + botId + '&symbol=' + encodeURIComponent(sym) + '&' + q;
         const statusMeta = getFinanceBotStatusMeta(bot);
         const kzM = resolveBotHeroKz(bot);
         const currentUsd = kzM.equity != null ? kzM.equity : resolveBotCurrentUsd(bot);
@@ -14519,7 +15342,7 @@ var _dashboardMarketPriceRaf = 0;
 var _dashboardMarketUnsub = null;
 
 function tickDashboardLiveMarketPrices() {
-    if (typeof tickVarliklarPrices === 'function') tickVarliklarPrices();
+    if (typeof tickVarliklarPrices === 'function') tickVarliklarPrices({ skipThrottle: true });
     if (typeof updateFinanceBotsLivePrices === 'function') updateFinanceBotsLivePrices();
 }
 
