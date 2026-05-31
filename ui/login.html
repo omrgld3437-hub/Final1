@@ -10,54 +10,34 @@
     <title>Giriş - TraderTrailing</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/ui/assets/theme.css?v=login2">
     <link rel="stylesheet" href="/ui/assets/design.css?v=login2">
     <link rel="stylesheet" href="/ui/assets/login.css?v=zip-auth1">
+    <link rel="stylesheet" href="/ui/assets/login-zip-layout.css?v=zip-full27">
 </head>
-<body class="login-page">
+<body class="login-page login-page--zip">
     <script>window.__APP_PAGE__ = 'login';</script>
 
-    <!-- Ticker şeridi (Omeraltinhtml ile aynı) -->
     <div class="login-ticker" aria-hidden="true">
         <div class="login-ticker__track">
             <span class="login-ticker__item">BTC</span>
             <span class="login-ticker__item">ETH</span>
-            <span class="login-ticker__item">7/24</span>
-            <span class="login-ticker__item">API</span>
-            <span class="login-ticker__item">DCA</span>
-            <span class="login-ticker__item">Grid</span>
-            <span class="login-ticker__item">Trailing</span>
-            <span class="login-ticker__item">Portföy</span>
-            <span class="login-ticker__item">Algoritmik</span>
-            <span class="login-ticker__item">TraderTrailing</span>
-            <span class="login-ticker__item">BTC</span>
-            <span class="login-ticker__item">ETH</span>
-            <span class="login-ticker__item">7/24</span>
-            <span class="login-ticker__item">API</span>
-            <span class="login-ticker__item">DCA</span>
-            <span class="login-ticker__item">Grid</span>
-            <span class="login-ticker__item">Trailing</span>
-            <span class="login-ticker__item">Portföy</span>
-            <span class="login-ticker__item">Algoritmik</span>
             <span class="login-ticker__item">TraderTrailing</span>
         </div>
     </div>
 
-    <!-- Arka plan: uzay, nebula, ışık, grid, vignette -->
-    <div class="login-page-bg" aria-hidden="true">
+    <div class="login-page-bg login-page-bg--zip login-page-bg--zip-nebula" aria-hidden="true">
+        <div class="login-bg-zip-photo" role="presentation"></div>
         <div class="login-bg-base"></div>
         <div class="login-bg-mesh"></div>
         <div class="login-bg-glow login-bg-glow-1"></div>
         <div class="login-bg-glow login-bg-glow-2"></div>
         <div class="login-bg-nebula" id="loginNebula"></div>
-        <div class="login-bg-milkyway" aria-hidden="true"></div>
         <canvas class="login-bg-stars" id="loginStarsCanvas" aria-hidden="true"></canvas>
-        <div class="login-shooting-stars" id="loginShootingStars" aria-hidden="true"></div>
-        <div class="login-bg-levels" aria-hidden="true"></div>
-        <div class="login-bg-grid"></div>
         <div class="login-bg-vignette"></div>
     </div>
+    <div class="zip-nebula-dim" aria-hidden="true"></div>
 
     <!-- Bakım ekranı -->
     <div id="lockdown-screen" aria-hidden="true">
@@ -76,111 +56,121 @@
         </div>
     </div>
 
-    <!-- Sağ üst: modern menü butonu + Giriş Yap + bayrak -->
-    <header class="login-topbar">
-        <div class="login-menu-wrap">
-            <button type="button" class="login-menu-btn" id="loginMenuBtn" aria-expanded="false" aria-haspopup="true" onclick="toggleLoginMenu()">
-                <span class="login-menu-btn__icon" aria-hidden="true"></span>
-                <span class="login-menu-btn__label">Sekmeler</span>
-                <span class="login-menu-btn__chevron" aria-hidden="true"></span>
-            </button>
-            <div class="login-menu-dropdown" id="loginMenuDropdown" role="menu" aria-hidden="true">
-                <div class="login-menu-dropdown__group">
-                    <button type="button" role="menuitem" onclick="openAuthModal(1); closeLoginMenu();">Kayıt Ol</button>
+    <header class="zip-nav" id="zipNav">
+        <div class="zip-nav__start">
+            <nav class="zip-nav__corp" aria-label="Kurumsal bilgi">
+                <div class="zip-corp-tabs zip-corp-tabs--nav" role="tablist">
+                    <button type="button" class="zip-corp-tab" role="tab" data-tab="2" aria-selected="false" onclick="openZipCorpTab(2)">Biz Kimiz</button>
+                    <button type="button" class="zip-corp-tab" role="tab" data-tab="5" aria-selected="false" onclick="openZipCorpTab(5)">Yasal Uyarı</button>
+                    <button type="button" class="zip-corp-tab" role="tab" data-tab="4" aria-selected="false" onclick="openZipCorpTab(4)">Hakkımızda</button>
                 </div>
-                <div class="login-menu-dropdown__divider"></div>
-                <div class="login-menu-dropdown__group">
-                    <button type="button" role="menuitem" onclick="openAuthModal(2); closeLoginMenu();">Biz Kimiz</button>
-                    <button type="button" role="menuitem" onclick="openAuthModal(3); closeLoginMenu();">Vizyon ve Misyon</button>
-                    <button type="button" role="menuitem" onclick="openAuthModal(4); closeLoginMenu();">Hakkımızda</button>
-                    <button type="button" role="menuitem" onclick="openAuthModal(5); closeLoginMenu();">Yasal Uyarı</button>
-                </div>
-            </div>
+            </nav>
         </div>
-        <button type="button" class="login-cta-btn" onclick="openAuthModal(0); showLogin();">Giriş Yap</button>
-        <a href="https://ttk.gov.tr/turk-bayragi-kanunu/" class="login-flag" target="_blank" rel="noopener noreferrer" title="Türk Bayrağı" aria-label="Türk Bayrağı">
-            <img class="login-flag__img" src="https://flagcdn.com/w80/tr.png" srcset="https://flagcdn.com/w160/tr.png 2x" alt="Türk Bayrağı" width="48" height="32">
-        </a>
+        <button type="button" class="zip-nav__brand zip-nav__brand--btn" id="zipNavBrand" onclick="goLoginHome()" aria-label="TraderTrailing anasayfa">
+            <span class="zip-nav__logo-mark" aria-hidden="true">
+                <svg class="zip-nav__logo-svg" width="32" height="32" viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg" focusable="false">
+                    <defs>
+                        <linearGradient id="zipLogoRing" x1="0" y1="0" x2="40" y2="40" gradientUnits="userSpaceOnUse">
+                            <stop offset="0%" stop-color="#848e9c">
+                                <animate attributeName="stop-color" values="#848e9c;#f0b90b;#848e9c" dur="6s" repeatCount="indefinite" calcMode="spline" keyTimes="0;0.5;1" keySplines="0.4 0 0.2 1;0.4 0 0.2 1"/>
+                            </stop>
+                            <stop offset="100%" stop-color="#eaecef">
+                                <animate attributeName="stop-color" values="#eaecef;#fff8e0;#eaecef" dur="6s" repeatCount="indefinite" calcMode="spline" keyTimes="0;0.5;1" keySplines="0.4 0 0.2 1;0.4 0 0.2 1"/>
+                            </stop>
+                        </linearGradient>
+                    </defs>
+                    <circle class="zip-nav__logo-ring" cx="20" cy="20" r="17.5" fill="rgba(201,162,39,0.08)" stroke="url(#zipLogoRing)" stroke-width="1.5">
+                        <animate attributeName="fill-opacity" values="0.06;0.18;0.06" dur="6s" repeatCount="indefinite" calcMode="spline" keyTimes="0;0.5;1" keySplines="0.4 0 0.2 1;0.4 0 0.2 1"/>
+                    </circle>
+                    <path class="zip-nav__logo-chart" d="M11 27 L17 19 L23 23 L29 13" fill="none" stroke="#848e9c" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round">
+                        <animate attributeName="stroke" values="#848e9c;#f0b90b;#fff8e0;#f0b90b;#848e9c" dur="6s" repeatCount="indefinite" calcMode="spline" keyTimes="0;0.35;0.5;0.65;1" keySplines="0.4 0 0.2 1;0.4 0 0.2 1;0.4 0 0.2 1;0.4 0 0.2 1"/>
+                    </path>
+                </svg>
+            </span>
+            <span class="zip-nav__brand-text login-brand">TraderTrailing</span>
+        </button>
+        <div class="zip-nav__end">
+            <div class="zip-nav__actions">
+                <button type="button" class="zip-nav__link-btn" onclick="openZipRegister()">Kayıt Ol</button>
+                <button type="button" class="zip-nav__cta" onclick="openZipLogin()">Giriş Yap</button>
+                <a href="https://ttk.gov.tr/turk-bayragi-kanunu/" class="login-flag zip-nav__flag" target="_blank" rel="noopener noreferrer" title="Türk Bayrağı" aria-label="Türk Bayrağı">
+                    <img class="login-flag__img" src="https://flagcdn.com/w80/tr.png" srcset="https://flagcdn.com/w160/tr.png 2x" alt="Türk Bayrağı" width="40" height="26">
+                </a>
+            </div>
+            <button type="button" class="zip-nav__burger" id="zipNavBurger" aria-expanded="false" aria-label="Menü">☰</button>
+        </div>
+        <div class="zip-nav__mobile" id="zipNavMobile" aria-hidden="true">
+            <button type="button" onclick="openZipLogin(); closeZipNavMobile();">Giriş Yap</button>
+            <button type="button" onclick="openZipRegister(); closeZipNavMobile();">Kayıt Ol</button>
+            <button type="button" class="zip-nav__mobile-corp" onclick="openZipCorpTab(2); closeZipNavMobile();">Biz Kimiz</button>
+            <button type="button" class="zip-nav__mobile-corp" onclick="openZipCorpTab(3); closeZipNavMobile();">Vizyon ve Misyon</button>
+            <button type="button" class="zip-nav__mobile-corp" onclick="openZipCorpTab(4); closeZipNavMobile();">Hakkımızda</button>
+            <button type="button" class="zip-nav__mobile-corp" onclick="openZipCorpTab(5); closeZipNavMobile();">Yasal Uyarı</button>
+            <button type="button" onclick="document.getElementById('loginZipDock').scrollIntoView({behavior:'smooth',block:'start'}); closeZipNavMobile();">Piyasa özeti</button>
+        </div>
     </header>
 
-    <!-- Çıkış sonrası uyarı (login sayfasında görünür) -->
+    <header class="login-topbar" hidden>
+        <button type="button" class="login-cta-btn" onclick="openAuthModal(0); showLogin();">Giriş Yap</button>
+    </header>
+
     <div class="login-logout-toast" id="loginLogoutToast" role="alert" aria-live="polite" aria-hidden="true">Güvenli çıkış yapıldı.</div>
 
-    <!-- Ana sayfa: saatler + kripto -->
-    <main class="login-landing">
-        <h1 class="login-landing-brand"><a href="#" class="login-brand">TraderTrailing</a></h1>
-        <section class="login-hero" aria-label="Tanıtım">
-            <span class="login-hero__badge">Yeni Nesil Al-Sat İşlem Odası</span>
-            <p class="login-hero__title">Gökyüzü derinliğinde akıllı yatırım terminali</p>
-            <p class="login-hero__tagline">Limit emirler, fiyat alarmları ve DCA stratejilerinizi tek merkezden yönetin.</p>
+    <div id="loginZipApp" class="login-zip-app">
+    <main id="loginZipMain" class="zip-main zip-main--welcome" aria-label="Karşılama">
+        <section class="zip-welcome" id="loginZipHome" aria-label="Karşılama ekranı">
+            <span class="login-hero__badge zip-welcome__badge">✦ Yeni Nesil Al-Sat İşlem Odası</span>
+            <h1 class="login-hero__title zip-welcome__title">Gökyüzü Derinliğinde Akıllı Yatırım Terminali</h1>
+            <p class="login-hero__tagline zip-welcome__lead">Limit emirler, fiyat alarmları ve DCA stratejilerinizi tek merkezden yönetin. Kurumsal portföyler için güvenli altyapı.</p>
+            <ul class="zip-welcome__features" aria-label="Öne çıkanlar">
+                <li class="zip-welcome__feature">
+                    <span class="zip-welcome__feature-icon" aria-hidden="true">◆</span>
+                    <strong>Algoritmik işlem</strong>
+                    <span>DCA, grid ve trailing botları</span>
+                </li>
+                <li class="zip-welcome__feature">
+                    <span class="zip-welcome__feature-icon" aria-hidden="true">◆</span>
+                    <strong>Canlı izleme</strong>
+                    <span>Portföy ve piyasa tek ekranda</span>
+                </li>
+                <li class="zip-welcome__feature">
+                    <span class="zip-welcome__feature-icon" aria-hidden="true">◆</span>
+                    <strong>Kurumsal güvenlik</strong>
+                    <span>Yetkilendirme ve denetim izi</span>
+                </li>
+            </ul>
+            <div class="zip-welcome__actions">
+                <button type="button" class="zip-welcome__btn zip-welcome__btn--primary" onclick="openZipLogin()">Giriş Yap</button>
+                <button type="button" class="zip-welcome__btn zip-welcome__btn--ghost" onclick="openZipRegister()">Kayıt Ol</button>
+            </div>
+            <p class="zip-welcome__hint">Üst menüden <strong>Giriş Yap</strong> veya <strong>Kayıt Ol</strong> ile panele erişin.</p>
         </section>
-        <section class="login-clocks" id="loginClocks">
-            <div class="login-clock" data-tz="Europe/Istanbul" data-city="İstanbul" data-exchange="BIST" data-open="10:00">
-                <div class="login-clock__face"><div class="login-clock__ticks" aria-hidden="true"></div><div class="login-clock__hand login-clock__hand--h"></div><div class="login-clock__hand login-clock__hand--m"></div><div class="login-clock__hand login-clock__hand--s"></div><span class="login-clock__ampm"></span></div>
-                <p class="login-clock__city">İstanbul</p>
-                <p class="login-clock__exchange">BIST 10:00</p>
+        <div class="zip-welcome-ticker" aria-label="Canlı kripto fiyatları">
+            <div class="zip-ticker-wrap zip-ticker-wrap--scroll">
+                <div class="zip-ticker-fade zip-ticker-fade--l" aria-hidden="true"></div>
+                <div class="zip-ticker-fade zip-ticker-fade--r" aria-hidden="true"></div>
+                <div class="zip-ticker-track" id="loginZipTicker" aria-live="polite"></div>
             </div>
-            <div class="login-clock" data-tz="Europe/London" data-city="Londra" data-exchange="LSE" data-open="08:00">
-                <div class="login-clock__face"><div class="login-clock__ticks" aria-hidden="true"></div><div class="login-clock__hand login-clock__hand--h"></div><div class="login-clock__hand login-clock__hand--m"></div><div class="login-clock__hand login-clock__hand--s"></div><span class="login-clock__ampm"></span></div>
-                <p class="login-clock__city">Londra</p>
-                <p class="login-clock__exchange">LSE 08:00</p>
-            </div>
-            <div class="login-clock" data-tz="America/New_York" data-city="New York" data-exchange="NYSE" data-open="09:30">
-                <div class="login-clock__face"><div class="login-clock__ticks" aria-hidden="true"></div><div class="login-clock__hand login-clock__hand--h"></div><div class="login-clock__hand login-clock__hand--m"></div><div class="login-clock__hand login-clock__hand--s"></div><span class="login-clock__ampm"></span></div>
-                <p class="login-clock__city">New York</p>
-                <p class="login-clock__exchange">NYSE 09:30</p>
-            </div>
-            <div class="login-clock" data-tz="Asia/Tokyo" data-city="Tokyo" data-exchange="TSE" data-open="09:00">
-                <div class="login-clock__face"><div class="login-clock__ticks" aria-hidden="true"></div><div class="login-clock__hand login-clock__hand--h"></div><div class="login-clock__hand login-clock__hand--m"></div><div class="login-clock__hand login-clock__hand--s"></div><span class="login-clock__ampm"></span></div>
-                <p class="login-clock__city">Tokyo</p>
-                <p class="login-clock__exchange">TSE 09:00</p>
-            </div>
-            <div class="login-clock" data-tz="Asia/Dubai" data-city="Dubai" data-exchange="DFM" data-open="10:00">
-                <div class="login-clock__face"><div class="login-clock__ticks" aria-hidden="true"></div><div class="login-clock__hand login-clock__hand--h"></div><div class="login-clock__hand login-clock__hand--m"></div><div class="login-clock__hand login-clock__hand--s"></div><span class="login-clock__ampm"></span></div>
-                <p class="login-clock__city">Dubai</p>
-                <p class="login-clock__exchange">DFM 10:00</p>
-            </div>
-            <div class="login-clock" data-tz="Asia/Shanghai" data-city="Şangay" data-exchange="SSE" data-open="09:30">
-                <div class="login-clock__face"><div class="login-clock__ticks" aria-hidden="true"></div><div class="login-clock__hand login-clock__hand--h"></div><div class="login-clock__hand login-clock__hand--m"></div><div class="login-clock__hand login-clock__hand--s"></div><span class="login-clock__ampm"></span></div>
-                <p class="login-clock__city">Şangay</p>
-                <p class="login-clock__exchange">SSE 09:30</p>
-            </div>
-        </section>
-        <section class="login-crypto" id="loginCrypto">
-            <div class="login-crypto__list" id="loginCryptoList"></div>
-        </section>
-        <section class="login-forex" id="loginForex">
-            <div class="login-forex__grid">
-                <div class="login-forex__item">
-                    <span class="login-forex__label">USD/TRY</span>
-                    <span class="login-forex__value" id="loginForexUsd">—</span>
-                </div>
-                <div class="login-forex__item">
-                    <span class="login-forex__label">EUR/TRY</span>
-                    <span class="login-forex__value" id="loginForexEur">—</span>
-                </div>
-                <div class="login-forex__item">
-                    <span class="login-forex__label">Gram Altın</span>
-                    <span class="login-forex__value" id="loginForexGold">—</span>
-                </div>
-            </div>
-        </section>
-        <footer class="login-footer login-landing-footer">
-            <p><strong>TraderTrailing</strong> — Kurumsal portföy yönetimi ve algoritmik işlem altyapısı.</p>
-            <p>© <span id="loginYear"></span> Tüm hakları saklıdır.</p>
-        </footer>
+        </div>
     </main>
 
-    <!-- Giriş / Kayıt / Bilgi modalı -->
+    <div class="zip-auth-stage" id="loginZipAuth" aria-hidden="true">
     <div class="login-modal" id="loginAuthModal" aria-hidden="true">
         <div class="login-modal__backdrop" onclick="closeAuthModal()"></div>
         <div class="login-modal__content">
             <button type="button" class="login-modal__close" aria-label="Kapat" onclick="closeAuthModal()">&times;</button>
             <div class="login-card" id="loginAuthCard">
+                <div class="login-card__header">
                 <nav class="login-tabs login-tabs--header" role="tablist">
                     <button type="button" class="login-tab active" role="tab" aria-selected="true" data-tab="0" onclick="setActiveTab(0); showLogin();">Giriş Yap</button>
                     <button type="button" class="login-tab" role="tab" aria-selected="false" data-tab="1" onclick="setActiveTab(1); showRegister();">Kayıt Ol</button>
                 </nav>
+                <nav class="zip-corp-tabs zip-corp-tabs--card" role="tablist" aria-label="Kurumsal bilgi sekmeleri" id="zipCorpTabsCard">
+                    <button type="button" class="zip-corp-tab" role="tab" data-tab="2" aria-selected="false" onclick="openZipCorpTab(2)">Biz Kimiz</button>
+                    <button type="button" class="zip-corp-tab" role="tab" data-tab="5" aria-selected="false" onclick="openZipCorpTab(5)">Yasal Uyarı</button>
+                    <button type="button" class="zip-corp-tab" role="tab" data-tab="4" aria-selected="false" onclick="openZipCorpTab(4)">Hakkımızda</button>
+                </nav>
+                </div>
                 <div class="login-card__body">
                 <h2 class="login-card-heading" id="loginSubtitle">Hesabınıza giriş yapın</h2>
                 <p class="login-card-lead" id="loginCardLead">Trading terminaline erişmek için bilgilerinizi girin.</p>
@@ -424,6 +414,65 @@
             </div>
         </div>
     </div>
+    </div>
+    </div>
+
+    <section class="zip-dock" id="loginZipDock" aria-label="Canlı piyasa ve saatler">
+        <div class="zip-dock__grid">
+            <div class="zip-dock__clocks">
+                <div class="zip-dock__label"><span class="zip-dock__label-dot" aria-hidden="true"></span> Eşzamanlı Dünya Borsaları Saatleri</div>
+                <section class="login-clocks" id="loginClocks">
+                    <div class="login-clock" data-tz="Europe/Istanbul" data-city="İstanbul" data-exchange="BIST" data-open="10:00">
+                        <div class="login-clock__face"><div class="login-clock__ticks" aria-hidden="true"></div><div class="login-clock__hand login-clock__hand--h"></div><div class="login-clock__hand login-clock__hand--m"></div><div class="login-clock__hand login-clock__hand--s"></div><span class="login-clock__ampm"></span></div>
+                        <div><p class="login-clock__city">İstanbul</p><p class="login-clock__exchange">BIST 10:00</p></div>
+                    </div>
+                    <div class="login-clock" data-tz="Europe/London" data-city="Londra" data-exchange="LSE" data-open="08:00">
+                        <div class="login-clock__face"><div class="login-clock__ticks" aria-hidden="true"></div><div class="login-clock__hand login-clock__hand--h"></div><div class="login-clock__hand login-clock__hand--m"></div><div class="login-clock__hand login-clock__hand--s"></div><span class="login-clock__ampm"></span></div>
+                        <div><p class="login-clock__city">Londra</p><p class="login-clock__exchange">LSE 08:00</p></div>
+                    </div>
+                    <div class="login-clock" data-tz="America/New_York" data-city="New York" data-exchange="NYSE" data-open="09:30">
+                        <div class="login-clock__face"><div class="login-clock__ticks" aria-hidden="true"></div><div class="login-clock__hand login-clock__hand--h"></div><div class="login-clock__hand login-clock__hand--m"></div><div class="login-clock__hand login-clock__hand--s"></div><span class="login-clock__ampm"></span></div>
+                        <div><p class="login-clock__city">New York</p><p class="login-clock__exchange">NYSE 09:30</p></div>
+                    </div>
+                </section>
+            </div>
+            <div>
+                <div class="zip-dock__label"><span class="zip-dock__label-dot" aria-hidden="true"></span> Makro göstergeler</div>
+                <section class="login-forex zip-dock__market" id="loginForex">
+                    <div class="login-forex__grid">
+                        <div class="login-forex__item">
+                            <span class="login-forex__label">USD/TRY</span>
+                            <span class="login-forex__value" id="loginForexUsd">—</span>
+                        </div>
+                        <div class="login-forex__item">
+                            <span class="login-forex__label">EUR/TRY</span>
+                            <span class="login-forex__value" id="loginForexEur">—</span>
+                        </div>
+                        <div class="login-forex__item">
+                            <span class="login-forex__label">Gram Altın</span>
+                            <span class="login-forex__value" id="loginForexGold">—</span>
+                        </div>
+                    </div>
+                </section>
+            </div>
+        </div>
+    </section>
+    <section class="login-crypto" id="loginCrypto" hidden aria-hidden="true">
+        <div class="login-crypto__list" id="loginCryptoList"></div>
+    </section>
+
+    <footer class="zip-footer">
+        <div class="zip-footer__inner">
+            <span class="zip-footer__brand">TraderTrailing</span>
+            <nav class="zip-footer__links" aria-label="Alt bağlantılar">
+                <button type="button" onclick="openZipCorpTab(2)">Biz Kimiz</button>
+                <button type="button" onclick="openZipCorpTab(5)">Yasal Uyarı</button>
+                <button type="button" onclick="openZipCorpTab(4)">Hakkımızda</button>
+            </nav>
+            <p class="zip-footer__copy">© <span id="loginYear"></span> Tüm hakları saklıdır.</p>
+        </div>
+    </footer>
+    </div>
 
     <script src="/ui/assets/utils/trTime.js?v=1"></script>
     <script src="/ui/assets/js/maintenanceOverlay.js?v=1"></script>
@@ -437,22 +486,67 @@
         if (isMobile) document.body.classList.add('login-mobile');
     }
 
+    var ZIP_CORP_TAB_IDS = [2, 4, 5];
+
+    function isZipCorpTab(index) {
+        return ZIP_CORP_TAB_IDS.indexOf(index) !== -1;
+    }
+
+    function syncZipCorpTabs(activeIndex) {
+        document.querySelectorAll('.zip-corp-tab').forEach(function (btn) {
+            var tabId = parseInt(btn.getAttribute('data-tab'), 10);
+            var on = tabId === activeIndex;
+            btn.classList.toggle('is-active', on);
+            btn.setAttribute('aria-selected', on ? 'true' : 'false');
+        });
+    }
+
     function setActiveTab(index) {
-        document.querySelectorAll('.login-tab').forEach(function (t, i) {
-            t.classList.toggle('active', i === index);
-            t.setAttribute('aria-selected', i === index ? 'true' : 'false');
+        document.querySelectorAll('.login-tab').forEach(function (t) {
+            var tabId = parseInt(t.getAttribute('data-tab'), 10);
+            var on = tabId === index;
+            t.classList.toggle('active', on);
+            t.setAttribute('aria-selected', on ? 'true' : 'false');
         });
         document.querySelectorAll('.login-tab-content').forEach(function (c, i) {
             c.classList.toggle('active', i === index);
         });
         var card = document.querySelector('#loginAuthModal .login-card');
+        var modal = document.getElementById('loginAuthModal');
+        var isInfo = index >= 2 && index <= 5;
+        var isLegal = index >= 6 && index <= 8;
         if (card) {
-            card.classList.toggle('login-card--info-only', index >= 2);
+            card.classList.toggle('login-card--info-only', isInfo);
+            card.classList.toggle('login-card--corp-tabs', isZipCorpTab(index));
             card.classList.toggle('login-card--register', index === 1);
+            card.classList.toggle('login-card--login', index === 0);
+            card.classList.toggle('login-card--legal', isLegal);
+        }
+        if (modal) {
+            modal.classList.toggle('login-modal--corp', isZipCorpTab(index));
+        }
+        if (isZipLoginPage) {
+            document.body.classList.toggle('login-zip-corp-open', isZipCorpTab(index));
+            if (isZipCorpTab(index)) syncZipCorpTabs(index);
+            else if (!isInfo) syncZipCorpTabs(-1);
+            if (modal && modal.classList.contains('show')) {
+                setAuthOverlay(true);
+            }
         }
     }
 
     window.setActiveTab = setActiveTab;
+
+    function openZipCorpTab(tabIndex) {
+        if (tabIndex !== 2 && tabIndex !== 3 && tabIndex !== 4 && tabIndex !== 5) return;
+        closeZipNavMobile();
+        if (!isZipLoginPage) {
+            openAuthModal(tabIndex);
+            return;
+        }
+        openAuthModal(tabIndex);
+    }
+    window.openZipCorpTab = openZipCorpTab;
 
     function togglePasswordVisibility(inputId, buttonId) {
         var input = document.getElementById(inputId);
@@ -469,15 +563,107 @@
     }
     window.togglePasswordVisibility = togglePasswordVisibility;
 
+    var isZipLoginPage = document.body && document.body.classList.contains('login-page--zip');
+
+    function setAuthOverlay(on) {
+        var modal = document.getElementById('loginAuthModal');
+        if (!modal || !isZipLoginPage) return;
+        var overlay = !!on;
+        modal.classList.toggle('login-modal--overlay', overlay);
+        var stage = document.getElementById('loginZipAuth');
+        if (stage) {
+            stage.classList.toggle('zip-auth-stage--open', overlay);
+            stage.setAttribute('aria-hidden', overlay ? 'false' : 'true');
+        }
+        document.body.classList.toggle('login-modal-open', overlay);
+        if (overlay) {
+            document.body.style.overflow = 'hidden';
+        } else {
+            document.body.style.removeProperty('overflow');
+        }
+    }
+
+    function showZipWelcome() {
+        var main = document.getElementById('loginZipMain');
+        var modal = document.getElementById('loginAuthModal');
+        if (main) main.classList.add('zip-main--welcome');
+        if (modal) {
+            modal.classList.remove('show', 'login-modal--corp');
+            modal.setAttribute('aria-hidden', 'true');
+        }
+        document.body.classList.remove('login-zip-corp-open');
+        syncZipCorpTabs(-1);
+        setAuthOverlay(false);
+    }
+
+    function initZipLoginPage() {
+        if (!isZipLoginPage) return;
+        document.body.classList.remove('login-modal-open');
+        document.body.style.removeProperty('overflow');
+        showZipWelcome();
+    }
+
+    function openZipLogin() {
+        closeZipNavMobile();
+        document.body.classList.remove('login-zip-corp-open');
+        syncZipCorpTabs(-1);
+        openAuthModal(0);
+        showLogin();
+    }
+
+    function openZipRegister() {
+        closeZipNavMobile();
+        document.body.classList.remove('login-zip-corp-open');
+        syncZipCorpTabs(-1);
+        openAuthModal(1);
+        showRegister();
+    }
+    window.openZipLogin = openZipLogin;
+    window.openZipRegister = openZipRegister;
+
+    /** Navbar marka — karşılama ekranına dön */
+    function goLoginHome() {
+        closeZipNavMobile();
+        if (!isZipLoginPage) {
+            window.location.href = '/ui/login.html';
+            return;
+        }
+        showZipWelcome();
+        var main = document.getElementById('loginZipMain');
+        if (main && main.scrollIntoView) {
+            main.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+        window.scrollTo({ top: 0, left: 0, behavior: 'smooth' });
+        if (history.replaceState) {
+            history.replaceState(null, '', window.location.pathname + (window.location.search || ''));
+        }
+    }
+    window.goLoginHome = goLoginHome;
+
+    window.setAuthOverlay = setAuthOverlay;
+
+    function closeZipNavMobile() {
+        var panel = document.getElementById('zipNavMobile');
+        var burger = document.getElementById('zipNavBurger');
+        if (panel) { panel.classList.remove('is-open'); panel.setAttribute('aria-hidden', 'true'); }
+        if (burger) burger.setAttribute('aria-expanded', 'false');
+    }
+    window.closeZipNavMobile = closeZipNavMobile;
+
     function openAuthModal(tabIndex) {
         var modal = document.getElementById('loginAuthModal');
         if (!modal) return;
-        var isAlreadyOpen = modal.classList.contains('show');
-        if (!isAlreadyOpen && (tabIndex === 6 || tabIndex === 7 || tabIndex === 8))
+        if (!modal.classList.contains('show') && (tabIndex === 6 || tabIndex === 7 || tabIndex === 8))
             tabIndex = 1;
         modal.classList.add('show');
         modal.setAttribute('aria-hidden', 'false');
-        document.body.style.overflow = 'hidden';
+        if (isZipLoginPage) {
+            var main = document.getElementById('loginZipMain');
+            if (main) main.classList.remove('zip-main--welcome');
+            setAuthOverlay(true);
+        } else {
+            document.body.style.overflow = 'hidden';
+        }
         setActiveTab(tabIndex);
         if (tabIndex === 0) showLogin();
         else if (tabIndex === 1) showRegister();
@@ -490,12 +676,22 @@
 
     function openContractTab(tabIndex) {
         if (tabIndex !== 6 && tabIndex !== 7 && tabIndex !== 8) return;
+        var modal = document.getElementById('loginAuthModal');
+        if (modal) {
+            modal.classList.add('show');
+            modal.setAttribute('aria-hidden', 'false');
+        }
+        if (isZipLoginPage) setAuthOverlay(true);
         setActiveTab(tabIndex);
     }
     window.openContractTab = openContractTab;
     function closeAuthModal() {
         var modal = document.getElementById('loginAuthModal');
         if (!modal) return;
+        if (isZipLoginPage) {
+            showZipWelcome();
+            return;
+        }
         modal.classList.remove('show');
         modal.setAttribute('aria-hidden', 'true');
         document.body.style.overflow = '';
@@ -514,6 +710,7 @@
         }
         setActiveTab(1);
         showRegister();
+        if (isZipLoginPage) setAuthOverlay(true);
     }
     window.confirmConsent = confirmConsent;
 
@@ -541,9 +738,25 @@
     document.addEventListener('keydown', function (e) {
         if (e.key === 'Escape') {
             closeLoginMenu();
-            if (document.getElementById('loginAuthModal') && document.getElementById('loginAuthModal').classList.contains('show')) closeAuthModal();
+            closeZipNavMobile();
+            var modal = document.getElementById('loginAuthModal');
+            if (modal && modal.classList.contains('login-modal--overlay')) closeAuthModal();
         }
     });
+
+    (function initZipNav() {
+        var burger = document.getElementById('zipNavBurger');
+        var panel = document.getElementById('zipNavMobile');
+        if (!burger || !panel) return;
+        burger.addEventListener('click', function () {
+            var open = panel.classList.toggle('is-open');
+            panel.setAttribute('aria-hidden', open ? 'false' : 'true');
+            burger.setAttribute('aria-expanded', open ? 'true' : 'false');
+        });
+        document.addEventListener('click', function (e) {
+            if (!e.target.closest('#zipNav')) closeZipNavMobile();
+        });
+    })();
 
     function showError(message, type) {
         var errorEl = document.getElementById('errorMessage');
@@ -588,8 +801,7 @@
         if (history.replaceState) history.replaceState(null, '', window.location.pathname + (window.location.hash || ''));
         var errEl = document.getElementById('errorMessage');
         if (errEl) { errEl.textContent = 'Oturumunuz sona erdi (sunucu yeniden başladı veya oturum geçersiz). Lütfen tekrar giriş yapın.'; errEl.className = 'login-message show info'; }
-        openAuthModal(0);
-        showLogin();
+        openZipLogin();
     }
 
     function restoreLastLoginPhone() {
@@ -865,6 +1077,11 @@
 
     /* Lockdown & health */
     document.addEventListener('DOMContentLoaded', function () {
+        initZipLoginPage();
+        syncZipChromeBottom();
+        requestAnimationFrame(function () {
+            requestAnimationFrame(syncZipChromeBottom);
+        });
         var loginYear = document.getElementById('loginYear');
         if (loginYear) loginYear.textContent = new Date().getFullYear();
 
@@ -1069,7 +1286,118 @@
     var loginCryptoCoins = ['BTC', 'ETH', 'SOL', 'AVAX', 'LTC', 'XRP'];
     var loginCryptoPrev = {};
     var loginCryptoListRendered = false;
+    var loginZipTickerRendered = false;
+    var loginZipTickerMeasured = false;
+
+    function syncZipTickerLayout() {
+        var wrap = document.querySelector('.zip-ticker-wrap');
+        var track = document.getElementById('loginZipTicker');
+        if (!wrap || !track) return;
+        wrap.classList.add('zip-ticker-wrap--scroll');
+        if (track.children.length === loginCryptoCoins.length) {
+            track.innerHTML = track.innerHTML + track.innerHTML;
+        } else if (track.children.length > loginCryptoCoins.length) {
+            var seen = {};
+            Array.prototype.slice.call(track.children).forEach(function (node) {
+                var sym = node.getAttribute && node.getAttribute('data-sym');
+                if (!sym || seen[sym]) node.remove();
+                else seen[sym] = true;
+            });
+            if (track.children.length === loginCryptoCoins.length) {
+                track.innerHTML = track.innerHTML + track.innerHTML;
+            }
+        }
+        function applyTickerShift() {
+            var half = Math.round(track.scrollWidth / 2);
+            if (half < 1) return;
+            track.style.setProperty('--zip-ticker-shift-px', half + 'px');
+            var durationSec = Math.max(24, Math.min(60, half / 28));
+            track.style.setProperty('--zip-ticker-duration', durationSec + 's');
+            track.style.animation = 'none';
+            track.style.webkitAnimation = 'none';
+            void track.offsetHeight;
+            track.style.removeProperty('animation');
+            track.style.removeProperty('-webkit-animation');
+        }
+        requestAnimationFrame(function () {
+            requestAnimationFrame(applyTickerShift);
+        });
+    }
+
+    function syncZipChromeBottom() {
+        if (!isZipLoginPage) return;
+        var dock = document.getElementById('loginZipDock');
+        var footer = document.querySelector('.zip-footer');
+        var nav = document.getElementById('zipNav');
+        var ticker = document.querySelector('.zip-ticker-wrap');
+        if (!dock) return;
+        var h = dock.offsetHeight + (footer ? footer.offsetHeight : 0);
+        document.documentElement.style.setProperty('--zip-chrome-bottom-px', h + 'px');
+        if (nav) {
+            document.documentElement.style.setProperty('--zip-nav-height-px', nav.offsetHeight + 'px');
+        }
+        if (ticker) {
+            var th = Math.ceil(ticker.getBoundingClientRect().height || ticker.offsetHeight || 0);
+            if (th >= 28) {
+                document.documentElement.style.setProperty('--zip-ticker-height-px', th + 'px');
+            }
+        }
+    }
+    window.syncZipChromeBottom = syncZipChromeBottom;
+
+    function renderZipTicker(data) {
+        var track = document.getElementById('loginZipTicker');
+        if (!track) return;
+        if (!loginZipTickerRendered) {
+            var items = '';
+            loginCryptoCoins.forEach(function (sym) {
+                items += '<span class="zip-ticker-item" data-sym="' + sym + '"><span class="zip-ticker-item__sym">' + sym + '/USDT</span><span class="zip-ticker-item__price">—</span><span class="zip-ticker-item__chg">—</span></span>';
+            });
+            track.innerHTML = items;
+            loginZipTickerRendered = true;
+            syncZipTickerLayout();
+            syncZipChromeBottom();
+        }
+        loginCryptoCoins.forEach(function (sym) {
+            var d = data[sym];
+            var prev = loginCryptoPrev[sym];
+            track.querySelectorAll('.zip-ticker-item[data-sym="' + sym + '"]').forEach(function (item) {
+                var priceEl = item.querySelector('.zip-ticker-item__price');
+                var chgEl = item.querySelector('.zip-ticker-item__chg');
+                var priceStr = '—';
+                var chgStr = '—';
+                var tickClass = '';
+                if (d) {
+                    var p = Number(d.price);
+                    priceStr = p >= 1
+                        ? p.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+                        : p.toPrecision(6);
+                    var chg = (d.priceChangePercent || 0);
+                    chgStr = (chg >= 0 ? '+' : '') + chg.toFixed(2) + '%';
+                    chgEl.className = 'zip-ticker-item__chg ' + (chg >= 0 ? 'up' : 'down');
+                    if (prev && String(prev.price) !== String(d.price)) {
+                        tickClass = Number(d.price) > Number(prev.price) ? 'tick-up' : 'tick-down';
+                    }
+                } else if (chgEl) {
+                    chgEl.className = 'zip-ticker-item__chg';
+                }
+                if (priceEl) priceEl.textContent = priceStr;
+                if (chgEl && d) chgEl.textContent = chgStr;
+                item.classList.remove('tick-up', 'tick-down');
+                if (tickClass) {
+                    item.classList.add(tickClass);
+                    item.addEventListener('animationend', function () { item.classList.remove('tick-up', 'tick-down'); }, { once: true });
+                }
+            });
+        });
+        if (!loginZipTickerMeasured && data && Object.keys(data).length) {
+            loginZipTickerMeasured = true;
+            syncZipTickerLayout();
+        }
+    }
+
     function renderCryptoList(data) {
+        renderZipTicker(data);
         var el = document.getElementById('loginCryptoList');
         if (!el) return;
         var isMobile = window.matchMedia && window.matchMedia('(max-width: 768px)').matches;
@@ -1148,6 +1476,19 @@
     function initCrypto() {
         fetchCrypto();
         cryptoIntervalId = setInterval(fetchCrypto, 2000);
+    }
+
+    window.addEventListener('resize', function () {
+        if (loginZipTickerRendered) syncZipTickerLayout();
+        syncZipChromeBottom();
+    });
+    window.addEventListener('load', function () {
+        if (loginZipTickerRendered) syncZipTickerLayout();
+    });
+    if (document.fonts && document.fonts.ready) {
+        document.fonts.ready.then(function () {
+            if (loginZipTickerRendered) syncZipTickerLayout();
+        });
     }
 
     /* Döviz ve altın – backend proxy (CORS yok) */
