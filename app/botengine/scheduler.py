@@ -82,8 +82,7 @@ class BotScheduler:
         jitter_ms = random.uniform(JITTER_MIN_MS, JITTER_MAX_MS)
         at = next_run_at + (jitter_ms / 1000.0)
         self._latest_next_run[bot_id] = at
-        with self._heap_lock:
-            heapq.heappush(self._heap, ScheduledBot(at, bot_id))
+        heapq.heappush(self._heap, ScheduledBot(at, bot_id))
 
     def unregister_bot(self, bot_id: int) -> None:
         self._registered.discard(bot_id)

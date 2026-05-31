@@ -4088,11 +4088,12 @@ async def bots_events(
         raise HTTPException(status_code=404, detail=_detail_err("NOT_FOUND", "Bot not found", rid))
     try:
         from app.services.binance_connectivity import sync_bot_connectivity_on_view
+        # force_probe=False: /health (bot sayfası) zaten prob yapar; ikinci 8s cüzdan çağrısı UI timeout + flicker üretir.
         await sync_bot_connectivity_on_view(
             db,
             bot,
             source="events_load" if after_id is None else "events_poll",
-            force_probe=(after_id is None),
+            force_probe=False,
         )
     except Exception as e:
         logger.debug("bots_events connectivity probe bot_id=%s: %s", bot.id, e)

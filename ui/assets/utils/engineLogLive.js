@@ -371,6 +371,23 @@
         return parts.length ? '?' + parts.join('&') : '';
     }
 
+    function unwrapEventsResponse(res) {
+        if (!res) return { events: [], connectivity_failure: null, connectivity_ok: true };
+        if (Array.isArray(res.events)) return res;
+        if (res.data && Array.isArray(res.data.events)) {
+            return {
+                events: res.data.events,
+                connectivity_failure: res.data.connectivity_failure || res.connectivity_failure,
+                connectivity_ok: res.data.connectivity_ok != null ? res.data.connectivity_ok : res.connectivity_ok
+            };
+        }
+        return res;
+    }
+
+    function hasLogTable(container) {
+        return !!(container && container.querySelector('table.engine-log-table'));
+    }
+
     /**
      * @param {object} opts — botId, accountId, accountCode, container, apiClient, state { events, lastId }, onAfterRender(events)
      * @param {boolean} incremental — after_id poll (no loading flash)
@@ -384,20 +401,23 @@
             url = '/api/bots-engine/' + opts.botId + '/events' + qBase +
                 (qBase ? '&' : '?') + 'limit=100&after_id=' + encodeURIComponent(state.lastId);
         } else {
-            if (!incremental && !(state.events && state.events.length)) {
+            if (!incremental && !(state.events && state.events.length) && !hasLogTable(opts.container)) {
                 opts._logBootstrapping = true;
-                var hasTable = opts.container.querySelector('table.engine-log-table');
                 var hasLoading = opts.container.querySelector('.engine-log-loading');
-                if (!hasTable && !hasLoading) {
+                if (!hasLoading) {
                     opts.container.innerHTML = '<div class="muted engine-log-loading" style="padding: 0.75rem;">Yükleniyor…</div>';
                 }
+            } else if (hasLogTable(opts.container)) {
+                opts._logBootstrapping = false;
             }
             opts._logForceTop = true;
             opts._logPinTop = true;
             url = '/api/bots-engine/' + opts.botId + '/events' + qBase +
                 (qBase ? '&' : '?') + 'limit=' + MAX_EVENTS;
         }
-        return opts.apiClient.get(url).then(function (res) {
+        var reqOpts = { timeout: opts.fetchTimeoutMs || 35000 };
+        return opts.apiClient.get(url, reqOpts).then(function (res) {
+            res = unwrapEventsResponse(res);
             opts._failCount = 0;
             opts.connectivityFailure = (res && res.connectivity_failure) ? res.connectivity_failure : null;
             if (typeof global !== 'undefined') {
@@ -432,17 +452,28 @@
             return state.events;
         }).catch(function (err) {
             opts._failCount = (opts._failCount || 0) + 1;
+            opts._logBootstrapping = false;
+            var hadTable = hasLogTable(opts.container);
             if (!incremental) {
-                var retryBtn = opts._failCount < 3
-                    ? ' <button type="button" class="btn btn-sm" data-engine-log-retry style="margin-left:0.5rem;">Tekrar dene</button>'
-                    : '';
-                opts.container.innerHTML = '<div class="muted" style="padding: 0.75rem;">Loglar yüklenemedi.' + retryBtn + '</div>';
-                var retryEl = opts.container.querySelector('[data-engine-log-retry]');
-                if (retryEl) {
-                    retryEl.onclick = function () {
-                        opts._failCount = 0;
-                        fetchAndRender(opts, false);
-                    };
+                if (!hadTable) {
+                    var retryBtn = opts._failCount < 3
+                        ? ' <button type="button" class="btn btn-sm" data-engine-log-retry style="margin-left:0.5rem;">Tekrar dene</button>'
+                        : '';
+                    var errHint = (err && err.message) ? (' ' + String(err.message).slice(0, 120)) : '';
+                    opts.container.innerHTML = '<div class="muted" style="padding: 0.75rem;">Loglar yüklenemedi.' + errHint + retryBtn + '</div>';
+                    var retryEl = opts.container.querySelector('[data-engine-log-retry]');
+                    if (retryEl) {
+                        retryEl.onclick = function () {
+                            opts._failCount = 0;
+                            fetchAndRender(opts, false);
+                        };
+                    }
+                } else if (!opts.container.querySelector('.engine-log-fetch-error')) {
+                    var note = document.createElement('div');
+                    note.className = 'muted engine-log-fetch-error';
+                    note.style.cssText = 'padding:0.5rem 0.75rem;color:#f6465d;font-size:0.8rem;';
+                    note.textContent = 'Log yenilenemedi — önceki kayıtlar gösteriliyor.';
+                    opts.container.insertBefore(note, opts.container.firstChild);
                 }
             } else if (opts._failCount >= 2 && typeof opts.onPollError === 'function') {
                 opts.onPollError(opts._failCount);

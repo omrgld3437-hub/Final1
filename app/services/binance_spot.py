@@ -184,29 +184,66 @@ class CircuitBreaker:
 
 
 # Binance server time cache (avoid -1021 timestamp outside recvWindow)
-_binance_time_cache: Dict[bool, Tuple[int, float]] = {}  # testnet -> (server_time_ms, local_ts)
+_binance_time_cache: Dict[bool, Tuple[int, float, float]] = {}  # testnet -> (server_ms, wall_ts, mono_ts)
+_binance_time_offset_ms: Dict[bool, float] = {}  # testnet -> (server_ms - local_ms) at last sync
 _BINANCE_TIME_CACHE_TTL = 30.0  # seconds
 _BINANCE_TIME_STALE_MAX_SEC = 120.0  # extrapolate stale cache before local-ms fallback
 _BINANCE_TIME_FETCH_TIMEOUT = httpx.Timeout(15.0, connect=5.0)
 _BINANCE_TIME_WARN_THROTTLE_SEC = 300.0
 _binance_time_warn_last = 0.0
-_MAX_CLOCK_RETRIES = 2
+_MAX_CLOCK_RETRIES = 4
+_BINANCE_TS_SAFETY_MS = 300  # imza timestamp'i Binance sunucu saatinden biraz geride (ileri sapma -1021)
+
+
+def _coerce_binance_code(raw: Any) -> Optional[int]:
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_binance_error_body(body: str) -> Tuple[Optional[int], str]:
+    if not body:
+        return None, ""
+    try:
+        data = json.loads(body)
+        if isinstance(data, dict):
+            return _coerce_binance_code(data.get("code")), str(data.get("msg") or "")
+    except Exception:
+        pass
+    return None, ""
 
 
 def _read_binance_time_from_cache(testnet: bool, *, max_age_sec: float) -> Optional[int]:
-    """Extrapolate cached server time; None if missing or older than max_age_sec."""
+    """Extrapolate cached server time; None if missing or older than max_age_sec.
+    Age uses monotonic clock so NTP wall-clock jumps do not skew the timestamp."""
     cached = _binance_time_cache.get(testnet)
     if not cached:
         return None
-    server_ms, local_ts = cached
-    age = time.time() - local_ts
-    if age > max_age_sec:
+    if len(cached) >= 3:
+        server_ms, _wall_ts, mono_ts = cached[0], cached[1], cached[2]
+        age = time.monotonic() - mono_ts
+    else:
+        server_ms, wall_ts = cached[0], cached[1]
+        age = time.time() - wall_ts
+    if age > max_age_sec or age < 0:
         return None
     return int(server_ms + age * 1000)
 
 
 def _store_binance_time_cache(testnet: bool, server_ms: int) -> None:
-    _binance_time_cache[testnet] = (server_ms, time.time())
+    _binance_time_cache[testnet] = (server_ms, time.time(), time.monotonic())
+    _binance_time_offset_ms[testnet] = float(server_ms - int(time.time() * 1000))
+
+
+def _fallback_timestamp_ms(testnet: bool) -> int:
+    """Local wall clock adjusted by last known Binance offset (when /time fetch fails)."""
+    off = _binance_time_offset_ms.get(testnet)
+    if off is not None:
+        return int(time.time() * 1000 + off)
+    return int(time.time() * 1000)
 
 
 def _log_binance_time_unavailable(reason: Optional[BaseException] = None) -> None:
@@ -224,7 +261,7 @@ def _log_binance_time_unavailable(reason: Optional[BaseException] = None) -> Non
 
 
 def invalidate_binance_time_cache(testnet: Optional[bool] = None) -> None:
-    """Clear cached Binance server time. testnet=None clears both."""
+    """Clear cached Binance server time. testnet=None clears both. Offset kept for fallback."""
     if testnet is None:
         _binance_time_cache.clear()
     else:
@@ -517,7 +554,7 @@ async def _get_binance_timestamp(
         stale = _read_binance_time_from_cache(testnet, max_age_sec=_BINANCE_TIME_STALE_MAX_SEC)
         if stale is not None:
             return stale
-        return int(time.time() * 1000)
+        return _fallback_timestamp_ms(testnet)
     base = _base_url(testnet)
     url = f"{base}/api/v3/time"
     last_exc: Optional[BaseException] = None
@@ -548,7 +585,7 @@ async def _get_binance_timestamp(
     if stale is not None:
         return stale
     _log_binance_time_unavailable(last_exc)
-    return int(time.time() * 1000)
+    return _fallback_timestamp_ms(testnet)
 
 
 def _path_weight(path: str, method: str, params: Optional[Dict[str, Any]] = None) -> int:
@@ -608,7 +645,8 @@ async def _build_signed_request(
     """Build url/headers/request_kw for a signed Binance call. Timestamp refreshed each call."""
     testnet = getattr(keys, "testnet", False)
     params = dict(base_params)
-    params["timestamp"] = await _get_binance_timestamp(client, testnet, force_refresh=force_refresh_time)
+    ts = await _get_binance_timestamp(client, testnet, force_refresh=force_refresh_time)
+    params["timestamp"] = max(0, int(ts) - _BINANCE_TS_SAFETY_MS)
     params["recvWindow"] = 60000
     params_str = {k: str(v) for k, v in params.items()}
     query_for_sign = "&".join(f"{k}={v}" for k, v in sorted(params_str.items()))
@@ -686,6 +724,24 @@ async def _signed_request_impl(
                     backoff *= BACKOFF_MULTIPLIER
                     continue
                 r.raise_for_status()
+            if r.status_code >= 400:
+                try:
+                    err_body = (r.text or "")[:500]
+                except Exception:
+                    err_body = ""
+                err_code, err_msg = _parse_binance_error_body(err_body)
+                if err_code == -1021 and clock_retries < _MAX_CLOCK_RETRIES:
+                    clock_retries += 1
+                    invalidate_binance_time_cache(testnet)
+                    fresh = await _get_binance_timestamp(client, testnet, force_refresh=True)
+                    logger.info(
+                        "BINANCE_CLOCK_RETRY path=%s attempt=%s/%s status=%s fresh_server_ms=%s local_skew_ms=%s",
+                        path, clock_retries, _MAX_CLOCK_RETRIES, r.status_code, fresh,
+                        fresh - int(time.time() * 1000),
+                    )
+                    continue
+                if err_code == -2013:
+                    raise BinanceSignedError(-2013, err_msg, {})
             r.raise_for_status()
             data = r.json()
             elapsed_ms = (time.perf_counter() - t0_req) * 1000
@@ -703,9 +759,11 @@ async def _signed_request_impl(
                 if code == -1021 and clock_retries < _MAX_CLOCK_RETRIES:
                     clock_retries += 1
                     invalidate_binance_time_cache(testnet)
+                    skew = await _get_binance_timestamp(client, testnet, force_refresh=True)
                     logger.info(
-                        "BINANCE_CLOCK_RETRY path=%s attempt=%s/%s",
-                        path, clock_retries, _MAX_CLOCK_RETRIES,
+                        "BINANCE_CLOCK_RETRY path=%s attempt=%s/%s fresh_server_ms=%s local_skew_ms=%s",
+                        path, clock_retries, _MAX_CLOCK_RETRIES, skew,
+                        skew - int(time.time() * 1000),
                     )
                     continue
                 if code in (-2015, -2008):
@@ -731,28 +789,30 @@ async def _signed_request_impl(
                 body = ""
             sc = getattr(e.response, "status_code", None)
             try:
-                b = json.loads(body) if body else {}
-                code = isinstance(b, dict) and b.get("code")
-                msg = (isinstance(b, dict) and b.get("msg")) or ""
+                err_code, err_msg = _parse_binance_error_body(body)
+                code = err_code
+                msg = err_msg
                 is_invalid_key = (
                     sc == 401
                     or (sc == 400 and code in (-2015, -2008))
                 )
                 if sc == 400 and code == -2013:
-                    raise BinanceSignedError(int(code), str(msg), b if isinstance(b, dict) else {})
+                    raise BinanceSignedError(int(code), str(msg), {})
                 if sc == 400 and code == -1021 and clock_retries < _MAX_CLOCK_RETRIES:
                     clock_retries += 1
                     invalidate_binance_time_cache(testnet)
+                    fresh = await _get_binance_timestamp(client, testnet, force_refresh=True)
                     logger.info(
-                        "BINANCE_CLOCK_RETRY path=%s attempt=%s/%s status=400",
-                        path, clock_retries, _MAX_CLOCK_RETRIES,
+                        "BINANCE_CLOCK_RETRY path=%s attempt=%s/%s status=400 fresh_server_ms=%s local_skew_ms=%s",
+                        path, clock_retries, _MAX_CLOCK_RETRIES, fresh,
+                        fresh - int(time.time() * 1000),
                     )
                     continue
             except BinanceSignedError:
                 raise
             except Exception:
-                b = {}
                 code = None
+                msg = ""
                 is_invalid_key = sc == 401
             if is_invalid_key:
                 logger.debug(
@@ -1332,7 +1392,7 @@ def _get_binance_timestamp_sync(testnet: bool, force_refresh: bool = False) -> i
         stale = _read_binance_time_from_cache(testnet, max_age_sec=_BINANCE_TIME_STALE_MAX_SEC)
         if stale is not None:
             return stale
-        return int(time.time() * 1000)
+        return _fallback_timestamp_ms(testnet)
     base = _base_url(testnet)
     last_exc: Optional[BaseException] = None
     for attempt in range(3):
@@ -1358,7 +1418,7 @@ def _get_binance_timestamp_sync(testnet: bool, force_refresh: bool = False) -> i
     if stale is not None:
         return stale
     _log_binance_time_unavailable(last_exc)
-    return int(time.time() * 1000)
+    return _fallback_timestamp_ms(testnet)
 
 
 def _sync_signed_request(method: str, path: str, keys: Any, params: Optional[Dict[str, Any]] = None) -> Any:
@@ -1373,7 +1433,8 @@ def _sync_signed_request(method: str, path: str, keys: Any, params: Optional[Dic
     clock_retries = 0
     for attempt in range(MAX_RETRIES + 1):
         params = dict(base_params)
-        params["timestamp"] = _get_binance_timestamp_sync(testnet, force_refresh=clock_retries > 0)
+        ts = _get_binance_timestamp_sync(testnet, force_refresh=clock_retries > 0)
+        params["timestamp"] = max(0, int(ts) - _BINANCE_TS_SAFETY_MS)
         params["recvWindow"] = 60000
         params_str = {k: str(v) for k, v in params.items()}
         query_for_sign = "&".join(f"{k}={v}" for k, v in sorted(params_str.items()))
@@ -1397,9 +1458,21 @@ def _sync_signed_request(method: str, path: str, keys: Any, params: Optional[Dic
                 if attempt < MAX_RETRIES:
                     time.sleep(INITIAL_BACKOFF * (BACKOFF_MULTIPLIER ** attempt))
                     continue
+            if r.status_code >= 400:
+                err_code, err_msg = _parse_binance_error_body((r.text or "")[:500])
+                if err_code == -1021 and clock_retries < _MAX_CLOCK_RETRIES:
+                    clock_retries += 1
+                    invalidate_binance_time_cache(testnet)
+                    logger.info(
+                        "BINANCE_CLOCK_RETRY sync path=%s attempt=%s/%s status=%s",
+                        path, clock_retries, _MAX_CLOCK_RETRIES, r.status_code,
+                    )
+                    continue
+                if err_code == -2013:
+                    raise BinanceSignedError(-2013, err_msg, {})
             r.raise_for_status()
             data = r.json()
-            code = data.get("code", 0) if isinstance(data, dict) else 0
+            code = _coerce_binance_code(data.get("code", 0) if isinstance(data, dict) else 0) or 0
             if code == -1021 and clock_retries < _MAX_CLOCK_RETRIES:
                 clock_retries += 1
                 invalidate_binance_time_cache(testnet)

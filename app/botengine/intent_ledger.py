@@ -76,11 +76,13 @@ def build_client_order_id(
     epoch_ms: Optional[int] = None,
     run_id: Optional[str] = None,
 ) -> str:
-    """Deterministic client_order_id including run_id to avoid restart collision. Max 36 chars (Binance limit)."""
+    """Deterministic client_order_id. Include run_id only when provided. Max 36 chars (Binance limit)."""
     ih = _intent_hash(symbol, side, qty, quote_qty, reason, grid_index)
     ts = epoch_ms or int(time.time() * 1000)
-    rid = _run_id_segment(run_id)
-    return f"b{bot_id}r{rid}c{cycle_id}i{ih}{ts}"[:36]
+    if run_id is not None and str(run_id).strip():
+        rid = _run_id_segment(run_id)
+        return f"b{bot_id}r{rid}c{cycle_id}i{ih}{ts}"[:36]
+    return f"b{bot_id}c{cycle_id}i{ih}{ts}"[:36]
 
 
 def build_intent_id(
@@ -95,12 +97,14 @@ def build_intent_id(
     strategy_action_hash: Optional[str] = None,
     run_id: Optional[str] = None,
 ) -> str:
-    """Deterministic intent_id including run_id so restarts cannot collide with previous run's intents."""
+    """Deterministic intent_id. Include run_id when present so restarts cannot collide."""
     ih = _intent_hash(symbol, side, qty, quote_qty, reason, grid_index)
     if strategy_action_hash:
         ih = hashlib.sha256((ih + strategy_action_hash).encode()).hexdigest()[:16]
-    rid = (str(run_id or "").strip() or "0")[:32]
-    return f"bot{bot_id}_r{rid}_cy{cycle_id}_it{ih}"
+    if run_id is not None and str(run_id).strip():
+        rid = str(run_id).strip()[:32]
+        return f"bot{bot_id}_r{rid}_cy{cycle_id}_it{ih}"
+    return f"bot{bot_id}_cy{cycle_id}_it{ih}"
 
 
 def upsert_intent(

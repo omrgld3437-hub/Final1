@@ -20,7 +20,7 @@ python -m manager_server
 | `state.py` | PID, log ring (kilitli), gürültü filtresi (deque race, TradeSync cache, emilen `BOT_*_EXCEPTION` / lease skip / fiyat yok; web tail: HTTP 200 access + `AUTH_VALIDATE outcome=OK`); helper spawn; IP engel listesi (`.run/blocked_ips.json`); **sistem çalışması** kronometresi (`.run/session.started_at` — yalnızca manager süreci yeniden başlayınca sıfırlanır; global start/stop/restart etkilemez); `schedule_global_action` → `global _global_action_running` (UnboundLocalError önlemi); manager tam restart → `scripts/runtime/manager_reboot.py`; özet kart **Saatlik tick / istek** (`ticks_last_60m`, son 60 dk): manager/html = metrics poll; **web** = `request_total` artışı (HTTP, UI etiketi **Saatlik istek**; web PID değişince sayaç sıfırlanır + `web.started_at` alt sınır); engine = `engine.metrics.json`; web proc’da `requests_per_min` tooltip |
 | `issue_file_store.py` | Olay Merkezi dosya deposu (`.run/issues/`) |
 | `reason_engine.py` | Durum açıklama |
-| `ui/` | manager.js, logHumanize.js, index.html — özet kartları (Saatlik tick satırı); header toplu start/stop/restart (`is-busy` yalnız global düğmeler; stuck heal + 90s watchdog) |
+| `ui/` | manager.js, logHumanize.js (v27: `[BinanceWS]` / `root` şablonları; emir hatası yanlış eşleşme düzeltildi), index.html — özet kartları (Saatlik tick satırı); header toplu start/stop/restart (`is-busy` yalnız global düğmeler; stuck heal + 90s watchdog) |
 
 ## Güvenlik
 

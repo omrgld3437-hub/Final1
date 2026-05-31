@@ -210,7 +210,6 @@ async def get_spot_quick_data(
                 from app.services.wallet_display import build_test_account_wallet
                 from app.services.test_spot_paper import spot_balances_from_wallet
                 from app.services.market_data import get_ticker_24h
-                from app.botengine.virtual_wallet import get_bot_locked_balances_for_account
 
                 wallet = build_test_account_wallet(account_id, db)
                 bot_locked = get_bot_locked_balances_for_account(db, account_id) or {}

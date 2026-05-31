@@ -187,7 +187,9 @@
             var data = res && res.data;
             if (!ok || !data) {
                 renderHome.showUpdatingBadge(false);
-                if (typeof window.markWalletLiveFetchFailed === 'function') window.markWalletLiveFetchFailed();
+                if (typeof window.markWalletLiveFetchFailed === 'function') {
+                    window.markWalletLiveFetchFailed(data.last_error_code || (data.error && data.error.error_code));
+                }
                 return;
             }
             if (data.inflight) {
@@ -207,18 +209,17 @@
                     wallet_cached_at: data.wallet_live_at
                 });
             } else if (data.wallet_error || (data.error && data.error.error_code)) {
-                if (typeof window.markWalletLiveFetchFailed === 'function') window.markWalletLiveFetchFailed();
-                if (typeof window.updateKpiCuzdanLiveStatus === 'function') window.updateKpiCuzdanLiveStatus();
-                notifyWalletRefreshFailure(data.last_error_code || (data.error && data.error.error_code));
+                var err0 = data.last_error_code || (data.error && data.error.error_code);
+                if (typeof window.markWalletLiveFetchFailed === 'function') window.markWalletLiveFetchFailed(err0);
+                notifyWalletRefreshFailure(err0);
             } else if (data.stale && data.last_error_code) {
-                if (typeof window.markWalletLiveFetchFailed === 'function') window.markWalletLiveFetchFailed();
-                if (typeof window.updateKpiCuzdanLiveStatus === 'function') window.updateKpiCuzdanLiveStatus();
+                if (typeof window.markWalletLiveFetchFailed === 'function') window.markWalletLiveFetchFailed(data.last_error_code);
                 notifyWalletRefreshFailure(data.last_error_code);
             }
         }).catch(function () {
             clearRefreshLock(accountId);
             renderHome.showUpdatingBadge(false);
-            if (typeof window.markWalletLiveFetchFailed === 'function') window.markWalletLiveFetchFailed();
+            if (typeof window.markWalletLiveFetchFailed === 'function') window.markWalletLiveFetchFailed('BINANCE_UNREACHABLE');
             if (typeof window.updateKpiCuzdanLiveStatus === 'function') window.updateKpiCuzdanLiveStatus();
             notifyWalletRefreshFailure('BINANCE_UNREACHABLE');
         });
@@ -236,11 +237,15 @@
         var msg = 'Cüzdan canlı yenilenemedi.';
         if (c === 'BINANCE_TIMEOUT' || c === 'BINANCE_UNREACHABLE') {
             msg = 'Binance\'e bağlanılamadı. Ayarlar → Sunucu dış IP\'yi API beyaz listesine ekleyin (kendi bilgisayar IP\'niz değil).';
-        } else if (c === 'API_UNAUTHORIZED' || c.indexOf('KEY') >= 0 || c.indexOf('401') >= 0) {
-            msg = 'Binance API anahtarı veya IP beyaz liste hatalı. Sunucu dış IP + Spot izinlerini kontrol edin.';
+        } else if (c === 'API_UNAUTHORIZED' || c.indexOf('KEY') >= 0 || c.indexOf('401') >= 0 || c.indexOf('2015') >= 0) {
+            msg = 'Binance 401: API anahtarı veya IP beyaz liste. Ayarlar → Sunucu dış IP (PC IP değil) + Spot izinleri.';
         } else if (c === 'BINANCE_RATE_LIMIT' || c === 'BINANCE_IP_BANNED') {
             msg = 'Binance istek limiti; birkaç dakika bekleyip sayfayı yenileyin.';
         } else if (c === 'CLOCK_DRIFT') {
+            if (typeof window.maybeToastConnectivityWarning === 'function') {
+                window.maybeToastConnectivityWarning({ error_code: 'CLOCK_DRIFT' });
+                return;
+            }
             msg = 'Sunucu saati Binance ile uyuşmuyor (-1021). macOS: sudo sntp -sS time.apple.com';
         }
         try { window.Toast.warning(msg); } catch (e) {}

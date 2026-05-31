@@ -28,8 +28,15 @@ logger = logging.getLogger(__name__)
 
 # Admin spot balance 401/API error log throttle: hesap basina en fazla 5 dkda bir
 _admin_spot_balance_error_ts: Dict[int, float] = {}
-_admin_spot_balance_error_lock = asyncio.Lock()
+_admin_spot_balance_error_lock: Optional[asyncio.Lock] = None
 _ADMIN_SPOT_ERROR_THROTTLE_SEC = 300.0
+
+
+def _get_admin_spot_balance_error_lock() -> asyncio.Lock:
+    global _admin_spot_balance_error_lock
+    if _admin_spot_balance_error_lock is None:
+        _admin_spot_balance_error_lock = asyncio.Lock()
+    return _admin_spot_balance_error_lock
 
 
 async def _get_account_wallet_strip_kpis(account_id: int, db: Session) -> tuple:
@@ -75,7 +82,7 @@ async def _get_account_wallet_strip_kpis(account_id: int, db: Session) -> tuple:
         return (0.0, 0.0, "error")
     except Exception as e:
         now = time.time()
-        async with _admin_spot_balance_error_lock:
+        async with _get_admin_spot_balance_error_lock():
             last = _admin_spot_balance_error_ts.get(account_id)
             if last is None or (now - last) >= _ADMIN_SPOT_ERROR_THROTTLE_SEC:
                 _admin_spot_balance_error_ts[account_id] = now
@@ -1137,4 +1144,3 @@ async def delete_admin_popup(
     db.delete(popup)
     db.commit()
     return {"success": True, "message": "Pop-up kaldırıldı."}
-

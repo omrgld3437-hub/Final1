@@ -3146,14 +3146,30 @@ function markWalletLiveFetchOk() {
     _walletPanelStaleFailureAt = 0;
     _walletStaleUi.wasStale = false;
     _walletStaleUi.liveSince = null;
+    if (typeof State !== 'undefined') State.walletLastErrorCode = null;
+    if (assetsState.wallet && assetsState.wallet.error) {
+        assetsState.wallet.error = null;
+    }
     cancelWalletPanelStaleBadgeTimer();
     if (typeof syncWalletPanelStatusBadges === 'function') syncWalletPanelStatusBadges();
 }
 window.markWalletLiveFetchOk = markWalletLiveFetchOk;
 
-function markWalletLiveFetchFailed() {
+function markWalletLiveFetchFailed(errorCode) {
     _walletLiveFailedAt = Date.now();
+    var code = errorCode ? String(errorCode).toUpperCase() : '';
+    if (code && typeof State !== 'undefined') State.walletLastErrorCode = code;
+    if (code && assetsState.wallet) {
+        assetsState.wallet.error = {
+            message: assetsState.wallet.error && assetsState.wallet.error.message
+                ? assetsState.wallet.error.message
+                : 'Canlı cüzdan yenilenemedi',
+            error_code: code
+        };
+        assetsState.wallet.status = 'error';
+    }
     scheduleWalletPanelStaleBadgeAfterFailure();
+    if (typeof updateKpiCuzdanLiveStatus === 'function') updateKpiCuzdanLiveStatus();
 }
 window.markWalletLiveFetchFailed = markWalletLiveFetchFailed;
 
@@ -3177,12 +3193,31 @@ function isWalletDataLive() {
 }
 window.isWalletDataLive = isWalletDataLive;
 
+function walletErrorCode() {
+    if (typeof State !== 'undefined' && State.walletLastErrorCode) {
+        return String(State.walletLastErrorCode).toUpperCase();
+    }
+    var e = assetsState.wallet && assetsState.wallet.error;
+    if (!e) return '';
+    return String(e.error_code || '').toUpperCase();
+}
+window.walletErrorCode = walletErrorCode;
+
+/** Stale KPI rozeti: CLOCK_DRIFT için kısa etiket. */
+function walletStaleStatusText() {
+    var code = walletErrorCode();
+    if (code === 'CLOCK_DRIFT') return 'Saat senkronu';
+    if (code === 'API_UNAUTHORIZED' || code.indexOf('KEY') >= 0) return 'API / IP';
+    return 'Güncel değil';
+}
+window.walletStaleStatusText = walletStaleStatusText;
+
 /** Cüzdan durum etiketi (iç mantık; UI'da Canlı gösterilmez). */
 function walletLiveStatusLabel() {
     if (typeof State !== 'undefined' && State.isTestAccount) return 'Test';
     if (assetsState.wallet.keys_configured !== true) return 'Bağlı değil';
     if (isWalletDataLive()) return 'Canlı';
-    return 'Güncel değil';
+    return walletStaleStatusText();
 }
 window.walletLiveStatusLabel = walletLiveStatusLabel;
 
@@ -3259,13 +3294,34 @@ function applyWalletStaleWarningEl(el) {
         return;
     }
     el.hidden = false;
-    el.textContent = 'Güncel değil';
+    el.textContent = walletStaleStatusText();
     el.classList.toggle('kpi-spot-status--stale', true);
     el.classList.toggle('kpi-spot-status--live', false);
     el.classList.toggle('kpi-spot-status--offline', false);
     el.classList.toggle('kpi-spot-status--test', false);
+    if (walletErrorCode() === 'CLOCK_DRIFT') {
+        el.classList.toggle('kpi-spot-status--clock', true);
+    } else {
+        el.classList.remove('kpi-spot-status--clock');
+    }
 }
 window.applyWalletStaleWarningEl = applyWalletStaleWarningEl;
+
+var _clockDriftToastAt = 0;
+var CLOCK_DRIFT_TOAST_DEBOUNCE_MS = 120000;
+
+/** CLOCK_DRIFT uyarısını en fazla 2 dk'da bir göster; diğer kodlar normal toast. */
+function maybeToastConnectivityWarning(d) {
+    if (typeof window.Toast === 'undefined' || !window.Toast.warning) return;
+    var code = String((d && (d.error_code || d.wallet_last_error_code)) || '').toUpperCase();
+    if (code === 'CLOCK_DRIFT') {
+        var now = Date.now();
+        if (now - _clockDriftToastAt < CLOCK_DRIFT_TOAST_DEBOUNCE_MS) return;
+        _clockDriftToastAt = now;
+    }
+    window.Toast.warning(connectivityCheckToastMessage(d));
+}
+window.maybeToastConnectivityWarning = maybeToastConnectivityWarning;
 
 function connectivityCheckToastMessage(d) {
     if (!d) return 'Binance bağlantısı kontrol edilemedi.';
@@ -3317,12 +3373,20 @@ function recoverDashboardAfterConnectivity(opts) {
             .then(function (res) {
                 var d = res && res.data;
                 if (!d || typeof window.Toast === 'undefined') return;
+                var errCode = String(d.error_code || d.wallet_last_error_code || '').toUpperCase();
+                if (errCode && typeof State !== 'undefined') State.walletLastErrorCode = errCode;
+                if (typeof updateKpiCuzdanLiveStatus === 'function') updateKpiCuzdanLiveStatus();
                 if (d.connectivity_ok && window.Toast.success) {
                     window.Toast.success('Binance bağlantısı kuruldu.');
+                    if (typeof State !== 'undefined') State.walletLastErrorCode = null;
                     if (typeof markWalletLiveFetchOk === 'function') markWalletLiveFetchOk();
                     return;
                 }
-                if (window.Toast.warning) window.Toast.warning(connectivityCheckToastMessage(d));
+                if (typeof maybeToastConnectivityWarning === 'function') {
+                    maybeToastConnectivityWarning(d);
+                } else if (window.Toast.warning) {
+                    window.Toast.warning(connectivityCheckToastMessage(d));
+                }
             })
             .catch(function () {});
     }

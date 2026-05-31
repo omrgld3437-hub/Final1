@@ -90,18 +90,42 @@ def _classify_binance_error(exc: Exception) -> Tuple[str, str]:
     resp = getattr(exc, "response", None)
     sc = getattr(resp, "status_code", None) if resp else None
     code_attr = getattr(exc, "code", None)
-    if code_attr == -1021 or "-1021" in s or ("timestamp" in s and "recvwindow" in s):
+    body = ""
+    if resp is not None:
+        try:
+            body = (getattr(resp, "text", None) or "")[:500]
+        except Exception:
+            body = ""
+    try:
+        from app.services.binance_spot import _parse_binance_error_body
+        binance_code, _ = _parse_binance_error_body(body)
+    except Exception:
+        binance_code = None
+    if (
+        sc in (401, 403)
+        or binance_code in (-2015, -2008)
+        or code_attr in (-2015, -2008)
+        or "-2015" in s
+        or "-2008" in s
+        or "invalid api-key" in body.lower()
+    ):
+        return (
+            "API_UNAUTHORIZED",
+            "Binance API anahtarı geçersiz veya IP beyaz listesinde değil (401/-2015).",
+        )
+    body_l = body.lower()
+    if (
+        code_attr == -1021
+        or binance_code == -1021
+        or "-1021" in body
+        or (body_l and "timestamp" in body_l and ("recvwindow" in body_l or "outside" in body_l))
+    ):
         try:
             from app.services.binance_spot import clock_sync_hint
             hint = clock_sync_hint()
         except Exception:
             hint = "Sunucu saatini NTP ile senkronize edin."
         return ("CLOCK_DRIFT", f"Sunucu saati Binance ile uyuşmuyor (-1021). {hint}")
-    if sc in (401, 403) or "401" in s or "unauthorized" in s or "-2015" in s or "invalid api-key" in s:
-        return (
-            "API_UNAUTHORIZED",
-            "Binance API anahtarı geçersiz veya IP beyaz listesinde değil (401/-2015).",
-        )
     if sc in (429, 418) or "rate limit" in s:
         return ("BINANCE_RATE_LIMIT", "Binance istek limiti aşıldı; kısa süre sonra tekrar denenecek.")
     if isinstance(exc, asyncio.TimeoutError) or "timeout" in s:

@@ -11,11 +11,18 @@ logger = logging.getLogger(__name__)
 
 # Per-bot lock: same bot cannot send two orders concurrently.
 _bot_locks: Dict[int, asyncio.Lock] = {}
-_lock_mu = asyncio.Lock()
+_lock_mu: Optional[asyncio.Lock] = None
+
+
+def _get_lock_mu() -> asyncio.Lock:
+    global _lock_mu
+    if _lock_mu is None:
+        _lock_mu = asyncio.Lock()
+    return _lock_mu
 
 
 async def acquire_bot_lock(bot_id: int) -> asyncio.Lock:
-    async with _lock_mu:
+    async with _get_lock_mu():
         if bot_id not in _bot_locks:
             _bot_locks[bot_id] = asyncio.Lock()
         return _bot_locks[bot_id]

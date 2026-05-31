@@ -1091,7 +1091,11 @@ async def http_exception_handler(request: Request, exc: HTTPException):
                     db.close()
             except Exception as e:
                 logger.warning("http_exception_handler persist failed: %s", e)
-    return JSONResponse(status_code=exc.status_code, content=exc.detail if isinstance(exc.detail, dict) else {"detail": exc.detail})
+    if isinstance(exc.detail, dict):
+        content = {"detail": exc.detail, **exc.detail}
+    else:
+        content = {"detail": exc.detail}
+    return JSONResponse(status_code=exc.status_code, content=content)
 
 
 # API routes

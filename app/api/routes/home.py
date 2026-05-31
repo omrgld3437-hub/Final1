@@ -224,14 +224,26 @@ def _get_prices_minimal_sync() -> Dict[str, Any]:
 
 
 async def _get_kpis_minimal(account_id: int, db: Session) -> Dict[str, Any]:
-    """Async wrapper: run DB-heavy KPI fetch in thread."""
+    """Async wrapper: run DB-heavy KPI fetch in a separate DB session/thread."""
     loop = asyncio.get_running_loop()
     try:
-        from app.services.dashboard_snapshot import fetch_bots_and_account_kpis, fetch_finance_pnl
-        bots_raw, pnl_raw = await asyncio.gather(
-            fetch_bots_and_account_kpis(account_id, db),
-            fetch_finance_pnl(account_id, db),
-        )
+        def _sync_fetch() -> Tuple[Dict[str, Any], Dict[str, Any]]:
+            from app.db.base import SessionLocal
+            from app.services.dashboard_snapshot import fetch_bots_and_account_kpis, fetch_finance_pnl
+
+            local_db = SessionLocal()
+            try:
+                async def _run():
+                    return await asyncio.gather(
+                        fetch_bots_and_account_kpis(account_id, local_db),
+                        fetch_finance_pnl(account_id, local_db),
+                    )
+
+                return asyncio.run(_run())
+            finally:
+                local_db.close()
+
+        bots_raw, pnl_raw = await loop.run_in_executor(None, _sync_fetch)
     except Exception as e:
         logger.debug("[home] get_kpis_minimal error: %s", e)
         return {}
@@ -282,7 +294,7 @@ async def home_fast(
     current: dict = Depends(require_auth),
 ):
     """
-    Fast homepage payload: NO Binance. Cached prices + minimal KPIs + last wallet snapshot.
+    Fast homepage payload: cached prices + minimal KPIs + last wallet snapshot.
     Contract: { ok, data, meta } with meta.request_id, server_ms, payload_bytes, cache, stale, generated_at.
     """
     t0 = time.perf_counter()
@@ -347,14 +359,16 @@ async def home_fast(
             }
 
     # Build payload: prices (DataHub only), KPIs (DB), wallet_cached (DB)
-    prices = await asyncio.get_running_loop().run_in_executor(None, _get_prices_minimal_sync)
-    prices_ready = bool(prices)
-
-    wallet_cached, wallet_cached_at = await asyncio.get_running_loop().run_in_executor(
+    loop = asyncio.get_running_loop()
+    prices_task = loop.run_in_executor(None, _get_prices_minimal_sync)
+    wallet_task = loop.run_in_executor(
         None,
         lambda: _get_wallet_cached_enriched_with_new_session(account_id, max_assets),
     )
-    kpis = await _get_kpis_minimal(account_id, db)
+    kpis_task = asyncio.create_task(_get_kpis_minimal(account_id, db))
+    prices, wallet_result, kpis = await asyncio.gather(prices_task, wallet_task, kpis_task)
+    prices_ready = bool(prices)
+    wallet_cached, wallet_cached_at = wallet_result
     inflight = _is_wallet_refresh_inflight(account_id)
 
     data = {
@@ -425,18 +439,54 @@ def _is_rate_limit_error(e: Exception) -> bool:
     return False
 
 
-def _is_clock_drift_error(e: Exception) -> bool:
+def _binance_error_response_body(e: Exception) -> str:
+    resp = getattr(e, "response", None)
+    if resp is None:
+        return ""
     try:
-        from app.services.binance_spot import BinanceSignedError
-        if isinstance(e, BinanceSignedError) and e.code == -1021:
+        return (getattr(resp, "text", None) or "")[:500]
+    except Exception:
+        return ""
+
+
+def _is_api_unauthorized_error(e: Exception) -> bool:
+    """401 / -2015 / -2008 — not clock drift (signed URL contains recvWindow= and must not match)."""
+    try:
+        from app.services.binance_spot import BinanceSignedError, _parse_binance_error_body
+        if isinstance(e, BinanceSignedError) and e.code in (-2015, -2008):
+            return True
+        resp = getattr(e, "response", None)
+        if resp is not None and getattr(resp, "status_code", None) in (401, 403):
+            return True
+        code, _ = _parse_binance_error_body(_binance_error_response_body(e))
+        if code in (-2015, -2008):
             return True
     except Exception:
         pass
     err_str = str(e)
-    if "-1021" in err_str:
+    if "-2015" in err_str or "-2008" in err_str:
         return True
-    msg = err_str.lower()
-    return "timestamp" in msg and ("recvwindow" in msg or "outside" in msg)
+    body_l = _binance_error_response_body(e).lower()
+    return "invalid api-key" in body_l or "invalid api-key" in err_str.lower()
+
+
+def _is_clock_drift_error(e: Exception) -> bool:
+    try:
+        from app.services.binance_spot import BinanceSignedError, _coerce_binance_code, _parse_binance_error_body
+        if isinstance(e, BinanceSignedError) and e.code == -1021:
+            return True
+        body = _binance_error_response_body(e)
+        code, msg = _parse_binance_error_body(body)
+        if code == -1021:
+            return True
+        body_l = body.lower()
+        if body_l and "timestamp" in body_l and ("recvwindow" in body_l or "outside" in body_l):
+            return True
+    except Exception:
+        pass
+    if "-1021" in str(e):
+        return True
+    return False
 
 
 def _cooldown_sec_for_rate_limit(e: Exception, default_sec: float = 30) -> float:
@@ -541,6 +591,16 @@ async def _do_wallet_refresh(account_id: int, db: Session, request_id: str, forc
             )
             _note_wallet_refresh_failure(account_id, code, err_str)
             return {"_error": err_str}
+        elif _is_api_unauthorized_error(e):
+            code = "API_UNAUTHORIZED"
+            _wallet_last_error_code[account_id] = code
+            _wallet_cooldown_until[account_id] = time.monotonic() + cfg.get("wallet_cooldown_sec", 30)
+            logger.warning(
+                "wallet_refresh_attempt error_code=%s duration_ms=%.0f request_id=%s account_id=%s",
+                code, duration_ms, request_id, account_id,
+            )
+            _note_wallet_refresh_failure(account_id, code, err_str)
+            return {"_error": err_str, "code": code}
         elif _is_clock_drift_error(e):
             from app.services.binance_spot import clock_sync_hint
             code = "CLOCK_DRIFT"

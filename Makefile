@@ -34,4 +34,4 @@ git-log:
 	python3 scripts/devops/sync_git_log.py
 
 test:
-	.venv/bin/pytest tests/ -q
+	PYTHONPATH=. .venv/bin/pytest tests/ -q

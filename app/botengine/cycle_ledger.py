@@ -140,6 +140,7 @@ def resolve_cycle_opened_at_for_cycle(
     if cid == cur_cid:
         ledger = state.get("cycle_ledger_current")
         return resolve_cycle_opened_at(state, ledger if isinstance(ledger, dict) else None)
+    candidates: List[str] = []
     row = _cycle_open_trade_row(state, cid)
     if row and row.get("ts"):
         candidates.append(str(row["ts"]))

@@ -191,9 +191,23 @@ function adminFetchTransientStatus(status) {
 
 function adminFetchTransientError(err) {
     if (!err) return false;
-    if (err.name === 'AbortError') return true;
+    if (err.name === 'AbortError') return false;
     var msg = String(err.message || '');
-    return /\bHTTP (499|502|503|504)\b/.test(msg);
+    return /\bHTTP (499|502|503|504)\b/.test(msg) || /Failed to fetch|NetworkError|network/i.test(msg);
+}
+
+var _adminAccountsToastAt = 0;
+var ADMIN_ACCOUNTS_TOAST_DEBOUNCE_MS = 30000;
+
+function adminMaybeAccountsTransientToast(err) {
+    if (!adminFetchTransientError(err)) return;
+    if (adminAccountsHasDisplayCache()) return;
+    var now = Date.now();
+    if (now - _adminAccountsToastAt < ADMIN_ACCOUNTS_TOAST_DEBOUNCE_MS) return;
+    _adminAccountsToastAt = now;
+    if (window.Toast && window.Toast.warning) {
+        window.Toast.warning('Hesaplar yenilenemedi (geçici ağ hatası). Tekrar deneniyor…');
+    }
 }
 
 function adminFetchJSON(url, opts) {
@@ -1355,14 +1369,14 @@ function loadTab(tabKey) {
     }).catch(function (err) {
         if (state.currentTab !== tabKey) return;
         if (window.__ADMIN_DEBUG && console && console.error) console.error('[ADMIN] loadTab error', tabKey, err);
-        if (tabKey === 'accounts' && window.Toast) {
+        if (tabKey === 'accounts') {
             if (adminFetchTransientError(err)) {
-                var hasAccountsCache = AdminStore.cache.accounts && AdminStore.cache.accounts.data;
-                if (hasAccountsCache) return;
-                window.Toast.warning('Hesaplar yenilenemedi (bağlantı kesildi). Tekrar deneniyor…');
+                adminMaybeAccountsTransientToast(err);
                 return;
             }
-            window.Toast.error('Hesaplar yüklenemedi: ' + (err && err.message ? err.message : ''));
+            if (window.Toast) {
+                window.Toast.error('Hesaplar yüklenemedi: ' + (err && err.message ? err.message : ''));
+            }
         }
     });
 }

@@ -1083,7 +1083,7 @@
     <script src="/ui/assets/utils/engineLogArchive.js?v=1"></script>
     <script src="/ui/assets/utils/botHealthAlerts.js?v=25"></script>
 <script src="/ui/assets/utils/engineLogFormat.js?v=60"></script>
-<script src="/ui/assets/utils/engineLogLive.js?v=29"></script>
+<script src="/ui/assets/utils/engineLogLive.js?v=30"></script>
     <script src="/ui/assets/core/intervalRegistry.js?v=1"></script>
     <script src="/ui/vendor/lightweight-charts.standalone.production.js"></script>
     <script src="/ui/assets/perf_chart_tv.js?v=1"></script>
@@ -2581,39 +2581,46 @@
 
         function startEngineLogLive(preserveDisplay) {
             if (!window.EngineLogLive || !botId) return;
-            if (preserveDisplay && engineLogList && engineLogList.querySelector('table.engine-log-table')) {
+            var hasCachedTable = preserveDisplay && engineLogList && engineLogList.querySelector('table.engine-log-table');
+            if (hasCachedTable) {
                 if (_engineLogPollingOn) return;
                 _engineLogPollingOn = true;
                 _engineLogLiveOpts._logBootstrapping = false;
-                var resumeLogs = function () {
-                    loadEngineEvents(botId, true).then(function (events) {
-                        if (window.BotHealthAlerts) {
-                            window._lastSeenHealthEventId = window.BotHealthAlerts.maxHealthEventId(events || window._lastEngineEvents);
-                        }
-                        window.EngineLogLive.renderDisplayEvents(_engineLogLiveOpts);
-                        window.EngineLogLive.startPolling(_engineLogLiveOpts, true);
-                    });
-                };
-                fetchBotHealth().finally(resumeLogs);
-                return;
-            }
-            stopEngineLogLive();
-            _engineLogLiveOpts._logBootstrapping = true;
-            _engineLogLiveOpts._lastLogRenderSig = null;
-            var bootLogs = function () {
-                loadEngineEvents(botId, false).then(function (events) {
-                    _engineLogLiveOpts._logBootstrapping = false;
+                Promise.all([
+                    typeof fetchBotHealth === 'function' ? fetchBotHealth().catch(function () { return null; }) : Promise.resolve(null),
+                    loadEngineEvents(botId, true)
+                ]).then(function (pair) {
+                    var events = pair[1];
                     if (window.BotHealthAlerts) {
                         window._lastSeenHealthEventId = window.BotHealthAlerts.maxHealthEventId(events || window._lastEngineEvents);
                     }
-                    if (window._lastHealthData && window.EngineLogLive) {
-                        window.EngineLogLive.renderDisplayEvents(_engineLogLiveOpts);
-                    }
+                    window.EngineLogLive.renderDisplayEvents(_engineLogLiveOpts);
                     window.EngineLogLive.startPolling(_engineLogLiveOpts, true);
-                    _engineLogPollingOn = true;
                 });
-            };
-            fetchBotHealth().finally(bootLogs);
+                return;
+            }
+            stopEngineLogLive();
+            if (engineLogList && engineLogList.querySelector('table.engine-log-table')) {
+                _engineLogLiveOpts._logBootstrapping = false;
+            } else {
+                _engineLogLiveOpts._logBootstrapping = true;
+            }
+            _engineLogLiveOpts._lastLogRenderSig = null;
+            Promise.all([
+                typeof fetchBotHealth === 'function' ? fetchBotHealth().catch(function () { return null; }) : Promise.resolve(null),
+                loadEngineEvents(botId, false)
+            ]).then(function (pair) {
+                var events = pair[1];
+                _engineLogLiveOpts._logBootstrapping = false;
+                if (window.BotHealthAlerts) {
+                    window._lastSeenHealthEventId = window.BotHealthAlerts.maxHealthEventId(events || window._lastEngineEvents);
+                }
+                if (window._lastHealthData && window.EngineLogLive) {
+                    window.EngineLogLive.renderDisplayEvents(_engineLogLiveOpts);
+                }
+                window.EngineLogLive.startPolling(_engineLogLiveOpts, true);
+                _engineLogPollingOn = true;
+            });
         }
 
         function stopEngineLogLive() {
@@ -2660,7 +2667,9 @@
             if (cycleTradesList) cycleTradesList.innerHTML = '<div class="cycle-pnl-item muted">Yükleniyor…</div>';
             var turBtns = document.getElementById('cycleTradesTurButtons');
             if (turBtns) turBtns.innerHTML = '';
-            if (engineLogList) engineLogList.innerHTML = '<div class="muted engine-log-loading" style="padding: 0.75rem;">Yükleniyor…</div>';
+            if (engineLogList && !engineLogList.querySelector('table.engine-log-table')) {
+                engineLogList.innerHTML = '<div class="muted engine-log-loading" style="padding: 0.75rem;">Yükleniyor…</div>';
+            }
             if (configGrid) configGrid.innerHTML = '';
             var pModal = document.getElementById('parametrelerModal');
             if (pModal) pModal.style.display = 'none';

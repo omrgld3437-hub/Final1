@@ -5959,8 +5959,17 @@ curl -X POST http://127.0.0.1:8000/api/admin/force-unlock-symbol -H "Authorizati
 
 ## Changelog (spec güncellemeleri)
 
+**2026-05-31 — CLOCK_DRIFT vs API_UNAUTHORIZED ayrımı:**
+- `home._is_clock_drift_error`: imza URL'sindeki `recvWindow=` artık saat sapması sayılmaz (401/-2015 → `API_UNAUTHORIZED`); gerçek -1021 yalnızca yanıt gövdesinden
+- `binance_connectivity._classify_binance_error`: aynı öncelik sırası (401/-2015 önce)
+
+**2026-05-31 — CLOCK_DRIFT UX + timestamp offset fallback:**
+- `binance_spot`: son başarılı `/api/v3/time` ile `server_ms - local_ms` offset saklanır; `/time` başarısızken ham yerel ms yerine offset uygulanır; saat önbelleği yaşlandırması **monotonic**; imza `timestamp` = server_ms − 300ms; HTTP **400** gövdesi `raise_for_status` öncesi parse (−1021 retry artık tetiklenir); -1021 retry **4** + taze `/time`
+- Dashboard: `markWalletLiveFetchFailed(code)` → KPI **Saat senkronu** (`State.walletLastErrorCode`)
+- Dashboard KPI stale rozeti: `CLOCK_DRIFT` → **Saat senkronu**; `maybeToastConnectivityWarning` CLOCK_DRIFT toast debounce 120s (`dashboard.js?v=clock-drift-kpi1`)
+
 **2026-05-28 — Binance -1021 (CLOCK_DRIFT) auto-heal:**
-- `binance_spot`: imzalı isteklerde timestamp her denemede yenilenir; -1021'de saat önbelleği temizlenip 2 kez otomatik retry
+- `binance_spot`: imzalı isteklerde timestamp her denemede yenilenir; -1021'de saat önbelleği temizlenip otomatik retry
 - `clock_sync_hint()`: macOS/Linux/Windows için doğru NTP talimatı (Windows-only w32tm kaldırıldı)
 - `home.py`: CLOCK_DRIFT algılama `BinanceSignedError(-1021)` ile güçlendirildi
 

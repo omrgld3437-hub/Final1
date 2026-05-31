@@ -44,9 +44,10 @@ def test_cycle_ledger_pnl_buy_sell_fee():
     assert abs(led["realized_pnl_quote"] - 7.99) < 1e-6
     assert led["matched_qty"] == 0.01
     assert led["avg_cost_quote_per_base"] == (1000.0 + 1.0) / 0.01  # 100100
-    # Dual PnL: Cash (trail_buy_grid + trail_profit_sell) => cash_pnl_usdt
+    # Cycle-end invariant: cash_pnl_usdt is gross; realized_pnl_quote is net after fees.
     assert "cash_pnl_usdt" in led
-    assert abs(led["cash_pnl_usdt"] - 7.99) < 1e-4
+    assert abs(led["cash_pnl_usdt"] - 10.0) < 1e-4
+    assert abs(led["cash_fifo_pnl_usdt"] - 7.99) < 1e-4
 
 
 def test_breakeven_price():

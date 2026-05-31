@@ -17,6 +17,8 @@
     'app.botengine.worker_main': 'Bot engine worker',
     'app.botengine.orchestrator': 'Bot tick döngüsü',
     'app.services.binance_spot': 'Binance Spot API',
+    'app.services.binance_ws': 'Binance canlı fiyat WebSocket',
+    'root': 'Web uygulaması (main.py)',
     'app.services.finance_trade_sync': 'Finans işlem senkronu',
     'app.botengine.adapters.binance_adapter': 'Binance adapter',
     'app.botengine.health_watch': 'Bot sağlık izleme',
@@ -1167,7 +1169,99 @@
       }
     },
     {
-      test: function (msg) { return /Binance|binance_spot|APIError|-\d{4}\s|MIN_NOTIONAL|LOT_SIZE|insufficient balance|Account has insufficient/i.test(msg); },
+      test: function (msg) { return /Unhandled exception:/i.test(msg); },
+      apply: function (ctx) {
+        var detail = technicalDetail(ctx);
+        var msg = ctx.message || ctx.raw || '';
+        if (/cannot import name '_fetch_server_public_ip'/.test(msg)) {
+          return {
+            konu: 'Bağlantı kontrolü API hatası (import)',
+            sebep: 'GET /api/home/connectivity-check, app.api.routes paketi _fetch_server_public_ip dışa aktarmıyordu.',
+            etki: 'Dashboard bağlantı testi ve ilgili istekler HTTP 500 döner.',
+            oneri: 'routes/__init__.py içinde _fetch_server_public_ip export edildi; Web API yeniden başlatın.'
+          };
+        }
+        if (/referenced before assignment/.test(msg) && /get_bot_locked_balances/.test(msg)) {
+          return {
+            konu: 'Spot quick_data kod hatası',
+            sebep: 'Al/Sat modal verisi: get_bot_locked_balances_for_account yerel import çakışması (düzeltildi).',
+            etki: 'ETHUSDT vb. için fiyat/bakiye quick_data boş veya hatalı dönebilirdi.',
+            oneri: 'Web API yeniden başlatın; tekrarlıyorsa spot_routes.py güncel sürümde mi kontrol edin.'
+          };
+        }
+        return {
+          konu: 'İşlenmeyen HTTP isteği hatası (500)',
+          sebep: 'FastAPI yakalanmamış istisna: ' + (detail ? detail.slice(0, 220) : 'detay Ham satırda'),
+          etki: 'İstek 500 döner; kullanıcı işlemi tamamlanmamış olabilir. Aynı hata error_logs tablosuna da yazılır.',
+          oneri: 'Ham satırdan hemen sonra gelen Traceback satırlarını web.log içinde okuyun; path ve request_id ile tekrarlayın.'
+        };
+      }
+    },
+    {
+      test: function (msg) { return /\[BinanceWS\]\s*Açılış el sıkışması zaman aşımı/i.test(msg); },
+      apply: function () {
+        return {
+          konu: 'Binance WebSocket bağlantı gecikmesi',
+          sebep: 'Canlı fiyat akışı (!miniTicker) açılış el sıkışması zaman aşımına uğradı (ağ/firewall yavaş).',
+          etki: 'DataHub REST/cache ile devam eder; WS birkaç dakikada bir kez uyarı verip yeniden bağlanır.',
+          oneri: 'Sunucu çıkış IP ve firewall; sürekli tekrarlıyorsa Binance erişimini test edin. Genelde geçicidir.'
+        };
+      }
+    },
+    {
+      test: function (msg) { return /\[BinanceWS\]\s*Ağ\/DNS erişilemiyor/i.test(msg); },
+      apply: function () {
+        return {
+          konu: 'Binance WebSocket DNS / ağ hatası',
+          sebep: 'stream.binance.com çözülemedi veya ağ erişilemiyor (offline/DNS).',
+          etki: 'Canlı mini ticker akışı kesilir; REST fiyat güncellemesi devreye girer.',
+          oneri: 'Sunucu internet/DNS; birkaç dakika sonra otomatik yeniden deneme. Sürekli ise ağ yöneticisine bildirin.'
+        };
+      }
+    },
+    {
+      test: function (msg) {
+        return /Binance WebSocket (bağlantı koptu|beklenmedik kapanma)/i.test(msg)
+          || (/\[BinanceWS\]\s*Connection closed/i.test(msg) && !/keepalive ping timeout/i.test(msg));
+      },
+      apply: function (ctx) {
+        var detail = technicalDetail(ctx);
+        return {
+          konu: 'Binance WebSocket bağlantısı koptu',
+          sebep: detail || 'WS bağlantısı beklenmedik kapandı; istemci yeniden bağlanıyor.',
+          etki: 'Kısa süre canlı fiyat gecikmesi; otomatik reconnect.',
+          oneri: 'Tek seferlik ise yok sayın. Sık tekrarlıyorsa ağ stabilitesi ve Binance durumunu kontrol edin.'
+        };
+      }
+    },
+    {
+      test: function (msg) { return /\[BinanceWS\]\s*Reconnecting in/i.test(msg); },
+      apply: function () {
+        return {
+          konu: 'Binance WebSocket yeniden bağlanıyor',
+          sebep: 'Önceki WS oturumu kapandı; üstel geri çekilme ile yeniden bağlantı planlandı.',
+          etki: 'Bilgi seviyesi; canlı fiyat birkaç saniye gecikebilir.',
+          oneri: 'Hata panelinde değil, ana logda kalabilir. Sürekli döngü varsa ağ/Binance erişimini inceleyin.'
+        };
+      }
+    },
+    {
+      test: function (msg) { return /\[BinanceWS\]/i.test(msg); },
+      apply: function (ctx) {
+        var detail = technicalDetail(ctx);
+        return {
+          konu: 'Binance canlı fiyat WebSocket uyarısı',
+          sebep: detail || 'miniTicker WebSocket döngüsünde geçici hata; yeniden bağlanma sürüyor.',
+          etki: 'Emir gönderimini doğrudan etkilemez; dashboard fiyatları REST/cache ile sürebilir.',
+          oneri: 'Ham satırdaki hata metnini okuyun. Emir reddi değilse Binance API anahtarı gerekmez (public stream).'
+        };
+      }
+    },
+    {
+      test: function (msg) {
+        if (/\[BinanceWS\]|binance_ws/i.test(msg)) return false;
+        return /Binance|binance_spot|APIError|-\d{4}\s|MIN_NOTIONAL|LOT_SIZE|insufficient balance|Account has insufficient/i.test(msg);
+      },
       apply: function () {
         return {
           konu: 'Binance API / emir hatası',
@@ -1217,8 +1311,21 @@
       konu = isErr ? 'Bot engine hatası' : 'Bot engine uyarısı';
     } else if (/app\.api\.routes\.home|routes\.home/i.test(mod)) {
       konu = isErr ? 'Anasayfa cüzdan API hatası' : 'Anasayfa cüzdan uyarısı';
+    } else if (mod === 'root') {
+      konu = isErr ? 'Web uygulaması (main) hatası' : 'Web uygulaması (main) uyarısı';
     }
     var sebep = 'Bu log satırı için özel Türkçe şablon yok; tam kaynak metin en altta (Ham satır).';
+    if (/main\.py:\d+.*Unhandled exception/i.test(msg)) {
+      sebep = 'Yakalanmamış istisna (HTTP 500); Traceback satırları web.log akışında bu satırdan hemen sonra gelir.';
+    } else if (/LEADERBOARD_REFRESH_FAIL/i.test(msg)) {
+      sebep = 'En iyi botlar listesi arka plan yenilemesi başarısız oldu.';
+    } else if (/Lockdown:\s*blocking path/i.test(msg)) {
+      sebep = 'Bakım kilidi açık; istek beyaz listede olmayan bir yola gitti.';
+    } else if (/global_exception_handler|persist_error|error_log middleware/i.test(msg)) {
+      sebep = 'Hata kaydı veya global exception işleyicisi ile ilgili kayıt.';
+    } else if (/Traceback \(most recent call last\)/i.test(msg)) {
+      sebep = 'Python Traceback başlığı; asıl hata tipi bir sonraki satırlarda.';
+    }
     if (/wallet_refresh|home_wallet_refresh|home_fast/i.test(msg)) {
       sebep = 'Anasayfa canlı cüzdan yenilemesi (Binance) ile ilgili kayıt; çoğunlukla IP beyaz liste, API anahtarı veya ağ kesintisi.';
     }

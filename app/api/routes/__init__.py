@@ -20,6 +20,14 @@ invalidate_open_orders_cache = _mod.invalidate_open_orders_cache
 
 def __getattr__(name):
     # Lazy export for names used by main.py, admin.py, finance.py, routes/home.py, subroutes/home.py
-    if name in ("get_binance_cache_stats", "_price_cache", "_fetch_wallet_uncached", "_wallet_response", "_cache"):
+    if name in (
+        "get_binance_cache_stats",
+        "_price_cache",
+        "_fetch_wallet_uncached",
+        "_wallet_response",
+        "_cache",
+        "_fetch_server_public_ip",
+        "_parse_public_ip_response",
+    ):
         return getattr(_mod, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

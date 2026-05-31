@@ -57,6 +57,26 @@ def mark_bot_run_started(state: Dict[str, Any], *, connectivity_resume: bool = F
     state[_STATE_KEY] = _utc_now_iso()
 
 
+def assign_bot_run_id(
+    state: Dict[str, Any],
+    *,
+    command_id: Optional[int] = None,
+    request_id: Optional[str] = None,
+    connectivity_resume: bool = False,
+) -> str:
+    """Cold start için emir kimliği. Connectivity resume aynı canlı run_id'yi korur."""
+    if connectivity_resume and (state.get("run_id") or "").strip():
+        return str(state["run_id"]).strip()
+    if command_id is not None:
+        run_id = f"cmd{int(command_id)}"
+    else:
+        rid = "".join(ch for ch in str(request_id or "") if ch.isalnum())[-12:]
+        ts = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f")
+        run_id = f"req{rid}" if rid else f"run{ts}"
+    state["run_id"] = run_id
+    return run_id
+
+
 def clear_bot_run_started(state: Dict[str, Any]) -> None:
     state.pop(_STATE_KEY, None)
 
