@@ -23,19 +23,20 @@ body.login-mobile {
 }
 
 :root {
-    --login-bg: #020203;
+    --login-bg: #0b0e11;
     --login-bg-deep: #010102;
     --login-text: #f8f7f5;
-    --login-text-secondary: #a8a6a1;
-    --login-text-muted: #6b6966;
-    --login-accent: #c9a227;
-    --login-accent-bright: #e4c04a;
+    --login-text-secondary: #9ca3af;
+    --login-text-muted: #6b7280;
+    --login-accent: #f0b90b;
+    --login-accent-bright: #fcd535;
+    --login-accent-on: #1e1b01;
     --login-green: #0ecb81;
     --login-red: #f6465d;
-    --login-border: rgba(255, 255, 255, 0.06);
-    --login-card-bg: rgba(10, 10, 12, 0.78);
+    --login-border: rgba(255, 255, 255, 0.08);
+    --login-card-bg: rgba(30, 32, 38, 0.78);
     --login-radius: 16px;
-    --login-ease: cubic-bezier(0.32, 0.72, 0, 1);
+    --login-ease: cubic-bezier(0.16, 1, 0.3, 1);
     --login-font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 }
 
@@ -53,8 +54,11 @@ body.login-mobile {
     position: absolute;
     inset: 0;
     contain: strict;
-    background:
-        linear-gradient(180deg, #010101 0%, #020202 50%, #010102 100%);
+    background-color: var(--login-bg);
+    background-image:
+        radial-gradient(circle at 10% 20%, rgba(240, 185, 11, 0.06) 0%, transparent 42%),
+        radial-gradient(circle at 88% 78%, rgba(59, 130, 246, 0.09) 0%, transparent 48%),
+        linear-gradient(180deg, #080a0d 0%, #0b0e11 45%, #06080a 100%);
 }
 
 .login-bg-mesh {
@@ -1856,4 +1860,181 @@ body.login-mobile .login-landing {
     .login-card {
         padding: 1.25rem 1rem;
     }
+}
+
+/* —— tradertrailing.zip AuthCard tema (2026-05) —— */
+.login-hero {
+    text-align: center;
+    max-width: 36rem;
+    margin: 0 auto 1.25rem;
+    padding: 0 1rem;
+}
+.login-hero__badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.35rem 0.85rem;
+    border-radius: 999px;
+    font-size: 0.625rem;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--login-accent);
+    background: rgba(240, 185, 11, 0.1);
+    border: 1px solid rgba(240, 185, 11, 0.28);
+}
+.login-hero__title {
+    margin: 0.85rem 0 0.35rem;
+    font-size: clamp(1.35rem, 3.5vw, 1.75rem);
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    color: #fff;
+    text-shadow: 0 0 24px rgba(240, 185, 11, 0.25);
+}
+.login-hero__tagline {
+    margin: 0;
+    font-size: 0.8rem;
+    line-height: 1.5;
+    color: var(--login-text-secondary);
+}
+
+.login-landing-brand .login-brand {
+    text-shadow: 0 0 18px rgba(240, 185, 11, 0.35);
+}
+
+.login-card {
+    padding: 0;
+    max-width: 440px;
+    background: rgba(30, 32, 38, 0.82);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    box-shadow: 0 24px 80px rgba(0, 0, 0, 0.55);
+}
+.login-card.login-card--register {
+    max-height: min(680px, 88vh);
+}
+.login-tabs--header {
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 0;
+    margin: 0;
+    padding: 0;
+    background: rgba(0, 0, 0, 0.22);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: var(--login-radius) var(--login-radius) 0 0;
+}
+.login-tabs--header .login-tab {
+    flex: 1;
+    padding: 1rem 0.5rem;
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--login-text-secondary);
+    background: transparent;
+    border-radius: 0;
+    border-bottom: 2px solid transparent;
+}
+.login-tabs--header .login-tab:hover {
+    color: var(--login-accent);
+    background: rgba(255, 255, 255, 0.02);
+}
+.login-tabs--header .login-tab.active {
+    color: var(--login-accent);
+    background: rgba(255, 255, 255, 0.02);
+    border-bottom-color: var(--login-accent);
+}
+.login-card__body {
+    padding: 1.75rem 1.5rem 1.5rem;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    flex: 1;
+}
+.login-card-heading {
+    margin: 0 0 0.35rem;
+    font-size: 1.15rem;
+    font-weight: 700;
+    color: #fff;
+    text-align: left;
+    letter-spacing: 0.02em;
+}
+.login-card-lead {
+    margin: 0 0 1rem;
+    font-size: 0.75rem;
+    color: var(--login-text-secondary);
+    text-align: left;
+    line-height: 1.45;
+}
+.login-card-title {
+    display: none;
+}
+.login-card--info-only .login-tabs--header {
+    display: none !important;
+}
+.login-card--info-only .login-card-heading,
+.login-card--info-only .login-card-lead {
+    display: none !important;
+}
+
+.login-form label {
+    font-size: 0.68rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--login-text-secondary);
+}
+.login-form .form-input {
+    background: rgba(17, 20, 24, 0.65);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 10px;
+    padding: 0.8rem 0.9rem;
+    transition: border-color 0.25s var(--login-ease), box-shadow 0.25s var(--login-ease), background 0.25s;
+}
+.login-form .form-input:focus {
+    border-color: var(--login-accent);
+    box-shadow: 0 0 12px rgba(240, 185, 11, 0.18);
+    background: rgba(17, 20, 24, 0.88);
+    outline: none;
+}
+.login-btn-primary {
+    color: var(--login-accent-on);
+    background: var(--login-accent);
+    font-weight: 800;
+    letter-spacing: 0.04em;
+    border-radius: 10px;
+    box-shadow: none;
+}
+.login-btn-primary:hover {
+    box-shadow: 0 0 18px rgba(240, 185, 11, 0.38);
+    transform: translateY(-1px);
+}
+.login-cta-btn {
+    color: var(--login-accent-on);
+    background: var(--login-accent);
+}
+.login-cta-btn:hover {
+    box-shadow: 0 0 16px rgba(240, 185, 11, 0.35);
+}
+.login-message.error {
+    background: rgba(246, 70, 93, 0.1);
+    border: 1px solid rgba(246, 70, 93, 0.25);
+    color: #fca5a5;
+    border-radius: 10px;
+    font-size: 0.75rem;
+}
+.login-message.success {
+    background: rgba(14, 203, 129, 0.1);
+    border: 1px solid rgba(14, 203, 129, 0.25);
+    color: #6ee7b7;
+    border-radius: 10px;
+}
+.login-modal__content {
+    padding: 0.5rem;
+}
+.login-modal__close {
+    color: rgba(255, 255, 255, 0.55);
+    z-index: 2;
+}
+.login-card .login-card__body .login-tab-content.active {
+    padding-top: 0.25rem;
 }

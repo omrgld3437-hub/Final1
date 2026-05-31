@@ -13,7 +13,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/ui/assets/theme.css?v=login2">
     <link rel="stylesheet" href="/ui/assets/design.css?v=login2">
-    <link rel="stylesheet" href="/ui/assets/login.css?v=2">
+    <link rel="stylesheet" href="/ui/assets/login.css?v=zip-auth1">
 </head>
 <body class="login-page">
     <script>window.__APP_PAGE__ = 'login';</script>
@@ -109,6 +109,11 @@
     <!-- Ana sayfa: saatler + kripto -->
     <main class="login-landing">
         <h1 class="login-landing-brand"><a href="#" class="login-brand">TraderTrailing</a></h1>
+        <section class="login-hero" aria-label="Tanıtım">
+            <span class="login-hero__badge">Yeni Nesil Al-Sat İşlem Odası</span>
+            <p class="login-hero__title">Gökyüzü derinliğinde akıllı yatırım terminali</p>
+            <p class="login-hero__tagline">Limit emirler, fiyat alarmları ve DCA stratejilerinizi tek merkezden yönetin.</p>
+        </section>
         <section class="login-clocks" id="loginClocks">
             <div class="login-clock" data-tz="Europe/Istanbul" data-city="İstanbul" data-exchange="BIST" data-open="10:00">
                 <div class="login-clock__face"><div class="login-clock__ticks" aria-hidden="true"></div><div class="login-clock__hand login-clock__hand--h"></div><div class="login-clock__hand login-clock__hand--m"></div><div class="login-clock__hand login-clock__hand--s"></div><span class="login-clock__ampm"></span></div>
@@ -171,13 +176,15 @@
         <div class="login-modal__backdrop" onclick="closeAuthModal()"></div>
         <div class="login-modal__content">
             <button type="button" class="login-modal__close" aria-label="Kapat" onclick="closeAuthModal()">&times;</button>
-            <div class="login-card">
-                <p class="login-card-title" id="loginSubtitle">Hesabınıza giriş yapın</p>
-                <div class="login-message" id="errorMessage"></div>
-                <nav class="login-tabs" role="tablist">
+            <div class="login-card" id="loginAuthCard">
+                <nav class="login-tabs login-tabs--header" role="tablist">
                     <button type="button" class="login-tab active" role="tab" aria-selected="true" data-tab="0" onclick="setActiveTab(0); showLogin();">Giriş Yap</button>
                     <button type="button" class="login-tab" role="tab" aria-selected="false" data-tab="1" onclick="setActiveTab(1); showRegister();">Kayıt Ol</button>
                 </nav>
+                <div class="login-card__body">
+                <h2 class="login-card-heading" id="loginSubtitle">Hesabınıza giriş yapın</h2>
+                <p class="login-card-lead" id="loginCardLead">Trading terminaline erişmek için bilgilerinizi girin.</p>
+                <div class="login-message" id="errorMessage"></div>
                 <!-- Sekme 0: Giriş / Şifre sıfırlama -->
             <div class="login-tab-content active" id="loginTab0" role="tabpanel">
                 <div id="loginFormWrap">
@@ -413,6 +420,7 @@
                     <button type="button" class="login-btn login-btn-primary" onclick="confirmConsent(8)">Okudum, anladım</button>
                 </div>
             </div>
+                </div>
             </div>
         </div>
     </div>
@@ -598,7 +606,9 @@
         document.getElementById('loginFormWrap').style.display = 'block';
         document.getElementById('passwordResetFormWrap').style.display = 'none';
         var sub = document.getElementById('loginSubtitle');
+        var lead = document.getElementById('loginCardLead');
         if (sub) sub.textContent = 'Hesabınıza giriş yapın';
+        if (lead) { lead.style.display = ''; lead.textContent = 'Trading terminaline erişmek için bilgilerinizi girin.'; }
         restoreLastLoginPhone();
         var hint = document.getElementById('loginTestHint');
         if (hint) hint.style.display = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') ? 'block' : 'none';
@@ -607,7 +617,9 @@
     function showRegister() {
         setActiveTab(1);
         var sub = document.getElementById('loginSubtitle');
+        var lead = document.getElementById('loginCardLead');
         if (sub) sub.textContent = 'Yeni hesap oluşturun';
+        if (lead) { lead.style.display = ''; lead.textContent = 'Kurumsal portföy hesabı için kayıt formunu doldurun.'; }
     }
 
     function showPasswordReset(e) {
@@ -616,7 +628,9 @@
         document.getElementById('loginFormWrap').style.display = 'none';
         document.getElementById('passwordResetFormWrap').style.display = 'block';
         var sub = document.getElementById('loginSubtitle');
-        if (sub) sub.textContent = 'Şifre sıfırlama talebi gönderin';
+        var lead = document.getElementById('loginCardLead');
+        if (sub) sub.textContent = 'Şifre sıfırlama';
+        if (lead) { lead.style.display = ''; lead.textContent = 'Tek kullanımlık şifre SMS ile yönetici onayından sonra gönderilir.'; }
     }
 
     window.showError = showError;
