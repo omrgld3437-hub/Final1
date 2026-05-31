@@ -978,6 +978,11 @@ def _is_noise_line(line: str, level: str) -> bool:
         # Bot engine: emilen tick hataları (engine log + resilience; bot running kalır)
         if _ABSORBED_ENGINE_WARN_RE.search(s):
             return True
+        # CSRF: /api/log-error muaf; geçmiş veya düzeltme öncesi çift kayıt gürültüsü
+        if "CSRF double-submit mismatch" in s and "/api/log-error" in s:
+            return True
+        if "CSRF Origin mismatch" in s and "/api/log-error" in s:
+            return True
     if level == "ERROR":
         # INFO yanlış sınıflandırma düzeltmesi öncesi: home_wallet_refresh error=...
         if "home_wallet_refresh" in s and " error=" in s and " - INFO - " in s:

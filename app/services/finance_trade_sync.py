@@ -253,6 +253,35 @@ class TradeSyncService:
         except Exception as e:
             logger.error(f"[TradeSync] Error fetching Binance trades: {e}")
             return []
+
+    def _resolve_bot_id_for_order(self, account_id: int, order_id: str, symbol: str) -> Optional[int]:
+        """Binance order_id → bot_id (order_intents veya trades; tahmin yok)."""
+        if not order_id:
+            return None
+        oid = str(order_id).strip()
+        try:
+            from sqlalchemy import text
+            from app.db.models import Trade
+
+            row = self.db.execute(
+                text(
+                    "SELECT bot_id FROM order_intents "
+                    "WHERE account_id = :aid AND binance_order_id = :oid LIMIT 1"
+                ),
+                {"aid": account_id, "oid": oid},
+            ).fetchone()
+            if row and row[0]:
+                return int(row[0])
+            t = (
+                self.db.query(Trade)
+                .filter(Trade.account_id == account_id, Trade.order_id == oid)
+                .first()
+            )
+            if t and t.bot_id:
+                return int(t.bot_id)
+        except Exception as e:
+            logger.debug("[TradeSync] bot resolve order_id=%s: %s", oid, e)
+        return None
     
     def _normalize_trade(self, trade_data: Dict, account_id: int) -> Optional[TradeNormalized]:
         """Normalize Binance trade data to TradeNormalized"""
@@ -275,25 +304,8 @@ class TradeSyncService:
             # Convert time
             trade_time = datetime.utcfromtimestamp(time_ms / 1000.0)
             
-            # Try to match with bot via orderId
-            bot_id = None
-            if order_id:
-                # Check if any bot has this orderId in its execution logs
-                # Match by order_id and symbol within same account
-                from app.db.models import Bot
-                matching_bot = self.db.query(Bot).filter(
-                    Bot.account_id == account_id,
-                    Bot.symbol == symbol
-                ).first()
-                
-                # If we find a bot for this symbol, check if order_id matches
-                # For now, we'll use symbol-based matching (more reliable)
-                # TODO: Store order_id in bot execution logs for exact matching
-                if matching_bot:
-                    # Check if order was placed within bot's active period
-                    # Simple heuristic: if bot is running and symbol matches, likely bot trade
-                    if matching_bot.status == "running":
-                        bot_id = matching_bot.id
+            # Bot eşlemesi: order_intents / trades tablosu (sembol+running heuristiği yok)
+            bot_id = self._resolve_bot_id_for_order(account_id, order_id, symbol)
             
             # Create normalized trade
             normalized = TradeNormalized(

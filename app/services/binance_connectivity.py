@@ -38,6 +38,7 @@ _AUTO_RESUME_ERROR_CODES = frozenset({
 })
 
 _CONNECTIVITY_STABLE_MESSAGE = "Bağlantı kuruldu ve stabil · Bot sorunsuz çalışıyor"
+_CONNECTIVITY_STABLE_COOLDOWN_SEC = 45.0
 _CONNECTIVITY_OUTAGE_META_CODES = frozenset({
     "API_UNAUTHORIZED",
     "BINANCE_UNREACHABLE",
@@ -447,6 +448,40 @@ def _bot_had_connectivity_outage(db: "Session", bot_id: int, within_sec: float =
         return False
 
 
+def _worker_started_ts() -> Optional[float]:
+    try:
+        from pathlib import Path
+
+        p = Path(__file__).resolve().parents[2] / ".run" / "worker.started_at"
+        if p.is_file():
+            return float(p.read_text(encoding="utf-8").strip())
+    except Exception:
+        pass
+    return None
+
+
+def queue_and_flush_connectivity_stable(
+    db: "Session",
+    bot_id: int,
+    *,
+    previous_error: str = "CONNECTIVITY_RECOVERED",
+    after_loop_restart: bool = False,
+    state: Optional[Dict[str, Any]] = None,
+) -> bool:
+    """Yeni kurtarma oturumu — pending_at tazelenir, yeşil stabil satır yazılır."""
+    from app.db.models import Bot
+    from app.botengine.state_store import load_state
+
+    if _recent_connectivity_recovered(db, int(bot_id), within_sec=_CONNECTIVITY_STABLE_COOLDOWN_SEC):
+        return False
+    bot = db.query(Bot).filter(Bot.id == int(bot_id)).first()
+    if not bot or (bot.status or "").lower() != "running":
+        return False
+    st = state if state is not None else (load_state(db, bot_id) or {})
+    mark_pending_connectivity_stable(db, bot, st, previous_error=previous_error)
+    return flush_pending_connectivity_stable(db, bot_id, after_loop_restart=after_loop_restart)
+
+
 def mark_pending_connectivity_stable(
     db: "Session",
     bot: Any,
@@ -534,7 +569,9 @@ def flush_pending_connectivity_stable(
     if not state.get("_pending_connectivity_stable"):
         return False
     pending_at = float(state.get("_pending_connectivity_stable_at") or 0)
-    if _connectivity_stable_flushed_for_pending(db, bot_id, pending_at):
+    if _connectivity_stable_flushed_for_pending(db, bot_id, pending_at) or _recent_connectivity_recovered(
+        db, bot_id, within_sec=_CONNECTIVITY_STABLE_COOLDOWN_SEC
+    ):
         state.pop("_pending_connectivity_stable", None)
         state.pop("_pending_connectivity_stable_at", None)
         state.pop("_pending_connectivity_stable_prev_err", None)
@@ -572,10 +609,12 @@ def mark_pending_connectivity_stable_for_running_bots(
         .all()
     )
     marked = 0
+    worker_started = _worker_started_ts()
+    worker_recent = bool(worker_started and (time.time() - worker_started) < 600.0)
     for bot in bots:
         had_outage = account_had_failure or _bot_had_connectivity_outage(db, bot.id)
         if not had_outage:
-            if _recent_connectivity_recovered(db, bot.id, within_sec=300.0):
+            if _recent_connectivity_recovered(db, bot.id, within_sec=300.0) and not worker_recent:
                 continue
         state = load_state(db, bot.id) or {}
         prev_err = (state.get("last_error_code") or "").strip() or None
@@ -863,12 +902,23 @@ async def probe_account_binance(account_id: int, db: "Session") -> Tuple[bool, s
     if is_test_account(account_id, db):
         return True, "", ""
     try:
-        from app.services.binance_assets import get_account_keys
+        from app.services.binance_assets import KEY_ERROR_CODES, get_account_keys
         from app.services.binance_spot import get_wallet
 
         keys = await get_account_keys(account_id, db)
         await asyncio.wait_for(get_wallet(keys, tag="connectivity_probe"), timeout=8.0)
         return True, "", ""
+    except ValueError as e:
+        code = str(e or "").strip()
+        if code in KEY_ERROR_CODES:
+            hints = {
+                "ACCOUNT_KEYS_EMPTY": "Hesap için Binance API anahtarı tanımlı değil.",
+                "ACCOUNT_KEYS_DECRYPT_FAIL": "API anahtarı çözülemedi.",
+                "ACCOUNT_NOT_FOUND": "Hesap kaydı bulunamadı.",
+                "ACCOUNT_KEYS_MISSING": "Hesap için Binance API anahtarı tanımlı değil.",
+            }
+            return False, code, hints.get(code, code)
+        return False, *_classify_binance_error(e)
     except Exception as e:
         return False, *_classify_binance_error(e)
 
@@ -903,13 +953,15 @@ async def sync_bot_connectivity_on_view(
             return fail
     _last_probe_by_bot[bot_id] = now
 
+    had_fail = bool(active_failure(account_id))
     ok, code, msg = await probe_account_binance(account_id, db)
     if ok:
         note_binance_success(account_id, schedule_resume=False)
-        try:
-            on_connectivity_restored(db, account_id)
-        except Exception as ar_ex:
-            logger.debug("connectivity restored account_id=%s: %s", account_id, ar_ex)
+        if had_fail:
+            try:
+                on_connectivity_restored(db, account_id)
+            except Exception as ar_ex:
+                logger.debug("connectivity restored account_id=%s: %s", account_id, ar_ex)
         return None
 
     note_binance_failure(account_id, code, msg, source, emit_async=False)

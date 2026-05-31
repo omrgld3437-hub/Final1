@@ -295,11 +295,18 @@ function varlikAssetCellHtml(d) {
         ? '<img src="' + d.logoUrl + '" alt="' + d.asset + '" loading="lazy" onerror="if(window.registerLogo404)window.registerLogo404(this.alt);this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\';" />'
         : '') +
         '<span class="varlik-logo-initials" style="' + (d.logoUrl ? 'display:none' : '') + '">' + d.initials + '</span>';
-    return '<td class="varlik-asset-cell" data-label="Varlık">' +
-        '<div class="varlik-asset">' +
-        '<div class="varlik-logo" title="' + d.asset + '">' + logoInner + '</div>' +
-        '<div class="varlik-asset-text"><div class="varlik-symbol">' + d.asset + '</div>' +
-        '<div class="varlik-name">' + d.name + '</div></div></div></td>';
+    return '<td class="varlik-asset-cell col-symbol col-left" data-label="Varlık">' +
+        '<div class="varlik-asset mevcut-bot-symbol-link">' +
+        '<span class="mevcut-bot-symbol-logo-slot"><div class="varlik-logo" title="' + d.asset + '">' + logoInner + '</div></span>' +
+        '<span class="mevcut-bot-symbol-text varlik-asset-text"><span class="varlik-symbol">' + d.asset + '</span>' +
+        '<span class="varlik-name">' + d.name + '</span></span></div></td>';
+}
+function varlikFiyatCellHtml(d) {
+    return '<td class="varlik-fiyat-cell mevcut-botlar-price-cell col-price col-center" data-label="Fiyat">' +
+        '<div class="varlik-fiyat-inline">' +
+        '<span class="price-cell varlik-wallet-price" data-price="' + (d.price != null ? d.price : '') + '">' + d.priceDisplay + '</span>' +
+        '<span class="change-pct varlik-change-inline" data-change-pct="' + (d.changePct != null ? d.changePct : '') + '" style="color: ' + d.changeColor + ';">' + d.changeStr + '</span>' +
+        '</div></td>';
 }
 window.fmtUsd = fmtUsd;
 window.fmtNum = fmtNum;
@@ -778,6 +785,19 @@ async function updateBinanceConnectionNotice() {
     }
 }
 
+/** Yenileme / sekme değişimi / istemci kopması — kalıcı hata banner'ı gösterme. */
+function isBenignDashboardFetchError(error) {
+    if (!error) return false;
+    if (error.name === 'AbortError') return true;
+    var status = Number(error.status) || 0;
+    if (status === 499) return true;
+    var code = String(error.error_code || '').toUpperCase();
+    if (code === 'CLIENT_DISCONNECT' || code === 'TIMEOUT') return true;
+    var msg = String(error.message || '').toLowerCase();
+    return msg.indexOf('client_disconnect') >= 0 || msg.indexOf('aborted') >= 0;
+}
+window.isBenignDashboardFetchError = isBenignDashboardFetchError;
+
 function showError(message) {
     const banner = document.getElementById("errorBanner");
     const msg = document.getElementById("errorMessage");
@@ -989,8 +1009,12 @@ async function loadSummary(accountId) {
         setAppbarAccountHolderName(data);
         hideError();
     } catch (error) {
-        const errorMsg = error instanceof window.APIError ? `Dashboard yüklenemedi: ${error.message}` : `Dashboard yüklenemedi: ${error.message || 'Bilinmeyen hata'}`;
-        showError(errorMsg, error);
+        if (isBenignDashboardFetchError(error)) {
+            console.warn('[dashboard] loadSummary skipped benign error:', error.message || error);
+        } else {
+            const errorMsg = error instanceof window.APIError ? `Dashboard yüklenemedi: ${error.message}` : `Dashboard yüklenemedi: ${error.message || 'Bilinmeyen hata'}`;
+            showError(errorMsg, error);
+        }
     } finally {
         State.inFlight = false;
     }
@@ -998,14 +1022,69 @@ async function loadSummary(accountId) {
 
 // Snapshot: single aggregated endpoint - prices, wallet, pnl, bots in one request
 const SNAPSHOT_POLL_MS = 5000;
+var _dashboardEventSource = null;
+var _dashboardSseActive = false;
+
+function _applySnapshotResponse(res) {
+    const data = (res && res.ok && res.data)
+        ? { ...res.data, account: res.data.kpis?.account || res.data.account, pnl: res.data.kpis?.pnl || res.data.pnl }
+        : res;
+    applySnapshotToUI(data);
+}
+
+function stopDashboardSSE() {
+    if (_dashboardEventSource) {
+        try { _dashboardEventSource.close(); } catch (e) { /* ignore */ }
+        _dashboardEventSource = null;
+    }
+    _dashboardSseActive = false;
+}
+
+function startDashboardSSE() {
+    if (_dashboardSseActive || !State.accountId || typeof EventSource === 'undefined') return false;
+    if (window.__DASHBOARD_SSE_ENABLED === false) return false;
+    stopDashboardSSE();
+    var fields = getSnapshotFields();
+    var url = '/api/dashboard/stream?account_id=' + encodeURIComponent(State.accountId)
+        + (fields ? '&fields=' + encodeURIComponent(fields) : '');
+    try {
+        var es = new EventSource(url);
+        es.onmessage = function (ev) {
+            if (!ev.data) return;
+            try {
+                var res = JSON.parse(ev.data);
+                if (State.inFlight) return;
+                State.inFlight = true;
+                try { _applySnapshotResponse(res); } finally { State.inFlight = false; }
+            } catch (parseErr) {
+                console.warn('[dashboard] SSE parse error:', parseErr);
+            }
+        };
+        es.onerror = function () {
+            stopDashboardSSE();
+            if (window.intervalRegistry && typeof window.intervalRegistry.start === 'function') {
+                window.intervalRegistry.start('dashboard_snapshot', dashboardDataRefresh, SNAPSHOT_POLL_MS, 'dashboard');
+            }
+        };
+        _dashboardEventSource = es;
+        _dashboardSseActive = true;
+        return true;
+    } catch (e) {
+        return false;
+    }
+}
+
+function startDashboardSnapshotTransport() {
+    stopDashboardSSE();
+    window.intervalRegistry.stop('dashboard_snapshot');
+    if (startDashboardSSE()) return;
+    window.intervalRegistry.start('dashboard_snapshot', dashboardDataRefresh, SNAPSHOT_POLL_MS, 'dashboard');
+}
 
 // BOOT_V2: no tab/wallet-idle gating. Always request wallet so cache-only snapshot serves it (mobile + desktop).
 function getSnapshotFields() {
     if (typeof isSpotModalOpen === 'function' && isSpotModalOpen()) return 'wallet,prices';
-    var activeTab = document.querySelector('.dm-tab.is-active');
-    var tabName = activeTab ? activeTab.getAttribute('data-tab') : '';
-    if (tabName === 'bots') return 'prices,bots,kpis';
-    return 'prices,bots,kpis,wallet';
+    return 'wallet,prices,bots,kpis';
 }
 
 async function fetchSnapshot() {
@@ -1015,10 +1094,7 @@ async function fetchSnapshot() {
         var fields = getSnapshotFields();
         var url = '/api/dashboard/snapshot?account_id=' + State.accountId + (fields ? '&fields=' + encodeURIComponent(fields) : '');
         const res = await window.apiClient.get(url, { timeout: 12000 });
-        const data = (res && res.ok && res.data)
-            ? { ...res.data, account: res.data.kpis?.account || res.data.account, pnl: res.data.kpis?.pnl || res.data.pnl }
-            : res;
-        applySnapshotToUI(data);
+        _applySnapshotResponse(res);
     } catch (error) {
         if (window.errorReporter) window.errorReporter.report(error, { tab: 'dashboard', account_id: State.accountId, action: 'fetchSnapshot' });
         console.warn('[dashboard] Snapshot fetch error:', error?.message || error);
@@ -1144,7 +1220,7 @@ function hydrateTransactionHistoryFromCache(accountId, period, typeFilter, page)
             btn.onclick = function () {
                 var p = parseInt(btn.getAttribute('data-page'), 10);
                 if (typeof loadTransactionHistory === 'function') {
-                    loadTransactionHistory(State.txHistoryPeriod, State.txHistoryType, p, false, { silent: _txHistoryLoaded });
+                    loadTransactionHistory(State.txHistoryPeriod, State.txHistoryType, p, false, { force: true });
                 }
             };
         });
@@ -1590,6 +1666,80 @@ var LEADERBOARD_LOADING_HTML = '<div style="text-align: center; color: var(--ds-
 var LEADERBOARD_LOAD_TIMEOUT_MS = 10000;
 var _leaderboardLoadTimeoutId = null;
 var _leaderboardSyncDebounce = null;
+var LEADERBOARD_RANK_SWAP_MIN_GAP_PCT = 0.15;
+var LEADERBOARD_RANK_SWAP_STABLE_POLLS = 2;
+var _leaderboardRankCandidate = null;
+
+function leaderboardItemKey(item) {
+    var sym = String((item && (item.symbol || (item.params && item.params.symbol))) || '').toUpperCase().replace(/\s/g, '');
+    var sid = String((item && item.structure_id) || 'trailing_dca').toLowerCase();
+    return sym + '|' + sid;
+}
+
+function sortLeaderboardItemsByProfit(items) {
+    return (items || []).slice().sort(function (a, b) {
+        var pa = a.profit_pct != null && Number.isFinite(Number(a.profit_pct)) ? Number(a.profit_pct) : -Infinity;
+        var pb = b.profit_pct != null && Number.isFinite(Number(b.profit_pct)) ? Number(b.profit_pct) : -Infinity;
+        if (pb !== pa) return pb - pa;
+        return leaderboardItemKey(a).localeCompare(leaderboardItemKey(b));
+    });
+}
+
+/** Küçük K/Z farklarında sıra zıplamasını önle — yeni set veya kalıcı fark olunca sırala. */
+function stabilizeLeaderboardOrder(incoming) {
+    incoming = sortLeaderboardItemsByProfit(incoming);
+    if (!incoming.length) {
+        State.leaderboardDisplayOrder = [];
+        _leaderboardRankCandidate = null;
+        return incoming;
+    }
+    var apiOrder = incoming.map(leaderboardItemKey);
+    var prevOrder = State.leaderboardDisplayOrder || [];
+    if (!prevOrder.length || State.leaderboardLastState !== 'items') {
+        State.leaderboardDisplayOrder = apiOrder.slice();
+        _leaderboardRankCandidate = null;
+        return incoming;
+    }
+    var prevSet = prevOrder.slice().sort().join(',');
+    var apiSet = apiOrder.slice().sort().join(',');
+    if (prevSet !== apiSet) {
+        State.leaderboardDisplayOrder = apiOrder.slice();
+        _leaderboardRankCandidate = null;
+        return incoming;
+    }
+    if (prevOrder.join('>') === apiOrder.join('>')) {
+        _leaderboardRankCandidate = null;
+        return incoming;
+    }
+    var orderSig = apiOrder.join('>');
+    if (!_leaderboardRankCandidate || _leaderboardRankCandidate.sig !== orderSig) {
+        _leaderboardRankCandidate = { sig: orderSig, count: 1 };
+    } else {
+        _leaderboardRankCandidate.count += 1;
+    }
+    var gapOk = true;
+    for (var i = 0; i < incoming.length - 1; i++) {
+        var a = Number(incoming[i].profit_pct != null ? incoming[i].profit_pct : 0);
+        var b = Number(incoming[i + 1].profit_pct != null ? incoming[i + 1].profit_pct : 0);
+        if (!Number.isFinite(a) || !Number.isFinite(b) || Math.abs(a - b) < LEADERBOARD_RANK_SWAP_MIN_GAP_PCT) {
+            gapOk = false;
+            break;
+        }
+    }
+    if (_leaderboardRankCandidate.count >= LEADERBOARD_RANK_SWAP_STABLE_POLLS || gapOk) {
+        State.leaderboardDisplayOrder = apiOrder.slice();
+        _leaderboardRankCandidate = null;
+        return incoming;
+    }
+    var byKey = {};
+    incoming.forEach(function (item) { byKey[leaderboardItemKey(item)] = item; });
+    return prevOrder.map(function (k) { return byKey[k]; }).filter(Boolean);
+}
+
+function buildGlobalLeaderboardOrderSignature(items) {
+    if (!Array.isArray(items)) return '';
+    return items.map(leaderboardItemKey).join('>');
+}
 
 function clearLeaderboardLoadTimeout() {
     if (_leaderboardLoadTimeoutId) {
@@ -1609,6 +1759,9 @@ function scheduleLeaderboardLoadTimeout() {
         State.leaderboardItems = [];
         State.leaderboardStructureSig = null;
         State.leaderboardMetricsSig = null;
+        State.leaderboardOrderSig = null;
+        State.leaderboardDisplayOrder = [];
+        _leaderboardRankCandidate = null;
         listEls.forEach(function (el) { el.innerHTML = LEADERBOARD_NO_PROFIT_HTML; });
         if (window.intervalRegistry) window.intervalRegistry.stop('dashboard.leaderboard');
     }, LEADERBOARD_LOAD_TIMEOUT_MS);
@@ -1621,6 +1774,9 @@ function setGlobalLeaderboardEmpty(html, stopPoll) {
     State.leaderboardItems = [];
     State.leaderboardStructureSig = null;
     State.leaderboardMetricsSig = null;
+    State.leaderboardOrderSig = null;
+    State.leaderboardDisplayOrder = [];
+    _leaderboardRankCandidate = null;
     listEls.forEach(function (el) {
         if (el.innerHTML !== msg) el.innerHTML = msg;
     });
@@ -1653,9 +1809,15 @@ function filterLeaderboardItemsForDisplay(items) {
 
 function buildGlobalLeaderboardMetricsSignature(items) {
     if (!Array.isArray(items)) return '';
-    return items.map(function (item, index) {
-        return index + ':' + (item.symbol || '') + ':' + (item.profit_pct != null ? item.profit_pct : '') + ':' + (item.total_pnl_usd != null ? item.total_pnl_usd : '');
+    return items.map(function (item) {
+        return leaderboardItemKey(item) + ':' + (item.profit_pct != null ? item.profit_pct : '') + ':' + (item.total_pnl_usd != null ? item.total_pnl_usd : '') + ':' + (item.cycles_count != null ? item.cycles_count : '');
     }).join('|');
+}
+
+function formatLeaderboardCyclesLabel(item) {
+    var n = item && item.cycles_count != null ? Number(item.cycles_count) : NaN;
+    if (!Number.isFinite(n) || n < 0) return 'Tamamlanan tur: —';
+    return 'Tamamlanan tur: ' + String(Math.floor(n));
 }
 
 /** Leaderboard coin logos — DOM yeniden kurulunca cache'den src; yoksa lazy observer. */
@@ -1845,10 +2007,10 @@ window.closeParametrelerModal = closeParametrelerModal;
 
 function buildGlobalLeaderboardStructureSignature(items) {
     if (!Array.isArray(items)) return '';
-    return items.map(function (item, index) {
+    return items.map(function (item) {
         var params = normalizeLeaderboardParamsToFormConfig(item.params || {});
-        return index + ':' + (item.structure_id || '') + ':' + (item.symbol || '') + ':' + JSON.stringify(params);
-    }).join('|');
+        return leaderboardItemKey(item) + ':' + JSON.stringify(params);
+    }).slice().sort().join('|');
 }
 
 function buildGlobalLeaderboardItemHtml(item, index) {
@@ -1868,16 +2030,23 @@ function buildGlobalLeaderboardItemHtml(item, index) {
     var paramsJsonAttr = JSON.stringify(params).replace(/"/g, '&quot;');
     var refPrice = item.reference_price != null ? String(item.reference_price) : '';
     var structureNameAttr = (typeof escapeHtml === 'function' ? escapeHtml(structureName) : structureName).replace(/"/g, '&quot;');
+    var itemKey = leaderboardItemKey(item);
+    var itemKeyAttr = (typeof escapeHtml === 'function' ? escapeHtml(itemKey) : itemKey).replace(/"/g, '&quot;');
+    var cyclesLabel = formatLeaderboardCyclesLabel(item);
     var applyBtnHtml = structure ? '<button type="button" class="btn btn-sm global-leaderboard-apply-btn" data-structure-id="' + (typeof escapeHtml === 'function' ? escapeHtml(structureId) : structureId) + '" data-params="' + paramsJsonAttr + '">Uygula</button>' : '';
     var viewParamsBtnHtml = '<button type="button" class="btn btn-sm global-leaderboard-view-params-btn" data-params="' + paramsJsonAttr + '" data-structure-name="' + structureNameAttr + '" data-rank="' + (index + 1) + '" data-reference-price="' + refPrice.replace(/"/g, '&quot;') + '">Parametreleri görüntüle</button>';
-    return '<div class="global-leaderboard-item" data-item-index="' + index + '" data-running-since="' + runningSinceNorm.replace(/"/g, '&quot;') + '">' +
+    return '<div class="global-leaderboard-item" data-item-key="' + itemKeyAttr + '" data-item-index="' + index + '" data-running-since="' + runningSinceNorm.replace(/"/g, '&quot;') + '">' +
         '<div class="global-leaderboard-item-main">' +
         '<div class="global-leaderboard-item-head">' +
         '<div class="global-leaderboard-symbol-wrap">' + symbolLogoHtml + '<span class="global-leaderboard-symbol-name">' + (typeof escapeHtml === 'function' ? escapeHtml(symbolStr) : symbolStr) + '</span></div>' +
         '<span class="global-leaderboard-rank-name">' + (index + 1) + '. ' + (typeof escapeHtml === 'function' ? escapeHtml(structureName) : structureName) + '</span>' +
         '<span class="global-leaderboard-pct" style="color:' + pnlMeta.color + '">' + pnlMeta.text + '</span>' +
         '</div>' +
-        '<div class="global-leaderboard-item-duration">Çalışma süresi: ' + runningStr + '</div>' +
+        '<div class="global-leaderboard-item-meta">' +
+        '<span class="global-leaderboard-item-duration">Çalışma süresi: ' + runningStr + '</span>' +
+        '<span class="global-leaderboard-item-sep" aria-hidden="true">·</span>' +
+        '<span class="global-leaderboard-item-cycles">' + cyclesLabel + '</span>' +
+        '</div>' +
         '</div>' +
         '<div class="global-leaderboard-item-actions">' + viewParamsBtnHtml + applyBtnHtml + '</div>' +
         '</div>';
@@ -1957,10 +2126,19 @@ function patchGlobalLeaderboardMetrics(items) {
     State.leaderboardItems = items;
     lists.forEach(function (listEl) {
     items.forEach(function (item, index) {
-        var row = listEl.querySelector('.global-leaderboard-item[data-item-index="' + index + '"]');
+        var itemKey = leaderboardItemKey(item);
+        var row = listEl.querySelector('.global-leaderboard-item[data-item-key="' + itemKey + '"]');
         if (!row) return;
+        var structureId = (item.structure_id || 'trailing_dca').toLowerCase();
+        var structure = typeof BOT_STRUCTURES !== 'undefined' ? BOT_STRUCTURES.find(function (s) { return s.id === structureId; }) : null;
+        var structureName = structure ? structure.name : structureId;
+        var rankNameEl = row.querySelector('.global-leaderboard-rank-name');
+        var rankText = (index + 1) + '. ' + structureName;
+        if (rankNameEl && rankNameEl.textContent !== rankText) rankNameEl.textContent = rankText;
+        row.setAttribute('data-item-index', String(index));
         var pnlEl = row.querySelector('.global-leaderboard-pct');
         var durEl = row.querySelector('.global-leaderboard-item-duration');
+        var cyclesEl = row.querySelector('.global-leaderboard-item-cycles');
         var pnlMeta = formatLeaderboardTotalPnl(item);
         if (pnlEl) {
             if (pnlEl.textContent !== pnlMeta.text) pnlEl.textContent = pnlMeta.text;
@@ -1970,6 +2148,10 @@ function patchGlobalLeaderboardMetrics(items) {
             var isoNorm = normalizeRunningSinceIso(item.running_since_iso || row.getAttribute('data-running-since'));
             var durText = 'Çalışma süresi: ' + formatLeaderboardRunningDuration(isoNorm);
             if (durEl.textContent !== durText) durEl.textContent = durText;
+        }
+        if (cyclesEl) {
+            var cyclesText = formatLeaderboardCyclesLabel(item);
+            if (cyclesEl.textContent !== cyclesText) cyclesEl.textContent = cyclesText;
         }
         if (item.running_since_iso) row.setAttribute('data-running-since', normalizeRunningSinceIso(item.running_since_iso));
         var params = stripLeaderboardBudgetFromParams(normalizeLeaderboardParamsToFormConfig(item.params || {}));
@@ -2027,24 +2209,28 @@ async function loadGlobalLeaderboard(patchOnly) {
             );
             return;
         }
+        items = stabilizeLeaderboardOrder(items);
         State.leaderboardItems = items;
+        var orderSig = buildGlobalLeaderboardOrderSignature(items);
         var structureSig = buildGlobalLeaderboardStructureSignature(items);
         var metricsSig = buildGlobalLeaderboardMetricsSignature(items);
         var domCount = primaryList.querySelectorAll('.global-leaderboard-item').length;
         if (patchOnly && State.leaderboardLastState === 'items') {
-            if (State.leaderboardStructureSig === structureSig && domCount === items.length) {
+            if (State.leaderboardOrderSig === orderSig && domCount === items.length) {
                 patchGlobalLeaderboardMetrics(items);
                 State.leaderboardMetricsSig = metricsSig;
+                State.leaderboardStructureSig = structureSig;
                 startGlobalLeaderboardPoll();
                 return;
             }
         }
-        var structureUnchanged = State.leaderboardStructureSig === structureSig
+        var orderUnchanged = State.leaderboardOrderSig === orderSig
             && domCount === items.length
             && State.leaderboardLastState === 'items';
-        if (structureUnchanged) {
+        if (orderUnchanged) {
             patchGlobalLeaderboardMetrics(items);
             State.leaderboardMetricsSig = metricsSig;
+            State.leaderboardStructureSig = structureSig;
             startGlobalLeaderboardPoll();
             return;
         }
@@ -2053,6 +2239,7 @@ async function loadGlobalLeaderboard(patchOnly) {
             html += buildGlobalLeaderboardItemHtml(item, index);
         });
         State.leaderboardLastState = 'items';
+        State.leaderboardOrderSig = orderSig;
         State.leaderboardStructureSig = structureSig;
         State.leaderboardMetricsSig = metricsSig;
         listEls.forEach(function (el) {
@@ -2080,12 +2267,26 @@ const TX_HISTORY_POLL_MS = 3500;
 var _txHistoryRateLimitUntil = 0;
 
 var _txHistoryInitialSyncDone = false;
+var _txHistoryLoadSeq = 0;
+var _txHistoryInflight = null;
+var _txHistoryInflightKey = '';
+var _spotTxHistoryPending = {};
+
+function _txHistoryListHasContent() {
+    var listEl = document.getElementById('txHistoryList');
+    if (!listEl) return false;
+    return !!listEl.querySelector('.tx-history-item');
+}
 
 function resetTxHistoryClientState() {
     _txHistoryRevision = '';
     _txHistoryLastSig = '';
     _txHistoryLoaded = false;
     _txHistoryInitialSyncDone = false;
+    _txHistoryLoadSeq += 1;
+    _txHistoryInflight = null;
+    _txHistoryInflightKey = '';
+    _spotTxHistoryPending = {};
 }
 window.resetTxHistoryClientState = resetTxHistoryClientState;
 
@@ -2104,9 +2305,19 @@ function _txEncodeAttr(tx) {
         return '';
     }
 }
+function _txIsPaperSpotTx(tx) {
+    if (!tx) return false;
+    if (tx.paper === true) return true;
+    var oid = String(tx.order_id || tx.trade_id || '');
+    return oid.indexOf('test_paper_') === 0;
+}
 function _txPlatformLabel(tx) {
-    var p = (tx && tx.platform && String(tx.platform)) || (tx && (tx.bot_id || tx.source === 'bot') ? 'TraderTrailing' : 'Binance');
-    return p === 'TradeTrailing' ? 'TraderTrailing' : p;
+    if (!tx) return 'Binance';
+    if (tx.bot_id || tx.source === 'bot') return 'TraderTrailing';
+    if (_txIsPaperSpotTx(tx)) return 'TraderTrailing';
+    var p = tx.platform && String(tx.platform);
+    if (p) return p === 'TradeTrailing' ? 'TraderTrailing' : p;
+    return 'Binance';
 }
 
 function isTransactionHistoryPanelVisible() {
@@ -2122,6 +2333,253 @@ function _txHistoryItemsSig(d) {
     return String(d.revision || '') + '|' + (d.total || 0) + '|' + d.items.map(function (tx) {
         return (tx.id || '') + ':' + (tx.time || '') + ':' + (tx.qty || '');
     }).join(';');
+}
+
+function clearTxHistoryUiCache(accountId) {
+    if (!accountId) return;
+    try {
+        var prefix = TX_HISTORY_CACHE_PREFIX + accountId;
+        [sessionStorage, localStorage].forEach(function (store) {
+            for (var i = store.length - 1; i >= 0; i--) {
+                var k = store.key(i);
+                if (k && k.indexOf(prefix) === 0) store.removeItem(k);
+            }
+        });
+    } catch (e) { /* ignore */ }
+}
+
+function _fmtTxQtyShort(n) {
+    if (n == null || !Number.isFinite(n)) return '—';
+    var s = Number(n).toFixed(8).replace(/\.?0+$/, '');
+    return s || '0';
+}
+
+function _renderTxHistoryItemHtml(tx) {
+    var timeStr = tx.time ? new Date(tx.time).toLocaleString('tr-TR', { dateStyle: 'short', timeStyle: 'short' }) : '—';
+    var typeLabel = tx.type_label || (tx.type === 'buy' ? 'Alım' : tx.type === 'sell' ? 'Satım' : tx.type === 'deposit' ? 'Yatırım' : tx.type === 'withdraw' ? 'Çekim' : '—');
+    var typeClass = tx.type === 'buy' ? 'tx-type-buy' : tx.type === 'sell' ? 'tx-type-sell' : tx.type === 'deposit' ? 'tx-type-deposit' : tx.type === 'withdraw' ? 'tx-type-withdraw' : '';
+    var amtRow = _txDisplayAmounts(tx);
+    var qtyStr = _fmtTxQtyShort(amtRow.qty);
+    var priceStr = amtRow.price > 0 ? (typeof fmtCoinPrice === 'function' ? fmtCoinPrice(amtRow.price) : '$' + Number(amtRow.price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 8 })) : '—';
+    var totalVal = (tx.type === 'deposit' || tx.type === 'withdraw')
+        ? (qtyStr + ' ' + (tx.symbol || ''))
+        : (amtRow.notional > 0 ? (typeof fmtUsd === 'function' ? fmtUsd(amtRow.notional) : '$' + amtRow.notional) : '—');
+    var sourceLabel = tx.source_label || (tx.source === 'bot' ? 'Bot' : tx.source === 'spot' ? 'Spot' : '—');
+    var platformLabel = _txPlatformLabel(tx);
+    var metaRight = (tx.type === 'buy' || tx.type === 'sell') ? ('Miktar ' + qtyStr + ' · Fiyat ' + priceStr) : (qtyStr + (tx.symbol ? ' ' + tx.symbol : ''));
+    return '<div class="tx-history-item" data-tx="' + _txEncodeAttr(tx) + '" role="button" tabindex="0">' +
+        '<div class="tx-history-item-left">' +
+        '<div class="tx-history-item-title"><span class="' + typeClass + '">' + typeLabel + '</span> ' + (tx.symbol || '') + '</div>' +
+        '<div class="tx-history-item-meta">' + timeStr + ' · ' + sourceLabel + ' · ' + platformLabel + (tx.bot_name ? ' · ' + tx.bot_name : '') + '</div>' +
+        '</div>' +
+        '<div class="tx-history-item-right">' +
+        '<div class="tx-history-item-total">' + totalVal + '</div>' +
+        '<div class="tx-history-item-meta">' + metaRight + '</div>' +
+        '</div></div>';
+}
+
+function _bindTxHistoryItemClicks(rootEl) {
+    var listEl = rootEl || document.getElementById('txHistoryList');
+    if (!listEl) return;
+    listEl.querySelectorAll('.tx-history-item').forEach(function (el) {
+        el.onclick = function () {
+            try {
+                var raw = el.getAttribute('data-tx');
+                var tx = raw ? JSON.parse(decodeURIComponent(raw)) : null;
+                if (tx && typeof openTxDetailModal === 'function') openTxDetailModal(tx);
+            } catch (e) {}
+        };
+    });
+}
+
+function spotOrderResultToTxItem(result, symbol, side) {
+    var r = result || {};
+    var executedQty = parseFloat(r.executedQty != null ? r.executedQty : r.executed_qty);
+    var cumQuote = parseFloat(r.cummulativeQuoteQty != null ? r.cummulativeQuoteQty : (r.cumulativeQuoteQty != null ? r.cumulativeQuoteQty : r.executed_value_usdt));
+    var price = parseFloat(r.price || 0);
+    if (!Number.isFinite(executedQty)) executedQty = 0;
+    if (!Number.isFinite(cumQuote)) cumQuote = 0;
+    if (!Number.isFinite(price)) price = 0;
+    if (executedQty > 0 && cumQuote > 0) price = cumQuote / executedQty;
+    var sideU = (side || r.side || '').toUpperCase();
+    var isBuy = sideU === 'BUY';
+    var sym = (symbol || r.symbol || '').toUpperCase();
+    var orderId = String(r.orderId || r.order_id || ('spot_' + Date.now()));
+    return {
+        id: 'o_' + orderId,
+        trade_id: orderId,
+        order_id: orderId,
+        time: new Date().toISOString(),
+        type: isBuy ? 'buy' : 'sell',
+        type_label: isBuy ? 'Alım' : 'Satım',
+        symbol: sym,
+        side: sideU,
+        qty: executedQty,
+        price: price,
+        quote_qty: cumQuote,
+        commission: 0,
+        commission_asset: 'USDT',
+        source: 'spot',
+        source_label: 'Spot',
+        platform: r.paper ? 'TraderTrailing' : 'Binance',
+        fills_count: 1
+    };
+}
+
+function spotTradeMatchesTxHistoryFilters(side) {
+    var typeFilter = (State.txHistoryType || 'buysell').toLowerCase();
+    var sideU = (side || '').toUpperCase();
+    if (typeFilter === 'buy' && sideU !== 'BUY') return false;
+    if (typeFilter === 'sell' && sideU !== 'SELL') return false;
+    if (typeFilter === 'deposit' || typeFilter === 'withdraw' || typeFilter === 'depositwithdraw') return false;
+    return true;
+}
+
+function spotTxPendingMatchesPeriod(tx, period) {
+    if (!tx || !tx.time) return true;
+    var p = (period || 'daily').toLowerCase();
+    if (p === 'all') return true;
+    var d = new Date(tx.time);
+    if (isNaN(d.getTime())) return true;
+    var fmt = function (dt) { return dt.toLocaleDateString('en-CA', { timeZone: 'Europe/Istanbul' }); };
+    var txDay = fmt(d);
+    var today = fmt(new Date());
+    if (p === 'daily') return txDay === today;
+    var diffDays = Math.floor((new Date(today).getTime() - new Date(txDay).getTime()) / 86400000);
+    if (p === 'weekly') return diffDays >= 0 && diffDays <= 6;
+    if (p === 'monthly') return diffDays >= 0 && diffDays <= 29;
+    return true;
+}
+
+function registerPendingSpotTxHistory(result, symbol, side) {
+    if (!spotTradeMatchesTxHistoryFilters(side)) return null;
+    var tx = spotOrderResultToTxItem(result, symbol, side);
+    if (!(tx.qty > 0) && !(tx.quote_qty > 0)) return null;
+    var oid = String(tx.order_id || tx.trade_id || '');
+    if (oid) _spotTxHistoryPending[oid] = tx;
+    return tx;
+}
+
+function clearPendingSpotTxFromServerItems(items) {
+    (items || []).forEach(function (tx) {
+        var oid = String(tx.order_id || tx.trade_id || '');
+        if (oid && _spotTxHistoryPending[oid]) delete _spotTxHistoryPending[oid];
+    });
+}
+
+function mergePendingSpotTxHistoryItems(serverItems, period) {
+    var items = Array.isArray(serverItems) ? serverItems.slice() : [];
+    var serverIds = {};
+    items.forEach(function (tx) {
+        var oid = String(tx.order_id || tx.trade_id || '');
+        if (oid) serverIds[oid] = true;
+    });
+    var pending = [];
+    Object.keys(_spotTxHistoryPending).forEach(function (k) {
+        var tx = _spotTxHistoryPending[k];
+        if (!tx) return;
+        var oid = String(tx.order_id || tx.trade_id || '');
+        if (serverIds[oid]) return;
+        if (!spotTradeMatchesTxHistoryFilters(tx.side)) return;
+        if (!spotTxPendingMatchesPeriod(tx, period)) return;
+        pending.push(tx);
+    });
+    pending.sort(function (a, b) {
+        return String(b.time || '').localeCompare(String(a.time || ''));
+    });
+    return pending.concat(items);
+}
+
+function _paintTxHistoryList(items, page, total, perPage, totalPages, period, typeFilter) {
+    var listEl = document.getElementById('txHistoryList');
+    var paginationEl = document.getElementById('txHistoryPagination');
+    if (!listEl) return;
+    if (!items || items.length === 0) {
+        listEl.innerHTML = '<div class="tx-history-empty" style="text-align:center;padding:2rem;color:var(--ds-text-secondary);">Bu filtrede işlem bulunamadı.</div>';
+    } else {
+        var html = items.map(function (tx) { return _renderTxHistoryItemHtml(tx); }).join('');
+        listEl.innerHTML = '<div class="tx-history-items">' + html + '</div>';
+        _bindTxHistoryItemClicks(listEl);
+    }
+    if (paginationEl) {
+        if (totalPages > 1) {
+            var pg = '';
+            if (page > 1) pg += '<button type="button" class="btn btn-sm tx-pg-btn" data-page="' + (page - 1) + '">← Önceki</button>';
+            pg += '<span style="margin:0 0.5rem;font-size:0.9rem;color:var(--ds-text-secondary);">Sayfa ' + page + ' / ' + totalPages + '</span>';
+            if (page < totalPages) pg += '<button type="button" class="btn btn-sm tx-pg-btn" data-page="' + (page + 1) + '">Sonraki →</button>';
+            paginationEl.innerHTML = pg;
+            paginationEl.querySelectorAll('.tx-pg-btn').forEach(function (btn) {
+                btn.onclick = function () {
+                    var p = parseInt(btn.getAttribute('data-page'), 10);
+                    if (typeof loadTransactionHistory === 'function') loadTransactionHistory(State.txHistoryPeriod, State.txHistoryType, p, false, { force: true });
+                };
+            });
+        } else {
+            paginationEl.innerHTML = '';
+        }
+    }
+    document.querySelectorAll('.tx-period-btn').forEach(function (b) { b.classList.toggle('active', b.getAttribute('data-period') === period); });
+    document.querySelectorAll('.tx-type-btn').forEach(function (b) { b.classList.toggle('active', b.getAttribute('data-type') === typeFilter); });
+}
+
+function scheduleTxHistoryRefreshAfterTrade(result, symbol, side) {
+    if (!State.accountId || typeof loadTransactionHistory !== 'function') return;
+    registerPendingSpotTxHistory(result, symbol, side);
+    if (typeof prependSpotTradeToTxHistoryPanel === 'function') {
+        prependSpotTradeToTxHistoryPanel(result, symbol, side);
+    }
+    var period = State.txHistoryPeriod || 'daily';
+    var typeFilter = State.txHistoryType || 'buysell';
+    [0, 400, 1000, 2500].forEach(function (delayMs) {
+        setTimeout(function () {
+            if (!State.accountId) return;
+            loadTransactionHistory(period, typeFilter, 1, false, { force: true, afterTrade: true });
+        }, delayMs);
+    });
+}
+
+function prependSpotTradeToTxHistoryPanel(result, symbol, side) {
+    var tx = registerPendingSpotTxHistory(result, symbol, side);
+    if (!tx) return null;
+    var listEl = document.getElementById('txHistoryList');
+    if (!listEl) return tx;
+    var container = listEl.querySelector('.tx-history-items');
+    var html = _renderTxHistoryItemHtml(tx);
+    var dup = false;
+    if (container) {
+        container.querySelectorAll('.tx-history-item').forEach(function (el) {
+            try {
+                var raw = el.getAttribute('data-tx');
+                var existing = raw ? JSON.parse(decodeURIComponent(raw)) : null;
+                if (existing && (String(existing.order_id) === String(tx.order_id) || String(existing.trade_id) === String(tx.trade_id))) dup = true;
+            } catch (e) {}
+        });
+    }
+    if (!dup) {
+        if (!container) {
+            listEl.innerHTML = '<div class="tx-history-items">' + html + '</div>';
+        } else {
+            container.insertAdjacentHTML('afterbegin', html);
+        }
+        _bindTxHistoryItemClicks(listEl);
+    }
+    return tx;
+}
+
+function formatSpotTradeFillToast(result, side, orderType, symbol) {
+    var tx = spotOrderResultToTxItem(result, symbol, side);
+    var typeLabel = (orderType || 'MARKET').toUpperCase() === 'LIMIT' ? 'Limit' : 'Market';
+    var sideLabel = tx.type_label || ((side || '').toUpperCase() === 'BUY' ? 'Alış' : 'Satış');
+    var sym = (symbol || tx.symbol || '').toUpperCase();
+    var base = sym.endsWith('USDT') ? sym.slice(0, -4) : sym;
+    var qtyStr = _fmtTxQtyShort(tx.qty);
+    var quoteStr = tx.quote_qty > 0
+        ? (typeof fmtUsd === 'function' ? fmtUsd(tx.quote_qty) : ('$' + Number(tx.quote_qty).toFixed(2)))
+        : '—';
+    if (!(tx.qty > 0) && !(tx.quote_qty > 0)) {
+        return typeLabel + ' ' + sideLabel + ' emri gönderildi';
+    }
+    return typeLabel + ' ' + sideLabel + ' gerçekleşti: ' + qtyStr + ' ' + base + ' · ' + quoteStr;
 }
 
 async function pollTransactionHistoryRevision() {
@@ -2159,21 +2617,43 @@ async function pollTransactionHistoryRevision() {
 
 async function loadTransactionHistory(period, typeFilter, page, sync, opts) {
     opts = opts || {};
-    var silent = !!opts.silent;
+    var force = !!opts.force;
+    var afterTrade = !!opts.afterTrade;
+    var silent = !!opts.silent && !force;
     if (!State.accountId || !window.apiClient) return;
     var listEl = document.getElementById('txHistoryList');
     var paginationEl = document.getElementById('txHistoryPagination');
     if (!listEl) return;
-    var hadCache = hydrateTransactionHistoryFromCache(State.accountId, period, typeFilter, page);
-    if (hadCache) silent = true;
+    var hadCache = false;
+    if (force) {
+        if (!afterTrade) _txHistoryRevision = '';
+        _txHistoryLastSig = '';
+        silent = false;
+        clearTxHistoryUiCache(State.accountId);
+    } else {
+        hadCache = hydrateTransactionHistoryFromCache(State.accountId, period, typeFilter, page);
+        if (hadCache) silent = true;
+    }
+    var hasContent = _txHistoryListHasContent();
+    if (hasContent && !force) silent = true;
     if (!silent) _txHistoryLastSig = '';
-    var doSync = !!sync || (!_txHistoryInitialSyncDone && (typeFilter || 'buysell') === 'buysell' && !hadCache);
+    var doSync = !!sync || (!_txHistoryInitialSyncDone && (typeFilter || 'buysell') === 'buysell' && !hadCache && !force);
     if (doSync) _txHistoryInitialSyncDone = true;
+    if (!force && Date.now() < _txHistoryRateLimitUntil) return;
+    var reqKey = String(State.accountId) + '|' + period + '|' + typeFilter + '|' + page + '|' + (doSync ? '1' : '0');
+    if (afterTrade) {
+        _txHistoryInflight = null;
+        _txHistoryInflightKey = '';
+        reqKey += '|at' + Date.now();
+    } else if (_txHistoryInflight && _txHistoryInflightKey === reqKey) {
+        return _txHistoryInflight;
+    }
+    var mySeq = ++_txHistoryLoadSeq;
     var txHistoryRequestDone = false;
     var loadingTimer = null;
-    if (!silent && !hadCache) {
+    if (!silent && !hadCache && !hasContent) {
         loadingTimer = setTimeout(function () {
-            if (txHistoryRequestDone) return;
+            if (txHistoryRequestDone || mySeq !== _txHistoryLoadSeq) return;
             listEl.innerHTML = '<div class="tx-history-loading" style="text-align:center;padding:2rem;color:var(--ds-text-secondary);">Yükleniyor...</div>';
         }, 200);
         if (paginationEl) paginationEl.innerHTML = '';
@@ -2181,82 +2661,42 @@ async function loadTransactionHistory(period, typeFilter, page, sync, opts) {
     State.txHistoryPeriod = period;
     State.txHistoryType = typeFilter;
     State.txHistoryPage = page;
-    if (Date.now() < _txHistoryRateLimitUntil) return;
     var q = '/api/accounts/' + State.accountId + '/transaction-history?period=' + encodeURIComponent(period) + '&type_filter=' + encodeURIComponent(typeFilter) + '&page=' + page + (doSync ? '&sync=1' : '');
+    if (!doSync && !force && _txHistoryRevision) {
+        q += '&revision=' + encodeURIComponent(_txHistoryRevision);
+    }
+    if (afterTrade) q += '&_nc=' + Date.now();
+    _txHistoryInflightKey = reqKey;
+    _txHistoryInflight = (async function () {
     try {
         var res = await window.apiClient.get(q, { suppressRateLimitToast: !!silent });
+        if (mySeq !== _txHistoryLoadSeq) return;
         txHistoryRequestDone = true;
         if (loadingTimer) clearTimeout(loadingTimer);
         var d = _txHistoryPayload(res);
         if (d && d.revision != null) _txHistoryRevision = String(d.revision);
-        var sig = _txHistoryItemsSig(d);
-        if (silent && sig && sig === _txHistoryLastSig) return;
+        var rawItems = (d && Array.isArray(d.items)) ? d.items : null;
+        if (rawItems) clearPendingSpotTxFromServerItems(rawItems);
+        var items = rawItems ? mergePendingSpotTxHistoryItems(rawItems, period) : mergePendingSpotTxHistoryItems([], period);
+        var sigPayload = d ? Object.assign({}, d, { items: items }) : { items: items };
+        var sig = _txHistoryItemsSig(sigPayload);
+        if (silent && !force && sig && sig === _txHistoryLastSig) return;
         _txHistoryLastSig = sig;
         _txHistoryLoaded = true;
-        if (!d || !Array.isArray(d.items)) {
-            listEl.innerHTML = '<div class="tx-history-empty" style="text-align:center;padding:2rem;color:var(--ds-text-secondary);">İşlem bulunamadı.</div>';
+        if (!rawItems && items.length === 0) {
+            if (!hasContent && !_txHistoryListHasContent()) {
+                listEl.innerHTML = '<div class="tx-history-empty" style="text-align:center;padding:2rem;color:var(--ds-text-secondary);">İşlem bulunamadı.</div>';
+            }
             return;
         }
-        var items = d.items;
-        var total = d.total || 0;
-        var totalPages = d.total_pages || 1;
-        if (items.length === 0) {
-            listEl.innerHTML = '<div class="tx-history-empty" style="text-align:center;padding:2rem;color:var(--ds-text-secondary);">Bu filtrede işlem bulunamadı.</div>';
-        } else {
-            function fmtQtyShort(n) {
-                if (n == null || !Number.isFinite(n)) return '—';
-                var s = Number(n).toFixed(8).replace(/\.?0+$/, '');
-                return s || '0';
-            }
-            var html = items.map(function (tx) {
-                var timeStr = tx.time ? new Date(tx.time).toLocaleString('tr-TR', { dateStyle: 'short', timeStyle: 'short' }) : '—';
-                var typeLabel = tx.type_label || (tx.type === 'buy' ? 'Alım' : tx.type === 'sell' ? 'Satım' : tx.type === 'deposit' ? 'Yatırım' : tx.type === 'withdraw' ? 'Çekim' : '—');
-                var typeClass = tx.type === 'buy' ? 'tx-type-buy' : tx.type === 'sell' ? 'tx-type-sell' : tx.type === 'deposit' ? 'tx-type-deposit' : tx.type === 'withdraw' ? 'tx-type-withdraw' : '';
-                var amtRow = _txDisplayAmounts(tx);
-                var qtyStr = fmtQtyShort(amtRow.qty);
-                var priceStr = amtRow.price > 0 ? (typeof fmtCoinPrice === 'function' ? fmtCoinPrice(amtRow.price) : '$' + Number(amtRow.price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 8 })) : '—';
-                var totalVal = (tx.type === 'deposit' || tx.type === 'withdraw')
-                    ? (qtyStr + ' ' + (tx.symbol || ''))
-                    : (amtRow.notional > 0 ? (typeof fmtUsd === 'function' ? fmtUsd(amtRow.notional) : '$' + amtRow.notional) : '—');
-                var sourceLabel = tx.source_label || (tx.source === 'bot' ? 'Bot' : tx.source === 'spot' ? 'Spot' : '—');
-                var platformLabel = _txPlatformLabel(tx);
-                var metaRight = (tx.type === 'buy' || tx.type === 'sell') ? ('Miktar ' + qtyStr + ' · Fiyat ' + priceStr) : (qtyStr + (tx.symbol ? ' ' + tx.symbol : ''));
-                return '<div class="tx-history-item" data-tx="' + _txEncodeAttr(tx) + '" role="button" tabindex="0">' +
-                    '<div class="tx-history-item-left">' +
-                    '<div class="tx-history-item-title"><span class="' + typeClass + '">' + typeLabel + '</span> ' + (tx.symbol || '') + '</div>' +
-                    '<div class="tx-history-item-meta">' + timeStr + ' · ' + sourceLabel + ' · ' + platformLabel + (tx.bot_name ? ' · ' + tx.bot_name : '') + '</div>' +
-                    '</div>' +
-                    '<div class="tx-history-item-right">' +
-                    '<div class="tx-history-item-total">' + totalVal + '</div>' +
-                    '<div class="tx-history-item-meta">' + metaRight + '</div>' +
-                    '</div></div>';
-            }).join('');
-            listEl.innerHTML = '<div class="tx-history-items">' + html + '</div>';
-            listEl.querySelectorAll('.tx-history-item').forEach(function (el) {
-                el.onclick = function () {
-                    try {
-                        var raw = el.getAttribute('data-tx');
-                        var tx = raw ? JSON.parse(decodeURIComponent(raw)) : null;
-                        if (tx && typeof openTxDetailModal === 'function') openTxDetailModal(tx);
-                    } catch (e) {}
-                };
-            });
-        }
-        if (paginationEl && totalPages > 1) {
-            var pg = '';
-            if (page > 1) pg += '<button type="button" class="btn btn-sm tx-pg-btn" data-page="' + (page - 1) + '">← Önceki</button>';
-            pg += '<span style="margin:0 0.5rem;font-size:0.9rem;color:var(--ds-text-secondary);">Sayfa ' + page + ' / ' + totalPages + '</span>';
-            if (page < totalPages) pg += '<button type="button" class="btn btn-sm tx-pg-btn" data-page="' + (page + 1) + '">Sonraki →</button>';
-            paginationEl.innerHTML = pg;
-            paginationEl.querySelectorAll('.tx-pg-btn').forEach(function (btn) {
-                btn.onclick = function () {
-                    var p = parseInt(btn.getAttribute('data-page'), 10);
-                    if (typeof loadTransactionHistory === 'function') loadTransactionHistory(State.txHistoryPeriod, State.txHistoryType, p, false);
-                };
-            });
-        }
-        document.querySelectorAll('.tx-period-btn').forEach(function (b) { b.classList.toggle('active', b.getAttribute('data-period') === period); });
-        document.querySelectorAll('.tx-type-btn').forEach(function (b) { b.classList.toggle('active', b.getAttribute('data-type') === typeFilter); });
+        var total = Number(d && d.total) || 0;
+        var perPage = Number(d && d.per_page) || 20;
+        var totalPages = Number(d && d.total_pages) || 0;
+        if (page === 1 && items.length > total) total = items.length;
+        if (!totalPages && total > 0) totalPages = Math.ceil(total / perPage);
+        if (total > 0 && total <= perPage) totalPages = 1;
+        if (totalPages < 1 && total > 0) totalPages = 1;
+        _paintTxHistoryList(items, page, total, perPage, totalPages, period, typeFilter);
         _persistTxHistoryCache(
             State.accountId,
             period,
@@ -2273,17 +2713,25 @@ async function loadTransactionHistory(period, typeFilter, page, sync, opts) {
             sessionStorage.setItem('dashboard_tx_page_' + State.accountId, String(page));
         } catch (eSave) {}
     } catch (e) {
+        if (mySeq !== _txHistoryLoadSeq) return;
         txHistoryRequestDone = true;
         if (loadingTimer) clearTimeout(loadingTimer);
         if (e && e.status === 429) {
             var raTx = (e.retry_after != null) ? Number(e.retry_after) : 60;
             _txHistoryRateLimitUntil = Date.now() + Math.min(120000, Math.max(15000, raTx * 1000));
         }
-        if (!silent) {
+        if (!silent && !_txHistoryListHasContent()) {
             if (window.errorReporter) window.errorReporter.report(e, { account_id: State.accountId, action: 'loadTransactionHistory' });
             listEl.innerHTML = '<div class="tx-history-error" style="text-align:center;padding:2rem;color:var(--ds-loss,#f6465d);">Yüklenemedi.</div>';
         }
+    } finally {
+        if (_txHistoryInflightKey === reqKey) {
+            _txHistoryInflight = null;
+            _txHistoryInflightKey = '';
+        }
     }
+    })();
+    return _txHistoryInflight;
 }
 window.loadTransactionHistory = loadTransactionHistory;
 window.pollTransactionHistoryRevision = pollTransactionHistoryRevision;
@@ -2441,7 +2889,13 @@ function applySnapshotToUI(data) {
         loadGlobalLeaderboard(isBotsTabActive() && isBotsTabCacheReady());
     }
     if (State.accountId && typeof loadTransactionHistory === 'function') {
-        loadTransactionHistory(State.txHistoryPeriod || 'daily', State.txHistoryType || 'buysell', State.txHistoryPage || 1, false);
+        loadTransactionHistory(
+            State.txHistoryPeriod || 'daily',
+            State.txHistoryType || 'buysell',
+            State.txHistoryPage || 1,
+            false,
+            { silent: _txHistoryLoaded }
+        );
     }
 }
 
@@ -2512,7 +2966,7 @@ function persistFinanceBotsDomCache() {
             html: src.innerHTML,
             structureSig: _financeBotsStructureSignature,
             idsSig: _financeBotsIdsSignature,
-            sortBy: typeof financeBotsSortBy !== 'undefined' ? financeBotsSortBy : 'pct'
+            sortBy: normalizeFinanceBotsSortBy(typeof financeBotsSortBy !== 'undefined' ? financeBotsSortBy : 'best')
         }));
     } catch (e) { /* quota */ }
 }
@@ -2526,7 +2980,7 @@ function restoreFinanceBotsDomFromSessionCache(accountId, bots) {
         if (!data || !data.html || data.html.indexOf('data-bot-id') < 0) return false;
         if (data.ts && Date.now() - data.ts > 86400000) return false;
         bots = Array.isArray(bots) ? bots : [];
-        var sortBy = data.sortBy || (typeof financeBotsSortBy !== 'undefined' ? financeBotsSortBy : 'pct');
+        var sortBy = normalizeFinanceBotsSortBy(data.sortBy || (typeof financeBotsSortBy !== 'undefined' ? financeBotsSortBy : 'best'));
         var structureSig = bots.length ? financeBotsStructureSignature(bots, sortBy) : data.structureSig;
         var idsSig = bots.length
             ? bots.map(function (b) { return String(b.bot_id || b.id || ''); }).sort().join(',')
@@ -2546,7 +3000,7 @@ function restoreFinanceBotsDomFromSessionCache(accountId, bots) {
         }
         _financeBotsStructureSignature = structureSig || data.structureSig;
         _financeBotsIdsSignature = idsSig || data.idsSig;
-        if (data.sortBy) financeBotsSortBy = data.sortBy;
+        if (data.sortBy) financeBotsSortBy = normalizeFinanceBotsSortBy(data.sortBy);
         markBotsTabCacheReady();
         return true;
     } catch (e) {
@@ -3046,6 +3500,7 @@ var KPI_CUZDAN_SESSION_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 var KPI_CUZDAN_LOCAL_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 var _walletStaleUi = { wasStale: false, liveSince: null };
 var _walletPanelUpdating = false;
+var _walletPanelUpdatingClearTimer = null;
 var _walletPanelStaleTimer = null;
 var _walletPanelStaleFailureAt = 0;
 var WALLET_LIVE_OK_TTL_MS = 60000;
@@ -3070,19 +3525,12 @@ function scheduleWalletPanelStaleBadgeAfterFailure() {
     if (typeof syncWalletPanelStatusBadges === 'function') syncWalletPanelStatusBadges();
 }
 
-/** Panel rozeti: yalnızca canlı güncelleme başarısız + 10 sn sonra. */
+/** Panel rozeti: canlı değil + güncelleme yok. */
 function shouldShowWalletPanelStaleBadge() {
     if (typeof State !== 'undefined' && State.isTestAccount) return false;
     if (!assetsState.wallet || assetsState.wallet.keys_configured !== true) return false;
     if (isWalletPanelUpdating()) return false;
-    if (isWalletDataLive()) return false;
-    if (!_walletPanelStaleFailureAt) return false;
-    if (Date.now() - _walletPanelStaleFailureAt < WALLET_PANEL_STALE_DELAY_MS) return false;
-    return _walletLiveFailedAfterOk()
-        || assetsState.wallet.status === 'error'
-        || !!assetsState.wallet.error
-        || assetsState.wallet.data_status === 'stale'
-        || assetsState.wallet.data_status === 'error';
+    return !isWalletDataLive();
 }
 
 /** Cüzdan paneli: yalnızca «Güncelleniyor» veya «Güncel değil» (aynı anda ikisi değil). */
@@ -3108,35 +3556,47 @@ function syncWalletPanelStatusBadges() {
         updatingEl.hidden = !updating;
         updatingEl.setAttribute('aria-hidden', updating ? 'false' : 'true');
     }
-    if (liveEl) {
-        liveEl.hidden = true;
-        liveEl.textContent = '';
-        liveEl.classList.remove('kpi-spot-status--live', 'kpi-spot-status--stale', 'kpi-spot-status--offline', 'kpi-spot-status--test');
-    }
     if (updating) {
+        if (liveEl) {
+            liveEl.hidden = true;
+            liveEl.textContent = '';
+            liveEl.classList.remove('kpi-spot-status--live', 'kpi-spot-status--stale', 'kpi-spot-status--offline', 'kpi-spot-status--test');
+        }
         if (staleEl) staleEl.hidden = true;
         return;
     }
     if (typeof State !== 'undefined' && State.isTestAccount) {
+        if (liveEl && typeof applyWalletStaleWarningEl === 'function') applyWalletStaleWarningEl(liveEl);
         if (staleEl) staleEl.hidden = true;
         return;
     }
+    if (liveEl && typeof applyWalletStaleWarningEl === 'function') {
+        applyWalletStaleWarningEl(liveEl);
+    }
     if (staleEl) {
-        if (assetsState.wallet.keys_configured !== true) {
-            staleEl.hidden = true;
-        } else {
-            var showStale = shouldShowWalletPanelStaleBadge();
-            staleEl.hidden = !showStale;
-            if (showStale) staleEl.textContent = 'Güncel değil';
-        }
+        staleEl.hidden = true;
     }
 }
 window.syncWalletPanelStatusBadges = syncWalletPanelStatusBadges;
 
 function setWalletPanelUpdating(updating) {
     _walletPanelUpdating = !!updating;
-    if (updating) cancelWalletPanelStaleBadgeTimer();
+    if (_walletPanelUpdatingClearTimer) {
+        clearTimeout(_walletPanelUpdatingClearTimer);
+        _walletPanelUpdatingClearTimer = null;
+    }
+    if (updating) {
+        cancelWalletPanelStaleBadgeTimer();
+        _walletPanelUpdatingClearTimer = setTimeout(function () {
+            _walletPanelUpdatingClearTimer = null;
+            if (!_walletPanelUpdating) return;
+            _walletPanelUpdating = false;
+            if (typeof updateKpiCuzdanLiveStatus === 'function') updateKpiCuzdanLiveStatus();
+            else if (typeof syncWalletPanelStatusBadges === 'function') syncWalletPanelStatusBadges();
+        }, 28000);
+    }
     syncWalletPanelStatusBadges();
+    applyWalletStaleWarningEl(document.getElementById('kpiCuzdanLive'));
 }
 window.setWalletPanelUpdating = setWalletPanelUpdating;
 
@@ -3151,13 +3611,23 @@ function markWalletLiveFetchOk() {
         assetsState.wallet.error = null;
     }
     cancelWalletPanelStaleBadgeTimer();
-    if (typeof syncWalletPanelStatusBadges === 'function') syncWalletPanelStatusBadges();
+    if (typeof updateKpiCuzdanLiveStatus === 'function') updateKpiCuzdanLiveStatus();
+    else if (typeof syncWalletPanelStatusBadges === 'function') syncWalletPanelStatusBadges();
 }
 window.markWalletLiveFetchOk = markWalletLiveFetchOk;
 
-function markWalletLiveFetchFailed(errorCode) {
-    _walletLiveFailedAt = Date.now();
+function markWalletLiveFetchFailed(errorCode, opts) {
+    opts = opts || {};
     var code = errorCode ? String(errorCode).toUpperCase() : '';
+    var hasCache = typeof _walletHasDisplayableAssets === 'function' && _walletHasDisplayableAssets();
+    var transient = !code || /BINANCE_TIMEOUT|BINANCE_UNREACHABLE|WALLET_REFRESH|WALLET_TIMEOUT|INFLIGHT/.test(code);
+    if (!opts.force && transient && hasCache) {
+        scheduleSilentWalletRecovery();
+        scheduleWalletPanelStaleBadgeAfterFailure();
+        if (typeof updateKpiCuzdanLiveStatus === 'function') updateKpiCuzdanLiveStatus();
+        return;
+    }
+    _walletLiveFailedAt = Date.now();
     if (code && typeof State !== 'undefined') State.walletLastErrorCode = code;
     if (code && assetsState.wallet) {
         assetsState.wallet.error = {
@@ -3234,6 +3704,9 @@ function shouldShowWalletStaleWarning() {
         _walletStaleUi.liveSince = null;
         return false;
     }
+    if (typeof isWalletPanelUpdating === 'function' && isWalletPanelUpdating()) {
+        return false;
+    }
     _walletStaleUi.liveSince = null;
     _walletStaleUi.wasStale = true;
     return true;
@@ -3243,7 +3716,7 @@ window.shouldShowWalletStaleWarning = shouldShowWalletStaleWarning;
 /** KPI/Binance rozeti: canlı → Canlı; değilse Güncel değil (kpiBotBakiyePct yalnızca uyarı). */
 function applyWalletStaleWarningEl(el) {
     if (!el) return;
-    var warnOnly = el.id === 'kpiBotBakiyePct' || el.id === 'bnWalletLiveBadge';
+    var warnOnly = el.id === 'kpiBotBakiyePct';
     if (typeof State !== 'undefined' && State.isTestAccount) {
         if (warnOnly) {
             el.hidden = true;
@@ -3308,18 +3781,43 @@ function applyWalletStaleWarningEl(el) {
 window.applyWalletStaleWarningEl = applyWalletStaleWarningEl;
 
 var _clockDriftToastAt = 0;
+var _walletConnectivityToastAt = 0;
+var _walletConnectivitySuccessToastAt = 0;
 var CLOCK_DRIFT_TOAST_DEBOUNCE_MS = 120000;
+var WALLET_CONNECTIVITY_TOAST_DEBOUNCE_MS = 120000;
+var WALLET_CONNECTIVITY_SUCCESS_TOAST_DEBOUNCE_MS = 120000;
+
+function _walletHasCachedBalance() {
+    return typeof _walletHasDisplayableAssets === 'function' && _walletHasDisplayableAssets();
+}
+
+/** Geçici Binance/ağ hatasında toast spam etme; önbellek varsa sessiz yeniden dene. */
+function debouncedWalletConnectivityToast(code, msg) {
+    if (typeof window.Toast === 'undefined' || !window.Toast.warning) return;
+    var c = String(code || '').toUpperCase();
+    var now = Date.now();
+    if (c !== 'API_UNAUTHORIZED' && c.indexOf('KEY') < 0 && _walletHasCachedBalance()
+        && /BINANCE_TIMEOUT|BINANCE_UNREACHABLE|WALLET_REFRESH|WALLET_TIMEOUT/.test(c)) {
+        return;
+    }
+    if (c === 'CLOCK_DRIFT') {
+        if (now - _clockDriftToastAt < CLOCK_DRIFT_TOAST_DEBOUNCE_MS) return;
+        _clockDriftToastAt = now;
+    } else if (/BINANCE_TIMEOUT|BINANCE_UNREACHABLE|WALLET_REFRESH|API_UNAUTHORIZED/.test(c)) {
+        if (now - _walletConnectivityToastAt < WALLET_CONNECTIVITY_TOAST_DEBOUNCE_MS) return;
+        _walletConnectivityToastAt = now;
+    }
+    window.Toast.warning(msg || (typeof connectivityCheckToastMessage === 'function'
+        ? connectivityCheckToastMessage({ error_code: c })
+        : 'Canlı cüzdan yenilenemedi.'));
+}
+window.debouncedWalletConnectivityToast = debouncedWalletConnectivityToast;
 
 /** CLOCK_DRIFT uyarısını en fazla 2 dk'da bir göster; diğer kodlar normal toast. */
 function maybeToastConnectivityWarning(d) {
     if (typeof window.Toast === 'undefined' || !window.Toast.warning) return;
     var code = String((d && (d.error_code || d.wallet_last_error_code)) || '').toUpperCase();
-    if (code === 'CLOCK_DRIFT') {
-        var now = Date.now();
-        if (now - _clockDriftToastAt < CLOCK_DRIFT_TOAST_DEBOUNCE_MS) return;
-        _clockDriftToastAt = now;
-    }
-    window.Toast.warning(connectivityCheckToastMessage(d));
+    debouncedWalletConnectivityToast(code, connectivityCheckToastMessage(d));
 }
 window.maybeToastConnectivityWarning = maybeToastConnectivityWarning;
 
@@ -3337,17 +3835,35 @@ function connectivityCheckToastMessage(d) {
     }
     if (code === 'BINANCE_TIMEOUT' || code === 'BINANCE_UNREACHABLE') {
         return (ip
-            ? 'Binance\'e ulaşılamıyor. Sunucu dış IP\'yi beyaz listeye ekleyin: ' + ip
-            : 'Binance\'e ulaşılamıyor; sunucu ağı ve API anahtarını kontrol edin.');
+            ? 'Binance API bağlantısı kurulamadı. Sunucu dış IP adresinin (' + ip + ') Binance API beyaz listesine tanımlı olduğundan emin olun.'
+            : 'Binance API bağlantısı kurulamadı. Ayarlar bölümündeki sunucu dış IP adresinin Binance API beyaz listesine tanımlı olduğundan emin olun.');
     }
     if (d.message) return String(d.message).slice(0, 220);
     return 'Canlı cüzdan yenilenemedi.';
+}
+
+/** Kullanıcıya gösterilen gerçek bağlantı/cüzdan hatası var mı (geçici TTL stale değil). */
+function _hadUserVisibleConnectivityIssue() {
+    if (typeof State !== 'undefined' && State.isTestAccount) return false;
+    var code = typeof walletErrorCode === 'function' ? walletErrorCode() : '';
+    if (code && /BINANCE_|CLOCK_DRIFT|API_UNAUTHORIZED|WALLET_REFRESH|WALLET_TIMEOUT/.test(code)) return true;
+    if (typeof _walletLiveFailedAfterOk === 'function' && _walletLiveFailedAfterOk()) return true;
+    if (_walletStaleUi.wasStale) return true;
+    var w = assetsState.wallet;
+    if (!w) return false;
+    if (w.status === 'error' && w.error) return true;
+    if (w.data_status === 'stale') {
+        if (typeof _walletHasCachedBalance === 'function' && !_walletHasCachedBalance()) return true;
+        if (typeof _walletLiveFailedAfterOk === 'function' && _walletLiveFailedAfterOk()) return true;
+    }
+    return false;
 }
 
 /** İnternet / API geri gelince: kilit + stale bayrak sıfırla, canlı cüzdan + snapshot yenile. */
 function recoverDashboardAfterConnectivity(opts) {
     opts = opts || {};
     if (!State.accountId) return;
+    var hadIssue = _hadUserVisibleConnectivityIssue();
     var aid = State.accountId;
     try {
         localStorage.removeItem('tt_wallet_refresh_lock:' + aid);
@@ -3362,8 +3878,7 @@ function recoverDashboardAfterConnectivity(opts) {
     if (typeof fetchSnapshot === 'function') fetchSnapshot();
     if (window.FLASH_HOME_ENABLED && window.homeFlash && typeof window.homeFlash.triggerRefresh === 'function') {
         window.homeFlash.triggerRefresh(aid, true);
-    }
-    if (typeof triggerWalletRefreshForVarliklar === 'function') {
+    } else if (typeof triggerWalletRefreshForVarliklar === 'function') {
         triggerWalletRefreshForVarliklar(aid, { force: true });
     }
     if (opts.summary !== false && typeof loadSummary === 'function') loadSummary(aid);
@@ -3376,12 +3891,19 @@ function recoverDashboardAfterConnectivity(opts) {
                 var errCode = String(d.error_code || d.wallet_last_error_code || '').toUpperCase();
                 if (errCode && typeof State !== 'undefined') State.walletLastErrorCode = errCode;
                 if (typeof updateKpiCuzdanLiveStatus === 'function') updateKpiCuzdanLiveStatus();
-                if (d.connectivity_ok && window.Toast.success) {
-                    window.Toast.success('Binance bağlantısı kuruldu.');
+                if (d.connectivity_ok) {
+                    if (hadIssue && window.Toast.success) {
+                        var nowOk = Date.now();
+                        if (nowOk - _walletConnectivitySuccessToastAt >= WALLET_CONNECTIVITY_SUCCESS_TOAST_DEBOUNCE_MS) {
+                            _walletConnectivitySuccessToastAt = nowOk;
+                            window.Toast.success('Binance bağlantısı kuruldu.');
+                        }
+                    }
                     if (typeof State !== 'undefined') State.walletLastErrorCode = null;
                     if (typeof markWalletLiveFetchOk === 'function') markWalletLiveFetchOk();
                     return;
                 }
+                if (_walletHasCachedBalance()) return;
                 if (typeof maybeToastConnectivityWarning === 'function') {
                     maybeToastConnectivityWarning(d);
                 } else if (window.Toast.warning) {
@@ -3394,15 +3916,45 @@ function recoverDashboardAfterConnectivity(opts) {
 window.recoverDashboardAfterConnectivity = recoverDashboardAfterConnectivity;
 window.connectivityCheckToastMessage = connectivityCheckToastMessage;
 
+/** Binance erişilebilir ama cüzdan rozeti takılı kaldıysa sessiz kurtarma (toast yok). */
+function maybeSilentWalletRecovery() {
+    if (!State.accountId || (typeof State !== 'undefined' && State.isTestAccount)) return;
+    if (typeof isWalletDataLive === 'function' && isWalletDataLive()) return;
+    if (!assetsState.wallet || assetsState.wallet.keys_configured !== true) return;
+    if (!window.apiClient || typeof window.apiClient.get !== 'function') return;
+    window.apiClient.get('/api/home/connectivity-check?account_id=' + State.accountId, { timeout: 15000 })
+        .then(function (res) {
+            var d = res && res.data;
+            if (!d || !d.connectivity_ok) return;
+            if (typeof markWalletLiveFetchOk === 'function') markWalletLiveFetchOk();
+            if (window.homeFlash && typeof window.homeFlash.resetRefreshThrottle === 'function') {
+                window.homeFlash.resetRefreshThrottle(State.accountId);
+            }
+            if (window.homeFlash && typeof window.homeFlash.triggerRefresh === 'function') {
+                window.homeFlash.triggerRefresh(State.accountId, true);
+            }
+        })
+        .catch(function () { /* sessiz */ });
+}
+window.maybeSilentWalletRecovery = maybeSilentWalletRecovery;
+
 function shouldRecoverWalletAfterConnectivity() {
     if (typeof State !== 'undefined' && State.isTestAccount) return false;
     if (typeof navigator !== 'undefined' && navigator.onLine === false) return false;
     if (assetsState.wallet.keys_configured !== true) return false;
-    return !isWalletDataLive() || _walletLiveFailedAfterOk()
-        || assetsState.wallet.data_status === 'stale'
-        || assetsState.wallet.status === 'error'
-        || !!assetsState.wallet.error;
+    return _hadUserVisibleConnectivityIssue();
 }
+
+function runWalletConnectivityRecovery(opts) {
+    if (typeof _hadUserVisibleConnectivityIssue === 'function' && _hadUserVisibleConnectivityIssue()) {
+        if (typeof recoverDashboardAfterConnectivity === 'function') {
+            recoverDashboardAfterConnectivity(opts || { summary: false });
+        }
+        return;
+    }
+    if (typeof maybeSilentWalletRecovery === 'function') maybeSilentWalletRecovery();
+}
+window.runWalletConnectivityRecovery = runWalletConnectivityRecovery;
 
 function updateCuzdanPnlKpi(dailyWalletPnl, account, data) {
     var spotUsd = (account && account.spot_balance_usd != null) ? Number(account.spot_balance_usd)
@@ -3805,33 +4357,126 @@ function patchText(id, text) {
 }
 
 // ============================================================
-// BOT LİSTESİ - Satır görünümü, % kâra göre sıralı; düğme ile bakiye kârına göre; tıklayınca detay
+// BOT LİSTESİ - K/Z sıralama: en kârlı üstte veya en zararda üstte
 // ============================================================
 
-var botsSortBy = 'pct'; // 'pct' | 'usd'
-var financeBotsSortBy = 'pct'; // Anasayfa Mevcut Botlar
+var botsSortBy = 'best'; // legacy alias
+var financeBotsSortBy = 'best'; // 'best' | 'worst'
+
+function normalizeFinanceBotsSortBy(sortBy) {
+    return sortBy === 'worst' ? 'worst' : 'best';
+}
+
+function financeBotSortPnlUsd(bot) {
+    if (typeof resolveBotHeroKz === 'function') {
+        var kz = resolveBotHeroKz(bot);
+        if (kz && kz.usd != null && Number.isFinite(Number(kz.usd))) return Number(kz.usd);
+    }
+    return Number(bot.total_pnl_usd ?? bot.total_pnl ?? bot.pnl_30d ?? 0) || 0;
+}
+
+function compareFinanceBotsForSort(a, b) {
+    var pa = financeBotSortPnlUsd(a);
+    var pb = financeBotSortPnlUsd(b);
+    if (normalizeFinanceBotsSortBy(financeBotsSortBy) === 'worst') return pa - pb;
+    return pb - pa;
+}
+
+function financeBotsIdsSignature(bots) {
+    return (bots || []).map(function (b) { return String(b.bot_id || b.id || ''); }).sort().join(',');
+}
+
+function reorderFinanceBotsListDom(container, sortedBotIds) {
+    if (!container || !sortedBotIds || !sortedBotIds.length) return false;
+    var tbody = container.querySelector('table.mevcut-botlar-table tbody');
+    if (!tbody) return false;
+    var rowMap = {};
+    tbody.querySelectorAll('tr[data-bot-id]').forEach(function (tr) {
+        rowMap[String(tr.getAttribute('data-bot-id'))] = tr;
+    });
+    var rowIds = Object.keys(rowMap);
+    if (rowIds.length !== sortedBotIds.length) return false;
+    for (var i = 0; i < sortedBotIds.length; i++) {
+        if (!rowMap[String(sortedBotIds[i])]) return false;
+    }
+    sortedBotIds.forEach(function (id) {
+        var tr = rowMap[String(id)];
+        if (tr) tbody.appendChild(tr);
+    });
+    var mobileWrap = container.querySelector('.mevcut-botlar-mobile');
+    if (mobileWrap) {
+        var cardMap = {};
+        mobileWrap.querySelectorAll('.mevcut-botlar-mobile-card[data-bot-id]').forEach(function (card) {
+            cardMap[String(card.getAttribute('data-bot-id'))] = card;
+        });
+        if (Object.keys(cardMap).length === sortedBotIds.length) {
+            sortedBotIds.forEach(function (id) {
+                var card = cardMap[String(id)];
+                if (card) mobileWrap.appendChild(card);
+            });
+        }
+    }
+    return true;
+}
+
+/** Sıralama değişince tabloyu yeniden çizmeden satırları taşır — coin logoları yeniden yüklenmez. */
+function applyFinanceBotsSortReorder(bots) {
+    bots = hydrateBotsWithMetricsCache(Array.isArray(bots) ? bots : []);
+    if (!bots.length) return false;
+    var idsSig = financeBotsIdsSignature(bots);
+    if (idsSig !== _financeBotsIdsSignature) return false;
+    var sorted = bots.slice().sort(compareFinanceBotsForSort);
+    var sortedIds = sorted.map(function (b) { return String(b.bot_id || b.id || ''); });
+    var containers = [document.getElementById('financeBotsList'), document.getElementById('financeBotsListBots')].filter(function (el) {
+        return el && _financeBotsPanelHasRows(el);
+    });
+    if (!containers.length) return false;
+    var ok = containers.every(function (c) { return reorderFinanceBotsListDom(c, sortedIds); });
+    if (!ok) return false;
+    State.bots = sorted;
+    var sortBy = normalizeFinanceBotsSortBy(financeBotsSortBy);
+    _financeBotsStructureSignature = financeBotsStructureSignature(bots, sortBy);
+    _financeBotsIdsSignature = idsSig;
+    if (typeof persistFinanceBotsDomCache === 'function') persistFinanceBotsDomCache();
+    if (typeof markBotsTabCacheReady === 'function') markBotsTabCacheReady();
+    return true;
+}
 
 function setBotsSortBy(sortBy) {
-    botsSortBy = sortBy;
-    const btn = document.getElementById('btnBotsSortBy');
-    if (btn) {
-        btn.title = sortBy === 'usd' ? 'Kâra göre sırala (tutar). Tıkla: orana göre' : 'Kâra göre sırala (oran). Tıkla: tutara göre';
-    }
-    renderBotsList(State.bots || []);
+    setFinanceBotsSortBy(normalizeFinanceBotsSortBy(sortBy));
 }
 
 function setFinanceBotsSortBy(sortBy) {
-    financeBotsSortBy = sortBy;
-    const btn = document.getElementById('btnSortBotsBy');
-    const btnTab = document.getElementById('btnSortBotsByBotsTab');
-    if (btn) btn.title = sortBy === 'usd' ? 'Kâra göre sırala (tutar). Tıkla: orana göre' : 'Kâra göre sırala (oran). Tıkla: tutara göre';
-    if (btnTab) btnTab.title = sortBy === 'usd' ? 'Kâra göre sırala (tutar). Tıkla: orana göre' : 'Kâra göre sırala (oran). Tıkla: tutara göre';
+    financeBotsSortBy = normalizeFinanceBotsSortBy(sortBy);
+    updateFinanceBotsSortButtonUi(financeBotsSortBy);
     if (State.bots && State.bots.length) {
-        renderFinanceBots(State.bots);
-        renderBotsList(State.bots);
+        if (!applyFinanceBotsSortReorder(State.bots)) {
+            renderFinanceBots(State.bots, { forceFullRender: true });
+        }
     } else {
         loadFinanceBotsList();
     }
+}
+
+function updateFinanceBotsSortButtonUi(sortBy) {
+    sortBy = normalizeFinanceBotsSortBy(sortBy);
+    var isWorst = sortBy === 'worst';
+    var title = isWorst
+        ? 'En zararda olan üstte. Tıkla: en kârlıya göre sırala'
+        : 'En kârlı üstte. Tıkla: en zararda olana göre sırala';
+    var icon = isWorst ? '↓' : '↑';
+    ['btnSortBotsBy', 'btnSortBotsByBotsTab'].forEach(function (id) {
+        var btn = document.getElementById(id);
+        if (!btn) return;
+        btn.title = title;
+        btn.setAttribute('aria-label', title);
+        btn.classList.toggle('profit-sort-worst', isWorst);
+        btn.classList.toggle('profit-sort-best', !isWorst);
+    });
+    ['btnSortBotsByIcon', 'btnSortBotsByBotsTabIcon'].forEach(function (id) {
+        var el = document.getElementById(id);
+        if (el) el.textContent = icon;
+    });
 }
 
 // Botlar sekmesi + Anasayfa aynı tablo: renderFinanceBots hem financeBotsList hem financeBotsListBots günceller
@@ -4780,10 +5425,10 @@ function initMobileBottomNav(currentDesktopTab) {
 
         const unifiedStrip = document.getElementById("unifiedKpiStrip");
         if (unifiedStrip) {
-            const showStrip = tab === "home" || tab === "portfoy" || tab === "trade" || tab === "bots";
+            const showStrip = tab === "home" || tab === "portfoy" || tab === "trade";
             unifiedStrip.classList.toggle("kpi-strip-hidden", !showStrip);
             unifiedStrip.style.display = showStrip ? "block" : "none";
-            unifiedStrip.classList.toggle("unified-kpi-bots-only", tab === "bots");
+            unifiedStrip.classList.remove("unified-kpi-bots-only");
         }
         updateBinanceConnectionNotice();
 
@@ -4865,6 +5510,7 @@ var _mobileTradeSearchPriceGen = 0;
 function initMobileTradeSearch() {
     var input = document.getElementById("mobileTradeSearchInput");
     var dropdown = document.getElementById("mobileTradeSearchDropdown");
+    var wrap = input ? input.closest(".coin-list-search-wrap") : null;
     if (!input || !dropdown) return;
 
     function fillDropdown() {
@@ -4893,8 +5539,39 @@ function initMobileTradeSearch() {
     if (!_mobileTradeSearchBound) {
         _mobileTradeSearchBound = true;
         input.oninput = fillDropdown;
+        input.onclick = function () {
+            input.focus();
+            ensureCoinListSearchSymbolsLoaded("all").then(function () {
+                buildCoinListSearchSymbols();
+                if ((input.value || "").trim()) fillDropdown();
+            });
+        };
+        if (wrap) {
+            wrap.addEventListener("click", function (e) {
+                if (e.target === dropdown || e.target.closest(".mobile-trade-search-item")) return;
+                input.focus();
+            });
+        }
         input.onfocus = function () {
             ensureCoinListSearchSymbolsLoaded("all").then(function () { buildCoinListSearchSymbols(); if ((input.value || "").trim()) fillDropdown(); });
+        };
+        input.onkeydown = function (e) {
+            if (e.key === "Escape") {
+                dropdown.style.display = "none";
+                return;
+            }
+            if (e.key === "Enter") {
+                var first = dropdown.querySelector(".mobile-trade-search-item");
+                if (first) {
+                    e.preventDefault();
+                    var sym = first.getAttribute("data-symbol");
+                    if (sym && typeof openSpotTradeModal === "function") {
+                        openSpotTradeModal(sym);
+                        input.value = "";
+                        dropdown.style.display = "none";
+                    }
+                }
+            }
         };
         input.onblur = function () { setTimeout(function () { dropdown.style.display = "none"; }, 180); };
         dropdown.onmousedown = function (e) { e.preventDefault(); };
@@ -5222,6 +5899,7 @@ function startMobileTradeFavPriceUpdates() {
 function renderMobileTradeFavorites() {
     var listEl = document.getElementById("mobileTradeFavoritesList");
     if (!listEl) return;
+    try {
     var favs = (typeof spotFavorites !== "undefined" && Array.isArray(spotFavorites)) ? spotFavorites.slice() : [];
     if (favs.length === 0) {
         listEl.innerHTML = '<div style="padding: 1.5rem; text-align: center; color: var(--ds-text-secondary); font-size: 0.9rem;">Favori yok. Yukarıdaki arama çubuğunda coin arayıp seçin, alım satım ekranında yıldıza tıklayarak favorilere ekleyin.</div>';
@@ -5246,7 +5924,7 @@ function renderMobileTradeFavorites() {
         var quote = _getMobileTradeFavQuote(symbol);
         var price = quote.price;
         var changePct = quote.changePct;
-        var priceDisplay = _fmtMobileTradeFavPriceDisplay(price, sym);
+        var priceDisplay = _fmtMobileTradeFavPriceDisplay(price, symbol);
         var changeStr = changePct != null ? (changePct >= 0 ? "+" : "") + Number(changePct).toFixed(2) + "%" : "—";
         var changeColor = changePct != null ? (changePct >= 0 ? "#0ecb81" : "#f6465d") : "var(--ds-text-secondary)";
         var base = baseFromSymbol(symbol);
@@ -5281,6 +5959,10 @@ function renderMobileTradeFavorites() {
     var view = document.getElementById("mobileTradeView");
     if (view && view.classList.contains("is-active")) {
         fetchMobileTradeFavPricesBatch(favs);
+    }
+    } catch (err) {
+        console.error("[dashboard] renderMobileTradeFavorites:", err);
+        listEl.innerHTML = '<div style="padding: 1rem; color: var(--ds-danger); font-size: 0.9rem;">Favori listesi yüklenemedi. Sayfayı yenileyin.</div>';
     }
 }
 
@@ -5351,14 +6033,13 @@ function bindTabs() {
                 updateBinanceApiBannerVisibility();
                 // API bağlantı uyarısı: Anasayfa, Binance, Botlar sekmesinde göster (en üstte, tek blok)
                 updateBinanceConnectionNotice();
-                // Ortak KPI şeridi (bakiyeler): sadece Anasayfa, Binance, Botlar’da göster; Finansal Hesap, İletişim, Ayarlar’da gizle
+                // Ortak KPI şeridi: Anasayfa, Trade; Botlar/Portföy/İletişim/Ayarlar’da gizle
                 const unifiedStrip = document.getElementById('unifiedKpiStrip');
                 if (unifiedStrip) {
-                    const showStrip = (targetTab === 'reports' || targetTab === 'binance' || targetTab === 'trade' || targetTab === 'bots');
+                    const showStrip = (targetTab === 'reports' || targetTab === 'binance' || targetTab === 'trade');
                     unifiedStrip.classList.toggle('kpi-strip-hidden', !showStrip);
                     unifiedStrip.style.display = showStrip ? 'block' : 'none';
-                    if (targetTab === 'bots') unifiedStrip.classList.add('unified-kpi-bots-only');
-                    else unifiedStrip.classList.remove('unified-kpi-bots-only');
+                    unifiedStrip.classList.remove('unified-kpi-bots-only');
                 }
                 
                 // REFACTOR: Stop intervals from ALL tabs before switching (prevent leaks)
@@ -5417,7 +6098,13 @@ function bindTabs() {
                 if (targetTab === "binance" && txPanel) {
                     txPanel.style.display = "block";
                     if (State.accountId && typeof loadTransactionHistory === "function") {
-                        loadTransactionHistory(State.txHistoryPeriod || "daily", State.txHistoryType || "buysell", State.txHistoryPage || 1, false);
+                        loadTransactionHistory(
+                            State.txHistoryPeriod || "daily",
+                            State.txHistoryType || "buysell",
+                            State.txHistoryPage || 1,
+                            false,
+                            { silent: _txHistoryLoaded }
+                        );
                     }
                 }
 
@@ -5480,6 +6167,7 @@ function bindTabs() {
         };
     });
     
+    initMobileTradeSearch();
     console.log("[dashboard] bindTabs: All tabs bound");
 }
 
@@ -5613,10 +6301,15 @@ var dmModalLastChartSymbol = null;  // Grafik sadece sembol değişince yeniden 
 var dmModalLastTahminSymbol = null;
 var _dmSymbolSearchPriceGen = 0;
 var _dmSymbolSearchOutsideBound = false;
+var _dmSymbolSearchPicking = false;
 var _dmModalStripSymbol = null;
 var dmModalTahminFetchTs = 0;
 var dmModalTahminHigh = null;
 var dmModalTahminLow = null;
+var _dmModalTickerInflightKey = '';
+var _dmModalTickerInflight = null;
+var _dmModalLastTickerFetchSymbol = null;
+var _dmModalTickerFetchTs = 0;
 var DM_MODAL_LIVE_PRICE_MS = 1500;
 var DM_MODAL_TAHMIN_MIN_MS = 30000;  // Tahmin (high/low) en fazla 30s'de bir yenilensin
 
@@ -5849,6 +6542,10 @@ function closeCreateBotModal() {
     dmModalLastTahminSymbol = null;
     dmModalTahminHigh = null;
     dmModalTahminLow = null;
+    _dmModalTickerInflightKey = '';
+    _dmModalTickerInflight = null;
+    _dmModalLastTickerFetchSymbol = null;
+    _dmModalTickerFetchTs = 0;
     if (dmModalLivePriceIntervalId) {
         clearInterval(dmModalLivePriceIntervalId);
         dmModalLivePriceIntervalId = null;
@@ -5918,11 +6615,26 @@ function bindCreateBotModal() {
     const dmSymbolSearchDropdown = document.getElementById("dmSymbolSearchDropdown");
     if (fSymbol) {
         let dmSymbolInputDebounce = null;
+        var symWrap = fSymbol.closest(".coin-list-search-wrap");
+        if (symWrap) {
+            symWrap.addEventListener("pointerdown", function (e) {
+                if (e.target.closest("#dmSymbolSearchDropdown")) return;
+                if (document.activeElement !== fSymbol) {
+                    fSymbol.focus({ preventScroll: true });
+                }
+            });
+        }
         fSymbol.addEventListener("focus", function () {
+            var v = (fSymbol.value || "").trim();
+            if (coinListSearchAllSymbols.length > 0) {
+                if (v.length >= 2) showCreateModalSymbolDropdown(v);
+                else showCreateModalSymbolDropdownSuggestions();
+            }
             ensureCoinListSearchSymbolsLoaded("all").then(function () {
                 buildCoinListSearchSymbols();
-                var v = (fSymbol.value || "").trim();
-                if (v.length >= 2) showCreateModalSymbolDropdown(v);
+                if (document.activeElement !== fSymbol) return;
+                var v2 = (fSymbol.value || "").trim();
+                if (v2.length >= 2) showCreateModalSymbolDropdown(v2);
                 else showCreateModalSymbolDropdownSuggestions();
             });
         });
@@ -5930,19 +6642,23 @@ function bindCreateBotModal() {
             const v = (fSymbol.value || "").trim();
             clearTimeout(dmSymbolInputDebounce);
             if (v.length >= 2) {
+                if (coinListSearchAllSymbols.length > 0) showCreateModalSymbolDropdown(v);
                 dmSymbolInputDebounce = setTimeout(function () {
                     ensureCoinListSearchSymbolsLoaded("all").then(function () {
                         buildCoinListSearchSymbols();
-                        showCreateModalSymbolDropdown(v);
+                        if (document.activeElement !== fSymbol) return;
+                        showCreateModalSymbolDropdown((fSymbol.value || "").trim());
                     });
-                }, 200);
+                }, 100);
             } else if (v.length === 1) {
+                if (coinListSearchAllSymbols.length > 0) showCreateModalSymbolDropdown(v, 1);
                 dmSymbolInputDebounce = setTimeout(function () {
                     ensureCoinListSearchSymbolsLoaded("all").then(function () {
                         buildCoinListSearchSymbols();
-                        showCreateModalSymbolDropdown(v, 1);
+                        if (document.activeElement !== fSymbol) return;
+                        showCreateModalSymbolDropdown((fSymbol.value || "").trim(), 1);
                     });
-                }, 120);
+                }, 80);
             } else {
                 hideCreateModalSymbolDropdown();
                 if (v.length === 0) {
@@ -5955,7 +6671,13 @@ function bindCreateBotModal() {
             }
         });
         fSymbol.addEventListener("blur", function () {
-            setTimeout(hideCreateModalSymbolDropdown, 180);
+            setTimeout(function () {
+                if (_dmSymbolSearchPicking) {
+                    _dmSymbolSearchPicking = false;
+                    return;
+                }
+                hideCreateModalSymbolDropdown();
+            }, 160);
         });
         // Enter: parite onayla → strip ve tahmin göster (dropdown açıksa ilk sonucu seç, yoksa yazılanı normalize et)
         fSymbol.addEventListener("keydown", function (e) {
@@ -5987,11 +6709,13 @@ function bindCreateBotModal() {
         });
     }
     if (dmSymbolSearchDropdown) {
-        dmSymbolSearchDropdown.addEventListener("mousedown", function (e) { e.preventDefault(); });
-        dmSymbolSearchDropdown.addEventListener("click", function (e) {
-            const item = e.target.closest(".dm-symbol-search-item, .coin-list-search-item");
+        dmSymbolSearchDropdown.addEventListener("mousedown", function (e) {
+            var item = e.target.closest(".dm-symbol-search-item, .coin-list-search-item");
             if (!item) return;
-            const symbol = item.getAttribute("data-symbol");
+            e.preventDefault();
+            _dmSymbolSearchPicking = true;
+            var symbol = item.getAttribute("data-symbol");
+            if (symbol) fetchCreateBotModalTicker24h(symbol, { force: true });
             if (symbol && fSymbol) {
                 fSymbol.value = symbol;
                 hideCreateModalSymbolDropdown();
@@ -6171,6 +6895,92 @@ function parseBaseQuote(symbol) {
     return { base: (symbol || '').toUpperCase().replace(/[\s\/\-]/g, ''), quote: 'USDT' };
 }
 
+/** Create bot modal: ticker_24h yanıtını strip + tahmin alanına uygula (klines'den hızlı). */
+function applyCreateBotModalTickerData(sym, quote, data) {
+    if (!sym || !data) return;
+    var price = parseFloat(data.lastPrice || data.weightedAvgPrice || 0);
+    var pct = parseFloat(data.priceChangePercent);
+    var high = parseFloat(data.highPrice || 0);
+    var low = parseFloat(data.lowPrice || 0);
+    if (!(price > 0 && Number.isFinite(price))) return;
+    var pctVal = Number.isFinite(pct) ? pct : null;
+    _updateCoinSearchSymbolQuote(sym, price, pctVal);
+    if (window.marketStore && window.marketStore.updateMini) {
+        var miniPatch = { last: price, changePct: pctVal };
+        if (high > 0 && Number.isFinite(high)) miniPatch.high = high;
+        if (low > 0 && Number.isFinite(low)) miniPatch.low = low;
+        window.marketStore.updateMini(sym, miniPatch);
+    }
+    var priceEl = document.getElementById('dmPairPrice');
+    var changeEl = document.getElementById('dmPairChangePct');
+    var changeTahmin = document.getElementById('dmTahminChange');
+    var highEl = document.getElementById('dmTahminHigh');
+    var lowEl = document.getElementById('dmTahminLow');
+    var formatPrice = function (v) {
+        return (v != null && Number.isFinite(v) && v > 0)
+            ? ((quote === 'USDT' || quote === 'FDUSD') ? fmtUsd(v) : fmtNum(v, 8))
+            : '—';
+    };
+    if (priceEl) {
+        var newText = (quote === 'USDT' || quote === 'FDUSD' ? fmtUsd(price) : fmtNum(price, 8) + ' ' + quote);
+        if (priceEl.textContent !== newText) {
+            var blinkGrace = (typeof dmModalOpenTs === 'number' && (Date.now() - dmModalOpenTs) < 600);
+            if (!blinkGrace && dmModalLastPrice != null && Number.isFinite(dmModalLastPrice) && Math.abs(price - dmModalLastPrice) > 1e-10 && typeof triggerValueBlink === 'function') {
+                triggerValueBlink(priceEl, price);
+            }
+            dmModalLastPrice = price;
+            priceEl.textContent = newText;
+        }
+    }
+    if (pctVal != null) {
+        applyDmModalPctEl(changeEl, pctVal);
+        applyDmModalPctEl(changeTahmin, pctVal);
+    }
+    if (high > 0 && Number.isFinite(high)) {
+        dmModalTahminHigh = high;
+        if (highEl) highEl.textContent = formatPrice(high);
+    }
+    if (low > 0 && Number.isFinite(low)) {
+        dmModalTahminLow = low;
+        if (lowEl) lowEl.textContent = formatPrice(low);
+    }
+}
+
+/** Create bot modal: /api/spot/ticker_24h — fiyat, 24s %, yüksek/düşük (klines yerine). */
+function fetchCreateBotModalTicker24h(symbol, opts) {
+    opts = opts || {};
+    var sym = (symbol || '').toUpperCase();
+    if (!sym) return Promise.resolve(null);
+    var now = Date.now();
+    var symbolChanged = sym !== _dmModalLastTickerFetchSymbol;
+    var stale = (now - _dmModalTickerFetchTs) >= DM_MODAL_TAHMIN_MIN_MS;
+    if (!opts.force && !symbolChanged && !stale) {
+        if (_dmModalTickerInflightKey === sym && _dmModalTickerInflight) return _dmModalTickerInflight;
+        return Promise.resolve(null);
+    }
+    if (_dmModalTickerInflightKey === sym && _dmModalTickerInflight) return _dmModalTickerInflight;
+    var quote = parseBaseQuote(sym).quote;
+    _dmModalTickerInflightKey = sym;
+    var fetchFn = window.apiClient && typeof window.apiClient.get === 'function'
+        ? window.apiClient.get('/api/spot/ticker_24h?symbol=' + encodeURIComponent(sym), { suppressRateLimitToast: true, timeout: 8000 })
+        : fetch(window.location.origin + '/api/spot/ticker_24h?symbol=' + encodeURIComponent(sym)).then(function (r) { return r.json(); });
+    _dmModalTickerInflight = Promise.resolve(fetchFn).then(function (data) {
+        if (_dmModalTickerInflightKey !== sym) return data;
+        _dmModalLastTickerFetchSymbol = sym;
+        _dmModalTickerFetchTs = Date.now();
+        dmModalTahminFetchTs = _dmModalTickerFetchTs;
+        applyCreateBotModalTickerData(sym, quote, data);
+        return data;
+    }).catch(function () {
+        return null;
+    }).finally(function () {
+        if (_dmModalTickerInflightKey === sym) {
+            _dmModalTickerInflight = null;
+        }
+    });
+    return _dmModalTickerInflight;
+}
+
 /** Create bot modal: seçilen parite strip'ini (logo, fiyat, 24h %, grafik) ve tahmin alanını güncelle */
 function updateCreateBotModalPairStrip(symbol, opts) {
     opts = opts || {};
@@ -6247,6 +7057,8 @@ function updateCreateBotModalPairStrip(symbol, opts) {
         loadCreateBotModalChart(sym);
     }
     updateCreateBotModalTahmin(sym, mini, quote);
+    var needTicker = sym !== _dmModalLastTickerFetchSymbol || !(price != null && Number.isFinite(price)) || (Date.now() - _dmModalTickerFetchTs) >= DM_MODAL_TAHMIN_MIN_MS;
+    if (needTicker) fetchCreateBotModalTicker24h(sym, { force: sym !== _dmModalLastTickerFetchSymbol });
     // Canlı fiyat: modal açık ve sembol seçiliyse periyodik güncelleme başlat
     if (!dmModalLivePriceIntervalId && document.getElementById('dmModal') && document.getElementById('dmModal').style.display !== 'none') {
         dmModalLivePriceIntervalId = setInterval(function () {
@@ -6260,38 +7072,35 @@ function updateCreateBotModalPairStrip(symbol, opts) {
     }
 }
 
-/** Create bot modal: Tahmin alanını (24s değişim, yüksek/düşük) doldur. High/low API en fazla 30s'de bir (flicker önleme). */
+/** Create bot modal: Tahmin alanını (24s değişim, yüksek/düşük) önbellekten doldur; veri ticker_24h ile gelir. */
 function updateCreateBotModalTahmin(symbol, mini, quoteAsset) {
     const changeEl = document.getElementById('dmTahminChange');
     const highEl = document.getElementById('dmTahminHigh');
     const lowEl = document.getElementById('dmTahminLow');
-    const formatPrice = (v) => (v != null && Number.isFinite(v) && v > 0) ? (quoteAsset === 'USDT' ? fmtUsd(v) : fmtNum(v, 8)) : '—';
+    const formatPrice = (v) => (v != null && Number.isFinite(v) && v > 0) ? (quoteAsset === 'USDT' || quoteAsset === 'FDUSD' ? fmtUsd(v) : fmtNum(v, 8)) : '—';
     if (changeEl) applyDmModalPctEl(changeEl, resolveDmModalChangePct(mini));
     if (!symbol) return;
-    var now = Date.now();
-    var symbolChanged = symbol !== dmModalLastTahminSymbol;
-    var stale = (now - dmModalTahminFetchTs) >= DM_MODAL_TAHMIN_MIN_MS;
-    if (!symbolChanged && !stale) return;
-    if (symbolChanged) {
+    if (symbol !== dmModalLastTahminSymbol) {
         dmModalLastTahminSymbol = symbol;
         dmModalTahminHigh = null;
         dmModalTahminLow = null;
         if (highEl) highEl.textContent = '—';
         if (lowEl) lowEl.textContent = '—';
     }
-    dmModalTahminFetchTs = now;
-    var fetchSymbol = symbol;
-    window.apiClient.get('/api/spot/klines?symbol=' + encodeURIComponent(symbol) + '&interval=5m&limit=288').then(function (data) {
-        if (fetchSymbol !== dmModalLastTahminSymbol) return;
-        if (Array.isArray(data) && data.length > 0) {
-            const low = Math.min(...data.map(k => Number(k.l)));
-            const high = Math.max(...data.map(k => Number(k.h)));
-            dmModalTahminHigh = high;
-            dmModalTahminLow = low;
-            if (highEl) highEl.textContent = formatPrice(high);
-            if (lowEl) lowEl.textContent = formatPrice(low);
-        }
-    }).catch(function () {});
+    var miniHigh = mini && mini.high != null ? Number(mini.high) : null;
+    var miniLow = mini && mini.low != null ? Number(mini.low) : null;
+    if (miniHigh != null && Number.isFinite(miniHigh) && miniHigh > 0) {
+        dmModalTahminHigh = miniHigh;
+        if (highEl) highEl.textContent = formatPrice(miniHigh);
+    } else if (dmModalTahminHigh != null && highEl) {
+        highEl.textContent = formatPrice(dmModalTahminHigh);
+    }
+    if (miniLow != null && Number.isFinite(miniLow) && miniLow > 0) {
+        dmModalTahminLow = miniLow;
+        if (lowEl) lowEl.textContent = formatPrice(miniLow);
+    } else if (dmModalTahminLow != null && lowEl) {
+        lowEl.textContent = formatPrice(dmModalTahminLow);
+    }
 }
 
 /** Create bot modal: mini grafik yükle (dmPairChart) */
@@ -6552,6 +7361,7 @@ function paintCreateModalSymbolDropdown(list, emptyHtml) {
         }).join('');
     }
     dropdown.style.display = 'block';
+    dropdown.style.pointerEvents = 'auto';
 }
 
 function showCreateModalSymbolDropdownSuggestions() {
@@ -6608,8 +7418,12 @@ function showCreateModalSymbolDropdown(query, minLen) {
 
 function hideCreateModalSymbolDropdown() {
     _dmSymbolSearchPriceGen++;
+    _dmSymbolSearchPicking = false;
     const dropdown = document.getElementById('dmSymbolSearchDropdown');
-    if (dropdown) dropdown.style.display = 'none';
+    if (dropdown) {
+        dropdown.style.display = 'none';
+        dropdown.style.pointerEvents = 'none';
+    }
 }
 
 function bindDmSymbolSearchOutsideClose() {
@@ -7137,10 +7951,19 @@ function normalizeAndApplyWallet(payload, meta) {
     assetsState.wallet.keysMessage = payload.message || null;
     assetsState.wallet.unpriced_assets = Array.isArray(payload.unpriced_assets) ? payload.unpriced_assets : [];
     if (err && _isLiveWalletSource(source)) {
-        markWalletLiveFetchFailed();
+        markWalletLiveFetchFailed(err.error_code || err.code);
     } else if (_isLiveWalletSource(source) && keysConfigured && !err) {
         if (explicitStatus === 'stale' || meta.stale) {
-            markWalletLiveFetchFailed();
+            if (meta.skipped || totalUsd != null || assets.length > 0) {
+                assetsState.wallet.data_status = 'cached';
+                assetsState.wallet.status = 'ready';
+                assetsState.wallet.error = null;
+                scheduleSilentWalletRecovery();
+            } else {
+                markWalletLiveFetchFailed(meta.stale_code || 'BINANCE_UNREACHABLE');
+            }
+        } else if (meta.skipped && (totalUsd != null || assets.length > 0) && !meta.stale) {
+            markWalletLiveFetchOk();
         } else if (!meta.skipped && (totalUsd != null || assets.length > 0)) {
             markWalletLiveFetchOk();
         }
@@ -7397,6 +8220,7 @@ function _varliklarTableHasRows() {
 function _walletHasDisplayableAssets() {
     return !!(assetsState.wallet.assets && assetsState.wallet.assets.length) || _varliklarTableHasRows();
 }
+window._walletHasDisplayableAssets = _walletHasDisplayableAssets;
 
 function hashWalletAssets(assets) {
     if (!Array.isArray(assets)) return '';
@@ -8562,15 +9386,24 @@ function updateTestAccountStripFromTable(tbody, opts) {
     var stripBotLocked = document.getElementById('binanceBotLockedAssets');
     var root = tbody || document.getElementById('varliklarTableBody');
     if (!root) return;
+    var walletAssets = (assetsState && assetsState.wallet && assetsState.wallet.assets) || [];
     var availSum = 0;
     var botSum = testAccountRunningBotsEquityUsd();
     var lockedSum = 0;
+    if (walletAssets.length && typeof testAccountUsdtAvailablePool === 'function') {
+        availSum = testAccountUsdtAvailablePool(walletAssets);
+    }
+    if (!(availSum > 0)) {
+        root.querySelectorAll('tr[data-asset]').forEach(function (row) {
+            var asset = row.getAttribute('data-asset') || '';
+            if (isTestWalletStableAsset(asset)) {
+                var avQty = parseFloat(row.getAttribute('data-available') || '') || 0;
+                if (avQty > 0) availSum += avQty;
+            }
+        });
+    }
     root.querySelectorAll('tr[data-asset]').forEach(function (row) {
         var asset = row.getAttribute('data-asset') || '';
-        if (isTestWalletStableAsset(asset)) {
-            var avQty = parseFloat(row.getAttribute('data-available') || '') || 0;
-            if (avQty > 0) availSum += avQty;
-        }
         var lockedQty = parseFloat(row.getAttribute('data-locked') || '') || 0;
         if (lockedQty > 0) {
             var priceCell = row.querySelector('.price-cell');
@@ -8844,16 +9677,13 @@ function renderVarliklarList() {
             var actionsSig = (d.canBuy ? '1' : '0') + (d.canSell ? '1' : '0') + d.symbol;
             return '<tr class="varlik-row" data-asset="' + d.asset + '" data-symbol="' + d.symbol + '" data-free="' + d.free + '" data-locked="' + d.locked + '" data-total="' + d.total + '" data-available="' + d.available + '" data-bot-locked="' + d.botLocked + '" data-actions-sig="' + actionsSig + '"' + (d.botLockedUsdStored != null && Number.isFinite(d.botLockedUsdStored) ? ' data-bot-locked-usd="' + d.botLockedUsdStored + '"' : '') + '>' +
                 varlikAssetCellHtml(d) +
-                '<td class="varlik-fiyat-cell" data-label="Fiyat">' +
-                '<div class="varlik-fiyat-stack">' +
-                '<span class="price-cell" data-price="' + (d.price != null ? d.price : '') + '">' + d.priceDisplay + '</span>' +
-                '<span class="change-pct" data-change-pct="' + (d.changePct != null ? d.changePct : '') + '" style="color: ' + d.changeColor + ';">' + d.changeStr + '</span></div></td>' +
-                '<td class="varlik-num-cell" data-label="Toplam">' + fmtVarlikQty(d.total, d.asset) + '</td>' +
-                '<td class="varlik-num-cell" data-label="Bot kilitli"' + (d.botLockedUsdLive != null && Number.isFinite(d.botLockedUsdLive) ? ' data-value="' + d.botLockedUsdLive + '"' : '') + '>' + d.botLockedDisplay + '</td>' +
-                '<td class="varlik-num-cell" data-label="Kilitli">' + fmtVarlikQty(d.locked, d.asset) + '</td>' +
-                '<td class="varlik-num-cell" data-label="Kullanılabilir">' + fmtVarlikQty(d.available, d.asset) + '</td>' +
-                '<td class="varlik-num-cell value-cell" data-value="' + d.valueUsd + '" data-label="Değer">' + d.valueDisplay + '</td>' +
-                '<td class="varlik-card-actions" data-label="İşlem">' + varlikRowActionsHtml(d) + '</td></tr>';
+                varlikFiyatCellHtml(d) +
+                '<td class="varlik-num-cell col-center" data-label="Toplam">' + fmtVarlikQty(d.total, d.asset) + '</td>' +
+                '<td class="varlik-num-cell col-center" data-label="Bot kilitli"' + (d.botLockedUsdLive != null && Number.isFinite(d.botLockedUsdLive) ? ' data-value="' + d.botLockedUsdLive + '"' : '') + '>' + d.botLockedDisplay + '</td>' +
+                '<td class="varlik-num-cell col-center" data-label="Kilitli">' + fmtVarlikQty(d.locked, d.asset) + '</td>' +
+                '<td class="varlik-num-cell col-center" data-label="Kullanılabilir">' + fmtVarlikQty(d.available, d.asset) + '</td>' +
+                '<td class="varlik-num-cell value-cell col-center" data-value="' + d.valueUsd + '" data-label="Değer">' + d.valueDisplay + '</td>' +
+                '<td class="varlik-card-actions col-action col-center" data-label="İşlem">' + varlikRowActionsHtml(d) + '</td></tr>';
         }).join('');
     }
     _varliklarHasRenderedRows = list.length > 0;
@@ -8874,20 +9704,22 @@ function renderVarliklarList() {
 }
 
 var _varlikPriceBlinkUntil = {};
-var VARLIK_PRICE_BLINK_MIN_REL = 0.0005;
-var VARLIK_PRICE_BLINK_COOLDOWN_MS = 1200;
 
-/** Cüzdan tablosu fiyat blink — anlamlı değişim + hücre cooldown (flicker azaltma). */
+/** Cüzdan tablosu fiyat blink — Mevcut Botlar ile aynı efekt (mevcutBotPriceFlashUp/Down). */
 function applyVarlikPriceBlink(priceCell, newPrice, oldPrice, asset) {
     if (!priceCell || !Number.isFinite(newPrice) || !Number.isFinite(oldPrice)) return;
     if (Math.abs(newPrice - oldPrice) < 1e-10) return;
     if (typeof isTestWalletStableAsset === 'function' && asset && isTestWalletStableAsset(asset)) return;
-    var rel = oldPrice > 0 ? Math.abs(newPrice - oldPrice) / oldPrice : 1;
-    if (rel < VARLIK_PRICE_BLINK_MIN_REL) return;
     var key = (asset || '') + '|' + (priceCell.closest('tr') && priceCell.closest('tr').getAttribute('data-asset') || '');
     var now = Date.now();
+    var cooldownMs = (typeof FINANCE_BOT_PRICE_BLINK_COOLDOWN_MS === 'number') ? FINANCE_BOT_PRICE_BLINK_COOLDOWN_MS : 350;
     if (_varlikPriceBlinkUntil[key] && now < _varlikPriceBlinkUntil[key]) return;
-    _varlikPriceBlinkUntil[key] = now + VARLIK_PRICE_BLINK_COOLDOWN_MS;
+    _varlikPriceBlinkUntil[key] = now + cooldownMs;
+    var tone = newPrice > oldPrice ? 'up' : 'down';
+    if (typeof applyFinanceBotPriceBlink === 'function') {
+        applyFinanceBotPriceBlink(priceCell, newPrice, oldPrice, tone);
+        return;
+    }
     priceCell.classList.remove('mevcut-bot-blink-up', 'mevcut-bot-blink-down', 'varlik-price-flash-up', 'varlik-price-flash-down', 'price-up', 'price-down', 'price-neutral', 'blink-positive', 'blink-negative');
     void priceCell.offsetWidth;
     priceCell.classList.add(newPrice > oldPrice ? 'mevcut-bot-blink-up' : 'mevcut-bot-blink-down');
@@ -8972,6 +9804,90 @@ function testAccountRefreshVarlikPctColumn(tbody) {
     });
 }
 
+var _silentWalletRecoveryTimer = null;
+function scheduleSilentWalletRecovery() {
+    if (_silentWalletRecoveryTimer || !State.accountId) return;
+    _silentWalletRecoveryTimer = setTimeout(function () {
+        _silentWalletRecoveryTimer = null;
+        if (!State.accountId) return;
+        if (typeof isWalletDataLive === 'function' && isWalletDataLive()) return;
+        if (window.homeFlash && typeof window.homeFlash.resetRefreshThrottle === 'function') {
+            window.homeFlash.resetRefreshThrottle(State.accountId);
+        }
+        if (typeof triggerWalletRefreshForVarliklar === 'function') {
+            triggerWalletRefreshForVarliklar(State.accountId, { force: false });
+        } else if (window.homeFlash && typeof window.homeFlash.triggerRefresh === 'function') {
+            window.homeFlash.triggerRefresh(State.accountId, false);
+        }
+    }, 6000);
+}
+window.scheduleSilentWalletRecovery = scheduleSilentWalletRecovery;
+
+var _walletInflightPollTimer = null;
+var _walletInflightPollAccountId = null;
+
+/** Sunucuda wallet refresh inflight bitene kadar poll; «Güncelleniyor…» takılmasın. */
+function pollWalletRefreshUntilDone(accountId) {
+    accountId = Number(accountId);
+    if (!accountId || !window.apiClient || typeof window.apiClient.get !== 'function') return;
+    _walletInflightPollAccountId = accountId;
+    if (_walletInflightPollTimer) return;
+    var attempts = 0;
+    var maxAttempts = 14;
+
+    function scheduleNext() {
+        if (attempts >= maxAttempts) {
+            _walletInflightPollAccountId = null;
+            if (typeof setWalletPanelUpdating === 'function') setWalletPanelUpdating(false);
+            if (typeof updateKpiCuzdanLiveStatus === 'function') updateKpiCuzdanLiveStatus();
+            return;
+        }
+        _walletInflightPollTimer = setTimeout(tick, attempts < 3 ? 1500 : 2500);
+    }
+
+    function tick() {
+        _walletInflightPollTimer = null;
+        if (_walletInflightPollAccountId !== accountId) return;
+        attempts += 1;
+        window.apiClient.get('/api/home/wallet/status?account_id=' + accountId, { timeout: 8000 })
+            .then(function (res) {
+                var d = res && res.data;
+                if (!d) {
+                    scheduleNext();
+                    return;
+                }
+                if (d.inflight) {
+                    if (typeof setWalletPanelUpdating === 'function') setWalletPanelUpdating(true);
+                    scheduleNext();
+                    return;
+                }
+                _walletInflightPollAccountId = null;
+                if (typeof setWalletPanelUpdating === 'function') setWalletPanelUpdating(false);
+                var errCode = d.last_error_code ? String(d.last_error_code).toUpperCase() : '';
+                if (errCode) {
+                    if (typeof markWalletLiveFetchFailed === 'function') markWalletLiveFetchFailed(errCode);
+                    return;
+                }
+                if (typeof isWalletDataLive === 'function' && isWalletDataLive()) {
+                    if (typeof updateKpiCuzdanLiveStatus === 'function') updateKpiCuzdanLiveStatus();
+                    return;
+                }
+                if (window.homeFlash && typeof window.homeFlash.resetRefreshThrottle === 'function') {
+                    window.homeFlash.resetRefreshThrottle(accountId);
+                }
+                if (window.homeFlash && typeof window.homeFlash.triggerRefresh === 'function') {
+                    window.homeFlash.triggerRefresh(accountId, false);
+                }
+            })
+            .catch(function () {
+                scheduleNext();
+            });
+    }
+
+    tick();
+}
+window.pollWalletRefreshUntilDone = pollWalletRefreshUntilDone;
+
 /** Cüzdan varlıkları tablosu: POST /api/home/wallet/refresh (backend TTL/inflight dedupe; homeFlash debounce atlanır). */
 var _varliklarWalletRefreshInflight = false;
 var _varliklarWalletRefreshLastAt = 0;
@@ -8987,7 +9903,7 @@ function triggerWalletRefreshForVarliklar(accountId, opts) {
     if (_varliklarWalletRefreshInflight) return Promise.resolve();
     _varliklarWalletRefreshInflight = true;
     var url = '/api/home/wallet/refresh?account_id=' + accountId + (force ? '&force=1' : '');
-    return window.apiClient.post(url, null, { timeout: 15000 })
+    return window.apiClient.post(url, null, { timeout: 25000 })
         .then(function (res) {
             _varliklarWalletRefreshLastAt = Date.now();
             if (res && res.ok && res.data && res.data.wallet_live && assetsState && assetsState.wallet) {
@@ -8998,6 +9914,7 @@ function triggerWalletRefreshForVarliklar(accountId, opts) {
                     stale: !!d.stale
                 });
             }
+            if (typeof setWalletPanelUpdating === 'function') setWalletPanelUpdating(false);
             if (window.__walletDebugMeta) {
                 window.__walletDebugMeta.last_refresh_at = (res && res.data && res.data.wallet_live_at) ? res.data.wallet_live_at : new Date().toISOString();
             }
@@ -10978,15 +11895,26 @@ async function submitSpotTrade() {
             }, new AbortController().signal);
             
             // Convert to expected format
-            const result = orderResult.order || orderResult;
+            const orderResultPayload = orderResult.order || orderResult;
+            const result = (orderResult && orderResult.order && typeof orderResult.order === 'object')
+                ? orderResult.order
+                : orderResultPayload;
+            if (orderResult && orderResult.tx_revision != null) {
+                _txHistoryRevision = String(orderResult.tx_revision);
+            }
             
-            // Success message
-            const orderType = spotTradeState.type === 'MARKET' ? 'Market' : 'Limit';
-            const sideText = spotTradeState.side === 'BUY' ? 'Alış' : 'Satış';
-            const successMsg = `${orderType} ${sideText} emri başarıyla gönderildi`;
+            // Success toast: gerçekleşen miktar + tutar
+            const successMsg = (typeof formatSpotTradeFillToast === 'function')
+                ? formatSpotTradeFillToast(result, spotTradeState.side, spotTradeState.type, spotTradeState.symbol)
+                : ((spotTradeState.type === 'MARKET' ? 'Market' : 'Limit') + ' ' + (spotTradeState.side === 'BUY' ? 'Alış' : 'Satış') + ' gerçekleşti');
             
             if (window.Toast) {
                 window.Toast.success(successMsg);
+            }
+            
+            // İşlem geçmişi: anında optimistik satır + sunucudan doğrula (retry)
+            if (typeof scheduleTxHistoryRefreshAfterTrade === 'function') {
+                scheduleTxHistoryRefreshAfterTrade(result, spotTradeState.symbol, spotTradeState.side);
             }
             
             // If LIMIT order, show active orders panel and start tracking
@@ -11004,9 +11932,9 @@ async function submitSpotTrade() {
             // Close modal
             closeSpotTradeModal();
             
-            // Refresh wallet table (TTL-aware; force after trade)
             if (State.accountId && typeof triggerWalletRefreshForVarliklar === 'function') {
-                scheduleWalletRefreshAfterTrade(State.accountId, { delays: [600, 2000, 5000] });
+                triggerWalletRefreshForVarliklar(State.accountId, { force: true });
+                scheduleWalletRefreshAfterTrade(State.accountId, { delays: [0, 600, 2000, 5000] });
             } else if (State.accountId && window.BinanceAssetsPanel) {
                 BinanceAssetsPanel.refresh();
             }
@@ -12760,14 +13688,13 @@ async function initDashboard() {
             targetContent.classList.add('is-active');
             targetContent.style.display = 'block';
         }
-        // Bakiye şeridi: Finansal Hesap, İletişim, Ayarlar sekmelerinde gösterilmez (kpi-strip-hidden ile CSS !important geçilir)
+        // Bakiye şeridi: Anasayfa, Trade; diğer sekmelerde gizle
         const unifiedStrip = document.getElementById('unifiedKpiStrip');
         if (unifiedStrip) {
-            const showStrip = (savedTab === 'reports' || savedTab === 'binance' || savedTab === 'trade' || savedTab === 'bots');
+            const showStrip = (savedTab === 'reports' || savedTab === 'binance' || savedTab === 'trade');
             unifiedStrip.classList.toggle('kpi-strip-hidden', !showStrip);
             unifiedStrip.style.display = showStrip ? 'block' : 'none';
-            if (savedTab === 'bots') unifiedStrip.classList.add('unified-kpi-bots-only');
-            else unifiedStrip.classList.remove('unified-kpi-bots-only');
+            unifiedStrip.classList.remove('unified-kpi-bots-only');
         }
         updateBinanceConnectionNotice();
         document.body.classList.toggle('tab-finance-active', savedTab === 'finance');
@@ -12813,9 +13740,14 @@ async function initDashboard() {
         } else if (error && error.status === 404) {
             msg = "Hesap bulunamadı. Geçerli bir account_code veya account_id kullanın.";
         } else if (error && error.message) {
-            msg = "Dashboard yüklenemedi: " + error.message;
+            if (!isBenignDashboardFetchError(error)) {
+                msg = "Dashboard yüklenemedi: " + error.message;
+            }
         }
-        showError(msg);
+        if (!isBenignDashboardFetchError(error)) {
+            showError(msg);
+        }
+        if (window.TtScrollRestore && window.TtScrollRestore.forceUnlock) window.TtScrollRestore.forceUnlock();
         return;
     }
     
@@ -13056,7 +13988,22 @@ async function initDashboard() {
             window.marketDataService.stop();
         }
         window.intervalRegistry.stop('dashboard.summary');
-        window.intervalRegistry.start('dashboard_snapshot', dashboardDataRefresh, SNAPSHOT_POLL_MS, 'dashboard');
+        if (window.apiClient && typeof window.apiClient.getPublicConfigAsync === 'function') {
+            window.apiClient.getPublicConfigAsync().then(function (cfg) {
+                window.__DASHBOARD_SSE_ENABLED = cfg && cfg.dashboard_sse_enabled !== false;
+                startDashboardSnapshotTransport();
+            }).catch(function () {
+                window.__DASHBOARD_SSE_ENABLED = false;
+                startDashboardSnapshotTransport();
+            });
+        } else if (window.apiClient && typeof window.apiClient.getPublicConfig === 'function') {
+            var cfg = window.apiClient.getPublicConfig();
+            window.__DASHBOARD_SSE_ENABLED = cfg && cfg.dashboard_sse_enabled !== false;
+            startDashboardSnapshotTransport();
+        } else {
+            window.__DASHBOARD_SSE_ENABLED = false;
+            startDashboardSnapshotTransport();
+        }
         window.intervalRegistry.start('dashboard.tx-history', pollTransactionHistoryRevision, TX_HISTORY_POLL_MS, 'dashboard');
         if (window.FLASH_HOME_ENABLED && window.homeFlash && typeof window.homeFlash.init === 'function') {
             window.homeFlash.init();
@@ -13064,43 +14011,61 @@ async function initDashboard() {
         } else {
             fetchSnapshot();
         }
-        // One-time wallet refresh on dashboard load (cache-only snapshot needs one live refresh to populate cache)
+        // One-time wallet refresh on dashboard load (homeFlash.init zaten triggerRefresh çağırır — çift istek yok)
         if (accountId && !window.__dashboardWalletRefreshDone) {
             window.__dashboardWalletRefreshDone = true;
-            setTimeout(function () {
-                if (typeof triggerWalletRefreshForVarliklar === 'function') {
-                    triggerWalletRefreshForVarliklar(accountId, { force: true });
-                } else if (window.FLASH_HOME_ENABLED && window.homeFlash && typeof window.homeFlash.triggerRefresh === 'function') {
-                    window.homeFlash.triggerRefresh(accountId, true);
-                } else if (window.apiClient && typeof window.apiClient.post === 'function') {
-                    window.apiClient.post('/api/home/wallet/refresh?account_id=' + accountId + '&force=1', null, { timeout: 15000 })
-                        .then(function (res) {
-                            if (res && res.ok && res.data && res.data.wallet_live && assetsState && assetsState.wallet) {
-                                normalizeAndApplyWallet(res.data.wallet_live, { source: 'wallet_refresh_init' });
-                            }
-                        })
-                        .catch(function () {});
-                }
-            }, 500);
+            if (!window.FLASH_HOME_ENABLED) {
+                setTimeout(function () {
+                    if (typeof triggerWalletRefreshForVarliklar === 'function') {
+                        triggerWalletRefreshForVarliklar(accountId, { force: true });
+                    } else if (window.apiClient && typeof window.apiClient.post === 'function') {
+                        window.apiClient.post('/api/home/wallet/refresh?account_id=' + accountId + '&force=1', null, { timeout: 25000 })
+                            .then(function (res) {
+                                if (res && res.ok && res.data && res.data.wallet_live && assetsState && assetsState.wallet) {
+                                    normalizeAndApplyWallet(res.data.wallet_live, { source: 'wallet_refresh_init' });
+                                }
+                            })
+                            .catch(function () {});
+                    }
+                }, 500);
+            }
         }
-        // 10s timeout guard: wallet stuck in idle/loading => set error (eliminates indefinite loading flicker)
+        // Yenileme devam ederken erken hata gösterme (homeFlash ~12–20 sn sürebilir)
         setTimeout(function () {
             if (!assetsState || !assetsState.wallet) return;
             var w = assetsState.wallet;
-            if (w.status === 'idle' || w.status === 'loading') {
-                w.status = 'error';
-                w.error = { error_code: 'WALLET_TIMEOUT_NO_SOURCE', message: 'Cüzdan verisi 10 saniye içinde yüklenemedi.' };
-                markWalletLiveFetchFailed();
-                if (window.BinanceAssetsPanel?.render) window.BinanceAssetsPanel.render();
-                if (typeof renderVarliklarList === 'function') renderVarliklarList();
-            }
+            if (w.status !== 'idle' && w.status !== 'loading') return;
+            if (typeof _walletHasDisplayableAssets === 'function' && _walletHasDisplayableAssets()) return;
+            if (_walletPanelUpdating || _varliklarWalletRefreshInflight) return;
+            try {
+                var lockKey = 'tt_wallet_refresh_lock:' + accountId;
+                var lockRaw = localStorage.getItem(lockKey);
+                if (lockRaw && (Date.now() - parseInt(lockRaw, 10)) < 25000) return;
+            } catch (eLock) {}
+            w.status = 'error';
+            w.error = { error_code: 'WALLET_TIMEOUT_NO_SOURCE', message: 'Cüzdan verisi zamanında yüklenemedi.' };
+            markWalletLiveFetchFailed('WALLET_TIMEOUT_NO_SOURCE', { force: true });
+            if (window.BinanceAssetsPanel?.render) window.BinanceAssetsPanel.render();
+            if (typeof renderVarliklarList === 'function') renderVarliklarList();
+        }, 22000);
+        setTimeout(function () {
             if (assetsState.prices && assetsState.prices.data_status === 'empty' && (!assetsState.prices.ts || assetsState.prices.ts === 0)) {
                 assetsState.prices.data_status = 'error';
                 assetsState.prices._timeout_code = 'PRICES_TIMEOUT_NO_SOURCE';
             }
         }, 10000);
+        setTimeout(function () {
+            if (typeof maybeSilentWalletRecovery === 'function') maybeSilentWalletRecovery();
+        }, 12000);
     } else {
         loadSummary(accountId);
+    }
+
+    if (window.TtScrollRestore && typeof window.TtScrollRestore.scheduleFinalize === 'function') {
+        window.TtScrollRestore.scheduleFinalize();
+    }
+    if (window.TtScrollRestore && typeof window.TtScrollRestore.ensureRestored === 'function') {
+        window.TtScrollRestore.ensureRestored();
     }
 
     var openSpotModalSymbol = new URLSearchParams(window.location.search).get('openSpotModal');
@@ -13176,7 +14141,7 @@ async function initDashboard() {
         }
         if (period || type) {
             State.txHistoryPage = 1;
-            if (typeof loadTransactionHistory === 'function') loadTransactionHistory(State.txHistoryPeriod, State.txHistoryType, 1, false);
+            if (typeof loadTransactionHistory === 'function') loadTransactionHistory(State.txHistoryPeriod, State.txHistoryType, 1, false, { force: true });
         }
     });
     // dashboard_snapshot already started in initDashboard when accountId set; no dashboard.summary
@@ -13188,6 +14153,12 @@ async function initDashboard() {
     window.intervalRegistry.start('finance.bots.live', function () {
         if (typeof pollFinanceBotsLiveEquity === 'function') pollFinanceBotsLiveEquity();
     }, 3000, 'dashboard');
+    if (typeof ensureFinanceBotsHealthPolling === 'function') ensureFinanceBotsHealthPolling();
+    window.addEventListener('tt-server-unreachable', function (ev) {
+        if (!ev || !ev.detail) return;
+        if (ev.detail.unreachable) applyFinanceBotsServerOfflineState();
+        else clearFinanceBotsServerOfflineState();
+    });
     
     // Auth ping: update activity, handle admin kick → redirect to login
     (function setupAuthPing() {
@@ -13253,8 +14224,8 @@ async function initDashboard() {
     var visibilityThrottledRefresh = throttle(function () {
         if (!State.accountId || isSpotModalOpen()) return;
         if (typeof shouldRecoverWalletAfterConnectivity === 'function' && shouldRecoverWalletAfterConnectivity()) {
-            if (typeof recoverDashboardAfterConnectivity === 'function') {
-                recoverDashboardAfterConnectivity({ summary: false });
+            if (typeof runWalletConnectivityRecovery === 'function') {
+                runWalletConnectivityRecovery({ summary: false });
                 return;
             }
         }
@@ -13283,8 +14254,8 @@ async function initDashboard() {
     window.addEventListener("focus", () => {
         if (!State.accountId || isSpotModalOpen()) return;
         if (typeof shouldRecoverWalletAfterConnectivity === 'function' && shouldRecoverWalletAfterConnectivity()) {
-            if (typeof recoverDashboardAfterConnectivity === 'function') {
-                recoverDashboardAfterConnectivity({ summary: false });
+            if (typeof runWalletConnectivityRecovery === 'function') {
+                runWalletConnectivityRecovery({ summary: false });
                 return;
             }
         }
@@ -13295,8 +14266,8 @@ async function initDashboard() {
     });
     window.addEventListener('online', function () {
         if (!State.accountId || isSpotModalOpen()) return;
-        if (typeof recoverDashboardAfterConnectivity === 'function') {
-            recoverDashboardAfterConnectivity({ summary: false });
+        if (typeof runWalletConnectivityRecovery === 'function') {
+            runWalletConnectivityRecovery({ summary: false });
         }
     });
     
@@ -14697,6 +15668,10 @@ function isBotWaitingFirstBuy(bot) {
 }
 
 function getFinanceBotStatusMeta(bot) {
+    if (typeof isDashboardServerUnreachable === 'function' && isDashboardServerUnreachable()
+        && typeof isFinanceBotRunningForHealth === 'function' && isFinanceBotRunningForHealth(bot)) {
+        return { text: 'SUNUCU YOK', className: 'mevcut-botlar-status--stopped' };
+    }
     if (isBotWaitingFirstBuy(bot)) {
         return { text: 'ALIM BEKLİYOR', className: 'mevcut-botlar-status--waiting' };
     }
@@ -14727,6 +15702,10 @@ var _financeBotsIdsSignature = null;
 var _financeBotsLiveHydrated = false;
 var _financeBotsLivePollPromise = null;
 var _financeBotsLiveSig = '';
+var _financeBotsHealthCache = {};
+var _financeBotsHealthPollPromise = null;
+var FINANCE_BOTS_HEALTH_POLL_MS = 15000;
+var FINANCE_BOT_ROW_ALERT_CLASSES = ['mevcut-bot-row-alert-warn', 'mevcut-bot-row-alert-crit', 'mevcut-bot-row-alert-both'];
 var _financeBotsMetricsCache = {};
 
 function financeBotsSessionCacheKey(accountId) {
@@ -15158,13 +16137,155 @@ function financeBotsStructureSignature(bots, sortBy) {
             (b.symbol || '').toUpperCase(),
             b.initial_allocation_done ? 1 : 0
         ].join(':');
-    }).join('|') + '|' + (sortBy || 'pct');
+    }).join('|') + '|' + (sortBy || 'best');
+}
+
+function isFinanceBotRunningForHealth(bot) {
+    if (!bot) return false;
+    var st = (bot.status || '').toLowerCase();
+    if (st !== 'running') return false;
+    var ds = (bot.display_status || '').toLowerCase();
+    return ds !== 'stopped' && ds !== 'paused' && ds !== 'paused_error' && ds !== 'paused_insufficient_balance';
+}
+
+function isDashboardServerUnreachable() {
+    return typeof window.isServerUnreachable === 'function' && window.isServerUnreachable();
+}
+window.isDashboardServerUnreachable = isDashboardServerUnreachable;
+
+function isDashboardFetchServerError(error) {
+    if (!error) return false;
+    if (isDashboardServerUnreachable()) return true;
+    var status = Number(error.status) || 0;
+    if (status === 0 || status === 502 || status === 503 || status === 504) return true;
+    var code = String(error.error_code || '').toUpperCase();
+    return code === 'NETWORK_ERROR' || code === 'BAD_GATEWAY' || code === 'SERVICE_UNAVAILABLE' || code === 'GATEWAY_TIMEOUT';
+}
+
+function applyFinanceBotsServerOfflineState() {
+    if (!isDashboardServerUnreachable()) return false;
+    applyFinanceBotsHealthAlertsToDom();
+    applyFinanceBotsLiveEquityToDom();
+    return true;
+}
+window.applyFinanceBotsServerOfflineState = applyFinanceBotsServerOfflineState;
+
+function clearFinanceBotsServerOfflineState() {
+    var cleared = false;
+    Object.keys(_financeBotsHealthCache).forEach(function (id) {
+        if (_financeBotsHealthCache[id] && _financeBotsHealthCache[id].serverOffline) {
+            delete _financeBotsHealthCache[id];
+            cleared = true;
+        }
+    });
+    if (!cleared) return;
+    applyFinanceBotsHealthAlertsToDom();
+    applyFinanceBotsLiveEquityToDom();
+    if (typeof pollFinanceBotsHealth === 'function') pollFinanceBotsHealth();
+}
+window.clearFinanceBotsServerOfflineState = clearFinanceBotsServerOfflineState;
+
+function classifyFinanceBotHealth(botId, healthData) {
+    if (window.BotHealthAlerts && typeof window.BotHealthAlerts.classifyRowAlerts === 'function') {
+        return window.BotHealthAlerts.classifyRowAlerts(botId, healthData, true);
+    }
+    var alerts = (healthData && healthData.alerts) ? healthData.alerts : [];
+    var hasCrit = alerts.some(function (a) { return a && String(a.level || '').toLowerCase() === 'critical'; });
+    var hasWarn = alerts.some(function (a) { return a && String(a.level || '').toLowerCase() === 'warn'; });
+    if (healthData && healthData.connectivity_ok === false) hasCrit = true;
+    if (hasCrit && hasWarn) return { level: 'both' };
+    if (hasCrit) return { level: 'critical' };
+    if (hasWarn) return { level: 'warn' };
+    return { level: null };
+}
+
+function applyFinanceBotsHealthAlertsToDom() {
+    if (isDashboardServerUnreachable()) {
+        (State.bots || []).filter(isFinanceBotRunningForHealth).forEach(function (bot) {
+            var id = String(bot.bot_id || bot.id || '');
+            if (id) _financeBotsHealthCache[id] = { level: 'critical', serverOffline: true };
+        });
+    }
+    document.querySelectorAll('tr[data-bot-id]').forEach(function (tr) {
+        var botId = tr.getAttribute('data-bot-id');
+        var info = botId ? _financeBotsHealthCache[botId] : null;
+        FINANCE_BOT_ROW_ALERT_CLASSES.forEach(function (c) { tr.classList.remove(c); });
+        if (info && info.level) tr.classList.add('mevcut-bot-row-alert-' + (info.level === 'critical' ? 'crit' : info.level));
+    });
+    document.querySelectorAll('.mevcut-botlar-mobile-card[data-bot-id]').forEach(function (card) {
+        var botId = card.getAttribute('data-bot-id');
+        var info = botId ? _financeBotsHealthCache[botId] : null;
+        FINANCE_BOT_ROW_ALERT_CLASSES.forEach(function (c) { card.classList.remove(c); });
+        if (info && info.level) card.classList.add('mevcut-bot-row-alert-' + (info.level === 'critical' ? 'crit' : info.level));
+    });
+}
+
+function pollFinanceBotsHealth() {
+    if (!State.accountId || !window.apiClient || document.hidden) return Promise.resolve();
+    if (isDashboardServerUnreachable()) {
+        applyFinanceBotsServerOfflineState();
+        return Promise.resolve();
+    }
+    var bots = (State.bots || []).filter(isFinanceBotRunningForHealth);
+    if (!bots.length) {
+        _financeBotsHealthCache = {};
+        applyFinanceBotsHealthAlertsToDom();
+        return Promise.resolve();
+    }
+    var q = State.accountCode
+        ? '?account_code=' + encodeURIComponent(State.accountCode)
+        : '?account_id=' + (State.accountId || '');
+    var updates = {};
+    var runningIds = bots.map(function (bot) { return String(bot.bot_id || bot.id || ''); }).filter(Boolean);
+    return Promise.all(bots.map(function (bot) {
+        var botId = String(bot.bot_id || bot.id || '');
+        if (!botId) return Promise.resolve();
+        return window.apiClient.get('/api/bots-engine/' + botId + '/health' + q, { timeout: 12000 })
+            .then(function (res) {
+                updates[botId] = classifyFinanceBotHealth(botId, res || {});
+            })
+            .catch(function (err) {
+                if (isBenignDashboardFetchError(err)) return;
+                if (isDashboardFetchServerError(err)) {
+                    updates[botId] = { level: 'critical', serverOffline: true };
+                    return;
+                }
+                if (_financeBotsHealthCache[botId]) return;
+                updates[botId] = { level: null };
+            });
+    })).then(function () {
+        Object.keys(_financeBotsHealthCache).forEach(function (id) {
+            if (runningIds.indexOf(id) < 0) delete _financeBotsHealthCache[id];
+        });
+        Object.keys(updates).forEach(function (id) {
+            _financeBotsHealthCache[id] = updates[id];
+        });
+        applyFinanceBotsHealthAlertsToDom();
+        if (isDashboardServerUnreachable()) applyFinanceBotsLiveEquityToDom();
+    });
+}
+
+function ensureFinanceBotsHealthPolling() {
+    if (!window.intervalRegistry) return;
+    window.intervalRegistry.stop('finance.bots.health');
+    window.intervalRegistry.start('finance.bots.health', function () {
+        if (_financeBotsHealthPollPromise) return;
+        _financeBotsHealthPollPromise = pollFinanceBotsHealth().finally(function () {
+            _financeBotsHealthPollPromise = null;
+        });
+    }, FINANCE_BOTS_HEALTH_POLL_MS, 'dashboard');
+    if (!_financeBotsHealthPollPromise) {
+        _financeBotsHealthPollPromise = pollFinanceBotsHealth().finally(function () {
+            _financeBotsHealthPollPromise = null;
+        });
+    }
 }
 
 function patchFinanceBotsMetrics(bots) {
     if (!bots || !bots.length) return;
     State.bots = hydrateBotsWithMetricsCache(bots);
     applyFinanceBotsLiveEquityToDom();
+    applyFinanceBotsHealthAlertsToDom();
     persistFinanceBotsSessionCache(State.bots);
 }
 
@@ -15191,10 +16312,14 @@ function renderFinanceBots(bots, opts) {
         return;
     }
 
-    var sortBy = (typeof financeBotsSortBy !== 'undefined' ? financeBotsSortBy : 'pct');
+    var sortBy = normalizeFinanceBotsSortBy(typeof financeBotsSortBy !== 'undefined' ? financeBotsSortBy : 'best');
     var structureSig = financeBotsStructureSignature(bots, sortBy);
-    var idsSig = bots.map(function (b) { return String(b.bot_id || b.id || ''); }).sort().join(',');
-    if (idsSig === _financeBotsIdsSignature && _financeBotsBothTablesReady()) {
+    var idsSig = financeBotsIdsSignature(bots);
+    var forceFull = !!opts.forceFullRender;
+    if (forceFull && idsSig === _financeBotsIdsSignature && applyFinanceBotsSortReorder(bots)) {
+        return;
+    }
+    if (!forceFull && idsSig === _financeBotsIdsSignature && structureSig === _financeBotsStructureSignature && _financeBotsBothTablesReady()) {
         State.bots = bots;
         _financeBotsStructureSignature = structureSig;
         updateFinanceBotsLivePrices();
@@ -15205,7 +16330,7 @@ function renderFinanceBots(bots, opts) {
         if (containerBotsTab && _financeBotsPanelHasRows(containerBotsTab)) markBotsTabCacheReady();
         return;
     }
-    if (_financeBotsStructureSignature === structureSig && _financeBotsBothTablesReady()) {
+    if (!forceFull && _financeBotsStructureSignature === structureSig && _financeBotsBothTablesReady()) {
         updateFinanceBotsLivePrices();
         patchFinanceBotsMetrics(bots);
         if (!_financeBotsLiveHydrated) ensureFinanceBotsLiveEquity();
@@ -15228,10 +16353,7 @@ function renderFinanceBots(bots, opts) {
             total_pnl_pct: bot.total_pnl_pct ?? pct
         };
     });
-    const sorted = normalized.slice().sort((a, b) => {
-        if (financeBotsSortBy === 'usd') return (b.total_pnl_usd || 0) - (a.total_pnl_usd || 0);
-        return (b.total_pnl_pct || 0) - (a.total_pnl_pct || 0);
-    });
+    const sorted = normalized.slice().sort(compareFinanceBotsForSort);
     var getLogoHtml = function (base) {
         var sz = 36;
         if (!base || typeof getCoinLogoUrl !== 'function') return '<span class="mevcut-bot-logo-placeholder" style="width:' + sz + 'px;height:' + sz + 'px;display:inline-block;"></span>';
@@ -15293,8 +16415,8 @@ function renderFinanceBots(bots, opts) {
         return resolveMarketLivePrice(sym);
     };
     var colgroup = '<colgroup>' +
-        '<col class="mevcut-botlar-col"><col class="mevcut-botlar-col"><col class="mevcut-botlar-col"><col class="mevcut-botlar-col">' +
-        '<col class="mevcut-botlar-col"><col class="mevcut-botlar-col"><col class="mevcut-botlar-col"><col class="mevcut-botlar-col">' +
+        '<col class="mevcut-botlar-col-symbol"><col class="mevcut-botlar-col-price"><col class="mevcut-botlar-col-status"><col class="mevcut-botlar-col-budget">' +
+        '<col class="mevcut-botlar-col-balance"><col class="mevcut-botlar-col-pnl"><col class="mevcut-botlar-col-tur"><col class="mevcut-botlar-col-action">' +
         '</colgroup>';
     const thead = '<thead><tr>' +
         '<th class="col-symbol col-left">Sembol</th>' +
@@ -15394,16 +16516,39 @@ function renderFinanceBots(bots, opts) {
     var fullHtml = tableHtml + mobileWrapHtml;
     if (containerAnasayfa) { containerAnasayfa.innerHTML = fullHtml; bindFinanceBotsRowClicks(containerAnasayfa); }
     if (containerBotsTab) { containerBotsTab.innerHTML = fullHtml; bindFinanceBotsRowClicks(containerBotsTab); }
+    updateFinanceBotsSortButtonUi(sortBy);
     _bindFinanceBotsSortButtons();
     updateFinanceBotsLivePrices();
     ensureFinanceBotsLiveEquity();
+    ensureFinanceBotsHealthPolling();
+    applyFinanceBotsHealthAlertsToDom();
     persistFinanceBotsSessionCache(sorted);
     if (containerBotsTab && _financeBotsPanelHasRows(containerBotsTab)) markBotsTabCacheReady();
 }
 
 var financeBotLastPrices = {};
+var _financeBotPriceBlinkUntil = {};
+var FINANCE_BOT_PRICE_BLINK_COOLDOWN_MS = 350;
 var _dashboardMarketPriceRaf = 0;
 var _dashboardMarketUnsub = null;
+
+function clearFinanceBotPriceTone(span) {
+    if (!span) return;
+    span.classList.remove('mevcut-bot-price-up', 'mevcut-bot-price-down');
+}
+
+function applyFinanceBotPriceBlink(span, newPrice, oldPrice, tone) {
+    if (!span || !Number.isFinite(newPrice) || !Number.isFinite(oldPrice)) return;
+    if (Math.abs(newPrice - oldPrice) < 1e-10) return;
+    clearFinanceBotPriceTone(span);
+    span.classList.remove('mevcut-bot-blink-up', 'mevcut-bot-blink-down', 'price-up', 'price-down', 'blink-positive', 'blink-negative');
+    void span.offsetWidth;
+    span.classList.add(tone === 'up' ? 'mevcut-bot-blink-up' : 'mevcut-bot-blink-down');
+    setTimeout(function () {
+        span.classList.remove('mevcut-bot-blink-up', 'mevcut-bot-blink-down');
+        clearFinanceBotPriceTone(span);
+    }, 780);
+}
 
 function tickDashboardLiveMarketPrices() {
     if (typeof tickVarliklarPrices === 'function') tickVarliklarPrices({ skipThrottle: true });
@@ -15427,34 +16572,42 @@ function ensureDashboardMarketPriceSubscriber() {
 }
 
 function updateFinanceBotsLivePrices() {
+    var grouped = {};
     document.querySelectorAll('.finance-bot-live-price').forEach(function (span) {
         var sym = span.getAttribute('data-symbol');
         var botId = span.getAttribute('data-bot-id');
         if (!sym || !botId) return;
-        var price = resolveBotLivePrice(sym);
+        if (!grouped[botId]) grouped[botId] = { sym: sym, spans: [] };
+        grouped[botId].spans.push(span);
+    });
+    var now = Date.now();
+    Object.keys(grouped).forEach(function (botId) {
+        var entry = grouped[botId];
+        var price = resolveBotLivePrice(entry.sym);
         if (price == null) return;
         var newText = fmtCoinPrice(price);
         var prev = financeBotLastPrices[botId];
-        if (span.textContent !== newText) {
-            if (prev != null && Number.isFinite(prev) && Math.abs(price - prev) > 1e-10) {
-                span.classList.remove('mevcut-bot-blink-up', 'mevcut-bot-blink-down', 'blink-positive', 'blink-negative');
-                void span.offsetWidth;
-                span.classList.add(price > prev ? 'mevcut-bot-blink-up' : 'mevcut-bot-blink-down');
-                setTimeout(function () {
-                    span.classList.remove('mevcut-bot-blink-up', 'mevcut-bot-blink-down');
-                }, 780);
-            }
-            span.textContent = newText;
-        }
+        var priceChanged = prev != null && Number.isFinite(prev) && Math.abs(price - prev) > 1e-10;
+        var tone = priceChanged ? (price > prev ? 'up' : 'down') : null;
+        var canBlink = priceChanged && (!_financeBotPriceBlinkUntil[botId] || now >= _financeBotPriceBlinkUntil[botId]);
+        if (canBlink) _financeBotPriceBlinkUntil[botId] = now + FINANCE_BOT_PRICE_BLINK_COOLDOWN_MS;
+        entry.spans.forEach(function (span) {
+            if (canBlink) applyFinanceBotPriceBlink(span, price, prev, tone);
+            else clearFinanceBotPriceTone(span);
+            if (span.textContent !== newText) span.textContent = newText;
+        });
         financeBotLastPrices[botId] = price;
     });
 }
 function _bindFinanceBotsSortButtons() {
-    var handler = function () { setFinanceBotsSortBy(financeBotsSortBy === 'pct' ? 'usd' : 'pct'); renderFinanceBots(State.bots || []); };
+    var handler = function () {
+        setFinanceBotsSortBy(normalizeFinanceBotsSortBy(financeBotsSortBy) === 'worst' ? 'best' : 'worst');
+    };
     var btn = document.getElementById('btnSortBotsBy');
     if (btn && !btn._boundFinanceBots) { btn._boundFinanceBots = true; btn.addEventListener('click', handler); }
     var btnTab = document.getElementById('btnSortBotsByBotsTab');
     if (btnTab && !btnTab._boundFinanceBots) { btnTab._boundFinanceBots = true; btnTab.addEventListener('click', handler); }
+    updateFinanceBotsSortButtonUi(normalizeFinanceBotsSortBy(typeof financeBotsSortBy !== 'undefined' ? financeBotsSortBy : 'best'));
 }
 
 async function loadEquityCurve(range) {

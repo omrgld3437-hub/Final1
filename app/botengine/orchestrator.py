@@ -695,6 +695,16 @@ async def _bot_loop(bot_id: int) -> None:
                                 logger.debug("bot_engine release_symbol_lock bot_id=%s err=%s", bot_id, ex)
                             lock_held = False
                     save_state(db, bot_id, account_id, state)
+                    if state.get("_pending_connectivity_stable"):
+                        try:
+                            from app.services.binance_connectivity import flush_pending_connectivity_stable
+
+                            flush_pending_connectivity_stable(db, bot_id, after_loop_restart=False)
+                        except Exception:
+                            pass
+                        state.pop("_pending_connectivity_stable", None)
+                        state.pop("_pending_connectivity_stable_at", None)
+                        state.pop("_pending_connectivity_stable_prev_err", None)
                     try:
                         sync_virtual_wallet_from_state(
                             db, bot_id, account_id, symbol,
@@ -943,7 +953,7 @@ async def ensure_running_bots(db: Session, recovery_source: str = "worker_poll")
                 from app.botengine.health_watch import emit_loop_auto_restart
                 emit_loop_auto_restart(
                     db, bot.id, bot.account_id,
-                    f"ensure_running_bots ({recovery_source})",
+                    recovery_source,
                 )
             except Exception:
                 pass

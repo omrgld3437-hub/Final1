@@ -5,6 +5,8 @@
  CHANGE: Force create bot modal visibility - !important rules to ensure modal is always visible when opened
 */
 
+@import url("scroll-auto-hide.css?v=10");
+
 /* ===== RETRO 90s WINDOWS THEME ===== */
 :root {
     --retro-pink: #ff6b9d;
@@ -778,6 +780,10 @@ textarea:focus {
 
 /* Kill unexpected fullscreen overlays on dashboard */
 .page-dashboard .top-ticker {
+    position: -webkit-sticky;
+    position: sticky;
+    top: 0;
+    z-index: 210;
     pointer-events: none !important;
 }
 
@@ -792,13 +798,13 @@ textarea:focus {
     pointer-events: none !important;
 }
 
-/* Appbar: sticky ile scroll'da üstte sabit kalır (Safari dahil) */
+/* Appbar: ticker altında sticky (Safari dahil) */
 .page-dashboard .admin-appbar,
 .page-dashboard .dash-appbar,
 .page-dashboard .dashboard-appbar {
     position: -webkit-sticky;
     position: sticky;
-    top: 0;
+    top: var(--dashboard-ticker-height, 41px);
     z-index: 200;
 }
 
@@ -834,14 +840,18 @@ textarea:focus {
 
 /* Ticker yukarıda kalsın ama butonların üstüne binmesin */
 .page-dashboard .top-ticker {
-    pointer-events: none; /* ticker tıklanmasın, alttaki UI tıklansın */
-}
-
-/* Appbar scroll'da üstte sabit (sticky) */
-.page-dashboard .dashboard-appbar {
     position: -webkit-sticky;
     position: sticky;
     top: 0;
+    z-index: 210;
+    pointer-events: none; /* ticker tıklanmasın, alttaki UI tıklansın */
+}
+
+/* Appbar scroll'da ticker altında sabit (sticky) */
+.page-dashboard .dashboard-appbar {
+    position: -webkit-sticky;
+    position: sticky;
+    top: var(--dashboard-ticker-height, 41px);
     z-index: 200;
 }
 
@@ -875,15 +885,19 @@ textarea:focus {
 
 /* Ticker yukarıda kalsın ama butonların üstüne binmesin */
 .page-dashboard .top-ticker {
+    position: -webkit-sticky;
+    position: sticky;
+    top: 0;
+    z-index: 210;
     pointer-events: none;  /* ticker tıklanmasın, alttaki UI tıklansın */
 }
 
-/* Appbar: sticky + z-index */
+/* Appbar: ticker altında sticky + z-index */
 .page-dashboard .dashboard-appbar,
 .page-dashboard .admin-appbar {
     position: -webkit-sticky;
     position: sticky;
-    top: 0;
+    top: var(--dashboard-ticker-height, 41px);
     z-index: 200;
 }
 
@@ -1169,47 +1183,7 @@ textarea:focus {
 .breach-modal-body .breach-item:last-child { margin-bottom: 0; }
 
 /* Tüm modallarda kaydırma çubuğu gizle */
-.dm-modal__content,
-.audit-modal__content,
-.modal-content,
-.modal-card,
-.modal-body,
-.breach-modal-body,
-.perf-chart-modal .perf-chart-modal-body,
-.perf-chart-modal .perf-chart-modal-body-chart,
-.perf-chart-modal .perf-chart-modal-body.symbol-chart-iframe-wrap,
-.dm-modal__body,
-#accountSettingsBody,
-#errorLogsList,
-#accountUserAuditList,
-#adminAuditList,
-#chatMessages,
-.parametreler-body,
-.binance-modal-body,
-.modal-panel {
-    scrollbar-width: none;
-    -ms-overflow-style: none;
-}
-.dm-modal__content::-webkit-scrollbar,
-.audit-modal__content::-webkit-scrollbar,
-.modal-content::-webkit-scrollbar,
-.modal-card::-webkit-scrollbar,
-.modal-body::-webkit-scrollbar,
-.breach-modal-body::-webkit-scrollbar,
-.perf-chart-modal .perf-chart-modal-body::-webkit-scrollbar,
-.perf-chart-modal .perf-chart-modal-body-chart::-webkit-scrollbar,
-.perf-chart-modal .perf-chart-modal-body.symbol-chart-iframe-wrap::-webkit-scrollbar,
-.dm-modal__body::-webkit-scrollbar,
-#accountSettingsBody::-webkit-scrollbar,
-#errorLogsList::-webkit-scrollbar,
-#accountUserAuditList::-webkit-scrollbar,
-#adminAuditList::-webkit-scrollbar,
-#chatMessages::-webkit-scrollbar,
-.parametreler-body::-webkit-scrollbar,
-.binance-modal-body::-webkit-scrollbar,
-.modal-panel::-webkit-scrollbar {
-    display: none;
-}
+/* Modal / panel içi kaydırma — scroll-auto-hide.css (hover + kaydırınca görünür) */
 
 .breach-modal-footer {
     padding: 1rem 1.5rem;

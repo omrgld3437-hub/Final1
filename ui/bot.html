@@ -14,14 +14,25 @@
         }
     })();
     </script>
+    <script>
+    window.__TT_SCROLL_SCOPE_FN__ = function () {
+        var q = new URLSearchParams(location.search);
+        return q.get('bot_id') || q.get('id') || '';
+    };
+    window.__TT_SCROLL_NO_AUTO_FINALIZE__ = true;
+    </script>
+    <script src="/ui/assets/scrollRestore.js?v=scroll-restore4"></script>
     <title>Bot Detay - TraderTrailing</title>
     <link rel="stylesheet" href="/ui/assets/theme.css?v=1">
-    <link rel="stylesheet" href="/ui/assets/design.css?v=ds-back-link1">
+    <link rel="stylesheet" href="/ui/assets/design.css?v=design-scroll8">
+    <link rel="stylesheet" href="/ui/assets/binance-colors.css?v=bin1">
+    <link rel="stylesheet" href="/ui/assets/dashboard-login-theme.css?v=bot-ws-hero1">
+    <script src="/ui/assets/scrollAutoHide.js?v=5"></script>
     <link rel="stylesheet" href="/ui/assets/blink.css?v=1">
     <style>
-        body { margin: 0; padding: 2rem; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--ds-bg-primary, #0b0e11); color: var(--ds-text-primary, #eaecef); min-height: 100vh; }
+        body { margin: 0; padding: 2rem; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--ds-bg-primary, #1a1d24); color: var(--ds-text-primary, #eaecef); min-height: 100vh; }
         .container { max-width: 960px; margin: 0 auto; }
-        .panel { background: var(--ds-bg-secondary, #1e2329); border-radius: 8px; padding: 1.5rem; margin-bottom: 1rem; border: 1px solid var(--ds-border, #2b3139); }
+        .panel { background: var(--ds-bg-panel, #242932); border-radius: 8px; padding: 1.5rem; margin-bottom: 1rem; border: 1px solid var(--ds-border-light, rgba(255,255,255,0.14)); }
         .panel h2 { margin: 0 0 1rem 0; font-size: 1.1rem; font-weight: 600; color: var(--ds-text-primary); }
         .muted { color: var(--ds-text-secondary); font-size: 0.9rem; }
         .grid-2 { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 1rem; }
@@ -361,10 +372,69 @@
         .profit-points-table th:nth-child(7), .profit-points-table td:nth-child(7) {
             text-align: center; overflow: hidden;
         }
-        .cycle-pnls-list { max-height: 320px; overflow-y: auto; }
-        .cycle-pnl-item { padding: 10px 12px; border-bottom: 1px solid var(--ds-border, #2b3139); display: flex; justify-content: space-between; align-items: center; }
-        .cycle-pnl-item.cycle-trade-clickable { cursor: pointer; transition: background 0.15s ease; }
-        .cycle-pnl-item.cycle-trade-clickable:hover { background: rgba(240, 185, 11, 0.08); }
+        .cycle-pnls-list { max-height: 320px; overflow-y: auto; display: flex; flex-direction: column; gap: 0.45rem; padding: 0.15rem 0; }
+        .cycle-pnl-item {
+            padding: 0.45rem 0.55rem;
+            display: flex;
+            align-items: center;
+            flex-wrap: nowrap;
+            gap: 0.45rem;
+            min-width: 0;
+            background: rgba(0, 0, 0, 0.12);
+            border: 1px solid rgba(54, 60, 69, 0.45);
+            border-radius: 9px;
+            box-sizing: border-box;
+        }
+        .cycle-pnl-item.cycle-pnl-item--empty { justify-content: center; border-style: dashed; opacity: 0.85; }
+        .cycle-pnl-item .cycle-trade-bar__main {
+            flex: 1;
+            min-width: 0;
+            display: flex;
+            align-items: center;
+            flex-wrap: nowrap;
+            gap: 0.45rem;
+            overflow: hidden;
+        }
+        .cycle-pnl-item .cycle-trade-line {
+            flex: 1;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            font-size: 0.82rem;
+            color: var(--ds-text-primary, #eaecef);
+        }
+        .cycle-pnl-item .cycle-trade-ts {
+            flex-shrink: 0;
+            margin-left: auto;
+            font-size: 0.72rem;
+            white-space: nowrap;
+        }
+        .cycle-trade-line .trade-pct-pos { color: #0ecb81; font-weight: 600; }
+        .cycle-trade-line .trade-pct-neg { color: #f6465d; font-weight: 600; }
+        .cycle-trade-chip {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            padding: 3px 8px;
+            border-radius: 6px;
+            font-size: 0.78rem;
+            font-weight: 600;
+            line-height: 1.2;
+            white-space: nowrap;
+            font-variant-numeric: tabular-nums;
+            box-sizing: border-box;
+            border: 1px solid transparent;
+        }
+        .cycle-trade-chip--buy { background: rgba(14, 203, 129, 0.15); color: #0ecb81; border-color: rgba(14, 203, 129, 0.4); }
+        .cycle-trade-chip--sell { background: rgba(246, 70, 93, 0.15); color: #f6465d; border-color: rgba(246, 70, 93, 0.4); }
+        .cycle-trade-chip--muted { background: rgba(128, 128, 128, 0.12); color: var(--ds-text-secondary, #848e9c); border-color: rgba(128, 128, 128, 0.25); font-weight: 500; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+        .cycle-trade-chip--pct-pos { background: rgba(14, 203, 129, 0.12); color: #0ecb81; border-color: rgba(14, 203, 129, 0.35); font-weight: 600; }
+        .cycle-trade-chip--pct-neg { background: rgba(246, 70, 93, 0.12); color: #f6465d; border-color: rgba(246, 70, 93, 0.35); font-weight: 600; }
+        .cycle-trade-chip--ts { flex-shrink: 0; margin-left: auto; background: rgba(111, 126, 214, 0.12); color: #9aa8f0; border-color: rgba(111, 126, 214, 0.35); font-size: 0.72rem; font-weight: 500; opacity: 0.95; }
+        .cycle-pnl-item.cycle-trade-clickable { cursor: pointer; transition: border-color 0.15s ease, background 0.15s ease; }
+        .cycle-pnl-item.cycle-trade-clickable:hover { background: rgba(240, 185, 11, 0.08); border-color: rgba(240, 185, 11, 0.35); }
         .grid-trade-detail-rows { display: flex; flex-direction: column; gap: 0; font-size: 0.9rem; }
         .grid-trade-detail-row { display: flex; justify-content: space-between; gap: 1rem; padding: 0.55rem 0; border-bottom: 1px solid var(--ds-border, #2b3139); }
         .grid-trade-detail-row:last-child { border-bottom: none; }
@@ -394,10 +464,24 @@
         #engineLogList .engine-log-table th:nth-child(3),
         #engineLogList .engine-log-table td:nth-child(3) { width: auto; white-space: normal; word-break: break-word; padding-left: 3ch; }
         #engineLogList { overflow-x: auto; width: 100%; box-sizing: border-box; }
-        #engineLogList .log-row-warn { color: var(--ds-text-warning, #f0b90b); }
-        #engineLogList .log-row-error { color: #f6465d; font-weight: 700; }
-        #engineLogList .log-row-success { color: #0ecb81; font-weight: 600; }
-        #engineLogList .log-row-info { color: var(--ds-text-primary, #eaecef); }
+        #engineLogList tr.log-row-warn td {
+            color: var(--ds-text-warning, #f0b90b);
+            background: rgba(240, 185, 11, 0.09);
+        }
+        #engineLogList tr.log-row-warn td:nth-child(2) { font-weight: 600; }
+        #engineLogList tr.log-row-error td {
+            color: #f6465d;
+            background: rgba(246, 70, 93, 0.11);
+            font-weight: 600;
+        }
+        #engineLogList tr.log-row-error td:nth-child(2) { font-weight: 700; }
+        #engineLogList tr.log-row-success td {
+            color: #0ecb81;
+            background: rgba(14, 203, 129, 0.09);
+            font-weight: 600;
+        }
+        #engineLogList tr.log-row-success td:nth-child(2) { font-weight: 700; }
+        #engineLogList tr.log-row-info td { color: var(--ds-text-primary, #eaecef); }
         #engineLogList .log-row-spacer td { color: transparent; user-select: none; padding: 0.35rem 0.45rem; line-height: 1.35; border-bottom: 1px solid var(--ds-border, #2b3139); }
         #engineLogList .log-row-spacer:hover td { background: transparent; }
         @keyframes hero-alert-blink {
@@ -411,7 +495,32 @@
         #engineLogList .log-repeat-badge { font-size: 0.65rem; color: var(--ds-text-tertiary); font-weight: 600; white-space: nowrap; }
         #engineLogPanel .engine-log-actions { display: flex; justify-content: flex-end; gap: 0.35rem; margin-bottom: 0.5rem; flex-wrap: wrap; }
         #engineLogPanel #btnEngineLogReset,
-        #engineLogPanel #btnEngineLogExport { min-height: 28px; height: 28px; padding: 0 0.65rem; font-size: 0.72rem; border-radius: 6px; }
+        #engineLogPanel #btnEngineLogExport {
+            min-height: 28px;
+            height: 28px;
+            padding: 0 0.65rem;
+            font-size: 0.72rem;
+            font-weight: 500;
+            border-radius: 6px;
+            -webkit-appearance: none;
+            appearance: none;
+            background: rgba(255, 255, 255, 0.035);
+            border: 1px solid rgba(255, 255, 255, 0.07);
+            color: var(--ds-text-secondary, #848e9c);
+            box-shadow: none;
+            transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+        }
+        #engineLogPanel #btnEngineLogReset:hover,
+        #engineLogPanel #btnEngineLogExport:hover {
+            background: rgba(255, 255, 255, 0.06);
+            border-color: rgba(255, 255, 255, 0.11);
+            color: var(--ds-text-primary, #eaecef);
+            opacity: 1;
+        }
+        #engineLogPanel #btnEngineLogReset:active,
+        #engineLogPanel #btnEngineLogExport:active {
+            background: rgba(255, 255, 255, 0.045);
+        }
         .trade-side-buy { color: #0ecb81; }
         .trade-side-sell { color: #f6465d; }
         .loading { text-align: center; padding: 2rem; color: var(--ds-text-secondary); }
@@ -438,26 +547,32 @@
         .param-table th { color: var(--ds-text-secondary); font-weight: 500; }
         .param-table .num { text-align: right; }
         .param-hint { font-size: 0.78rem; color: var(--ds-text-secondary); margin-top: 0.5rem; line-height: 1.4; }
-        .bot-top-strip { display: flex; align-items: center; flex-wrap: wrap; gap: 1rem 1.5rem; padding: 1rem 0; border-bottom: 1px solid var(--ds-border, #2b3139); margin-bottom: 1rem; }
+        .bot-top-strip { display: flex; align-items: center; flex-wrap: nowrap; gap: 0.65rem 1rem; padding: 1rem 0; border-bottom: 1px solid var(--ds-border, #2b3139); margin-bottom: 1rem; min-width: 0; }
+        .bot-top-strip #botLogoWrap { flex-shrink: 0; }
         .bot-top-strip .bot-logo { width: 44px; height: 44px; border-radius: 50%; object-fit: cover; flex-shrink: 0; }
         .bot-top-strip .bot-logo-initials { width: 44px; height: 44px; border-radius: 50%; background: var(--ds-bg-tertiary, #2b3139); display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 0.9rem; flex-shrink: 0; }
-        .bot-top-strip .bot-symbol { font-size: 1.35rem; font-weight: 700; color: var(--ds-text-primary); margin-right: 0.5rem; }
-        .bot-top-strip .bot-price { font-size: 1.25rem; font-weight: 600; color: var(--ds-text-primary); min-width: 11ch; font-variant-numeric: tabular-nums; display: inline-block; text-align: right; }
-        .bot-top-strip .bot-24h { font-size: 0.95rem; margin-left: 0.25rem; min-width: 7ch; font-variant-numeric: tabular-nums; display: inline-block; text-align: right; }
+        .bot-top-strip .bot-symbol { font-size: 1.2rem; font-weight: 700; color: var(--ds-text-primary); margin-right: 0.35rem; white-space: nowrap; flex-shrink: 0; }
+        .bot-top-strip .bot-price { font-size: 1.15rem; font-weight: 600; color: var(--ds-text-primary); min-width: 8ch; font-variant-numeric: tabular-nums; display: inline-block; text-align: right; white-space: nowrap; flex-shrink: 0; }
+        .bot-top-strip .bot-24h { font-size: 0.9rem; margin-left: 0.25rem; min-width: 6ch; font-variant-numeric: tabular-nums; display: inline-block; text-align: right; white-space: nowrap; flex-shrink: 0; }
         .bot-top-strip .bot-24h.up { color: #0ecb81; }
         .bot-top-strip .bot-24h.down { color: #f6465d; }
         .bot-top-strip .bot-24h.muted { color: var(--ds-text-secondary, #848e9c); }
-        .bot-strip-price-block { display: flex; align-items: baseline; flex-wrap: nowrap; gap: 0.35rem 0.5rem; flex-shrink: 0; }
-        .bot-strip-mini-chart-wrap { width: 100px; height: 36px; min-width: 100px; max-width: 100px; flex-shrink: 0; background: var(--ds-bg-tertiary, #2b3139); border-radius: 8px; border: 1px solid var(--ds-border, #2b3139); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: border-color 0.2s, box-shadow 0.2s; }
+        .bot-strip-price-block { display: flex; align-items: center; flex-wrap: nowrap; gap: 0.35rem 0.5rem; flex-shrink: 1; min-width: 0; }
+        .bot-strip-mini-chart-wrap { width: 88px; height: 34px; min-width: 88px; max-width: 88px; flex-shrink: 0; background: var(--ds-bg-tertiary, #2b3139); border-radius: 8px; border: 1px solid var(--ds-border, #2b3139); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: border-color 0.2s, box-shadow 0.2s; }
         .bot-strip-mini-chart-wrap:hover { border-color: var(--ds-accent, #f0b90b); box-shadow: 0 0 0 1px rgba(240,185,11,0.2); }
         .bot-strip-mini-chart-svg { width: 100%; height: 100%; padding: 4px; box-sizing: border-box; display: flex; align-items: center; justify-content: center; }
         .bot-strip-mini-chart-svg svg { width: 100%; height: 100%; display: block; flex-shrink: 0; }
-        .bot-top-strip .strip-right { margin-left: auto; display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
+        .bot-strip-health-badges { display: none; align-items: center; gap: 0.5rem; flex-shrink: 0; min-width: 88px; }
+        .bot-top-strip .strip-right { margin-left: auto; display: flex; align-items: center; gap: 0.5rem; flex-wrap: nowrap; flex-shrink: 0; }
         .bot-top-strip .strip-right .btn,
         .bot-top-strip .strip-right .status-badge,
-        .bot-top-strip .strip-right .btn-row .btn { min-height: 36px; }
+        .bot-top-strip .strip-right .btn-row .btn { min-height: 36px; flex-shrink: 0; white-space: nowrap; }
+        .bot-top-strip .strip-right .btn { padding: 8px 12px; font-size: 0.85rem; }
         .state-hero { background: linear-gradient(145deg, var(--ds-bg-secondary, #1e2329) 0%, var(--ds-bg-tertiary, #2b3139) 100%); border-radius: 14px; padding: 1.5rem 1.75rem; margin-bottom: 1.5rem; border: 1px solid var(--ds-border, #2b3139); box-shadow: 0 4px 12px rgba(0,0,0,0.15); display: flex; flex-direction: column; min-height: 200px; }
         .state-hero-title { font-size: 0.72rem; font-weight: 600; color: var(--ds-text-secondary); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 0.25rem; text-align: center; flex-shrink: 0; }
+        .state-hero-title-row { display: flex; align-items: center; justify-content: center; gap: 0.5rem; margin-bottom: 0.25rem; flex-shrink: 0; flex-wrap: wrap; }
+        .state-hero-title-row .state-hero-title { margin-bottom: 0; }
+        .state-hero-title-row .state-hero-ws-indicator { flex-shrink: 0; }
         .state-hero-meta { font-size: 0.65rem; color: var(--ds-text-muted, var(--ds-text-secondary)); text-align: center; margin-bottom: 1rem; display: flex; justify-content: center; align-items: center; flex-wrap: wrap; gap: 0.5rem; }
         .state-hero-meta-dur { display: inline-flex; align-items: baseline; gap: 0.25em; flex-shrink: 0; }
         .state-hero-meta-dur-label { flex-shrink: 0; }
@@ -533,8 +648,6 @@
         /* ========== MOBİL: Bot detay sayfası tam revizyon (simetrik, buton boyutları mobil) ========== */
         @media (max-width: 768px) {
             /* Sabit birim: 12px = 0.75rem, 16px = 1rem */
-            html { scrollbar-width: none; -ms-overflow-style: none; }
-            html::-webkit-scrollbar, body::-webkit-scrollbar, .container::-webkit-scrollbar { display: none; width: 0; height: 0; }
             body { padding: 0; min-height: 100vh; -webkit-overflow-scrolling: touch; overflow-x: hidden; }
             .container { max-width: 100%; padding: 0 1rem calc(2rem + env(safe-area-inset-bottom)); margin: 0; }
             .back {
@@ -598,8 +711,9 @@
             .cycle-report .cycle-report-status,
             .cycle-report .cycle-report-tur-num { padding: var(--cr-chip-py, 4px) var(--cr-chip-px, 10px); font-size: 0.75rem; border-radius: 8px; min-height: var(--cr-chip-min-h, 1.625rem); }
             /* Tur işlemleri: cycle butonları eşit, simetrik */
-            #cycleTradesTurButtons { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1rem; align-items: center; }
-            #cycleTradesTurButtons .cycle-tur-btn { min-height: 36px; height: 36px; padding: 0 1rem; font-size: 0.8rem; border-radius: 8px; flex: 0 0 auto; box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center; white-space: nowrap; }
+            #cycleTradesTurButtons.cycle-tur-buttons-strip { display: flex; flex-wrap: nowrap; gap: 0.5rem; margin-bottom: 1rem; align-items: center; overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch; scroll-behavior: smooth; cursor: grab; padding-bottom: 0.15rem; scrollbar-width: thin; }
+            #cycleTradesTurButtons.cycle-tur-buttons-strip.is-dragging { cursor: grabbing; user-select: none; }
+            #cycleTradesTurButtons.cycle-tur-buttons-strip .cycle-tur-btn { flex: 0 0 auto; }
             .cycle-report { padding: 0.65rem 0.75rem; --cr-item-py: 0.4rem; --cr-item-px: 0.35rem; --cr-item-gap: 0.25rem; }
             .cycle-report-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.45rem; }
             .cycle-report-grid:has(.cycle-report-item--pnl) { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -607,7 +721,7 @@
             .cycle-report .cycle-report-chip.cycle-report-chip--pnl { font-size: 0.72rem; overflow: visible; text-overflow: clip; padding: var(--cr-chip-py, 4px) 7px; }
             .cycle-report-item { padding: var(--cr-item-py) var(--cr-item-px); min-height: 3rem; gap: var(--cr-item-gap); }
             .cycle-pnls-list { max-height: 320px; -webkit-overflow-scrolling: touch; border-radius: 10px; }
-            .cycle-pnl-item { padding: 0.75rem 1rem; min-height: 48px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; }
+            .cycle-pnl-item { padding: 0.65rem 0.75rem; min-height: 44px; }
 
             /* Performans: periyot butonları 4 eşit, metrik kartları 2 sütun eşit */
             .perf-genel-block { padding: 1.25rem; margin-bottom: 1rem; text-align: center; border-radius: 12px; }
@@ -627,7 +741,27 @@
             #engineLogPanel { overflow: hidden; max-width: 100%; }
             #engineLogPanel .btn, #engineLogPanel .btn-secondary { min-height: 48px; height: 48px; padding: 0 1.25rem; border-radius: 10px; }
             #engineLogPanel #btnEngineLogReset,
-            #engineLogPanel #btnEngineLogExport { min-height: 28px; height: 28px; padding: 0 0.5rem; font-size: 0.72rem; border-radius: 6px; }
+            #engineLogPanel #btnEngineLogExport {
+                min-height: 28px;
+                height: 28px;
+                padding: 0 0.5rem;
+                font-size: 0.72rem;
+                font-weight: 500;
+                border-radius: 6px;
+                -webkit-appearance: none;
+                appearance: none;
+                background: rgba(255, 255, 255, 0.035);
+                border: 1px solid rgba(255, 255, 255, 0.07);
+                color: var(--ds-text-secondary, #848e9c);
+                box-shadow: none;
+            }
+            #engineLogPanel #btnEngineLogReset:hover,
+            #engineLogPanel #btnEngineLogExport:hover {
+                background: rgba(255, 255, 255, 0.06);
+                border-color: rgba(255, 255, 255, 0.11);
+                color: var(--ds-text-primary, #eaecef);
+                opacity: 1;
+            }
             #engineLogPanel .engine-log-actions { display: flex; justify-content: flex-end; gap: 0.35rem; margin-bottom: 0.5rem; flex-wrap: wrap; }
             @media (max-width: 768px) {
                 #engineLogPanel { display: none !important; }
@@ -734,8 +868,25 @@
         .stop-delete-option .option-title { display: block; font-weight: 600; color: var(--ds-text-primary); font-size: 0.95rem; margin-bottom: 0.35rem; }
         .stop-delete-option .option-detail { display: block; font-size: 0.82rem; color: var(--ds-text-secondary); line-height: 1.4; }
         .modal-actions { display: flex; gap: 0.75rem; justify-content: flex-end; }
-        /* Tur (cycle) seçim butonları – küçük, tasarıma uyumlu */
-        #cycleTradesTurButtons .cycle-tur-btn { padding: 4px 10px; font-size: 0.75rem; font-weight: 500; border-radius: 6px; border: 1px solid var(--ds-border, #2b3139); background: var(--ds-bg-tertiary, #2b3139); color: var(--ds-text-secondary, #848e9c); cursor: pointer; transition: background 0.2s, border-color 0.2s, color 0.2s; }
+        /* Tur (cycle) seçim — yatay kaydırma + sürükle */
+        #cycleTradesTurButtons.cycle-tur-buttons-strip {
+            display: flex;
+            flex-wrap: nowrap;
+            gap: 0.5rem;
+            margin-bottom: 1rem;
+            align-items: center;
+            overflow-x: auto;
+            overflow-y: hidden;
+            -webkit-overflow-scrolling: touch;
+            scroll-behavior: smooth;
+            cursor: grab;
+            padding-bottom: 0.2rem;
+            scrollbar-width: thin;
+            scrollbar-color: rgba(132, 142, 156, 0.45) transparent;
+        }
+        #cycleTradesTurButtons.cycle-tur-buttons-strip.is-dragging { cursor: grabbing; user-select: none; }
+        #cycleTradesTurButtons.cycle-tur-buttons-strip .cycle-tur-btn { flex: 0 0 auto; }
+        #cycleTradesTurButtons .cycle-tur-btn { padding: 4px 10px; font-size: 0.75rem; font-weight: 600; border-radius: 6px; border: 1px solid var(--ds-border, #2b3139); background: var(--ds-bg-tertiary, #2b3139); color: var(--ds-text-secondary, #848e9c); cursor: pointer; transition: background 0.2s, border-color 0.2s, color 0.2s; min-height: var(--cr-chip-min-h, 1.625rem); box-sizing: border-box; white-space: nowrap; }
         #cycleTradesTurButtons .cycle-tur-btn:hover { background: var(--ds-bg-secondary, #1e2329); color: var(--ds-text-primary, #eaecef); border-color: var(--ds-border, #2b3139); }
         #cycleTradesTurButtons .cycle-tur-btn.active { background: rgba(240, 185, 11, 0.15); color: var(--ds-accent, #f0b90b); border-color: var(--ds-accent, #f0b90b); }
         .cycle-report {
@@ -745,7 +896,7 @@
             --cr-chip-py: 4px;
             --cr-chip-px: 10px;
             --cr-chip-min-h: 1.625rem;
-            background: linear-gradient(180deg, rgba(30, 35, 41, 0.95) 0%, var(--ds-bg-tertiary, #2b3139) 100%);
+            background: var(--ds-bg-tertiary, #2b3139);
             border: 1px solid var(--ds-border, #363c45);
             border-radius: 12px;
             padding: 0.65rem 0.75rem;
@@ -813,12 +964,23 @@
         .cycle-report .cycle-report-value.negative { color: #f6465d; }
         .cycle-report .cycle-report-value.muted-val { color: var(--ds-text-secondary, #848e9c); font-weight: 500; }
         /* Bot tipi üst başlık – modal’daki yapı adıyla aynı */
-        .bot-type-header { display: none; margin-bottom: 0.5rem; padding: 0.5rem 0; text-align: center; }
+        .bot-page-title-row { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; margin-bottom: 0.75rem; min-height: 36px; }
+        .bot-page-title-row .back { grid-column: 1; justify-self: start; margin-bottom: 0; }
+        .bot-type-header { display: none; grid-column: 2; margin-bottom: 0; padding: 0; text-align: center; max-width: min(100%, 42rem); }
         .bot-type-header__name { font-size: 1.35rem; font-weight: 700; color: var(--ds-text-primary, #eaecef); letter-spacing: -0.02em; }
     </style>
 </head>
-<body>
+<body class="binance-theme page-bot">
+    <script>(function(){var s=window.TtScrollRestore;if(s&&s.forceUnlock)s.forceUnlock();})();</script>
+    <div class="dashboard-appbar page-bot-appbar" role="banner">
+        <div class="dashboard-appbar-inner page-bot-appbar-inner">
+            <div class="page-bot-appbar-center appbar-company">
+                <span class="tt-logo-text">TraderTrailing</span>
+            </div>
+        </div>
+    </div>
     <div class="container">
+        <div class="bot-page-title-row">
         <a href="#" id="backLink" class="back" aria-label="Dashboard'a dön">
             <span class="back-icon" aria-hidden="true">←</span>
             <span class="back-label">Dashboard'a dön</span>
@@ -826,8 +988,14 @@
         <div class="bot-type-header" id="botTypeHeader">
             <div class="bot-type-header__name" id="botTypeHeaderName">—</div>
         </div>
+        </div>
         <div class="state-hero" id="statePanel" style="display: none;">
-            <div class="state-hero-title" id="stateHeroTitle">Durum</div>
+            <div class="state-hero-title-row">
+                <div class="state-hero-title" id="stateHeroTitle">Durum</div>
+                <span id="datahubWsIndicator" class="datahub-ws-indicator state-hero-ws-indicator" title="Piyasa verisi WebSocket durumu" aria-label="WS durumu">
+                    <span class="datahub-ws-dot"></span><span class="datahub-ws-label">WS</span>
+                </span>
+            </div>
             <div class="state-hero-meta" id="stateHeroMeta"></div>
             <div class="state-hero-grid" id="stateGrid"></div>
         </div>
@@ -896,10 +1064,12 @@
                 <div id="botStripMiniChartWrap" class="bot-strip-mini-chart-wrap" title="Sembol grafiği (mum/çizgi) için tıklayın" role="button" tabindex="0">
                     <div id="botStripMiniChartSvg" class="bot-strip-mini-chart-svg"></div>
                 </div>
-                <div class="strip-right">
-                    <span id="statusBadge" class="status-badge status-stopped">—</span>
+                <div id="botStripHealthBadges" class="bot-strip-health-badges" style="display: none;" aria-live="polite">
                     <span id="healthWarnBadge" class="health-alert-badge health-alert-warn" style="display: none;" title="">Uyarı</span>
                     <span id="healthCriticalBadge" class="health-alert-badge health-alert-critical" style="display: none;" title="">Kritik</span>
+                </div>
+                <div class="strip-right">
+                    <span id="statusBadge" class="status-badge status-stopped">—</span>
                     <button id="btnParametreler" class="btn btn-ghost" type="button">Parametreler</button>
                     <button id="btnStopAndDelete" class="btn btn-danger">Sonlandır</button>
                 </div>
@@ -946,7 +1116,7 @@
 
         <div class="panel" id="tradesPanel" style="display: none;">
             <h2>Tur Detayları</h2>
-            <div id="cycleTradesTurButtons" style="display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1rem; align-items: center;"></div>
+            <div id="cycleTradesTurButtons" class="cycle-tur-buttons-strip"></div>
             <div id="cycleReport" class="cycle-report" style="display: none; margin-bottom: 1rem;"></div>
             <div class="cycle-pnls-list" id="cycleTradesList" style="max-height: 400px;"></div>
         </div>
@@ -1077,14 +1247,16 @@
             </div>
         </div>
     </div>
+    <script src="/ui/assets/utils/trTime.js?v=1"></script>
     <script src="/ui/assets/utils/coinLogo.js?v=1"></script>
     <script src="/ui/assets/core/apiClient.js?v=refactor1"></script>
     <script src="/ui/assets/utils/gridTrailEnvelope.js?v=2"></script>
     <script src="/ui/assets/utils/engineLogArchive.js?v=1"></script>
-    <script src="/ui/assets/utils/botHealthAlerts.js?v=25"></script>
-<script src="/ui/assets/utils/engineLogFormat.js?v=60"></script>
-<script src="/ui/assets/utils/engineLogLive.js?v=30"></script>
+    <script src="/ui/assets/utils/botHealthAlerts.js?v=30"></script>
+<script src="/ui/assets/utils/engineLogFormat.js?v=69"></script>
+<script src="/ui/assets/utils/engineLogLive.js?v=35"></script>
     <script src="/ui/assets/core/intervalRegistry.js?v=1"></script>
+    <script src="/ui/assets/botPageAppbar.js?v=1"></script>
     <script src="/ui/vendor/lightweight-charts.standalone.production.js"></script>
     <script src="/ui/assets/perf_chart_tv.js?v=1"></script>
     <script>
@@ -1137,6 +1309,7 @@
         base += '&tab=bots';
         backLink.href = base;
         backLink.addEventListener('click', function () {
+            if (window.TtScrollRestore) window.TtScrollRestore.save();
             if (_botDetailHydrated && botId) persistBotDetailUiCache(botId);
             try { localStorage.setItem('dashboard_active_tab', 'bots'); } catch (e) {}
         });
@@ -1166,6 +1339,8 @@
         var profitPointsBody = document.getElementById('profitPointsBody');
         var tradesPanel = document.getElementById('tradesPanel');
         var cycleTradesList = document.getElementById('cycleTradesList');
+        var cycleTradesTurButtonsEl = document.getElementById('cycleTradesTurButtons');
+        if (cycleTradesTurButtonsEl) initCycleTurButtonsDragScroll(cycleTradesTurButtonsEl);
         var perfPanel = document.getElementById('perfPanel');
         var engineLogPanel = document.getElementById('engineLogPanel');
         var engineLogList = document.getElementById('engineLogList');
@@ -1218,7 +1393,7 @@
                 window._cycleReportDurationCycleId = o.cycleReportDurationCycleId != null ? Number(o.cycleReportDurationCycleId) : window._cycleReportDurationCycleId;
             }
             if (cycleTradesList) {
-                cycleTradesList.innerHTML = '<div class="cycle-pnl-item muted">Yükleniyor…</div>';
+                cycleTradesList.innerHTML = cycleTradesListPlaceholder('Yükleniyor…');
             }
             var turBtns = document.getElementById('cycleTradesTurButtons');
             if (turBtns) turBtns.innerHTML = '';
@@ -1451,6 +1626,26 @@
             if (v == null || v === '' || isNaN(v)) return '—';
             var n = Number(v);
             return n.toLocaleString('en-US', { minimumFractionDigits: decimals != null ? decimals : 2, maximumFractionDigits: decimals != null ? decimals : 8 });
+        }
+        function formatTradeTs(ts) {
+            if (window.trTime && trTime.trFormatDateTime) return trTime.trFormatDateTime(ts);
+            if (!ts) return '—';
+            try {
+                return new Date(ts).toLocaleString('tr-TR', { timeZone: 'Europe/Istanbul' });
+            } catch (e) { return '—'; }
+        }
+        function formatTradeTsNoSec(ts) {
+            if (!ts) return '—';
+            try {
+                var tz = (window.trTime && trTime.TR_TZ) ? trTime.TR_TZ : 'Europe/Istanbul';
+                var d = new Date(ts);
+                if (isNaN(d.getTime())) return '—';
+                return d.toLocaleString('tr-TR', {
+                    timeZone: tz,
+                    day: '2-digit', month: '2-digit', year: 'numeric',
+                    hour: '2-digit', minute: '2-digit'
+                });
+            } catch (e) { return '—'; }
         }
         var _botSymbolTickDecimals = {};
         function decimalPlacesFromTickSize(tickSize) {
@@ -1886,6 +2081,19 @@
             });
             return best;
         }
+        function mergeCycleStartedAt(persistedIso, incomingIso, cycleNum) {
+            if (!incomingIso) return persistedIso || null;
+            if (!persistedIso) return incomingIso;
+            var p = parseUtcMs(persistedIso);
+            var n = parseUtcMs(incomingIso);
+            if (p <= 0) return incomingIso;
+            if (n <= 0) return persistedIso;
+            var cid = Number(cycleNum);
+            // Tur ≥2: önceki tur/bot başlangıcına yapışmış eski kayıt → yeni tur açılışını kullan
+            if (cid > 1 && n > p + 2000) return incomingIso;
+            // Aynı tur: tur başlangıcı = o turun en erken anı
+            return n < p ? incomingIso : persistedIso;
+        }
         function formatDurationFromStartedAt(startedAtIso) {
             var ms = parseUtcMs(startedAtIso);
             if (!ms) return '';
@@ -1900,7 +2108,7 @@
                 window._cycleReportStartedAt = readCycleStartedAtPersisted(cid);
             }
             window._cycleReportDurationCycleId = cid;
-            var merged = opts.force ? iso : pickEarlierStartedAt(readCycleStartedAtPersisted(cid), iso);
+            var merged = opts.force ? iso : mergeCycleStartedAt(readCycleStartedAtPersisted(cid), iso, cid);
             if (!merged) merged = iso;
             window._cycleReportStartedAt = merged;
             writeCycleStartedAtPersisted(cid, merged);
@@ -1912,46 +2120,54 @@
                 window._cycleReportStartedAt = readCycleStartedAtPersisted(cid);
             }
             window._cycleReportDurationCycleId = cid;
-            var merged = pickEarlierStartedAt(readCycleStartedAtPersisted(cid), window._cycleReportStartedAt);
-            merged = pickEarlierStartedAt(merged, iso);
+            var merged = mergeCycleStartedAt(readCycleStartedAtPersisted(cid), window._cycleReportStartedAt, cid);
+            merged = mergeCycleStartedAt(merged, iso, cid);
             window._cycleReportStartedAt = merged || null;
             if (merged) writeCycleStartedAtPersisted(cid, merged);
         }
         function resolveOpenCycleStartedAt(summary, cycleNum) {
             var cid = cycleNum != null ? Number(cycleNum) : null;
             if (cid == null || isNaN(cid)) return null;
-            if (summary && summary.started_at) return String(summary.started_at).trim();
+            var candidates = [];
+            if (summary && summary.started_at) candidates.push(String(summary.started_at).trim());
             var curCid = (lastBotDetail && lastBotDetail.currentCycleId != null) ? Number(lastBotDetail.currentCycleId) : null;
             var st = (lastBotDetail && lastBotDetail.state) ? lastBotDetail.state : {};
             if (curCid != null && cid === curCid) {
-                if (st.cycle_opened_at) return String(st.cycle_opened_at).trim();
+                if (st.cycle_opened_at) candidates.push(String(st.cycle_opened_at).trim());
                 var ledger = st.cycle_ledger_current;
                 if (ledger && Number(ledger.cycle_id) === cid && ledger.started_at) {
-                    return String(ledger.started_at).trim();
+                    candidates.push(String(ledger.started_at).trim());
                 }
                 var dp = lastBotDetail && lastBotDetail.dual_pnl && lastBotDetail.dual_pnl.current_cycle;
                 if (dp && dp.started_at && Number(dp.cycle_id || curCid) === cid) {
-                    return String(dp.started_at).trim();
-                }
-                if (cid === 1) {
-                    var tb = st.target_budgets;
-                    if (tb && typeof tb === 'object' && tb.ts) return String(tb.ts).trim();
-                    if (lastBotStartedAt) return String(lastBotStartedAt).trim();
+                    candidates.push(String(dp.started_at).trim());
                 }
                 var cot = (st.cycle_open_trades || []).find(function (row) {
                     return row && Number(row.cycle_id) === cid;
                 });
-                if (cot && cot.ts) return String(cot.ts).trim();
+                if (cot && cot.ts) candidates.push(String(cot.ts).trim());
+                if (cid === 1) {
+                    var tb = st.target_budgets;
+                    if (tb && typeof tb === 'object' && tb.ts) candidates.push(String(tb.ts).trim());
+                }
+            } else if (summary && summary.completed_at && summary.started_at) {
+                candidates.push(String(summary.started_at).trim());
             }
-            return readCycleStartedAtPersisted(cid);
+            var persisted = readCycleStartedAtPersisted(cid);
+            if (persisted) candidates.push(persisted);
+            return earliestStartedAtIso(candidates);
         }
         function applyCycleReportStartedFromApi(summary, cycleNum) {
             if (!summary || cycleNum == null) return;
             var iso = summary.started_at ? String(summary.started_at).trim() : null;
             if (!iso) return;
-            window._cycleReportDurationCycleId = Number(cycleNum);
-            window._cycleReportStartedAt = iso;
-            writeCycleStartedAtPersisted(cycleNum, iso);
+            var cid = Number(cycleNum);
+            if (window._cycleReportDurationCycleId != null && Number(window._cycleReportDurationCycleId) !== cid) {
+                window._cycleReportStartedAt = null;
+            }
+            window._cycleReportDurationCycleId = cid;
+            window._cycleReportStartedAt = mergeCycleStartedAt(window._cycleReportStartedAt, iso, cid) || iso;
+            writeCycleStartedAtPersisted(cid, window._cycleReportStartedAt);
         }
         function updateCycleReportDurationLive() {
             var durEl = document.getElementById('cycleReportDuration');
@@ -1960,17 +2176,18 @@
             var cur = (lastBotDetail && lastBotDetail.currentCycleId != null) ? lastBotDetail.currentCycleId : lastKnownCycleId;
             if (sel == null || cur == null || Number(sel) !== Number(cur)) return;
             var cacheSum = _cycleTradesCache[String(sel)] && _cycleTradesCache[String(sel)].summary;
-            if (cacheSum && cacheSum.duration_sec != null && Number.isFinite(Number(cacheSum.duration_sec))) {
-                var vApi = formatDurationSec(Number(cacheSum.duration_sec));
-                if (vApi) { durEl.textContent = vApi; return; }
-            }
-            if (cacheSum && cacheSum.started_at) applyCycleReportStartedFromApi(cacheSum, sel);
-            var startedAt = window._cycleReportStartedAt;
-            if (!startedAt || parseUtcMs(startedAt) <= 0) {
-                startedAt = resolveOpenCycleStartedAt(cacheSum || null, sel);
-                if (startedAt) applyCycleReportStartedFromApi({ started_at: startedAt }, sel);
-            }
+            var st = (lastBotDetail && lastBotDetail.state) ? lastBotDetail.state : {};
+            var stateOpen = (st.cycle_opened_at && Number(st.cycle_id) === Number(sel)) ? String(st.cycle_opened_at).trim() : null;
+            var startedAt = earliestStartedAtIso([
+                stateOpen,
+                cacheSum && cacheSum.started_at ? String(cacheSum.started_at).trim() : null,
+                window._cycleReportStartedAt,
+                resolveOpenCycleStartedAt(cacheSum || null, sel)
+            ]);
+            if (startedAt) applyCycleReportStartedFromApi({ started_at: startedAt }, sel);
+            else startedAt = window._cycleReportStartedAt;
             var v = formatDurationFromStartedAt(startedAt);
+            if (!v && cacheSum && cacheSum.duration_sec != null) v = formatDurationSec(cacheSum.duration_sec);
             if (!v && startedAt) v = '0sn';
             if (v) durEl.textContent = v;
         }
@@ -2170,6 +2387,61 @@
             }
         }
         function escapeHtml(s) { return (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+
+        function cycleTradesListPlaceholder(msg) {
+            return '<div class="cycle-pnl-item cycle-pnl-item--empty"><span class="muted">' + escapeHtml(msg || '') + '</span></div>';
+        }
+
+        function initCycleTurButtonsDragScroll(strip) {
+            if (!strip || strip.dataset.dragScrollBound === '1') return;
+            strip.dataset.dragScrollBound = '1';
+            var dragState = { active: false, startX: 0, scrollLeft: 0, moved: false };
+            strip.addEventListener('mousedown', function(e) {
+                if (e.button !== 0) return;
+                dragState.active = true;
+                dragState.moved = false;
+                dragState.startX = e.pageX;
+                dragState.scrollLeft = strip.scrollLeft;
+                strip.classList.add('is-dragging');
+            });
+            document.addEventListener('mousemove', function(e) {
+                if (!dragState.active) return;
+                var dx = e.pageX - dragState.startX;
+                if (Math.abs(dx) > 3) dragState.moved = true;
+                strip.scrollLeft = dragState.scrollLeft - dx;
+            });
+            document.addEventListener('mouseup', function() {
+                if (!dragState.active) return;
+                dragState.active = false;
+                strip.classList.remove('is-dragging');
+            });
+            strip.addEventListener('click', function(e) {
+                if (dragState.moved) {
+                    e.preventDefault();
+                    e.stopImmediatePropagation();
+                    dragState.moved = false;
+                }
+            }, true);
+        }
+
+        function scrollCycleTurBtnIntoStrip(strip, cycleId) {
+            if (!strip || cycleId == null) return;
+            var btn = strip.querySelector('button[data-cycle="' + String(cycleId) + '"]');
+            if (!btn) return;
+            var stripRect = strip.getBoundingClientRect();
+            var btnRect = btn.getBoundingClientRect();
+            var delta = (btnRect.left + btnRect.width / 2) - (stripRect.left + stripRect.width / 2);
+            var target = strip.scrollLeft + delta;
+            var maxScroll = Math.max(0, strip.scrollWidth - strip.clientWidth);
+            if (target < 0) target = 0;
+            if (target > maxScroll) target = maxScroll;
+            if (Math.abs(strip.scrollLeft - target) < 2) return;
+            try {
+                strip.scrollTo({ left: target, behavior: 'smooth' });
+            } catch (e) {
+                strip.scrollLeft = target;
+            }
+        }
 
         function setError(msg) {
             loadingEl.style.display = 'none';
@@ -2512,15 +2784,25 @@
             if (!botId || !window.apiClient || document.hidden) return Promise.resolve();
             var q = accountCode ? '?account_code=' + encodeURIComponent(accountCode) : '?account_id=' + (accountId || '');
             return window.apiClient.get('/api/bots-engine/' + botId + '/health' + q).then(function(res) {
+                var wasServerDown = window._serverUnreachable === true;
+                clearServerUnreachable();
                 window._lastHealthData = res || { alerts: [] };
                 var prevFail = !!(window._lastConnectivityFailure && window._lastConnectivityFailure.error_code);
                 window._lastConnectivityProbeOk = !!(res && res.connectivity_ok !== false && !res.connectivity_failure);
                 window._lastConnectivityFailure = (res && res.connectivity_failure) ? res.connectivity_failure : null;
-                if (window._lastConnectivityProbeOk && prevFail && botId && typeof loadEngineEvents === 'function') {
+                if (_engineLogLiveOpts) {
+                    _engineLogLiveOpts.connectivityFailure = window._lastConnectivityFailure;
+                }
+                if (botId && typeof loadEngineEvents === 'function'
+                    && ((window._lastConnectivityProbeOk && prevFail) || wasServerDown)) {
+                    if (_engineLogLiveOpts) {
+                        _engineLogLiveOpts._lastLogRenderSig = null;
+                        _engineLogLiveOpts._connectivitySynthetic = null;
+                    }
                     loadEngineEvents(botId, false);
                 }
                 var alerts = (res && res.alerts) ? res.alerts : [];
-                var healthKey = String(res && res.last_error_code || '') + '|' + alerts.map(function (a) {
+                var healthKey = String(res && res.connectivity_ok) + '|' + String(res && res.last_error_code || '') + '|' + alerts.map(function (a) {
                     return (a && a.code) || '';
                 }).join(',');
                 if (window.EngineLogLive && _engineLogLiveOpts && healthKey !== _lastHealthLogRenderKey) {
@@ -2531,7 +2813,9 @@
                 }
                 syncHealthFromState();
                 return res;
-            }).catch(function() { return null; });
+            }).catch(function() {
+                return null;
+            });
         }
 
         function onEngineEventsForHealth(events) {
@@ -2559,6 +2843,7 @@
             isBotRunning: isBotRunning,
             onAfterRender: onEngineEventsForHealth,
             onPollError: function (failCount) {
+                if (failCount >= 3) reportServerUnreachable();
                 if (typeof fetchBotHealth === 'function') fetchBotHealth();
                 if (failCount >= 3 && engineLogList && !engineLogList.querySelector('.engine-log-poll-error')) {
                     var note = document.createElement('div');
@@ -2615,7 +2900,7 @@
                 if (window.BotHealthAlerts) {
                     window._lastSeenHealthEventId = window.BotHealthAlerts.maxHealthEventId(events || window._lastEngineEvents);
                 }
-                if (window._lastHealthData && window.EngineLogLive) {
+                if (window.EngineLogLive) {
                     window.EngineLogLive.renderDisplayEvents(_engineLogLiveOpts);
                 }
                 window.EngineLogLive.startPolling(_engineLogLiveOpts, true);
@@ -2664,7 +2949,7 @@
                     localStorage.removeItem(BOT_DETAIL_UI_CACHE_PREFIX + botId);
                 }
             } catch (e) {}
-            if (cycleTradesList) cycleTradesList.innerHTML = '<div class="cycle-pnl-item muted">Yükleniyor…</div>';
+            if (cycleTradesList) cycleTradesList.innerHTML = cycleTradesListPlaceholder('Yükleniyor…');
             var turBtns = document.getElementById('cycleTradesTurButtons');
             if (turBtns) turBtns.innerHTML = '';
             if (engineLogList && !engineLogList.querySelector('table.engine-log-table')) {
@@ -2708,7 +2993,38 @@
         }
 
         function connectivityErrorCodes() {
-            return { API_UNAUTHORIZED: 1, ACCOUNT_KEYS_MISSING: 1, BINANCE_UNREACHABLE: 1, BINANCE_RATE_LIMIT: 1 };
+            return { API_UNAUTHORIZED: 1, ACCOUNT_KEYS_MISSING: 1, BINANCE_UNREACHABLE: 1, BINANCE_RATE_LIMIT: 1, SERVER_UNREACHABLE: 1 };
+        }
+
+        function clearServerUnreachable() {
+            window._serverUnreachable = false;
+        }
+
+        function reportServerUnreachable() {
+            if (!isBotRunning()) return;
+            window._serverUnreachable = true;
+            window._lastConnectivityProbeOk = false;
+            var msg = 'Sunucuya erişilemiyor — bot verisi güncellenemiyor';
+            window._lastConnectivityFailure = { error_code: 'SERVER_UNREACHABLE', message: msg, source: 'ui' };
+            window._lastHealthData = {
+                alerts: [{ code: 'SERVER_UNREACHABLE', level: 'critical', message: msg, title: msg }],
+                connectivity_ok: false,
+                connectivity_failure: window._lastConnectivityFailure
+            };
+            if (_engineLogLiveOpts) {
+                _engineLogLiveOpts.connectivityFailure = window._lastConnectivityFailure;
+            }
+            window._botLiveProblem = true;
+            syncHealthFromState();
+            if (window.EngineLogLive && _engineLogLiveOpts) {
+                _lastHealthLogRenderKey = '';
+                window.EngineLogLive.renderDisplayEvents(_engineLogLiveOpts);
+            }
+            applyStatusBadge('running', {
+                lastErrorCode: 'SERVER_UNREACHABLE',
+                stale: true,
+                showAsError: true
+            });
         }
 
         function connectivityProbeLooksOk() {
@@ -3709,10 +4025,7 @@
 
         function fetchGridPointsLive() {
             if (document.hidden || !botId || !window.apiClient || _gridPointsPollInFlight) return;
-            if (!botDetailGridTrailActive(lastBotDetail)) {
-                syncGridPointsPoll();
-                return;
-            }
+            if (!gridPointsPanel || gridPointsPanel.style.display === 'none') return;
             _gridPointsPollInFlight = true;
             window.apiClient.get('/api/bots-engine/' + botId + '/grid-points?account_id=' + (accountId || ''))
                 .then(function (res) {
@@ -3734,7 +4047,6 @@
                             patchProfitTrailCells(merged, lastPriceForBlink);
                         }
                     }
-                    if (!botDetailGridTrailActive(merged)) syncGridPointsPoll();
                     var trailAfter = botDetailGridTrailActive(merged);
                     if (_lastGridTrailActive && !trailAfter) {
                         resetGridTrailUiSession();
@@ -3749,7 +4061,9 @@
 
         function syncGridPointsPoll() {
             if (!window.intervalRegistry) return;
-            if (botDetailGridTrailActive(lastBotDetail)) {
+            var running = ((lastBotDetail && lastBotDetail.status) || '').toLowerCase() === 'running';
+            var panelVisible = gridPointsPanel && gridPointsPanel.style.display !== 'none';
+            if (running && panelVisible) {
                 fetchGridPointsLive();
                 window.intervalRegistry.start('bot-detail-grid-points', fetchGridPointsLive, gridPointsPollMs, 'bot-detail');
             } else {
@@ -4024,7 +4338,7 @@
                 });
                 window._botDetailCycleTrades = trades;
                 if (!trades || !trades.length) {
-                    cycleTradesList.innerHTML = '<div class="cycle-pnl-item muted">Tur ' + (cycleNum || selectedCycleId) + ' için henüz işlem yok.</div>';
+                    cycleTradesList.innerHTML = cycleTradesListPlaceholder('Tur ' + (cycleNum || selectedCycleId) + ' için henüz işlem yok.');
                     return;
                 }
                 function isInitialAllocationTradeRow(t) {
@@ -4124,31 +4438,53 @@
                     }
                     return null;
                 }
-                trades.forEach(function(t) {
-                    var div = document.createElement('div');
-                    var isDetail = isTradeDetailRow(t);
-                    div.className = 'cycle-pnl-item' + (isDetail ? ' cycle-trade-clickable' : '');
+                function buildCycleTradeItemHtml(t, ctx) {
+                    ctx = ctx || {};
                     var side = (t.side || '').toUpperCase();
-                    var sideCl = side === 'BUY' ? 'trade-side-buy' : 'trade-side-sell';
-                    var baseLabel = side === 'BUY' ? 'Alış' : 'Satış';
-                    var coin = baseFromSymbol(t.symbol || botSymbolForTrades) || '—';
-                    var reason = tradeReason(t);
+                    var sideLabel = side === 'BUY' ? 'Alış' : 'Satış';
+                    var sideChipCls = side === 'BUY' ? 'cycle-trade-chip--buy' : 'cycle-trade-chip--sell';
+                    var coin = baseFromSymbol(t.symbol || ctx.botSymbol || '') || '—';
+                    var reason = ctx.reason || '—';
                     var qty = fmtNum(t.qty, 8);
                     var price = fmtNum(t.price, 4);
                     var quoteQty = (t.qty && t.price) ? fmtUsd(t.qty * t.price) : '—';
                     var feeVal = t.fee != null ? t.fee : t.commission;
                     var feeStr = (feeVal != null && feeVal !== '') ? fmtUsd(Number(feeVal)) : '—';
-                    var ts = t.ts ? (function() { var d = new Date(t.ts); return d.toLocaleString('tr-TR'); })() : '—';
+                    var ts = formatTradeTsNoSec(t.ts);
+                    var lineHtml = escapeHtml(reason) + ' · ' + escapeHtml(coin) +
+                        ' · Miktar ' + escapeHtml(qty) + ' · @ ' + escapeHtml(price) +
+                        ' · ' + escapeHtml(quoteQty) + ' · Kom. ' + escapeHtml(feeStr);
+                    if (ctx.realizedPctStr) {
+                        var pctCls = ctx.realizedPctCls === 'cycle-trade-chip--pct-pos' ? 'trade-pct-pos' : 'trade-pct-neg';
+                        lineHtml += ' · <span class="' + pctCls + '">' + escapeHtml(ctx.realizedPctStr) + '</span>';
+                    }
+                    return '<div class="cycle-trade-bar__main">' +
+                        '<span class="cycle-trade-chip ' + sideChipCls + '">' + escapeHtml(sideLabel) + '</span>' +
+                        '<span class="cycle-trade-line">' + lineHtml + '</span>' +
+                        '</div>' +
+                        '<span class="cycle-trade-ts muted">' + escapeHtml(ts) + '</span>';
+                }
+                trades.forEach(function(t) {
+                    var div = document.createElement('div');
+                    var isDetail = isTradeDetailRow(t);
+                    div.className = 'cycle-pnl-item' + (isDetail ? ' cycle-trade-clickable' : '');
+                    var reason = tradeReason(t);
                     var refP = resolveTradeReferencePrice(t);
                     var priceNum = t.price != null && !isNaN(Number(t.price)) ? Number(t.price) : null;
                     var realizedPctStr = '';
+                    var realizedPctCls = '';
                     var skipRealizedPct = (reason === 'Tur başlangıç (Base)' || reason === 'İlk base alımı' || isInitialAllocationTradeRow(t));
                     if (!skipRealizedPct && refP != null && refP > 0 && priceNum != null) {
                         var pct = ((priceNum - refP) / refP * 100);
-                        realizedPctStr = ' · Gerçekleşme ' + (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%';
+                        realizedPctStr = 'Gerçekleşme ' + (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%';
+                        realizedPctCls = pct >= 0 ? 'cycle-trade-chip--pct-pos' : 'cycle-trade-chip--pct-neg';
                     }
-                    var midPart = reason + ' · ' + coin;
-                    div.innerHTML = '<div><span class="' + sideCl + '" style="font-weight:600">' + baseLabel + '</span> · ' + midPart + ' · Miktar ' + qty + ' · Fiyat @ ' + price + ' · ' + quoteQty + ' · Komisyon ' + feeStr + realizedPctStr + '</div><div class="muted" style="font-size:0.8rem">' + ts + '</div>';
+                    div.innerHTML = buildCycleTradeItemHtml(t, {
+                        botSymbol: botSymbolForTrades,
+                        reason: reason,
+                        realizedPctStr: realizedPctStr,
+                        realizedPctCls: realizedPctCls
+                    });
                     if (isDetail) {
                         div.setAttribute('role', 'button');
                         div.setAttribute('tabindex', '0');
@@ -4183,22 +4519,14 @@
                 }
                 var dur = '—';
                 if (isOpenCycle) {
-                    applyCycleReportStartedFromApi(summary, cycleNum);
-                    var apiDur = summary && summary.duration_sec != null && Number.isFinite(Number(summary.duration_sec))
-                        ? Number(summary.duration_sec) : null;
-                    if (apiDur != null && apiDur >= 0) {
-                        dur = formatDurationSec(apiDur);
-                    } else {
-                        var startedAt = (summary && summary.started_at)
-                            ? String(summary.started_at).trim()
-                            : resolveOpenCycleStartedAt(summary, cycleNum);
-                        if (startedAt) {
-                            applyCycleReportStartedFromApi({ started_at: startedAt }, cycleNum);
-                            dur = formatDurationFromStartedAt(startedAt);
-                        }
+                    var startedAt = resolveOpenCycleStartedAt(summary, cycleNum);
+                    if (startedAt) applyCycleReportStartedFromApi({ started_at: startedAt }, cycleNum);
+                    if (summary && summary.duration_sec != null) {
+                        dur = formatDurationSec(summary.duration_sec);
+                    } else if (startedAt) {
+                        dur = formatDurationFromStartedAt(startedAt);
                     }
                 } else {
-                    setCycleReportStartedAt(null, cycleNum);
                     if (window.intervalRegistry) window.intervalRegistry.stop('bot-cycle-report-duration');
                     dur = formatDurationSec(summary && summary.duration_sec != null ? summary.duration_sec : null);
                 }
@@ -4276,12 +4604,13 @@
                 cycleTradesTurButtons.querySelectorAll('button[data-cycle]').forEach(function(btn) {
                     btn.classList.toggle('active', Number(btn.getAttribute('data-cycle')) === cycleId);
                 });
+                if (opts.scrollTur) scrollCycleTurBtnIntoStrip(cycleTradesTurButtons, cycleId);
                 var cycleReportEl = document.getElementById('cycleReport');
                 var stTrades = (lastBotDetail && lastBotDetail.state) ? lastBotDetail.state : {};
                 var mergeSig = stateTradesMergeSig(stTrades, lastBotDetail);
                 var fromCache = renderCycleTradesFromCache(cycleId);
                 if (!silent && !fromCache) {
-                    cycleTradesList.innerHTML = '<div class="cycle-pnl-item muted">Yükleniyor…</div>';
+                    cycleTradesList.innerHTML = cycleTradesListPlaceholder('Yükleniyor…');
                     if (cycleReportEl) cycleReportEl.style.display = 'none';
                 }
                 var q = 'account_id=' + (accountId || '') + '&limit=100&cycle_id=' + cycleId;
@@ -4333,6 +4662,7 @@
                             };
                             renderCycleTradesList(tradesList, cycleId);
                             renderCycleReport(summary, cycleId);
+                            if (typeof fetchGridPointsLive === 'function') fetchGridPointsLive();
                             if (Number(cycleId) === Number(currentCycleFromState)) {
                                 var opened = resolveOpenCycleStartedAt(summary, cycleId);
                                 if (opened) {
@@ -4342,14 +4672,14 @@
                             }
                         } catch (uiErr) {
                             console.warn('loadCycleTrades render', uiErr);
-                            cycleTradesList.innerHTML = '<div class="cycle-pnl-item muted">İşlemler gösterilemedi.</div>';
+                            cycleTradesList.innerHTML = cycleTradesListPlaceholder('İşlemler gösterilemedi.');
                         }
                     })
                     .catch(function(err) {
                         if (myDetailGen !== _showDetailGen || myTradesGen !== _tradesLoadGen) return;
                         console.warn('loadCycleTrades', err);
                         if (!silent) {
-                            cycleTradesList.innerHTML = '<div class="cycle-pnl-item muted">İşlemler yüklenemedi.</div>';
+                            cycleTradesList.innerHTML = cycleTradesListPlaceholder('İşlemler yüklenemedi.');
                             if (cycleReportEl) cycleReportEl.style.display = 'none';
                         }
                     });
@@ -4373,9 +4703,11 @@
                         btn.className = 'cycle-tur-btn' + (c === selectedCycleId ? ' active' : '');
                         btn.setAttribute('data-cycle', c);
                         btn.textContent = 'Tur ' + c;
-                        btn.onclick = function() { loadCycleTrades(c, { silent: true }); };
+                        btn.onclick = function() { loadCycleTrades(c, { silent: true, scrollTur: true }); };
                         cycleTradesTurButtons.appendChild(btn);
                     });
+                    initCycleTurButtonsDragScroll(cycleTradesTurButtons);
+                    scrollCycleTurBtnIntoStrip(cycleTradesTurButtons, selectedCycleId);
                     loadCycleTrades(selectedCycleId);
                 })
                 .catch(function() {
@@ -4411,9 +4743,11 @@
                             btn.className = 'cycle-tur-btn' + (c === selectedCycleId ? ' active' : '');
                             btn.setAttribute('data-cycle', c);
                             btn.textContent = 'Tur ' + c;
-                            btn.onclick = function() { loadCycleTrades(c, { silent: true }); };
+                            btn.onclick = function() { loadCycleTrades(c, { silent: true, scrollTur: true }); };
                             cycleTradesTurButtons.appendChild(btn);
                         });
+                        initCycleTurButtonsDragScroll(cycleTradesTurButtons);
+                        scrollCycleTurBtnIntoStrip(cycleTradesTurButtons, selectedCycleId);
                         loadCycleTrades(selectedCycleId);
                     })
                     .catch(function() {
@@ -5026,6 +5360,9 @@
             var urlSymBoot = getBotDetailUrlSymbol();
             if (urlSymBoot) syncBotStripSymbol(urlSymBoot, { forceChart: false });
             var restoredFromCache = restoreBotDetailUiCache(botId);
+            if (restoredFromCache && window.TtScrollRestore && window.TtScrollRestore.forceUnlock) {
+                window.TtScrollRestore.forceUnlock();
+            }
             if (_botDetailHydrated) {
                 if (loadingEl) loadingEl.style.display = 'none';
             } else if (!restoredFromCache) {
@@ -5068,10 +5405,18 @@
                     if (lastBotDetail.symbol && lastBotDetail.symbol !== 'MULTI' && accountId && window.intervalRegistry) {
                         window.intervalRegistry.start('bot-detail-strip-24h', fetchBot24h, 5000, 'bot-detail');
                     }
+                    if (window.TtScrollRestore) {
+                        window.TtScrollRestore.scheduleFinalize();
+                        window.TtScrollRestore.ensureRestored();
+                    }
                     return res;
                 })
                 .catch(function (e) {
                     setError('Bot yüklenemedi: ' + (e.message || 'Hata'));
+                    if (window.TtScrollRestore) {
+                        window.TtScrollRestore.scheduleFinalize();
+                        window.TtScrollRestore.ensureRestored();
+                    }
                 });
         }
 
@@ -5200,10 +5545,15 @@
             if (document.hidden || !botId || !window.apiClient) return;
             var q = '?account_id=' + (accountId || '');
             window.apiClient.get('/api/bots-engine/' + botId + '/live' + q).then(function (data) {
+                clearServerUnreachable();
+                window._botLiveFailStreak = 0;
                 _botLivePollSeen = true;
                 data._liveSnapshot = true;
                 applyLive(data);
-            }).catch(function() {});
+            }).catch(function() {
+                window._botLiveFailStreak = (window._botLiveFailStreak || 0) + 1;
+                if (isBotRunning() && window._botLiveFailStreak >= 3) reportServerUnreachable();
+            });
         }
         function fetchStripPrice() {
             if (document.hidden || !window.apiClient || !lastBotDetail.symbol || !accountId || !botPriceEl) return;
@@ -5590,7 +5940,7 @@
             var coin = baseFromSymbol(sym) || '—';
             var reason = tradeReasonFn ? tradeReasonFn(t) : (td.label || gd.grid_label || 'Grid');
             if (titleEl) titleEl.textContent = (td.label || gd.grid_label || reason || 'İşlem') + ' · Detay';
-            var ts = t.ts ? (function() { var d = new Date(t.ts); return d.toLocaleString('tr-TR'); })() : '—';
+            var ts = formatTradeTs(t.ts);
             var qty = t.qty != null ? fmtNum(t.qty, 8) + ' ' + coin : '—';
             var tradeQty = t.qty != null && !isNaN(Number(t.qty)) ? Number(t.qty) : null;
             var feeUsd = tradeFeeUsd(t);

@@ -39,3 +39,15 @@ def test_classify_unauthorized():
 
     code, msg = bc._classify_binance_error(Err())
     assert code == "API_UNAUTHORIZED"
+
+
+def test_queue_and_flush_skips_recent_stable(monkeypatch):
+    monkeypatch.setattr(bc, "_recent_connectivity_recovered", lambda db, bot_id, within_sec=45.0: True)
+    called = {"mark": 0}
+
+    def fake_mark(*a, **k):
+        called["mark"] += 1
+
+    monkeypatch.setattr(bc, "mark_pending_connectivity_stable", fake_mark)
+    assert bc.queue_and_flush_connectivity_stable(None, 1) is False
+    assert called["mark"] == 0

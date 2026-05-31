@@ -28,6 +28,47 @@ _crypto_ts: float = 0
 _last_result: Dict[str, Any] = {}
 _inflight_lock = asyncio.Lock()
 _http_client: Optional[httpx.AsyncClient] = None
+_fx_day_open: Dict[str, float] = {}
+_fx_day_open_date: str = ""
+
+def _ticker_chg_from_hub(*symbols: str) -> Optional[float]:
+    """Binance 24s % — DataHub ticker/24hr veya WS mini."""
+    try:
+        from app.services.data_hub import data_hub
+        for sym in symbols:
+            if not sym:
+                continue
+            pct = data_hub.get_change24h_pct(sym)
+            if pct is not None and float(pct) == float(pct):
+                return float(pct)
+    except Exception as e:
+        logger.debug("[pricing_summary] hub chg %s: %s", symbols, e)
+    return None
+
+def _fx_daily_chg_pct(field: str, current: Optional[float]) -> Optional[float]:
+    """FX dış API: günün ilk kaydı (UTC) baz — hub yoksa."""
+    global _fx_day_open, _fx_day_open_date
+    if current is None or not (float(current) > 0):
+        return None
+    from datetime import datetime, timezone
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    if _fx_day_open_date != today:
+        _fx_day_open = {}
+        _fx_day_open_date = today
+    cur = float(current)
+    if field not in _fx_day_open:
+        _fx_day_open[field] = cur
+        return 0.0
+    open_v = _fx_day_open[field]
+    if open_v <= 0:
+        return None
+    return ((cur - open_v) / open_v) * 100.0
+
+def _resolve_chg_pct(field: str, price: Optional[float], hub_symbols: tuple[str, ...]) -> Optional[float]:
+    pct = _ticker_chg_from_hub(*hub_symbols)
+    if pct is not None:
+        return pct
+    return _fx_daily_chg_pct(field, price)
 
 def _get_client() -> httpx.AsyncClient:
     global _http_client
@@ -191,6 +232,8 @@ async def get_summary() -> Dict[str, Any]:
         ons_altin_usd = xauusd
         gram_altin_tl = _gram_altin_tl(xauusd, usdtry)
 
+        gold_chg = _resolve_chg_pct("ons_altin_usd", ons_altin_usd, ("PAXGUSDT", "XAUUSDT"))
+
         out = {
             "ts": server_ts,
             "usdtry": usdtry,
@@ -201,6 +244,11 @@ async def get_summary() -> Dict[str, Any]:
             "xauusd": xauusd,
             "gram_altin_tl": gram_altin_tl,
             "ons_altin_usd": ons_altin_usd,
+            "usdtry_chg_pct": _resolve_chg_pct("usdtry", usdtry, ("USDTTRY",)),
+            "eurtry_chg_pct": _resolve_chg_pct("eurtry", eurtry, ("EURTRY", "EURUSDT")),
+            "gbptry_chg_pct": _resolve_chg_pct("gbptry", gbptry, ("GBPTRY", "GBPUSDT")),
+            "gram_altin_tl_chg_pct": gold_chg,
+            "ons_altin_usd_chg_pct": gold_chg,
             "source_status": {
                 "fx": fx_status,
                 "metals": metals_status,

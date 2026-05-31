@@ -25,6 +25,9 @@
     'app.botengine.intent_ledger': 'Emir intent defteri',
     'app.api.spot_routes': 'Spot API (Al/Sat modal)',
     'app.api.routes.home': 'Anasayfa cüzdan API (home/fast, wallet/refresh)',
+    'app.api.dashboard_stream': 'Dashboard SSE akışı (snapshot push)',
+    'app.api._routes_impl': 'Web API (cüzdan, açık emir, snapshot)',
+    'app.api.routes': 'Web API (cüzdan, açık emir, snapshot)',
     'app.api.bots_engine': 'Bot API (oluştur/sil/performans)',
     'app.services.spot_engine': 'Spot engine',
     'uvicorn.error': 'Web sunucusu',
@@ -578,6 +581,89 @@
       }
     },
     {
+      test: function (msg) {
+        return /(?:open_orders|wallet)\s+upstream_error/i.test(msg);
+      },
+      apply: function (ctx) {
+        var msg = ctx.message || ctx.raw || '';
+        var isOpenOrders = /open_orders/i.test(msg);
+        var reasonM = msg.match(/reason=([^\s]+)/i);
+        var reason = reasonM ? reasonM[1] : '';
+        var errM = msg.match(/error=([^\s(]+)/i);
+        var errType = errM ? errM[1] : '';
+        var statusM = msg.match(/status=([^\s]+)/i);
+        var status = statusM ? statusM[1] : '?';
+        var acct = ctx.params.account_id || (msg.match(/account_id=(\d+)/i) || [])[1];
+        var acctTxt = acct ? (' (hesap #' + acct + ')') : '';
+        if (reason === 'invalid_api_key') {
+          return {
+            konu: isOpenOrders ? 'Açık emirler — Binance API anahtarı geçersiz' : 'Cüzdan — Binance API anahtarı geçersiz',
+            sebep: 'Binance isteği reddedildi: API anahtarı yok, süresi dolmuş veya IP izni eksik (401 / -2015).',
+            etki: isOpenOrders
+              ? 'Açık emir listesi boş dönebilir; bot engine kendi emirlerini ayrı kanaldan yönetir.'
+              : 'Cüzdan tablosu boş veya eski bakiye gösterebilir.',
+            oneri: 'Dashboard → Ayarlar: API Key + Secret kaydedin; Binance’te Spot izinleri ve sunucu IP whitelist açık olsun.'
+          };
+        }
+        var sebep = (isOpenOrders
+          ? 'Binance açık emir listesi alınamadı'
+          : 'Binance cüzdan bakiyesi alınamadı') + acctTxt + '. ';
+        if (/DependencyFailure/i.test(errType) || /circuit breaker|retry budget/i.test(msg)) {
+          sebep += 'İstek koruması devreye girdi: çok sık Binance çağrısı, devre kesici açık veya yeniden deneme kotası doldu.';
+        } else if (status === '429') {
+          sebep += 'Binance istek limiti (429) aşıldı.';
+        } else {
+          sebep += 'Binance geçici yanıt vermedi (HTTP ' + status + (errType ? ', ' + errType : '') + ').';
+        }
+        if (/cache_empty=true/i.test(msg)) {
+          sebep += ' Önbellek boş olduğu için arayüze boş liste ve «güncel değil» bilgisi döndürüldü (HTTP 200, hata ekranı yok).';
+        } else if (/serve_stale|cache_hit=true/i.test(msg)) {
+          sebep += ' Önbellekteki son bilinen veri «güncel değil» olarak sunuldu.';
+        }
+        return {
+          konu: isOpenOrders ? 'Açık emirler — Binance geçici hata' : 'Cüzdan — Binance geçici hata',
+          sebep: sebep,
+          etki: isOpenOrders
+            ? 'Dashboard açık emir paneli boş veya eski görünebilir; bot işlemleri engine tarafında devam eder.'
+            : 'Dashboard cüzdanı boş veya eski bakiye gösterebilir; ~10 sn sonra otomatik yeniden denenecek.',
+          oneri: 'Birkaç dakika bekleyin. Sık tekrarlıyorsa açık sekme/poll sayısını azaltın; Binance API limiti ve sunucu bağlantısını kontrol edin.'
+        };
+      }
+    },
+    {
+      test: function (msg) { return /\[snapshot\]\s+\w+\s+timeout/i.test(msg); },
+      apply: function (ctx) {
+        var nameM = (ctx.message || ctx.raw || '').match(/\[snapshot\]\s+(\w+)\s+timeout/i);
+        var part = nameM ? nameM[1] : 'bileşen';
+        return {
+          konu: 'Dashboard snapshot — ' + part + ' zaman aşımı',
+          sebep: 'Anlık dashboard snapshot isteğinde «' + part + '» parçası belirlenen sürede tamamlanamadı.',
+          etki: 'Push ile gelen veri eksik olabilir; sayfa bir sonraki güncellemede tamamlanır.',
+          oneri: 'Tek seferlik ise yok sayın. Sık tekrarlıyorsa veritabanı yükü ve Binance bağlantısını kontrol edin.'
+        };
+      }
+    },
+    {
+      test: function (msg) { return /\[snapshot\]\s+\w+\s+error:/i.test(msg); },
+      apply: function (ctx) {
+        var m = (ctx.message || ctx.raw || '').match(/\[snapshot\]\s+(\w+)\s+error:\s*(.+)/i);
+        var part = m ? m[1] : 'bileşen';
+        var fullDetail = m ? m[2].trim().slice(0, 220) : 'bilinmeyen hata';
+        var sebep = 'Anlık snapshot «' + part + '» yüklenirken hata: ' + fullDetail;
+        if (/401|Unauthorized|Invalid API-key/i.test(fullDetail) && part === 'wallet') {
+          sebep = 'Snapshot cüzdan bileşeni Binance yetkilendirme hatası aldı (401). API anahtarı veya IP whitelist kontrol edin.';
+        }
+        return {
+          konu: 'Dashboard snapshot — ' + part + ' hatası',
+          sebep: sebep,
+          etki: 'İlgili dashboard alanı güncellenmeyebilir; diğer snapshot parçaları gelmiş olabilir.',
+          oneri: part === 'wallet'
+            ? 'API anahtarı ve IP iznini doğrulayın.'
+            : 'Ağ/Binance durumunu kontrol edin; sayfayı yenileyin.'
+        };
+      }
+    },
+    {
       test: function (msg) { return /wallet_refresh_attempt error_code=CLOCK_DRIFT/i.test(msg); },
       apply: function () {
         return {
@@ -694,6 +780,43 @@
           sebep: 'İşletim sistemi dosya veya kaynağa erişimi reddetti (yetki yetersiz).',
           etki: 'Log yazma, config okuma veya DB erişimi başarısız olabilir.',
           oneri: 'Proje dizini ve log/DB dosyalarının çalışan kullanıcı tarafından okunup yazılabildiğini doğrulayın.'
+        };
+      }
+    },
+    {
+      test: function (msg) { return /ADMIN_ACCOUNTS_LIST/i.test(msg); },
+      apply: function (ctx) {
+        var raw = ctx.message || ctx.raw || '';
+        var durM = raw.match(/duration_ms=(\d+)/);
+        var dur = durM ? durM[1] + ' ms' : '—';
+        var liteM = raw.match(/lite=(True|False|true|false)/);
+        var lite = liteM ? liteM[1] : '—';
+        var walletM = raw.match(/wallet_errors=(\[[^\]]*\]|None)/);
+        var slowM = raw.match(/slow_wallets=(\[[^\]]*\]|None)/);
+        var reqM = raw.match(/request_id=([^\s]+)/);
+        return {
+          konu: 'Admin hesap listesi yavaş / hatalı',
+          sebep: 'GET /api/admin/accounts toplam ' + dur + ' sürdü (lite=' + lite + '). '
+            + 'Her hesap için Binance cüzdan + bot KPI çekilir; çok hesapta veya API gecikmesinde 12sn+ olabilir. '
+            + 'wallet_errors=' + (walletM ? walletM[1] : '—') + ' slow_wallets=' + (slowM ? slowM[1] : '—')
+            + (reqM ? ' request_id=' + reqM[1] : ''),
+          etki: 'Admin paneli Hesaplar sekmesi geç açılır veya "Yükleniyor…" uzun kalır; geçici ağ hatası toast\'u görülebilir.',
+          oneri: 'Manager log\'da ADMIN_ACCOUNTS_LIST satırını request_id ile arayın; slow_wallets hesapları Binance API gecikmesi olabilir. '
+            + 'İlk yükleme lite=1 ile hızlandırılır; tam veri arka planda gelir. Sorun sürerse hesap sayısını ve Binance rate limit\'i kontrol edin.'
+        };
+      }
+    },
+    {
+      test: function (msg) { return /ADMIN_ACCOUNTS_(LOAD|FULL_REFRESH)_FAIL|ADMIN_PANEL_CLIENT_ERROR.*ADMIN_ACCOUNTS/i.test(msg); },
+      apply: function (ctx) {
+        var raw = ctx.message || ctx.raw || '';
+        var ctxStr = typeof ctx.context === 'string' ? ctx.context : (ctx.context ? JSON.stringify(ctx.context) : raw);
+        return {
+          konu: 'Admin hesaplar istemci/sunucu yükleme hatası',
+          sebep: 'Tarayıcı /api/admin/accounts isteğini tamamlayamadı veya HTTP hata döndü. Ham: ' + (raw.slice(0, 400) || ctxStr.slice(0, 400)),
+          etki: 'Hesaplar sekmesi boş kalır veya eski önbellek gösterilir; "geçici ağ hatası" uyarısı çıkabilir.',
+          oneri: 'context içindeki http_status, duration_ms, request_id ve fetch_url ile web.log\'da eşleşen ADMIN_ACCOUNTS_LIST veya SLOW_REQUEST satırını bulun. '
+            + '502/503/504 ise web servisi yeniden başlatın; 499 ise istek zaman aşımı — admin accounts endpoint\'i ağır olabilir.'
         };
       }
     },
@@ -818,13 +941,56 @@
       }
     },
     {
-      test: function (msg) { return /\b403\b|Forbidden|MANAGER_ALLOW_REMOTE|Erişim engellendi/i.test(msg); },
-      apply: function () {
+      test: function (msg) { return /CSRF double-submit mismatch/i.test(msg); },
+      apply: function (ctx) {
+        var m = (ctx.message || ctx.raw || '').match(/path=([^\s]+)/);
+        var path = m ? m[1] : '—';
+        return {
+          konu: 'CSRF token uyuşmazlığı (403)',
+          sebep: 'Cookie oturumu var ama istekte X-CSRF-Token başlığı eksik veya csrf_token çerezi ile eşleşmiyor. Yol: ' + path,
+          etki: 'POST/PATCH/DELETE isteği reddedildi; ilgili işlem (ayar kaydı, çıkış, hata raporu vb.) tamamlanmadı.',
+          oneri: 'Sayfayı tam yenileyin (Cmd+Shift+R), tekrar giriş yapın. AUTH_CSRF_DOUBLE_SUBMIT=1 ise apiClient/errorReporter CSRF başlığı göndermeli; sorun sürerse .env içinde geçici olarak AUTH_CSRF_DOUBLE_SUBMIT=0 deneyin.'
+        };
+      }
+    },
+    {
+      test: function (msg) { return /CSRF Origin mismatch|CSRF Referer mismatch/i.test(msg); },
+      apply: function (ctx) {
+        var m = (ctx.message || ctx.raw || '').match(/path=([^\s]+)/);
+        var path = m ? m[1] : '—';
+        return {
+          konu: 'CSRF Origin/Referer engeli (403)',
+          sebep: 'İstek kaynağı (Origin/Referer) izinli host listesinde değil. Yol: ' + path,
+          etki: 'Tarayıcıdan gelen değiştirici istek reddedildi.',
+          oneri: 'Siteye kayıtlı PUBLIC_BASE_URL veya localhost/127.0.0.1 üzerinden erişin; farklı IP/hostname ile açıyorsanız AUTH_CSRF_ALLOWED_ORIGINS veya PUBLIC_BASE_URL güncelleyin.'
+        };
+      }
+    },
+    {
+      test: function (msg) { return /\b403\b|Forbidden|MANAGER_ALLOW_REMOTE|Erişim engellendi/i.test(msg) && !/CSRF/i.test(msg); },
+      apply: function (ctx) {
+        var msg = ctx.message || ctx.raw || '';
+        if (/IP engellendi/i.test(msg)) {
+          return {
+            konu: 'IP engellendi (403)',
+            sebep: 'İstemci IP adresi Manager güvenlik panelindeki engel listesinde.',
+            etki: 'Web API istekleri bu IP\'den reddedilir.',
+            oneri: 'Manager → Güvenlik sekmesinden IP engelini kaldırın veya farklı ağdan erişin.'
+          };
+        }
+        if (/spot_order_403|Bu hesaba erişim|FORBIDDEN|ACCOUNT_ISOLATED/i.test(msg)) {
+          return {
+            konu: 'Hesap veya yetki reddi (403)',
+            sebep: 'Oturum bu hesaba veya işleme erişim yetkisine sahip değil.',
+            etki: 'İlgili API isteği reddedildi.',
+            oneri: 'Doğru hesapla giriş yapın; oturumu yenileyin; admin yetkisi gerekiyorsa admin hesabı kullanın.'
+          };
+        }
         return {
           konu: 'Erişim engellendi (403)',
-          sebep: 'İstek yetkilendirme veya uzaktan erişim kuralı nedeniyle reddedildi.',
-          etki: 'Manager paneli veya API uzaktan erişilemez; localhost dışından bağlantı kopar.',
-          oneri: 'Manager için MANAGER_ALLOW_REMOTE=1 ile başlatın veya localhost/VPN üzerinden erişin; API token/cookie kontrol edin.'
+          sebep: 'İstek yetkilendirme veya erişim kuralı nedeniyle reddedildi.',
+          etki: 'İlgili API veya panel özelliği kullanılamaz.',
+          oneri: 'Ham satırdaki path ve request_id ile web.log\'da ayrıntıyı arayın; Manager uzaktan erişim için MANAGER_ALLOW_REMOTE=1 gerekir (yalnızca Manager 7999).'
         };
       }
     },
@@ -1198,6 +1364,29 @@
       }
     },
     {
+      test: function (msg, ctx) {
+        if (/dashboard_sse tick error/i.test(msg)) return true;
+        return !!(ctx && ctx.module === 'app.api.dashboard_stream');
+      },
+      apply: function (ctx) {
+        var detail = technicalDetail(ctx);
+        var msg = ctx.message || ctx.raw || '';
+        var isImport = /ImportError|cannot import name/i.test(detail || msg);
+        return {
+          konu: 'Dashboard SSE anlık güncelleme hatası',
+          sebep: isImport
+            ? 'SSE tick içinde snapshot yardımcı modülü yüklenemedi; routes export düzeltmesi sonrası Web API yeniden başlatılmalı.'
+            : (/dashboard_sse tick error/i.test(msg)
+                ? ('Dashboard SSE tick başarısız: ' + (detail ? detail.slice(0, 200) : 'veritabanı veya snapshot okuma hatası'))
+                : 'Dashboard SSE kanalında uyarı (cüzdan/snapshot okuma); tick atlandı, akış devam eder.'),
+          etki: 'Dashboard canlı akışı o tick için atlanır; tarayıcı snapshot/yenileme ile devam eder. Cüzdan rozeti «Güncel değil» geçici kalabilir.',
+          oneri: isImport
+            ? 'stop.command → start.command ile Web API yeniden başlatın.'
+            : 'Sayfayı yenileyin; Ayarlar → Binance bağlantı testi. Tek seferlik ise yok sayın.'
+        };
+      }
+    },
+    {
       test: function (msg) { return /\[BinanceWS\]\s*Açılış el sıkışması zaman aşımı/i.test(msg); },
       apply: function () {
         return {
@@ -1311,11 +1500,19 @@
       konu = isErr ? 'Bot engine hatası' : 'Bot engine uyarısı';
     } else if (/app\.api\.routes\.home|routes\.home/i.test(mod)) {
       konu = isErr ? 'Anasayfa cüzdan API hatası' : 'Anasayfa cüzdan uyarısı';
+    } else if (/app\.api\.dashboard_stream/i.test(mod)) {
+      konu = isErr ? 'Dashboard SSE akış hatası' : 'Dashboard SSE uyarısı';
+    } else if (/app\.api\._routes_impl|app\.api\.routes/i.test(mod)) {
+      konu = isErr ? 'Web API hatası' : 'Web API uyarısı';
     } else if (mod === 'root') {
       konu = isErr ? 'Web uygulaması (main) hatası' : 'Web uygulaması (main) uyarısı';
+    } else if (/app\.middleware\.csrf/i.test(mod)) {
+      konu = isErr ? 'CSRF güvenlik hatası' : 'CSRF güvenlik uyarısı';
     }
     var sebep = 'Bu log satırı için özel Türkçe şablon yok; tam kaynak metin en altta (Ham satır).';
-    if (/main\.py:\d+.*Unhandled exception/i.test(msg)) {
+    if (/app\.middleware\.csrf/i.test(mod)) {
+      sebep = 'Çerez oturumlu istek CSRF korumasından geçemedi (token veya Origin/Referer).';
+    } else if (/main\.py:\d+.*Unhandled exception/i.test(msg)) {
       sebep = 'Yakalanmamış istisna (HTTP 500); Traceback satırları web.log akışında bu satırdan hemen sonra gelir.';
     } else if (/LEADERBOARD_REFRESH_FAIL/i.test(msg)) {
       sebep = 'En iyi botlar listesi arka plan yenilemesi başarısız oldu.';
@@ -1392,7 +1589,7 @@
     var msg = ctx.message || ctx.raw;
     var tr = null;
     for (var i = 0; i < RULES.length; i++) {
-      if (RULES[i].test(msg) || RULES[i].test(ctx.raw)) {
+      if (RULES[i].test(msg, ctx) || RULES[i].test(ctx.raw)) {
         tr = RULES[i].apply(ctx);
         break;
       }

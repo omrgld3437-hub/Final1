@@ -140,6 +140,9 @@
             }
             if (data.wallet_live_inflight) {
                 renderHome.showUpdatingBadge(true);
+                if (typeof window.pollWalletRefreshUntilDone === 'function') {
+                    window.pollWalletRefreshUntilDone(accountId);
+                }
             }
             storageCache.mergeSaved(accountId, {
                 wallet_cached: data.wallet_cached,
@@ -179,7 +182,7 @@
         renderHome.showUpdatingBadge(true);
 
         var url = '/api/home/wallet/refresh?account_id=' + accountId + (force ? '&force=1' : '');
-        var opts = { timeout: 20000 };
+        var opts = { timeout: 25000 };
 
         return apiClient.post(url, null, opts).then(function (res) {
             clearRefreshLock(accountId);
@@ -187,18 +190,42 @@
             var data = res && res.data;
             if (!ok || !data) {
                 renderHome.showUpdatingBadge(false);
+                var errCode = (data && (data.last_error_code || (data.error && data.error.error_code))) || 'WALLET_REFRESH_FAILED';
+                var hasCache = !!(window.assetsState && window.assetsState.wallet
+                    && typeof window._walletHasDisplayableAssets === 'function'
+                    && window._walletHasDisplayableAssets());
+                if (hasCache) {
+                    if (typeof window.scheduleSilentWalletRecovery === 'function') {
+                        window.scheduleSilentWalletRecovery();
+                    }
+                    return;
+                }
                 if (typeof window.markWalletLiveFetchFailed === 'function') {
-                    window.markWalletLiveFetchFailed(data.last_error_code || (data.error && data.error.error_code));
+                    window.markWalletLiveFetchFailed(errCode);
+                }
+                if (typeof window.debouncedWalletConnectivityToast === 'function') {
+                    window.debouncedWalletConnectivityToast(errCode);
                 }
                 return;
             }
             if (data.inflight) {
-                renderHome.showUpdatingBadge(true);
+                if (data.wallet_live) {
+                    renderHome.walletCachedToAssetsState(data.wallet_live, data.wallet_live_at, {
+                        live: false,
+                        skipped: true,
+                        stale: !!data.stale
+                    });
+                }
+                if (typeof window.pollWalletRefreshUntilDone === 'function') {
+                    window.pollWalletRefreshUntilDone(accountId);
+                } else {
+                    setTimeout(function () { triggerRefresh(accountId, false); }, 2500);
+                }
                 return;
             }
             renderHome.showUpdatingBadge(false);
             if (data.wallet_live) {
-                var refreshLive = !data.skipped && !data.stale && !data.inflight;
+                var refreshLive = !data.stale && !data.inflight && (!data.skipped || !!(data.wallet_live && (data.wallet_live.total_usd != null || (data.wallet_live.assets && data.wallet_live.assets.length))));
                 renderHome.walletCachedToAssetsState(data.wallet_live, data.wallet_live_at, {
                     live: refreshLive,
                     skipped: !!data.skipped,
@@ -208,19 +235,42 @@
                     wallet_cached: data.wallet_live,
                     wallet_cached_at: data.wallet_live_at
                 });
+                if (data.stale && data.last_error_code) {
+                    if (typeof window.scheduleSilentWalletRecovery === 'function') {
+                        window.scheduleSilentWalletRecovery();
+                    } else {
+                        setTimeout(function () { triggerRefresh(accountId, false); }, 20000);
+                    }
+                    return;
+                }
             } else if (data.wallet_error || (data.error && data.error.error_code)) {
                 var err0 = data.last_error_code || (data.error && data.error.error_code);
                 if (typeof window.markWalletLiveFetchFailed === 'function') window.markWalletLiveFetchFailed(err0);
                 notifyWalletRefreshFailure(err0);
             } else if (data.stale && data.last_error_code) {
-                if (typeof window.markWalletLiveFetchFailed === 'function') window.markWalletLiveFetchFailed(data.last_error_code);
-                notifyWalletRefreshFailure(data.last_error_code);
+                if (typeof window.scheduleSilentWalletRecovery === 'function') {
+                    window.scheduleSilentWalletRecovery();
+                } else {
+                    setTimeout(function () { triggerRefresh(accountId, false); }, 20000);
+                }
             }
         }).catch(function () {
             clearRefreshLock(accountId);
             renderHome.showUpdatingBadge(false);
-            if (typeof window.markWalletLiveFetchFailed === 'function') window.markWalletLiveFetchFailed('BINANCE_UNREACHABLE');
-            if (typeof window.updateKpiCuzdanLiveStatus === 'function') window.updateKpiCuzdanLiveStatus();
+            var hasCache = !!(window.assetsState && window.assetsState.wallet
+                && ((typeof window._walletHasDisplayableAssets === 'function' && window._walletHasDisplayableAssets())
+                    || (typeof window.assetsState.wallet.total_usd === 'number' && window.assetsState.wallet.total_usd > 0)));
+            if (hasCache) {
+                if (typeof window.scheduleSilentWalletRecovery === 'function') {
+                    window.scheduleSilentWalletRecovery();
+                } else {
+                    setTimeout(function () { triggerRefresh(accountId, false); }, 8000);
+                }
+                return;
+            }
+            if (typeof window.markWalletLiveFetchFailed === 'function') {
+                window.markWalletLiveFetchFailed('WALLET_REFRESH_NETWORK');
+            }
             notifyWalletRefreshFailure('BINANCE_UNREACHABLE');
         });
     }
@@ -232,11 +282,15 @@
     }
 
     function notifyWalletRefreshFailure(code) {
-        if (typeof window.Toast === 'undefined' || !window.Toast.warning) return;
         var c = String(code || '').toUpperCase();
+        if (typeof window.debouncedWalletConnectivityToast === 'function') {
+            window.debouncedWalletConnectivityToast(c);
+            return;
+        }
+        if (typeof window.Toast === 'undefined' || !window.Toast.warning) return;
         var msg = 'Cüzdan canlı yenilenemedi.';
         if (c === 'BINANCE_TIMEOUT' || c === 'BINANCE_UNREACHABLE') {
-            msg = 'Binance\'e bağlanılamadı. Ayarlar → Sunucu dış IP\'yi API beyaz listesine ekleyin (kendi bilgisayar IP\'niz değil).';
+            msg = 'Binance API bağlantısı kurulamadı. Ayarlar bölümünde görüntülenen sunucu dış IP adresinin Binance API beyaz listesine tanımlı olduğundan emin olun. Yerel bilgisayar IP adresi geçerli değildir.';
         } else if (c === 'API_UNAUTHORIZED' || c.indexOf('KEY') >= 0 || c.indexOf('401') >= 0 || c.indexOf('2015') >= 0) {
             msg = 'Binance 401: API anahtarı veya IP beyaz liste. Ayarlar → Sunucu dış IP (PC IP değil) + Spot izinleri.';
         } else if (c === 'BINANCE_RATE_LIMIT' || c === 'BINANCE_IP_BANNED') {
@@ -257,6 +311,7 @@
         triggerRefresh: triggerRefresh,
         getAccountId: getAccountId,
         clearRefreshLock: clearRefreshLock,
-        resetRefreshThrottle: resetRefreshThrottle
+        resetRefreshThrottle: resetRefreshThrottle,
+        isRefreshLocked: isRefreshLocked
     };
 });

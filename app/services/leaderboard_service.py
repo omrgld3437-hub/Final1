@@ -233,7 +233,16 @@ def _leaderboard_item_extras(
     if bot_id is not None and account_id is not None:
         try:
             cycle_ids = Ledger.get_cycle_ids(db, bot_id, account_id)
-            cycles_count = len(cycle_ids) if cycle_ids else 0
+            cycles_count = max(cycle_ids) if cycle_ids else 0
+            try:
+                from app.botengine.state_store import load_state
+
+                state = load_state(db, bot_id) or {}
+                cycle_id_ = int(state.get("cycle_id") or 0)
+                if cycle_id_ > cycles_count:
+                    cycles_count = cycle_id_
+            except Exception:
+                pass
         except Exception:
             pass
         try:

@@ -20,6 +20,7 @@ FastAPI router’ları — web süreci emir göndermez (worker-only).
 | `pricing_routes.py` | Fiyatlandırma |
 | `leaderboard.py` | Sıralama |
 | `ws.py` | WebSocket |
+| `dashboard_stream.py` | `GET /api/dashboard/stream` — SSE snapshot (wallet cache: `_get_snapshot_wallet_cached` via `routes/__init__.py`) |
 | `bots_v2.py` | Legacy bot API |
 
 ## Alt klasörler
@@ -50,6 +51,7 @@ finance_reports.py
 leaderboard.py
 market_data_routes.py
 pricing_routes.py
+dashboard_stream.py
 routes.py
 spot_routes.py
 ws.py

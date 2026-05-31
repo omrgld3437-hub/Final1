@@ -360,6 +360,11 @@ async def startup_event():
     # WebSocket combined stream (fallback: REST remains active)
     data_hub.start_ws(testnet=False)
     try:
+        from app.services.server_public_ip import start_server_public_ip_refresh
+        start_server_public_ip_refresh()
+    except Exception as e:
+        logger.debug("server_public_ip refresh start skipped: %s", e)
+    try:
         from app.services.binance_rest_log import start_rest_log_flush_task
         start_rest_log_flush_task()
     except Exception as e:
@@ -647,9 +652,14 @@ async def request_metrics_middleware(request, call_next):
                         del _slow_request_log_ts[k]
         if do_log_slow:
             request_id = getattr(request.state, "request_id", None)
+            query_hint = ""
+            if path == "/api/admin/accounts":
+                qs = str(getattr(getattr(request, "url", None), "query", "") or "")
+                if qs:
+                    query_hint = " query=" + qs[:120]
             logger.warning(
-                "SLOW_REQUEST method=%s path=%s status=200 duration_ms=%.0f request_id=%s ip=%s",
-                method, path, duration_ms, request_id, client_ip,
+                "SLOW_REQUEST method=%s path=%s status=200 duration_ms=%.0f request_id=%s ip=%s%s",
+                method, path, duration_ms, request_id, client_ip, query_hint,
             )
 
     # 404 (route bulunamadı) ve 5xx yanıtlarını error_logs'a yaz; 499 yazma (istemci kesintisi)
@@ -1122,6 +1132,12 @@ if not _home_routes_loaded:
     logger.warning("Flash Home routes not loaded. /api/home/fast and /api/home/wallet/refresh will use fallback.")
 
 try:
+    from app.api import dashboard_stream
+    app.include_router(dashboard_stream.router, prefix="/api")
+except ImportError as e:
+    logger.warning("Dashboard SSE routes not loaded: %s", e)
+
+try:
     from app.api.routes import dashboard_bootstrap
     app.include_router(dashboard_bootstrap.router, prefix="/api")
 except ImportError as e:
@@ -1489,9 +1505,10 @@ async def api_config_public():
         return {
             "auth_cookie_primary": cfg.get("auth_cookie_primary", False),
             "csrf_double_submit": cfg.get("auth_csrf_double_submit", False),
+            "dashboard_sse_enabled": os.environ.get("DASHBOARD_SSE_ENABLED", "1").strip().lower() in ("1", "true", "yes"),
         }
     except Exception:
-        return {"auth_cookie_primary": False, "csrf_double_submit": False}
+        return {"auth_cookie_primary": False, "csrf_double_submit": False, "dashboard_sse_enabled": False}
 
 
 @app.get("/api/health/marketdata")

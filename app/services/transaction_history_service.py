@@ -44,11 +44,17 @@ class TransactionHistoryService:
         source_filter: all | spot | bot
         """
         from app.services.transaction_history_file_store import (
+            ensure_buysell_dedup_v1,
             ledger_has_buysell,
             query_transactions,
             rebuild_from_db,
             sync_from_db_if_stale,
         )
+
+        try:
+            ensure_buysell_dedup_v1(db, account_id)
+        except Exception:
+            pass
 
         tf = (type_filter or "all").strip().lower()
         if tf in ("deposit", "withdraw", "depositwithdraw"):

@@ -167,6 +167,25 @@
         return 'Tur ' + tur + ' tekrar aktif edildi · Bot sorunsuz çalışmaya devam ediyor';
     }
 
+    function formatHealthResolvedMessage(meta) {
+        meta = meta || {};
+        var code = String(meta.health_code || meta.error_code || '').toUpperCase();
+        if (/CONNECTIVITY|BINANCE_UNREACHABLE|BINANCE_RATE|API_UNAUTHORIZED|ACCOUNT_KEYS/.test(code)) {
+            return formatTurReconnectMessage(Object.assign({ connectivity_stable: true, error_code: 'CONNECTIVITY_STABLE' }, meta));
+        }
+        var title = meta.title || 'Sorun giderildi · Bot normal çalışmaya devam ediyor';
+        if (code && title.indexOf(code) < 0) title += ' · kod ' + code;
+        return title;
+    }
+
+    function isRecoveryMeta(meta) {
+        meta = meta || {};
+        if (meta.health_resolved || meta.recovery_report) return true;
+        if (meta.connectivity_stable === true) return true;
+        var ec = String(meta.error_code || meta.health_code || '').toUpperCase();
+        return ec === 'CONNECTIVITY_STABLE' || ec === 'CONNECTIVITY_RECOVERED';
+    }
+
     function appendColdStartConfigBrief(meta, parts) {
         if (!meta || !meta.cold_start_config) return;
         var bp = num(meta.base_alloc_pct);
@@ -802,6 +821,80 @@
         return out;
     }
 
+    function isConnectivityStableEvent(ev) {
+        if (!ev) return false;
+        var meta = ev.meta || {};
+        var ec = String(meta.error_code || meta.health_code || '').toUpperCase();
+        if (ec === 'CONNECTIVITY_STABLE' || ec === 'CONNECTIVITY_RECOVERED') return true;
+        if (meta.connectivity_stable === true) return true;
+        if ((ev.type || '') === 'INFO' && /Bağlantı kuruldu ve stabil|tekrar aktif edildi/i.test(ev.message || '')) return true;
+        return false;
+    }
+
+    function connectivityStableRichnessScore(ev) {
+        var score = 0;
+        var id = Number(ev.id || 0);
+        if (id > 0) score += 10000 + id;
+        else if (id < 0) score += 1000 + Math.abs(id);
+        if (!(ev.meta && ev.meta.recovery_report)) score += 500;
+        if (!(ev.meta && ev.meta.health_ui_track)) score += 200;
+        var ts = parseEventTsMs(ev.ts);
+        if (ts > 0) score += ts / 1e15;
+        return score;
+    }
+
+    function dedupeConnectivityStableForDisplay(events) {
+        var list = events || [];
+        var keep = null;
+        var keepScore = -Infinity;
+        list.forEach(function (ev) {
+            if (!isConnectivityStableEvent(ev)) return;
+            var sc = connectivityStableRichnessScore(ev);
+            if (sc > keepScore) {
+                keep = ev;
+                keepScore = sc;
+            }
+        });
+        if (!keep) return list;
+        return list.filter(function (ev) {
+            return !isConnectivityStableEvent(ev) || ev === keep;
+        });
+    }
+
+    function hadConnectivityIncidentBefore(events, beforeEv, windowMs) {
+        windowMs = windowMs || 45 * 60 * 1000;
+        var beforeId = beforeEv && beforeEv.id != null ? Number(beforeEv.id) : 0;
+        var beforeTs = parseEventTsMs(beforeEv && beforeEv.ts);
+        for (var i = 0; i < (events || []).length; i++) {
+            var ev = events[i];
+            if (ev === beforeEv) continue;
+            var id = ev && ev.id != null ? Number(ev.id) : 0;
+            if (beforeId > 0 && id >= beforeId) continue;
+            var ts = parseEventTsMs(ev.ts);
+            if (beforeTs > 0 && ts > beforeTs) continue;
+            if (beforeTs > 0 && ts > 0 && ts < beforeTs - windowMs) continue;
+            var meta = ev.meta || {};
+            var ec = String(meta.error_code || meta.health_code || '').toUpperCase();
+            var ty = String(ev.type || '').toUpperCase();
+            if (meta.synthetic_live && (ec === 'SERVER_UNREACHABLE' || meta.source === 'server_unreachable')) return true;
+            if (/CONNECTIVITY_PAUSED|CONNECTIVITY_LOST|BINANCE_UNREACHABLE|API_UNAUTHORIZED|ACCOUNT_KEYS|SERVER_UNREACHABLE/.test(ec)) return true;
+            if ((ty === 'HEALTH_CRITICAL' || ty === 'HEALTH_WARN') && /BINANCE|CONNECTIVITY|API_UNAUTHORIZED|SERVER_UNREACHABLE|ACCOUNT_KEYS/.test(ec)) {
+                return true;
+            }
+            if (ty === 'ERROR' && /BINANCE|401|ulaşılamıyor|sunucu|api anahtar/i.test(String(ev.message || '') + ' ' + ec)) return true;
+            if (ty === 'INFO' && meta.connectivity_pause === true) return true;
+        }
+        return false;
+    }
+
+    function shouldHideOrphanConnectivityStable(ev, meta, options) {
+        if (options && options.forExport) return false;
+        if (!isConnectivityStableEvent(ev)) return false;
+        if (String(meta.health_code || '').toUpperCase() === 'SERVER_UNREACHABLE') return true;
+        var events = _logContext.events || [];
+        return !hadConnectivityIncidentBefore(events, ev);
+    }
+
     function shouldHideRedundantCycleStart(ev, meta) {
         if ((ev.type || '') !== 'CYCLE_START' || meta.cycle_id == null) return false;
         if (meta.quote_balance != null || meta.equity_usdt != null || meta.equity_usd != null) return false;
@@ -1014,14 +1107,85 @@
         return { severity: severity, message: joinParts(parts) };
     }
 
+    function formatTrDuration(seconds) {
+        var sec = Math.max(1, Math.round(Number(seconds) || 1));
+        if (sec < 60) return sec + ' saniye';
+        var mins = Math.floor(sec / 60);
+        var rem = sec % 60;
+        if (mins < 60) {
+            if (rem >= 30) return mins + ' dakika ' + rem + ' saniye';
+            if (mins === 1) return '1 dakika';
+            return mins + ' dakika';
+        }
+        var hours = Math.floor(mins / 60);
+        mins = mins % 60;
+        if (mins > 0) return hours + ' saat ' + mins + ' dakika';
+        if (hours === 1) return '1 saat';
+        return hours + ' saat';
+    }
+
+    function serverRestartBotMessage(meta) {
+        meta = meta || {};
+        var dur = formatTrDuration(meta.unavailable_sec);
+        return 'Sunucu yeniden başlatıldığı için bot otomatik yeniden başlatıldı. ' + dur + ' erişim alınamadı.';
+    }
+
+    function humanizeRestartReason(metaOrReason, raw) {
+        if (metaOrReason && typeof metaOrReason === 'object') {
+            var rr = String(metaOrReason.restart_reason || '').toLowerCase();
+            if (/worker_poll|engine_tick|ensure_running_bots/i.test(rr)) {
+                return serverRestartBotMessage(metaOrReason);
+            }
+            if (metaOrReason.restart_reason_label && !/Kısa bir süre/i.test(metaOrReason.restart_reason_label)) {
+                return String(metaOrReason.restart_reason_label);
+            }
+        }
+        var r = typeof metaOrReason === 'string'
+            ? metaOrReason
+            : String((metaOrReason && metaOrReason.restart_reason) || '').trim();
+        var low = r.toLowerCase();
+        if (!r && raw) {
+            var rawLow = String(raw).toLowerCase();
+            if (/worker_poll/i.test(rawLow)) low = 'worker_poll';
+            else if (/engine_tick/i.test(rawLow)) low = 'engine_tick';
+            else if (/ensure_running_bots/i.test(rawLow)) low = 'ensure_running_bots';
+            else if (/sunucu yeniden başlatıldığı/i.test(rawLow)) {
+                return String(raw).replace(/\s*·\s*Bot çalışmaya devam ediyor\s*$/i, '').trim();
+            }
+        }
+        if (/worker_poll|engine_tick|ensure_running_bots/i.test(low)) {
+            return serverRestartBotMessage(typeof metaOrReason === 'object' ? metaOrReason : {});
+        }
+        if (low === 'loop_exit' || low === 'loop_crash' || low === 'loop_exception') {
+            var durLoop = formatTrDuration(metaOrReason && metaOrReason.unavailable_sec);
+            return 'Bot döngüsü beklenmedik şekilde sonlandı; worker otomatik yeniden başlattı. ' + durLoop + ' erişim alınamadı.';
+        }
+        if (r) return r;
+        var fromRaw = String(raw || '').replace(/^Dayanıklılık:\s*/i, '').trim();
+        fromRaw = fromRaw.replace(/^döngü yeniden başlatılıyor\s*/i, '').replace(/^\(|\)$/g, '').trim();
+        if (/worker_poll|engine_tick|ensure_running_bots/i.test(fromRaw)) {
+            return serverRestartBotMessage({});
+        }
+        if (/worker periyodik|motor periyodik|sistem kontrolü/i.test(String(raw || ''))) {
+            return serverRestartBotMessage(typeof metaOrReason === 'object' ? metaOrReason : {});
+        }
+        return fromRaw || '';
+    }
+
     function formatInfo(meta, raw) {
         meta = meta || {};
-        if (meta.event_kind === 'BOT_RESILIENCE' || /Dayanıklılık:/i.test(raw || '')) {
-            var rp = [raw.replace(/^Dayanıklılık:\s*/i, '').trim() || 'Bot çalışmaya devam ediyor'];
-            if (meta.restart_reason) rp.push('neden: ' + meta.restart_reason);
-            if (meta.error_code) rp.push('kod ' + meta.error_code);
-            if (meta.continues_running) rp.push('döngü aktif');
-            return { message: joinParts(rp), severity: meta.health_code === 'BOT_LOOP_AUTO_RESTART' ? 'warn' : 'info' };
+        if (meta.event_kind === 'BOT_RESILIENCE' || /Dayanıklılık:/i.test(raw || '') || meta.health_code === 'BOT_LOOP_AUTO_RESTART') {
+            var msg = humanizeRestartReason(meta, raw);
+            if (!msg && meta.restart_reason_label) msg = String(meta.restart_reason_label);
+            if (msg && /Kısa bir süre/i.test(msg)) {
+                msg = serverRestartBotMessage(meta);
+            }
+            if (msg && meta.continues_running !== false
+                && msg.indexOf('devam') < 0
+                && msg.indexOf('erişim alınamadı') < 0) {
+                msg = msg + ' · Bot çalışmaya devam ediyor';
+            }
+            return { message: msg || 'Bot çalışmaya devam ediyor', severity: meta.health_code === 'BOT_LOOP_AUTO_RESTART' ? 'warn' : 'info' };
         }
         if (raw.indexOf('İlk alım miktarı') >= 0) {
             var cap = num(meta.capped_quote_qty);
@@ -1116,6 +1280,7 @@
         if (ec === 'ACCOUNT_KEYS_MISSING') parts.push('API anahtarı eksik — bot işlem yapamaz');
         else if (ec === 'LOT_SIZE') parts.push('Lot boyutu hatası — miktar borsa filtresine uymuyor');
         else if (ec === 'BINANCE_UNREACHABLE') parts.push('Binance bağlantı hatası — bakiye/veri alınamadı');
+        else if (ec === 'SERVER_UNREACHABLE') parts.push('Sunucuya erişilemiyor — bot verisi güncellenemiyor');
         else if (/401|Unauthorized|API anahtarı/i.test(raw)) parts.push('Binance API geçersiz — anahtar, IP veya Spot izni kontrol edin');
         else if (/INSUFFICIENT_BALANCE/i.test(raw)) parts.push('Yetersiz bakiye — emir reddedildi');
         else if (/SAFE_STOP|paused/i.test(raw) || ec === 'SAFE_STOP') parts.push('Güvenlik durdurması — bot durduruldu');
@@ -1149,6 +1314,10 @@
         meta = meta || {};
         var hc = String(meta.health_code || '');
         var ec = String(meta.error_code || '').toUpperCase();
+        if (meta.health_code === 'CONNECTIVITY_LOST' || meta.error_code === 'CONNECTIVITY_LOST') {
+            return hasRecentSkipOrErrorForCode('BINANCE_UNREACHABLE')
+                || hasRecentSkipOrErrorForCode('SERVER_UNREACHABLE');
+        }
         if (hc === 'STATE_ERROR_WARN' && ec) {
             return hasRecentSkipOrErrorForCode(ec);
         }
@@ -1226,6 +1395,9 @@
             )) {
             return { hidden: true };
         }
+        if (!options.forExport && shouldHideOrphanConnectivityStable(ev, meta, options)) {
+            return { hidden: true };
+        }
         if (!options.forExport && ty === 'INFO' && shouldHideDuplicateBotStart(ev, meta, raw)) {
             return { hidden: true };
         }
@@ -1272,52 +1444,64 @@
         } else if (ty === 'CYCLE_SPACER' || meta.tur_spacer === true) {
             return { hidden: true };
         } else if (ty === 'HEALTH_CRITICAL') {
-            severity = 'critical';
-            message = formatHealth(meta, raw, true);
-            typeLabel = 'Kritik';
-            if (meta.health_resolved) {
-                message = (message || '—') + ' · çözüldü';
+            if (meta.health_resolved || meta.recovery_report) {
+                severity = 'success';
+                message = formatHealthResolvedMessage(meta);
+                typeLabel = 'Düzeldi';
+            } else {
+                severity = 'critical';
+                message = formatHealth(meta, raw, true);
+                typeLabel = 'Kritik';
             }
         } else if (ty === 'HEALTH_WARN') {
-            severity = 'warn';
-            message = formatHealth(meta, raw, false);
-            typeLabel = 'Uyarı';
-            if (meta.health_resolved) {
-                message = (message || '—') + ' · çözüldü';
+            if (meta.health_resolved || meta.recovery_report) {
+                severity = 'success';
+                message = formatHealthResolvedMessage(meta);
+                typeLabel = 'Düzeldi';
+            } else {
+                severity = 'warn';
+                message = formatHealth(meta, raw, false);
+                typeLabel = 'Uyarı';
             }
         } else if (ty === 'INFO') {
             if (/COMMAND_EXECUTED.*START/i.test(raw) && meta.connectivity_resume === true) {
                 return { hidden: true };
             }
-            var infoRes = formatInfo(meta, raw);
-            if (infoRes && typeof infoRes === 'object') {
-                message = infoRes.message;
-                severity = infoRes.severity || 'info';
-            } else {
-                message = infoRes || raw;
-            }
-            if (/quote_qty_capped/i.test(raw)) severity = 'warn';
-            if (/COMMAND_EXECUTED.*START/i.test(raw) && meta.connectivity_resume !== true) {
-                typeLabel = 'Start';
-            } else if (
-                meta.error_code === 'CONNECTIVITY_STABLE'
-                || meta.connectivity_stable === true
-                || meta.error_code === 'CONNECTIVITY_RECOVERED'
-                || /Bağlantı kuruldu ve stabil/i.test(message || '')
-                || /tekrar aktif edildi/i.test(message || '')
-            ) {
+            if (isRecoveryMeta(meta)) {
                 severity = 'success';
-                typeLabel = 'Bağlantı';
-            } else if (/COMMAND_EXECUTED/i.test(raw)) {
-                typeLabel = 'Tur ' + (meta.cycle_id != null ? meta.cycle_id : 1);
-            } else if (
-                meta.error_code === 'CONNECTIVITY_PAUSED'
-                || meta.connectivity_pause
-                || /beklemeye alındı/i.test(raw)
-            ) {
-                typeLabel = 'Bilgi';
-            } else if (meta.cycle_id != null) {
-                typeLabel = 'Tur ' + meta.cycle_id;
+                message = formatHealthResolvedMessage(meta);
+                typeLabel = 'Düzeldi';
+            } else {
+                var infoRes = formatInfo(meta, raw);
+                if (infoRes && typeof infoRes === 'object') {
+                    message = infoRes.message;
+                    severity = infoRes.severity || 'info';
+                } else {
+                    message = infoRes || raw;
+                }
+                if (/quote_qty_capped/i.test(raw)) severity = 'warn';
+                if (/COMMAND_EXECUTED.*START/i.test(raw) && meta.connectivity_resume !== true) {
+                    typeLabel = 'Start';
+                } else if (
+                    meta.error_code === 'CONNECTIVITY_STABLE'
+                    || meta.connectivity_stable === true
+                    || meta.error_code === 'CONNECTIVITY_RECOVERED'
+                    || /Bağlantı kuruldu ve stabil/i.test(message || '')
+                    || /tekrar aktif edildi/i.test(message || '')
+                ) {
+                    severity = 'success';
+                    typeLabel = 'Düzeldi';
+                } else if (/COMMAND_EXECUTED/i.test(raw)) {
+                    typeLabel = 'Tur ' + (meta.cycle_id != null ? meta.cycle_id : 1);
+                } else if (
+                    meta.error_code === 'CONNECTIVITY_PAUSED'
+                    || meta.connectivity_pause
+                    || /beklemeye alındı/i.test(raw)
+                ) {
+                    typeLabel = 'Bilgi';
+                } else if (meta.cycle_id != null) {
+                    typeLabel = 'Tur ' + meta.cycle_id;
+                }
             }
         } else if (ty === 'BOT_ACTION') {
             message = reasonDetail(meta) || raw || 'Strateji aksiyonu';
@@ -1454,8 +1638,19 @@
             var key;
             if (meta.health_ui_track && ec) {
                 key = 'HEALTH_TRACK\0' + ec + '\0' + (meta.health_resolved ? 'resolved' : 'active');
-            } else if (ec && /API_UNAUTHORIZED|BINANCE_UNREACHABLE|BINANCE_RATE|ACCOUNT_KEYS|CONNECTIVITY_RECOVERED|CONNECTIVITY_PAUSED/.test(ec)) {
-                key = ec + '\0' + fmt.severity;
+            } else if (ec && /API_UNAUTHORIZED|BINANCE_UNREACHABLE|BINANCE_RATE|ACCOUNT_KEYS|CONNECTIVITY_RECOVERED|CONNECTIVITY_PAUSED|CONNECTIVITY_LOST|SERVER_UNREACHABLE/.test(ec)) {
+                var connCollapse = /CONNECTIVITY_LOST|SERVER_UNREACHABLE/.test(ec) ? 'BINANCE_UNREACHABLE' : ec;
+                key = 'CONN\0' + connCollapse + '\0' + fmt.severity;
+            } else if (ec === 'CONNECTIVITY_STABLE') {
+                key = 'RECOVERY\0CONNECTIVITY_STABLE';
+            } else if (ec === 'CONNECTIVITY_RECOVERED') {
+                key = 'RECOVERY\0CONNECTIVITY_RECOVERED';
+            } else if (
+                ec === 'OUTAGE_RECOVERY'
+                || ec === 'BOT_LOOP_AUTO_RESTART'
+                || meta.event_kind === 'BOT_RESILIENCE'
+            ) {
+                key = 'RECOVERY\0' + ec + '\0' + String(ev.id != null ? ev.id : (ev.ts || ''));
             } else if (isHealthEventType(ev.type) && ec) {
                 key = (ev.type || '') + '\0' + ec + '\0' + fmt.severity;
             } else if ((ev.type || '') === 'CYCLE_START') {
@@ -1533,6 +1728,7 @@
         sortEngineEventsDesc: sortEngineEventsDesc,
         dedupeCycleStartForDisplay: dedupeCycleStartForDisplay,
         dedupeCycleEndForDisplay: dedupeCycleEndForDisplay,
+        dedupeConnectivityStableForDisplay: dedupeConnectivityStableForDisplay,
         parseEventTsMs: parseEventTsMs,
         formatEventTs: formatEventTs
     };

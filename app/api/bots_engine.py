@@ -1549,6 +1549,104 @@ def _merge_synthetic_tur_after_initial_fill(
     return _sort_engine_events_desc(merged)
 
 
+def _row_to_engine_event(row: Any) -> Dict[str, Any]:
+    meta: Dict[str, Any] = {}
+    if row[4]:
+        try:
+            meta = json.loads(row[4])
+        except Exception:
+            meta = {}
+    return {
+        "id": row[0],
+        "ts": normalize_event_ts_iso_z(row[1]),
+        "type": row[2],
+        "message": row[3] or "",
+        "meta": meta,
+    }
+
+
+def _merge_anchor_events(
+    events: List[Dict[str, Any]],
+    anchors: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    if not anchors:
+        return events
+    have = {int(e.get("id") or 0) for e in events if int(e.get("id") or 0) > 0}
+    merged = list(events)
+    for ev in anchors:
+        eid = int(ev.get("id") or 0)
+        if eid > 0 and eid not in have:
+            merged.append(ev)
+            have.add(eid)
+    return merged
+
+
+def _fetch_lifecycle_anchor_events(db: Session, bot_id: int) -> List[Dict[str, Any]]:
+    """Bot başlangıç satırları — son N limit penceresinin dışında kalsa da tabloda kalsın."""
+    anchors: List[Dict[str, Any]] = []
+    seen: set = set()
+
+    def _add(ev: Dict[str, Any], key: str) -> None:
+        if key in seen:
+            return
+        eid = int(ev.get("id") or 0)
+        if eid <= 0:
+            return
+        seen.add(key)
+        anchors.append(ev)
+
+    try:
+        start_rows = db.execute(
+            text("""
+                SELECT id, ts, event_type, message, meta_json FROM bot_engine_events
+                WHERE bot_id = :bid AND event_type = 'INFO'
+                  AND message LIKE '%COMMAND_EXECUTED%' AND message LIKE '%START%'
+                ORDER BY id ASC LIMIT 8
+            """),
+            {"bid": bot_id},
+        ).fetchall()
+        for row in start_rows:
+            ev = _row_to_engine_event(row)
+            meta = ev.get("meta") or {}
+            if meta.get("connectivity_resume") is True:
+                continue
+            _add(ev, "bot_start")
+            break
+
+        fill_row = db.execute(
+            text("""
+                SELECT id, ts, event_type, message, meta_json FROM bot_engine_events
+                WHERE bot_id = :bid AND event_type = 'ORDER_FILLED'
+                  AND (message LIKE '%initial_allocation%' OR meta_json LIKE '%initial_allocation%')
+                ORDER BY id ASC LIMIT 1
+            """),
+            {"bid": bot_id},
+        ).fetchone()
+        if fill_row:
+            _add(_row_to_engine_event(fill_row), "initial_fill")
+
+        cycle_rows = db.execute(
+            text("""
+                SELECT id, ts, event_type, message, meta_json FROM bot_engine_events
+                WHERE bot_id = :bid AND event_type = 'CYCLE_START'
+                ORDER BY id ASC LIMIT 120
+            """),
+            {"bid": bot_id},
+        ).fetchall()
+        for row in cycle_rows:
+            ev = _row_to_engine_event(row)
+            try:
+                cid = int((ev.get("meta") or {}).get("cycle_id") or 0)
+            except (TypeError, ValueError):
+                cid = 0
+            if cid == 1:
+                _add(ev, "tur1_start")
+                break
+    except Exception as ex:
+        logger.debug("lifecycle anchor events bot_id=%s: %s", bot_id, ex)
+    return anchors
+
+
 def _enrich_command_start_events(
     events: List[Dict[str, Any]],
     bot: Any,
@@ -4105,6 +4203,13 @@ async def bots_events(
             from app.botengine.engine_log_ack import filter_events_for_dismiss
 
             events = filter_events_for_dismiss(events, dismiss_before)
+        try:
+            anchors = _fetch_lifecycle_anchor_events(db, bot.id)
+            if dismiss_before > 0:
+                anchors = filter_events_for_dismiss(anchors, dismiss_before)
+            events = _merge_anchor_events(events, anchors)
+        except Exception as anchor_ex:
+            logger.debug("bots_events lifecycle anchors bot_id=%s: %s", bot.id, anchor_ex)
     try:
         events = _enrich_command_start_events(events, bot, state)
         events = _merge_synthetic_cycle_end_events(events, state, db=db, bot_id=bot.id)

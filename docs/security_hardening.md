@@ -67,7 +67,7 @@ Verify: login works, refresh stays logged in, no CSP violations in console, no f
 ## 4. Backend behaviour summary
 
 - **Token source:** `get_token_from_request()`: Bearer first if AUTH_ALLOW_BEARER=1, else cookie. `request.state.auth_source` set to `bearer` or `cookie`.
-- **CSRF:** Applied only when method is POST/PUT/PATCH/DELETE and auth source is cookie. `/api/auth/login` and `/api/auth/register` exempt. Origin/Referer validated against allowed hosts. Optional double-submit: cookie `csrf_token` + header `X-CSRF-Token`.
+- **CSRF:** Applied only when method is POST/PUT/PATCH/DELETE and auth source is cookie. Exempt: `/api/auth/login`, `/api/auth/register`, `/api/log-error` (frontend error reporter). Origin/Referer validated against allowed hosts. Optional double-submit: cookie `csrf_token` + header `X-CSRF-Token` (apiClient + errorReporter send header when cookie present).
 - **Login:** Same 401 message and **INVALID_CREDENTIALS** for both “user not found” and “wrong password” (no enumeration). Rate limit returns 429 RATE_LIMITED with Retry-After.
 - **Cookies:** auth_token HttpOnly, SameSite, Secure when HTTPS; optional csrf_token (not HttpOnly) when AUTH_CSRF_DOUBLE_SUBMIT=1.
 

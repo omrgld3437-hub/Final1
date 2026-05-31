@@ -17,6 +17,8 @@ _spec.loader.exec_module(_mod)
 router = _mod.router
 invalidate_wallet_cache = _mod.invalidate_wallet_cache
 invalidate_open_orders_cache = _mod.invalidate_open_orders_cache
+_get_snapshot_wallet_cached = _mod._get_snapshot_wallet_cached
+_enrich_snapshot_wallet_with_bot_locked = _mod._enrich_snapshot_wallet_with_bot_locked
 
 def __getattr__(name):
     # Lazy export for names used by main.py, admin.py, finance.py, routes/home.py, subroutes/home.py
@@ -28,6 +30,8 @@ def __getattr__(name):
         "_cache",
         "_fetch_server_public_ip",
         "_parse_public_ip_response",
+        "_get_snapshot_wallet_cached",
+        "_enrich_snapshot_wallet_with_bot_locked",
     ):
         return getattr(_mod, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

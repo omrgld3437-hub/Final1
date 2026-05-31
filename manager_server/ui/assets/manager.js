@@ -1473,6 +1473,8 @@
     if (/\/api\/server\/manager\/restart\b/i.test(s) && /\s404\b/.test(s)) return true;
     if (/\/api\/issues\/summary\b/i.test(s) && /\s404\b/.test(s)) return true;
     if (/\/api\/security\//i.test(s) && /\s404\b/.test(s)) return true;
+    if (/CSRF (?:double-submit mismatch|Origin mismatch|Referer mismatch)/i.test(s) && /\/api\/log-error/i.test(s)) return true;
+    if (/POST \/api\/log-error HTTP\/1\.1"\s+403 Forbidden/i.test(s)) return true;
     return false;
   }
   function filterPanelErrWrn(arr) {

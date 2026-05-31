@@ -197,7 +197,75 @@ function adminFetchTransientError(err) {
 }
 
 var _adminAccountsToastAt = 0;
+var _adminAccountsErrorReportAt = 0;
+var _adminAccountsFullRefreshPromise = null;
 var ADMIN_ACCOUNTS_TOAST_DEBOUNCE_MS = 30000;
+
+function adminScheduleAccountsFullRefresh(fullUrl) {
+    if (_adminAccountsFullRefreshPromise) return _adminAccountsFullRefreshPromise;
+    _adminAccountsFullRefreshPromise = adminFetchJSON(fullUrl, { tab: 'accounts', phase: 'full_refresh', lite: false })
+        .then(function (full) {
+            if (state.currentTab !== 'accounts') return;
+            var data = { accounts: full.accounts || [], totals: full.totals || null };
+            runRenderForTab('accounts', data);
+            try {
+                AdminStore.cache.accounts.data = data;
+                AdminStore.cache.accounts.ts = Date.now();
+            } catch (e) {}
+        })
+        .catch(function (err) {
+            adminReportAccountsLoadError(err, { url: fullUrl, phase: 'full_refresh', lite: false });
+        })
+        .finally(function () {
+            _adminAccountsFullRefreshPromise = null;
+        });
+    return _adminAccountsFullRefreshPromise;
+}
+
+function adminReportAccountsLoadError(err, meta) {
+    meta = meta || {};
+    var now = Date.now();
+    if (now - _adminAccountsErrorReportAt < ADMIN_ACCOUNTS_TOAST_DEBOUNCE_MS) return;
+    _adminAccountsErrorReportAt = now;
+    var detail = (err && err.message) ? err.message : String(err || 'unknown');
+    var msg = meta.phase === 'full_refresh' ? 'ADMIN_ACCOUNTS_FULL_REFRESH_FAIL' : 'ADMIN_ACCOUNTS_LOAD_FAIL';
+    var ctx = {
+        page: 'Admin',
+        section: 'Hesaplar',
+        tab: 'accounts',
+        action: 'loadAccounts',
+        phase: meta.phase || 'fetch',
+        fetch_url: meta.url || '/api/admin/accounts',
+        http_status: meta.status != null ? meta.status : (err && err.status != null ? err.status : null),
+        duration_ms: meta.duration_ms != null ? meta.duration_ms : (err && err.duration_ms != null ? err.duration_ms : null),
+        attempt: meta.attempt != null ? meta.attempt : (err && err._attempt != null ? err._attempt : null),
+        request_id: meta.request_id || (err && err.request_id) || null,
+        lite: !!meta.lite,
+        transient: adminFetchTransientError(err),
+        online: typeof navigator !== 'undefined' ? navigator.onLine : null,
+        err_name: err && err.name ? err.name : null
+    };
+    if (window.errorReporter && window.errorReporter.report) {
+        window.errorReporter.report(new Error(msg + ': ' + detail), ctx);
+        return;
+    }
+    try {
+        var headers = Object.assign({ 'Content-Type': 'application/json' }, adminAuthHeaders());
+        if (ctx.request_id) headers['X-Request-ID'] = ctx.request_id;
+        fetch('/api/log-error', {
+            method: 'POST',
+            credentials: 'include',
+            headers: headers,
+            body: JSON.stringify({
+                message: msg,
+                source: 'admin_panel',
+                detail: detail,
+                path: '/ui/admin.html',
+                context: ctx
+            })
+        }).catch(function () {});
+    } catch (e) {}
+}
 
 function adminMaybeAccountsTransientToast(err) {
     if (!adminFetchTransientError(err)) return;
@@ -205,6 +273,7 @@ function adminMaybeAccountsTransientToast(err) {
     var now = Date.now();
     if (now - _adminAccountsToastAt < ADMIN_ACCOUNTS_TOAST_DEBOUNCE_MS) return;
     _adminAccountsToastAt = now;
+    adminReportAccountsLoadError(err, { phase: 'transient_toast' });
     if (window.Toast && window.Toast.warning) {
         window.Toast.warning('Hesaplar yenilenemedi (geçici ağ hatası). Tekrar deneniyor…');
     }
@@ -231,9 +300,37 @@ function adminFetchJSON(url, opts) {
                         return adminFetchJSON(url, Object.assign({}, opts, { _attempt: attempt + 1 }));
                     });
                 }
-                throw new Error('HTTP ' + r.status);
+                var httpErr = new Error('HTTP ' + r.status);
+                httpErr.status = r.status;
+                httpErr.duration_ms = dur;
+                httpErr.request_id = requestId;
+                httpErr.url = url;
+                httpErr._attempt = attempt;
+                throw httpErr;
             }
             return r.json();
+        })
+        .catch(function (err) {
+            if (err && err.name === 'AbortError') throw err;
+            var dur = Math.round(performance.now() - start);
+            if (!err.duration_ms) err.duration_ms = dur;
+            if (!err.request_id) err.request_id = requestId;
+            if (!err.url) err.url = url;
+            if (err._attempt == null) err._attempt = attempt;
+            var isTransient = adminFetchTransientError(err) || adminFetchTransientStatus(err.status);
+            var exhausted = attempt >= 2 || !isTransient;
+            if (tab === 'accounts' && exhausted && !(signal && signal.aborted)) {
+                adminReportAccountsLoadError(err, {
+                    url: url,
+                    status: err.status,
+                    duration_ms: dur,
+                    attempt: attempt,
+                    request_id: requestId,
+                    phase: opts.phase || 'fetch',
+                    lite: /\blite=1\b/.test(url)
+                });
+            }
+            throw err;
         });
 }
 
@@ -415,6 +512,13 @@ document.addEventListener("DOMContentLoaded", async () => {
             }
         }
     });
+
+    if (window.TtScrollRestore && typeof window.TtScrollRestore.scheduleFinalize === 'function') {
+        window.TtScrollRestore.scheduleFinalize();
+    }
+    if (window.TtScrollRestore && typeof window.TtScrollRestore.ensureRestored === 'function') {
+        window.TtScrollRestore.ensureRestored();
+    }
 });
 
 async function fetchBreachAlerts() {
@@ -600,14 +704,14 @@ function renderTiles(accounts, container = null) {
                     </div>
                 </div>
                 
-                <div class="acct-section">
+                <div class="acct-section acct-section--metrics">
                     <div class="acct-active">
                         <div class="label">AKTİF BOT</div>
                         <div class="value">${acc.active_bots}${acc.total_bots != null && acc.total_bots > acc.active_bots ? '<span style="font-size:0.75rem;color:var(--ds-text-secondary);font-weight:400;"> / ' + acc.total_bots + ' toplam</span>' : ''}</div>
                     </div>
                 </div>
-                
-                <div class="acct-section">
+
+                <div class="acct-section acct-section--balances">
                     <div class="bal-strip">
                         <div class="bal-item">
                             <div class="bal-label">${spotUi.spotLabel}</div>
@@ -1383,8 +1487,14 @@ function loadTab(tabKey) {
 
 function getAdminTabFetcher(tabKey) {
     if (tabKey === 'accounts') return function (signal) {
-        return adminFetchJSON('/api/admin/accounts?cb=' + Date.now(), { tab: 'accounts', signal: signal }).then(function (r) {
-            return { accounts: r.accounts || [], totals: r.totals || null };
+        var liteUrl = '/api/admin/accounts?lite=1&cb=' + Date.now();
+        var fullUrl = '/api/admin/accounts?cb=' + Date.now();
+        return adminFetchJSON(liteUrl, { tab: 'accounts', signal: signal, phase: 'lite', lite: true }).then(function (r) {
+            var payload = { accounts: r.accounts || [], totals: r.totals || null };
+            if (!(signal && signal.aborted)) {
+                adminScheduleAccountsFullRefresh(fullUrl);
+            }
+            return payload;
         });
     };
     if (tabKey === 'pending') return function (signal) {
@@ -1394,7 +1504,7 @@ function getAdminTabFetcher(tabKey) {
         ]).then(function (arr) { return { pending: arr[0], reset: arr[1] }; });
     };
     if (tabKey === 'suspended') return function (signal) {
-        return adminFetchJSON('/api/admin/accounts?suspended=true', { tab: 'suspended', signal: signal }).then(function (r) {
+        return adminFetchJSON('/api/admin/accounts?suspended=true&lite=1', { tab: 'suspended', signal: signal }).then(function (r) {
             return { accounts: r.accounts || [] };
         });
     };

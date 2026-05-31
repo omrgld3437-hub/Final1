@@ -4,6 +4,7 @@
 
 html:has(body.login-page--zip) {
     scroll-behavior: smooth;
+    background: #020203;
 }
 
 body.login-page.login-page--zip,
@@ -22,8 +23,13 @@ body.login-page.login-page--zip:not(.login-mobile) {
     contain: none !important;
     display: flex;
     flex-direction: column;
-    background: #0b0e11;
+    background: #020203;
     color: #f8f7f5;
+}
+
+body.login-page.login-page--zip:not(.login-mobile) {
+    max-height: none !important;
+    overflow-y: auto !important;
 }
 
 body.login-page.login-page--zip.login-modal-open {
@@ -33,6 +39,10 @@ body.login-page.login-page--zip.login-modal-open {
 /* Zip nebula arka plan — tradertrailing.zip index.css nebula-bg */
 body.login-page--zip .login-page-bg {
     z-index: 0;
+    /* scrollbar alanı dahil tam viewport — sağ şerit kararması olmasın */
+    width: 100%;
+    min-width: 100vw;
+    min-height: 100dvh;
 }
 
 body.login-page--zip .login-bg-zip-photo {
@@ -82,7 +92,8 @@ body.login-page--zip .login-bg-stars {
 
 body.login-page--zip .login-bg-vignette {
     z-index: 5;
-    background: radial-gradient(ellipse 90% 70% at 50% 20%, transparent 0%, rgba(0, 0, 0, 0.45) 100%);
+    /* Sağ kenar karartmasını azalt; merkez odaklı vignette */
+    background: radial-gradient(ellipse 85% 65% at 50% 22%, transparent 0%, rgba(0, 0, 0, 0.32) 72%, transparent 100%);
 }
 
 .zip-nebula-dim {
@@ -328,6 +339,7 @@ body.login-page--zip .login-overlay-scrim {
     display: none;
     align-items: center;
     gap: 0.75rem;
+    --zip-nav-action-h: 29px;
 }
 
 @media (min-width: 768px) {
@@ -353,10 +365,16 @@ body.login-page--zip .login-overlay-scrim {
 }
 
 .zip-nav__cta {
-    padding: 0.5rem 1rem;
+    box-sizing: border-box;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: var(--zip-nav-action-h);
+    padding: 0 1rem;
     font-size: 0.68rem;
     font-weight: 800;
     letter-spacing: 0.08em;
+    line-height: 1;
     text-transform: uppercase;
     color: var(--login-accent-on);
     background: var(--login-accent);
@@ -373,6 +391,32 @@ body.login-page--zip .login-overlay-scrim {
 
 .zip-nav__flag {
     margin-left: 0.25rem;
+}
+
+.zip-nav__flag.login-flag {
+    padding: 0;
+    min-width: auto;
+    height: var(--zip-nav-action-h);
+    min-height: var(--zip-nav-action-h);
+    border-radius: 8px;
+    overflow: hidden;
+    flex-shrink: 0;
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.zip-nav__flag.login-flag:hover {
+    background: none;
+    box-shadow: 0 0 12px rgba(240, 185, 11, 0.25);
+    transform: translateY(-1px);
+}
+
+.zip-nav__flag .login-flag__img {
+    display: block;
+    height: 100%;
+    width: auto;
+    aspect-ratio: 3 / 2;
+    object-fit: cover;
+    border-radius: 8px;
 }
 
 .zip-nav__burger {

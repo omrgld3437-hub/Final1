@@ -1,216 +1,111 @@
 /*
  FILE: ui/assets/ticker.css
- VERSION: v8
- DATE: 2026-01-22
- CHANGE: tick-val up/down/same renkleri (yeşil/kırmızı), tickFlashGreen/Red animasyonları, yüzdelik gizli
+ VERSION: v11
+ DATE: 2026-05-31
+ CHANGE: Sabit ortalanmış şerit; marquee animasyonu kaldırıldı
 */
 
-:root{
+:root {
   --gold: #f0b90b;
-  --muted: rgba(255,255,255,.65);
-  --ticker-height: 56px;
+  --muted: rgba(255, 255, 255, 0.65);
+  --ticker-height: 41px;
+  --dashboard-ticker-height: 41px;
+  --login-green: #0ecb81;
+  --login-red: #f6465d;
 }
 
-/* Kur şeridi sayfa ile birlikte kayar; aşağı indirince şerit de kaybolur */
+/* Kur şeridi — scroll'da üstte sabit, içerik hareket etmez */
 .top-ticker {
-  position: relative;
+  position: -webkit-sticky;
+  position: sticky;
+  top: 0;
   left: 0;
   right: 0;
   width: 100%;
   max-width: 100vw;
-  min-height: var(--ticker-height, 56px);
-  z-index: 50;
-  background: rgba(10,14,20,.78);
-  backdrop-filter: blur(10px);
-  border-bottom: 1px solid rgba(255,255,255,.08);
+  min-height: var(--ticker-height, 41px);
+  z-index: 210;
+  background: rgba(17, 20, 24, 0.88);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   overflow: hidden;
   box-sizing: border-box;
 }
 
-.top-ticker-inner{
-  min-height: 100%;
-  max-width: min(1280px, 100vw);
-  width: 100%;
-  margin: 0 auto;
-  padding: 6px 12px 8px;
-  box-sizing: border-box;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
+.top-ticker .zip-ticker-wrap {
+  position: relative;
+  overflow: hidden;
+  padding: 0.55rem 0;
 }
 
-.top-ticker-top-row{
+.top-ticker .zip-ticker-wrap--static .zip-ticker-track {
   display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  width: 100%;
-  max-width: 100%;
-  min-width: 0;
-  box-sizing: border-box;
-}
-
-/* Çizgi altında canlı metin (son güncelleme) */
-.ticker-live-line{
-  font-size: 10px;
-  letter-spacing: .03em;
-  color: var(--muted);
-  text-align: center;
-  padding-top: 2px;
-  border-top: 1px solid rgba(255,255,255,.06);
-  margin: 0 -12px;
-  padding-left: 12px;
-  padding-right: 12px;
-  font-variant-numeric: tabular-nums;
-  max-width: 100%;
-  box-sizing: border-box;
-}
-
-.top-ticker-row{
-  display: flex;
-  align-items: center;
-  justify-content: center;
   flex-wrap: wrap;
-  gap: 8px 10px;
-  min-width: 0;
-  max-width: 100%;
-  padding: 0 2px;
-  box-sizing: border-box;
-}
-
-.tick{
-  display:flex;
-  align-items: baseline;
-  gap: 8px;
-  padding: 6px 10px;
-  border-radius: 12px;
-  border: 1px solid rgba(255,255,255,.06);
-  background: rgba(255,255,255,.02);
-}
-
-.tick-label{
-  font-size: 11px;
-  letter-spacing: .04em;
-  color: var(--muted);
-  white-space: nowrap;
-}
-
-.tick-val{
-  font-size: 13px;
-  font-weight: 700;
-  color: rgba(255,255,255,.92);
-  white-space: nowrap;
-  font-variant-numeric: tabular-nums;
-  transition: color 0.3s ease;
-}
-
-.tick-val.up {
-  color: #0ecb81 !important; /* Binance green */
-}
-
-.tick-val.down {
-  color: #f6465d !important; /* Binance red */
-}
-
-.tick-val.same {
-  color: rgba(255,255,255,.92);
-}
-
-.tick-pct{
-  font-size: 12px;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  margin-left: 2px;
-}
-
-/* Saat ve tarih bloğu (kur çiftlerinin sağında) */
-.tick-live {
-  padding-left: 12px;
-  margin-left: 8px;
-  border-left: 1px solid rgba(255,255,255,.10);
-  font-weight: 600;
-  color: var(--ds-text-primary, rgba(255,255,255,.9));
-  font-variant-numeric: tabular-nums;
-}
-
-/* Saat üstte, tarih hemen altında; tek sütun */
-.tick-live-col {
-  display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 0;
-  line-height: 1.2;
+  gap: 0.35rem 1.25rem;
+  width: 100%;
+  max-width: min(1280px, 100vw);
+  margin: 0 auto;
+  padding: 0 1rem;
+  box-sizing: border-box;
+  animation: none !important;
+  transform: none !important;
 }
 
-.tick-live-time {
-  display: block;
-  font-size: 1.1rem;
+.top-ticker .zip-ticker-item {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+  gap: 0.35rem 0.45rem;
+  min-width: 0;
+  font-family: ui-monospace, "JetBrains Mono", monospace;
+  font-size: clamp(0.62rem, 1.1vw, 0.75rem);
   white-space: nowrap;
-  transition: color 0.2s ease, text-shadow 0.2s ease;
+  padding: 0.2rem 0.35rem;
+  border-radius: 6px;
+  border: 1px solid transparent;
 }
 
-.tick-live-date {
-  display: block;
-  font-size: 0.65rem;
-  white-space: nowrap;
-  opacity: 0.9;
-  margin-top: 2px;
-  transition: color 0.2s ease, text-shadow 0.2s ease;
+.top-ticker .zip-ticker-item__sym {
+  color: #d1d5db;
+  font-weight: 600;
 }
 
-/* Sadece değişen öğe yeşil yansın: saat her dakikada, tarih her yeni günde */
-.tick-live-blink-time .tick-live-time {
-  animation: tickLiveBlinkGreen 0.65s ease;
-}
-
-.tick-live-blink-date .tick-live-date {
-  animation: tickLiveBlinkGreen 0.65s ease;
-}
-
-@keyframes tickLiveBlinkGreen {
-  0%   { color: #0ecb81; text-shadow: 0 0 12px rgba(14,203,129,.5); }
-  50%  { color: #0ecb81; text-shadow: 0 0 8px rgba(14,203,129,.35); }
-  100% { color: var(--ds-text-primary, rgba(255,255,255,.9)); text-shadow: none; }
-}
-
-/* pulse every refresh (even if values unchanged) */
-.top-ticker.pulse{
-  box-shadow: inset 0 -1px 0 rgba(240,185,11,.35);
-}
-
-/* blink per item when value changed */
-.tick-update{
-  background: rgba(240,185,11,.06);
-  border-color: rgba(240,185,11,.22);
-}
-
-.tick.up .tick-val {
-  animation: tickFlashGreen .6s ease;
+.top-ticker .zip-ticker-item__price {
+  color: #fff;
   font-weight: 700;
+  font-variant-numeric: tabular-nums;
 }
 
-.tick.down .tick-val {
-  animation: tickFlashRed .6s ease;
-  font-weight: 700;
+.top-ticker .zip-ticker-item__chg {
+  font-size: 0.68rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }
 
-@keyframes tickFlashGreen{
-  0%   { color: #0ecb81; text-shadow: 0 0 14px rgba(14,203,129,.4); font-weight: 700; }
-  60%  { color: #0ecb81; text-shadow: none; font-weight: 700; }
-  100% { color: #0ecb81; font-weight: 700; }
+.top-ticker .zip-ticker-item__chg.up {
+  color: var(--login-green);
 }
 
-@keyframes tickFlashRed{
-  0%   { color: #f6465d; text-shadow: 0 0 14px rgba(246,70,93,.4); font-weight: 700; }
-  60%  { color: #f6465d; text-shadow: none; font-weight: 700; }
-  100% { color: #f6465d; font-weight: 700; }
+.top-ticker .zip-ticker-item__chg.down {
+  color: var(--login-red);
 }
 
-/* Mobil + tablet: üst döviz şeridi tamamen kaldır (≤1024px: telefon portrait/landscape, tablet) */
+.top-ticker .zip-ticker-item.tick-up {
+  background: rgba(14, 203, 129, 0.12);
+  border-color: rgba(14, 203, 129, 0.25);
+}
+
+.top-ticker .zip-ticker-item.tick-down {
+  background: rgba(246, 70, 93, 0.12);
+  border-color: rgba(246, 70, 93, 0.25);
+}
+
+/* Mobil + tablet: üst döviz şeridi gizli (≤1024px) */
 @media (max-width: 1024px) {
   body .top-ticker,
   body #topTicker,

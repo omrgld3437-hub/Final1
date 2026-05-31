@@ -11,7 +11,11 @@ from starlette.responses import JSONResponse
 logger = logging.getLogger(__name__)
 
 # Routes that never require CSRF (no session yet or explicit exempt)
-CSRF_EXEMPT_PATHS = frozenset(["/api/auth/login", "/api/auth/register"])
+CSRF_EXEMPT_PATHS = frozenset([
+    "/api/auth/login",
+    "/api/auth/register",
+    "/api/log-error",  # frontend hata raporu — CSRF yüzünden sessizce düşmesin
+])
 # Paths where we only do Origin check (e.g. logout); double-submit not required if not enabled
 CSRF_ORIGIN_ONLY_PATHS = frozenset(["/api/auth/logout"])
 

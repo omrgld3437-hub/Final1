@@ -134,12 +134,26 @@ function sendErrorToBackend(errorInfo, context) {
                     user_agent: typeof navigator !== 'undefined' ? navigator.userAgent : null
                 }
             };
-            var token = typeof sessionStorage !== 'undefined' ? sessionStorage.getItem('token') : null;
-            var headers = { 'Content-Type': 'application/json' };
+            var token = null;
+            try {
+                if (typeof getAuthStorage === 'function') token = getAuthStorage('token');
+                else if (typeof sessionStorage !== 'undefined') token = sessionStorage.getItem('token');
+            } catch (e) {}
+            var headers = {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json',
+                'X-Requested-With': 'XMLHttpRequest'
+            };
             if (token) headers['Authorization'] = 'Bearer ' + token;
+            try {
+                if (typeof document !== 'undefined' && document.cookie) {
+                    var csrfMatch = document.cookie.match(/\bcsrf_token=([^;]+)/);
+                    if (csrfMatch && csrfMatch[1]) headers['X-CSRF-Token'] = csrfMatch[1].trim();
+                }
+            } catch (e) {}
             fetch('/api/log-error', {
                 method: 'POST',
-                credentials: 'same-origin',
+                credentials: 'include',
                 headers: headers,
                 body: JSON.stringify(payload)
             }).catch(function() {});

@@ -398,6 +398,107 @@ def emit_resilience_continue(
         pass
 
 
+def _parse_db_ts(val: Any) -> Optional[int]:
+    if val is None:
+        return None
+    if isinstance(val, (int, float)):
+        return int(val)
+    if isinstance(val, datetime):
+        dt = val
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return int(dt.timestamp())
+    if isinstance(val, str):
+        s = val.strip()
+        if not s:
+            return None
+        try:
+            if s.isdigit():
+                return int(s)
+            dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return int(dt.timestamp())
+        except Exception:
+            return None
+    return None
+
+
+def _worker_started_ts() -> Optional[int]:
+    try:
+        from pathlib import Path
+
+        p = Path(__file__).resolve().parents[2] / ".run" / "worker.started_at"
+        if p.is_file():
+            return int(float(p.read_text(encoding="utf-8").strip()))
+    except Exception:
+        pass
+    return None
+
+
+def _compute_unreachable_sec(
+    state: Optional[Dict[str, Any]],
+    now: Optional[float] = None,
+    *,
+    updated_at_ts: Optional[int] = None,
+) -> int:
+    """Son tick / state güncellemesi / worker başlangıcından bu yana geçen süre (sn)."""
+    now_ts = int(now if now is not None else time.time())
+    estimates: List[int] = []
+    last_tick = _parse_last_tick_ts(state)
+    if last_tick is not None:
+        estimates.append(now_ts - last_tick)
+    if updated_at_ts is not None:
+        estimates.append(now_ts - updated_at_ts)
+    ws = _worker_started_ts()
+    if ws is not None:
+        estimates.append(now_ts - ws)
+    if estimates:
+        return max(1, max(estimates))
+    return 1
+
+
+def _format_tr_duration(seconds: Optional[int]) -> str:
+    sec = max(1, int(seconds or 1))
+    if sec < 60:
+        return f"{sec} saniye"
+    mins, rem = divmod(sec, 60)
+    if mins < 60:
+        if rem >= 30:
+            return f"{mins} dakika {rem} saniye"
+        if mins == 1:
+            return "1 dakika"
+        return f"{mins} dakika"
+    hours, mins = divmod(mins, 60)
+    if mins > 0:
+        return f"{hours} saat {mins} dakika"
+    if hours == 1:
+        return "1 saat"
+    return f"{hours} saat"
+
+
+def humanize_restart_reason(reason: str, *, unavailable_sec: Optional[int] = None) -> str:
+    """Teknik restart_reason kodunu Türkçe kullanıcı mesajına çevirir."""
+    r = (reason or "").strip()
+    low = r.lower()
+    if not r:
+        dur = _format_tr_duration(unavailable_sec)
+        return f"Sunucu yeniden başlatıldığı için bot otomatik yeniden başlatıldı. {dur} erişim alınamadı."
+    if "worker_poll" in low or "engine_tick" in low or "ensure_running_bots" in low:
+        dur = _format_tr_duration(unavailable_sec)
+        return (
+            f"Sunucu yeniden başlatıldığı için bot otomatik yeniden başlatıldı. "
+            f"{dur} erişim alınamadı."
+        )
+    if low in ("loop_exit", "loop_crash", "loop_exception"):
+        dur = _format_tr_duration(unavailable_sec)
+        return (
+            f"Bot döngüsü beklenmedik şekilde sonlandı; worker otomatik yeniden başlattı. "
+            f"{dur} erişim alınamadı."
+        )
+    return r
+
+
 def emit_loop_auto_restart(
     db: Session,
     bot_id: int,
@@ -415,18 +516,31 @@ def emit_loop_auto_restart(
         emit_map = {}
         state["_resilience_last_emit"] = emit_map
     now = time.time()
-    if now - float(emit_map.get("BOT_LOOP_AUTO_RESTART") or 0) < 60.0:
-        try:
-            from app.services.binance_connectivity import flush_pending_connectivity_stable
-
-            flush_pending_connectivity_stable(db, bot_id, after_loop_restart=True)
-        except Exception:
-            pass
+    last_emit = float(emit_map.get("BOT_LOOP_AUTO_RESTART") or 0)
+    worker_started = _worker_started_ts()
+    new_worker_boot = bool(worker_started and last_emit > 0 and last_emit < worker_started)
+    if not new_worker_boot and now - last_emit < 60.0:
         return
     emit_map["BOT_LOOP_AUTO_RESTART"] = now
+    updated_at_ts: Optional[int] = None
+    try:
+        from sqlalchemy import text
+
+        row = db.execute(
+            text("SELECT updated_at FROM bot_engine_state WHERE bot_id = :bid"),
+            {"bid": bot_id},
+        ).fetchone()
+        if row:
+            updated_at_ts = _parse_db_ts(row[0])
+    except Exception:
+        pass
+    unavailable_sec = _compute_unreachable_sec(state, now, updated_at_ts=updated_at_ts)
+    human = humanize_restart_reason(reason, unavailable_sec=unavailable_sec)
     meta = {
         "health_code": "BOT_LOOP_AUTO_RESTART",
         "restart_reason": reason,
+        "restart_reason_label": human,
+        "unavailable_sec": unavailable_sec,
         "loop_id": loop_id,
         "continues_running": True,
     }
@@ -443,7 +557,7 @@ def emit_loop_auto_restart(
         bot_id,
         account_id,
         "INFO",
-        f"Dayanıklılık: döngü yeniden başlatılıyor ({reason})",
+        human,
         {"event_kind": "BOT_RESILIENCE", **meta},
     )
     try:
@@ -451,11 +565,17 @@ def emit_loop_auto_restart(
     except Exception:
         pass
     try:
-        from app.services.binance_connectivity import flush_pending_connectivity_stable
+        from app.db.models import Bot
+        from app.services.binance_connectivity import mark_pending_connectivity_stable
 
-        flush_pending_connectivity_stable(db, bot_id, after_loop_restart=True)
+        bot = db.query(Bot).filter(Bot.id == int(bot_id)).first()
+        if bot and (bot.status or "").lower() == "running":
+            mark_pending_connectivity_stable(
+                db, bot, state, previous_error="WORKER_RESTART",
+            )
+            save_state(db, bot_id, account_id, state)
     except Exception as flush_ex:
-        logger.debug("flush_pending_connectivity_stable bot_id=%s: %s", bot_id, flush_ex)
+        logger.debug("mark_pending_connectivity_stable bot_id=%s: %s", bot_id, flush_ex)
 
 
 def emit_price_stale(db: Session, bot_id: int, account_id: int, symbol: str) -> None:

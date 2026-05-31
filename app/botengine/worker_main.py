@@ -700,6 +700,10 @@ async def worker_loop():
 
 
 def main():
+    try:
+        _RUN_DIR.joinpath("worker.started_at").write_text(str(time.time()), encoding="utf-8")
+    except Exception:
+        pass
     # RAM capture (5 dk) veya RAM_PROBE
     if os.getenv("RAM_CAPTURE", "").strip() == "1":
         try:

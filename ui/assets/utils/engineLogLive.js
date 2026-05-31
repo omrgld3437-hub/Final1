@@ -119,9 +119,9 @@
         var ty = String(ev.type || '').toUpperCase();
         var meta = ev.meta || {};
         var code = String(meta.error_code || meta.health_code || '').toUpperCase();
-        if (/API_UNAUTHORIZED|BINANCE_UNREACHABLE|BINANCE_RATE|ACCOUNT_KEYS/.test(code)) return true;
+        if (/API_UNAUTHORIZED|BINANCE_UNREACHABLE|BINANCE_RATE|ACCOUNT_KEYS|SERVER_UNREACHABLE/.test(code)) return true;
         if (ty === 'ERROR' || ty === 'HEALTH_CRITICAL' || ty === 'HEALTH_WARN') {
-            return /binance|beyaz liste|401|-2015|ulaşılamıyor|api anahtar/i.test(String(ev.message || ''));
+            return /binance|beyaz liste|401|-2015|ulaşılamıyor|sunucu|api anahtar/i.test(String(ev.message || ''));
         }
         return false;
     }
@@ -140,18 +140,8 @@
             return !(e && e.meta && e.meta.synthetic_live);
         });
         var fail = connectivityFailure && connectivityFailure.error_code ? connectivityFailure : null;
-        if (!fail && healthData) {
-            var alerts = healthData.alerts || [];
-            var errCode = String(healthData.last_error_code || '').trim();
-            var connAlert = alerts.some(function (a) {
-                return a && (a.code === 'BINANCE_UNREACHABLE' || a.code === 'STATE_ERROR');
-            });
-            if (connAlert || /API_UNAUTHORIZED|BINANCE_UNREACHABLE|ACCOUNT_KEYS/i.test(errCode)) {
-                fail = {
-                    error_code: errCode || 'BINANCE_UNREACHABLE',
-                    message: (alerts[0] && (alerts[0].message || alerts[0].title)) || 'Binance bağlantı hatası'
-                };
-            }
+        if (!fail && healthData && healthData.connectivity_ok === false && healthData.connectivity_failure) {
+            fail = healthData.connectivity_failure;
         }
         if (!fail) return list;
         if (botId && global.BotHealthAlerts && global.BotHealthAlerts.isConnectivityLogSuppressed
@@ -160,11 +150,12 @@
         }
         if (list.some(function (ev) { return connectivityEventVisible(ev, fmtApi); })) return list;
 
-        var msg = fail.message || 'Binance bağlantı hatası';
-        if (/^Binance bağlantı hatası/i.test(msg) === false && fail.error_code) {
+        var code = String(fail.error_code || 'BINANCE_UNREACHABLE').toUpperCase();
+        var isServer = code === 'SERVER_UNREACHABLE';
+        var msg = fail.message || (isServer ? 'Sunucuya erişilemiyor — bot verisi güncellenemiyor' : 'Binance bağlantı hatası');
+        if (!isServer && /^Binance bağlantı hatası/i.test(msg) === false && fail.error_code) {
             msg = 'Binance bağlantı hatası — ' + msg;
         }
-        var code = fail.error_code || 'BINANCE_UNREACHABLE';
         var prev = opts && opts._connectivitySynthetic;
         if (prev && prev.meta && prev.meta.error_code === code && prev.message === msg) {
             return [prev].concat(list);
@@ -177,7 +168,7 @@
             message: msg,
             meta: {
                 error_code: code,
-                health_code: 'BINANCE_UNREACHABLE',
+                health_code: isServer ? 'SERVER_UNREACHABLE' : 'BINANCE_UNREACHABLE',
                 synthetic_live: true,
                 source: fail.source || 'connectivity'
             }
@@ -200,6 +191,9 @@
             list = fmtApi.dedupeCycleEndForDisplay(list);
         }
         list = sortEventsForDisplay(list);
+        if (fmtApi && fmtApi.dedupeConnectivityStableForDisplay) {
+            list = fmtApi.dedupeConnectivityStableForDisplay(list);
+        }
         if (fmtApi && fmtApi.setLogContext) {
             fmtApi.setLogContext({
                 botId: botId,
@@ -312,7 +306,7 @@
         var collapsed = prep.collapsed;
         if (!list.length) {
             if (opts._logBootstrapping) {
-                return { rendered: false, events: list, skipped: true };
+                opts._logBootstrapping = false;
             }
             if (opts._lastLogRenderSig !== 'empty') {
                 container.innerHTML = '<div class="muted" style="padding: 0.75rem;">Henüz event yok.</div>';
@@ -322,7 +316,7 @@
         }
         if (!collapsed.length) {
             if (opts._logBootstrapping) {
-                return { rendered: false, events: list, skipped: true };
+                opts._logBootstrapping = false;
             }
             var emptySig = 'hidden\x1e' + prep.signature;
             if (opts._lastLogRenderSig !== emptySig) {
@@ -419,6 +413,10 @@
         return opts.apiClient.get(url, reqOpts).then(function (res) {
             res = unwrapEventsResponse(res);
             opts._failCount = 0;
+            if (opts.container) {
+                var staleFetch = opts.container.querySelector('.engine-log-fetch-error, .engine-log-poll-error');
+                if (staleFetch) staleFetch.remove();
+            }
             opts.connectivityFailure = (res && res.connectivity_failure) ? res.connectivity_failure : null;
             if (typeof global !== 'undefined') {
                 global._lastConnectivityProbeOk = !!(res && res.connectivity_ok !== false && !res.connectivity_failure);
@@ -443,9 +441,14 @@
                 global._lastEngineEvents = state.events;
             }
             if (didMerge || !incremental || !(state.events && state.events.length)) {
+                opts._logBootstrapping = false;
+                renderTable(opts.container, state.events, global.EngineLogFormat, opts.botId, opts);
+            } else {
+                opts._logBootstrapping = false;
+            }
+            if (opts.container && opts.container.querySelector('.engine-log-loading')) {
                 renderTable(opts.container, state.events, global.EngineLogFormat, opts.botId, opts);
             }
-            opts._logBootstrapping = false;
             if (typeof opts.onAfterRender === 'function') {
                 opts.onAfterRender(state.events);
             }

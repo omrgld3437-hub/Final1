@@ -32,6 +32,53 @@ except ImportError:
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+
+def _record_spot_order_tx_history(account_id: int, result: dict, symbol: str, side: str) -> None:
+    """Spot emir sonrası işlem geçmişine anında yaz (sync beklemeden)."""
+    if not result or not account_id:
+        return
+    try:
+        from app.services.transaction_history_file_store import record_spot_manual_trade_fill
+
+        fills = result.get("fills") if isinstance(result.get("fills"), list) else []
+        commission = 0.0
+        commission_asset = "USDT"
+        for f in fills:
+            if not isinstance(f, dict):
+                continue
+            try:
+                commission += float(f.get("commission") or 0)
+            except (TypeError, ValueError):
+                pass
+            if f.get("commissionAsset"):
+                commission_asset = str(f.get("commissionAsset"))
+        executed_qty = float(result.get("executedQty") or 0)
+        cum_quote = float(
+            result.get("cummulativeQuoteQty")
+            or result.get("cumulativeQuoteQty")
+            or 0
+        )
+        price_val = float(result.get("price") or 0)
+        if executed_qty > 0 and cum_quote > 0:
+            price_val = cum_quote / executed_qty
+        order_id = str(result.get("orderId") or result.get("order_id") or "")
+        if executed_qty <= 0 and cum_quote <= 0:
+            return
+        record_spot_manual_trade_fill(
+            account_id,
+            order_id=order_id,
+            symbol=symbol,
+            side=side,
+            qty=executed_qty,
+            price=price_val,
+            quote_qty=cum_quote,
+            commission=commission,
+            commission_asset=commission_asset,
+        )
+    except Exception as ex:
+        logger.debug("spot tx history record failed account_id=%s: %s", account_id, ex)
+
+
 # Semboller: Binance'te yok veya 500 üreten çiftler – blacklist + base==quote
 INVALID_QUICK_DATA_SYMBOLS = frozenset({
     "USDTUSDT", "USDCUSDT", "FDUSDUSDT", "BUSDUSDT", "TUSDUSDT", "DAIUSDT"
@@ -381,7 +428,20 @@ async def place_spot_order(
                 request_id=getattr(request.state, "request_id", None),
                 meta=meta,
             )
-            return {"success": True, "order": result}
+            _record_spot_order_tx_history(
+                request_body.account_id,
+                result if isinstance(result, dict) else {},
+                request_body.symbol,
+                request_body.side,
+            )
+            from app.services.transaction_history_file_store import get_public_revision
+
+            tx_rev = get_public_revision(request_body.account_id)
+            return {
+                "success": True,
+                "order": result,
+                "tx_revision": str(tx_rev.get("revision") or "0"),
+            }
         except ValueError as e:
             raise HTTPException(status_code=400, detail={"error": "VALIDATION_ERROR", "detail": str(e)})
     try:
@@ -481,12 +541,23 @@ async def place_spot_order(
                 request_id=getattr(request.state, "request_id", None),
                 meta=meta,
             )
+            order_payload = result if isinstance(result, dict) else {}
+            _record_spot_order_tx_history(
+                request_body.account_id,
+                order_payload,
+                request_body.symbol,
+                request_body.side,
+            )
             await invalidate_wallet_cache(request_body.account_id)
             await invalidate_open_orders_cache(request_body.account_id)
             await invalidate_account_cache_for_keys(keys)
+            from app.services.transaction_history_file_store import get_public_revision
+
+            tx_rev = get_public_revision(request_body.account_id)
             return {
                 "success": True,
-                "order": result
+                "order": result,
+                "tx_revision": str(tx_rev.get("revision") or "0"),
             }
     except AppErrorBase:
         raise

@@ -4,9 +4,9 @@ VERSION: v4
 DATE: 2026-01-22
 CHANGE: Fix delete_admin_account - handle missing financial_portfolios table gracefully
 """
-from fastapi import APIRouter, Depends, HTTPException, Query, Body
+from fastapi import APIRouter, Depends, HTTPException, Query, Body, Request
 from sqlalchemy.orm import Session
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 from datetime import datetime, date, timedelta, timezone
 from sqlalchemy import func, desc, or_
 from pydantic import BaseModel
@@ -23,6 +23,7 @@ import uuid
 import logging
 import asyncio
 import time
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,17 @@ logger = logging.getLogger(__name__)
 _admin_spot_balance_error_ts: Dict[int, float] = {}
 _admin_spot_balance_error_lock: Optional[asyncio.Lock] = None
 _ADMIN_SPOT_ERROR_THROTTLE_SEC = 300.0
+_ADMIN_ACCOUNTS_LIVE_CONCURRENCY = max(1, int(os.getenv("ADMIN_ACCOUNTS_LIVE_CONCURRENCY", "4")))
+_ADMIN_ACCOUNTS_FULL_CACHE_TTL_SEC = max(0.0, float(os.getenv("ADMIN_ACCOUNTS_FULL_CACHE_TTL_SEC", "15")))
+_admin_accounts_full_cache: Dict[str, tuple] = {}
+_admin_accounts_full_cache_lock: Optional[asyncio.Lock] = None
+
+
+def _get_admin_accounts_full_cache_lock() -> asyncio.Lock:
+    global _admin_accounts_full_cache_lock
+    if _admin_accounts_full_cache_lock is None:
+        _admin_accounts_full_cache_lock = asyncio.Lock()
+    return _admin_accounts_full_cache_lock
 
 
 def _get_admin_spot_balance_error_lock() -> asyncio.Lock:
@@ -99,6 +111,91 @@ async def _get_spot_balance_for_account(account_id: int, db: Session) -> tuple:
     return (total, status)
 
 
+def _get_lite_wallet_kpis(account_id: int, db: Session) -> tuple:
+    """Cached spot (AssetSnapshot) + bot locked USDT only — no live Binance."""
+    from app.botengine.virtual_wallet import get_bot_locked_balances_for_account
+
+    bot_locked_map = get_bot_locked_balances_for_account(db, account_id) or {}
+    bots_balance = float(bot_locked_map.get("USDT") or 0.0)
+    last_snap = (
+        db.query(AssetSnapshot)
+        .filter(AssetSnapshot.account_id == account_id)
+        .order_by(desc(AssetSnapshot.timestamp))
+        .first()
+    )
+    if last_snap and getattr(last_snap, "total_usd_value", None) is not None:
+        return (float(last_snap.total_usd_value), bots_balance, "cached")
+    return (0.0, bots_balance, "pending")
+
+
+async def _admin_fetch_live_row_kpis(account_id: int, acct_is_test: bool) -> Dict[str, Any]:
+    """Live wallet + bot KPI for one account (isolated DB session, safe for parallel gather)."""
+    from app.db.session import SessionLocal
+
+    t0 = time.perf_counter()
+    db = SessionLocal()
+    test_spot_kpi = None
+    spot_balance = 0.0
+    bot_locked_usd = 0.0
+    spot_balance_status = "error"
+    bot_raw: Dict[str, Any] = {}
+    try:
+        if acct_is_test:
+            from app.services.test_account_kpi import compute_test_account_dashboard_spot_kpi_async
+
+            test_spot_kpi = await compute_test_account_dashboard_spot_kpi_async(account_id, db)
+            spot_balance = float(test_spot_kpi.get("spot_strip_total_usd") or 0.0)
+            bot_locked_usd = float(test_spot_kpi.get("bot_locked_usd") or 0.0)
+            spot_balance_status = "ok"
+        else:
+            spot_balance, bot_locked_usd, spot_balance_status = await _get_account_wallet_strip_kpis(
+                account_id, db
+            )
+        from app.services.dashboard_snapshot import fetch_bots_and_account_kpis
+
+        bot_raw = await fetch_bots_and_account_kpis(account_id, db)
+    finally:
+        db.close()
+    wallet_ms = (time.perf_counter() - t0) * 1000.0
+    bot_kpi_error = None
+    if bot_raw.get("_error"):
+        bot_kpi_error = str(bot_raw.get("_error"))[:300]
+    return {
+        "spot_balance": spot_balance,
+        "bot_locked_usd": bot_locked_usd,
+        "spot_balance_status": spot_balance_status,
+        "test_spot_kpi": test_spot_kpi,
+        "bot_raw": bot_raw,
+        "wallet_ms": wallet_ms,
+        "wallet_error": spot_balance_status == "error",
+        "bot_kpi_error": bot_kpi_error,
+    }
+
+
+async def _admin_fetch_live_rows_parallel(
+    account_ids: List[int],
+    test_account_ids: set,
+) -> Dict[int, Dict[str, Any]]:
+    if not account_ids:
+        return {}
+    sem = asyncio.Semaphore(_ADMIN_ACCOUNTS_LIVE_CONCURRENCY)
+
+    async def _one(aid: int) -> tuple:
+        async with sem:
+            data = await _admin_fetch_live_row_kpis(aid, aid in test_account_ids)
+            return aid, data
+
+    out: Dict[int, Dict[str, Any]] = {}
+    results = await asyncio.gather(*[_one(aid) for aid in account_ids], return_exceptions=True)
+    for item in results:
+        if isinstance(item, Exception):
+            logger.warning("[Admin] parallel live row failed: %s", item)
+            continue
+        aid, data = item
+        out[aid] = data
+    return out
+
+
 router = APIRouter()
 
 
@@ -133,25 +230,42 @@ def _require_admin(current: dict = Depends(require_auth)) -> dict:
 
 @router.get("/admin/accounts")
 async def get_admin_accounts(
+    request: Request,
     current: dict = Depends(_require_admin),
     suspended: bool = False,
+    lite: bool = Query(False, description="Skip live Binance/bot KPI; use cached snapshot for faster list"),
     db: Session = Depends(get_db)
 ) -> Dict:
     """Get all accounts with metrics for admin panel
-    
+
     Args:
         suspended: If True, only return accounts with suspended users
+        lite: If True, skip live Binance wallet and bot KPI fetches (cached snapshot only)
     """
+    t0 = time.perf_counter()
+    request_id = getattr(getattr(request, "state", None), "request_id", None) or (
+        request.headers.get("X-Request-ID") or request.headers.get("X-Request-Id") or ""
+    )
+    admin_user_id = current.get("user_id")
+    cache_key = f"{admin_user_id}:{int(bool(suspended))}:{int(bool(lite))}"
+    if not lite and _ADMIN_ACCOUNTS_FULL_CACHE_TTL_SEC > 0:
+        now_cache = time.time()
+        async with _get_admin_accounts_full_cache_lock():
+            cached = _admin_accounts_full_cache.get(cache_key)
+            if cached and (now_cache - cached[0]) < _ADMIN_ACCOUNTS_FULL_CACHE_TTL_SEC:
+                return cached[1]
+    wallet_errors: List[int] = []
+    bot_kpi_errors: List[Dict] = []
+    slow_wallets: List[Dict] = []
+    row_errors: List[Dict] = []
+
     try:
         if suspended:
-            # Get accounts where user is suspended
             accounts = db.query(Account).join(User, Account.user_id == User.id).filter(
                 User.is_suspended == True,
                 or_(User.is_deleted == False, User.is_deleted.is_(None))
             ).all()
         else:
-            # Get all accounts (exclude suspended users from main list)
-            # Use left outer join to include accounts without users
             accounts = db.query(Account).outerjoin(User, Account.user_id == User.id).filter(
                 or_(
                     User.is_suspended == False,
@@ -160,83 +274,119 @@ async def get_admin_accounts(
                 )
             ).all()
     except Exception as e:
-        logger.error(f"[Admin] Error querying accounts: {e}")
-        return {"accounts": [], "totals": {"total_accounts": 0, "total_active_bots": 0, "total_bots_balance_usd": 0.0, "total_spot_balance_usd": 0.0}}
-    
-    accounts_list = []
+        logger.error(
+            "[Admin] Error querying accounts: %s request_id=%s",
+            e, request_id, exc_info=True,
+        )
+        return {
+            "accounts": [],
+            "totals": {
+                "total_accounts": 0,
+                "total_active_bots": 0,
+                "total_bots_balance_usd": 0.0,
+                "total_spot_balance_usd": 0.0,
+            },
+            "lite": lite,
+        }
+
+    accounts_list: List[Dict] = []
     total_active_bots = 0
     total_bots_balance_usd = 0.0
     total_spot_balance_usd = 0.0
-    
-    admin_user_id = current.get("user_id")
     today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-    try:
-        for account in accounts:
-            # Admin kendi hesabini hesap listesinde gosterme (tile olarak gorunmesin)
-            if admin_user_id is not None and account.user_id == admin_user_id:
-                continue
-            bots = db.query(Bot).filter(Bot.account_id == account.id).all()
+
+    from app.services.test_account import is_test_account
+
+    work_accounts = [
+        a for a in accounts
+        if not (admin_user_id is not None and a.user_id == admin_user_id)
+    ]
+    work_account_ids = [a.id for a in work_accounts]
+    bots_by_account: Dict[int, List] = {aid: [] for aid in work_account_ids}
+    if work_account_ids:
+        for bot in db.query(Bot).filter(Bot.account_id.in_(work_account_ids)).all():
+            bots_by_account.setdefault(bot.account_id, []).append(bot)
+
+    test_account_ids = {a.id for a in work_accounts if is_test_account(a.id, db)}
+
+    live_by_account: Dict[int, Dict[str, Any]] = {}
+    if not lite and work_account_ids:
+        live_by_account = await _admin_fetch_live_rows_parallel(work_account_ids, test_account_ids)
+        for aid, live in live_by_account.items():
+            if live.get("wallet_error"):
+                wallet_errors.append(aid)
+            if live.get("wallet_ms", 0) >= 2500:
+                slow_wallets.append({"account_id": aid, "wallet_ms": round(live["wallet_ms"])})
+            if live.get("bot_kpi_error"):
+                bot_kpi_errors.append({"account_id": aid, "error": live["bot_kpi_error"]})
+
+    for account in work_accounts:
+        try:
+            bots = bots_by_account.get(account.id, [])
             from app.services.bot_status_utils import count_admin_active_bots
 
             active_bots_count = count_admin_active_bots(bots)
 
-            from app.services.test_account import is_test_account
-
-            acct_is_test = is_test_account(account.id, db)
+            acct_is_test = account.id in test_account_ids
             test_spot_kpi = None
-            if acct_is_test:
+            if acct_is_test and lite:
                 from app.services.test_account_kpi import compute_test_account_dashboard_spot_kpi_async
 
                 test_spot_kpi = await compute_test_account_dashboard_spot_kpi_async(account.id, db)
                 spot_balance = float(test_spot_kpi.get("spot_strip_total_usd") or 0.0)
                 bot_locked_usd = float(test_spot_kpi.get("bot_locked_usd") or 0.0)
                 spot_balance_status = "ok"
+            elif lite:
+                spot_balance, bot_locked_usd, spot_balance_status = _get_lite_wallet_kpis(account.id, db)
             else:
-                spot_balance, bot_locked_usd, spot_balance_status = await _get_account_wallet_strip_kpis(
-                    account.id, db
-                )
+                live = live_by_account.get(account.id) or {}
+                test_spot_kpi = live.get("test_spot_kpi")
+                spot_balance = float(live.get("spot_balance") or 0.0)
+                bot_locked_usd = float(live.get("bot_locked_usd") or 0.0)
+                spot_balance_status = live.get("spot_balance_status") or "error"
+
             bots_balance = float(bot_locked_usd or 0.0)
 
-            # Günlük bot PnL + aktif bot (snapshot ile dashboard aynı bot listesi)
             daily_pnl_usd = 0.0
             daily_pnl_pct = 0.0
-            try:
-                from app.services.dashboard_snapshot import fetch_bots_and_account_kpis
-
-                bot_raw = await fetch_bots_and_account_kpis(account.id, db)
-                if not bot_raw.get("_error"):
-                    bots_array = bot_raw.get("bots") or []
-                    kpi_active = count_admin_active_bots(bots_array)
-                    if kpi_active > active_bots_count:
-                        active_bots_count = kpi_active
-                    daily_pnl_usd = float(bot_raw.get("daily_bot_pnl_usd_kpi") or 0)
-                    ak = bot_raw.get("account") or {}
-                    if ak.get("daily_bot_pnl_usd") is not None:
-                        daily_pnl_usd = float(ak.get("daily_bot_pnl_usd") or 0)
-                    daily_sum = sum(float(b.get("daily_pnl_usd") or 0) for b in bots_array)
-                    if abs(daily_sum) > 1e-6:
-                        daily_pnl_usd = daily_sum
-                    ref_sum = 0.0
-                    for b in bots_array:
-                        d_usd = float(b.get("daily_pnl_usd") or 0)
-                        d_pct = float(b.get("daily_pnl_pct") or 0)
-                        if abs(d_pct) > 1e-6:
-                            ref_sum += d_usd / (d_pct / 100.0)
-                    if ref_sum > 1e-9:
-                        daily_pnl_pct = daily_pnl_usd / ref_sum * 100.0
-                    elif bots_balance > abs(daily_pnl_usd) + 1e-6:
-                        ref_open = bots_balance - daily_pnl_usd
-                        daily_pnl_pct = (daily_pnl_usd / ref_open * 100.0) if ref_open > 1e-9 else 0.0
-            except Exception as bot_kpi_ex:
-                logger.warning("[Admin] fetch_bots_and_account_kpis account_id=%s: %s", account.id, bot_kpi_ex)
+            if not lite:
+                bot_raw = (live_by_account.get(account.id) or {}).get("bot_raw") or {}
+                try:
+                    if not bot_raw.get("_error"):
+                        bots_array = bot_raw.get("bots") or []
+                        kpi_active = count_admin_active_bots(bots_array)
+                        if kpi_active > active_bots_count:
+                            active_bots_count = kpi_active
+                        daily_pnl_usd = float(bot_raw.get("daily_bot_pnl_usd_kpi") or 0)
+                        ak = bot_raw.get("account") or {}
+                        if ak.get("daily_bot_pnl_usd") is not None:
+                            daily_pnl_usd = float(ak.get("daily_bot_pnl_usd") or 0)
+                        daily_sum = sum(float(b.get("daily_pnl_usd") or 0) for b in bots_array)
+                        if abs(daily_sum) > 1e-6:
+                            daily_pnl_usd = daily_sum
+                        ref_sum = 0.0
+                        for b in bots_array:
+                            d_usd = float(b.get("daily_pnl_usd") or 0)
+                            d_pct = float(b.get("daily_pnl_pct") or 0)
+                            if abs(d_pct) > 1e-6:
+                                ref_sum += d_usd / (d_pct / 100.0)
+                        if ref_sum > 1e-9:
+                            daily_pnl_pct = daily_pnl_usd / ref_sum * 100.0
+                        elif bots_balance > abs(daily_pnl_usd) + 1e-6:
+                            ref_open = bots_balance - daily_pnl_usd
+                            daily_pnl_pct = (daily_pnl_usd / ref_open * 100.0) if ref_open > 1e-9 else 0.0
+                except Exception as bot_kpi_ex:
+                    bot_kpi_errors.append({"account_id": account.id, "error": str(bot_kpi_ex)[:300]})
+                    logger.warning(
+                        "[Admin] bot KPI merge account_id=%s request_id=%s: %s",
+                        account.id, request_id, bot_kpi_ex,
+                    )
 
             total_active_bots += active_bots_count
-
             total_bots_balance_usd += bots_balance
             total_spot_balance_usd += spot_balance
             total_usd = bots_balance + spot_balance
-            
-            # Günlük cüzdan PnL: test = dashboard KPI strip; canlı = AssetSnapshot
+
             daily_wallet_pnl_usd = None
             daily_wallet_pnl_pct = None
             if acct_is_test and test_spot_kpi:
@@ -263,8 +413,7 @@ async def get_admin_accounts(
                             daily_wallet_pnl_pct = (daily_wallet_pnl_usd / ref_cuzdan * 100.0) if ref_cuzdan and ref_cuzdan > 0 else 0.0
                 except Exception:
                     pass
-            
-            # Get user info
+
             user_login_info = None
             user_logout_info = None
             user_username = None
@@ -295,7 +444,7 @@ async def get_admin_accounts(
                             user_logout_info = user.last_logout_at.isoformat() if hasattr(user.last_logout_at, 'isoformat') else str(user.last_logout_at)
                         user_is_suspended = user.is_suspended
                         user_id = user.id
-            
+
             if acct_is_test and spot_balance_status != "ok":
                 spot_balance_status = "ok"
 
@@ -334,19 +483,50 @@ async def get_admin_accounts(
                 "user_surname": user_surname,
                 "is_test_account": acct_is_test,
             })
-    except Exception as e:
-        logger.error(f"[Admin] Error processing account {account.id if 'account' in locals() else 'unknown'}: {e}", exc_info=True)
-        # Skip this account and continue with next
-        pass
-    
-    # Sort by active_bots desc, then total_usd desc
+        except Exception as e:
+            row_errors.append({"account_id": account.id, "error": str(e)[:400]})
+            logger.warning(
+                "[Admin] account row failed account_id=%s lite=%s request_id=%s error=%s",
+                account.id, lite, request_id, e, exc_info=True,
+            )
+
     try:
         accounts_list.sort(key=lambda x: (-x["active_bots"], -x["total_usd"]))
     except Exception as e:
-        logger.warning(f"[Admin] Error sorting accounts: {e}")
-    
+        logger.warning("[Admin] Error sorting accounts: %s request_id=%s", e, request_id)
+
+    duration_ms = (time.perf_counter() - t0) * 1000.0
+    log_level = logger.warning if duration_ms >= 3000 or wallet_errors or bot_kpi_errors or row_errors else logger.info
+    log_level(
+        "ADMIN_ACCOUNTS_LIST duration_ms=%.0f account_rows=%d query_total=%d lite=%s suspended=%s "
+        "wallet_errors=%s bot_kpi_error_count=%d slow_wallets=%s row_errors=%s request_id=%s admin_user_id=%s",
+        duration_ms,
+        len(accounts_list),
+        len(accounts),
+        lite,
+        suspended,
+        wallet_errors[:30],
+        len(bot_kpi_errors),
+        slow_wallets[:15],
+        row_errors[:10],
+        request_id,
+        admin_user_id,
+    )
+    if bot_kpi_errors:
+        logger.warning(
+            "ADMIN_ACCOUNTS_LIST bot_kpi_errors=%s request_id=%s",
+            json.dumps(bot_kpi_errors[:20], ensure_ascii=False),
+            request_id,
+        )
+    if row_errors:
+        logger.warning(
+            "ADMIN_ACCOUNTS_LIST row_errors=%s request_id=%s",
+            json.dumps(row_errors[:10], ensure_ascii=False),
+            request_id,
+        )
+
     try:
-        return {
+        payload = {
             "accounts": accounts_list,
             "totals": {
                 "total_accounts": len(accounts_list),
@@ -355,10 +535,19 @@ async def get_admin_accounts(
                 "total_spot_balance_usd": round(total_spot_balance_usd, 2),
                 "total_usd": round(total_bots_balance_usd + total_spot_balance_usd, 2),
                 "last_update_ts": datetime.utcnow().isoformat() + "Z"
-            }
+            },
+            "lite": lite,
         }
+        if not lite and _ADMIN_ACCOUNTS_FULL_CACHE_TTL_SEC > 0:
+            async with _get_admin_accounts_full_cache_lock():
+                _admin_accounts_full_cache[cache_key] = (time.time(), payload)
+                if len(_admin_accounts_full_cache) > 32:
+                    cutoff = time.time() - _ADMIN_ACCOUNTS_FULL_CACHE_TTL_SEC * 2
+                    for k in [x for x, v in _admin_accounts_full_cache.items() if v[0] < cutoff]:
+                        del _admin_accounts_full_cache[k]
+        return payload
     except Exception as e:
-        logger.error(f"[Admin] Error building response: {e}", exc_info=True)
+        logger.error("[Admin] Error building response: %s request_id=%s", e, request_id, exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 

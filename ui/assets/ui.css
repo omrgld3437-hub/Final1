@@ -2151,7 +2151,7 @@ body,
 .dashboard-appbar {
     position: -webkit-sticky;
     position: sticky;
-    top: 0;
+    top: var(--dashboard-ticker-height, 41px);
     z-index: 200;
     padding: 1rem 0;
     background: var(--ds-bg-secondary);

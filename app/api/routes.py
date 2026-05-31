@@ -97,6 +97,29 @@ async def api_log_error(
             is_admin=is_admin,
             level="error",
         )
+        import json as _json
+        _ctx_str = ""
+        try:
+            _ctx_str = _json.dumps(context, ensure_ascii=False, default=str)[:3500] if context else ""
+        except Exception:
+            _ctx_str = str(context)[:3500] if context else ""
+        _detail_str = (str(detail)[:1500] if detail is not None else "")
+        _req_id = (request.headers.get("X-Request-ID") or request.headers.get("X-Request-Id") or "")[:64]
+        logger.warning(
+            "ADMIN_PANEL_CLIENT_ERROR source=%s message=%s path=%s detail=%s context=%s "
+            "user_id=%s account_id=%s is_admin=%s ip=%s request_id=%s ua=%s",
+            source[:32],
+            message[:500],
+            path[:512],
+            _detail_str,
+            _ctx_str,
+            user_id,
+            account_id,
+            is_admin,
+            client_ip,
+            _req_id,
+            user_agent[:120] if user_agent else "",
+        )
         return {"ok": True}
     except Exception as e:
         import logging
@@ -275,7 +298,7 @@ async def get_account(
 
 
 def _parse_public_ip_response(text: str, is_json: bool = False) -> Optional[str]:
-    """Metin veya JSON yanıtından geçerli IPv4 adresini çıkarır."""
+    """Metin veya JSON yanıtından geçerli IPv4/IPv6 adresini çıkarır."""
     if not text or not isinstance(text, str):
         return None
     s = text.strip()
@@ -286,7 +309,6 @@ def _parse_public_ip_response(text: str, is_json: bool = False) -> Optional[str]
             return ip if ip and len(ip) <= 45 else None
         except (TypeError, ValueError):
             return None
-    # Düz metin: tek satır (IPv4 veya IPv6)
     if "\n" in s:
         s = s.split("\n")[0].strip()
     if s and len(s) <= 45 and all(c.isalnum() or c in ".:" for c in s):
@@ -295,56 +317,10 @@ def _parse_public_ip_response(text: str, is_json: bool = False) -> Optional[str]
 
 
 async def _fetch_server_public_ip() -> Optional[str]:
-    """Sunucunun internet dış IP'sini alır. Tüm servislere paralel istek; ilk başarılı cevabı döner."""
-    timeout = 5.0
+    """Önbellekli sunucu dış IP (startup keşfi + periyodik yenileme)."""
+    from app.services.server_public_ip import get_server_public_ip
 
-    async def try_ipify_json(client: httpx.AsyncClient) -> Optional[str]:
-        try:
-            r = await client.get("https://api.ipify.org?format=json")
-            if r.status_code == 200:
-                return _parse_public_ip_response(r.text, is_json=True)
-        except Exception:
-            pass
-        return None
-
-    async def try_ipify_text(client: httpx.AsyncClient) -> Optional[str]:
-        try:
-            r = await client.get("https://api.ipify.org?format=text")
-            if r.status_code == 200:
-                return _parse_public_ip_response(r.text, is_json=False)
-        except Exception:
-            pass
-        return None
-
-    async def try_ifconfig(client: httpx.AsyncClient) -> Optional[str]:
-        try:
-            r = await client.get("https://ifconfig.me/ip")
-            if r.status_code == 200:
-                return _parse_public_ip_response(r.text, is_json=False)
-        except Exception:
-            pass
-        return None
-
-    async def try_icanhazip(client: httpx.AsyncClient) -> Optional[str]:
-        try:
-            r = await client.get("https://icanhazip.com")
-            if r.status_code == 200:
-                return _parse_public_ip_response(r.text, is_json=False)
-        except Exception:
-            pass
-        return None
-
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        results = await asyncio.gather(
-            try_ipify_json(client),
-            try_ipify_text(client),
-            try_ifconfig(client),
-            try_icanhazip(client),
-        )
-    for ip in results:
-        if ip:
-            return ip
-    return None
+    return await get_server_public_ip()
 
 
 @router.get("/accounts/{account_id}/settings")
@@ -405,6 +381,8 @@ class SettingsUpdateBody(BaseModel):
     api_ip_whitelist: Optional[str] = None
     is_first_login: Optional[bool] = None
     isolate_from_admin: Optional[bool] = None
+    password: Optional[str] = None
+    new_password: Optional[str] = None
 
 
 @router.patch("/accounts/{account_id}/settings")
@@ -419,6 +397,14 @@ async def update_account_settings(
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
     require_account_access(current, account_id)
+    if body.password is not None or body.new_password is not None:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error_code": "PASSWORD_USE_AUTH_ENDPOINT",
+                "message": "Şifre değişikliği PATCH /settings ile yapılamaz. POST /api/auth/change-password kullanın.",
+            },
+        )
     try:
         if body.api_key is not None:
             account.api_key_enc = encrypt_account_api_key(account_id, body.api_key or "")

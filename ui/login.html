@@ -7,14 +7,19 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta name="theme-color" content="#020203">
     <meta name="referrer" content="strict-origin-when-cross-origin">
+    <style id="tt-scroll-critical">html,html*{scrollbar-width:none;-ms-overflow-style:none}html::-webkit-scrollbar,html *::-webkit-scrollbar{display:none;width:0!important;height:0!important;background:transparent}</style>
+    <script>document.documentElement.classList.add('tt-auto-scrollbar');</script>
+    <link rel="stylesheet" href="/ui/assets/scroll-auto-hide.css?v=8">
+    <script src="/ui/assets/scrollRestore.js?v=scroll-restore4"></script>
     <title>Giriş - TraderTrailing</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/ui/assets/theme.css?v=login2">
-    <link rel="stylesheet" href="/ui/assets/design.css?v=login2">
+    <link rel="stylesheet" href="/ui/assets/design.css?v=design-scroll8">
     <link rel="stylesheet" href="/ui/assets/login.css?v=zip-auth1">
-    <link rel="stylesheet" href="/ui/assets/login-zip-layout.css?v=zip-full27">
+    <link rel="stylesheet" href="/ui/assets/login-zip-layout.css?v=zip-flag2">
+    <script src="/ui/assets/scrollAutoHide.js?v=5"></script>
 </head>
 <body class="login-page login-page--zip">
     <script>window.__APP_PAGE__ = 'login';</script>
@@ -576,11 +581,6 @@
             stage.setAttribute('aria-hidden', overlay ? 'false' : 'true');
         }
         document.body.classList.toggle('login-modal-open', overlay);
-        if (overlay) {
-            document.body.style.overflow = 'hidden';
-        } else {
-            document.body.style.removeProperty('overflow');
-        }
     }
 
     function showZipWelcome() {

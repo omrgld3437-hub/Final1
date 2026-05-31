@@ -11,6 +11,29 @@ const API_BASE_URL = window.location.origin || 'http://127.0.0.1:8000';
 const DEFAULT_TIMEOUT = 15000; // 15s – dashboard/summary and account meta can be slow; avoid 499/timeout
 const RATE_LIMIT_TOAST_DEBOUNCE_MS = 30000;
 var _lastRateLimitToastAt = 0;
+const SERVER_DOWN_TOAST_KEY = 'tt-server-down';
+const SERVER_DOWN_TOAST_DEFAULT = 'Sunucuya bağlanılamıyor. Sunucu gelene kadar bekleniyor.';
+
+function showServerDownToast(message) {
+    if (typeof window.Toast === 'undefined') return;
+    var msg = message || SERVER_DOWN_TOAST_DEFAULT;
+    try {
+        if (typeof window.Toast.showPersistent === 'function') {
+            window.Toast.showPersistent(SERVER_DOWN_TOAST_KEY, msg, 'warning');
+        } else if (window.Toast.warning) {
+            window.Toast.warning(msg, 0);
+        }
+    } catch (e) { /* ignore */ }
+}
+
+function hideServerDownToast() {
+    if (typeof window.Toast === 'undefined') return;
+    try {
+        if (typeof window.Toast.dismiss === 'function') {
+            window.Toast.dismiss(SERVER_DOWN_TOAST_KEY);
+        }
+    } catch (e) { /* ignore */ }
+}
 
 /** FastAPI detail: object { message } or plain string. */
 function extractHttpDetailMessage(data) {
@@ -215,8 +238,34 @@ const MAX_TRACE_SIZE = 1000;
 
 // Sunucu geri gelince kontrol: 200 gelince toast göster, oturumu temizleme / login'e atma — kullanıcı hesapta kalsın
 var _serverBackCheckerTimer = null;
-function startServerBackChecker() {
+
+function markServerUnreachable() {
+    if (typeof window === 'undefined') return;
+    if (window.__TT_SERVER_UNREACHABLE__) return;
+    window.__TT_SERVER_UNREACHABLE__ = true;
+    try {
+        window.dispatchEvent(new CustomEvent('tt-server-unreachable', { detail: { unreachable: true } }));
+    } catch (e) { /* ignore */ }
+}
+
+function markServerReachable() {
+    if (typeof window === 'undefined') return;
+    if (!window.__TT_SERVER_UNREACHABLE__) return;
+    window.__TT_SERVER_UNREACHABLE__ = false;
+    hideServerDownToast();
+    try {
+        window.dispatchEvent(new CustomEvent('tt-server-unreachable', { detail: { unreachable: false } }));
+    } catch (e) { /* ignore */ }
+}
+
+function isServerUnreachable() {
+    return !!(typeof window !== 'undefined' && window.__TT_SERVER_UNREACHABLE__);
+}
+
+function startServerBackChecker(toastMessage) {
     if (typeof window.location === 'undefined' || (window.location.pathname || '').includes('/login')) return;
+    markServerUnreachable();
+    showServerDownToast(toastMessage);
     if (_serverBackCheckerTimer !== null) return;
     var interval = 2500;
     _serverBackCheckerTimer = setInterval(function () {
@@ -229,6 +278,7 @@ function startServerBackChecker() {
                 if (!data || data.ok !== true) return;
                 clearInterval(_serverBackCheckerTimer);
                 _serverBackCheckerTimer = null;
+                markServerReachable();
                 if (typeof window.Toast !== 'undefined' && window.Toast.success) {
                     try { window.Toast.success('Sunucu geldi. Bağlantı yenilendi.'); } catch (e) {}
                 }
@@ -376,6 +426,18 @@ async function apiClient(endpoint, options = {}) {
 
         // Check for backend error standard
         if (!response.ok) {
+            // 499: istemci isteği iptal etti (yenileme, navigasyon) — fatal değil
+            if (response.status === 499) {
+                throw new APIError({
+                    status: 499,
+                    error_code: 'CLIENT_DISCONNECT',
+                    error_id: null,
+                    request_id: requestId,
+                    message: (typeof data === 'object' && data && (data.detail || data.message)) || 'client_disconnect',
+                    url,
+                    method
+                });
+            }
             // 401: only SESSION_NOT_FOUND = session invalid (logout/redirect). UNAUTHORIZED/missing_token = request had no token, do NOT clear session (e.g. prefetch without cookie).
             if (response.status === 401) {
                 var body = data;
@@ -414,10 +476,9 @@ async function apiClient(endpoint, options = {}) {
                 var detailObj = data?.detail && typeof data.detail === 'object' ? data.detail : null;
                 var msg = detailObj?.message || (typeof data?.detail === 'string' ? data.detail : null) || data?.message
                     || (response.status === 503 ? 'Sunucu erişime kapalı.' : (response.status === 504 ? 'Sunucu yanıt vermiyor.' : 'Sunucu kapalı veya erişilemiyor.'));
-                if (typeof window.Toast !== 'undefined' && window.Toast.warning) {
-                    try { window.Toast.warning(msg); } catch (e) {}
-                }
                 if (response.status !== 503 || !detailObj?.error_code) {
+                    startServerBackChecker(msg);
+                } else {
                     startServerBackChecker();
                 }
                 var code = detailObj?.error_code || (response.status === 503 ? 'SERVICE_UNAVAILABLE' : (response.status === 504 ? 'GATEWAY_TIMEOUT' : 'BAD_GATEWAY'));
@@ -569,13 +630,12 @@ async function apiClient(endpoint, options = {}) {
                 });
             }
 
-            // APIError: 5xx / ağ hatası → toast + sunucu geri gelince kontrol
+            // APIError: 5xx / ağ hatası → sunucu geri gelince kontrol (toast debounce startServerBackChecker içinde)
             if (error instanceof APIError) {
                 var s = error.status || 0;
-                if (s === 502 || s === 503 || s === 504 || s === 0) {
-                    if (typeof window.Toast !== 'undefined' && window.Toast.warning) {
-                        try { window.Toast.warning('Sunucuya bağlanılamıyor. Sunucu gelene kadar bekleniyor.'); } catch (e) {}
-                    }
+                if (s === 502 || s === 503 || s === 504) {
+                    startServerBackChecker();
+                } else if (s === 0 && String(error.error_code || '').toUpperCase() === 'NETWORK_ERROR') {
                     startServerBackChecker();
                 } else if (s >= 500 && s < 600) {
                     if (typeof window.showMaintenanceScreen === 'function') window.showMaintenanceScreen();
@@ -583,10 +643,7 @@ async function apiClient(endpoint, options = {}) {
                 throw error;
             }
 
-            // Ağ hatası (sunucu kapalı) → toast + sunucu geri gelince kontrol
-            if (typeof window.Toast !== 'undefined' && window.Toast.warning) {
-                try { window.Toast.warning('Sunucuya bağlanılamıyor. Sunucu gelene kadar bekleniyor.'); } catch (e) {}
-            }
+            // Ağ hatası (sunucu kapalı)
             startServerBackChecker();
             throw new APIError({
                 status: 0,
@@ -623,6 +680,7 @@ apiClient.hasToken = function () {
 };
 apiClient.clearAuthAndBroadcast = clearAuthAndBroadcast;
 apiClient.redirectToLoginOnce = redirectToLoginOnce;
+apiClient.getPublicConfigAsync = getPublicConfigAsync;
 
 // Debug function to dump network statistics
 window.dumpNetStats = function() {
@@ -643,3 +701,6 @@ window.dumpNetStats = function() {
 // Export
 window.apiClient = apiClient;
 window.APIError = APIError;
+window.isServerUnreachable = isServerUnreachable;
+window.markServerUnreachable = markServerUnreachable;
+window.markServerReachable = markServerReachable;

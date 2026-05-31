@@ -1,0 +1,83 @@
+/*
+ * Overlay scrollbar — native tamamen gizli, layout kayması yok.
+ * Thumb: scrollAutoHide.js → #tt-scroll-overlay
+ * html seçicisi: CSS yüklenmeden önce FOUC önleme (tt-auto-scrollbar sınıfı şart değil)
+ */
+
+html,
+html.tt-auto-scrollbar {
+    scrollbar-gutter: auto;
+}
+
+html,
+html.tt-auto-scrollbar,
+html *,
+html.tt-auto-scrollbar * {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+}
+
+html::-webkit-scrollbar,
+html.tt-auto-scrollbar::-webkit-scrollbar,
+html *::-webkit-scrollbar,
+html.tt-auto-scrollbar *::-webkit-scrollbar {
+    display: none;
+    width: 0 !important;
+    height: 0 !important;
+    background: transparent;
+}
+
+html::-webkit-scrollbar-thumb,
+html.tt-auto-scrollbar::-webkit-scrollbar-thumb,
+html *::-webkit-scrollbar-thumb,
+html.tt-auto-scrollbar *::-webkit-scrollbar-thumb,
+html::-webkit-scrollbar-track,
+html.tt-auto-scrollbar::-webkit-scrollbar-track,
+html *::-webkit-scrollbar-track,
+html.tt-auto-scrollbar *::-webkit-scrollbar-track {
+    display: none;
+    background: transparent;
+}
+
+#tt-scroll-overlay {
+    position: fixed;
+    top: 0;
+    right: 0;
+    width: 6px;
+    height: 100%;
+    padding: 3px 2px 3px 0;
+    box-sizing: border-box;
+    pointer-events: none;
+    z-index: 2147483000;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.22s ease, visibility 0.22s ease;
+}
+
+#tt-scroll-overlay.is-visible {
+    opacity: 1;
+    visibility: visible;
+}
+
+#tt-scroll-overlay .tt-scroll-overlay__thumb {
+    position: absolute;
+    right: 2px;
+    width: 4px;
+    min-height: 32px;
+    border-radius: 999px;
+    background: rgba(201, 162, 39, 0.55);
+    box-shadow: 0 0 0 1px rgba(26, 29, 36, 0.45);
+    transition: background 0.15s ease;
+}
+
+#tt-scroll-overlay.is-visible .tt-scroll-overlay__thumb:hover {
+    background: rgba(228, 192, 74, 0.78);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    #tt-scroll-overlay {
+        opacity: 0.85;
+        visibility: visible;
+        transition: none;
+    }
+}

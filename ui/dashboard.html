@@ -10,7 +10,34 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
     <meta name="robots" content="noindex, follow">
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <style id="tt-scroll-critical">html,html*{scrollbar-width:none;-ms-overflow-style:none}html::-webkit-scrollbar,html *::-webkit-scrollbar{display:none;width:0!important;height:0!important;background:transparent}</style>
+    <script>document.documentElement.classList.add('tt-auto-scrollbar');</script>
+    <link rel="stylesheet" href="/ui/assets/scroll-auto-hide.css?v=8">
     <script>window.__APP_PAGE__ = 'dashboard';</script>
+    <script>
+    window.__TT_SCROLL_SCOPE_FN__ = function () {
+        var q = new URLSearchParams(location.search);
+        var parts = [];
+        var ac = q.get('account_code');
+        var aid = q.get('account_id');
+        if (!ac && !aid) {
+            try {
+                ac = localStorage.getItem('selectedAccountCode');
+                aid = localStorage.getItem('selectedAccountId');
+            } catch (e) {}
+        }
+        if (ac) parts.push('ac=' + ac);
+        else if (aid) parts.push('aid=' + aid);
+        var tab = q.get('tab');
+        if (!tab) {
+            try { tab = localStorage.getItem('dashboard_active_tab'); } catch (e) {}
+        }
+        if (tab) parts.push('tab=' + tab);
+        return parts.join('&');
+    };
+    window.__TT_SCROLL_NO_AUTO_FINALIZE__ = true;
+    </script>
+    <script src="/ui/assets/scrollRestore.js?v=scroll-restore5"></script>
     <script>
     (function(){
       var r = document.documentElement;
@@ -58,14 +85,15 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
     })();
     </script>
     <title>Dashboard - TraderTrailing</title>
-    <link rel="stylesheet" href="/ui/assets/ticker.css?v=mobile1">
+    <link rel="stylesheet" href="/ui/assets/ticker.css?v=static-fx1">
     <link rel="stylesheet" href="/ui/assets/theme.css?v=clean1">
     <link rel="stylesheet" href="/ui/assets/ui.css?v=clean1">
-    <link rel="stylesheet" href="/ui/assets/design.css?v=clean1">
-    <link rel="stylesheet" href="/ui/assets/dashboard.css?v=varliklar-antiflicker1">
+    <link rel="stylesheet" href="/ui/assets/design.css?v=design-scroll8">
+    <link rel="stylesheet" href="/ui/assets/dashboard.css?v=wallet-th-bot1">
     <link rel="stylesheet" href="/ui/assets/binance-colors.css?v=bin1">
     <link rel="stylesheet" href="/ui/assets/blink.css?v=1">
-    <link rel="stylesheet" href="/ui/assets/dashboard-login-theme.css?v=1">
+    <link rel="stylesheet" href="/ui/assets/dashboard-login-theme.css?v=dm-tabs-appbar1">
+    <script src="/ui/assets/scrollAutoHide.js?v=5"></script>
     <style id="chat-animations">
         /* Sohbet: Admin yazıyor + mesaj giriş animasyonu */
         #chatMessages .chat-typing-bubble {
@@ -117,9 +145,10 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
     </style>
 </head>
 <body class="binance-theme page-dashboard">
+    <script>(function(){var s=window.TtScrollRestore;if(s&&s.forceUnlock)s.forceUnlock();})();</script>
     <div id="topTicker" class="top-ticker"></div>
     
-    <!-- Appbar: sayfa genişliği (container) ile hizalı; sol = isim, orta = çıkış, sağ = WS + logo -->
+    <!-- Appbar: sol = kullanıcı, orta = WS + logo -->
     <div class="dashboard-appbar">
         <div class="dashboard-appbar-inner">
             <div class="dashboard-appbar-left">
@@ -132,12 +161,13 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
                 </button>
                 <a id="adminLink" class="btn-admin-back" href="/ui/admin.html" style="display: none;" title="Admin paneline dön">← Admin'e dön</a>
             </div>
-            <div class="dashboard-appbar-right appbar-company" style="display: flex; align-items: center; gap: 0.5rem;">
+            <div class="dashboard-appbar-center appbar-company">
                 <span id="datahubWsIndicator" class="datahub-ws-indicator" title="Piyasa verisi WebSocket durumu" aria-label="WS durumu">
                     <span class="datahub-ws-dot"></span><span class="datahub-ws-label">WS</span>
                 </span>
                 <span class="tt-logo-text">TraderTrailing</span>
             </div>
+            <div class="dashboard-appbar-right" aria-hidden="true"></div>
         </div>
     </div>
     <script>
@@ -448,36 +478,37 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
             </script>
 
             <!-- Cüzdan varlıkları tablosu (1 USD üstü, Al/Sat ortak modal) -->
-            <div class="panel binance-varliklar-panel">
-                <div class="binance-varliklar-panel__top">
-                    <div class="binance-varliklar-panel__title-row">
-                        <h3 class="binance-varliklar-panel__title">Cüzdan Varlıkları</h3>
-                        <div class="binance-varliklar-panel__meta" id="binanceVarliklarPanelMeta">
-                            <span id="bnWalletLiveBadge" class="binance-varliklar-panel__live kpi-value-sub kpi-spot-status" hidden></span>
-                            <span id="bnAssetsStaleBadge" class="binance-varliklar-panel__badge binance-varliklar-panel__badge--stale" hidden>Güncel değil</span>
-                            <span id="flashHomeUpdatingBadge" class="binance-varliklar-panel__badge binance-varliklar-panel__badge--updating" hidden aria-hidden="true">Güncelleniyor…</span>
-                        </div>
+            <div class="panel binance-varliklar-panel mevcut-botlar-panel">
+                <div class="mevcut-botlar-panel-header binance-varliklar-panel__top">
+                    <div class="mevcut-botlar-panel-header-left">
+                        <h3 class="mevcut-botlar-panel-title binance-varliklar-panel__title">Cüzdan Varlıkları</h3>
+                        <p class="binance-varliklar-panel__hint">Spot bakiye · 1 USDT altı gizli</p>
                     </div>
-                    <p class="binance-varliklar-panel__hint">Spot bakiye · 1 USDT altı gizli</p>
+                    <div class="binance-varliklar-panel__meta" id="binanceVarliklarPanelMeta">
+                        <span id="bnWalletLiveBadge" class="binance-varliklar-panel__live kpi-value-sub kpi-spot-status" hidden></span>
+                        <span id="bnAssetsStaleBadge" class="binance-varliklar-panel__badge binance-varliklar-panel__badge--stale" hidden>Güncel değil</span>
+                        <span id="flashHomeUpdatingBadge" class="binance-varliklar-panel__badge binance-varliklar-panel__badge--updating" hidden aria-hidden="true">Güncelleniyor…</span>
+                    </div>
                 </div>
                 <div id="flashHomeWalletContent" class="binance-varliklar-panel__body">
-                    <div class="varliklar-table-wrap">
-                        <table class="varliklar-table varliklar-table--wallet" aria-label="Cüzdan varlıkları">
+                    <div class="varliklar-table-wrap mevcut-botlar-table-wrap">
+                        <table class="binance-assets-table mevcut-botlar-table varliklar-table varliklar-table--wallet" aria-label="Cüzdan varlıkları">
                             <colgroup>
                                 <col class="varliklar-col varliklar-col--asset" />
-                                <col class="varliklar-col varliklar-col--data" span="6" />
+                                <col class="varliklar-col varliklar-col--price" />
+                                <col class="varliklar-col varliklar-col--data" span="5" />
                                 <col class="varliklar-col varliklar-col--act" />
                             </colgroup>
                             <thead>
                                 <tr>
-                                    <th scope="col" class="varliklar-th varliklar-th--asset">Varlık</th>
-                                    <th scope="col" class="varliklar-th varliklar-th--num">Fiyat</th>
-                                    <th scope="col" class="varliklar-th varliklar-th--num">Toplam</th>
-                                    <th scope="col" class="varliklar-th varliklar-th--num">Bot kilitli</th>
-                                    <th scope="col" class="varliklar-th varliklar-th--num">Kilitli</th>
-                                    <th scope="col" class="varliklar-th varliklar-th--num">Kullanılabilir</th>
-                                    <th scope="col" class="varliklar-th varliklar-th--num">Değer</th>
-                                    <th scope="col" class="varliklar-th varliklar-th--act">Al / Sat</th>
+                                    <th scope="col" class="col-symbol col-left">Varlık</th>
+                                    <th scope="col" class="col-price col-center">Fiyat</th>
+                                    <th scope="col" class="col-center">Toplam</th>
+                                    <th scope="col" class="col-center">Bot kilitli</th>
+                                    <th scope="col" class="col-center">Kilitli</th>
+                                    <th scope="col" class="col-center">Kullanılabilir</th>
+                                    <th scope="col" class="col-center">Değer</th>
+                                    <th scope="col" class="col-action col-center">Al / Sat</th>
                                 </tr>
                             </thead>
                             <tbody id="varliklarTableBody">
@@ -489,15 +520,18 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
                 </div>
             </div>
 
-            <!-- Mevcut Botlar (Anasayfa önizleme; + Bot Oluştur yalnızca Botlar sekmesinde) -->
+            <!-- Mevcut Botlar (Binance sekmesi) -->
             <div class="panel mevcut-botlar-panel" style="margin-bottom: 2rem; margin-top: 2rem; width: 100%; max-width: 100%;">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
-                    <h3 style="margin: 0; font-size: 1.2rem; font-weight: 600; color: var(--ds-text-primary);">Mevcut Botlar</h3>
-                    <button type="button" id="btnSortBotsBy" class="btn btn-sm profit-sort-btn" title="Kâra göre sırala: oran (%) veya tutar ($)" aria-label="Kâra göre sırala">
-                        <span id="btnSortBotsByIcon" aria-hidden="true">⇅</span>
+                <div class="mevcut-botlar-panel-header">
+                    <div class="mevcut-botlar-panel-header-left">
+                        <h3 class="mevcut-botlar-panel-title">Mevcut Botlar</h3>
+                        <button type="button" class="btn mevcut-botlar-create-btn" id="btnCreateBotBinanceTab" onclick="window.openCreateBotModal()">+ Bot Oluştur</button>
+                    </div>
+                    <button type="button" id="btnSortBotsBy" class="btn btn-sm profit-sort-btn profit-sort-best" title="En kârlı üstte. Tıkla: en zararda olana göre sırala" aria-label="Kâra göre sırala">
+                        <span id="btnSortBotsByIcon" aria-hidden="true">↑</span>
                     </button>
                 </div>
-                <div id="financeBotsList" class="mevcut-botlar-list" style="display: flex; flex-direction: column; gap: 0; width: 100%;"></div>
+                <div id="financeBotsList" class="mevcut-botlar-list"></div>
             </div>
 
             <!-- En İyi 5 Bot: tüm kullanıcılar, yalnızca aktif (running) kârdaki botlar -->
@@ -639,19 +673,17 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
 
         <!-- Tab Content: Botlar (Bot oluştur + Mevcut Botlar) -->
         <div id="tabBots" class="dm-tab-content" style="display: none;">
-            <div style="display: flex; justify-content: flex-end; align-items: center; margin-bottom: 1rem; width: 100%;">
-                <button type="button" class="btn primary" id="btnCreateBotBotsTab" onclick="window.openCreateBotModal()" style="padding: 8px 16px; font-weight: 600; background: var(--ds-accent); color: #000;">+ Bot Oluştur</button>
-            </div>
             <div class="panel mevcut-botlar-panel" style="margin-bottom: 2rem; margin-top: 0; width: 100%; max-width: 100%;">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
-                    <h3 style="margin: 0; font-size: 1.2rem; font-weight: 600; color: var(--ds-text-primary);">Mevcut Botlar</h3>
-                    <button type="button" id="btnSortBotsByBotsTab" class="btn btn-sm profit-sort-btn" title="Kâra göre sırala: oran (%) veya tutar ($)" aria-label="Kâra göre sırala">
-                        <span id="btnSortBotsByBotsTabIcon" aria-hidden="true">⇅</span>
+                <div class="mevcut-botlar-panel-header">
+                    <div class="mevcut-botlar-panel-header-left">
+                        <h3 class="mevcut-botlar-panel-title">Mevcut Botlar</h3>
+                        <button type="button" class="btn mevcut-botlar-create-btn" id="btnCreateBotBotsTab" onclick="window.openCreateBotModal()">+ Bot Oluştur</button>
+                    </div>
+                    <button type="button" id="btnSortBotsByBotsTab" class="btn btn-sm profit-sort-btn profit-sort-best" title="En kârlı üstte. Tıkla: en zararda olana göre sırala" aria-label="Kâra göre sırala">
+                        <span id="btnSortBotsByBotsTabIcon" aria-hidden="true">↑</span>
                     </button>
                 </div>
-                <div id="financeBotsListBots" class="mevcut-botlar-list" style="display: flex; flex-direction: column; gap: 0; width: 100%;">
-                    <div style="text-align: center; padding: 2rem; color: var(--ds-text-secondary);">Yükleniyor...</div>
-                </div>
+                <div id="financeBotsListBots" class="mevcut-botlar-list"></div>
             </div>
 
             <!-- En İyi 5 Bot (Anasayfa ile aynı veri) -->
@@ -743,7 +775,7 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
 
         <!-- Tab Content: İletişim (Yönetim ile mesajlaşma) -->
         <div id="tabContact" class="dm-tab-content" style="display: none;">
-            <div style="display: flex; justify-content: center; align-items: flex-start; width: 100%; padding: 2rem 0;">
+            <div class="tab-contact-layout">
                 <div class="panel" style="max-width: 560px; width: 100%; text-align: center;">
                     <h2 style="margin: 0 0 1rem 0; font-size: 1.25rem; font-weight: 600; color: var(--ds-text-primary);">Yönetim ile İletişim</h2>
                     <p style="margin: 0 0 1.25rem 0; font-size: 0.95rem; color: var(--ds-text-secondary); line-height: 1.5;">Yönetim ekibiyle güvenli mesajlaşma. Soru ve taleplerinizi buradan iletebilirsiniz; mesaj geçmişi saklanır.</p>
@@ -841,7 +873,7 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
 
         <!-- Mobil Trade görünümü: coin ara + favori coinler, seçince alım satım modalı açılır (sadece mobilde) -->
         <div id="mobileTradeView" class="mobile-trade-view dm-tab-content" style="display: none;">
-            <h3 style="margin: 0 0 0.75rem 0; font-size: 1.2rem; font-weight: 600; color: var(--ds-text-primary);">İşlem</h3>
+            <h3 class="mobile-trade-view__title">İşlem</h3>
             <div class="coin-list-search-wrap" style="position: relative; width: 100%; max-width: 100%; margin-bottom: 1rem;" role="search">
                 <input type="search" id="mobileTradeSearchInput" class="form-input" placeholder="BTCUSDT, XRP/ETH, SOL BTC… ara" autocomplete="off" style="width: 100%; padding: 0.6rem 1rem;" aria-label="Coin ara" />
                 <div id="mobileTradeSearchDropdown" class="coin-list-search-dropdown" style="display: none; position: absolute; left: 0; right: 0; top: 100%; margin-top: 4px; max-height: 280px; overflow-y: auto; background: var(--ds-bg-panel); border: 1px solid var(--ds-border); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.3); z-index: 100;"></div>
@@ -1007,10 +1039,10 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
                             Miktar: <span id="bnTradeTotalValueAmount" style="color: var(--ds-text-primary); font-weight: 600;">0.00000000</span>
                         </div>
                         <div id="bnTradeTotalPercentButtons" class="bn-trade-percent-btns">
-                            <button class="btn-mini ghost" onclick="setTradePercent(25)">25%</button>
-                            <button class="btn-mini ghost" onclick="setTradePercent(50)">50%</button>
-                            <button class="btn-mini ghost" onclick="setTradePercent(75)">75%</button>
-                            <button class="btn-mini ghost" onclick="setTradePercent(100)">100%</button>
+                            <button type="button" class="btn-mini" onclick="setTradePercent(25)">25%</button>
+                            <button type="button" class="btn-mini" onclick="setTradePercent(50)">50%</button>
+                            <button type="button" class="btn-mini" onclick="setTradePercent(75)">75%</button>
+                            <button type="button" class="btn-mini" onclick="setTradePercent(100)">100%</button>
                         </div>
                     </div>
 
@@ -1026,11 +1058,11 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
                         <div id="bnTradeQuantityValue" style="margin-top: 4px; font-size: 0.8rem; color: var(--ds-text-secondary); display: none;">
                             Tutar: <span id="bnTradeQuantityValueAmount" style="color: var(--ds-text-primary); font-weight: 600;">0.00000000</span>
                         </div>
-                        <div id="bnTradeQuantityPercentButtons" style="display: flex; gap: 4px; margin-top: 0.5rem;">
-                            <button class="btn-mini ghost" onclick="setTradePercent(25)">25%</button>
-                            <button class="btn-mini ghost" onclick="setTradePercent(50)">50%</button>
-                            <button class="btn-mini ghost" onclick="setTradePercent(75)">75%</button>
-                            <button class="btn-mini ghost" onclick="setTradePercent(100)">100%</button>
+                        <div id="bnTradeQuantityPercentButtons" class="bn-trade-percent-btns">
+                            <button type="button" class="btn-mini" onclick="setTradePercent(25)">25%</button>
+                            <button type="button" class="btn-mini" onclick="setTradePercent(50)">50%</button>
+                            <button type="button" class="btn-mini" onclick="setTradePercent(75)">75%</button>
+                            <button type="button" class="btn-mini" onclick="setTradePercent(100)">100%</button>
                         </div>
                     </div>
                 </div>
@@ -1999,8 +2031,8 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
     <!-- Core infrastructure (must load first) -->
     <script src="/ui/assets/utils/trTime.js?v=1"></script>
     <script src="/ui/assets/js/maintenanceOverlay.js?v=1"></script>
-    <script src="/ui/assets/core/apiClient.js?v=429-toast-fix1"></script>
-    <script src="/ui/assets/core/errorReporter.js?v=refactor1"></script>
+    <script src="/ui/assets/core/apiClient.js?v=server-down-toast-persist1"></script>
+    <script src="/ui/assets/core/errorReporter.js?v=csrf-log-error1"></script>
     <script src="/ui/assets/core/intervalRegistry.js?v=refactor1"></script>
     <!-- Stores -->
     <script src="/ui/assets/stores/marketStore.js?v=refactor2"></script>
@@ -2014,17 +2046,18 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
     <script src="/ui/assets/services/financeService.js?v=refactor1"></script>
     <!-- Legacy API (kept for compatibility, will be phased out) -->
     <script src="/ui/assets/api.js?v=clean1"></script>
-    <script src="/ui/assets/components.js?v=clean1"></script>
+    <script src="/ui/assets/components.js?v=toast-persistent1"></script>
     <!-- DEPRECATED: BinanceMarketData - will be disabled -->
     <!-- <script src="/ui/assets/binanceMarketData.js?v=1.0&nocache=202601230000"></script> -->
     <script src="/ui/assets/spot_engine.js?v=1.0&nocache=202601222350"></script>
     <script src="/ui/assets/utils/coinLogo.js?v=1"></script>
+    <script src="/ui/assets/utils/botHealthAlerts.js?v=27"></script>
     <!-- Flash Home (Patch H). Deploy ui/assets/ so storageCache, renderHome, homeFlash exist (else 404). -->
     <script src="/ui/assets/storageCache.js?v=flash1"></script>
     <script src="/ui/assets/renderHome.js?v=wallet-stable6"></script>
-    <script src="/ui/assets/homeFlash.js?v=clock-drift-kpi2"></script>
+    <script src="/ui/assets/homeFlash.js?v=wallet-inflight-poll1"></script>
     <!-- Main dashboard (refactored) -->
-    <script src="/ui/assets/dashboard.js?v=api-unauth-kpi1"></script>
-    <script src="/ui/assets/ticker.js?v=mobile1" defer></script>
+    <script src="/ui/assets/dashboard.js?v=wallet-status-fix1"></script>
+    <script src="/ui/assets/ticker.js?v=chg-pct1" defer></script>
 </body>
 </html>

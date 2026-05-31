@@ -89,8 +89,51 @@ h1, h2, h3, h4 {
 /* Mevcut Botlar – tam satır, tablo tam genişlik */
 .page-dashboard .mevcut-botlar-panel {
     box-sizing: border-box;
+    margin-top: 0;
+    margin-bottom: 0;
+    width: 100%;
+    max-width: 100%;
+}
+.page-dashboard .mevcut-botlar-panel-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+}
+.page-dashboard .mevcut-botlar-panel-header-left {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    min-width: 0;
+}
+.page-dashboard .mevcut-botlar-panel-title {
+    margin: 0;
+    font-size: 1.2rem;
+    font-weight: 600;
+    color: var(--ds-text-primary);
+}
+.page-dashboard .mevcut-botlar-create-btn {
+    padding: 0.35rem 0.85rem;
+    font-size: 0.8rem;
+    font-weight: 600;
+    line-height: 1.2;
+    background: transparent;
+    color: var(--ds-accent, #f0b90b);
+    border: 2px solid var(--ds-accent, #f0b90b);
+    border-radius: 8px;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+.page-dashboard .mevcut-botlar-create-btn:hover {
+    background: rgba(240, 185, 11, 0.1);
+    color: var(--ds-accent-hover, #f8c622);
+    border-color: var(--ds-accent-hover, #f8c622);
 }
 .page-dashboard .mevcut-botlar-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
     min-width: 0;
 }
 .page-dashboard .mevcut-botlar-table-wrap {
@@ -100,23 +143,37 @@ h1, h2, h3, h4 {
 .page-dashboard .mevcut-botlar-table {
     width: 100% !important;
     table-layout: fixed;
-    border-collapse: collapse;
 }
-.page-dashboard .mevcut-botlar-table col.mevcut-botlar-col {
-    width: 12.5%;
-}
+.page-dashboard .mevcut-botlar-table col.mevcut-botlar-col-symbol { width: 13%; }
+.page-dashboard .mevcut-botlar-table col.mevcut-botlar-col-price { width: 11%; }
+.page-dashboard .mevcut-botlar-table col.mevcut-botlar-col-status { width: 11%; }
+.page-dashboard .mevcut-botlar-table col.mevcut-botlar-col-budget { width: 10%; }
+.page-dashboard .mevcut-botlar-table col.mevcut-botlar-col-balance { width: 10%; }
+.page-dashboard .mevcut-botlar-table col.mevcut-botlar-col-pnl { width: 13%; }
+.page-dashboard .mevcut-botlar-table col.mevcut-botlar-col-tur { width: 7%; }
+.page-dashboard .mevcut-botlar-table col.mevcut-botlar-col-action { width: 10%; }
 .page-dashboard .mevcut-botlar-table.binance-assets-table thead th,
 .page-dashboard .mevcut-botlar-table.binance-assets-table tbody td {
-    padding: 12px 6px;
     vertical-align: middle;
     box-sizing: border-box;
     font-variant-numeric: tabular-nums;
-    text-align: center;
     overflow: hidden;
     text-overflow: ellipsis;
-}
-.page-dashboard .mevcut-botlar-table.binance-assets-table thead th {
     text-align: center;
+    padding: 0 3px;
+}
+.page-dashboard .mevcut-botlar-table thead th {
+    color: var(--ds-text-secondary);
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+    line-height: 1.25;
+    padding: 0.55rem 3px;
+    background: transparent !important;
+    border: none !important;
+    border-bottom: none !important;
 }
 .page-dashboard .mevcut-botlar-table .col-left {
     text-align: left;
@@ -127,33 +184,19 @@ h1, h2, h3, h4 {
 .page-dashboard .mevcut-botlar-table .col-center {
     text-align: center;
 }
-.page-dashboard .mevcut-botlar-table thead th {
-    color: var(--ds-text-secondary);
-    font-size: 0.7rem;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.03em;
-    white-space: normal;
-    line-height: 1.25;
-    hyphens: auto;
-}
-.page-dashboard .mevcut-botlar-table tbody tr {
-    display: table-row;
-    width: 100%;
-}
 .page-dashboard .mevcut-botlar-table .col-symbol {
     text-align: left;
-    padding-left: 12px;
-    padding-right: 8px;
+    padding-left: 0.65rem;
+    padding-right: 4px;
 }
 .page-dashboard .mevcut-botlar-table thead th.col-symbol {
     text-align: left;
-    padding-left: 12px;
+    padding-left: 0.65rem;
 }
 .page-dashboard .mevcut-botlar-table .col-symbol a.mevcut-bot-symbol-link {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 12px;
     justify-content: flex-start;
     width: 100%;
     max-width: 100%;
@@ -224,29 +267,91 @@ h1, h2, h3, h4 {
 .page-dashboard .mevcut-botlar-price-cell .finance-bot-live-price,
 .page-dashboard .mevcut-botlar-price-cell .mevcut-bot-portfolio-balance {
     display: inline-block;
-    text-align: center;
-    padding: 2px 5px;
-    border-radius: 3px;
+    width: 6.5rem;
+    max-width: 100%;
+    padding: 0.2rem 0.55rem;
+    border-radius: 6px;
     box-sizing: border-box;
     vertical-align: middle;
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+    font-size: 0.75rem;
+    letter-spacing: 0;
+    white-space: nowrap;
+    line-height: 1.25;
+    text-align: center;
+    background: transparent;
+    color: var(--ds-text-primary, #eaecef);
 }
-@keyframes mevcutBotPriceBlinkUp {
-    0% { background-color: rgba(14, 203, 129, 0.22); color: #0ecb81; }
-    40% { background-color: rgba(14, 203, 129, 0.14); color: #0ecb81; }
-    100% { background-color: transparent; color: inherit; }
+.page-dashboard .mevcut-botlar-mobile-price {
+    display: inline-block;
+    padding: 0.2rem 0.55rem;
+    border-radius: 6px;
+    box-sizing: border-box;
+    vertical-align: middle;
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+    font-size: 0.75rem;
+    letter-spacing: 0;
+    white-space: nowrap;
+    line-height: 1.25;
+    text-align: center;
+    background: transparent;
+    color: var(--ds-text-primary, #eaecef);
 }
-@keyframes mevcutBotPriceBlinkDown {
-    0% { background-color: rgba(246, 70, 93, 0.22); color: #f6465d; }
-    40% { background-color: rgba(246, 70, 93, 0.14); color: #f6465d; }
-    100% { background-color: transparent; color: inherit; }
+.page-dashboard .finance-bot-live-price.mevcut-bot-price-up,
+.page-dashboard .mevcut-botlar-mobile-price.mevcut-bot-price-up,
+.page-dashboard .mevcut-botlar-price-cell .mevcut-bot-portfolio-balance.mevcut-bot-price-up {
+    background: rgba(14, 203, 129, 0.15);
+    color: #0ecb81;
+}
+.page-dashboard .finance-bot-live-price.mevcut-bot-price-down,
+.page-dashboard .mevcut-botlar-mobile-price.mevcut-bot-price-down,
+.page-dashboard .mevcut-botlar-price-cell .mevcut-bot-portfolio-balance.mevcut-bot-price-down {
+    background: rgba(246, 70, 93, 0.12);
+    color: #f6465d;
+}
+@keyframes mevcutBotPriceFlashUp {
+    0%, 100% {
+        background-color: transparent;
+        color: var(--ds-text-primary, #eaecef);
+    }
+    45% {
+        background-color: rgba(14, 203, 129, 0.15);
+        color: #0ecb81;
+    }
+}
+@keyframes mevcutBotPriceFlashDown {
+    0%, 100% {
+        background-color: transparent;
+        color: var(--ds-text-primary, #eaecef);
+    }
+    45% {
+        background-color: rgba(246, 70, 93, 0.12);
+        color: #f6465d;
+    }
+}
+@keyframes mevcutBotPriceFlashUpText {
+    0%, 100% { color: var(--ds-text-primary, #eaecef); }
+    45% { color: #0ecb81; }
+}
+@keyframes mevcutBotPriceFlashDownText {
+    0%, 100% { color: var(--ds-text-primary, #eaecef); }
+    45% { color: #f6465d; }
 }
 .page-dashboard .finance-bot-live-price.mevcut-bot-blink-up,
-.page-dashboard .binance-varliklar-panel .varliklar-table--wallet .price-cell.mevcut-bot-blink-up {
-    animation: mevcutBotPriceBlinkUp 0.75s ease-out 1 forwards;
+.page-dashboard .mevcut-botlar-mobile-price.mevcut-bot-blink-up,
+.page-dashboard .mevcut-botlar-price-cell .mevcut-bot-portfolio-balance.mevcut-bot-blink-up,
+.page-dashboard .binance-varliklar-panel .varliklar-table--wallet .price-cell.mevcut-bot-blink-up,
+.page-dashboard .binance-varliklar-panel .varliklar-table--wallet .varlik-wallet-price.mevcut-bot-blink-up {
+    animation: mevcutBotPriceFlashUp 0.75s ease-out 1;
 }
 .page-dashboard .finance-bot-live-price.mevcut-bot-blink-down,
-.page-dashboard .binance-varliklar-panel .varliklar-table--wallet .price-cell.mevcut-bot-blink-down {
-    animation: mevcutBotPriceBlinkDown 0.75s ease-out 1 forwards;
+.page-dashboard .mevcut-botlar-mobile-price.mevcut-bot-blink-down,
+.page-dashboard .mevcut-botlar-price-cell .mevcut-bot-portfolio-balance.mevcut-bot-blink-down,
+.page-dashboard .binance-varliklar-panel .varliklar-table--wallet .price-cell.mevcut-bot-blink-down,
+.page-dashboard .binance-varliklar-panel .varliklar-table--wallet .varlik-wallet-price.mevcut-bot-blink-down {
+    animation: mevcutBotPriceFlashDown 0.75s ease-out 1;
 }
 .page-dashboard .mevcut-botlar-table .col-pnl {
     white-space: nowrap;
@@ -282,6 +387,22 @@ h1, h2, h3, h4 {
     color: var(--ds-accent, #f0b90b);
     border-color: var(--ds-accent, #f0b90b);
     background: rgba(240, 185, 11, 0.08);
+}
+.page-dashboard .profit-sort-btn.profit-sort-best {
+    color: #0ecb81;
+}
+.page-dashboard .profit-sort-btn.profit-sort-best:hover {
+    color: #0ecb81;
+    border-color: rgba(14, 203, 129, 0.55);
+    background: rgba(14, 203, 129, 0.08);
+}
+.page-dashboard .profit-sort-btn.profit-sort-worst {
+    color: #f6465d;
+}
+.page-dashboard .profit-sort-btn.profit-sort-worst:hover {
+    color: #f6465d;
+    border-color: rgba(246, 70, 93, 0.55);
+    background: rgba(246, 70, 93, 0.08);
 }
 
 /* Mevcut Botlar tablosu – Detay butonu (sayfa tasarımına uyumlu) */
@@ -994,40 +1115,51 @@ h1, h2, h3, h4 {
     }
 }
 
-/* Tabs – yatay orta */
+/* Tabs – yuvarlak bar (segmented) */
 .page-dashboard .dm-tabs {
     display: flex;
     align-items: center;
     justify-content: center;
     flex-wrap: wrap;
-    gap: 8px;
-    margin-bottom: 2rem;
-    border-bottom: 1px solid var(--ds-border);
-    padding-bottom: 0;
+    gap: 4px;
+    width: max-content;
+    max-width: 100%;
+    margin: 0 auto 2rem;
+    padding: 4px;
+    background: var(--ds-bg-secondary, #1e2329);
+    border: 1px solid var(--ds-border-light, #2b3139);
+    border-radius: 12px;
+    box-sizing: border-box;
 }
 
 .page-dashboard .dm-tab {
     background: transparent;
     border: none;
-    border-bottom: 2px solid transparent;
+    border-radius: 8px;
     color: var(--ds-text-secondary);
-    padding: 12px 24px;
+    padding: 0.5rem 1.05rem;
+    min-height: 36px;
     cursor: pointer;
-    font-size: 14px;
-    font-weight: 500;
-    transition: all 0.2s;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    transition: color 0.18s ease, background 0.18s ease, box-shadow 0.18s ease;
     pointer-events: auto !important;
     position: relative;
     z-index: 10;
+    white-space: nowrap;
+    line-height: 1.2;
 }
 
 .page-dashboard .dm-tab:hover {
     color: var(--ds-text-primary);
+    background: rgba(255, 255, 255, 0.05);
 }
 
 .page-dashboard .dm-tab.is-active {
-    color: var(--ds-accent);
-    border-bottom-color: var(--ds-accent);
+    color: var(--ds-accent, #f0b90b);
+    background: var(--ds-bg-tertiary, #2b3139);
+    box-shadow: inset 0 0 0 1px rgba(240, 185, 11, 0.35), 0 1px 4px rgba(0, 0, 0, 0.18);
 }
 
 .page-dashboard .dm-tab-content {
@@ -1036,6 +1168,20 @@ h1, h2, h3, h4 {
 
 .page-dashboard .dm-tab-content.is-active {
     display: block !important;
+    margin-top: 0 !important;
+    padding-top: 0 !important;
+}
+
+/* Sekme içeriği: tab bar alt boşluğu tek kaynak (dm-tabs margin-bottom) */
+.page-dashboard #unifiedKpiStrip:not(.kpi-strip-hidden) {
+    margin-top: 0;
+}
+
+.page-dashboard .tab-contact-layout {
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    width: 100%;
 }
 
 /* Ana alan ve Binance sekmesi: viewport'a tam sığsın */
@@ -1049,6 +1195,37 @@ h1, h2, h3, h4 {
     box-sizing: border-box;
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
+}
+
+/* Trade sekmesi – tıklanabilirlik garantisi */
+.page-dashboard #mobileTradeView,
+.page-dashboard #mobileTradeView .coin-list-search-wrap,
+.page-dashboard #mobileTradeView .mobile-trade-favorites-list,
+.page-dashboard #mobileTradeView .mobile-trade-fav-item {
+    pointer-events: auto;
+}
+.page-dashboard #mobileTradeView.dm-tab-content.is-active {
+    position: relative;
+    z-index: 25;
+}
+.page-dashboard #mobileTradeView .coin-list-search-wrap {
+    position: relative;
+    z-index: 20;
+}
+.page-dashboard #mobileTradeView .mobile-trade-view__title {
+    margin: 0 0 0.85rem 0;
+    font-size: 1.2rem;
+    font-weight: 600;
+    color: var(--ds-text-primary);
+}
+.page-dashboard #mobileTradeSearchDropdown {
+    z-index: 300;
+    pointer-events: auto;
+}
+.page-dashboard #mobileTradeSearchInput {
+    pointer-events: auto;
+    position: relative;
+    z-index: 1;
 }
 
 /* Trade favori Al/Sat butonu – mobil + masaüstü ortak */
@@ -1225,7 +1402,7 @@ h1, h2, h3, h4 {
 @media (min-width: 769px) {
     .page-dashboard #mobileTradeView.dm-tab-content.is-active {
         display: block !important;
-        margin-top: 2rem;
+        margin-top: 0;
         margin-left: auto;
         margin-right: auto;
         width: 100%;
@@ -1234,7 +1411,10 @@ h1, h2, h3, h4 {
         background: var(--ds-bg-panel, rgba(20, 24, 30, 0.75));
         border: 1px solid var(--ds-border, #2b3139);
         border-radius: 12px;
-        padding: 1.5rem;
+        padding: 1.5rem !important;
+    }
+    .page-dashboard #mobileTradeView > h3 {
+        margin: 0 0 1rem 0;
     }
     .page-dashboard #mobileTradeView .mobile-trade-favorites-list {
         display: grid;
@@ -1271,7 +1451,7 @@ h1, h2, h3, h4 {
     .page-dashboard #tabFinance.dm-tab-content.is-active {
         width: 100%;
         max-width: 100%;
-        margin-top: 2rem;
+        margin-top: 0;
         padding-left: 1.5rem;
         padding-right: 1.5rem;
         box-sizing: border-box;
@@ -1373,11 +1553,8 @@ h1, h2, h3, h4 {
     text-transform: uppercase;
     letter-spacing: 0.05em;
 }
-/* Botlar sekmesinde sadece Botlar bölümü */
+/* Botlar sekmesinde KPI şeridi gösterilmez (boş blok ek boşluk yaratmasın) */
 .page-dashboard .kpi-strip-row.unified-kpi-bots-only {
-    grid-template-columns: 1fr !important;
-}
-.page-dashboard .kpi-strip-row.unified-kpi-bots-only .kpi-block-cuzdan {
     display: none !important;
 }
 @media (max-width: 640px) {
@@ -1581,7 +1758,8 @@ h1, h2, h3, h4 {
     vertical-align: middle;
 }
 .page-dashboard .binance-varliklar-panel .varliklar-table--wallet .varlik-fiyat-cell {
-    min-width: 6.5rem;
+    min-width: 0;
+    white-space: nowrap;
 }
 .page-dashboard .varliklar-table .price-cell {
     font-weight: 600;
@@ -1642,38 +1820,32 @@ h1, h2, h3, h4 {
     letter-spacing: -0.02em;
 }
 
-/* ========== Cüzdan Varlıkları — düzenli tablo (9 sütun, hizalı) ========== */
+/* ========== Cüzdan Varlıkları — Mevcut Botlar ile aynı tablo stili ========== */
 .page-dashboard .binance-varliklar-panel {
     width: 100%;
     max-width: 100%;
     margin-top: 2rem;
-    padding: 1rem 1.25rem 1.25rem;
+    padding: 1.5rem;
     box-sizing: border-box;
 }
-.page-dashboard .binance-varliklar-panel__top {
-    margin-bottom: 0.85rem;
-    padding-bottom: 0.75rem;
-    border-bottom: 1px solid var(--ds-border, #2b3139);
+.page-dashboard .binance-varliklar-panel .binance-varliklar-panel__top {
+    margin-bottom: 1rem;
+    padding: 0;
+    border-bottom: none;
 }
-.page-dashboard .binance-varliklar-panel__title-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.75rem;
+.page-dashboard .binance-varliklar-panel .binance-varliklar-panel__top .mevcut-botlar-panel-header-left {
     flex-wrap: wrap;
+    row-gap: 0.15rem;
 }
-.page-dashboard .binance-varliklar-panel__title {
-    margin: 0;
-    font-size: 1.1rem;
-    font-weight: 600;
-    color: var(--ds-text-primary);
-    line-height: 1.3;
+.page-dashboard .binance-varliklar-panel .binance-varliklar-panel__title {
+    font-size: 1.2rem;
 }
 .page-dashboard .binance-varliklar-panel__hint {
-    margin: 0.35rem 0 0;
-    font-size: 0.8rem;
+    margin: 0.2rem 0 0;
+    font-size: 0.78rem;
     color: var(--ds-text-secondary);
-    line-height: 1.4;
+    line-height: 1.35;
+    font-weight: 400;
 }
 .page-dashboard .binance-varliklar-panel__meta {
     display: inline-flex;
@@ -1681,6 +1853,7 @@ h1, h2, h3, h4 {
     flex-wrap: wrap;
     gap: 0.35rem;
     font-size: 0.75rem;
+    flex-shrink: 0;
 }
 .page-dashboard .binance-varliklar-panel__badge {
     padding: 0.15rem 0.5rem;
@@ -1704,114 +1877,179 @@ h1, h2, h3, h4 {
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
 }
-.page-dashboard .binance-varliklar-panel .varliklar-table--wallet {
-    width: 100%;
-    table-layout: fixed;
-    border-collapse: collapse;
-    font-size: 0.85rem;
+.page-dashboard table.binance-assets-table.varliklar-table--wallet {
+    border-collapse: separate !important;
+    border-spacing: 0 0.5rem !important;
+    margin-top: 0 !important;
+    width: 100% !important;
+    table-layout: fixed !important;
+    min-width: 980px;
 }
-/* Varlık + 6 veri sütunu + işlem */
-.page-dashboard .binance-varliklar-panel .varliklar-col--asset { width: 15%; }
-.page-dashboard .binance-varliklar-panel .varliklar-col--data { width: 10%; }
-.page-dashboard .binance-varliklar-panel .varliklar-col--act { width: 18%; }
-.page-dashboard .binance-varliklar-panel .varliklar-table--wallet .varliklar-th,
-.page-dashboard .binance-varliklar-panel .varliklar-table--wallet tbody td {
-    padding: 0.5rem;
-    text-align: left;
-    vertical-align: middle;
+.page-dashboard table.binance-assets-table.varliklar-table--wallet col.varliklar-col--asset { width: 13%; }
+.page-dashboard table.binance-assets-table.varliklar-table--wallet col.varliklar-col--price { width: 12%; }
+.page-dashboard table.binance-assets-table.varliklar-table--wallet col.varliklar-col--data { width: 10.5%; }
+.page-dashboard table.binance-assets-table.varliklar-table--wallet col.varliklar-col--act { width: 13%; }
+.page-dashboard table.binance-assets-table.varliklar-table--wallet thead {
+    display: table-header-group;
 }
-.page-dashboard .binance-varliklar-panel .varliklar-table--wallet .varliklar-th {
-    font-size: 0.72rem;
-    font-weight: 600;
-    color: var(--ds-text-secondary);
-    background: var(--ds-bg-tertiary, #2b3139);
-    border-bottom: 1px solid var(--ds-border, #2b3139);
+.page-dashboard table.binance-assets-table.varliklar-table--wallet thead th {
+    background: var(--ds-bg-tertiary, #242932) !important;
+    border-top: 1px solid var(--ds-border, #2b3139) !important;
+    border-bottom: 1px solid var(--ds-border, #2b3139) !important;
+    color: var(--ds-text-secondary, #848e9c) !important;
+    font-size: 0.72rem !important;
+    font-weight: 700 !important;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
     white-space: nowrap;
     line-height: 1.25;
+    padding: 0.58rem 3px !important;
+    vertical-align: middle;
+    text-align: center;
+    box-sizing: border-box;
+    overflow: visible !important;
+    text-overflow: clip !important;
 }
-.page-dashboard .binance-varliklar-panel .varliklar-table--wallet tbody td {
+.page-dashboard table.binance-assets-table.varliklar-table--wallet thead th.col-left,
+.page-dashboard table.binance-assets-table.varliklar-table--wallet thead th.col-symbol {
+    text-align: left;
+}
+.page-dashboard table.binance-assets-table.varliklar-table--wallet thead th:first-child {
+    border-left: 1px solid var(--ds-border, #2b3139) !important;
+    border-top-left-radius: 10px;
+    border-bottom-left-radius: 10px;
+    padding-left: 0.65rem !important;
+    text-align: left;
+}
+.page-dashboard table.binance-assets-table.varliklar-table--wallet thead th:last-child {
+    border-right: 1px solid var(--ds-border, #2b3139) !important;
+    border-top-right-radius: 10px;
+    border-bottom-right-radius: 10px;
+    padding-right: 0.65rem !important;
+}
+.page-dashboard table.binance-assets-table.varliklar-table--wallet tbody tr[data-asset] td {
+    display: table-cell;
+    padding: 0.55rem 3px !important;
+    border-top: 1px solid var(--ds-border, #2b3139);
     border-bottom: 1px solid var(--ds-border, #2b3139);
-    line-height: 1.35;
+    background: var(--ds-bg-secondary, #1e2329) !important;
+    font-size: 0.78rem;
+    vertical-align: middle;
+    text-align: center;
+    box-sizing: border-box;
+    font-variant-numeric: tabular-nums;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
-.page-dashboard .binance-varliklar-panel .varliklar-table--wallet tbody tr:hover {
-    background: rgba(255, 255, 255, 0.02);
+.page-dashboard table.binance-assets-table.varliklar-table--wallet tbody tr[data-asset] td:first-child {
+    border-left: 1px solid var(--ds-border, #2b3139);
+    border-top-left-radius: 10px;
+    border-bottom-left-radius: 10px;
+    padding-left: 1rem !important;
+    text-align: left;
 }
-.page-dashboard .binance-varliklar-panel .varlik-asset {
+.page-dashboard table.binance-assets-table.varliklar-table--wallet tbody tr[data-asset] td:last-child {
+    border-right: 1px solid var(--ds-border, #2b3139);
+    border-top-right-radius: 10px;
+    border-bottom-right-radius: 10px;
+    padding-right: 1rem !important;
+}
+.page-dashboard table.binance-assets-table.varliklar-table--wallet tbody tr[data-asset]:hover td {
+    background: var(--ds-bg-tertiary, #242932) !important;
+    border-color: var(--ds-border-light, #3d4550);
+}
+.page-dashboard table.binance-assets-table.varliklar-table--wallet .varlik-asset.mevcut-bot-symbol-link {
     display: flex;
     align-items: center;
-    gap: 0.6rem;
+    gap: 0.65rem;
+    justify-content: flex-start;
     min-width: 0;
+    color: inherit;
+    text-decoration: none;
 }
-.page-dashboard .binance-varliklar-panel .varlik-asset .varlik-logo {
-    flex: 0 0 32px;
-    width: 32px;
-    height: 32px;
-}
-.page-dashboard .binance-varliklar-panel .varlik-asset-text {
+.page-dashboard table.binance-assets-table.varliklar-table--wallet .varlik-asset-text {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
     min-width: 0;
-    overflow: hidden;
-}
-.page-dashboard .binance-varliklar-panel .varlik-asset-text .varlik-symbol {
-    font-weight: 700;
-    color: var(--ds-text-primary);
     line-height: 1.25;
 }
-.page-dashboard .binance-varliklar-panel .varlik-asset-text .varlik-name {
-    margin-top: 0.1rem;
-    font-size: 0.78rem;
+.page-dashboard table.binance-assets-table.varliklar-table--wallet .varlik-asset-text .varlik-symbol {
+    font-weight: 700;
+    color: var(--ds-text-primary);
+    font-size: 0.82rem;
+}
+.page-dashboard table.binance-assets-table.varliklar-table--wallet .varlik-asset-text .varlik-name {
+    font-size: 0.72rem;
     color: var(--ds-text-secondary);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    max-width: 100%;
 }
-.page-dashboard .binance-varliklar-panel .varlik-fiyat-cell {
-    white-space: nowrap;
-}
-.page-dashboard .binance-varliklar-panel .varlik-fiyat-stack {
-    display: inline-flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 0.12rem;
-}
-.page-dashboard .binance-varliklar-panel .varlik-fiyat-stack .price-cell {
-    display: inline-block;
-    font-weight: 600;
-    font-variant-numeric: tabular-nums;
-    font-feature-settings: "tnum";
-    padding: 2px 5px;
-    border-radius: 3px;
-    box-sizing: border-box;
-    line-height: 1.3;
-    vertical-align: middle;
-}
-.page-dashboard .binance-varliklar-panel .varlik-fiyat-stack .change-pct {
-    font-size: 0.78rem;
-    font-weight: 600;
-    font-variant-numeric: tabular-nums;
-}
-.page-dashboard .binance-varliklar-panel .varlik-num-cell {
-    font-variant-numeric: tabular-nums;
-    font-feature-settings: "tnum";
-    color: var(--ds-text-primary);
-    white-space: nowrap;
-}
-.page-dashboard .binance-varliklar-panel .varlik-num-cell.value-cell {
-    font-weight: 600;
-}
-.page-dashboard .binance-varliklar-panel .varliklar-th--act,
-.page-dashboard .binance-varliklar-panel .varlik-card-actions {
-    text-align: center;
-}
-.page-dashboard .binance-varliklar-panel .varlik-card-actions {
+.page-dashboard table.binance-assets-table.varliklar-table--wallet .varlik-logo {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
     overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--ds-bg-tertiary);
+    flex-shrink: 0;
 }
-.page-dashboard .binance-varliklar-panel .varlik-card-actions .btn-al-sat-wrap {
+.page-dashboard table.binance-assets-table.varliklar-table--wallet .varlik-fiyat-inline {
+    display: inline-flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+    flex-wrap: nowrap;
+    gap: 0.35rem;
+    white-space: nowrap;
+    max-width: 100%;
+}
+.page-dashboard table.binance-assets-table.varliklar-table--wallet .varlik-wallet-price {
+    display: inline-block;
+    flex: 0 0 auto;
+    padding: 0.2rem 0.45rem;
+    border-radius: 6px;
+    box-sizing: border-box;
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+    font-size: 0.75rem;
+    line-height: 1.25;
+    color: var(--ds-text-primary, #eaecef);
+    background: transparent;
+}
+.page-dashboard table.binance-assets-table.varliklar-table--wallet .varlik-change-inline {
+    flex: 0 0 auto;
+    min-width: 3.35rem;
+    font-size: 0.72rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.25;
+    text-align: left;
+    white-space: nowrap;
+}
+.page-dashboard table.binance-assets-table.varliklar-table--wallet .varlik-num-cell.value-cell {
+    font-weight: 600;
+}
+.page-dashboard table.binance-assets-table.varliklar-table--wallet .varlik-card-actions .btn-al-sat-wrap {
     display: inline-flex;
     flex-wrap: nowrap;
+    gap: 0.35rem;
     justify-content: center;
-    gap: 0.5rem;
-    max-width: 100%;
-    margin: 0 auto;
+}
+.page-dashboard table.binance-assets-table.varliklar-table--wallet tbody tr[data-asset] td.varlik-card-actions {
+    overflow: visible;
+    text-overflow: clip;
+    white-space: nowrap;
+}
+.page-dashboard table.binance-assets-table.varliklar-table--wallet .varlik-card-actions .btn-al,
+.page-dashboard table.binance-assets-table.varliklar-table--wallet .varlik-card-actions .btn-sat {
+    width: auto;
+    min-width: 3.35rem;
+    padding: 0.35rem 0.55rem;
 }
 .page-dashboard .binance-varliklar-panel .varliklar-empty {
     margin-top: 1rem;
@@ -2457,6 +2695,8 @@ h1, h2, h3, h4 {
 
 .page-dashboard .dm-tab-content.is-active {
     display: block !important;
+    margin-top: 0 !important;
+    padding-top: 0 !important;
 }
 
 /* Hide bots section when bots tab is not active */
@@ -2563,15 +2803,25 @@ h1, h2, h3, h4 {
 }
 
 .global-leaderboard-item-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.25rem 0.35rem;
     font-size: 0.8rem;
     color: var(--ds-text-secondary);
     margin-top: 0.35rem;
 }
 
-.global-leaderboard-item-duration {
+.global-leaderboard-item-duration,
+.global-leaderboard-item-cycles {
     font-size: 0.75rem;
     color: var(--ds-text-tertiary);
-    margin-top: 0.2rem;
+}
+
+.global-leaderboard-item-sep {
+    color: var(--ds-text-tertiary);
+    font-size: 0.75rem;
+    user-select: none;
 }
 
 .global-leaderboard-item-actions {
@@ -3318,6 +3568,208 @@ body.tab-bots-active #tabBinance #globalLeaderboardPanel {
     background-color: var(--ds-bg-tertiary);
 }
 
+/* Mevcut Botlar — başlık satırı + kart satırlar (panel genişliğine sığar) */
+.page-dashboard table.binance-assets-table.mevcut-botlar-table {
+    border-collapse: separate !important;
+    border-spacing: 0 0.5rem !important;
+    margin-top: 0 !important;
+    width: 100% !important;
+    table-layout: fixed !important;
+}
+.page-dashboard .mevcut-botlar-table-wrap {
+    display: block;
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    overflow: visible;
+}
+.page-dashboard table.binance-assets-table.mevcut-botlar-table thead {
+    display: table-header-group;
+}
+.page-dashboard table.binance-assets-table.mevcut-botlar-table thead tr {
+    display: table-row;
+}
+.page-dashboard table.binance-assets-table.mevcut-botlar-table thead th {
+    background: var(--ds-bg-tertiary, #242932) !important;
+    border-top: 1px solid var(--ds-border, #2b3139) !important;
+    border-bottom: 1px solid var(--ds-border, #2b3139) !important;
+    color: var(--ds-text-secondary, #848e9c) !important;
+    font-size: 0.72rem !important;
+    font-weight: 700 !important;
+    letter-spacing: 0.04em;
+    padding: 0.58rem 3px !important;
+    vertical-align: middle;
+}
+.page-dashboard table.binance-assets-table.mevcut-botlar-table thead th:first-child {
+    border-left: 1px solid var(--ds-border, #2b3139) !important;
+    border-top-left-radius: 10px;
+    border-bottom-left-radius: 10px;
+    padding-left: 0.65rem !important;
+}
+.page-dashboard table.binance-assets-table.mevcut-botlar-table thead th:last-child {
+    border-right: 1px solid var(--ds-border, #2b3139) !important;
+    border-top-right-radius: 10px;
+    border-bottom-right-radius: 10px;
+    padding-right: 0.65rem !important;
+}
+.page-dashboard table.binance-assets-table.mevcut-botlar-table tbody {
+    display: table-row-group;
+}
+.page-dashboard table.binance-assets-table.mevcut-botlar-table tbody tr[data-bot-id] {
+    display: table-row;
+}
+.page-dashboard table.binance-assets-table.mevcut-botlar-table tbody tr[data-bot-id] td {
+    display: table-cell;
+    padding: 0.55rem 3px !important;
+    border-top: 1px solid var(--ds-border, #2b3139);
+    border-bottom: 1px solid var(--ds-border, #2b3139);
+    background: var(--ds-bg-secondary, #1e2329) !important;
+    font-size: 0.78rem;
+    vertical-align: middle;
+}
+.page-dashboard table.binance-assets-table.mevcut-botlar-table tbody tr[data-bot-id] td:first-child {
+    border-left: 1px solid var(--ds-border, #2b3139);
+    border-top-left-radius: 10px;
+    border-bottom-left-radius: 10px;
+    padding-left: 0.65rem !important;
+}
+.page-dashboard table.binance-assets-table.mevcut-botlar-table tbody tr[data-bot-id] td:last-child {
+    border-right: 1px solid var(--ds-border, #2b3139);
+    border-top-right-radius: 10px;
+    border-bottom-right-radius: 10px;
+    padding-right: 0.65rem !important;
+}
+.page-dashboard table.binance-assets-table.mevcut-botlar-table tbody tr[data-bot-id]:not(.mevcut-bot-row-alert-warn):not(.mevcut-bot-row-alert-crit):not(.mevcut-bot-row-alert-both):hover td {
+    background: var(--ds-bg-tertiary, #242932) !important;
+    border-color: var(--ds-border-light, #3d4550);
+}
+.page-dashboard table.binance-assets-table.mevcut-botlar-table tbody tr[data-bot-id] td.col-symbol {
+    text-align: left;
+    font-weight: 600;
+}
+.page-dashboard table.binance-assets-table.mevcut-botlar-table tbody tr[data-bot-id] td.col-pnl {
+    font-weight: 700;
+    white-space: nowrap;
+    font-size: 0.76rem;
+}
+.page-dashboard table.binance-assets-table.mevcut-botlar-table tbody tr[data-bot-id] td.col-action {
+    white-space: nowrap;
+}
+.page-dashboard table.binance-assets-table.mevcut-botlar-table .mevcut-botlar-detay-btn {
+    padding: 0.3rem 0.55rem;
+    font-size: 0.72rem;
+}
+@keyframes mevcut-bot-row-warn-blink {
+    0%, 100% {
+        border-color: rgba(240, 185, 11, 0.88);
+    }
+    50% {
+        border-color: rgba(240, 185, 11, 0.18);
+    }
+}
+@keyframes mevcut-bot-row-crit-blink {
+    0%, 100% {
+        border-color: rgba(246, 70, 93, 0.92);
+    }
+    50% {
+        border-color: rgba(246, 70, 93, 0.2);
+    }
+}
+@keyframes mevcut-bot-row-both-blink {
+    0%, 100% {
+        border-color: rgba(246, 70, 93, 0.98);
+    }
+    50% {
+        border-color: rgba(246, 70, 93, 0.12);
+    }
+}
+.page-dashboard table.binance-assets-table.mevcut-botlar-table tbody tr[data-bot-id].mevcut-bot-row-alert-warn td:not(:first-child):not(:last-child),
+.page-dashboard table.binance-assets-table.mevcut-botlar-table tbody tr[data-bot-id].mevcut-bot-row-alert-crit td:not(:first-child):not(:last-child),
+.page-dashboard table.binance-assets-table.mevcut-botlar-table tbody tr[data-bot-id].mevcut-bot-row-alert-both td:not(:first-child):not(:last-child) {
+    box-shadow: none !important;
+    border-left: none !important;
+    border-right: none !important;
+    border-top-width: 1px;
+    border-top-style: solid;
+    border-bottom-width: 1px;
+    border-bottom-style: solid;
+}
+.page-dashboard table.binance-assets-table.mevcut-botlar-table tbody tr[data-bot-id].mevcut-bot-row-alert-warn td:first-child,
+.page-dashboard table.binance-assets-table.mevcut-botlar-table tbody tr[data-bot-id].mevcut-bot-row-alert-crit td:first-child,
+.page-dashboard table.binance-assets-table.mevcut-botlar-table tbody tr[data-bot-id].mevcut-bot-row-alert-both td:first-child {
+    box-shadow: none !important;
+    border-right: none !important;
+    border-top-width: 1px !important;
+    border-top-style: solid !important;
+    border-bottom-width: 1px !important;
+    border-bottom-style: solid !important;
+    border-left-width: 1px !important;
+    border-left-style: solid !important;
+}
+.page-dashboard table.binance-assets-table.mevcut-botlar-table tbody tr[data-bot-id].mevcut-bot-row-alert-warn td:last-child,
+.page-dashboard table.binance-assets-table.mevcut-botlar-table tbody tr[data-bot-id].mevcut-bot-row-alert-crit td:last-child,
+.page-dashboard table.binance-assets-table.mevcut-botlar-table tbody tr[data-bot-id].mevcut-bot-row-alert-both td:last-child {
+    box-shadow: none !important;
+    border-left: none !important;
+    border-top-width: 1px !important;
+    border-top-style: solid !important;
+    border-bottom-width: 1px !important;
+    border-bottom-style: solid !important;
+    border-right-width: 1px !important;
+    border-right-style: solid !important;
+}
+.page-dashboard table.binance-assets-table.mevcut-botlar-table tbody tr[data-bot-id].mevcut-bot-row-alert-warn td:only-child {
+    border-left-width: 1px !important;
+    border-left-style: solid !important;
+    border-right-width: 1px !important;
+    border-right-style: solid !important;
+}
+.page-dashboard table.binance-assets-table.mevcut-botlar-table tbody tr[data-bot-id].mevcut-bot-row-alert-crit td:only-child,
+.page-dashboard table.binance-assets-table.mevcut-botlar-table tbody tr[data-bot-id].mevcut-bot-row-alert-both td:only-child {
+    border-left-width: 1px !important;
+    border-left-style: solid !important;
+    border-right-width: 1px !important;
+    border-right-style: solid !important;
+}
+.page-dashboard table.binance-assets-table.mevcut-botlar-table tbody tr[data-bot-id].mevcut-bot-row-alert-warn:hover td,
+.page-dashboard table.binance-assets-table.mevcut-botlar-table tbody tr[data-bot-id].mevcut-bot-row-alert-crit:hover td,
+.page-dashboard table.binance-assets-table.mevcut-botlar-table tbody tr[data-bot-id].mevcut-bot-row-alert-both:hover td {
+    background: var(--ds-bg-tertiary, #242932) !important;
+}
+.page-dashboard table.binance-assets-table.mevcut-botlar-table tbody tr[data-bot-id].mevcut-bot-row-alert-warn td {
+    animation: mevcut-bot-row-warn-blink 2.2s ease-in-out infinite;
+}
+.page-dashboard table.binance-assets-table.mevcut-botlar-table tbody tr[data-bot-id].mevcut-bot-row-alert-crit td {
+    animation: mevcut-bot-row-crit-blink 0.65s ease-in-out infinite;
+}
+.page-dashboard table.binance-assets-table.mevcut-botlar-table tbody tr[data-bot-id].mevcut-bot-row-alert-both td {
+    animation: mevcut-bot-row-both-blink 0.35s ease-in-out infinite;
+}
+.page-dashboard .mevcut-botlar-mobile-card.mevcut-bot-row-alert-warn {
+    animation: mevcut-bot-row-warn-blink 2.2s ease-in-out infinite;
+    box-shadow: none;
+    border-width: 1px;
+    border-style: solid;
+}
+.page-dashboard .mevcut-botlar-mobile-card.mevcut-bot-row-alert-crit {
+    animation: mevcut-bot-row-crit-blink 0.65s ease-in-out infinite;
+    box-shadow: none;
+    border-width: 1px;
+    border-style: solid;
+}
+.page-dashboard .mevcut-botlar-mobile-card.mevcut-bot-row-alert-both {
+    animation: mevcut-bot-row-both-blink 0.35s ease-in-out infinite;
+    box-shadow: none;
+    border-width: 1px;
+    border-style: solid;
+}
+.page-dashboard .mevcut-botlar-mobile-card {
+    background: var(--ds-bg-secondary, #1e2329);
+    border: 1px solid var(--ds-border, #2b3139);
+    border-radius: 10px;
+    padding: 0.875rem 1rem;
+}
+
 /* Ticker link effect */
 .page-dashboard .ticker-link {
     color: var(--ds-text-primary);
@@ -3479,9 +3931,46 @@ body.tab-bots-active #tabBinance #globalLeaderboardPanel {
 
 .page-dashboard #bnTradeTotalPercentButtons.bn-trade-percent-btns {
     display: flex;
-    gap: 4px;
+    gap: 6px;
     margin-top: 0.5rem;
     justify-content: center;
+}
+
+.page-dashboard .bn-trade-percent-btns {
+    display: flex;
+    gap: 6px;
+    margin-top: 0.5rem;
+    justify-content: center;
+}
+
+.page-dashboard .bn-trade-percent-btns .btn-mini,
+.page-dashboard .bn-trade-percent-btns button {
+    flex: 1;
+    min-width: 0;
+    padding: 0.35rem 0.55rem;
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--ds-text-secondary);
+    background: var(--ds-bg-tertiary);
+    border: 1px solid var(--ds-border);
+    border-radius: 8px;
+    cursor: pointer;
+    transition: color 0.15s, border-color 0.15s, background 0.15s, transform 0.12s;
+}
+
+.page-dashboard .bn-trade-percent-btns .btn-mini:hover,
+.page-dashboard .bn-trade-percent-btns button:hover {
+    color: var(--ds-text-primary);
+    border-color: var(--ds-accent);
+    background: rgba(240, 185, 11, 0.06);
+}
+
+.page-dashboard .bn-trade-percent-btns .btn-mini:active,
+.page-dashboard .bn-trade-percent-btns button:active {
+    color: #000;
+    background: var(--ds-accent);
+    border-color: var(--ds-accent);
+    transform: scale(0.98);
 }
 
 .page-dashboard #bnTradeChartHighLow.bn-trade-chart-high-low {
@@ -3531,6 +4020,24 @@ body.tab-bots-active #tabBinance #globalLeaderboardPanel {
 /* Bot create modal: seçilen işlem çifti strip (logo, sembol, fiyat, 24h %) + küçük grafik – sabit yükseklik, Safari uyumlu */
 .page-dashboard #dmModal .dm-modal__body {
     overflow-x: hidden;
+}
+.page-dashboard #dmModal .coin-list-search-wrap {
+    position: relative;
+    z-index: 2;
+    isolation: isolate;
+}
+.page-dashboard #dmModal #fSymbol {
+    position: relative;
+    z-index: 1;
+    min-height: 44px;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+    cursor: text;
+}
+.page-dashboard #dmModal #dmSymbolSearchDropdown {
+    z-index: 30;
+    pointer-events: none;
+    -webkit-overflow-scrolling: touch;
 }
 .page-dashboard #dmModal .dm-selected-pair-strip {
     display: flex;
@@ -3755,9 +4262,23 @@ body.tab-bots-active #tabBinance #globalLeaderboardPanel {
     }
     .page-dashboard #dmModal .coin-list-search-wrap {
         max-width: 100%;
+        position: relative;
+        z-index: 2;
+        isolation: isolate;
+    }
+    .page-dashboard #dmModal #fSymbol {
+        position: relative;
+        z-index: 1;
+        min-height: 44px;
+        touch-action: manipulation;
+        -webkit-tap-highlight-color: transparent;
+        cursor: text;
     }
     .page-dashboard #dmModal #dmSymbolSearchDropdown {
         max-height: 240px;
+        z-index: 30;
+        pointer-events: none;
+        -webkit-overflow-scrolling: touch;
     }
     .page-dashboard #dmModal .label-with-tooltip {
         word-wrap: break-word;
@@ -4291,27 +4812,26 @@ body.tab-bots-active #tabBinance #globalLeaderboardPanel {
         padding: 0.5rem 0;
     }
     .page-dashboard .dashboard-appbar-inner {
-        display: flex;
-        flex-wrap: nowrap;
+        display: grid;
+        grid-template-columns: 1fr auto 1fr;
         align-items: center;
-        justify-content: space-between;
         gap: 0.5rem;
-        grid-template-columns: unset;
         padding: 0 1rem;
         min-height: 48px;
     }
     .page-dashboard .dashboard-appbar-left {
-        order: 1;
-        flex: 1;
+        justify-self: start;
         min-width: 0;
         gap: 0.35rem;
-        justify-self: unset;
+    }
+    .page-dashboard .dashboard-appbar-center {
+        justify-self: center;
+        min-width: 0;
     }
     .page-dashboard .dashboard-appbar-right {
-        order: 3;
+        justify-self: end;
         flex-shrink: 0;
         gap: 0.35rem;
-        justify-self: unset;
     }
     .page-dashboard .appbar-user-block {
         min-width: 0;
@@ -4354,7 +4874,7 @@ body.tab-bots-active #tabBinance #globalLeaderboardPanel {
         max-width: 100%;
         overflow-x: hidden;
     }
-    /* Sekmeler: sola yaslı, yatay kaydırma */
+    /* Sekmeler: yuvarlak bar, yatay kaydırma */
     .page-dashboard .dm-tabs,
     .page-dashboard .tabs-header {
         display: flex;
@@ -4363,45 +4883,42 @@ body.tab-bots-active #tabBinance #globalLeaderboardPanel {
         flex-wrap: nowrap;
         overflow-x: auto;
         -webkit-overflow-scrolling: touch;
-        gap: 0.25rem;
-        margin-left: -1rem;
-        margin-right: -1rem;
-        padding-left: 1rem;
-        padding-right: 1rem;
+        gap: 4px;
+        width: max-content;
+        max-width: calc(100% + 2rem);
+        margin-left: auto;
+        margin-right: auto;
+        padding: 4px;
         margin-bottom: 1rem;
-        padding-bottom: 0.5rem;
-        border-bottom: 1px solid var(--ds-border);
-        scrollbar-width: thin;
-    }
-    .page-dashboard .dm-tabs::-webkit-scrollbar {
-        height: 4px;
+        background: var(--ds-bg-secondary, #1e2329);
+        border: 1px solid var(--ds-border-light, #2b3139);
+        border-radius: 12px;
     }
     .page-dashboard .dm-tab,
     .page-dashboard .tabs-header button,
     .page-dashboard .tab-btn {
         flex-shrink: 0;
-        min-height: 44px;
-        padding: 0.65rem 1rem;
-        font-size: 0.875rem;
-        font-weight: 500;
+        min-height: 40px;
+        padding: 0.5rem 0.9rem;
+        font-size: 0.8125rem;
+        font-weight: 600;
         white-space: nowrap;
-        border-radius: 8px 8px 0 0;
+        border-radius: 8px;
         border: none;
-        border-bottom: 2px solid transparent;
         background: transparent;
         color: var(--ds-text-secondary);
-        transition: color 0.2s, border-color 0.2s, background 0.2s;
+        transition: color 0.18s ease, background 0.18s ease, box-shadow 0.18s ease;
     }
     .page-dashboard .dm-tab:hover,
     .page-dashboard .tabs-header button:hover {
         color: var(--ds-text-primary);
-        background: var(--ds-bg-tertiary);
+        background: rgba(255, 255, 255, 0.05);
     }
     .page-dashboard .dm-tab.is-active,
     .page-dashboard .tabs-header button.active {
-        color: var(--ds-accent);
-        border-bottom-color: var(--ds-accent);
-        background: transparent;
+        color: var(--ds-accent, #f0b90b);
+        background: var(--ds-bg-tertiary, #2b3139);
+        box-shadow: inset 0 0 0 1px rgba(240, 185, 11, 0.35), 0 1px 4px rgba(0, 0, 0, 0.18);
     }
     /* Mobilde sekmeler arası spacer büyümesin, kaydırma ile hepsi görünsün */
     .page-dashboard .dm-tabs > div {
@@ -4425,11 +4942,11 @@ body.tab-bots-active #tabBinance #globalLeaderboardPanel {
     .page-dashboard .mevcut-botlar-mobile {
         display: flex !important;
         flex-direction: column;
-        gap: 0.6rem;
+        gap: 0.75rem;
     }
     .page-dashboard .mevcut-botlar-mobile-card {
-        padding: 1rem;
-        border-radius: 12px;
+        padding: 0.875rem 1rem;
+        border-radius: 10px;
         border: 1px solid var(--ds-border, #2b3139);
         background: var(--ds-bg-secondary, #1e2329);
         cursor: pointer;
@@ -4512,7 +5029,7 @@ body.tab-bots-active #tabBinance #globalLeaderboardPanel {
         opacity: 0.9;
     }
 
-    /* ========== Cüzdan Varlıkları paneli: mobil kart görünümü (kaydırma yok) ========== */
+    /* ========== Cüzdan Varlıkları paneli: mobil kart görünümü ========== */
     .page-dashboard .binance-varliklar-panel {
         width: 100%;
         max-width: 100%;
@@ -4521,7 +5038,7 @@ body.tab-bots-active #tabBinance #globalLeaderboardPanel {
         margin-right: 0;
         padding: 1rem;
         box-sizing: border-box;
-        overflow: hidden;
+        overflow: visible;
     }
     .page-dashboard .binance-varliklar-panel__title-row {
         flex-direction: column;
@@ -4533,17 +5050,27 @@ body.tab-bots-active #tabBinance #globalLeaderboardPanel {
     .page-dashboard .binance-varliklar-panel .varliklar-table-wrap {
         width: 100%;
         overflow: visible;
-        margin-left: 0;
-        margin-right: 0;
-        padding: 0;
+        margin-left: 0 !important;
+        margin-right: 0 !important;
+        padding: 0 !important;
         background: transparent;
         border: none;
         min-height: 0;
         box-shadow: none;
     }
-    .page-dashboard .binance-varliklar-panel .varliklar-table {
+    .page-dashboard .binance-varliklar-panel .varliklar-table--wallet,
+    .page-dashboard .binance-varliklar-panel .varliklar-table--wallet tbody {
+        display: block;
         width: 100%;
         min-width: 0;
+    }
+    .page-dashboard .binance-varliklar-panel .varliklar-table--wallet colgroup {
+        display: none;
+    }
+    .page-dashboard .binance-varliklar-panel .varliklar-table {
+        width: 100%;
+        min-width: 0 !important;
+        table-layout: auto;
         font-size: 0.85rem;
         border-collapse: collapse;
     }
@@ -4552,38 +5079,82 @@ body.tab-bots-active #tabBinance #globalLeaderboardPanel {
     }
     .page-dashboard .binance-varliklar-panel .varliklar-table tbody tr[data-asset] {
         display: block;
+        width: 100%;
         background: var(--ds-bg-panel, var(--ds-bg-secondary));
         border: 1px solid var(--ds-border);
         border-radius: 12px;
         padding: 1rem;
         margin-bottom: 0.75rem;
         box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+        box-sizing: border-box;
+    }
+    .page-dashboard .binance-varliklar-panel .varliklar-table tbody tr[data-asset] > td {
+        display: block;
+        width: 100% !important;
+        min-width: 0 !important;
+        max-width: 100%;
+        box-sizing: border-box;
     }
     .page-dashboard .binance-varliklar-panel .varliklar-table tbody tr[data-asset] > td.varlik-asset-cell {
-        display: block;
         padding: 0 0 0.75rem 0 !important;
         margin-bottom: 0.75rem;
         border-bottom: 1px solid var(--ds-border);
         text-align: left;
     }
+    .page-dashboard .binance-varliklar-panel .varliklar-table tbody tr[data-asset] > td.varlik-asset-cell::before {
+        content: none;
+        display: none;
+    }
     .page-dashboard .binance-varliklar-panel .varliklar-table tbody tr[data-asset] .varlik-asset {
         display: flex;
         align-items: center;
         gap: 0.75rem;
+        min-width: 0;
     }
-    .page-dashboard .binance-varliklar-panel .varliklar-table tbody tr[data-asset] > td[data-label] {
+    .page-dashboard .binance-varliklar-panel .varliklar-table tbody tr[data-asset] .varlik-asset-text {
+        min-width: 0;
+        flex: 1;
+    }
+    .page-dashboard .binance-varliklar-panel .varliklar-table tbody tr[data-asset] .varlik-name {
+        white-space: normal;
+        overflow: visible;
+        text-overflow: clip;
+    }
+    .page-dashboard .binance-varliklar-panel .varliklar-table tbody tr[data-asset] > td[data-label]:not(.varlik-asset-cell):not(.varlik-card-actions) {
         display: flex !important;
         justify-content: space-between;
         align-items: center;
-        padding: 0.4rem 0 !important;
+        gap: 0.75rem;
+        padding: 0.45rem 0 !important;
         border: none;
         font-size: 0.85rem;
     }
-    .page-dashboard .binance-varliklar-panel .varliklar-table tbody tr[data-asset] > td[data-label]::before {
+    .page-dashboard .binance-varliklar-panel .varliklar-table tbody tr[data-asset] > td[data-label]:not(.varlik-asset-cell):not(.varlik-card-actions)::before {
         content: attr(data-label);
+        flex-shrink: 0;
         font-weight: 600;
         color: var(--ds-text-secondary);
         font-size: 0.8rem;
+    }
+    .page-dashboard .binance-varliklar-panel .varliklar-table .varlik-fiyat-cell {
+        width: auto !important;
+        min-width: 0 !important;
+        white-space: normal;
+    }
+    .page-dashboard .binance-varliklar-panel .varlik-fiyat-inline {
+        flex-direction: row;
+        align-items: center;
+        justify-content: flex-end;
+        flex-wrap: nowrap;
+        gap: 0.35rem;
+    }
+    .page-dashboard .binance-varliklar-panel .varlik-change-inline {
+        min-width: 3.35rem;
+    }
+    .page-dashboard .binance-varliklar-panel .varliklar-table .varlik-num-cell {
+        text-align: right;
+        white-space: nowrap;
+        font-variant-numeric: tabular-nums;
     }
     .page-dashboard .binance-varliklar-panel .varliklar-table tbody tr[data-asset] > td.varlik-card-actions {
         display: block !important;
@@ -4591,10 +5162,15 @@ body.tab-bots-active #tabBinance #globalLeaderboardPanel {
         margin-top: 0.5rem;
         border-top: 1px solid var(--ds-border);
     }
+    .page-dashboard .binance-varliklar-panel .varliklar-table tbody tr[data-asset] > td.varlik-card-actions::before {
+        content: none;
+        display: none;
+    }
     .page-dashboard .binance-varliklar-panel .varliklar-table tbody tr[data-asset] .btn-al-sat-wrap {
         display: flex;
         gap: 0.5rem;
-        justify-content: center;
+        justify-content: stretch;
+        width: 100%;
     }
     .page-dashboard .binance-varliklar-panel .varliklar-table .varlik-logo,
     .page-dashboard .binance-varliklar-panel .varliklar-table .varlik-logo-initials {
@@ -5039,8 +5615,7 @@ body.tab-bots-active #tabBinance #globalLeaderboardPanel {
         font-size: 0.9rem;
     }
 
-    .page-dashboard .binance-assets-table-wrapper,
-    .page-dashboard .varliklar-table-wrap {
+    .page-dashboard .binance-assets-table-wrapper {
         margin-left: -1rem;
         margin-right: -1rem;
         padding-left: 1rem;
@@ -5226,7 +5801,10 @@ body.tab-bots-active #tabBinance #globalLeaderboardPanel {
     /* Trade: alım satım arama + modal */
     .page-dashboard.mobile-tab-trade #mobileTradeView {
         display: block !important;
-        padding: 1rem 0.75rem;
+        padding: 1rem 0.75rem !important;
+    }
+    .page-dashboard.mobile-tab-trade #mobileTradeView > h3 {
+        margin: 0 0 0.85rem 0;
     }
     .page-dashboard .mobile-trade-fav-item {
         transition: background 0.15s, border-color 0.15s;

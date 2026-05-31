@@ -10,6 +10,19 @@ CHANGE: Fix navigation links + route pinning - ensure admin link works, update c
     <meta name="robots" content="noindex, follow">
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style id="tt-scroll-critical">html,html*{scrollbar-width:none;-ms-overflow-style:none}html::-webkit-scrollbar,html *::-webkit-scrollbar{display:none;width:0!important;height:0!important;background:transparent}</style>
+    <script>document.documentElement.classList.add('tt-auto-scrollbar');</script>
+    <link rel="stylesheet" href="/ui/assets/scroll-auto-hide.css?v=8">
+    <script>
+    window.__TT_SCROLL_SCOPE_FN__ = function () {
+        try {
+            var t = sessionStorage.getItem('admin_tab');
+            return t ? 'tab=' + t : '';
+        } catch (e) { return ''; }
+    };
+    window.__TT_SCROLL_NO_AUTO_FINALIZE__ = true;
+    </script>
+    <script src="/ui/assets/scrollRestore.js?v=scroll-restore4"></script>
     <script>
     (function(){
       var r = document.documentElement;
@@ -37,9 +50,10 @@ CHANGE: Fix navigation links + route pinning - ensure admin link works, update c
     <link rel="stylesheet" href="/ui/assets/ticker.css?v=adminfix1">
     <link rel="stylesheet" href="/ui/assets/theme.css?v=adminfix1">
     <link rel="stylesheet" href="/ui/assets/ui.css?v=adminfix1">
-    <link rel="stylesheet" href="/ui/assets/design.css?v=adminfix1">
-    <link rel="stylesheet" href="/ui/assets/dashboard-login-theme.css?v=clean1">
-    <link rel="stylesheet" href="/ui/assets/admin-login-theme.css?v=admin-header14">
+    <link rel="stylesheet" href="/ui/assets/design.css?v=design-scroll8">
+    <link rel="stylesheet" href="/ui/assets/dashboard-login-theme.css?v=admin-tabs-noline1">
+    <link rel="stylesheet" href="/ui/assets/admin-login-theme.css?v=admin-bal-revert1">
+    <script src="/ui/assets/scrollAutoHide.js?v=5"></script>
 </head>
 <body class="binance-theme page-admin">
     <!-- ADMIN_FINGERPRINT: admin-pin-001 -->
@@ -605,11 +619,11 @@ CHANGE: Fix navigation links + route pinning - ensure admin link works, update c
     })();
     </script>
     <script src="/ui/assets/utils/trTime.js?v=1"></script>
-    <script src="/ui/assets/core/errorReporter.js?v=err1"></script>
+    <script src="/ui/assets/core/errorReporter.js?v=csrf-log-error1"></script>
     <script src="/ui/assets/core/apiClient.js?v=adminfix1"></script>
     <script src="/ui/assets/api.js?v=adminfix3"></script>
-    <script src="/ui/assets/components.js?v=adminfix3"></script>
-    <script src="/ui/assets/admin.js?v=admin-accounts-toast1" defer></script>
+    <script src="/ui/assets/components.js?v=toast-persistent1"></script>
+    <script src="/ui/assets/admin.js?v=admin-accounts-perf1" defer></script>
     <script src="/ui/assets/ticker.js?v=adminfix1" defer></script>
 </body>
 </html>

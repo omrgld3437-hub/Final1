@@ -15,3 +15,6 @@ __pycache__/
 venv/
 .DS_Store
 .pytest_cache/
+node_modules/
+ui/dashboard-react/node_modules/
+ui/dashboard-react/dist/

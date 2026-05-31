@@ -85,38 +85,67 @@ function createBadge(text, type = "neutral") {
 // Toast notification system
 const Toast = {
     container: null,
-    
+    _persistent: {},
+
     init() {
         if (!this.container) {
             this.container = createEl("div", "toast-container");
             document.body.appendChild(this.container);
         }
     },
-    
+
     show(message, type = "info", duration = 3000) {
         this.init();
         const toast = createEl("div", `toast ${type}`, {
             text: message
         });
-        
+
         this.container.appendChild(toast);
-        
+
+        if (duration == null || duration <= 0) return toast;
+
         setTimeout(() => {
             toast.style.animation = "slideIn 0.3s ease-out reverse";
             setTimeout(() => toast.remove(), 300);
         }, duration);
+        return toast;
     },
-    
+
+    /** Kalıcı toast — dismiss(key) veya sunucu gelene kadar ekranda kalır. */
+    showPersistent(key, message, type = "warning") {
+        if (!key) return this.show(message, type, 0);
+        this.init();
+        var existing = this._persistent[key];
+        if (existing && existing.isConnected) {
+            existing.textContent = message;
+            existing.className = `toast ${type} toast-persistent`;
+            return existing;
+        }
+        var toast = createEl("div", `toast ${type} toast-persistent`, { text: message });
+        this._persistent[key] = toast;
+        this.container.appendChild(toast);
+        return toast;
+    },
+
+    dismiss(key) {
+        if (!key || !this._persistent[key]) return;
+        var toast = this._persistent[key];
+        delete this._persistent[key];
+        if (!toast.isConnected) return;
+        toast.style.animation = "slideIn 0.3s ease-out reverse";
+        setTimeout(function () { toast.remove(); }, 300);
+    },
+
     success(message, duration) {
         this.show(message, "success", duration != null ? duration : 3000);
     },
-    
-    error(message) {
-        this.show(message, "error");
+
+    error(message, duration) {
+        this.show(message, "error", duration != null ? duration : 3000);
     },
-    
-    warning(message) {
-        this.show(message, "warning");
+
+    warning(message, duration) {
+        this.show(message, "warning", duration != null ? duration : 3000);
     }
 };
 

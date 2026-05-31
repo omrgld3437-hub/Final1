@@ -220,7 +220,7 @@
     var KNOWN_HEALTH_CODES = [
         'STATE_ERROR_WARN', 'STATE_ERROR', 'REPEATED_ORDER_FAIL',
         'TICK_STALE_WARN', 'TICK_STALE_CRIT', 'NO_TICK_YET',
-        'FIRST_BUY_STUCK', 'LOOP_TASK_MISSING', 'BINANCE_UNREACHABLE',
+        'FIRST_BUY_STUCK', 'LOOP_TASK_MISSING', 'BINANCE_UNREACHABLE', 'SERVER_UNREACHABLE',
         'LOT_SIZE', 'MIN_NOTIONAL', 'MIN_NOTIONAL_AFTER_CAP', 'ORDER_FAILED',
         'INSUFFICIENT_QUOTE', 'ORDER_TIMEOUT',
         'BOT_CONTINUES_ON_ERROR', 'BOT_LOOP_AUTO_RESTART', 'PRICE_STALE_OR_MISSING',
@@ -509,7 +509,16 @@
         Object.keys(reg.entries).forEach(function (k) {
             var e = reg.entries[k];
             if (!e || e.dismissed) return;
-            if (!e.active || !activeCodes[e.code]) {
+            if (activeCodes[e.code]) return;
+            if (e.active) {
+                e.active = false;
+                e.resolvedAt = now;
+                e.resolvedEmitted = false;
+            } else if (e.resolvedAt) {
+                if (e.resolvedEmitted && now - e.resolvedAt > 120000) {
+                    delete reg.entries[k];
+                }
+            } else {
                 delete reg.entries[k];
             }
         });
@@ -563,6 +572,71 @@
         };
     }
 
+    function buildRegistryResolvedSynthetic(entry) {
+        var code = String(entry.code || '');
+        var isConn = /CONNECTIVITY|BINANCE|API_UNAUTHORIZED|ACCOUNT_KEYS|TICK_STALE/.test(code);
+        return {
+            id: -(entry.syntheticId || 0) - 900000,
+            type: 'INFO',
+            ts: new Date(entry.resolvedAt || Date.now()).toISOString(),
+            message: entry.message,
+            meta: {
+                health_code: entry.code,
+                health_ui_track: true,
+                health_resolved: true,
+                recovery_report: isConn,
+                connectivity_stable: isConn,
+                error_code: isConn ? 'CONNECTIVITY_STABLE' : (code || 'HEALTH_RESOLVED'),
+                title: isConn
+                    ? 'Sorun giderildi · Bot normal çalışmaya devam ediyor'
+                    : (entry.message || 'Sorun giderildi'),
+                cycle_id: null
+            }
+        };
+    }
+
+    function hasRecentConnectivityStable(events, withinMs) {
+        var cutoff = Date.now() - (withinMs || 45000);
+        for (var i = 0; i < (events || []).length; i++) {
+            var ev = events[i];
+            var meta = ev.meta || {};
+            var ec = String(meta.error_code || '').toUpperCase();
+            if (ec !== 'CONNECTIVITY_STABLE' && meta.connectivity_stable !== true) continue;
+            var ts = ev.ts ? new Date(ev.ts).getTime() : 0;
+            if (ts >= cutoff) return true;
+        }
+        return false;
+    }
+
+    function hadRecentConnectivityIncident(events, withinMs) {
+        withinMs = withinMs || 45 * 60 * 1000;
+        var cutoff = Date.now() - withinMs;
+        for (var i = 0; i < (events || []).length; i++) {
+            var ev = events[i];
+            if (!ev) continue;
+            var meta = ev.meta || {};
+            var ec = String(meta.error_code || meta.health_code || '').toUpperCase();
+            var ty = String(ev.type || '').toUpperCase();
+            if (meta.synthetic_live && (ec === 'SERVER_UNREACHABLE' || meta.source === 'server_unreachable')) {
+                var st = ev.ts ? new Date(ev.ts).getTime() : Date.now();
+                if (st >= cutoff) return true;
+            }
+            if (/CONNECTIVITY_PAUSED|CONNECTIVITY_LOST|BINANCE_UNREACHABLE|API_UNAUTHORIZED|ACCOUNT_KEYS/.test(ec)) {
+                var ts1 = ev.ts ? new Date(ev.ts).getTime() : 0;
+                if (!ts1 || ts1 >= cutoff) return true;
+            }
+            if (ty === 'HEALTH_CRITICAL' && /BINANCE|CONNECTIVITY|API_UNAUTHORIZED|ACCOUNT_KEYS/.test(ec)) {
+                var ts2 = ev.ts ? new Date(ev.ts).getTime() : 0;
+                if (!ts2 || ts2 >= cutoff) return true;
+            }
+            if (ty === 'ERROR' && /BINANCE|401|ulaşılamıyor|api anahtar/i.test(String(ev.message || '') + ' ' + ec)) {
+                var ts3 = ev.ts ? new Date(ev.ts).getTime() : 0;
+                if (!ts3 || ts3 >= cutoff) return true;
+            }
+        }
+        return false;
+    }
+
     function filterDismissedFromEvents(botId, events, healthData) {
         if (!botId) return events || [];
         var dismiss = getDismissInfo(botId);
@@ -601,11 +675,36 @@
         });
 
         var synthetics = [];
+        var registryDirty = false;
         Object.keys(reg.entries || {}).forEach(function (k) {
             var e = reg.entries[k];
-            if (!e || e.dismissed || !e.active) return;
-            synthetics.push(buildRegistrySynthetic(e));
+            if (!e || e.dismissed) return;
+            if (e.active) {
+                synthetics.push(buildRegistrySynthetic(e));
+            } else if (e.resolvedAt && !e.resolvedEmitted) {
+                var code = String(e.code || '');
+                if (code === 'SERVER_UNREACHABLE') {
+                    e.resolvedEmitted = true;
+                    registryDirty = true;
+                    return;
+                }
+                var connCode = /CONNECTIVITY|BINANCE|API_UNAUTHORIZED|ACCOUNT_KEYS|TICK_STALE/.test(code);
+                if (connCode && (
+                    hasRecentConnectivityStable(events, 45000)
+                    || !hadRecentConnectivityIncident(events, 45 * 60 * 1000)
+                )) {
+                    e.resolvedEmitted = true;
+                    registryDirty = true;
+                } else {
+                    synthetics.push(buildRegistryResolvedSynthetic(e));
+                    e.resolvedEmitted = true;
+                    registryDirty = true;
+                }
+            }
         });
+        if (registryDirty || synthetics.some(function (s) { return s.meta && s.meta.recovery_report; })) {
+            saveLogRegistry(botId, reg);
+        }
 
         return synthetics.concat(out);
     }
@@ -652,6 +751,17 @@
         if (shell) shell.classList.toggle('is-active', !!(warnActive || critActive));
     }
 
+    function syncBotTopStripLayout(hasStripAlert) {
+        var strip = document.getElementById('botTopStrip');
+        var chartWrap = document.getElementById('botStripMiniChartWrap');
+        var btnParam = document.getElementById('btnParametreler');
+        var alertSlot = document.getElementById('botStripHealthBadges');
+        if (strip) strip.classList.toggle('has-health-alerts', !!hasStripAlert);
+        if (chartWrap) chartWrap.style.display = hasStripAlert ? 'none' : '';
+        if (btnParam) btnParam.style.display = hasStripAlert ? 'none' : '';
+        if (alertSlot) alertSlot.style.display = hasStripAlert ? 'flex' : 'none';
+    }
+
     function syncDom(opts) {
         opts = opts || {};
         hideBanner();
@@ -687,9 +797,14 @@
             }
         }
 
+        syncBotTopStripLayout(hasWarn || hasCrit);
+
         var liveProblem = !!(global._botLiveProblem) && !opts.suppressLiveProblem;
-        var warnActive = hasWarn || (running && liveProblem && !hasCrit);
-        var critActive = hasCrit;
+        var connFailCode = global._lastConnectivityFailure && global._lastConnectivityFailure.error_code;
+        var liveCrit = liveProblem && !!(connFailCode || global._serverUnreachable);
+        var liveWarn = liveProblem && !liveCrit;
+        var warnActive = hasWarn || (running && liveWarn && !hasCrit);
+        var critActive = hasCrit || (running && liveCrit);
 
         var syncKey = [
             running ? '1' : '0',
@@ -814,10 +929,30 @@
         return shouldHideResetLogEvent(ev, botId);
     }
 
+    function classifyRowAlerts(botId, healthData, running) {
+        if (!running) return { level: null, hasCrit: false, hasWarn: false };
+        var alerts = (healthData && healthData.alerts) ? healthData.alerts.slice() : [];
+        if (healthData && healthData.connectivity_ok === false && healthData.connectivity_failure) {
+            alerts.push({
+                code: healthData.connectivity_failure.error_code || 'BINANCE_UNREACHABLE',
+                level: 'critical',
+                message: healthData.connectivity_failure.message
+            });
+        }
+        var picked = filterAlertsForUi(alerts, getDismissInfo(botId), [], healthData);
+        var hasCrit = picked.criticals.length > 0;
+        var hasWarn = picked.warns.length > 0;
+        if (hasCrit && hasWarn) return { level: 'both', hasCrit: true, hasWarn: true };
+        if (hasCrit) return { level: 'critical', hasCrit: true, hasWarn: false };
+        if (hasWarn) return { level: 'warn', hasCrit: false, hasWarn: true };
+        return { level: null, hasCrit: false, hasWarn: false };
+    }
+
     global.BotHealthAlerts = {
         getDismissInfo: getDismissInfo,
         resetUi: resetUi,
         applyHealth: applyHealth,
+        classifyRowAlerts: classifyRowAlerts,
         syncDom: syncDom,
         filterDismissedFromEvents: filterDismissedFromEvents,
         getServerDismissBeforeId: getServerDismissBeforeId,

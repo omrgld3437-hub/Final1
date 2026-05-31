@@ -22,6 +22,8 @@ logger = logging.getLogger(__name__)
 
 _STORE_VERSION = 1
 _MAX_ORDERS = 8000
+_MAX_SEEN_TRADES = 25000
+_BUYSELL_DEDUP_V = 1
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _TX_ROOT = _PROJECT_ROOT / ".run" / "tx_history"
 
@@ -274,6 +276,49 @@ def ensure_tx_history_fresh_from_db(db: Any, account_id: int, *, force: bool = F
         )
 
 
+def record_spot_manual_trade_fill(
+    account_id: int,
+    *,
+    order_id: str,
+    symbol: str,
+    side: str,
+    qty: float,
+    price: float,
+    quote_qty: float,
+    commission: float = 0.0,
+    commission_asset: str = "USDT",
+    time: Optional[datetime] = None,
+) -> None:
+    """Manuel spot emir fill — işlem geçmişi dosyasına anında yaz (bot değil, src=spot)."""
+    ts = time or datetime.now(timezone.utc)
+    oid = str(order_id or "").strip()
+    if not oid:
+        oid = f"spot_{int(ts.timestamp() * 1000)}"
+    q = float(qty or 0)
+    qq = float(quote_qty or 0)
+    px = float(price or 0)
+    if qq > 0 and q > 0:
+        px = qq / q
+    elif px <= 0 and qq > 0 and q > 0:
+        px = qq / q
+    upsert_trade_fill(
+        account_id,
+        trade_id=oid,
+        order_id=oid,
+        time=ts,
+        side=side,
+        symbol=(symbol or "").upper(),
+        qty=q,
+        price=px,
+        quote_qty=qq,
+        commission=float(commission or 0),
+        commission_asset=commission_asset or "USDT",
+        is_maker=False,
+        bot_id=None,
+        bot_name=None,
+    )
+
+
 def record_bot_trade_fill(
     db: Any,
     account_id: int,
@@ -323,7 +368,33 @@ def record_bot_trade_fill(
 
 
 def _empty_ledger(account_id: int) -> Dict[str, Any]:
-    return {"v": _STORE_VERSION, "aid": account_id, "orders": {}, "idx": [], "dates": {}}
+    return {"v": _STORE_VERSION, "aid": account_id, "orders": {}, "idx": [], "dates": {}, "seen_trades": {}}
+
+
+def _ensure_seen_trades(data: Dict[str, Any]) -> Dict[str, str]:
+    seen = data.get("seen_trades")
+    if not isinstance(seen, dict):
+        seen = {}
+        data["seen_trades"] = seen
+    return seen
+
+
+def _trade_id_seen(data: Dict[str, Any], trade_id: str) -> bool:
+    tid = str(trade_id or "").strip()
+    if not tid:
+        return False
+    return tid in _ensure_seen_trades(data)
+
+
+def _mark_trade_seen(data: Dict[str, Any], trade_id: str) -> None:
+    tid = str(trade_id or "").strip()
+    if not tid:
+        return
+    seen = _ensure_seen_trades(data)
+    seen[tid] = "1"
+    if len(seen) > _MAX_SEEN_TRADES:
+        for old in list(seen.keys())[: len(seen) - _MAX_SEEN_TRADES + 5000]:
+            seen.pop(old, None)
 
 
 def _load_ledger_unlocked(account_id: int) -> Dict[str, Any]:
@@ -341,6 +412,7 @@ def _load_ledger_unlocked(account_id: int) -> Dict[str, Any]:
         data.setdefault("orders", {})
         data.setdefault("idx", [])
         data.setdefault("dates", {})
+        _ensure_seen_trades(data)
         return data
     except Exception as e:
         logger.warning("tx_history load account_id=%s: %s", account_id, e)
@@ -426,6 +498,11 @@ def _normalize_buysell_amounts(rec: List[Any]) -> Tuple[float, float, float]:
     return qty, price, quote
 
 
+def _is_test_paper_order_id(order_id: Optional[str]) -> bool:
+    """Test hesabı manuel spot paper emirleri (test_paper_*)."""
+    return str(order_id or "").strip().startswith("test_paper_")
+
+
 def _expand_record(key: str, rec: List[Any]) -> Dict[str, Any]:
     tc = rec[C_TYPE]
     if tc == "d":
@@ -439,6 +516,10 @@ def _expand_record(key: str, rec: List[Any]) -> Dict[str, Any]:
     src = rec[C_SRC]
     bot_id = rec[C_BID]
     is_bot = src == "b" or bot_id is not None
+    oid = str(rec[C_OID] or "")
+    is_paper = (not is_bot) and (
+        _is_test_paper_order_id(oid) or _is_test_paper_order_id(rec[C_TID] if len(rec) > C_TID else "")
+    )
     qty, price, quote = _normalize_buysell_amounts(rec) if tc in ("b", "s") else (
         float(rec[C_QTY] or 0),
         float(rec[C_PRICE] or 0),
@@ -475,7 +556,8 @@ def _expand_record(key: str, rec: List[Any]) -> Dict[str, Any]:
         "is_maker": False,
         "source": "bot" if is_bot else "spot",
         "source_label": "Bot" if is_bot else "Spot",
-        "platform": "TraderTrailing" if is_bot else "Binance",
+        "platform": "TraderTrailing" if (is_bot or is_paper) else "Binance",
+        "paper": is_paper,
         "bot_id": bot_id,
         "bot_name": rec[C_BNAME] or None,
         "fills_count": int(rec[C_FILLS] or 1),
@@ -518,7 +600,8 @@ def upsert_trade_fill(
     bot_id: Optional[int],
     bot_name: Optional[str] = None,
 ) -> None:
-    """Tek fill ekle veya aynı emirde birleştir."""
+    """Tek fill ekle veya aynı emirde birleştir (aynı trade_id tekrar eklenmez)."""
+    tid = str(trade_id or "").strip()
     key = _order_key(order_id, trade_id)
     time_iso = _utc_iso(time)
     date_tr = _ts_to_date_tr(time)
@@ -527,20 +610,21 @@ def upsert_trade_fill(
 
     with _account_lock(account_id):
         data = _load_ledger_unlocked(account_id)
+        if _trade_id_seen(data, tid):
+            return
         orders: Dict[str, List[Any]] = data["orders"]
         existing = orders.get(key)
         if existing and tc in ("b", "s"):
-            # Spot/Binance kaydı bot satırının üzerine yazılır (çift sayım / eski miktar kalmasın)
             if existing[C_SRC] == "b" and not bot_id:
-                orders.pop(key, None)
-                existing = None
-            elif existing:
-                same_qty = abs(float(qty or 0) - float(existing[C_QTY] or 0)) < 1e-12
-                same_quote = abs(float(quote_qty or 0) - float(existing[C_QUOTE] or 0)) < 0.02
-                same_comm = abs(float(commission or 0) - float(existing[C_COMM] or 0)) < 1e-12
-                same_asset = (commission_asset or "USDT") == (existing[C_CASSET] or "USDT")
-                if same_qty and same_quote and same_comm and same_asset:
-                    return
+                _mark_trade_seen(data, tid)
+                return
+            same_qty = abs(float(qty or 0) - float(existing[C_QTY] or 0)) < 1e-12
+            same_quote = abs(float(quote_qty or 0) - float(existing[C_QUOTE] or 0)) < 0.02
+            same_comm = abs(float(commission or 0) - float(existing[C_COMM] or 0)) < 1e-12
+            same_asset = (commission_asset or "USDT") == (existing[C_CASSET] or "USDT")
+            if same_qty and same_quote and same_comm and same_asset:
+                _mark_trade_seen(data, tid)
+                return
         if existing and tc in ("b", "s"):
             total_qty = float(existing[C_QTY] or 0) + float(qty or 0)
             total_quote = float(existing[C_QUOTE] or 0) + float(quote_qty or 0)
@@ -555,6 +639,8 @@ def upsert_trade_fill(
             existing[C_QUOTE] = round(total_quote, 8)
             existing[C_COMM] = round(total_comm, 8)
             existing[C_FILLS] = fills
+            if len(existing) > C_TID:
+                existing[C_TID] = tid or existing[C_TID]
             if bot_id and not existing[C_BID]:
                 existing[C_BID] = bot_id
                 existing[C_SRC] = "b"
@@ -576,8 +662,9 @@ def upsert_trade_fill(
                 (bot_name or "")[:32],
                 1,
                 order_id,
-                trade_id,
+                tid,
             ]
+        _mark_trade_seen(data, tid)
         _index_insert(data, key, date_tr, time_iso)
         _save_ledger_unlocked(account_id, data)
 
@@ -903,36 +990,40 @@ def query_transactions(
     return result
 
 
-def rebuild_from_db(db: Any, account_id: int, *, days: int = 365) -> int:
-    """TradeNormalized → şifreli dosya (ilk okuma / backfill)."""
-    from sqlalchemy import desc
-    from app.db.models import Bot, TradeNormalized
+def _strip_buysell_orders(data: Dict[str, Any]) -> None:
+    orders: Dict[str, List[Any]] = data.get("orders") or {}
+    remove = {k for k, rec in orders.items() if rec and rec[C_TYPE] in ("b", "s")}
+    for k in remove:
+        orders.pop(k, None)
+    data["orders"] = orders
+    data["idx"] = [k for k in (data.get("idx") or []) if k not in remove]
+    dates: Dict[str, List[str]] = {}
+    for d, dkeys in (data.get("dates") or {}).items():
+        kept = [k for k in dkeys if k not in remove]
+        if kept:
+            dates[d] = kept
+    data["dates"] = dates
+    data["seen_trades"] = {}
 
-    cutoff = datetime.utcnow() - timedelta(days=days)
-    rows = (
-        db.query(TradeNormalized)
-        .filter(
-            TradeNormalized.account_id == account_id,
-            TradeNormalized.time >= cutoff,
-            TradeNormalized.side.in_(["BUY", "SELL"]),
-        )
-        .order_by(TradeNormalized.time.asc())
-        .limit(_MAX_ORDERS)
-        .all()
-    )
-    if not rows:
-        return 0
 
-    bot_names: Dict[int, str] = {}
-    bot_ids = {r.bot_id for r in rows if r.bot_id}
-    if bot_ids:
-        for b in db.query(Bot).filter(Bot.id.in_(bot_ids)).all():
-            try:
-                cfg = json.loads(b.config_json or "{}")
-                bot_names[b.id] = (b.name or cfg.get("name") or f"Bot #{b.id}")[:32]
-            except Exception:
-                bot_names[b.id] = f"Bot #{b.id}"
+def _replay_trades_normalized_to_ledger(
+    db: Any,
+    account_id: int,
+    rows: List[Any],
+    bot_names: Optional[Dict[int, str]] = None,
+) -> int:
+    from app.db.models import Bot
 
+    if bot_names is None:
+        bot_names = {}
+        bot_ids = {r.bot_id for r in rows if getattr(r, "bot_id", None)}
+        if bot_ids:
+            for b in db.query(Bot).filter(Bot.id.in_(bot_ids)).all():
+                try:
+                    cfg = json.loads(b.config_json or "{}")
+                    bot_names[b.id] = (b.name or cfg.get("name") or f"Bot #{b.id}")[:32]
+                except Exception:
+                    bot_names[b.id] = f"Bot #{b.id}"
     count = 0
     for t in rows:
         q, pr, quote = _trade_fill_amounts(t.qty, t.price, t.quote_qty)
@@ -954,3 +1045,65 @@ def rebuild_from_db(db: Any, account_id: int, *, days: int = 365) -> int:
         )
         count += 1
     return count
+
+
+def rebuild_buysell_from_db(db: Any, account_id: int, *, days: int = 365) -> int:
+    """Alım/satım satırlarını TradeNormalized'dan sıfırdan yeniden oluştur (çift sayım onarımı)."""
+    from app.db.models import TradeNormalized
+
+    cutoff = datetime.utcnow() - timedelta(days=days)
+    rows = (
+        db.query(TradeNormalized)
+        .filter(
+            TradeNormalized.account_id == account_id,
+            TradeNormalized.time >= cutoff,
+            TradeNormalized.side.in_(["BUY", "SELL"]),
+        )
+        .order_by(TradeNormalized.time.asc())
+        .limit(_MAX_ORDERS)
+        .all()
+    )
+    with _account_lock(account_id):
+        data = _load_ledger_unlocked(account_id)
+        _strip_buysell_orders(data)
+        _save_ledger_unlocked(account_id, data)
+    if not rows:
+        return 0
+    return _replay_trades_normalized_to_ledger(db, account_id, rows)
+
+
+def ensure_buysell_dedup_v1(db: Any, account_id: int) -> None:
+    """Tek seferlik: eski çift sayımlı alım/satım kayıtlarını DB'den yeniden kur."""
+    meta = _read_rev_meta(account_id)
+    if int(meta.get("buysell_dedup_v") or 0) >= _BUYSELL_DEDUP_V:
+        return
+    if ledger_has_buysell(account_id):
+        try:
+            n = rebuild_buysell_from_db(db, account_id, days=365)
+            logger.info("tx_history buysell dedup repair account_id=%s rows=%s", account_id, n)
+        except Exception as e:
+            logger.warning("tx_history buysell dedup repair account_id=%s: %s", account_id, e)
+    meta = _read_rev_meta(account_id)
+    meta["buysell_dedup_v"] = _BUYSELL_DEDUP_V
+    _write_rev_meta(account_id, meta)
+
+
+def rebuild_from_db(db: Any, account_id: int, *, days: int = 365) -> int:
+    """TradeNormalized → şifreli dosya (ilk okuma / backfill)."""
+    from app.db.models import TradeNormalized
+
+    cutoff = datetime.utcnow() - timedelta(days=days)
+    rows = (
+        db.query(TradeNormalized)
+        .filter(
+            TradeNormalized.account_id == account_id,
+            TradeNormalized.time >= cutoff,
+            TradeNormalized.side.in_(["BUY", "SELL"]),
+        )
+        .order_by(TradeNormalized.time.asc())
+        .limit(_MAX_ORDERS)
+        .all()
+    )
+    if not rows:
+        return 0
+    return _replay_trades_normalized_to_ledger(db, account_id, rows)
