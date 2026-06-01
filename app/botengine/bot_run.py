@@ -83,7 +83,7 @@ async def run_one_bot_tick(bot_id: int, tick_id: str) -> float:
             if acct_test:
                 logger.debug("BOT_RUN_ID run_id=%s bot_id=%s (test)", state.get("run_id"), bot_id)
             else:
-                logger.info("BOT_RUN_ID run_id=%s bot_id=%s", state.get("run_id"), bot_id)
+                logger.debug("BOT_RUN_ID run_id=%s bot_id=%s", state.get("run_id"), bot_id)
         if not state:
             if is_trdca:
                 state = build_trdca_pro_state_skeleton(bot_id, account_id, getattr(cfg, "quote_asset", "USDT"))
@@ -122,7 +122,7 @@ async def run_one_bot_tick(bot_id: int, tick_id: str) -> float:
         if acct_test:
             logger.debug(*mode_log)
         else:
-            logger.info(*mode_log)
+            logger.debug(*mode_log)
         lock_symbol = trade_lock_symbol(account_id, symbol)
         next_wake = time.monotonic() + (getattr(cfg, "tick_interval_ms", 5000) / 1000.0)
         if is_trdca:

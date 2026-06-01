@@ -12707,20 +12707,7 @@ async function cancelOrder(symbol, orderId) {
     
     try {
         const url = "/api/binance/order?account_id=" + encodeURIComponent(State.accountId) + "&symbol=" + encodeURIComponent(symbol) + "&order_id=" + encodeURIComponent(orderId);
-        const opts = { method: "DELETE", headers: {} };
-        var tok = localStorage.getItem("token");
-        if (tok) opts.headers["Authorization"] = "Bearer " + tok;
-        var r = await fetch(url, opts);
-        var result = await r.json().catch(function() { return {}; });
-        if (!r.ok) {
-            var detail = result.detail;
-            var msg = (typeof detail === "object" && detail && detail.message) ? detail.message : (result.message || result.error || "HTTP " + r.status);
-            if (typeof msg !== "string") msg = JSON.stringify(msg);
-            var err = new Error(msg);
-            err.status = r.status;
-            err.error_code = typeof detail === "object" && detail ? detail.error_code : null;
-            throw err;
-        }
+        var result = await window.apiClient.delete(url, { timeout: 15000 });
         if (window.Toast) window.Toast.success(result.message || "Emir iptal edildi");
         await loadActiveOrders();
         if (typeof loadWallet === "function") loadWallet(true);
@@ -13668,15 +13655,9 @@ async function initDashboard() {
         var isOwner = user && !user.is_admin && user.account_id != null && Number(user.account_id) === Number(accountId);
         if (accountId && isOwner) {
             try {
-                var logoutHeaders = { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' };
-                var csrfM = typeof document !== 'undefined' && document.cookie && document.cookie.match(/\bcsrf_token=([^;]+)/);
-                if (csrfM && csrfM[1]) logoutHeaders['X-CSRF-Token'] = csrfM[1].trim();
-                await fetch('/api/auth/logout', {
-                    method: 'POST',
-                    credentials: 'include',
-                    headers: logoutHeaders,
-                    body: JSON.stringify({ account_id: accountId })
-                });
+                if (window.apiClient && typeof window.apiClient.post === 'function') {
+                    await window.apiClient.post('/api/auth/logout', { account_id: accountId }, { timeout: 8000 });
+                }
             } catch (e) {}
         }
         localStorage.removeItem('user');
@@ -14274,8 +14255,8 @@ async function initDashboard() {
         window.intervalRegistry.start('auth.health', async () => {
             if (!State.accountId) return;
             try {
-                const r = await fetch('/api/auth/ping?account_id=' + State.accountId, { cache: 'no-store' });
-                if (r.status === 401) {
+                const d = await window.apiClient.get('/api/auth/ping?account_id=' + State.accountId, { timeout: 8000, suppressRateLimitToast: true });
+                if (d && d.kicked) {
                     try { if (typeof window.clearAuthAndBroadcast === 'function') window.clearAuthAndBroadcast(); } catch (e) {}
                     localStorage.removeItem('user');
                     localStorage.removeItem('token');
@@ -14285,8 +14266,8 @@ async function initDashboard() {
                     window.location.replace('/ui/login.html');
                     return;
                 }
-                const d = await r.json().catch(() => ({}));
-                if (d.kicked) {
+            } catch (e) {
+                if (e && e.status === 401) {
                     localStorage.removeItem('user');
                     localStorage.removeItem('token');
                     try { localStorage.removeItem('boot_id'); } catch (e) {}
@@ -14294,7 +14275,7 @@ async function initDashboard() {
                     window.intervalRegistry.stop('auth.health');
                     window.location.replace('/ui/login.html');
                 }
-            } catch (e) {}
+            }
         }, 60000, 'auth.health');
     })();
 
@@ -16786,12 +16767,7 @@ async function loadFinanceReport() {
     const period = document.getElementById('reportPeriod')?.value || 'weekly';
     
     try {
-        const response = await fetch(`/api/finance/report?account_id=${State.accountId}&period=${period}&cb=${Date.now()}`);
-        if (!response.ok) {
-            throw new Error(`HTTP ${response.status}`);
-        }
-        
-        const data = await response.json();
+        const data = await window.apiClient.get(`/api/finance/report?account_id=${State.accountId}&period=${period}&cb=${Date.now()}`, { timeout: 15000 });
         renderFinanceReport(data);
         
     } catch (error) {
@@ -16866,12 +16842,7 @@ async function loadFinanceBots() {
     if (!State.accountId) return;
     
     try {
-        const response = await fetch(`/api/finance/bots?account_id=${State.accountId}&cb=${Date.now()}`);
-        if (!response.ok) {
-            throw new Error(`HTTP ${response.status}`);
-        }
-        
-        const data = await response.json();
+        const data = await window.apiClient.get(`/api/finance/bots?account_id=${State.accountId}&cb=${Date.now()}`, { timeout: 15000 });
         renderFinanceBots(data.bots || []);
         
     } catch (error) {
@@ -17497,12 +17468,9 @@ function dismissUserPopup() {
     if (!_userPopupId) return;
     var popupId = _userPopupId;
     _userPopupId = null;
-    fetch(window.location.origin + "/api/auth/popup/dismiss", {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ popup_id: popupId })
-    }).catch(function () {});
+    if (window.apiClient && typeof window.apiClient.post === "function") {
+        window.apiClient.post("/api/auth/popup/dismiss", { popup_id: popupId }, { timeout: 8000 }).catch(function () {});
+    }
     if (wasFirstLogin) {
         setTimeout(function () {
             shouldShowFirstLoginModal(State.accountId, true).then(function (show) {

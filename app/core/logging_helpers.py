@@ -59,13 +59,9 @@ def log_wallet_trace(
     if duration_ms is not None:
         payload["duration_ms"] = round(duration_ms, 2)
     payload.update(extra)
-    # Snapshot WALLET_NOT_READY every ~5s is noisy; log at DEBUG (same account, no keys/cache)
-    if (
-        event == "wallet_payload_out"
-        and payload.get("error_code") == "WALLET_NOT_READY"
-        and (payload.get("source") == "snapshot_wallet" or payload.get("source") == "dashboard_snapshot")
-        and (payload.get("asset_count") or 0) == 0
-    ):
+    # Wallet payload traces are high-volume during dashboard polling. Keep
+    # successful boundary traces at DEBUG; promote only error traces to INFO.
+    if event == "wallet_payload_out" and not payload.get("error_code"):
         logger.debug("wallet_trace %s", payload)
     else:
         logger.info("wallet_trace %s", payload)

@@ -10,6 +10,10 @@ export PYTHONWARNINGS="${PYTHONWARNINGS:+$PYTHONWARNINGS,}ignore:::urllib3"
 PY="$ROOT/.venv/bin/python"
 [ -x "$PY" ] || PY="python3"
 
+# Runtime log bakimi: buyuk aktif loglari copy-truncate ile arsivle.
+# Env ile ayarlanabilir: LOG_ACTIVE_MAX_MB, LOG_COMPRESS_AFTER_MB, LOG_ARCHIVE_DELETE_DAYS.
+"$PY" "$ROOT/scripts/maintenance/manage_logs.py" >/dev/null 2>&1 || true
+
 STARTED=()
 
 # Manager (7999)
@@ -32,7 +36,7 @@ if [ -f "$WEB_PID" ] && kill -0 "$(cat "$WEB_PID")" 2>/dev/null; then
   STARTED+=("Web (8000): zaten calisiyor, PID=$(cat "$WEB_PID")")
 else
   rm -f "$WEB_PID"
-  nohup "$PY" -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 2 --loop uvloop --http httptools --log-level info >> "$WEB_LOG" 2>&1 &
+  nohup "$PY" -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 2 --loop uvloop --http httptools --log-level warning --no-access-log >> "$WEB_LOG" 2>&1 &
   echo $! > "$WEB_PID"
   STARTED+=("Web (8000): baslatildi, PID=$!")
   sleep 1

@@ -327,7 +327,7 @@ async def home_fast(
                 _enrich_minimal_wallet_with_bot_locked(wc, account_id, db)
                 data_out["wallet_cached"] = wc
             server_ms = (time.perf_counter() - t0) * 1000
-            logger.info(
+            logger.debug(
                 "home_fast_served event=home_fast_served account_id=%s request_id=%s server_ms=%.2f payload_bytes=%s cache=memory",
                 account_id, request_id, server_ms, payload_len,
             )
@@ -400,7 +400,7 @@ async def home_fast(
         "generated_at": generated_at,
     }
 
-    logger.info(
+    logger.debug(
         "home_fast_served event=home_fast_served account_id=%s request_id=%s server_ms=%.2f payload_bytes=%s cache=db",
         account_id, request_id, server_ms, payload_len,
     )
@@ -701,7 +701,7 @@ async def _do_wallet_refresh(account_id: int, db: Session, request_id: str, forc
     out["assets"] = _sort_and_cap_assets(assets_out, max_assets)
     _in_memory_wallet[account_id] = (out, time.monotonic())
     asset_count = len(out.get("assets") or [])
-    logger.info(
+    logger.debug(
         "wallet_refresh_success asset_count=%s total_usd=%s request_id=%s account_id=%s duration_ms=%.0f",
         asset_count, out.get("total_usd"), request_id, account_id, duration_ms,
     )
@@ -747,7 +747,7 @@ async def home_wallet_refresh(
     cooldown_until = _wallet_cooldown_until.get(account_id)
     if cooldown_until is not None and now_mono < cooldown_until:
         server_ms = (time.perf_counter() - t0) * 1000
-        logger.info(
+        logger.debug(
             "home_wallet_refresh event=home_wallet_refresh account_id=%s request_id=%s skipped=true reason=cooldown server_ms=%.2f",
             account_id, request_id, server_ms,
         )
@@ -767,7 +767,7 @@ async def home_wallet_refresh(
     last_at = _wallet_last_live_at.get(account_id)
     if last_at is not None and (now_mono - last_at) < ttl_sec and force != 1:
         server_ms = (time.perf_counter() - t0) * 1000
-        logger.info(
+        logger.debug(
             "home_wallet_refresh event=home_wallet_refresh account_id=%s request_id=%s skipped=true reason=ttl server_ms=%.2f",
             account_id, request_id, server_ms,
         )
@@ -786,7 +786,7 @@ async def home_wallet_refresh(
     # Inflight dedup
     if _is_wallet_refresh_inflight(account_id):
         server_ms = (time.perf_counter() - t0) * 1000
-        logger.info(
+        logger.debug(
             "home_wallet_refresh event=home_wallet_refresh account_id=%s request_id=%s skipped=true reason=inflight server_ms=%.2f",
             account_id, request_id, server_ms,
         )
@@ -860,7 +860,7 @@ async def home_wallet_refresh(
             "meta": {"request_id": request_id, "server_ms": round(server_ms, 2)},
         }
 
-    logger.info(
+    logger.debug(
         "home_wallet_refresh event=home_wallet_refresh account_id=%s request_id=%s skipped=false inflight=false server_ms=%.2f",
         account_id, request_id, server_ms,
     )

@@ -184,8 +184,9 @@ def _start_web() -> bool:
     # .venv varsa her zaman .venv Python kullan (fastapi/uvicorn orada kurulu olsun)
     use_py = str(py_exe) if py_exe.exists() else sys.executable
     uvicorn_extra = [] if _IS_WINDOWS else ["--loop", "uvloop", "--http", "httptools"]
+    access_log_args = ["--log-level", os.environ.get("WEB_LOG_LEVEL", "warning"), "--no-access-log"]
     if uvicorn_exe.exists():
-        cmd = [str(uvicorn_exe), "app.main:app", "--host", host, "--port", "8000", "--workers", "2", "--log-level", "info"] + uvicorn_extra
+        cmd = [str(uvicorn_exe), "app.main:app", "--host", host, "--port", "8000", "--workers", "2"] + access_log_args + uvicorn_extra
     else:
         try:
             import uvicorn as _u
@@ -195,7 +196,7 @@ def _start_web() -> bool:
                 "HATA: uvicorn yok. Proje kokunde: .venv\\Scripts\\pip install -r requirements.txt  veya  pip install -r requirements.txt",
             )
             return False
-        cmd = [use_py, "-m", "uvicorn", "app.main:app", "--host", host, "--port", "8000", "--workers", "2", "--log-level", "info"] + uvicorn_extra
+        cmd = [use_py, "-m", "uvicorn", "app.main:app", "--host", host, "--port", "8000", "--workers", "2"] + access_log_args + uvicorn_extra
     cwd = str(_PROJECT_ROOT)
     env = _spawn_env()
     try:

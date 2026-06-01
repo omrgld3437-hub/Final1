@@ -362,7 +362,7 @@ async def _bot_loop(bot_id: int) -> None:
                     if acct_test:
                         logger.debug("BOT_RUN_ID run_id=%s bot_id=%s (test)", state.get("run_id"), bot_id)
                     else:
-                        logger.info("BOT_RUN_ID run_id=%s bot_id=%s", state.get("run_id"), bot_id)
+                        logger.debug("BOT_RUN_ID run_id=%s bot_id=%s", state.get("run_id"), bot_id)
                 # Production: paper_mode from DB; test hesabı her zaman paper, API anahtarı yok
                 paper_mode = acct_test or (bot_mode == "paper")
                 keys = None
@@ -406,7 +406,7 @@ async def _bot_loop(bot_id: int) -> None:
                 if acct_test:
                     logger.debug(*mode_log)
                 else:
-                    logger.info(*mode_log)
+                    logger.debug(*mode_log)
                 if not paper_mode and not is_trdca and symbol and symbol != "MULTI":
                     try:
                         from app.botengine.intent_ledger import reconcile_open_orders_for_bot
@@ -612,7 +612,7 @@ async def _bot_loop(bot_id: int) -> None:
                     flush_queued_events(db, bot_id, account_id, state)
                     elapsed_ms = (time.perf_counter() - t0) * 1000
 
-                    logger.info(
+                    logger.debug(
                         "BOT_TICK_SUMMARY bot_id=%s actions=%s next_wake=%s initial_allocation_done=%s quote=%s base=%s price=%s",
                         bot_id,
                         len(actions) if actions else 0,

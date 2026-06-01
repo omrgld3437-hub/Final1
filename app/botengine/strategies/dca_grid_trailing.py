@@ -714,7 +714,7 @@ def tick_dca_grid_trailing(
                 state["mode"] = BotEngineMode.TRAIL_PROFIT_SELL.value
                 return _finish_tick(state, config, actions, next_wake)
             if trigger_price is not None and P < trigger_price and breakeven is not None and P < breakeven:
-                logger.info(
+                logger.debug(
                     "BOT_PROFIT_EXIT_EVAL bot_id=%s cycle_id=%s symbol=%s scope=cycle last_price=%.4f breakeven=%.4f trigger=%.4f decision=HOLD reason=below_breakeven",
                     state.get("bot_id"), state.get("cycle_id"), symbol, P, breakeven, trigger_price or 0,
                 )

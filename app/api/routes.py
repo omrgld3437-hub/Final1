@@ -3455,18 +3455,18 @@ async def api_binance_open_orders(
             if now - ts < OPEN_ORDERS_CACHE_TTL:
                 global _open_orders_cache_hits
                 _open_orders_cache_hits += 1
-                log.info("open_orders cache_hit=true upstream_call=false account_id=%s request_id=%s", account_id, request_id)
+                log.debug("open_orders cache_hit=true upstream_call=false account_id=%s request_id=%s", account_id, request_id)
                 return cached
         if cache_key in _open_orders_inflight:
             task = _open_orders_inflight[cache_key]
-            log.info("open_orders cache_hit=false upstream_call=false in_flight_reuse account_id=%s request_id=%s", account_id, request_id)
+            log.debug("open_orders cache_hit=false upstream_call=false in_flight_reuse account_id=%s request_id=%s", account_id, request_id)
         else:
             global _open_orders_cache_misses
             _open_orders_cache_misses += 1
             task = asyncio.create_task(_fetch_open_orders_uncached(account_id, symbol or None, db))
             _open_orders_inflight[cache_key] = task
             is_creator = True
-            log.info("open_orders cache_hit=false upstream_call=true account_id=%s request_id=%s", account_id, request_id)
+            log.debug("open_orders cache_hit=false upstream_call=true account_id=%s request_id=%s", account_id, request_id)
 
     try:
         out = await asyncio.wait_for(task, timeout=12.0)

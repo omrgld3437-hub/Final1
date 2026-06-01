@@ -1,6 +1,6 @@
 # TraderTrailing — Makefile
 
-.PHONY: start stop restart deploy run dev setup meta test hooks git-log
+.PHONY: start stop restart deploy run dev setup meta test hooks git-log logs-clean
 
 start:
 	./ops/start.command
@@ -35,3 +35,6 @@ git-log:
 
 test:
 	PYTHONPATH=. .venv/bin/pytest tests/ -q
+
+logs-clean:
+	.venv/bin/python scripts/maintenance/manage_logs.py

@@ -938,16 +938,16 @@ async def get_wallet(keys: Any, tag: str = "wallet") -> Dict[str, Any]:
         if cache_key in _account_cache:
             data, ts = _account_cache[cache_key]
             if now - ts < _ACCOUNT_CACHE_TTL:
-                logger.info("ACCOUNT_CALL tag=%s cache_hit=true upstream_call=false age_sec=%.2f", tag, now - ts)
+                logger.debug("ACCOUNT_CALL tag=%s cache_hit=true upstream_call=false age_sec=%.2f", tag, now - ts)
                 return data
         if cache_key in _account_inflight:
             task = _account_inflight[cache_key]
-            logger.info("ACCOUNT_CALL tag=%s cache_hit=false in_flight_reuse", tag)
+            logger.debug("ACCOUNT_CALL tag=%s cache_hit=false in_flight_reuse", tag)
         else:
             task = asyncio.create_task(_fetch_account_upstream(keys, tag))
             _account_inflight[cache_key] = task
             is_creator = True
-            logger.info("ACCOUNT_CALL tag=%s cache_hit=false upstream_call=true", tag)
+            logger.debug("ACCOUNT_CALL tag=%s cache_hit=false upstream_call=true", tag)
     try:
         data = await asyncio.wait_for(task, timeout=BINANCE_REQUEST_TIMEOUT_SEC)
     except asyncio.TimeoutError as e:

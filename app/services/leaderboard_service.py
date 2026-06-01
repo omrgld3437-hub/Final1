@@ -454,7 +454,7 @@ def refresh_bot_public_metrics(db: Session, batch_size: int = 200) -> int:
                 logger.debug("leaderboard refresh bot %s skip: %s", getattr(bot, "id", ""), e)
         db.commit()
         duration_ms = (time.perf_counter() - start) * 1000
-        logger.info("LEADERBOARD_REFRESH_OK count=%s duration_ms=%.0f", updated, duration_ms)
+        logger.debug("LEADERBOARD_REFRESH_OK count=%s duration_ms=%.0f", updated, duration_ms)
         return updated
     except Exception as e:
         db.rollback()
