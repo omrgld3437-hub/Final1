@@ -16858,7 +16858,8 @@ async function loadFinanceBotDetail(botId) {
 // Finance trades period state
 let financeTradesPeriod = 'daily'; // daily, weekly, monthly, yearly, all
 let financeTradesTypeFilter = 'all'; // all | buysell | depositwithdraw
-let _financeTradesSyncedOnce = false; // sync=1 on first load for fresh Binance data
+let _financeTradesLoadedOnce = false;
+let _financeTradesSyncedOnce = false; // sync=1 only for explicit refresh; first paint stays fast
 
 /** Türkiye saatine göre dönem aralığı (start/end UTC ISO). Günlük = bugün 00:00 TR → şimdi, vb. */
 function getTurkeyDateRange(period) {
@@ -17117,7 +17118,7 @@ async function loadFinanceTrades(doSync) {
     if (!State.accountId) return;
     
     const body = document.getElementById('financeTradesBody');
-    var isBackgroundRefresh = (doSync !== true && _financeTradesSyncedOnce === true);
+    var isBackgroundRefresh = (doSync !== true && _financeTradesLoadedOnce === true);
     if (body && !isBackgroundRefresh) {
         body.innerHTML = '<tr><td colspan="9" style="text-align: center; padding: 2rem; color: var(--ds-text-secondary);">Yükleniyor...</td></tr>';
     }
@@ -17133,7 +17134,7 @@ async function loadFinanceTrades(doSync) {
     if (financeTradesTypeFilter && String(financeTradesTypeFilter).toLowerCase() !== 'all') {
         url += '&type_filter=' + encodeURIComponent(String(financeTradesTypeFilter).trim().toLowerCase());
     }
-    if (doSync || _financeTradesSyncedOnce === false) {
+    if (doSync === true) {
         url += '&sync=1';
         _financeTradesSyncedOnce = true;
     }
@@ -17144,6 +17145,7 @@ async function loadFinanceTrades(doSync) {
         const data = await window.apiClient.get(url, { timeout: 90000 });
         renderFinanceTrades(data);
         updateTradesSummaryStats(data);
+        _financeTradesLoadedOnce = true;
         
         // Hide banner on successful load (if error was resolved)
         if (binanceApiErrorState.isError) {

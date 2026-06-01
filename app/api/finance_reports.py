@@ -37,8 +37,9 @@ FINANCE_TRADES_ALL_MAX_ROWS = 5000  # type_filter=all tek istekte en fazla bu ka
 
 # Deposit/withdraw kısa süreli cache (aynı hesap/tarih tekrar istekte Binance'e gitmesin)
 _deposit_withdraw_cache: Dict[tuple, tuple] = {}  # (account_id, start_ms, end_ms, symbol_filter) -> (deposits, withdrawals, expiry_ts)
-_DEPOSIT_WITHDRAW_CACHE_TTL_SEC = 120  # 2 dakika
+_DEPOSIT_WITHDRAW_CACHE_TTL_SEC = 300  # 5 dakika
 _DEPOSIT_WITHDRAW_FAILURE_CACHE_TTL_SEC = 90  # geçici Binance hatasında boş cache (tekrarlı SAPI spam önleme)
+_DEPOSIT_WITHDRAW_CACHE_BUCKET_MS = 5 * 60 * 1000
 
 # Deposit/withdraw 400/401 hata log throttle: aynı hesap+endpoint için en fazla 5 dakikada bir WARNING
 _deposit_withdraw_error_ts: Dict[tuple, float] = {}
@@ -404,6 +405,21 @@ def _clean_deposit_withdraw_cache():
             _deposit_withdraw_cache.pop(k, None)
 
 
+def _deposit_withdraw_cache_key(
+    account_id: int,
+    start_ms: int,
+    end_ms: int,
+    symbol_filter: Optional[str],
+) -> tuple:
+    """Bucket moving date ranges so repeated dashboard refreshes reuse the same SAPI result."""
+    bucket = max(1, _DEPOSIT_WITHDRAW_CACHE_BUCKET_MS)
+    key_start_ms = (int(start_ms) // bucket) * bucket
+    key_end_ms = (int(end_ms) // bucket) * bucket
+    if key_end_ms < key_start_ms:
+        key_end_ms = int(end_ms)
+    return (int(account_id), key_start_ms, key_end_ms, symbol_filter or "")
+
+
 async def _fetch_deposit_withdraw(
     account_id: int,
     start_time: Optional[datetime],
@@ -436,7 +452,7 @@ async def _fetch_deposit_withdraw(
         start_ms = max(0, end_ms - ninety_days_ms)
     if end_ms - start_ms > ninety_days_ms:
         start_ms = end_ms - ninety_days_ms
-    cache_key = (account_id, start_ms, end_ms, symbol_filter or "")
+    cache_key = _deposit_withdraw_cache_key(account_id, start_ms, end_ms, symbol_filter)
     _clean_deposit_withdraw_cache()
     cached = _deposit_withdraw_cache.get(cache_key)
     if cached is not None and len(cached) >= 3 and cached[2] > time.monotonic():
