@@ -215,9 +215,38 @@ body {
     white-space: nowrap;
 }
 
+/* Sticky footer — içerik kısa olsa bile footer viewport altında */
+html:has(body.page-dashboard),
+html:has(body.page-admin) {
+    min-height: 100%;
+    min-height: 100dvh;
+}
+
+body.page-dashboard,
+body.page-admin {
+    min-height: 100vh;
+    min-height: 100dvh;
+    display: flex;
+    flex-direction: column;
+}
+
+body.page-dashboard > #dashboardMainContainer,
+body.page-admin > .admin-container {
+    flex: 1 0 auto;
+    width: 100%;
+    box-sizing: border-box;
+}
+
+body.page-dashboard > .page-footer,
+body.page-admin > .page-footer {
+    margin-top: auto;
+    flex-shrink: 0;
+}
+
 /* Page footer (login hariç tüm sayfalar) – içerikle iç içe girmesin */
 .page-footer {
-    margin-top: 3rem;
+    width: 100%;
+    box-sizing: border-box;
     padding: 1.5rem 2rem;
     border-top: 1px solid var(--ds-border);
     background: var(--ds-bg-secondary);

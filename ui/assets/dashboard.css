@@ -1175,6 +1175,10 @@ h1, h2, h3, h4 {
 /* Sekme içeriği: tab bar alt boşluğu tek kaynak (dm-tabs margin-bottom) */
 .page-dashboard #unifiedKpiStrip:not(.kpi-strip-hidden) {
     margin-top: 0;
+    display: grid !important;
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
 }
 
 .page-dashboard .tab-contact-layout {
@@ -1182,6 +1186,47 @@ h1, h2, h3, h4 {
     justify-content: center;
     align-items: flex-start;
     width: 100%;
+}
+
+/* İletişim kartı — Portföy Yönetimi paneli ile aynı yükseklik; genişlik 560px sabit */
+.page-dashboard #tabContact .contact-intro-panel {
+    max-width: 560px;
+    width: 100%;
+    margin-bottom: 2rem;
+    box-sizing: border-box;
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 281px;
+}
+
+.page-dashboard #tabContact .contact-intro-panel__title {
+    margin: 0 0 1.5rem 0;
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--ds-text-primary);
+    line-height: 1.3;
+}
+
+.page-dashboard #tabContact .contact-intro-panel__text {
+    margin: 0 0 1.5rem 0;
+    font-size: 0.95rem;
+    color: var(--ds-text-secondary);
+    line-height: 1.5;
+    max-width: 420px;
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.page-dashboard #tabContact .contact-intro-panel__btn {
+    background: var(--ds-accent);
+    color: #000;
+    font-weight: 600;
+    margin-top: auto;
 }
 
 /* Ana alan ve Binance sekmesi: viewport'a tam sığsın */
@@ -1403,10 +1448,10 @@ h1, h2, h3, h4 {
     .page-dashboard #mobileTradeView.dm-tab-content.is-active {
         display: block !important;
         margin-top: 0;
-        margin-left: auto;
-        margin-right: auto;
+        margin-left: 0;
+        margin-right: 0;
         width: 100%;
-        max-width: 880px;
+        max-width: 100%;
         box-sizing: border-box;
         background: var(--ds-bg-panel, rgba(20, 24, 30, 0.75));
         border: 1px solid var(--ds-border, #2b3139);
@@ -1488,6 +1533,9 @@ h1, h2, h3, h4 {
     flex-direction: row;
     align-items: stretch;
     gap: 0;
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
 }
 .page-dashboard .kpi-strip-row .kpi-block-row {
     flex: 1;
@@ -1893,7 +1941,7 @@ h1, h2, h3, h4 {
     display: table-header-group;
 }
 .page-dashboard table.binance-assets-table.varliklar-table--wallet thead th {
-    background: var(--ds-bg-tertiary, #242932) !important;
+    background: var(--ds-bg-tertiary, #2b3139) !important;
     border-top: 1px solid var(--ds-border, #2b3139) !important;
     border-bottom: 1px solid var(--ds-border, #2b3139) !important;
     color: var(--ds-text-secondary, #848e9c) !important;
@@ -1932,7 +1980,8 @@ h1, h2, h3, h4 {
     padding: 0.55rem 3px !important;
     border-top: 1px solid var(--ds-border, #2b3139);
     border-bottom: 1px solid var(--ds-border, #2b3139);
-    background: var(--ds-bg-secondary, #1e2329) !important;
+    background: var(--ds-bg-tertiary, #2b3139) !important;
+    color: var(--ds-text-primary);
     font-size: 0.78rem;
     vertical-align: middle;
     text-align: center;
@@ -1955,8 +2004,9 @@ h1, h2, h3, h4 {
     padding-right: 1rem !important;
 }
 .page-dashboard table.binance-assets-table.varliklar-table--wallet tbody tr[data-asset]:hover td {
-    background: var(--ds-bg-tertiary, #242932) !important;
+    background: var(--ds-bg-tertiary, #2b3139) !important;
     border-color: var(--ds-border-light, #3d4550);
+    box-shadow: inset 0 0 0 9999px rgba(255, 255, 255, 0.04);
 }
 .page-dashboard table.binance-assets-table.varliklar-table--wallet .varlik-asset.mevcut-bot-symbol-link {
     display: flex;
@@ -2736,9 +2786,13 @@ h1, h2, h3, h4 {
     justify-content: space-between;
     gap: 0.75rem 1rem;
     padding: 0.875rem 1rem;
-    background: var(--ds-bg-secondary, #1e2329);
+    background: var(--ds-bg-tertiary, #2b3139);
     border-radius: 10px;
     border: 1px solid var(--ds-border, #2b3139);
+    transition: border-color 0.15s ease;
+}
+.page-dashboard .global-leaderboard-item:hover {
+    border-color: var(--ds-border-light, #3d4550);
 }
 
 .global-leaderboard-item-main {
@@ -2786,9 +2840,9 @@ h1, h2, h3, h4 {
 }
 
 .global-leaderboard-symbol-name {
-    font-size: 0.8rem;
-    font-weight: 600;
-    color: var(--ds-text-secondary);
+    font-size: 0.82rem;
+    font-weight: 700;
+    color: var(--ds-text-primary);
 }
 
 .global-leaderboard-rank-name {
@@ -2838,26 +2892,47 @@ h1, h2, h3, h4 {
     white-space: nowrap;
     touch-action: manipulation;
     cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.35rem 0.65rem;
+    font-size: 0.72rem;
+    line-height: 1.2;
+    border-radius: 8px;
+    transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
 }
 
 .page-dashboard .global-leaderboard-view-params-btn {
-    background: #1a1f26 !important;
-    color: var(--ds-text-primary, #eaecef) !important;
-    border: 1px solid #3d4550 !important;
     font-weight: 600;
+    color: var(--ds-text-primary, #eaecef) !important;
+    background: var(--ds-bg-panel, #242932) !important;
+    border: 1px solid var(--ds-border-light, rgba(255, 255, 255, 0.14)) !important;
+    box-shadow: var(--ds-shadow-panel, 0 1px 3px rgba(0, 0, 0, 0.18));
 }
 .page-dashboard .global-leaderboard-view-params-btn:hover {
-    background: #252b33 !important;
-    border-color: #4a5563 !important;
-    color: #fff !important;
+    color: var(--ds-accent, #c9a227) !important;
+    border-color: var(--ds-accent, #c9a227) !important;
+    background: rgba(201, 162, 39, 0.1) !important;
+    box-shadow: 0 0 0 1px rgba(201, 162, 39, 0.2);
 }
 .page-dashboard .global-leaderboard-view-params-btn:active {
-    background: #14181d !important;
+    background: var(--ds-bg-tertiary, #2b3139) !important;
+    transform: scale(0.98);
 }
 
-.global-leaderboard-apply-btn {
-    background: var(--ds-accent, #f0b90b) !important;
-    color: #000 !important;
+.page-dashboard .global-leaderboard-apply-btn {
+    font-weight: 700;
+    color: #1a1d24 !important;
+    background: var(--ds-accent, #c9a227) !important;
+    border: 1px solid transparent !important;
+    box-shadow: 0 2px 6px rgba(201, 162, 39, 0.22);
+}
+.page-dashboard .global-leaderboard-apply-btn:hover {
+    background: var(--ds-accent-hover, #e4c04a) !important;
+    box-shadow: 0 2px 10px rgba(201, 162, 39, 0.32);
+}
+.page-dashboard .global-leaderboard-apply-btn:active {
+    transform: scale(0.98);
 }
 
 /* Parametreler modal — bot detay #parametrelerModal ile aynı */
@@ -3590,7 +3665,7 @@ body.tab-bots-active #tabBinance #globalLeaderboardPanel {
     display: table-row;
 }
 .page-dashboard table.binance-assets-table.mevcut-botlar-table thead th {
-    background: var(--ds-bg-tertiary, #242932) !important;
+    background: var(--ds-bg-tertiary, #2b3139) !important;
     border-top: 1px solid var(--ds-border, #2b3139) !important;
     border-bottom: 1px solid var(--ds-border, #2b3139) !important;
     color: var(--ds-text-secondary, #848e9c) !important;
@@ -3623,7 +3698,8 @@ body.tab-bots-active #tabBinance #globalLeaderboardPanel {
     padding: 0.55rem 3px !important;
     border-top: 1px solid var(--ds-border, #2b3139);
     border-bottom: 1px solid var(--ds-border, #2b3139);
-    background: var(--ds-bg-secondary, #1e2329) !important;
+    background: var(--ds-bg-tertiary, #2b3139) !important;
+    color: var(--ds-text-primary);
     font-size: 0.78rem;
     vertical-align: middle;
 }
@@ -3640,12 +3716,15 @@ body.tab-bots-active #tabBinance #globalLeaderboardPanel {
     padding-right: 0.65rem !important;
 }
 .page-dashboard table.binance-assets-table.mevcut-botlar-table tbody tr[data-bot-id]:not(.mevcut-bot-row-alert-warn):not(.mevcut-bot-row-alert-crit):not(.mevcut-bot-row-alert-both):hover td {
-    background: var(--ds-bg-tertiary, #242932) !important;
+    background: var(--ds-bg-tertiary, #2b3139) !important;
     border-color: var(--ds-border-light, #3d4550);
+    box-shadow: inset 0 0 0 9999px rgba(255, 255, 255, 0.04);
 }
 .page-dashboard table.binance-assets-table.mevcut-botlar-table tbody tr[data-bot-id] td.col-symbol {
     text-align: left;
-    font-weight: 600;
+    font-weight: 700;
+    color: var(--ds-text-primary);
+    font-size: 0.82rem;
 }
 .page-dashboard table.binance-assets-table.mevcut-botlar-table tbody tr[data-bot-id] td.col-pnl {
     font-weight: 700;
@@ -3764,7 +3843,7 @@ body.tab-bots-active #tabBinance #globalLeaderboardPanel {
     border-style: solid;
 }
 .page-dashboard .mevcut-botlar-mobile-card {
-    background: var(--ds-bg-secondary, #1e2329);
+    background: var(--ds-bg-tertiary, #2b3139);
     border: 1px solid var(--ds-border, #2b3139);
     border-radius: 10px;
     padding: 0.875rem 1rem;
@@ -3884,28 +3963,143 @@ body.tab-bots-active #tabBinance #globalLeaderboardPanel {
 /* Spot Trade Modal Styles */
 .page-dashboard #bnSpotTradeModal .dm-modal__content {
     max-width: 500px;
+    background: var(--ds-bg-panel, #242932);
+    border: 1px solid var(--ds-border-light, rgba(255, 255, 255, 0.12));
+    box-shadow: var(--ds-shadow-panel, 0 8px 32px rgba(0, 0, 0, 0.45));
 }
 
-/* Alış/Satış butonları: Alış yeşil, Satış kırmızı; JS ile seçili durum güncellenir, burada sadece kimlik netleştirilir */
-.page-dashboard #bnSpotTradeModal #bnTradeBuyBtn {
-    background: rgba(14, 203, 129, 0.1);
-    color: #0ecb81;
-    border: 1px solid rgba(14, 203, 129, 0.3);
+.page-dashboard #bnSpotTradeModal .dm-modal__head {
+    background: var(--ds-bg-secondary, #1e2329);
+    border-bottom: 1px solid var(--ds-border-light, rgba(255, 255, 255, 0.1));
 }
-.page-dashboard #bnSpotTradeModal #bnTradeSellBtn {
-    background: transparent;
-    color: var(--ds-text-tertiary);
+
+.page-dashboard #bnSpotTradeModal .dm-modal__body {
+    background: var(--ds-bg-panel, #242932);
+}
+
+.page-dashboard #bnSpotTradeModal #bnTradeChartWrap {
+    height: 140px;
+    margin-bottom: 0.5rem;
+    background: var(--ds-bg-primary, #1a1d24);
+    border: 1px solid var(--ds-border, rgba(255, 255, 255, 0.1));
+    border-radius: 10px;
+    overflow: hidden;
+    cursor: pointer;
+    position: relative;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.page-dashboard #bnSpotTradeModal #bnTradeChart {
+    width: 100%;
+    height: 100%;
+    background: var(--ds-bg-primary, #1a1d24);
+}
+
+.page-dashboard #bnSpotTradeModal #bnTradeChart svg {
+    display: block;
+    background: var(--ds-bg-primary, #1a1d24);
+}
+
+.page-dashboard #bnSpotTradeModal #bnTradeChartOverlay {
+    position: absolute;
+    right: 8px;
+    bottom: 8px;
+    font-size: 0.72rem;
+    color: var(--ds-text-secondary, #b7bdc6);
+    background: rgba(0, 0, 0, 0.45);
+    padding: 0.2rem 0.45rem;
+    border-radius: 6px;
+    pointer-events: none;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.page-dashboard #bnSpotTradeModal #bnTradeChartHighLow.bn-trade-chart-high-low {
+    background: var(--ds-bg-secondary, #1e2329);
+    border: 1px solid var(--ds-border, rgba(255, 255, 255, 0.1));
+    border-radius: 8px;
+    padding: 0.55rem 0.75rem;
+}
+
+.page-dashboard #bnSpotTradeModal #bnTradeChartHighLow .num {
+    color: var(--ds-text-primary);
+    font-weight: 600;
+}
+
+.page-dashboard #bnSpotTradeModal #bnTradeTypeMarket,
+.page-dashboard #bnSpotTradeModal #bnTradeTypeLimit {
+    background: var(--ds-bg-tertiary, #2b3139);
+    color: var(--ds-text-secondary);
     border: 1px solid var(--ds-border);
 }
+
+.page-dashboard #bnSpotTradeModal #bnTradeTypeMarket:hover,
+.page-dashboard #bnSpotTradeModal #bnTradeTypeLimit:hover {
+    color: var(--ds-text-primary);
+    border-color: var(--ds-border-light);
+}
+
+.page-dashboard #bnSpotTradeModal .form-input {
+    background: var(--ds-bg-secondary, #1e2329);
+    border-color: var(--ds-border-light);
+}
+
+.page-dashboard #bnSpotTradeModal .bn-trade-side-row,
+.page-dashboard #bnSpotTradeModal .bn-trade-type-row {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 1.5rem;
+}
+
+.page-dashboard #bnSpotTradeModal .bn-trade-side-btn,
+.page-dashboard #bnSpotTradeModal .bn-trade-type-btn {
+    flex: 1;
+    min-height: 38px;
+    font-size: 0.875rem;
+    font-weight: 700;
+    border-radius: 10px;
+    transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+}
+
+.page-dashboard #bnSpotTradeModal #bnTradeBuyBtn {
+    background: var(--ds-bg-tertiary, #2b3139);
+    color: var(--ds-text-muted, #848e9c);
+    border: 1.5px solid var(--ds-border, rgba(255, 255, 255, 0.1));
+}
+.page-dashboard #bnSpotTradeModal #bnTradeBuyBtn.is-active {
+    background: rgba(14, 203, 129, 0.22) !important;
+    color: #0ecb81 !important;
+    border: 1.5px solid rgba(14, 203, 129, 0.7) !important;
+    box-shadow: 0 0 0 1px rgba(14, 203, 129, 0.2), 0 2px 10px rgba(14, 203, 129, 0.18);
+}
 .page-dashboard #bnSpotTradeModal #bnTradeBuyBtn:hover {
-    background: rgba(14, 203, 129, 0.2);
+    border-color: rgba(14, 203, 129, 0.55);
     color: #0ecb81;
-    border-color: rgba(14, 203, 129, 0.5);
+}
+
+.page-dashboard #bnSpotTradeModal #bnTradeSellBtn {
+    background: var(--ds-bg-tertiary, #2b3139);
+    color: var(--ds-text-muted, #848e9c);
+    border: 1.5px solid var(--ds-border, rgba(255, 255, 255, 0.1));
+}
+.page-dashboard #bnSpotTradeModal #bnTradeSellBtn.is-active {
+    background: rgba(246, 70, 93, 0.22) !important;
+    color: #f6465d !important;
+    border: 1.5px solid rgba(246, 70, 93, 0.7) !important;
+    box-shadow: 0 0 0 1px rgba(246, 70, 93, 0.2), 0 2px 10px rgba(246, 70, 93, 0.18);
 }
 .page-dashboard #bnSpotTradeModal #bnTradeSellBtn:hover {
-    background: rgba(246, 70, 93, 0.08);
+    border-color: rgba(246, 70, 93, 0.55);
     color: #f6465d;
-    border-color: rgba(246, 70, 93, 0.3);
+}
+
+.page-dashboard #bnSpotTradeModal .bn-trade-type-btn {
+    background: var(--ds-bg-tertiary, #2b3139);
+    color: var(--ds-text-secondary);
+    border: 1.5px solid var(--ds-border);
+}
+.page-dashboard #bnSpotTradeModal .bn-trade-type-btn:hover {
+    color: var(--ds-text-primary);
+    border-color: var(--ds-border-light);
 }
 
 .page-dashboard #bnSpotTradeModal .price-live.price-up,
@@ -3922,11 +4116,15 @@ body.tab-bots-active #tabBinance #globalLeaderboardPanel {
     font-size: 1.3rem;
 }
 
+.page-dashboard #bnSpotTradeModal #bnTradeTypeMarket.active,
+.page-dashboard #bnSpotTradeModal #bnTradeTypeLimit.active,
 .page-dashboard #bnTradeTypeMarket.active,
 .page-dashboard #bnTradeTypeLimit.active {
-    background: var(--ds-accent);
-    color: var(--ds-bg-primary);
-    border-color: var(--ds-accent);
+    background: var(--ds-bg-tertiary, #2b3139) !important;
+    color: var(--ds-accent, #c9a227) !important;
+    border: 1.5px solid var(--ds-accent, #c9a227) !important;
+    font-weight: 700;
+    box-shadow: 0 0 0 1px rgba(201, 162, 39, 0.28);
 }
 
 .page-dashboard #bnTradeTotalPercentButtons.bn-trade-percent-btns {
@@ -3947,30 +4145,46 @@ body.tab-bots-active #tabBinance #globalLeaderboardPanel {
 .page-dashboard .bn-trade-percent-btns button {
     flex: 1;
     min-width: 0;
-    padding: 0.35rem 0.55rem;
+    padding: 0.4rem 0.55rem;
     font-size: 0.78rem;
-    font-weight: 600;
-    color: var(--ds-text-secondary);
-    background: var(--ds-bg-tertiary);
-    border: 1px solid var(--ds-border);
+    font-weight: 700;
+    color: var(--ds-text-primary);
+    background: var(--ds-bg-secondary, #1e2329);
+    border: 1.5px solid var(--ds-border-light, rgba(255, 255, 255, 0.14));
     border-radius: 8px;
     cursor: pointer;
     transition: color 0.15s, border-color 0.15s, background 0.15s, transform 0.12s;
 }
 
+.page-dashboard #bnSpotTradeModal .bn-trade-percent-btns .btn-mini,
+.page-dashboard #bnSpotTradeModal .bn-trade-percent-btns button {
+    background: var(--ds-bg-primary, #1a1d24);
+    border-color: var(--ds-border-light);
+    color: var(--ds-text-primary);
+}
+
 .page-dashboard .bn-trade-percent-btns .btn-mini:hover,
 .page-dashboard .bn-trade-percent-btns button:hover {
-    color: var(--ds-text-primary);
-    border-color: var(--ds-accent);
-    background: rgba(240, 185, 11, 0.06);
+    color: var(--ds-accent, #c9a227);
+    border-color: var(--ds-accent, #c9a227);
+    background: rgba(201, 162, 39, 0.12);
 }
 
 .page-dashboard .bn-trade-percent-btns .btn-mini:active,
 .page-dashboard .bn-trade-percent-btns button:active {
-    color: #000;
-    background: var(--ds-accent);
-    border-color: var(--ds-accent);
+    color: var(--ds-accent, #c9a227);
+    background: var(--ds-bg-primary, #1a1d24);
+    border-color: var(--ds-accent, #c9a227);
     transform: scale(0.98);
+}
+
+.page-dashboard .bn-trade-percent-btns .btn-mini.is-active,
+.page-dashboard .bn-trade-percent-btns button.is-active {
+    color: var(--ds-accent, #c9a227) !important;
+    background: var(--ds-bg-primary, #1a1d24) !important;
+    border: 1.5px solid var(--ds-accent, #c9a227) !important;
+    box-shadow: 0 0 0 1px rgba(201, 162, 39, 0.28);
+    font-weight: 700;
 }
 
 .page-dashboard #bnTradeChartHighLow.bn-trade-chart-high-low {
@@ -4401,13 +4615,7 @@ body.tab-bots-active #tabBinance #globalLeaderboardPanel {
     border-color: #f6465d;
 }
 
-/* Trade modal type buttons */
-.page-dashboard #bnTradeTypeMarket.active,
-.page-dashboard #bnTradeTypeLimit.active {
-    background: var(--ds-accent);
-    color: var(--ds-bg-primary);
-    border-color: var(--ds-accent);
-}
+/* Trade modal type buttons — see #bnSpotTradeModal .bn-trade-type-btn.active above */
 
 .page-dashboard .mini-btn {
     padding: 4px 8px;

@@ -376,8 +376,10 @@
         margin-left: auto !important;
         margin-right: auto !important;
         padding: 0.55rem 1.25rem 0.65rem !important;
-        flex: none;
+        flex: 1 0 auto;
         min-height: 0;
+        display: flex;
+        flex-direction: column;
     }
     .page-admin .tabs-container {
         flex: none;

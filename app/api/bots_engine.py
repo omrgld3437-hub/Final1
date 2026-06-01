@@ -3193,14 +3193,20 @@ async def bots_grid_points(
 @router.get("/batch/live")
 async def bots_live_batch(
     request: Request,
-    account_id: int = Query(..., description="Account scope"),
+    account_id: Optional[int] = Query(None, description="Account scope"),
+    account_code: Optional[str] = Query(None),
     bot_ids: str = Query(..., description="Comma-separated bot ids (max 50)"),
     current: dict = Depends(require_auth),
     db: Session = Depends(get_db),
 ):
     """Batch live snapshots: one HTTP round-trip for dashboard equity polls."""
     rid = _request_id(request)
-    get_account_or_403(current, account_id, db)
+    resolved_account_id = _resolve_account_id(account_id, account_code, db)
+    if resolved_account_id is None:
+        if account_code and str(account_code).strip():
+            raise HTTPException(status_code=404, detail=_detail_err("ACCOUNT_NOT_FOUND", "Account not found", rid))
+        raise HTTPException(status_code=422, detail=_detail_err("ACCOUNT_REQUIRED", "account_id or account_code is required", rid))
+    get_account_or_403(current, resolved_account_id, db)
     id_list: List[int] = []
     for part in (bot_ids or "").split(","):
         part = part.strip()
@@ -3215,7 +3221,7 @@ async def bots_live_batch(
         return {"live": {}, "request_id": rid}
     bots = (
         db.query(Bot)
-        .filter(Bot.account_id == account_id, Bot.id.in_(id_list))
+        .filter(Bot.account_id == resolved_account_id, Bot.id.in_(id_list))
         .all()
     )
     from app.botengine.state_store import load_states_bulk

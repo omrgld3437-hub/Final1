@@ -49,10 +49,10 @@ CHANGE: Fix navigation links + route pinning - ensure admin link works, update c
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/ui/assets/ticker.css?v=adminfix1">
     <link rel="stylesheet" href="/ui/assets/theme.css?v=adminfix1">
-    <link rel="stylesheet" href="/ui/assets/ui.css?v=adminfix1">
-    <link rel="stylesheet" href="/ui/assets/design.css?v=design-scroll8">
+    <link rel="stylesheet" href="/ui/assets/ui.css?v=footer-sticky1">
+    <link rel="stylesheet" href="/ui/assets/design.css?v=footer-sticky2">
     <link rel="stylesheet" href="/ui/assets/dashboard-login-theme.css?v=admin-tabs-noline1">
-    <link rel="stylesheet" href="/ui/assets/admin-login-theme.css?v=admin-bal-revert1">
+    <link rel="stylesheet" href="/ui/assets/admin-login-theme.css?v=footer-sticky2">
     <script src="/ui/assets/scrollAutoHide.js?v=5"></script>
 </head>
 <body class="binance-theme page-admin">
@@ -430,6 +430,15 @@ CHANGE: Fix navigation links + route pinning - ensure admin link works, update c
         </div>
     </div>
 
+    <footer class="page-footer">
+        <div class="page-footer-legal">
+            <strong>TraderTrailing</strong> Ömer Altın kuruluşudur. Tüm hakları saklıdır.
+        </div>
+        <div class="page-footer-license">
+            Bu web platformu, TraderTrailing adına lisanslı yazılım altyapısı ile sunulmaktadır. İçerik, tasarım ve işlevler telif hakları ile korunmaktadır; izinsiz kopyalama, dağıtım veya ticari kullanım yasaktır.
+        </div>
+    </footer>
+
     <!-- Sunucudan Çık Onay Modal (şifre gerekli) -->
     <div id="serverExitModal" class="modal" style="display: none;">
         <div class="modal-content" style="max-width: 420px;">
@@ -579,15 +588,6 @@ CHANGE: Fix navigation links + route pinning - ensure admin link works, update c
             <div id="accountUserAuditList" style="flex: 1; overflow: auto; padding: 1rem 1.25rem; font-size: 0.85rem;"><span style="color: var(--ds-text-secondary);">Yükleniyor...</span></div>
         </div>
     </div>
-
-    <footer class="page-footer">
-        <div class="page-footer-legal">
-            <strong>TraderTrailing</strong> Ömer Altın kuruluşudur. Tüm hakları saklıdır.
-        </div>
-        <div class="page-footer-license">
-            Bu web platformu, TraderTrailing adına lisanslı yazılım altyapısı ile sunulmaktadır. İçerik, tasarım ve işlevler telif hakları ile korunmaktadır; izinsiz kopyalama, dağıtım veya ticari kullanım yasaktır.
-        </div>
-    </footer>
 
     <script>
     (function () {

@@ -87,12 +87,12 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
     <title>Dashboard - TraderTrailing</title>
     <link rel="stylesheet" href="/ui/assets/ticker.css?v=static-fx1">
     <link rel="stylesheet" href="/ui/assets/theme.css?v=clean1">
-    <link rel="stylesheet" href="/ui/assets/ui.css?v=clean1">
-    <link rel="stylesheet" href="/ui/assets/design.css?v=design-scroll8">
-    <link rel="stylesheet" href="/ui/assets/dashboard.css?v=wallet-th-bot1">
+    <link rel="stylesheet" href="/ui/assets/ui.css?v=footer-sticky1">
+    <link rel="stylesheet" href="/ui/assets/design.css?v=footer-sticky2">
+    <link rel="stylesheet" href="/ui/assets/dashboard.css?v=trade-btn-outline1">
     <link rel="stylesheet" href="/ui/assets/binance-colors.css?v=bin1">
     <link rel="stylesheet" href="/ui/assets/blink.css?v=1">
-    <link rel="stylesheet" href="/ui/assets/dashboard-login-theme.css?v=dm-tabs-appbar1">
+    <link rel="stylesheet" href="/ui/assets/dashboard-login-theme.css?v=spot-modal-chart1">
     <script src="/ui/assets/scrollAutoHide.js?v=5"></script>
     <style id="chat-animations">
         /* Sohbet: Admin yazıyor + mesaj giriş animasyonu */
@@ -353,7 +353,7 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
             }
             function paintKpi(spot, pnl, pct) {
                 var strip = document.getElementById('unifiedKpiStrip');
-                if (strip) strip.style.display = 'block';
+                if (strip) strip.style.removeProperty('display');
                 if (spot > 0) {
                     var w = document.getElementById('kpiCuzdan');
                     if (w) w.textContent = fmtUsdEarly(spot);
@@ -776,10 +776,10 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
         <!-- Tab Content: İletişim (Yönetim ile mesajlaşma) -->
         <div id="tabContact" class="dm-tab-content" style="display: none;">
             <div class="tab-contact-layout">
-                <div class="panel" style="max-width: 560px; width: 100%; text-align: center;">
-                    <h2 style="margin: 0 0 1rem 0; font-size: 1.25rem; font-weight: 600; color: var(--ds-text-primary);">Yönetim ile İletişim</h2>
-                    <p style="margin: 0 0 1.25rem 0; font-size: 0.95rem; color: var(--ds-text-secondary); line-height: 1.5;">Yönetim ekibiyle güvenli mesajlaşma. Soru ve taleplerinizi buradan iletebilirsiniz; mesaj geçmişi saklanır.</p>
-                    <button type="button" id="btnOpenChatModal" class="btn primary" style="background: var(--ds-accent); color: #000; font-weight: 600;" onclick="openChatScreen()">Sohbeti Aç</button>
+                <div class="panel contact-intro-panel">
+                    <h2 class="contact-intro-panel__title">Yönetim ile İletişim</h2>
+                    <p class="contact-intro-panel__text">Yönetim ekibiyle güvenli mesajlaşma. Soru ve taleplerinizi buradan iletebilirsiniz; mesaj geçmişi saklanır.</p>
+                    <button type="button" id="btnOpenChatModal" class="btn primary contact-intro-panel__btn" onclick="openChatScreen()">Sohbeti Aç</button>
                 </div>
             </div>
         </div>
@@ -884,6 +884,15 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
 
     </div>
 
+    <footer class="page-footer">
+        <div class="page-footer-legal">
+            <strong>TraderTrailing</strong> Ömer Altın kuruluşudur. Tüm hakları saklıdır.
+        </div>
+        <div class="page-footer-license">
+            Bu web platformu, TraderTrailing adına lisanslı yazılım altyapısı ile sunulmaktadır. İçerik, tasarım ve işlevler telif hakları ile korunmaktadır; izinsiz kopyalama, dağıtım veya ticari kullanım yasaktır.
+        </div>
+    </footer>
+
     <script>
     (function(){
       var c = document.getElementById('dashboardMainContainer');
@@ -929,7 +938,11 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
             });
           }
           var s = document.getElementById('unifiedKpiStrip');
-          if (s) s.style.display = (mobileTab === 'home' || mobileTab === 'portfoy' || mobileTab === 'trade') ? 'block' : 'none';
+          if (s) {
+            var showKpi = (mobileTab === 'home' || mobileTab === 'portfoy' || mobileTab === 'trade');
+            if (showKpi) s.style.removeProperty('display');
+            else s.style.display = 'none';
+          }
         }
       }
       c.style.visibility = 'visible';
@@ -971,7 +984,7 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
     (function(){ if (window.innerWidth <= 768) {
       var hasMobileTab = document.body.classList.contains('mobile-tab-home') || document.body.classList.contains('mobile-tab-portfoy') || document.body.classList.contains('mobile-tab-trade') || document.body.classList.contains('mobile-tab-bots') || document.body.classList.contains('mobile-tab-ayarlar');
       if (!hasMobileTab) { document.body.classList.add('mobile-tab-home'); var nav = document.getElementById('mobileBottomNav'); if (nav) nav.querySelectorAll('.mobile-nav-item').forEach(function(i){ i.classList.toggle('is-active', i.getAttribute('data-mobile-tab') === 'home'); }); }
-      var s = document.getElementById('unifiedKpiStrip'); if (s) s.style.display = 'block';
+      var s = document.getElementById('unifiedKpiStrip'); if (s) s.style.removeProperty('display');
     } })();
     </script>
 
@@ -996,9 +1009,9 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
                     </div>
                 </div>
                 <!-- Son 4 saat grafik (tıkla → detay grafik sayfası) -->
-                <div id="bnTradeChartWrap" role="button" tabindex="0" title="Detay grafik sayfasını aç" style="height: 140px; margin-bottom: 0.5rem; background: var(--ds-bg-tertiary); border-radius: var(--ds-radius-md); overflow: hidden; cursor: pointer; position: relative;">
-                    <div id="bnTradeChart" style="width: 100%; height: 100%;"></div>
-                    <div id="bnTradeChartOverlay" style="position: absolute; right: 8px; bottom: 8px; font-size: 0.75rem; color: var(--ds-text-tertiary); pointer-events: none;">Grafiği büyüt →</div>
+                <div id="bnTradeChartWrap" role="button" tabindex="0" title="Detay grafik sayfasını aç">
+                    <div id="bnTradeChart"></div>
+                    <div id="bnTradeChartOverlay">Grafiği büyüt →</div>
                 </div>
                 <!-- Günlük / Yıllık en düşük - en yüksek -->
                 <div id="bnTradeChartHighLow" class="bn-trade-chart-high-low">
@@ -1006,16 +1019,16 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
                     <span>Yıllık: En düşük <span id="bnTradeYearlyLow" class="num">—</span> · En yüksek <span id="bnTradeYearlyHigh" class="num">—</span></span>
                 </div>
 
-                <!-- Buy/Sell Tabs (Alış/Satış – eski stil: yeşil/kırmızı seçili, gri seçili değil) -->
-                <div style="display: flex; gap: 8px; margin-bottom: 1.5rem;">
-                    <button id="bnTradeBuyBtn" class="btn" style="flex: 1; background: rgba(14, 203, 129, 0.1); color: #0ecb81; border: 1px solid rgba(14, 203, 129, 0.3);" onclick="setTradeSide('BUY')">Alış</button>
-                    <button id="bnTradeSellBtn" class="btn" style="flex: 1; background: transparent; color: var(--ds-text-tertiary); border: 1px solid var(--ds-border);" onclick="setTradeSide('SELL')">Satış</button>
+                <!-- Buy/Sell Tabs -->
+                <div class="bn-trade-side-row">
+                    <button id="bnTradeBuyBtn" type="button" class="btn bn-trade-side-btn is-active" onclick="setTradeSide('BUY')">Alış</button>
+                    <button id="bnTradeSellBtn" type="button" class="btn bn-trade-side-btn" onclick="setTradeSide('SELL')">Satış</button>
                 </div>
 
                 <!-- Order Type (Market/Limit) -->
-                <div style="display: flex; gap: 8px; margin-bottom: 1.5rem;">
-                    <button id="bnTradeTypeMarket" class="btn ghost" style="flex: 1;" onclick="setTradeType('MARKET')">Market</button>
-                    <button id="bnTradeTypeLimit" class="btn ghost" style="flex: 1;" onclick="setTradeType('LIMIT')">Limit</button>
+                <div class="bn-trade-type-row">
+                    <button id="bnTradeTypeMarket" type="button" class="btn bn-trade-type-btn active" onclick="setTradeType('MARKET')">Market</button>
+                    <button id="bnTradeTypeLimit" type="button" class="btn bn-trade-type-btn" onclick="setTradeType('LIMIT')">Limit</button>
                 </div>
 
                 <!-- Limit Price (only for LIMIT orders) -->
@@ -1039,10 +1052,10 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
                             Miktar: <span id="bnTradeTotalValueAmount" style="color: var(--ds-text-primary); font-weight: 600;">0.00000000</span>
                         </div>
                         <div id="bnTradeTotalPercentButtons" class="bn-trade-percent-btns">
-                            <button type="button" class="btn-mini" onclick="setTradePercent(25)">25%</button>
-                            <button type="button" class="btn-mini" onclick="setTradePercent(50)">50%</button>
-                            <button type="button" class="btn-mini" onclick="setTradePercent(75)">75%</button>
-                            <button type="button" class="btn-mini" onclick="setTradePercent(100)">100%</button>
+                            <button type="button" class="btn-mini" data-percent="25" aria-pressed="false" onclick="setTradePercent(25)">25%</button>
+                            <button type="button" class="btn-mini" data-percent="50" aria-pressed="false" onclick="setTradePercent(50)">50%</button>
+                            <button type="button" class="btn-mini" data-percent="75" aria-pressed="false" onclick="setTradePercent(75)">75%</button>
+                            <button type="button" class="btn-mini" data-percent="100" aria-pressed="false" onclick="setTradePercent(100)">100%</button>
                         </div>
                     </div>
 
@@ -1059,10 +1072,10 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
                             Tutar: <span id="bnTradeQuantityValueAmount" style="color: var(--ds-text-primary); font-weight: 600;">0.00000000</span>
                         </div>
                         <div id="bnTradeQuantityPercentButtons" class="bn-trade-percent-btns">
-                            <button type="button" class="btn-mini" onclick="setTradePercent(25)">25%</button>
-                            <button type="button" class="btn-mini" onclick="setTradePercent(50)">50%</button>
-                            <button type="button" class="btn-mini" onclick="setTradePercent(75)">75%</button>
-                            <button type="button" class="btn-mini" onclick="setTradePercent(100)">100%</button>
+                            <button type="button" class="btn-mini" data-percent="25" aria-pressed="false" onclick="setTradePercent(25)">25%</button>
+                            <button type="button" class="btn-mini" data-percent="50" aria-pressed="false" onclick="setTradePercent(50)">50%</button>
+                            <button type="button" class="btn-mini" data-percent="75" aria-pressed="false" onclick="setTradePercent(75)">75%</button>
+                            <button type="button" class="btn-mini" data-percent="100" aria-pressed="false" onclick="setTradePercent(100)">100%</button>
                         </div>
                     </div>
                 </div>
@@ -1381,15 +1394,6 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
             </div>
         </div>
     </div>
-
-    <footer class="page-footer">
-        <div class="page-footer-legal">
-            <strong>TraderTrailing</strong> Ömer Altın kuruluşudur. Tüm hakları saklıdır.
-        </div>
-        <div class="page-footer-license">
-            Bu web platformu, TraderTrailing adına lisanslı yazılım altyapısı ile sunulmaktadır. İçerik, tasarım ve işlevler telif hakları ile korunmaktadır; izinsiz kopyalama, dağıtım veya ticari kullanım yasaktır.
-        </div>
-    </footer>
 
     <!-- Must Change Password Modal (zorunlu, kapatılamaz) -->
     <div id="mustChangePasswordModal" class="modal" style="display: none; position: fixed; z-index: 20000; left: 0; top: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.95); align-items: center; justify-content: center;">
@@ -2057,7 +2061,7 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
     <script src="/ui/assets/renderHome.js?v=wallet-stable6"></script>
     <script src="/ui/assets/homeFlash.js?v=wallet-inflight-poll1"></script>
     <!-- Main dashboard (refactored) -->
-    <script src="/ui/assets/dashboard.js?v=wallet-status-fix1"></script>
+    <script src="/ui/assets/dashboard.js?v=trade-percent-active1"></script>
     <script src="/ui/assets/ticker.js?v=chg-pct1" defer></script>
 </body>
 </html>

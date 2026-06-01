@@ -741,9 +741,11 @@ async def home_wallet_refresh(
         wallet_cached = wallet_cached or mem_w
         wallet_cached_at = wallet_cached_at or mem_w.get("ts")
 
-    # Cooldown
+    # Cooldown. `force=1` only bypasses the freshness TTL below; it must not
+    # bypass cooldown/inflight protection, otherwise focus/polling events can
+    # start a new Binance wallet request every few seconds.
     cooldown_until = _wallet_cooldown_until.get(account_id)
-    if cooldown_until is not None and now_mono < cooldown_until and force != 1:
+    if cooldown_until is not None and now_mono < cooldown_until:
         server_ms = (time.perf_counter() - t0) * 1000
         logger.info(
             "home_wallet_refresh event=home_wallet_refresh account_id=%s request_id=%s skipped=true reason=cooldown server_ms=%.2f",

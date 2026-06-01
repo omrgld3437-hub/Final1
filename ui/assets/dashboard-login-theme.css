@@ -299,8 +299,9 @@ body.binance-theme.page-admin {
     box-shadow: var(--ds-shadow-panel);
 }
 
-.page-dashboard .kpi-strip-row .kpi-block {
-    background: var(--ds-bg-secondary) !important;
+.page-dashboard .kpi-strip-row .kpi-block,
+.page-dashboard .kpi-block-cuzdan {
+    background: var(--ds-bg-panel) !important;
     border: 1px solid var(--ds-border-light) !important;
     box-shadow: var(--ds-shadow-panel);
 }
@@ -369,17 +370,34 @@ body.binance-theme.page-admin {
     border-bottom: 1px solid var(--ds-border);
 }
 
+.page-dashboard table.binance-assets-table.varliklar-table--wallet tbody tr[data-asset] td,
 .page-dashboard .mevcut-botlar-table tbody tr[data-bot-id] td {
     color: var(--ds-text-primary);
+    background: var(--ds-bg-tertiary) !important;
+    border-color: var(--ds-border, #2b3139);
 }
 
 .page-dashboard .varliklar-table tbody tr:hover,
 .page-dashboard .binance-assets-table tbody tr:hover {
-    background: rgba(255, 255, 255, 0.04);
+    background: transparent;
 }
 
-.page-dashboard .mevcut-botlar-table tbody tr[data-bot-id]:hover {
-    background: var(--ds-bg-tertiary, #242932);
+.page-dashboard table.binance-assets-table.varliklar-table--wallet tbody tr[data-asset]:hover td,
+.page-dashboard table.binance-assets-table.mevcut-botlar-table tbody tr[data-bot-id]:not(.mevcut-bot-row-alert-warn):not(.mevcut-bot-row-alert-crit):not(.mevcut-bot-row-alert-both):hover td {
+    border-color: var(--ds-border-light);
+}
+
+.page-dashboard .global-leaderboard-item {
+    background: var(--ds-bg-tertiary) !important;
+    border-color: var(--ds-border) !important;
+}
+
+.page-dashboard .global-leaderboard-item:hover {
+    border-color: var(--ds-border-light) !important;
+}
+
+.page-dashboard .global-leaderboard-symbol-name {
+    color: var(--ds-text-primary);
 }
 
 .page-dashboard .mobile-trade-fav-item {
@@ -408,10 +426,26 @@ body.binance-theme.page-admin {
 }
 
 .page-dashboard .modal-content,
-.page-dashboard .dm-modal .modal-card {
+.page-dashboard .dm-modal .modal-card,
+.page-dashboard #bnSpotTradeModal .dm-modal__content {
     background: var(--ds-bg-secondary) !important;
     color: var(--ds-text-primary);
     border-color: var(--ds-border-light) !important;
+}
+
+.page-dashboard #bnSpotTradeModal .dm-modal__head {
+    background: var(--ds-bg-primary) !important;
+    border-bottom-color: var(--ds-border-light) !important;
+}
+
+.page-dashboard #bnSpotTradeModal .dm-modal__body {
+    background: var(--ds-bg-panel) !important;
+}
+
+.page-dashboard #bnSpotTradeModal #bnTradeChartWrap,
+.page-dashboard #bnSpotTradeModal #bnTradeChart,
+.page-dashboard #bnSpotTradeModal #bnTradeChart svg {
+    background: var(--ds-bg-primary) !important;
 }
 
 .page-dashboard .coin-list-search-dropdown {
@@ -674,13 +708,15 @@ body.binance-theme.page-admin {
 }
 
 .page-bot .state-hero {
-    background: linear-gradient(145deg, var(--ds-bg-secondary) 0%, var(--ds-bg-tertiary) 100%);
-    border-color: var(--ds-border-light);
+    background: var(--ds-bg-panel) !important;
+    border-color: var(--ds-border-light) !important;
+    box-shadow: var(--ds-shadow-panel);
+    border-radius: 8px;
 }
 
 .page-bot .state-hero-item {
-    background: rgba(0, 0, 0, 0.2);
-    border-color: var(--ds-border);
+    background: rgba(0, 0, 0, 0.12);
+    border-color: var(--ds-border-light);
 }
 
 .page-bot .back,
