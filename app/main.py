@@ -419,6 +419,21 @@ async def startup_event():
                 logger.debug("perf_chart_sample_loop: %s", e)
     asyncio.create_task(_perf_chart_sample_loop())
 
+    # error_logs temizleme: 30 günden eski kayıtları günde bir kez sil
+    async def _error_logs_cleanup_loop():
+        from app.db.session import SessionLocal
+        from app.db.schema_guard import cleanup_old_error_logs
+        from app.db.base import engine as _engine
+        while True:
+            await asyncio.sleep(24 * 3600)
+            try:
+                def _sync():
+                    cleanup_old_error_logs(_engine, retain_days=30)
+                await loop.run_in_executor(None, _sync)
+            except Exception as e:
+                logger.debug("error_logs_cleanup_loop: %s", e)
+    asyncio.create_task(_error_logs_cleanup_loop())
+
     # Leaderboard refresh: bot_public_metrics every 60s (DB/PnlService only, no Binance). Single-run lock for multi-worker.
     async def _leaderboard_refresh_loop():
         from app.db.session import SessionLocal
@@ -468,6 +483,7 @@ async def startup_event():
                 await asyncio.sleep(2)
                 try:
                     snap = RequestMetrics.snapshot_web_metrics()
+                    snap["pid"] = os.getpid()
                     p = RUN_DIR / "web.metrics.json"
                     tmp = RUN_DIR / "web.metrics.json.tmp"
                     tmp.write_text(_json.dumps(snap, ensure_ascii=False, indent=2), encoding="utf-8")

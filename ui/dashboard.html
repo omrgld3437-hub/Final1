@@ -89,7 +89,7 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
     <link rel="stylesheet" href="/ui/assets/theme.css?v=clean1">
     <link rel="stylesheet" href="/ui/assets/ui.css?v=footer-sticky1">
     <link rel="stylesheet" href="/ui/assets/design.css?v=footer-sticky2">
-    <link rel="stylesheet" href="/ui/assets/dashboard.css?v=trade-btn-outline1">
+    <link rel="stylesheet" href="/ui/assets/dashboard.css?v=bot-tab-health-blink1">
     <link rel="stylesheet" href="/ui/assets/binance-colors.css?v=bin1">
     <link rel="stylesheet" href="/ui/assets/blink.css?v=1">
     <link rel="stylesheet" href="/ui/assets/dashboard-login-theme.css?v=spot-modal-chart1">
@@ -531,6 +531,7 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
                         <span id="btnSortBotsByIcon" aria-hidden="true">↑</span>
                     </button>
                 </div>
+                <div id="walletStaleBotNotice" class="wallet-stale-bot-notice" style="display:none;" role="status" aria-live="polite"></div>
                 <div id="financeBotsList" class="mevcut-botlar-list"></div>
             </div>
 
@@ -683,6 +684,7 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
                         <span id="btnSortBotsByBotsTabIcon" aria-hidden="true">↑</span>
                     </button>
                 </div>
+                <div id="walletStaleBotNoticeBotsTab" class="wallet-stale-bot-notice" style="display:none;" role="status" aria-live="polite"></div>
                 <div id="financeBotsListBots" class="mevcut-botlar-list"></div>
             </div>
 
@@ -2055,13 +2057,14 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
     <!-- <script src="/ui/assets/binanceMarketData.js?v=1.0&nocache=202601230000"></script> -->
     <script src="/ui/assets/spot_engine.js?v=1.0&nocache=202601222350"></script>
     <script src="/ui/assets/utils/coinLogo.js?v=1"></script>
-    <script src="/ui/assets/utils/botHealthAlerts.js?v=27"></script>
+    <script src="/ui/assets/utils/botHealthAlerts.js?v=31"></script>
     <!-- Flash Home (Patch H). Deploy ui/assets/ so storageCache, renderHome, homeFlash exist (else 404). -->
     <script src="/ui/assets/storageCache.js?v=flash1"></script>
     <script src="/ui/assets/renderHome.js?v=wallet-stable6"></script>
     <script src="/ui/assets/homeFlash.js?v=wallet-inflight-poll1"></script>
     <!-- Main dashboard (refactored) -->
-    <script src="/ui/assets/dashboard.js?v=finance-fast-first-paint1"></script>
+  <script src="/ui/assets/dashboard.js?v=wallet-live-refresh-manager2"></script>
+  <script src="/ui/assets/wallet-stale-fix.js?v=1"></script>
     <script src="/ui/assets/ticker.js?v=chg-pct1" defer></script>
 </body>
 </html>

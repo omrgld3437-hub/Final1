@@ -113,14 +113,27 @@ function mergeContext(context) {
 /**
  * Send error to backend for admin error logs (fire-and-forget, no throw)
  */
+var _SENSITIVE_PARAM_RE = /([?&])(token|password|passwd|secret|key|auth|reset_code|code|session)=[^&]*/gi;
+function _sanitizeUrl(url) {
+    if (!url || typeof url !== 'string') return url;
+    return url.replace(_SENSITIVE_PARAM_RE, '$1$2=[REDACTED]');
+}
+
 function sendErrorToBackend(errorInfo, context) {
         try {
             var ctx = mergeContext(context && typeof context === 'object' ? context : {});
+            // Sadece pathname gönder — query string'de token/reset_code gibi hassas parametre olabilir
+            var safePath = (typeof window !== 'undefined' && window.location)
+                ? (window.location.pathname || '')
+                : null;
+            var safeUrl = (typeof window !== 'undefined' && window.location)
+                ? _sanitizeUrl(window.location.href)
+                : null;
             var payload = {
-                message: errorInfo.message || String(errorInfo),
+                message: (errorInfo.message || String(errorInfo)).slice(0, 1000),
                 source: 'frontend',
-                detail: errorInfo.stack || null,
-                path: (typeof window !== 'undefined' && window.location) ? (window.location.pathname || '') + (window.location.search || '') : null,
+                detail: errorInfo.stack ? errorInfo.stack.slice(0, 4000) : null,
+                path: safePath,
                 context: {
                     page: ctx.page,
                     section: ctx.section,
@@ -130,7 +143,7 @@ function sendErrorToBackend(errorInfo, context) {
                     symbol: ctx.symbol,
                     bot_id: ctx.bot_id,
                     account_id: ctx.account_id,
-                    url: typeof window !== 'undefined' && window.location ? window.location.href : null,
+                    url: safeUrl,
                     user_agent: typeof navigator !== 'undefined' ? navigator.userAgent : null
                 }
             };

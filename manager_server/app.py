@@ -132,6 +132,8 @@ async def catch_http_exceptions(request: Request, call_next):
 _SUPPRESS_404_PATHS = frozenset({
     "/",
     "/favicon.ico",
+    "/apple-touch-icon.png",
+    "/apple-touch-icon-precomposed.png",
     "/api/issues/summary",
     "/api/security/blocked-ips",
     "/api/stack/restart",
@@ -194,6 +196,13 @@ async def root_redirect():
 @app.get("/favicon.ico")
 async def favicon():
     """204 No Content – tarayıcı 404 log spam önlenir."""
+    return Response(status_code=204)
+
+
+@app.get("/apple-touch-icon.png")
+@app.get("/apple-touch-icon-precomposed.png")
+async def apple_touch_icon():
+    """204 No Content – Safari/iOS otomatik ikon isteği 404 uyarısı üretmesin."""
     return Response(status_code=204)
 
 @app.get("/api/status")

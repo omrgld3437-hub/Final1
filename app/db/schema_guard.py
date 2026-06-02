@@ -687,6 +687,52 @@ def ensure_core_tables(engine):
     logger.info("schema_guard: created core tables (accounts, bots, etc.)")
 
 
+def ensure_error_logs_composite_indexes(engine):
+    """error_logs için (account_id, created_at) ve (level, created_at) composite indexleri yoksa oluştur."""
+    with engine.connect() as conn:
+        existing_idx = {
+            row[1] for row in conn.execute(
+                text("SELECT type, name FROM sqlite_master WHERE type='index'")
+            ).fetchall()
+        }
+        to_create = [
+            ("ix_error_logs_account_created",
+             "CREATE INDEX ix_error_logs_account_created ON error_logs (account_id, created_at)"),
+            ("ix_error_logs_level_created",
+             "CREATE INDEX ix_error_logs_level_created ON error_logs (level, created_at)"),
+        ]
+        for idx_name, ddl in to_create:
+            if idx_name in existing_idx:
+                continue
+            try:
+                conn.execute(text(ddl))
+                conn.commit()
+                logger.info("schema_guard: created index %s", idx_name)
+            except Exception as e:
+                logger.debug("schema_guard: index %s skipped: %s", idx_name, e)
+                conn.rollback()
+
+
+def cleanup_old_error_logs(engine, retain_days: int = 30) -> int:
+    """30 günden eski error_logs satırlarını sil. Geri dönen değer: silinen satır sayısı."""
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(
+                text(
+                    "DELETE FROM error_logs WHERE created_at < datetime('now', :offset)"
+                ),
+                {"offset": f"-{retain_days} days"},
+            )
+            conn.commit()
+            deleted = result.rowcount or 0
+            if deleted:
+                logger.info("schema_guard: cleanup_old_error_logs deleted=%d rows (>%d days)", deleted, retain_days)
+            return deleted
+    except Exception as e:
+        logger.warning("schema_guard: cleanup_old_error_logs failed: %s", e)
+        return 0
+
+
 def run_schema_guard(engine):
     """Entry point: ensure core tables + devices columns + audit_events table + chat_threads.rating + chat_ratings + pending_registrations.password_hash + accounts.isolate_from_admin + error_logs + bot_engine_state/events. Call once at startup."""
     try:
@@ -698,6 +744,7 @@ def run_schema_guard(engine):
         ensure_pending_registrations_password_hash(engine)
         ensure_accounts_isolate_from_admin(engine)
         ensure_error_logs_table(engine)
+        ensure_error_logs_composite_indexes(engine)
         ensure_bot_engine_tables(engine)
         ensure_bot_engine_commands_table(engine)
         ensure_bot_perf_chart_state_table(engine)

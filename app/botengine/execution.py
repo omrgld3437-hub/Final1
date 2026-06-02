@@ -6,10 +6,10 @@ import asyncio
 import logging
 import time
 import uuid
+from decimal import Decimal, ROUND_FLOOR
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
-from sqlalchemy import event
 from sqlalchemy.orm import Session as SQLASession
 
 from app.bot.ledger import Ledger
@@ -102,26 +102,6 @@ def _cycle_meta(state: Dict[str, Any], symbol: Optional[str] = None, **extra: An
     meta.update(extra)
     return meta
 
-# Transaction event hooks for debugging (only register once)
-_events_registered = False
-if not _events_registered:
-    @event.listens_for(SQLASession, "after_begin")
-    def receive_after_begin(session, transaction, connection):
-        """Log transaction begin."""
-        logger.debug("BOT_DB_TX_BEGIN session_id=%s", id(session))
-
-    @event.listens_for(SQLASession, "after_commit")
-    def receive_after_commit(session):
-        """Log transaction commit."""
-        logger.debug("BOT_DB_TX_COMMIT session_id=%s", id(session))
-
-    @event.listens_for(SQLASession, "after_rollback")
-    def receive_after_rollback(session):
-        """Log transaction rollback at DEBUG only (expected when e.g. TradeSync fails for ACCOUNT_KEYS_MISSING)."""
-        logger.debug("BOT_DB_TX_ROLLBACK session_id=%s", id(session))
-    
-    _events_registered = True
-
 
 def _num(v: Any) -> float:
     if v is None:
@@ -130,6 +110,79 @@ def _num(v: Any) -> float:
         return float(v)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _current_cycle_sell_grid_qty(state: Dict[str, Any]) -> float:
+    ledger = state.get("cycle_ledger_current")
+    total = 0.0
+    if isinstance(ledger, dict):
+        for fill in ledger.get("fills") or []:
+            if not isinstance(fill, dict):
+                continue
+            if (fill.get("side") or "").upper() != "SELL":
+                continue
+            if (fill.get("reason") or "").strip() != "trail_sell_grid":
+                continue
+            total += _num(fill.get("qty"))
+    if total > 0:
+        return total
+    for row in state.get("sell_history") or []:
+        if not isinstance(row, dict) or row.get("grid_index") is None:
+            continue
+        total += _num(row.get("qty"))
+    return total
+
+
+def _boost_reentry_quote_to_next_lot(
+    state: Dict[str, Any],
+    quote_qty: float,
+    price: float,
+    available_quote: float,
+    filters: Dict[str, Any],
+    buffer_pct: float = 0.001,
+) -> Optional[Dict[str, float]]:
+    """Raise re-entry quote enough to buy at least one lot step more than sold."""
+    if quote_qty <= 0 or price <= 0 or available_quote <= quote_qty:
+        return None
+    sold_qty = _current_cycle_sell_grid_qty(state)
+    if sold_qty <= 0:
+        return None
+    try:
+        from app.botengine.order_qty import quantize_qty_down
+
+        step_str = str(filters.get("step_size_str") or filters.get("stepSize") or "").strip()
+        if not step_str:
+            step_str = "0.00001"
+        step = Decimal(step_str)
+        if step <= 0:
+            return None
+        current_lot_qty, _ = quantize_qty_down(float(quote_qty) / float(price), step_str)
+        if current_lot_qty > sold_qty + (float(step) / 2.0):
+            return None
+        sold_d = Decimal(str(sold_qty))
+        price_d = Decimal(str(price))
+        available_d = Decimal(str(available_quote))
+        old_quote_d = Decimal(str(quote_qty))
+        steps = (sold_d / step).to_integral_value(rounding=ROUND_FLOOR)
+        target_qty_d = (steps + 1) * step
+        if target_qty_d <= sold_d:
+            target_qty_d += step
+        buffer_d = Decimal("1") + Decimal(str(max(0.0, buffer_pct)))
+        target_quote_d = target_qty_d * price_d * buffer_d
+        if target_quote_d <= old_quote_d:
+            return None
+        if target_quote_d > available_d:
+            return None
+        return {
+            "old_quote_qty": float(old_quote_d),
+            "new_quote_qty": float(target_quote_d),
+            "sold_qty": float(sold_d),
+            "current_lot_qty": float(current_lot_qty),
+            "target_qty": float(target_qty_d),
+            "step_size": float(step),
+        }
+    except Exception:
+        return None
 
 
 def _fill_ts_from_order(order: Dict[str, Any]) -> datetime:
@@ -198,7 +251,7 @@ def _sync_initial_done_from_db(state: Dict[str, Any], db: "Session", bot_id: int
     from app.botengine.state_store import load_state
     fresh = load_state(db, bot_id)
     if fresh and fresh.get("initial_allocation_done"):
-        for k in ("initial_allocation_done", "reference_price", "cycle_id", "initial_alloc_base_qty", "initial_alloc_price", "base_balance", "quote_balance", "free_quote", "locked_quote", "last_fill_snapshot"):
+        for k in ("initial_allocation_done", "reference_price", "cycle_id", "initial_alloc_base_qty", "initial_alloc_price", "initial_alloc_fee_quote", "base_balance", "quote_balance", "free_quote", "locked_quote", "last_fill_snapshot"):
             if k in fresh:
                 state[k] = fresh[k]
         return True
@@ -597,6 +650,52 @@ async def run_actions(
                                     },
                                 )
                                 continue
+                        if reason == "trail_reentry_buy" and price and price > 0 and available_quote > quote_qty:
+                            try:
+                                buy_filters = await adapter.get_symbol_filters(symbol)
+                            except Exception:
+                                buy_filters = {}
+                            boost = _boost_reentry_quote_to_next_lot(
+                                state,
+                                float(quote_qty),
+                                float(price),
+                                float(available_quote),
+                                buy_filters,
+                                buffer_pct=float(getattr(config, "reentry_lot_step_quote_buffer_pct", 0.001) or 0.001),
+                            )
+                            if boost and boost.get("new_quote_qty", 0) > quote_qty:
+                                old_qty = float(quote_qty)
+                                quote_qty = round(float(boost["new_quote_qty"]), 8)
+                                logger.info(
+                                    "BOT_REENTRY_COMPOUND_LOT_BOOST bot_id=%s quote_qty %.8f -> %.8f sold_qty=%.10f current_lot_qty=%.10f target_qty=%.10f step=%.10f available_quote=%.2f",
+                                    bot_id,
+                                    old_qty,
+                                    quote_qty,
+                                    boost.get("sold_qty", 0),
+                                    boost.get("current_lot_qty", 0),
+                                    boost.get("target_qty", 0),
+                                    boost.get("step_size", 0),
+                                    available_quote,
+                                )
+                                append_event(
+                                    db,
+                                    bot_id,
+                                    account_id,
+                                    "INFO",
+                                    "Bileşik re-entry: alım miktarı bir üst lot adımına yükseltildi",
+                                    {
+                                        "reason": reason,
+                                        "side": side,
+                                        "symbol": symbol,
+                                        "old_quote_qty": round(old_qty, 8),
+                                        "quote_qty": quote_qty,
+                                        "sold_qty": round(float(boost.get("sold_qty", 0)), 10),
+                                        "current_lot_qty": round(float(boost.get("current_lot_qty", 0)), 10),
+                                        "target_qty": round(float(boost.get("target_qty", 0)), 10),
+                                        "step_size": boost.get("step_size"),
+                                        "available_quote": round(float(available_quote), 8),
+                                    },
+                                )
                     if not skip_virtual_check:
                         ok, budget_reason, required, available = check_virtual_budget(
                             db, bot_id, symbol, side,
@@ -888,11 +987,30 @@ async def run_actions(
                             db.commit()
                         state["last_error_code"] = "INSUFFICIENT_BALANCE"
                         state["backoff_until"] = time.time() + 60
-                        append_event(db, bot_id, account_id, "ERROR", f"INSUFFICIENT_BALANCE {error_id} {e!s}", {
-                            "error_code": "INSUFFICIENT_BALANCE", "error_id": error_id, "request_id": request_id, "bot_id": bot_id, "account_id": account_id, "action_key": key, "loop_id": loop_id,
-                        })
+                        append_event(db, bot_id, account_id, "ERROR",
+                            "Yetersiz bakiye — bot beklemeye alındı. Cüzdana bakiye ekleyip botu yeniden başlatın.",
+                            {
+                                "error_code": "INSUFFICIENT_BALANCE",
+                                "error_id": error_id,
+                                "request_id": request_id,
+                                "bot_id": bot_id,
+                                "account_id": account_id,
+                                "action_key": key,
+                                "loop_id": loop_id,
+                                "user_action_required": True,
+                                "resume_hint": "START komutu ile yeniden başlatın",
+                            })
+                        try:
+                            from app.services import audit as _audit_svc
+                            _audit_svc.log_event(
+                                db, actor_type="system", event_type="BOT_PAUSED_INSUFFICIENT_BALANCE",
+                                severity="WARN", target_account_id=account_id,
+                                meta={"bot_id": bot_id, "error_id": error_id, "action_key": key},
+                            )
+                        except Exception:
+                            pass
                         logger.warning(
-                            "BOT_EXECUTION_INSUFFICIENT_BALANCE error_code=INSUFFICIENT_BALANCE error_id=%s request_id=%s bot_id=%s account_id=%s loop_id=%s (60s backoff, bot paused)",
+                            "BOT_EXECUTION_INSUFFICIENT_BALANCE error_code=INSUFFICIENT_BALANCE error_id=%s request_id=%s bot_id=%s account_id=%s loop_id=%s (bot paused, kullanici START gerekli)",
                             error_id, request_id or "-", bot_id, account_id, loop_id or "",
                         )
                         continue
@@ -934,6 +1052,15 @@ async def run_actions(
                             append_event(db, bot_id, account_id, "ERROR", "Binance 401 Unauthorized – API anahtarı geçersiz, IP beyaz listesi veya Spot izinlerini kontrol edin.", {
                                 "error_code": "API_UNAUTHORIZED", "error_id": error_id, "bot_id": bot_id, "account_id": account_id, "action_key": key, "loop_id": loop_id,
                             })
+                            try:
+                                from app.services import audit as _audit_svc
+                                _audit_svc.log_event(
+                                    db, actor_type="system", event_type="BOT_PAUSED_API_UNAUTHORIZED",
+                                    severity="WARN", target_account_id=account_id,
+                                    meta={"bot_id": bot_id, "error_id": error_id, "action_key": key},
+                                )
+                            except Exception:
+                                pass
                             save_state(db, bot_id, account_id, state)
                         if not _should_log_exec_401(bot_id):
                             logger.debug("BOT_EXECUTION_SKIP bot_id=%s reason=%s skip_reason=API_401 bot paused (throttled log)", bot_id, reason)
@@ -1052,6 +1179,7 @@ async def run_actions(
                         state["cycle_opened_at"] = _ts_open
                         state["initial_alloc_base_qty"] = round(float(exec_qty), 10)
                         state["initial_alloc_price"] = round(float(fill_price), 10)
+                        state["initial_alloc_fee_quote"] = round(float(fee), 8)
                         C = _num(getattr(config, "initial_capital_usdt", 0))
                         state["quote_balance"] = round(max(0.0, C - cum_quote - fee), 10)
                         state["base_balance"] = round(float(exec_qty), 10)
@@ -1487,6 +1615,14 @@ async def run_actions(
                         update_virtual_after_fill(db, bot_id, symbol, side, exec_qty, cum_quote, fee)
                     except Exception as ex:
                         logger.warning("bot_engine execution update_virtual_after_fill failed bot_id=%s err=%s", bot_id, ex)
+                    # Fill sonrası account balance cache'ini temizle: _write_fill_snapshot_to_state
+                    # ve sonraki tick'teki pre-flight kontrolü taze Binance bakiyesi görür.
+                    if not adapter.paper_mode and adapter.keys:
+                        try:
+                            from app.services.binance_spot import invalidate_account_cache_for_keys
+                            await invalidate_account_cache_for_keys(adapter.keys)
+                        except Exception:
+                            pass
                     try:
                         await _write_fill_snapshot_to_state(state, adapter, config, symbol)
                     except Exception as snap_err:

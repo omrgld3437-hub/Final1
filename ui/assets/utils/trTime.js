@@ -5,10 +5,21 @@
 (function () {
     var TR_TZ = 'Europe/Istanbul';
 
+    function normalizeUtcIso(v) {
+        if (typeof v !== 'string') return v;
+        var s = v.trim();
+        if (!s) return s;
+        if (s.indexOf('T') < 0 && s.indexOf(' ') > 0) s = s.replace(' ', 'T');
+        if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(s) && !/[zZ]|[+\-]\d{2}:?\d{2}$/.test(s)) {
+            s += 'Z';
+        }
+        return s;
+    }
+
     function toDate(v) {
         if (v == null || v === '') return null;
         if (v instanceof Date) return isNaN(v.getTime()) ? null : v;
-        var ms = typeof v === 'number' ? v : Date.parse(v);
+        var ms = typeof v === 'number' ? v : Date.parse(normalizeUtcIso(v));
         if (!Number.isFinite(ms)) return null;
         return new Date(ms);
     }

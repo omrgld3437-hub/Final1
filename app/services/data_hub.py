@@ -104,7 +104,7 @@ class DataHub:
         self._ws_client: Optional[Any] = None
         self._mini_ws: Dict[str, Dict] = {}  # symbol -> {last, open, changePct, volume, quoteVolume}
         self._ws_started = False
-        self.WS_STALE_SEC = 60.0  # consider WS stale after 60s no message
+        self.WS_STALE_SEC = 30.0  # 30s: WS mesaj gelmezse stale say, REST fallback devreye girer
         self.REST_PRICE_INTERVAL_WHEN_WS = 30.0  # WS aktifken REST price seyrek
         self.BULK_REFRESH_MIN_INTERVAL = 10.0  # max 1 Binance ticker/price call per 10s
         self._last_bulk_refresh_ts: float = 0.0

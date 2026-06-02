@@ -1,63 +1,61 @@
 """
-Price Hub - Cache populated by DataHub bulk refresh. No per-symbol Binance REST calls.
+Price Hub - Thin wrapper over DataHub. No per-symbol Binance REST calls.
+update_price() DataHub'a yazar (tek SSOT); get_price() doğrudan DataHub'dan okur.
 """
-import asyncio
+import time as _time
 from typing import Dict, Optional
-from datetime import datetime, timedelta
 
 
 class PriceHub:
-    """Centralized price cache and manager"""
+    """DataHub üzerinde thin shim — geriye dönük uyumluluk için."""
 
-    def __init__(self):
-        self._cache: Dict[str, Dict] = {}  # symbol -> {price, updated_at}
-        self._cache_ttl = 5  # seconds
-
-    def update_price(self, symbol: str, price: float):
-        """Update price in cache"""
-        self._cache[symbol] = {
-            "price": price,
-            "updated_at": datetime.utcnow()
-        }
+    def update_price(self, symbol: str, price: float) -> None:
+        """DataHub cache'ini doğrudan güncelle."""
+        try:
+            from app.services.data_hub import data_hub
+            sym = (symbol or "").strip().upper()
+            if sym and price and float(price) > 0:
+                prev = data_hub.prices.get(sym) or {}
+                data_hub.prices[sym] = {**prev, "price": float(price), "ts": _time.time()}
+        except Exception:
+            pass
 
     def get_price(self, symbol: str) -> Optional[float]:
-        """Get price from cache if fresh"""
-        if symbol not in self._cache:
+        """DataHub'dan oku (trading stale eşiği: BinanceAdapter'da 30s). Burada serve-stale yok."""
+        try:
+            from app.services.data_hub import data_hub
+            sym = (symbol or "").strip().upper()
+            if not sym:
+                return None
+            d = data_hub.get_price_with_meta(sym)
+            if not d:
+                return None
+            p = d.get("price")
+            if p is None or float(p) <= 0:
+                return None
+            return float(p)
+        except Exception:
             return None
-        
-        cached = self._cache[symbol]
-        age = (datetime.utcnow() - cached["updated_at"]).total_seconds()
-        
-        if age > self._cache_ttl:
-            return None
-        
-        return cached["price"]
 
     async def fetch_price(self, symbol: str, client: Optional[object] = None) -> Optional[float]:
-        """Fetch price via DataHub bulk refresh. No per-symbol REST calls."""
-        cached = self.get_price(symbol)
-        if cached:
-            return cached
+        """DataHub bulk refresh → get_price. Geriye dönük uyumluluk."""
+        p = self.get_price(symbol)
+        if p and p > 0:
+            return p
         try:
             from app.services.data_hub import data_hub
             await data_hub.refresh_all_prices_bulk()
-            p = data_hub.get_price(symbol)
-            if p is not None:
-                self.update_price(symbol, float(p))
-                return float(p)
+            return self.get_price(symbol)
         except Exception:
-            pass
-        return None
+            return None
 
     def get_all_prices(self) -> Dict[str, float]:
-        """Get all cached prices"""
-        now = datetime.utcnow()
-        result = {}
-        for symbol, data in self._cache.items():
-            age = (now - data["updated_at"]).total_seconds()
-            if age <= self._cache_ttl:
-                result[symbol] = data["price"]
-        return result
+        """Tüm DataHub fiyatları (stale dahil — UI kullanımı için)."""
+        try:
+            from app.services.data_hub import data_hub
+            return {sym: float(d.get("price") or 0) for sym, d in data_hub.prices.items() if d.get("price") and float(d.get("price") or 0) > 0}
+        except Exception:
+            return {}
 
 
 # Global instance

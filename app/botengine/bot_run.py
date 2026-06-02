@@ -107,6 +107,15 @@ async def run_one_bot_tick(bot_id: int, tick_id: str) -> float:
             save_state(db, bot_id, account_id, state)
             bot.status = "paused_error"
             db.commit()
+            try:
+                from app.services import audit as _audit_svc
+                _audit_svc.log_event(
+                    db, actor_type="system", event_type="BOT_PAUSED_NO_KEYS",
+                    severity="WARN", target_account_id=account_id,
+                    meta={"bot_id": bot_id, "error_code": "ACCOUNT_KEYS_MISSING"},
+                )
+            except Exception:
+                pass
             logger.warning("BOT_LIVE_NO_KEYS bot_id=%s account_id=%s paused_error (FAIL FAST)", bot_id, account_id)
             return time.monotonic() + 30.0
         if not keys and not paper_mode:

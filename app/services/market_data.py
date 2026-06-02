@@ -120,7 +120,7 @@ async def refresh_worker_symbol_from_web(symbol: str) -> Optional[float]:
         return None
     base = (os.getenv("WEB_INTERNAL_URL") or "http://127.0.0.1:8000").rstrip("/")
     try:
-        async with httpx.AsyncClient(timeout=3.0) as client:
+        async with httpx.AsyncClient(timeout=1.5) as client:
             r = await client.get(
                 f"{base}/api/data/prices",
                 params={"slim": 1, "symbols": sym},

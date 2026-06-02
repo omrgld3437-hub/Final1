@@ -103,17 +103,24 @@ class BinanceAdapter:
         self._filters_cache[symbol] = out
         return out
 
+    # Alım/satım kararları için maksimum fiyat yaşı (saniye).
+    # DataHub UI serve-stale eşiği (120s) çok geniş; bot 30s'den eski fiyatla işlem yapmaz.
+    TRADE_PRICE_STALE_SEC: float = 30.0
+
     def get_price(self, symbol: str) -> Optional[float]:
         """
         data_hub only. No direct Binance public ticker fallback.
         Returns None if symbol never seen OR price is stale (bot safety: never trade on stale).
+        Trading stale threshold: TRADE_PRICE_STALE_SEC (30s) — tighter than DataHub UI TTL (120s).
         """
+        import time as _time
         from app.services.data_hub import data_hub
         d = data_hub.get_price_with_meta(symbol)
         if not d or not isinstance(d, dict):
             return None
-        if d.get("is_stale"):
-            return None  # Bot must not trade on stale price
+        ts = d.get("ts") or 0
+        if _time.time() - float(ts) > self.TRADE_PRICE_STALE_SEC:
+            return None  # Fiyat 30s'den eski — işlem yok
         p = d.get("price")
         if p is None or not isinstance(p, (int, float)) or float(p) <= 0:
             return None

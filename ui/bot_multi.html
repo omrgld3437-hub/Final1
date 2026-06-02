@@ -927,7 +927,7 @@
     <script src="/ui/assets/utils/gridTrailEnvelope.js?v=2"></script>
     <script src="/ui/assets/utils/engineLogArchive.js?v=1"></script>
     <script src="/ui/assets/utils/engineLogFormat.js?v=64"></script>
-    <script src="/ui/assets/utils/botHealthAlerts.js?v=30"></script>
+    <script src="/ui/assets/utils/botHealthAlerts.js?v=31"></script>
     <script src="/ui/assets/utils/engineLogLive.js?v=31"></script>
     <script src="/ui/vendor/lightweight-charts.standalone.production.js"></script>
     <script src="/ui/assets/perf_chart_tv.js?v=1"></script>
@@ -945,6 +945,24 @@
         else base += 'account_id=';
         base += '&tab=bots';
         backLink.href = base;
+        function updateBackLinkHealthParams(picked) {
+            if (!backLink || !botId) return;
+            try {
+                var url = new URL(backLink.href, location.origin);
+                var hasCrit = picked && picked.criticals && picked.criticals.length > 0;
+                var hasWarn = picked && picked.warns && picked.warns.length > 0;
+                if (hasCrit || hasWarn) {
+                    url.searchParams.set('health_bot_id', String(botId));
+                    url.searchParams.set('health_level', hasCrit ? 'critical' : 'warn');
+                    url.searchParams.set('health_ts', String(Date.now()));
+                } else {
+                    url.searchParams.delete('health_bot_id');
+                    url.searchParams.delete('health_level');
+                    url.searchParams.delete('health_ts');
+                }
+                backLink.href = url.pathname + url.search;
+            } catch (e) {}
+        }
 
         var botTopStrip = document.getElementById('botTopStrip');
         var botLogoWrap = document.getElementById('botLogoWrap');
@@ -996,6 +1014,10 @@
             if (!/[zZ]|[+\-]\d{2}:?\d{2}$/.test(s)) s += 'Z';
             var d = new Date(s);
             return isNaN(d.getTime()) ? 0 : d.getTime();
+        }
+        function parseBotDetailUtcDate(ts) {
+            var ms = parseUtcMs(ts);
+            return ms > 0 ? new Date(ms) : null;
         }
         function pickEarlierStartedAt(prevIso, nextIso) {
             if (!nextIso) return prevIso || null;
@@ -1243,12 +1265,34 @@
 
         function syncHealthFromState() {
             if (!window.BotHealthAlerts) return;
-            window.BotHealthAlerts.applyHealth(
+            var picked = window.BotHealthAlerts.applyHealth(
                 botId,
                 window._lastHealthData || { alerts: [] },
                 isBotRunning(),
                 window._lastEngineEvents || []
             );
+            updateBackLinkHealthParams(picked);
+            var criticals = (picked && picked.criticals) || [];
+            if (isBotRunning() && criticals.length && statusBadge) {
+                var top = criticals[0] || {};
+                var topMeta = top.meta || {};
+                var code = String(
+                    topMeta.error_code
+                    || top.error_code
+                    || top.health_code
+                    || top.code
+                    || (window._lastConnectivityFailure && window._lastConnectivityFailure.error_code)
+                    || 'BINANCE_UNREACHABLE'
+                ).trim().toUpperCase();
+                var isConn = code === 'BINANCE_UNREACHABLE' || !!(window._lastConnectivityFailure && window._lastConnectivityFailure.error_code);
+                statusBadge.textContent = isConn ? 'Bağlantı hatası' : 'Hata';
+                statusBadge.className = 'status-badge status-error';
+                statusBadge.title = isConn
+                    ? 'Binance erişimi alınamıyor; bot güvenli bekleme modunda izleniyor. API Key, IP beyaz listesi, Spot izinleri veya ağ erişimini kontrol edin.'
+                    : (top.message || 'Kritik bot hatası');
+                var stateHeroTitleEl = document.getElementById('stateHeroTitle');
+                if (stateHeroTitleEl) stateHeroTitleEl.textContent = isConn ? 'Durum · Bağlantı hatası' : 'Durum · Hata';
+            }
         }
 
         function fetchBotHealth() {
@@ -1912,10 +1956,13 @@
             var connOk = window._lastConnectivityProbeOk === true
                 || (window._lastConnectivityProbeOk !== false && !window._lastConnectivityFailure);
             var hasApiKeyError = lastErrorCode === 'API_UNAUTHORIZED' && status === 'running' && !connOk;
-            var statusText = status === 'running' ? (hasApiKeyError ? 'Hata (API anahtarı)' : 'Çalışıyor') : status === 'error' || (status && status.indexOf('paused') === 0) ? 'Hata' : status === 'stopped' ? 'Durduruldu' : 'Bekliyor';
+            var hasConnectivityError = status === 'running' && !connOk && (lastErrorCode === 'BINANCE_UNREACHABLE' || (window._lastConnectivityFailure && window._lastConnectivityFailure.error_code));
+            var statusText = status === 'running' ? (hasConnectivityError ? 'Bağlantı hatası' : hasApiKeyError ? 'Hata (API anahtarı)' : 'Çalışıyor') : status === 'error' || (status && status.indexOf('paused') === 0) ? 'Hata' : status === 'stopped' ? 'Durduruldu' : 'Bekliyor';
             statusBadge.textContent = statusText;
-            statusBadge.className = 'status-badge ' + (hasApiKeyError || status === 'error' || (status && status.indexOf('paused') === 0) ? 'status-error' : status === 'running' ? 'status-running' : 'status-stopped');
-            statusBadge.title = hasApiKeyError ? 'Binance API anahtarı geçersiz veya IP/Spot izni yok. API Key, IP beyaz listesi ve Spot izinlerini kontrol edin.' : '';
+            statusBadge.className = 'status-badge ' + (hasConnectivityError || hasApiKeyError || status === 'error' || (status && status.indexOf('paused') === 0) ? 'status-error' : status === 'running' ? 'status-running' : 'status-stopped');
+            statusBadge.title = hasConnectivityError
+                ? 'Binance erişimi alınamıyor; bot güvenli bekleme modunda izleniyor. API Key, IP beyaz listesi, Spot izinleri veya ağ erişimini kontrol edin.'
+                : hasApiKeyError ? 'Binance API anahtarı geçersiz veya IP/Spot izni yok. API Key, IP beyaz listesi ve Spot izinlerini kontrol edin.' : '';
 
             if (btnStart) btnStart.style.display = status !== 'running' ? 'flex' : 'none';
             if (btnStopAndDelete) btnStopAndDelete.style.display = 'inline-block';
@@ -2013,11 +2060,8 @@
                 trades = (trades || []).slice().sort(function(a, b) {
                     function tradeTsMs(t) {
                         if (!t || !t.ts) return 0;
-                        var s = String(t.ts).trim();
-                        if (s.indexOf('T') < 0 && s.indexOf(' ') > 0) s = s.replace(' ', 'T');
-                        if (s.indexOf('Z') < 0 && s.indexOf('+') < 0 && s.indexOf('-', 10) < 0) s = s + 'Z';
-                        var d = new Date(s);
-                        return isNaN(d.getTime()) ? 0 : d.getTime();
+                        var d = parseBotDetailUtcDate(t.ts);
+                        return d ? d.getTime() : 0;
                     }
                     var ta = tradeTsMs(a);
                     var tb = tradeTsMs(b);
@@ -2084,7 +2128,10 @@
                     var quoteQty = (t.qty && t.price) ? fmtUsd(t.qty * t.price) : '—';
                     var feeVal = t.fee != null ? t.fee : t.commission;
                     var feeStr = (feeVal != null && feeVal !== '') ? fmtUsd(Number(feeVal)) : '—';
-                    var ts = t.ts ? (function() { var d = new Date(t.ts); return d.toLocaleString('tr-TR'); })() : '—';
+                    var ts = t.ts ? (function() {
+                        var d = parseBotDetailUtcDate(t.ts);
+                        return d ? d.toLocaleString('tr-TR', { timeZone: 'Europe/Istanbul' }) : '—';
+                    })() : '—';
                     var refP = resolveTradeReferencePrice(t);
                     var priceNum = t.price != null && !isNaN(Number(t.price)) ? Number(t.price) : null;
                     var realizedPctStr = '';

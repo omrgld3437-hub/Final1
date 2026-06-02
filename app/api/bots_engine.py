@@ -223,7 +223,9 @@ def _worker_process_alive() -> bool:
 
 
 def _detail_err(code: str, message: str, request_id: str) -> dict:
-    return {"error_code": code, "message": message, "request_id": request_id}
+    eid = str(uuid.uuid4())[:16]
+    logger.warning("API_ERR error_code=%s error_id=%s request_id=%s msg=%s", code, eid, request_id, message)
+    return {"error_code": code, "message": message, "request_id": request_id, "error_id": eid}
 
 
 def _parse_event_ts_ms(ts: Any) -> int:
@@ -498,7 +500,7 @@ def _find_cycle_end_event(events: List[Dict[str, Any]], cycle_id: int) -> Option
 
 
 def _cycle_open_trade_row(state: Dict[str, Any], cycle_id: int) -> Optional[Dict[str, Any]]:
-    for row in state.get("cycle_open_trades") or []:
+    for row in reversed(state.get("cycle_open_trades") or []):
         if not isinstance(row, dict):
             continue
         if int(row.get("cycle_id") or 0) == int(cycle_id):
@@ -1708,13 +1710,32 @@ async def bots_list(
     rid = _request_id(request)
     get_account_or_403(current, account_id, db)
     rows = db.query(Bot).filter(Bot.account_id == account_id).order_by(Bot.id.desc()).all()
-    from app.botengine.state_store import load_states_list_meta
+    from app.botengine.health_watch import _account_wallet_stale_alert, evaluate_bot_health_lite
+    from app.botengine.state_store import load_states_bulk, load_states_list_meta
 
     state_meta = load_states_list_meta(db, [r.id for r in rows])
+    state_full = load_states_bulk(db, [r.id for r in rows])
+    # Account-level connectivity bir kez çözülür; bot başına tekrar sorgulanmaz.
+    try:
+        from app.services.binance_connectivity import active_failure
+        account_failure = active_failure(account_id)
+    except Exception:
+        account_failure = None
+    account_wallet_alert = None if account_failure else _account_wallet_stale_alert(db, account_id)
     out = []
     for r in rows:
         raw = json.loads(r.config_json or "{}")
         meta = state_meta.get(r.id) or {}
+        state = state_full.get(r.id) or {}
+        health_alerts = evaluate_bot_health_lite(
+            r,
+            state,
+            account_failure=account_failure,
+            account_wallet_alert=account_wallet_alert,
+        )
+        has_crit = any((a.get("level") or "").lower() == "critical" for a in health_alerts)
+        has_warn = any((a.get("level") or "").lower() == "warn" for a in health_alerts)
+        health_level = "both" if (has_crit and has_warn) else ("critical" if has_crit else ("warn" if has_warn else None))
         ia_done = bool(meta.get("initial_allocation_done"))
         st = (r.status or "stopped").lower()
         display_status = st
@@ -1728,6 +1749,8 @@ async def bots_list(
             "status": st,
             "display_status": display_status,
             "initial_allocation_done": ia_done,
+            "health_alert_level": health_level,
+            "health_alerts": health_alerts,
             "config": raw,
             "last_tick_at": meta.get("last_tick_at"),
             "created_at": r.started_at.isoformat() + "Z" if getattr(r, "started_at", None) else None,
@@ -2015,9 +2038,9 @@ async def bots_detail(
         target_weights = (raw.get("trb") or {}).get("target_weights_all") or (raw.get("dca") or {}).get("coin_weights") or {}
         if not target_weights and raw.get("assets"):
             for a in raw["assets"]:
-                sym = (a.get("symbol") or "").upper().replace("USDT", "").replace("FDUSD", "").strip()
-                if sym:
-                    target_weights[sym] = float(a.get("target_pct") or 0) / 100.0
+                asset_sym = (a.get("symbol") or "").upper().replace("USDT", "").replace("FDUSD", "").strip()
+                if asset_sym:
+                    target_weights[asset_sym] = float(a.get("target_pct") or 0) / 100.0
         if target_weights and (sym == "MULTI" or strategy_id in ("trdca_pro", "multi_asset_rebalance")):
             balances_map = {}
             if effective_balances_map:
@@ -2735,9 +2758,8 @@ def _resolve_cycle_reference_price(
         except (TypeError, ValueError):
             pass
     if state:
-        for row in state.get("cycle_open_trades") or []:
-            if not isinstance(row, dict) or int(row.get("cycle_id") or 0) != int(cycle_id):
-                continue
+        row = _cycle_open_trade_row(state, int(cycle_id))
+        if row:
             try:
                 rp = float(row.get("reference_price") or row.get("price") or 0)
                 if rp > 0:
@@ -2924,27 +2946,25 @@ def _cycle_open_to_trade_dicts(
         return []
     sym = (symbol or "").upper()
     out: List[Dict[str, Any]] = []
-    for row in state.get("cycle_open_trades") or []:
-        if not isinstance(row, dict) or int(row.get("cycle_id") or 0) != int(cycle_id):
-            continue
+    row = _cycle_open_trade_row(state, int(cycle_id))
+    if row:
         qty = float(row.get("qty") or 0)
         price = float(row.get("price") or 0)
-        if qty <= 0 or price <= 0:
-            continue
-        cid = f"cycle_open_{cycle_id}"
-        out.append({
-            "id": cid,
-            "ts": row.get("ts"),
-            "side": (row.get("side") or "BUY").upper(),
-            "qty": qty,
-            "price": price,
-            "fee": float(row.get("fee") or 0),
-            "fee_asset": "USDT",
-            "client_order_id": cid,
-            "symbol": sym,
-            "cycle_id": int(cycle_id),
-            "reference_price": row.get("reference_price") or price,
-        })
+        if qty > 0 and price > 0:
+            cid = f"cycle_open_{cycle_id}"
+            out.append({
+                "id": cid,
+                "ts": row.get("ts"),
+                "side": (row.get("side") or "BUY").upper(),
+                "qty": qty,
+                "price": price,
+                "fee": float(row.get("fee") or 0),
+                "fee_asset": "USDT",
+                "client_order_id": cid,
+                "symbol": sym,
+                "cycle_id": int(cycle_id),
+                "reference_price": row.get("reference_price") or price,
+            })
     if out:
         return out
     if int(state.get("cycle_id") or 1) != int(cycle_id):
@@ -2993,7 +3013,16 @@ def _build_live_snapshot_from_state(bot: Bot, state: Optional[Dict[str, Any]], d
                 try:
                     last_tick_at = int(lt)
                 except (TypeError, ValueError):
-                    pass
+                    try:
+                        s = str(lt).strip()
+                        if s:
+                            if "T" not in s and " " in s:
+                                s = s.replace(" ", "T", 1)
+                            if not (s.endswith("Z") or "+" in s[10:] or "-" in s[10:]):
+                                s = s + "+00:00"
+                            last_tick_at = int(datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp())
+                    except Exception:
+                        pass
         last_error_code = state.get("last_error_code")
         if isinstance(last_error_code, str):
             last_error_code = last_error_code.strip() or None
@@ -3283,11 +3312,7 @@ def _compute_perf_series(
     if not bucket_sec:
         return [], {"baseline_equity": None, "points": 0}
 
-    row = db.execute(
-        text("SELECT chart_payload FROM bot_perf_chart_state WHERE bot_id = :bid"),
-        {"bid": bot_id},
-    ).fetchone()
-    payload = json.loads(row[0]) if row and row[0] else {}
+    payload = _load_perf_chart_payload(db, bot_id)
     samples = payload.get("samples") if isinstance(payload.get("samples"), list) else []
     baseline = payload.get("baseline") or {}
     baseline_bot0 = baseline.get("bot0") if isinstance(baseline.get("bot0"), (int, float)) else 0.0
@@ -3377,14 +3402,10 @@ async def bots_get_perf_chart_state(
     bot = _resolve_bot(bot_id, resolved_account_id, current, db)
     if not bot:
         raise HTTPException(status_code=404, detail=_detail_err("NOT_FOUND", "Bot not found", rid))
-    row = db.execute(
-        text("SELECT chart_payload FROM bot_perf_chart_state WHERE bot_id = :bid"),
-        {"bid": bot.id},
-    ).fetchone()
-    if not row or not row[0]:
+    payload = _load_perf_chart_payload(db, bot.id)
+    if not payload:
         return {"baseline": None, "samples": [], "range": "4h", "request_id": rid}
     try:
-        payload = json.loads(row[0])
         baseline = payload.get("baseline")
         samples = payload.get("samples") if isinstance(payload.get("samples"), list) else []
         range_val = payload.get("range") if payload.get("range") in ("1m", "5m", "1h", "4h", "1d", "1w") else "4h"
@@ -3447,6 +3468,24 @@ async def bots_put_perf_chart_state(
 
 
 PERF_CHART_MAX_AGE_SEC = 7 * 24 * 3600  # 7 gün
+
+
+def _load_perf_chart_payload(db: Session, bot_id: int) -> Dict[str, Any]:
+    """bot_perf_chart_state tek SELECT helper'ı. Yoksa boş dict döner."""
+    try:
+        row = db.execute(
+            text("SELECT chart_payload FROM bot_perf_chart_state WHERE bot_id = :bid"),
+            {"bid": bot_id},
+        ).fetchone()
+    except Exception:
+        return {}
+    if not row or not row[0]:
+        return {}
+    try:
+        data = json.loads(row[0])
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
 
 
 def _compute_trdca_pnl_breakdown(
@@ -3567,11 +3606,7 @@ def append_perf_chart_sample(db: Session, bot_id: int) -> None:
         )
         bot_pct = (current_usd - initial_capital) / initial_capital * 100.0 if initial_capital > 0 else None
 
-        row = db.execute(
-            text("SELECT chart_payload FROM bot_perf_chart_state WHERE bot_id = :bid"),
-            {"bid": bot_id},
-        ).fetchone()
-        payload = json.loads(row[0]) if row and row[0] else {}
+        payload = _load_perf_chart_payload(db, bot_id)
         baseline = payload.get("baseline") or {}
 
         parite_pct = None
@@ -3614,7 +3649,7 @@ def append_perf_chart_sample(db: Session, bot_id: int) -> None:
 
         if bot_pct is None and parite_pct is None:
             return
-        if not row or not row[0]:
+        if not payload:
             return
         baseline = payload.get("baseline")
         samples = payload.get("samples")
@@ -3760,9 +3795,18 @@ async def bots_start(
             raw = json.loads(bot.config_json or "{}")
             budget = float(raw.get("initial_capital_usdt") or raw.get("budget_usd") or raw.get("bot_budget_usdt") or 0)
             sym = (bot.symbol or "").upper().strip()
-            quote_asset = (raw.get("quote_asset") or "USDT").strip().upper() if sym in ("MULTI",) else (sym[-4:] if len(sym) >= 4 and sym.endswith("USDT") else "USDT")
-            if not quote_asset:
-                quote_asset = "USDT"
+            if sym == "MULTI":
+                quote_asset = (raw.get("quote_asset") or "USDT").strip().upper() or "USDT"
+            else:
+                # Tek-sembol parite: bilinen quote son ekleri (USDT/FDUSD/BUSD/USDC/TUSD/BTC/ETH).
+                cfg_q = (raw.get("quote_asset") or "").strip().upper()
+                quote_asset = None
+                for suf in ("USDT", "FDUSD", "BUSD", "USDC", "TUSD", "BTC", "ETH"):
+                    if sym.endswith(suf) and len(sym) > len(suf):
+                        quote_asset = suf
+                        break
+                if not quote_asset:
+                    quote_asset = cfg_q or "USDT"
             if budget > 0:
                 from app.services.binance_assets import get_account_keys
                 from app.botengine.adapters.binance_adapter import BinanceAdapter
@@ -3975,9 +4019,9 @@ async def bots_delete(
         raise HTTPException(status_code=404, detail=_detail_err("NOT_FOUND", "Bot not found", rid))
     body = {}
     try:
-        body = await request.json() if request.body else {}
+        body = await request.json()
     except Exception:
-        pass
+        body = {}
     if not isinstance(body, dict):
         body = {}
     convert_base = body.get("convert_base_to_quote") is True
@@ -4217,13 +4261,19 @@ async def bots_events(
         except Exception as anchor_ex:
             logger.debug("bots_events lifecycle anchors bot_id=%s: %s", bot.id, anchor_ex)
     try:
-        events = _enrich_command_start_events(events, bot, state)
-        events = _merge_synthetic_cycle_end_events(events, state, db=db, bot_id=bot.id)
-        events = _merge_synthetic_cycle_start_events(events, state, db=db, bot_id=bot.id)
-        events = _merge_synthetic_tur_after_initial_fill(events, state)
-        _enrich_cycle_start_events_meta(events, state)
-        events = _dedupe_cycle_end_events(events)
-        events = _dedupe_cycle_start_events(events)[:limit]
+        if after_id is None:
+            # İlk yükleme: anchor/sentetik satırlar + dedupe + enrich tam paket.
+            events = _enrich_command_start_events(events, bot, state)
+            events = _merge_synthetic_cycle_end_events(events, state, db=db, bot_id=bot.id)
+            events = _merge_synthetic_cycle_start_events(events, state, db=db, bot_id=bot.id)
+            events = _merge_synthetic_tur_after_initial_fill(events, state)
+            _enrich_cycle_start_events_meta(events, state)
+            events = _dedupe_cycle_end_events(events)
+            events = _dedupe_cycle_start_events(events)[:limit]
+        else:
+            # Incremental poll: sentetik backfill yeni event üretmez; yalnız meta-enrich yeterli.
+            events = _enrich_command_start_events(events, bot, state)
+            _enrich_cycle_start_events_meta(events, state)
         events = _sort_engine_events_desc(events)
     except Exception as enrich_ex:
         logger.exception(

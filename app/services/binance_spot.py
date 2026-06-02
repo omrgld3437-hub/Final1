@@ -901,7 +901,9 @@ async def _signed_request(
 # ---------------------------------------------------------------------------
 # /api/v3/account – tek nokta: TTL cache + inflight dedupe (hangi route çağırırsa çağırsın)
 # ---------------------------------------------------------------------------
-_ACCOUNT_CACHE_TTL = 45.0
+# 8s TTL: her fill sonrası cache invalide edilir; 45s eski değer fill sonrası bayat bakiye döndürüyordu.
+# Weight 20 → 60/8 ≈ 7.5 çağrı/dk/hesap = sadece ~150 weight/dk (1200 limitin %12'si).
+_ACCOUNT_CACHE_TTL = 8.0
 _account_cache: Dict[tuple, tuple] = {}  # (testnet, api_key) -> (data, ts)
 _account_inflight: Dict[tuple, asyncio.Task] = {}
 _account_lock = asyncio.Lock()

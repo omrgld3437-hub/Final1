@@ -387,6 +387,15 @@ async def _bot_loop(bot_id: int) -> None:
                     state["retry_at"] = datetime.utcnow()
                     save_state(db, bot_id, account_id, state)
                     append_event(db, bot_id, account_id, "ERROR", "API anahtarı gerekli (live bot)", {"error_code": "ACCOUNT_KEYS_MISSING"})
+                    try:
+                        from app.services import audit as _audit_svc
+                        _audit_svc.log_event(
+                            db, actor_type="system", event_type="BOT_PAUSED_NO_KEYS",
+                            severity="WARN", target_account_id=account_id,
+                            meta={"bot_id": bot_id, "error_code": "ACCOUNT_KEYS_MISSING"},
+                        )
+                    except Exception:
+                        pass
                     logger.warning("BOT_LIVE_NO_KEYS bot_id=%s account_id=%s paused_error (FAIL FAST)", bot_id, account_id)
                     await asyncio.sleep(30)
                     continue

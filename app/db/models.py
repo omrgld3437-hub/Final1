@@ -228,6 +228,12 @@ class ChatRating(Base):
 class ErrorLog(Base):
     """Olay günlüğü: hatalar (error) + sıra dışı/anormal durumlar (anomaly). Admin panelde listelenir."""
     __tablename__ = "error_logs"
+    __table_args__ = (
+        # Admin panel "hesap + tarih" sorgularını hızlandırır
+        Index("ix_error_logs_account_created", "account_id", "created_at"),
+        # Seviye bazlı filtreleme (critical/error/warning)
+        Index("ix_error_logs_level_created", "level", "created_at"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)

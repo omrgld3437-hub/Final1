@@ -2,6 +2,7 @@
 from datetime import datetime, timezone
 
 from app.api.bots_engine import _parse_ts_utc
+from app.bot.ledger import Ledger
 
 
 def test_parse_ts_utc_naive_assumed_utc():
@@ -21,3 +22,7 @@ def test_mixed_ts_list_max_min():
     b = _parse_ts_utc("2026-05-24T14:17:39.591374+00:00")
     assert a is not None and b is not None
     assert (max(a, b) - min(a, b)).total_seconds() > 0
+
+
+def test_ledger_trade_ts_serializes_naive_as_utc_z():
+    assert Ledger._trade_ts_iso_utc(datetime(2026, 5, 24, 12, 30, 45)) == "2026-05-24T12:30:45Z"

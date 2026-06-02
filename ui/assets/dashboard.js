@@ -1104,6 +1104,30 @@ async function fetchSnapshot() {
     }
 }
 
+var _dashboardStaleWalletRefreshLastAt = 0;
+var DASHBOARD_STALE_WALLET_REFRESH_GAP_MS = 15000;
+
+function maybeRefreshStaleWalletFromDashboard() {
+    if (!State.accountId || (typeof State !== 'undefined' && State.isTestAccount)) return;
+    if (typeof triggerWalletRefreshForVarliklar !== 'function') return;
+    if (typeof isWalletPanelUpdating === 'function' && isWalletPanelUpdating()) return;
+    var stale = false;
+    if (window.__walletDebugMeta && window.__walletDebugMeta.wallet_age_sec != null) {
+        stale = Number(window.__walletDebugMeta.wallet_age_sec) >= 900;
+    }
+    if (!stale && assetsState && assetsState.wallet) {
+        stale = assetsState.wallet.data_status === 'stale' || (typeof isWalletDataLive === 'function' && !isWalletDataLive());
+    }
+    if (!stale) return;
+    var now = Date.now();
+    if (now - _dashboardStaleWalletRefreshLastAt < DASHBOARD_STALE_WALLET_REFRESH_GAP_MS) return;
+    _dashboardStaleWalletRefreshLastAt = now;
+    triggerWalletRefreshForVarliklar(State.accountId, { force: true });
+    if (typeof pollWalletRefreshUntilDone === 'function') {
+        pollWalletRefreshUntilDone(State.accountId);
+    }
+}
+
 function dashboardDataRefresh() {
     if (!State.accountId || State.inFlight || (typeof isSpotModalOpen === 'function' && isSpotModalOpen())) return;
     var activeTab = document.querySelector('.dm-tab.is-active');
@@ -1124,12 +1148,7 @@ function dashboardDataRefresh() {
             window.homeFlash.loadFast(State.accountId);
         }
         if (typeof loadBotsListFast === 'function') loadBotsListFast(State.accountId);
-        _dashboardWalletForceTick++;
-        if (_dashboardWalletForceTick >= 6 && typeof triggerWalletRefreshForVarliklar === 'function') {
-            _dashboardWalletForceTick = 0;
-            triggerWalletRefreshForVarliklar(State.accountId, { force: true });
-        }
-        return;
+        maybeRefreshStaleWalletFromDashboard();
     }
     _binanceWalletIdleCycles = 0;
     _dashboardWalletForceTick = 0;
@@ -1474,6 +1493,23 @@ function normalizeRunningSinceIso(iso) {
     return s;
 }
 
+function leaderboardStartMonthDays(runningSinceIso) {
+    var norm = normalizeRunningSinceIso(runningSinceIso);
+    if (!norm) return 30;
+    var d = new Date(norm);
+    if (isNaN(d.getTime())) return 30;
+    var yyyy = d.getFullYear();
+    var mm = d.getMonth();
+    var key = 'leaderboardDurationStartMonthDays:v1:' + yyyy + '-' + (mm + 1);
+    try {
+        var cached = Number(sessionStorage.getItem(key));
+        if (cached >= 28 && cached <= 31) return cached;
+    } catch (e) {}
+    var days = new Date(yyyy, mm + 1, 0).getDate();
+    try { sessionStorage.setItem(key, String(days)); } catch (e2) {}
+    return days;
+}
+
 /** Bot detay stateHeroMetaDur ile aynı format ve UTC kaynak. */
 function formatLeaderboardRunningDuration(runningSinceIso) {
     var norm = normalizeRunningSinceIso(runningSinceIso);
@@ -1481,13 +1517,18 @@ function formatLeaderboardRunningDuration(runningSinceIso) {
     try {
         var d = new Date(norm);
         if (isNaN(d.getTime())) return '—';
-        var sec = Math.max(0, Math.floor((Date.now() - d.getTime()) / 1000));
-        var h = Math.floor(sec / 3600);
-        var m = Math.floor((sec % 3600) / 60);
-        var s = sec % 60;
-        if (h > 0) return h + 's ' + m + 'dk';
-        if (m > 0) return m + 'dk ' + s + 'sn';
-        return s + 'sn';
+        var ms = Math.max(0, Date.now() - d.getTime());
+        var totalMinutes = Math.floor(ms / 60000);
+        var totalHours = Math.floor(ms / 3600000);
+        var totalDays = Math.floor(ms / 86400000);
+        var monthDays = leaderboardStartMonthDays(norm);
+        if (totalDays >= monthDays) {
+            return Math.floor(totalDays / monthDays) + ' ay ' + (totalDays % monthDays) + ' gün';
+        }
+        if (totalDays >= 1) {
+            return totalDays + ' gün ' + Math.floor((ms % 86400000) / 3600000) + ' sa';
+        }
+        return totalHours + ' sa ' + Math.max(0, totalMinutes % 60) + ' dk';
     } catch (e) { return '—'; }
 }
 
@@ -2860,11 +2901,18 @@ function applySnapshotToUI(data) {
     if (data.wallet && typeof data.wallet === 'object' && assetsState && assetsState.wallet) {
         var w = data.wallet;
         var meta = data.meta || {};
-        normalizeAndApplyWallet(w, { source: 'dashboard_snapshot', request_id: meta.request_id || w._request_id });
+        normalizeAndApplyWallet(w, {
+            source: 'dashboard_snapshot',
+            request_id: meta.request_id || w._request_id,
+            wallet_age_sec: meta.wallet_age_sec,
+            stale: meta.wallet_age_sec != null ? Number(meta.wallet_age_sec) >= 900 : false
+        });
         if (window.__walletDebugMeta === undefined) window.__walletDebugMeta = {};
         window.__walletDebugMeta.wallet_source = meta.wallet_source;
         window.__walletDebugMeta.wallet_age_sec = meta.wallet_age_sec;
+        window.__walletDebugMeta.wallet_ts_iso = meta.wallet_ts_iso || w.ts || null;
         window.__walletDebugMeta.request_id = meta.request_id;
+        maybeRefreshStaleWalletFromDashboard();
     }
     if (data.pnl && typeof data.pnl === 'object' && !data.pnl._error) {
         var spotUsd = (data.wallet && typeof data.wallet.total_usd === 'number' && data.wallet.total_usd >= 0) ? data.wallet.total_usd : (State.summary && State.summary.account && typeof State.summary.account.spot_balance_usd === 'number' ? State.summary.account.spot_balance_usd : (typeof (assetsState && assetsState.wallet && assetsState.wallet.total_usd) === 'number' ? assetsState.wallet.total_usd : 0));
@@ -3068,6 +3116,7 @@ function refreshBotsTabDataOnly() {
         updateFinanceBotsLivePrices();
     }
     if (typeof ensureFinanceBotsLiveEquity === 'function') ensureFinanceBotsLiveEquity();
+    if (typeof ensureFinanceBotsHealthPolling === 'function') ensureFinanceBotsHealthPolling();
     if (State.accountId && typeof loadBotPerformance === 'function') {
         loadBotPerformance(State.botPerformancePeriod || 'all');
     }
@@ -3148,6 +3197,8 @@ function loadBotsListFast(accountId) {
                         status: (r.status || 'stopped').toLowerCase(),
                         display_status: r.display_status || r.status || 'stopped',
                         initial_allocation_done: r.initial_allocation_done === true,
+                        health_alert_level: r.health_alert_level || null,
+                        health_alerts: Array.isArray(r.health_alerts) ? r.health_alerts : [],
                         account_id: r.account_id, config: cfg,
                         budget_usd: budget, initial_usd: budget,
                         total_pnl_usd: 0, total_pnl_pct: 0, daily_pnl_usd: 0,
@@ -3182,6 +3233,8 @@ function loadBotsListFast(accountId) {
                     status: (r.status || 'stopped').toLowerCase(),
                     display_status: r.display_status || r.status || 'stopped',
                     initial_allocation_done: r.initial_allocation_done === true,
+                    health_alert_level: r.health_alert_level || null,
+                    health_alerts: Array.isArray(r.health_alerts) ? r.health_alerts : [],
                     account_id: r.account_id,
                     config: cfg,
                     budget_usd: budget,
@@ -3526,6 +3579,8 @@ window.triggerValueBlink = triggerValueBlink;
 var lastSpotUpdateTs = 0;
 var _walletLiveOkAt = 0;
 var _walletLiveFailedAt = 0;
+// Sayfa yüklenince ilk 3 saniye "Güncel değil" gösterme; canlı veri yoksa ardından çıksın.
+var _walletStaleGracePeriodUntil = Date.now() + 3000;
 var _kpiCuzdanPnlDisplay = { pnlUsd: null, pnlPct: null };
 var _kpiCuzdanLastSpot = 0;
 var KPI_CUZDAN_SESSION_PREFIX = "kpi_cuzdan_snap_v1_";
@@ -3608,8 +3663,24 @@ function syncWalletPanelStatusBadges() {
         applyWalletStaleWarningEl(liveEl);
     }
     if (staleEl) {
+        var staleText = typeof walletStaleStatusText === 'function' ? walletStaleStatusText() : 'Güncel değil';
+        staleEl.textContent = staleText;
+        var lastText = typeof walletLastUpdatedText === 'function' ? walletLastUpdatedText() : '';
+        staleEl.title = lastText
+            ? ('Son başarılı cüzdan güncellemesi: ' + lastText + '. Sistem otomatik tekrar deneyecek.')
+            : 'Canlı Binance cüzdan yenilemesi şu anda başarısız. Sistem otomatik tekrar deneyecek.';
         staleEl.hidden = true;
     }
+    // Bot detay sayfasının wallet stale durumunu bilmesi için localStorage'a yaz (grace period geçmişse).
+    try {
+        var isLive = typeof isWalletDataLive === 'function' ? isWalletDataLive() : true;
+        if (!isLive && Date.now() >= _walletStaleGracePeriodUntil && typeof walletStaleStatusText === 'function') {
+            var staleMsg = walletStaleStatusText();
+            localStorage.setItem('wallet_stale_for_botdetail_v1', JSON.stringify({ msg: staleMsg, ts: Date.now() }));
+        } else if (isLive) {
+            localStorage.removeItem('wallet_stale_for_botdetail_v1');
+        }
+    } catch (e) {}
 }
 window.syncWalletPanelStatusBadges = syncWalletPanelStatusBadges;
 
@@ -3677,6 +3748,22 @@ function markWalletLiveFetchFailed(errorCode, opts) {
 }
 window.markWalletLiveFetchFailed = markWalletLiveFetchFailed;
 
+function markWalletCachedLiveFetchStale(errorCode) {
+    var code = errorCode ? String(errorCode).toUpperCase() : 'WALLET_STALE';
+    _walletLiveFailedAt = Date.now();
+    if (typeof State !== 'undefined') State.walletLastErrorCode = code;
+    if (assetsState.wallet) {
+        assetsState.wallet.data_status = 'stale';
+        if (assetsState.wallet.status !== 'error') assetsState.wallet.status = 'ready';
+    }
+    scheduleSilentWalletRecovery();
+    scheduleWalletPanelStaleBadgeAfterFailure();
+    if (typeof updateKpiCuzdanLiveStatus === 'function') updateKpiCuzdanLiveStatus();
+    if (window.BinanceAssetsPanel && typeof window.BinanceAssetsPanel.render === 'function') window.BinanceAssetsPanel.render();
+    else if (typeof renderVarliklarList === 'function') renderVarliklarList();
+}
+window.markWalletCachedLiveFetchStale = markWalletCachedLiveFetchStale;
+
 function _isLiveWalletSource(source) {
     return /binance_wallet|wallet_refresh|wallet_live|homeFlash_live/i.test(String(source || ''));
 }
@@ -3707,12 +3794,54 @@ function walletErrorCode() {
 }
 window.walletErrorCode = walletErrorCode;
 
+function parseDashboardWalletTime(raw) {
+    if (raw == null || raw === '') return null;
+    if (typeof raw === 'number') {
+        var dn = new Date(raw);
+        return isNaN(dn.getTime()) ? null : dn;
+    }
+    var s = String(raw).trim();
+    if (!s) return null;
+    if (s.indexOf('T') < 0 && s.indexOf(' ') > 0) s = s.replace(' ', 'T');
+    if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(s) && !/[zZ]|[+\-]\d{2}:?\d{2}$/.test(s)) s += 'Z';
+    var d = new Date(s);
+    return isNaN(d.getTime()) ? null : d;
+}
+
+function walletLastUpdatedDate() {
+    var w = assetsState && assetsState.wallet ? assetsState.wallet : null;
+    var raw = w && w.ts ? w.ts : null;
+    if (!raw && window.__walletDebugMeta) raw = window.__walletDebugMeta.wallet_ts_iso;
+    return parseDashboardWalletTime(raw);
+}
+window.walletLastUpdatedDate = walletLastUpdatedDate;
+
+function walletLastUpdatedText() {
+    var d = walletLastUpdatedDate();
+    if (!d) return '';
+    try {
+        return d.toLocaleString('tr-TR', {
+            timeZone: 'Europe/Istanbul',
+            day: '2-digit',
+            month: '2-digit',
+            year: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit'
+        });
+    } catch (e) {
+        return '';
+    }
+}
+window.walletLastUpdatedText = walletLastUpdatedText;
+
 /** Stale KPI rozeti: CLOCK_DRIFT için kısa etiket. */
 function walletStaleStatusText() {
     var code = walletErrorCode();
-    if (code === 'CLOCK_DRIFT') return 'Saat senkronu';
-    if (code === 'API_UNAUTHORIZED' || code.indexOf('KEY') >= 0) return 'API / IP';
-    return 'Güncel değil';
+    var base = 'Güncel değil';
+    if (code === 'CLOCK_DRIFT') base = 'Saat senkronu';
+    else if (code === 'API_UNAUTHORIZED' || code.indexOf('KEY') >= 0) base = 'API / IP';
+    var last = walletLastUpdatedText();
+    return last ? (base + ' · Son: ' + last) : base;
 }
 window.walletStaleStatusText = walletStaleStatusText;
 
@@ -3739,6 +3868,10 @@ function shouldShowWalletStaleWarning() {
         return false;
     }
     if (typeof isWalletPanelUpdating === 'function' && isWalletPanelUpdating()) {
+        return false;
+    }
+    // 3 saniyelik grace: yüklenme anında "Canlı"dan "Güncel değil"e geçişi engelle.
+    if (Date.now() < _walletStaleGracePeriodUntil) {
         return false;
     }
     _walletStaleUi.liveSince = null;
@@ -3781,6 +3914,7 @@ function applyWalletStaleWarningEl(el) {
         }
         el.hidden = false;
         el.textContent = 'Canlı';
+        el.title = 'Cüzdan Binance üzerinden canlı güncellendi.';
         el.classList.toggle('kpi-spot-status--live', true);
         el.classList.toggle('kpi-spot-status--stale', false);
         el.classList.toggle('kpi-spot-status--offline', false);
@@ -3801,7 +3935,12 @@ function applyWalletStaleWarningEl(el) {
         return;
     }
     el.hidden = false;
-    el.textContent = walletStaleStatusText();
+    var statusText = walletStaleStatusText();
+    var lastText = walletLastUpdatedText();
+    el.textContent = statusText;
+    el.title = lastText
+        ? ('Son görünen bakiye korunuyor. Son başarılı cüzdan güncellemesi: ' + lastText + '. Sistem otomatik tekrar deneyecek.')
+        : 'Son görünen bakiye korunuyor; canlı Binance cüzdan yenilemesi şu anda başarısız. Sistem otomatik tekrar deneyecek.';
     el.classList.toggle('kpi-spot-status--stale', true);
     el.classList.toggle('kpi-spot-status--live', false);
     el.classList.toggle('kpi-spot-status--offline', false);
@@ -7956,7 +8095,8 @@ function normalizeAndApplyWallet(payload, meta) {
         if (out.total_usd == null && out.usdt_value != null) out.total_usd = Number(out.usdt_value);
         return out;
     });
-    var ts = payload.ts != null ? (typeof payload.ts === 'number' ? payload.ts : (typeof payload.ts === 'string' ? new Date(payload.ts).getTime() : Date.now())) : Date.now();
+    var ts = payload.ts != null ? (typeof payload.ts === 'number' ? payload.ts : (typeof payload.ts === 'string' ? new Date(payload.ts).getTime() : null)) : null;
+    if (ts == null) ts = assetsState.wallet.ts || 0;
     var currentTotal = (assetsState.wallet && typeof assetsState.wallet.total_usd === 'number') ? assetsState.wallet.total_usd : null;
     if ((totalUsd == null || totalUsd === 0) && currentTotal != null && currentTotal > 0) totalUsd = currentTotal;
     if (totalUsd == null && assets.length && freeUsd != null) totalUsd = freeUsd;
@@ -7977,7 +8117,11 @@ function normalizeAndApplyWallet(payload, meta) {
     assetsState.wallet.error = err || null;
     var explicitStatus = payload.data_status;
     var inferredLive = _isLiveWalletSource(source) && !meta.skipped && !meta.stale;
-    var newDataStatus = explicitStatus || (err ? 'error' : (inferredLive ? 'fresh' : 'cached'));
+    var snapshotFresh = source === 'dashboard_snapshot'
+        && meta.wallet_age_sec != null
+        && Number(meta.wallet_age_sec) < 900
+        && !meta.stale;
+    var newDataStatus = explicitStatus || (err ? 'error' : ((inferredLive || snapshotFresh) ? 'fresh' : 'cached'));
     if (!err && explicitStatus !== 'stale' && explicitStatus !== 'error'
         && _walletLiveOkAt && (Date.now() - _walletLiveOkAt) <= WALLET_LIVE_OK_TTL_MS
         && !_walletLiveFailedAfterOk()) {
@@ -7988,12 +8132,13 @@ function normalizeAndApplyWallet(payload, meta) {
     assetsState.wallet.unpriced_assets = Array.isArray(payload.unpriced_assets) ? payload.unpriced_assets : [];
     if (err && _isLiveWalletSource(source)) {
         markWalletLiveFetchFailed(err.error_code || err.code);
-    } else if (_isLiveWalletSource(source) && keysConfigured && !err) {
+    } else if ((_isLiveWalletSource(source) || snapshotFresh) && keysConfigured && !err) {
         if (explicitStatus === 'stale' || meta.stale) {
             if (meta.skipped || totalUsd != null || assets.length > 0) {
                 assetsState.wallet.data_status = 'cached';
                 assetsState.wallet.status = 'ready';
                 assetsState.wallet.error = null;
+                markWalletCachedLiveFetchStale(meta.stale_code || payload.last_error_code || payload._error_code || 'BINANCE_UNREACHABLE');
                 scheduleSilentWalletRecovery();
             } else {
                 markWalletLiveFetchFailed(meta.stale_code || 'BINANCE_UNREACHABLE');
@@ -8576,7 +8721,7 @@ function renderAssetsSummary() {
     if (typeof State !== 'undefined' && State.isTestAccount && typeof updateTestAccountKpiCuzdanFromStrip === 'function') {
         updateTestAccountKpiCuzdanFromStrip();
     }
-    if (lastEl) lastEl.textContent = assetsState.wallet.ts ? new Date(assetsState.wallet.ts).toLocaleTimeString('tr-TR') : '—';
+    if (lastEl) lastEl.textContent = assetsState.wallet.ts ? new Date(assetsState.wallet.ts).toLocaleTimeString('tr-TR', { timeZone: 'Europe/Istanbul', hour: '2-digit', minute: '2-digit' }) : '—';
     if (typeof syncWalletPanelStatusBadges === 'function') syncWalletPanelStatusBadges();
 }
 
@@ -9892,6 +10037,11 @@ function pollWalletRefreshUntilDone(accountId) {
                     scheduleNext();
                     return;
                 }
+                if (window.__walletDebugMeta && d.last_snapshot_at) {
+                    window.__walletDebugMeta.wallet_ts_iso = d.last_snapshot_at;
+                    window.__walletDebugMeta.wallet_age_sec = d.last_snapshot_age_sec;
+                    window.__walletDebugMeta.wallet_snapshot_stale = !!d.snapshot_stale;
+                }
                 if (d.inflight) {
                     if (typeof setWalletPanelUpdating === 'function') setWalletPanelUpdating(true);
                     scheduleNext();
@@ -9901,7 +10051,27 @@ function pollWalletRefreshUntilDone(accountId) {
                 if (typeof setWalletPanelUpdating === 'function') setWalletPanelUpdating(false);
                 var errCode = d.last_error_code ? String(d.last_error_code).toUpperCase() : '';
                 if (errCode) {
-                    if (typeof markWalletLiveFetchFailed === 'function') markWalletLiveFetchFailed(errCode);
+                    if (typeof _walletHasDisplayableAssets === 'function' && _walletHasDisplayableAssets()
+                        && typeof markWalletCachedLiveFetchStale === 'function') {
+                        markWalletCachedLiveFetchStale(errCode);
+                    } else if (typeof markWalletLiveFetchFailed === 'function') {
+                        markWalletLiveFetchFailed(errCode, { force: true });
+                    }
+                    return;
+                }
+                if (d.snapshot_stale) {
+                    if (typeof _walletHasDisplayableAssets === 'function' && _walletHasDisplayableAssets()
+                        && typeof markWalletCachedLiveFetchStale === 'function') {
+                        markWalletCachedLiveFetchStale('WALLET_SNAPSHOT_STALE');
+                    } else if (typeof markWalletLiveFetchFailed === 'function') {
+                        markWalletLiveFetchFailed('WALLET_SNAPSHOT_STALE', { force: true });
+                    }
+                    if (window.homeFlash && typeof window.homeFlash.resetRefreshThrottle === 'function') {
+                        window.homeFlash.resetRefreshThrottle(accountId);
+                    }
+                    if (window.homeFlash && typeof window.homeFlash.triggerRefresh === 'function') {
+                        window.homeFlash.triggerRefresh(accountId, true);
+                    }
                     return;
                 }
                 if (typeof isWalletDataLive === 'function' && isWalletDataLive()) {
@@ -9974,8 +10144,15 @@ function triggerWalletRefreshForVarliklar(accountId, opts) {
                 normalizeAndApplyWallet(res.data.wallet_live, {
                     source: force ? 'wallet_refresh_varliklar_force' : 'wallet_refresh_varliklar',
                     skipped: !!d.skipped,
-                    stale: !!d.stale
+                    stale: !!d.stale,
+                    stale_code: d.last_error_code || d.error_code || null
                 });
+            }
+            if (res && res.data && res.data.stale && res.data.last_error_code && typeof markWalletCachedLiveFetchStale === 'function') {
+                markWalletCachedLiveFetchStale(res.data.last_error_code);
+            }
+            if (res && res.data && res.data.stale && !res.data.last_error_code && typeof markWalletCachedLiveFetchStale === 'function') {
+                markWalletCachedLiveFetchStale('WALLET_SNAPSHOT_STALE');
             }
             if (res && res.data && res.data.inflight && typeof pollWalletRefreshUntilDone === 'function') {
                 pollWalletRefreshUntilDone(accountId);
@@ -9983,9 +10160,19 @@ function triggerWalletRefreshForVarliklar(accountId, opts) {
             if (typeof setWalletPanelUpdating === 'function') setWalletPanelUpdating(false);
             if (window.__walletDebugMeta) {
                 window.__walletDebugMeta.last_refresh_at = (res && res.data && res.data.wallet_live_at) ? res.data.wallet_live_at : new Date().toISOString();
+                if (res && res.data && res.data.wallet_live_at) {
+                    window.__walletDebugMeta.wallet_ts_iso = res.data.wallet_live_at;
+                }
             }
         })
-        .catch(function () {
+        .catch(function (err) {
+            var code = (err && (err.error_code || err.code)) || 'WALLET_REFRESH_FAILED';
+            if (typeof _walletHasDisplayableAssets === 'function' && _walletHasDisplayableAssets()
+                && typeof markWalletCachedLiveFetchStale === 'function') {
+                markWalletCachedLiveFetchStale(code);
+            } else if (typeof markWalletLiveFetchFailed === 'function') {
+                markWalletLiveFetchFailed(code, { force: true });
+            }
             if (force && typeof scheduleWalletConnectivityRetry === 'function') {
                 scheduleWalletConnectivityRetry(accountId);
             }
@@ -15749,10 +15936,36 @@ function isBotWaitingFirstBuy(bot) {
     return true;
 }
 
+function getFinanceBotHealthStatus(bot) {
+    var botId = String((bot && (bot.bot_id || bot.id)) || '');
+    var info = (botId && typeof _financeBotsHealthCache !== 'undefined') ? _financeBotsHealthCache[botId] : null;
+    var level = normalizeFinanceBotsTabAlertLevel(info && info.level);
+    var message = info && (info.message || info.title);
+    if (!level && bot) {
+        level = normalizeFinanceBotsTabAlertLevel(bot.health_alert_level || bot.health_level);
+        if (!message && Array.isArray(bot.health_alerts) && bot.health_alerts.length) {
+            var hasCrit = bot.health_alerts.some(function (a) { return a && String(a.level || '').toLowerCase() === 'critical'; });
+            var hasWarn = bot.health_alerts.some(function (a) { return a && String(a.level || '').toLowerCase() === 'warn'; });
+            level = normalizeFinanceBotsTabAlertLevel(hasCrit && hasWarn ? 'both' : (hasCrit ? 'critical' : (hasWarn ? 'warn' : '')));
+            message = (bot.health_alerts[0] && (bot.health_alerts[0].message || bot.health_alerts[0].title)) || message;
+        }
+    }
+    return { level: level, message: message || '' };
+}
+
 function getFinanceBotStatusMeta(bot) {
     if (typeof isDashboardServerUnreachable === 'function' && isDashboardServerUnreachable()
         && typeof isFinanceBotRunningForHealth === 'function' && isFinanceBotRunningForHealth(bot)) {
-        return { text: 'SUNUCU YOK', className: 'mevcut-botlar-status--stopped' };
+        return { text: 'DURDURULDU', className: 'mevcut-botlar-status--stopped', title: 'Sunucuya ulaşılamadığı için bot akışı güvenli durumda izleniyor.' };
+    }
+    var health = getFinanceBotHealthStatus(bot);
+    if (typeof isFinanceBotRunningForHealth === 'function' && isFinanceBotRunningForHealth(bot)
+        && (health.level === 'crit' || health.level === 'both')) {
+        return {
+            text: 'DURDURULDU',
+            className: 'mevcut-botlar-status--stopped',
+            title: health.message || 'Kritik hata nedeniyle bot işlem akışı durdu; detay sayfasındaki uyarı ve logları kontrol edin.'
+        };
     }
     if (isBotWaitingFirstBuy(bot)) {
         return { text: 'ALIM BEKLİYOR', className: 'mevcut-botlar-status--waiting' };
@@ -15788,6 +16001,7 @@ var _financeBotsHealthCache = {};
 var _financeBotsHealthPollPromise = null;
 var FINANCE_BOTS_HEALTH_POLL_MS = 15000;
 var FINANCE_BOT_ROW_ALERT_CLASSES = ['mevcut-bot-row-alert-warn', 'mevcut-bot-row-alert-crit', 'mevcut-bot-row-alert-both'];
+var FINANCE_BOTS_TAB_ALERT_CLASSES = ['bots-tab-alert-warn', 'bots-tab-alert-crit', 'bots-tab-alert-both'];
 var _financeBotsMetricsCache = {};
 
 function financeBotsSessionCacheKey(accountId) {
@@ -15863,6 +16077,8 @@ function persistFinanceBotsSessionCache(bots) {
                 status: b.status,
                 display_status: b.display_status,
                 initial_allocation_done: b.initial_allocation_done,
+                health_alert_level: b.health_alert_level || null,
+                health_alerts: Array.isArray(b.health_alerts) ? b.health_alerts : [],
                 budget_usd: b.budget_usd || b.initial_usd,
                 initial_usd: b.initial_usd || b.budget_usd,
                 current_usd: b.current_usd,
@@ -15900,6 +16116,7 @@ function restoreFinanceBotsFromSessionCache(accountId) {
                 patchFinanceBotsMetrics(State.bots);
                 updateFinanceBotsLivePrices();
                 if (!_financeBotsLiveHydrated) ensureFinanceBotsLiveEquity();
+                if (typeof ensureFinanceBotsHealthPolling === 'function') ensureFinanceBotsHealthPolling();
                 return true;
             }
             if (typeof renderFinanceBots === 'function') renderFinanceBots(State.bots);
@@ -16100,6 +16317,8 @@ function applyFinanceBotsLiveEquityToDom() {
                     setTextIfChanged(statusEl, statusMeta.text);
                     var statusCls = 'mevcut-botlar-status ' + statusMeta.className;
                     if (statusEl.className !== statusCls) statusEl.className = statusCls;
+                    if (statusMeta.title) statusEl.setAttribute('title', statusMeta.title);
+                    else statusEl.removeAttribute('title');
                 }
             }
             if (tds.length >= 7) {
@@ -16122,6 +16341,8 @@ function applyFinanceBotsLiveEquityToDom() {
             setTextIfChanged(el, statusMeta.text);
             var statusCls = 'mevcut-botlar-status ' + statusMeta.className;
             if (el.className !== statusCls) el.className = statusCls;
+            if (statusMeta.title) el.setAttribute('title', statusMeta.title);
+            else el.removeAttribute('title');
         });
     });
     if (typeof State !== 'undefined' && State.isTestAccount) {
@@ -16281,24 +16502,218 @@ function classifyFinanceBotHealth(botId, healthData) {
     return { level: null };
 }
 
+function financeBotsHealthAccountKey() {
+    if (State.accountCode) return 'code:' + String(State.accountCode);
+    if (State.accountId) return 'id:' + String(State.accountId);
+    return '';
+}
+
+function hydrateFinanceBotsStoredHealthAlerts() {
+    var stored = {};
+    if (window.BotHealthAlerts && typeof window.BotHealthAlerts.getStoredRowAlerts === 'function') {
+        stored = Object.assign(
+            {},
+            window.BotHealthAlerts.getStoredRowAlerts() || {},
+            window.BotHealthAlerts.getStoredRowAlerts(financeBotsHealthAccountKey()) || {}
+        );
+    }
+    try {
+        var params = new URLSearchParams(location.search);
+        var qBotId = String(params.get('health_bot_id') || '').trim();
+        var qLevel = String(params.get('health_level') || '').trim().toLowerCase();
+        var qTs = Number(params.get('health_ts') || 0);
+        if (qBotId && (qLevel === 'critical' || qLevel === 'warn' || qLevel === 'both') && (!qTs || Date.now() - qTs < 120000)) {
+            stored[qBotId] = { level: qLevel, query: true };
+        }
+    } catch (e) {}
+    Object.keys(stored).forEach(function (id) {
+        if (!_financeBotsHealthCache[id] || !_financeBotsHealthCache[id].level) {
+            _financeBotsHealthCache[id] = stored[id];
+        }
+    });
+}
+
+function normalizeFinanceBotsTabAlertLevel(level) {
+    var lv = String(level || '').toLowerCase();
+    if (lv === 'critical' || lv === 'crit') return 'crit';
+    if (lv === 'warn' || lv === 'warning') return 'warn';
+    if (lv === 'both') return 'both';
+    return '';
+}
+
+function getFinanceBotsTabAlertTargets() {
+    var seen = [];
+    var out = [];
+    document.querySelectorAll('#btnBotsTab, .dm-tab[data-tab="bots"], [data-mobile-tab="bots"]').forEach(function (el) {
+        if (!el || seen.indexOf(el) >= 0) return;
+        seen.push(el);
+        out.push(el);
+    });
+    return out;
+}
+
+function collectFinanceBotsTabAlertSummary() {
+    var ids = [];
+    if (Array.isArray(State.bots) && State.bots.length) {
+        State.bots.forEach(function (bot) {
+            var id = String((bot && (bot.bot_id || bot.id)) || '');
+            if (id && ids.indexOf(id) < 0) ids.push(id);
+        });
+    }
+    if (!ids.length) {
+        document.querySelectorAll('tr[data-bot-id], .mevcut-botlar-mobile-card[data-bot-id]').forEach(function (el) {
+            var id = String(el.getAttribute('data-bot-id') || '');
+            if (id && ids.indexOf(id) < 0) ids.push(id);
+        });
+    }
+
+    var alertLevelsByBot = {};
+    ids.forEach(function (id) {
+        var info = _financeBotsHealthCache[id];
+        var level = normalizeFinanceBotsTabAlertLevel(info && info.level);
+        if (level) alertLevelsByBot[id] = level;
+    });
+
+    var levels = Object.keys(alertLevelsByBot).map(function (id) { return alertLevelsByBot[id]; });
+    var hasWarn = levels.indexOf('warn') >= 0 || levels.indexOf('both') >= 0;
+    var hasCrit = levels.indexOf('crit') >= 0 || levels.indexOf('both') >= 0;
+    var alertCount = levels.length;
+    var mode = '';
+
+    if (alertCount > 1 || (hasCrit && hasWarn)) mode = 'both';
+    else if (hasCrit) mode = 'crit';
+    else if (hasWarn) mode = 'warn';
+
+    return {
+        mode: mode,
+        alertCount: alertCount,
+        hasWarn: hasWarn,
+        hasCrit: hasCrit
+    };
+}
+
+function updateFinanceBotsTabAlertState() {
+    var summary = collectFinanceBotsTabAlertSummary();
+    // Wallet stale durumu bireysel bot cache'ine artık yazılmıyor;
+    // Tab göstergesi için burada ayrıca kontrol edilir.
+    var walletStale = !!(financeBotsWalletStaleInfo() && (State.bots || []).some(isFinanceBotRunningForHealth));
+    var effectiveMode = summary.mode;
+    if (!effectiveMode && walletStale) effectiveMode = 'warn';
+    var title = '';
+    if (effectiveMode === 'both') {
+        title = 'Botlarda birden fazla veya karışık kritik uyarı var. Botlar sekmesini kontrol edin.';
+    } else if (effectiveMode === 'crit') {
+        title = 'Botlarda kritik hata var. Botlar sekmesini kontrol edin.';
+    } else if (effectiveMode === 'warn') {
+        title = walletStale && !summary.hasWarn && !summary.hasCrit
+            ? 'Cüzdan verisi güncel değil. Bakiye bilgisi anlık olmayabilir.'
+            : 'Botlarda uyarı var. Botlar sekmesini kontrol edin.';
+    }
+
+    getFinanceBotsTabAlertTargets().forEach(function (el) {
+        FINANCE_BOTS_TAB_ALERT_CLASSES.forEach(function (c) { el.classList.remove(c); });
+        if (effectiveMode) {
+            if (!Object.prototype.hasOwnProperty.call(el.dataset, 'botsTabBaseTitle')) {
+                el.dataset.botsTabBaseTitle = el.getAttribute('title') || '';
+            }
+            el.classList.add('bots-tab-alert-' + effectiveMode);
+            el.setAttribute('title', title);
+            el.setAttribute('aria-live', 'polite');
+        } else {
+            if (Object.prototype.hasOwnProperty.call(el.dataset, 'botsTabBaseTitle')) {
+                var baseTitle = el.dataset.botsTabBaseTitle || '';
+                if (baseTitle) el.setAttribute('title', baseTitle);
+                else el.removeAttribute('title');
+                delete el.dataset.botsTabBaseTitle;
+            }
+            el.removeAttribute('aria-live');
+        }
+    });
+}
+
+function financeBotsWalletStaleInfo() {
+    if (typeof State !== 'undefined' && State.isTestAccount) return null;
+    if (!assetsState || !assetsState.wallet || assetsState.wallet.keys_configured !== true) return null;
+    if (typeof isWalletDataLive === 'function' && isWalletDataLive()) return null;
+    var msg = typeof walletStaleStatusText === 'function'
+        ? walletStaleStatusText()
+        : 'Cüzdan verisi güncel değil';
+    return {
+        level: 'warn',
+        message: msg,
+        walletSnapshotStale: true
+    };
+}
+
+function _syncWalletStaleBotNotice(walletInfo) {
+    var msg = walletInfo ? ('⚠ ' + (walletInfo.message || 'Cüzdan verisi güncel değil') + ' — Bakiye bilgisi anlık olmayabilir. Bot işlemleri etkilenmez.') : '';
+    ['walletStaleBotNotice', 'walletStaleBotNoticeBotsTab'].forEach(function (elId) {
+        var el = document.getElementById(elId);
+        if (!el) return;
+        if (walletInfo) {
+            el.textContent = msg;
+            el.style.display = 'flex';
+        } else {
+            el.style.display = 'none';
+            el.textContent = '';
+        }
+    });
+}
+
 function applyFinanceBotsHealthAlertsToDom() {
+    hydrateFinanceBotsStoredHealthAlerts();
     if (isDashboardServerUnreachable()) {
         (State.bots || []).filter(isFinanceBotRunningForHealth).forEach(function (bot) {
             var id = String(bot.bot_id || bot.id || '');
             if (id) _financeBotsHealthCache[id] = { level: 'critical', serverOffline: true };
         });
     }
+    var walletInfo = financeBotsWalletStaleInfo();
+    // Wallet stale durumunu bireysel bot satırlarına değil, panel üstündeki notice'a taşı.
+    // Bu sayede sarı satır ↔ boş detay uyuşmazlığı ortadan kalkar.
+    _syncWalletStaleBotNotice(walletInfo);
+    if (!walletInfo) {
+        Object.keys(_financeBotsHealthCache).forEach(function (id) {
+            if (_financeBotsHealthCache[id] && _financeBotsHealthCache[id].walletSnapshotStale) {
+                delete _financeBotsHealthCache[id];
+            }
+        });
+    }
     document.querySelectorAll('tr[data-bot-id]').forEach(function (tr) {
         var botId = tr.getAttribute('data-bot-id');
         var info = botId ? _financeBotsHealthCache[botId] : null;
         FINANCE_BOT_ROW_ALERT_CLASSES.forEach(function (c) { tr.classList.remove(c); });
-        if (info && info.level) tr.classList.add('mevcut-bot-row-alert-' + (info.level === 'critical' ? 'crit' : info.level));
+        // walletSnapshotStale yalnızca panel notice üzerinden gösterilir, satır renklenmez.
+        if (info && info.level && !info.walletSnapshotStale) tr.classList.add('mevcut-bot-row-alert-' + (info.level === 'critical' ? 'crit' : info.level));
     });
     document.querySelectorAll('.mevcut-botlar-mobile-card[data-bot-id]').forEach(function (card) {
         var botId = card.getAttribute('data-bot-id');
         var info = botId ? _financeBotsHealthCache[botId] : null;
         FINANCE_BOT_ROW_ALERT_CLASSES.forEach(function (c) { card.classList.remove(c); });
-        if (info && info.level) card.classList.add('mevcut-bot-row-alert-' + (info.level === 'critical' ? 'crit' : info.level));
+        if (info && info.level && !info.walletSnapshotStale) card.classList.add('mevcut-bot-row-alert-' + (info.level === 'critical' ? 'crit' : info.level));
+    });
+    updateFinanceBotsTabAlertState();
+}
+
+function hydrateFinanceBotsInlineHealthAlerts(bots) {
+    if (!Array.isArray(bots)) return;
+    bots.forEach(function (bot) {
+        var botId = String((bot && (bot.bot_id || bot.id)) || '');
+        if (!botId) return;
+        var level = String(bot.health_alert_level || bot.health_level || '').toLowerCase();
+        if (!level && Array.isArray(bot.health_alerts)) {
+            var hasCrit = bot.health_alerts.some(function (a) { return a && String(a.level || '').toLowerCase() === 'critical'; });
+            var hasWarn = bot.health_alerts.some(function (a) { return a && String(a.level || '').toLowerCase() === 'warn'; });
+            level = hasCrit && hasWarn ? 'both' : (hasCrit ? 'critical' : (hasWarn ? 'warn' : ''));
+        }
+        if (level === 'critical' || level === 'warn' || level === 'both') {
+            _financeBotsHealthCache[botId] = {
+                level: level,
+                inline: true
+            };
+        } else if (_financeBotsHealthCache[botId] && _financeBotsHealthCache[botId].inline) {
+            delete _financeBotsHealthCache[botId];
+        }
     });
 }
 
@@ -16341,9 +16756,17 @@ function pollFinanceBotsHealth() {
         });
         Object.keys(updates).forEach(function (id) {
             _financeBotsHealthCache[id] = updates[id];
+            if (window.BotHealthAlerts && typeof window.BotHealthAlerts.setStoredRowAlert === 'function') {
+                window.BotHealthAlerts.setStoredRowAlert(
+                    id,
+                    updates[id] && updates[id].level,
+                    updates[id] && updates[id].message,
+                    financeBotsHealthAccountKey()
+                );
+            }
         });
         applyFinanceBotsHealthAlertsToDom();
-        if (isDashboardServerUnreachable()) applyFinanceBotsLiveEquityToDom();
+        applyFinanceBotsLiveEquityToDom();
     });
 }
 
@@ -16366,6 +16789,7 @@ function ensureFinanceBotsHealthPolling() {
 function patchFinanceBotsMetrics(bots) {
     if (!bots || !bots.length) return;
     State.bots = hydrateBotsWithMetricsCache(bots);
+    hydrateFinanceBotsInlineHealthAlerts(State.bots);
     applyFinanceBotsLiveEquityToDom();
     applyFinanceBotsHealthAlertsToDom();
     persistFinanceBotsSessionCache(State.bots);
@@ -16374,6 +16798,7 @@ function patchFinanceBotsMetrics(bots) {
 function renderFinanceBots(bots, opts) {
     opts = opts || {};
     bots = hydrateBotsWithMetricsCache(Array.isArray(bots) ? bots : []);
+    hydrateFinanceBotsInlineHealthAlerts(bots);
     const containerAnasayfa = document.getElementById('financeBotsList');
     const containerBotsTab = document.getElementById('financeBotsListBots');
     if (!containerAnasayfa && !containerBotsTab) return;
@@ -16387,9 +16812,11 @@ function renderFinanceBots(bots, opts) {
         if (_financeBotsTableHasRows() || (State.bots && State.bots.length)) return;
         _financeBotsStructureSignature = null;
         _financeBotsIdsSignature = null;
+        _financeBotsHealthCache = {};
         clearBotsTabCache();
         if (containerAnasayfa) containerAnasayfa.innerHTML = emptyHtml;
         if (containerBotsTab) containerBotsTab.innerHTML = emptyHtml;
+        updateFinanceBotsTabAlertState();
         _bindFinanceBotsSortButtons();
         return;
     }
@@ -16541,7 +16968,7 @@ function renderFinanceBots(bots, opts) {
         return '<tr style="cursor:pointer" data-bot-id="' + botId + '" data-symbol="' + sym + '" data-detail-page="' + detailPage + '">' +
             '<td class="col-symbol col-left">' + symbolCell + '</td>' +
             '<td class="mevcut-botlar-price-cell col-price col-center">' + priceCell + '</td>' +
-            '<td class="col-status col-center"><span class="mevcut-botlar-status ' + statusMeta.className + '">' + statusMeta.text + '</span></td>' +
+            '<td class="col-status col-center"><span class="mevcut-botlar-status ' + statusMeta.className + '"' + (statusMeta.title ? ' title="' + escapeHtml(statusMeta.title).replace(/"/g, '&quot;') + '"' : '') + '>' + statusMeta.text + '</span></td>' +
             '<td class="col-budget col-center">' + fmtUsd(bot.budget_usd || 0) + '</td>' +
             '<td class="mevcut-botlar-balance-cell col-balance col-center finance-bot-balance' + (balanceDisplay === '—' ? ' finance-bot-metric-pending' : '') + '" data-bot-id="' + botId + '" data-balance="' + (currentUsd != null ? currentUsd : '') + '" title="Bot bakiyesi (bot detay /live equity ile aynı)">' + balanceDisplay + '</td>' +
             '<td class="col-pnl col-center" style="color:' + sc + '">' + formatHeroKzDisplay(rowPnl, rowPnlPct, budgetUsd) + '</td>' +
@@ -16584,7 +17011,7 @@ function renderFinanceBots(bots, opts) {
             mobilePriceSpan +
             '</div>' +
             '<div class="mevcut-botlar-mobile-stats">' +
-            '<div class="mevcut-botlar-mobile-stat"><span class="mevcut-botlar-mobile-stat-label">Durum</span><span class="mevcut-botlar-status ' + statusMeta.className + '">' + statusMeta.text + '</span></div>' +
+            '<div class="mevcut-botlar-mobile-stat"><span class="mevcut-botlar-mobile-stat-label">Durum</span><span class="mevcut-botlar-status ' + statusMeta.className + '"' + (statusMeta.title ? ' title="' + escapeHtml(statusMeta.title).replace(/"/g, '&quot;') + '"' : '') + '>' + statusMeta.text + '</span></div>' +
             '<div class="mevcut-botlar-mobile-stat"><span class="mevcut-botlar-mobile-stat-label">Bütçe</span><span class="mevcut-botlar-mobile-stat-value">' + fmtUsd(bot.budget_usd || 0) + '</span></div>' +
             '<div class="mevcut-botlar-mobile-stat"><span class="mevcut-botlar-mobile-stat-label">Bakiye</span><span class="mevcut-botlar-mobile-stat-value">' + balanceDisplay + '</span></div>' +
             '<div class="mevcut-botlar-mobile-stat"><span class="mevcut-botlar-mobile-stat-label">K/Z</span><span class="mevcut-botlar-mobile-stat-value mevcut-botlar-mobile-pnl" style="color:' + sc + '">' + formatHeroKzDisplay(rowPnl, rowPnlPct, budgetUsd) + '</span></div>' +

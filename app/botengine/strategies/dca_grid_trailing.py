@@ -9,6 +9,10 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from app.botengine.models import BotEngineMode, DcaGridTrailingConfig
 from app.botengine.strategies.base import Strategy
+from app.botengine.strategies.grid_outage_recovery import (
+    apply_grid_outage_recovery,
+    should_apply_outage_recovery,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -366,10 +370,6 @@ def tick_dca_grid_trailing(
     logger.debug(
         "BOT_STRATEGY_TICK bot_id=%s price=%.2f ref=%s ia_done=%s mode=%s base_bal=%.4f quote_bal=%.2f",
         state.get("bot_id", 0), P, ref, initial_done, state.get("mode", "IDLE"), base_balance, quote_balance
-    )
-    from app.botengine.strategies.grid_outage_recovery import (
-        apply_grid_outage_recovery,
-        should_apply_outage_recovery,
     )
     apply_recovery, gap_sec = should_apply_outage_recovery(state, config)
     if apply_recovery:

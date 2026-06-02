@@ -62,7 +62,7 @@ def _parse_iso_ts_ms(ts: Any) -> int:
 def _cycle_open_trade_row(state: Dict[str, Any], cycle_id: int) -> Optional[Dict[str, Any]]:
     """Tur açılış satırı (cycle_open_trades içinde tek kayıt / tur)."""
     cid = int(cycle_id or 1)
-    for row in state.get("cycle_open_trades") or []:
+    for row in reversed(state.get("cycle_open_trades") or []):
         if isinstance(row, dict) and int(row.get("cycle_id") or 0) == cid:
             return row
     return None
@@ -87,16 +87,37 @@ def _cycle_open_ts_candidates(state: Dict[str, Any], cycle_id: int) -> List[str]
     return candidates
 
 
+def _cycle_open_trade_ts(state: Dict[str, Any], cycle_id: int) -> Optional[str]:
+    """Tur 2+ için cycle_open_trades satırı otoriter açılış anıdır."""
+    row = _cycle_open_trade_row(state, int(cycle_id or 1))
+    if row and row.get("ts"):
+        return str(row["ts"])
+    return None
+
+
 def resolve_cycle_opened_at(
     state: Dict[str, Any],
     ledger: Optional[Dict[str, Any]] = None,
 ) -> Optional[str]:
     """Tur açılış zamanı — initial_allocation / cycle_reset; ledger.created_at değil."""
-    co = state.get("cycle_opened_at")
-    if isinstance(co, str) and co.strip():
-        return co.strip()
     cid = int(state.get("cycle_id") or 1)
+    row_ts = _cycle_open_trade_ts(state, cid)
+    row_ms = _parse_iso_ts_ms(row_ts)
     candidates = _cycle_open_ts_candidates(state, cid)
+    co = state.get("cycle_opened_at")
+    if cid > 1 and row_ms > 0:
+        cur_ms = _parse_iso_ts_ms(co) if isinstance(co, str) and co.strip() else 0
+        if cur_ms <= 0 or row_ms > cur_ms + 2000:
+            return row_ts
+    if isinstance(co, str) and co.strip():
+        cur = co.strip()
+        cur_ms = _parse_iso_ts_ms(cur)
+        if candidates:
+            best = min(candidates)
+            best_ms = _parse_iso_ts_ms(best)
+            if cid > 1 and best_ms > 0 and cur_ms > 0 and best_ms > cur_ms + 2000:
+                return best
+        return cur
     if candidates:
         return min(candidates)
     if isinstance(ledger, dict):
@@ -112,10 +133,15 @@ def heal_cycle_opened_at(state: Dict[str, Any]) -> None:
     candidates = _cycle_open_ts_candidates(state, cid)
     if not candidates:
         return
+    row_ts = _cycle_open_trade_ts(state, cid)
+    row_ms = _parse_iso_ts_ms(row_ts)
     best = min(candidates)
     best_ms = _parse_iso_ts_ms(best)
     current = state.get("cycle_opened_at")
     cur_ms = _parse_iso_ts_ms(current) if isinstance(current, str) and str(current).strip() else 0
+    if cid > 1 and row_ms > 0 and (cur_ms <= 0 or row_ms > cur_ms + 2000):
+        state["cycle_opened_at"] = row_ts
+        return
     if cur_ms <= 0:
         state["cycle_opened_at"] = best
         return
@@ -141,9 +167,11 @@ def resolve_cycle_opened_at_for_cycle(
         ledger = state.get("cycle_ledger_current")
         return resolve_cycle_opened_at(state, ledger if isinstance(ledger, dict) else None)
     candidates: List[str] = []
-    row = _cycle_open_trade_row(state, cid)
-    if row and row.get("ts"):
-        candidates.append(str(row["ts"]))
+    row_ts = _cycle_open_trade_ts(state, cid)
+    if cid > 1 and row_ts:
+        return row_ts
+    if row_ts:
+        candidates.append(row_ts)
     for row in state.get("completed_cycle_dual_pnls") or []:
         if not isinstance(row, dict) or int(row.get("cycle_id") or 0) != cid:
             continue
@@ -486,7 +514,9 @@ def cycle_ledger_with_basis(
         return ledger
     buy_qty = _num(ledger.get("buy_qty_total")) + init_q
     buy_quote = _num(ledger.get("buy_quote_total")) + init_q * init_p
-    buy_fee = _num(ledger.get("buy_fee_total_quote"))
+    # initial_alloc_fee_quote: state'e execution.py tarafından kaydedilir; eksikse 0 (geriye dönük uyumluluk)
+    init_fee = _num(state.get("initial_alloc_fee_quote"))
+    buy_fee = _num(ledger.get("buy_fee_total_quote")) + init_fee
     if buy_qty <= 0:
         return ledger
     out = dict(ledger)

@@ -157,8 +157,12 @@ def _enrich_minimal_wallet_with_bot_locked(wallet: Dict[str, Any], account_id: i
     free_usd_tot = 0.0
     locked_usd_tot = 0.0
     total_bot_locked_usd = 0.0
+    snapshot_assets = set()
     for a in wallet["assets"]:
         asset = (a.get("asset") or "").strip()
+        if not asset:
+            continue
+        snapshot_assets.add(asset)
         free = float(a.get("free") or 0)
         locked = float(a.get("locked") or 0)
         usdt_value = a.get("usdt_value")
@@ -181,6 +185,51 @@ def _enrich_minimal_wallet_with_bot_locked(wallet: Dict[str, Any], account_id: i
         free_usd_tot += free_val
         locked_usd_tot += locked_val
         total_bot_locked_usd += bot_locked_val
+
+    # Snapshot'ta olmayan ama bot_locked olan varlıkları ekle (ör. cüzdan eski, bot yeni coin aldı)
+    try:
+        from app.services.data_hub import data_hub
+        prices_map = data_hub.get_all_prices() or {}
+    except Exception:
+        prices_map = {}
+    stable = {"USDT", "BUSD", "USDC", "FDUSD", "TUSD", "DAI"}
+    for asset, bl_qty in bot_locked.items():
+        if not asset or asset in snapshot_assets:
+            continue
+        bl_qty = float(bl_qty or 0)
+        if bl_qty <= 0:
+            continue
+        if asset in stable:
+            price = 1.0
+        else:
+            price = None
+            for quote in ("USDT", "BUSD", "FDUSD", "USDC"):
+                raw = prices_map.get(f"{asset}{quote}")
+                if raw is not None and float(raw) > 0:
+                    price = float(raw)
+                    break
+        if price is None:
+            continue
+        bl_val = round(bl_qty * price, 2)
+        total_bot_locked_usd += bl_val
+        wallet["assets"].append({
+            "asset": asset,
+            "free": 0.0,
+            "locked": 0.0,
+            "total": bl_qty,
+            "bot_locked": round(bl_qty, 8),
+            "available": 0.0,
+            "free_usd": 0.0,
+            "locked_usd": 0.0,
+            "total_usd": bl_val,
+            "usdt_value": bl_val,
+            "bot_locked_usd": bl_val,
+            "available_usd": 0.0,
+            "_synthetic": True,
+        })
+        # Snapshot total_usd'e bu varlığın değerini ekle (snapshot alındıktan sonra satın alındı)
+        wallet["total_usd"] = round((wallet.get("total_usd") or 0) + bl_val, 2)
+
     wallet["free_usd"] = round(free_usd_tot, 2)
     wallet["locked_usd"] = round(locked_usd_tot, 2)
     wallet["bot_locked_usd"] = round(total_bot_locked_usd, 2)
@@ -904,7 +953,9 @@ async def home_wallet_status(
     require_account_access(current, account_id)
     cfg = get_config()
     cooldown_sec = cfg.get("wallet_cooldown_sec", 30)
+    stale_threshold_sec = float(cfg.get("wallet_snapshot_warn_age_sec", 900))
     now_mono = time.monotonic()
+    now_utc = datetime.now(timezone.utc)
     cooldown_until = _wallet_cooldown_until.get(account_id)
     last_iso = _wallet_last_live_at_iso.get(account_id)
     cooldown_iso = None
@@ -914,6 +965,8 @@ async def home_wallet_status(
 
     keys_configured = False
     last_snapshot_at = None
+    last_snapshot_age_sec = None
+    last_snapshot_total_usd = None
     try:
         acc = db.query(Account).filter(Account.id == account_id).first()
         if acc:
@@ -922,9 +975,14 @@ async def home_wallet_status(
             keys_configured = bool(ek and es and (not isinstance(ek, str) or ek.strip()) and (not isinstance(es, str) or es.strip()))
         row = db.query(AssetSnapshot).filter(AssetSnapshot.account_id == account_id).order_by(desc(AssetSnapshot.timestamp)).limit(1).first()
         if row and row.timestamp:
-            last_snapshot_at = row.timestamp.isoformat().replace("+00:00", "Z") if row.timestamp.tzinfo else row.timestamp.replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z")
+            ts = row.timestamp if row.timestamp.tzinfo else row.timestamp.replace(tzinfo=timezone.utc)
+            last_snapshot_at = ts.isoformat().replace("+00:00", "Z")
+            last_snapshot_age_sec = max(0.0, (now_utc - ts).total_seconds())
+            last_snapshot_total_usd = row.total_usd_value
     except Exception as e:
         logger.debug("[home] wallet/status keys/snapshot check error: %s", e)
+
+    snapshot_stale = bool(keys_configured and (last_snapshot_age_sec is None or last_snapshot_age_sec >= stale_threshold_sec))
 
     return {
         "ok": True,
@@ -935,6 +993,10 @@ async def home_wallet_status(
             "last_error_code": _wallet_last_error_code.get(account_id),
             "keys_configured": keys_configured,
             "last_snapshot_at": last_snapshot_at,
+            "last_snapshot_age_sec": round(last_snapshot_age_sec, 1) if last_snapshot_age_sec is not None else None,
+            "last_snapshot_total_usd": last_snapshot_total_usd,
+            "snapshot_stale": snapshot_stale,
+            "stale_threshold_sec": stale_threshold_sec,
         },
         "meta": {"request_id": request_id},
     }

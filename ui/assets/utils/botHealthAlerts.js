@@ -7,30 +7,32 @@
 
     var _lastDomSyncKey = '';
     var LOG_REGISTRY_PREFIX = 'botHealthLogRegistry_';
+    var ROW_STATE_PREFIX = 'botHealthRowState_v1_';
+    var ROW_STATE_TTL_MS = 120000;
 
     var ALERT_PRIORITY = {
         LOOP_TASK_MISSING: 1000,
+        BOT_CONTINUES_ON_ERROR: 980,
         TICK_STALE_CRIT: 950,
+        INSUFFICIENT_BALANCE: 940,
+        BOT_LOOP_AUTO_RESTART: 910,
         BINANCE_UNREACHABLE: 900,
         STATE_ERROR: 880,
         REPEATED_ORDER_FAIL: 850,
         TICK_STALE_WARN: 500,
         STATE_ERROR_WARN: 480,
         FIRST_BUY_STUCK: 450,
+        PRICE_STALE_OR_MISSING: 420,
+        REPEATED_LOCK_BUSY: 410,
+        REPEATED_SLIPPAGE: 405,
         NO_TICK_YET: 400,
+        CONNECTIVITY_DEGRADED: 390,
         LOT_SIZE: 300,
         MIN_NOTIONAL: 290,
         MIN_NOTIONAL_AFTER_CAP: 285,
         ORDER_FAILED: 200,
         INSUFFICIENT_QUOTE: 180,
-        ORDER_TIMEOUT: 170,
-        BOT_CONTINUES_ON_ERROR: 920,
-        BOT_LOOP_AUTO_RESTART: 910,
-        LOOP_TASK_MISSING: 905,
-        PRICE_STALE_OR_MISSING: 420,
-        REPEATED_LOCK_BUSY: 410,
-        REPEATED_SLIPPAGE: 400,
-        CONNECTIVITY_DEGRADED: 390
+        ORDER_TIMEOUT: 170
     };
 
     function storageGet(key) {
@@ -62,6 +64,89 @@
         try {
             sessionStorage.removeItem(key);
         } catch (e2) {}
+    }
+
+    function currentAccountKey() {
+        try {
+            var params = new URLSearchParams(global.location && global.location.search || '');
+            var code = (params.get('account_code') || '').trim();
+            if (code) return 'code:' + code;
+            var id = (params.get('account_id') || '').trim();
+            if (id) return 'id:' + id;
+        } catch (e) {}
+        return '';
+    }
+
+    function normalizeAccountKey(accountKey) {
+        var key = String(accountKey || '').trim();
+        if (!key) return currentAccountKey();
+        if (key.indexOf('code:') === 0 || key.indexOf('id:') === 0) return key;
+        return 'id:' + key;
+    }
+
+    function rowStateKey(accountKey) {
+        var key = normalizeAccountKey(accountKey);
+        return key ? ROW_STATE_PREFIX + key : '';
+    }
+
+    function readRowStateMap(accountKey) {
+        try {
+            var key = rowStateKey(accountKey);
+            if (!key) return {};
+            var raw = storageGet(key);
+            if (!raw) return {};
+            var data = JSON.parse(raw);
+            return data && typeof data === 'object' ? data : {};
+        } catch (e) {
+            return {};
+        }
+    }
+
+    function writeRowStateMap(accountKey, data) {
+        var key = rowStateKey(accountKey);
+        if (!key) return;
+        try {
+            storageSet(key, JSON.stringify(data || {}));
+        } catch (e) {}
+    }
+
+    function setStoredRowAlert(botId, level, message, accountKey) {
+        var id = String(botId || '');
+        if (!id) return;
+        var data = readRowStateMap(accountKey);
+        if (level) {
+            data[id] = {
+                level: level,
+                message: message || '',
+                ts: Date.now()
+            };
+        } else {
+            delete data[id];
+        }
+        writeRowStateMap(accountKey, data);
+    }
+
+    function getStoredRowAlerts(accountKey) {
+        var data = readRowStateMap(accountKey);
+        var now = Date.now();
+        var out = {};
+        var changed = false;
+        Object.keys(data).forEach(function (botId) {
+            var row = data[botId];
+            var ts = Number(row && row.ts) || 0;
+            if (!row || !row.level || !ts || now - ts > ROW_STATE_TTL_MS) {
+                delete data[botId];
+                changed = true;
+                return;
+            }
+            out[botId] = {
+                level: row.level,
+                message: row.message || '',
+                stored: true
+            };
+        });
+        if (changed) writeRowStateMap(accountKey, data);
+        return out;
     }
 
     function resetKey(botId) {
@@ -222,7 +307,7 @@
         'TICK_STALE_WARN', 'TICK_STALE_CRIT', 'NO_TICK_YET',
         'FIRST_BUY_STUCK', 'LOOP_TASK_MISSING', 'BINANCE_UNREACHABLE', 'SERVER_UNREACHABLE',
         'LOT_SIZE', 'MIN_NOTIONAL', 'MIN_NOTIONAL_AFTER_CAP', 'ORDER_FAILED',
-        'INSUFFICIENT_QUOTE', 'ORDER_TIMEOUT',
+        'INSUFFICIENT_QUOTE', 'ORDER_TIMEOUT', 'INSUFFICIENT_BALANCE',
         'BOT_CONTINUES_ON_ERROR', 'BOT_LOOP_AUTO_RESTART', 'PRICE_STALE_OR_MISSING',
         'REPEATED_LOCK_BUSY', 'REPEATED_SLIPPAGE', 'CONNECTIVITY_DEGRADED',
         'OUTAGE_RECOVERY', 'RUN_ACTION_EXCEPTION'
@@ -840,6 +925,11 @@
             criticals: picked.criticals,
             suppressLiveProblem: connDismissed || statusDismissed
         });
+        var level = null;
+        if (running && picked.criticals.length > 0 && picked.warns.length > 0) level = 'both';
+        else if (running && picked.criticals.length > 0) level = 'critical';
+        else if (running && picked.warns.length > 0) level = 'warn';
+        setStoredRowAlert(botId, level, topAlertMessage(picked.criticals.length ? picked.criticals : picked.warns));
         return picked;
     }
 
@@ -953,6 +1043,8 @@
         resetUi: resetUi,
         applyHealth: applyHealth,
         classifyRowAlerts: classifyRowAlerts,
+        getStoredRowAlerts: getStoredRowAlerts,
+        setStoredRowAlert: setStoredRowAlert,
         syncDom: syncDom,
         filterDismissedFromEvents: filterDismissedFromEvents,
         getServerDismissBeforeId: getServerDismissBeforeId,

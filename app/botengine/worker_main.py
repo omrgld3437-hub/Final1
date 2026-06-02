@@ -677,6 +677,7 @@ async def worker_loop():
                 ticks_last_60m = sum(1 for t in _ENGINE_METRICS_TICK_TIMES if t >= now - 3600)
                 last_tick_age = (now - _ENGINE_LAST_TICK_TS) if _ENGINE_LAST_TICK_TS else None
                 snap = {
+                    "pid": os.getpid(),
                     "active_bots": n_bots,
                     "last_tick_ts": _ENGINE_LAST_TICK_TS,
                     "last_tick_age_s": round(last_tick_age, 1) if last_tick_age is not None else None,

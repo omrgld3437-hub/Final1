@@ -19,8 +19,12 @@ import httpx
 
 TR_TZ = ZoneInfo("Europe/Istanbul")
 logger = logging.getLogger(__name__)
+_snapshot_wallet_refresh_tasks: Dict[int, asyncio.Task] = {}
+_snapshot_wallet_refresh_last_at: Dict[int, float] = {}
+_SNAPSHOT_WALLET_REFRESH_GAP_SEC = float(os.environ.get("SNAPSHOT_WALLET_REFRESH_GAP_SEC", "30"))
 
 from app.db.session import get_db
+from app.db.base import SessionLocal
 from app.db.models import Account, Bot, Trade, PnlSnapshot, User, ChatThread, ErrorLog, AssetSnapshot
 from app.services.encryption import (
     encrypt_account_api_key,
@@ -45,6 +49,48 @@ from app.core.logging_helpers import log_wallet_trace
 
 router = APIRouter()
 
+# ---------------------------------------------------------------------------
+# /api/log-error rate-limiter: IP başına dakikada max 30 istek (sliding-window)
+# ---------------------------------------------------------------------------
+_LOG_ERROR_RL_LOCK = __import__("threading").Lock()
+_LOG_ERROR_RL: Dict[str, "collections.deque"] = {}  # type: ignore[type-arg]
+_LOG_ERROR_RL_MAX = 30
+_LOG_ERROR_RL_WINDOW = 60.0
+
+import collections as _collections
+import re as _re
+
+_SENSITIVE_URL_RE = _re.compile(
+    r"([?&])(token|password|passwd|secret|key|auth|reset_code|code|session)[^&]*",
+    _re.IGNORECASE,
+)
+
+def _sanitize_url(url: Optional[str]) -> Optional[str]:
+    if not url:
+        return url
+    return _SENSITIVE_URL_RE.sub(r"\1\2=[REDACTED]", url)
+
+def _check_log_error_rate_limit(client_ip: str) -> bool:
+    """True = allowed. Sliding-window per IP."""
+    now = time.time()
+    with _LOG_ERROR_RL_LOCK:
+        q = _LOG_ERROR_RL.get(client_ip)
+        if q is None:
+            q = _collections.deque()
+            _LOG_ERROR_RL[client_ip] = q
+        cutoff = now - _LOG_ERROR_RL_WINDOW
+        while q and q[0] < cutoff:
+            q.popleft()
+        if len(q) >= _LOG_ERROR_RL_MAX:
+            return False
+        q.append(now)
+        # Eski IP'leri bellek sızdırmasın diye temizle (periyodik)
+        if len(_LOG_ERROR_RL) > 2000:
+            stale = [k for k, v in _LOG_ERROR_RL.items() if not v or v[-1] < cutoff]
+            for k in stale:
+                del _LOG_ERROR_RL[k]
+        return True
+
 
 # Frontend error reporting (no auth required; optional Bearer for user/account)
 @router.post("/log-error")
@@ -55,12 +101,38 @@ async def api_log_error(
 ):
     """Accept frontend error reports and persist to error_logs. Optional Bearer token for user_id/account_id."""
     try:
+        # Rate-limit kontrolü
+        client_ip = None
+        if request.client:
+            client_ip = (request.client.host or "")[:50]
+        forwarded = request.headers.get("x-forwarded-for")
+        if forwarded:
+            client_ip = (forwarded.split(",")[0].strip() or client_ip or "")[:50]
+        ip_key = client_ip or "unknown"
+        if not _check_log_error_rate_limit(ip_key):
+            return {"ok": False, "throttled": True}
+
         payload = body or {}
-        message = (payload.get("message") or "").strip() or "(no message)"
+        # Payload boyut sınırı
+        message = (payload.get("message") or "").strip()[:1000] or "(no message)"
         source = (payload.get("source") or "frontend")[:32]
-        detail = payload.get("detail")
-        path = (payload.get("path") or "")[:512]
-        context = payload.get("context")
+        raw_detail = payload.get("detail")
+        detail = (str(raw_detail)[:4000] if raw_detail is not None else None)
+        raw_path = (payload.get("path") or "")[:512]
+        path = _sanitize_url(raw_path)
+        raw_ctx = payload.get("context")
+        context: Optional[Dict[str, Any]] = None
+        if isinstance(raw_ctx, dict):
+            # URL alanlarındaki hassas parametreleri temizle
+            context = {}
+            for k, v in raw_ctx.items():
+                if k == "url" and isinstance(v, str):
+                    context[k] = _sanitize_url(v)
+                elif isinstance(v, str):
+                    context[k] = v[:512]
+                else:
+                    context[k] = v
+
         user_id = None
         account_id = None
         is_admin = False
@@ -75,13 +147,9 @@ async def api_log_error(
                     is_admin = bool(session.get("is_admin"))
             except Exception:
                 pass
-        client_ip = None
-        if request.client:
-            client_ip = (request.client.host or "")[:50]
-        forwarded = request.headers.get("x-forwarded-for")
-        if forwarded:
-            client_ip = (forwarded.split(",")[0].strip() or client_ip or "")[:50]
         user_agent = (request.headers.get("user-agent") or "")[:512]
+        # Kimliksiz istekler ayrı seviyede loglanır (gürültü önleme)
+        log_level = "error" if user_id else "warning"
         error_logging_persist(
             db,
             source,
@@ -95,7 +163,7 @@ async def api_log_error(
             client_ip=client_ip,
             context=context,
             is_admin=is_admin,
-            level="error",
+            level=log_level,
         )
         import json as _json
         _ctx_str = ""
@@ -2584,6 +2652,42 @@ def _get_snapshot_wallet_cached(account_id: int, db: Session):
         return (None, None, "none", None)
 
 
+def _schedule_snapshot_wallet_refresh(account_id: int, request_id: str) -> bool:
+    now = time.monotonic()
+    task = _snapshot_wallet_refresh_tasks.get(account_id)
+    if task and not task.done():
+        return False
+    last = _snapshot_wallet_refresh_last_at.get(account_id, 0.0)
+    if now - last < _SNAPSHOT_WALLET_REFRESH_GAP_SEC:
+        return False
+    _snapshot_wallet_refresh_last_at[account_id] = now
+
+    async def _runner() -> None:
+        db2 = SessionLocal()
+        try:
+            from app.api.routes.home import _do_wallet_refresh
+            await _do_wallet_refresh(account_id, db2, request_id or "snapshot-stale", True)
+        except Exception as exc:
+            logging.getLogger(__name__).warning(
+                "snapshot_wallet_refresh_failed account_id=%s request_id=%s error=%s",
+                account_id, request_id, str(exc)[:200],
+            )
+        finally:
+            try:
+                db2.close()
+            except Exception:
+                pass
+            cur = _snapshot_wallet_refresh_tasks.get(account_id)
+            if cur is asyncio.current_task():
+                _snapshot_wallet_refresh_tasks.pop(account_id, None)
+
+    try:
+        _snapshot_wallet_refresh_tasks[account_id] = asyncio.create_task(_runner())
+        return True
+    except RuntimeError:
+        return False
+
+
 @router.get("/dashboard/snapshot")
 async def api_dashboard_snapshot(
     request: Request,
@@ -2711,6 +2815,7 @@ async def api_dashboard_snapshot(
     wallet_age_sec = None
     wallet_ts_iso = None
     keys_configured = False
+    wallet_refresh_scheduled = False
     if need_wallet:
         acc = db.query(Account).filter(Account.id == account_id).first()
         if acc:
@@ -2719,7 +2824,8 @@ async def api_dashboard_snapshot(
             keys_configured = bool(ek and es and (not isinstance(ek, str) or ek.strip()) and (not isinstance(es, str) or es.strip()))
         wallet_cached, wallet_ts_iso, wallet_source, wallet_age_sec = _get_snapshot_wallet_cached(account_id, db)
         from app.services.test_account import is_test_account
-        if is_test_account(account_id, db):
+        is_test_wallet = is_test_account(account_id, db)
+        if is_test_wallet:
             from app.services.wallet_display import build_test_account_wallet
 
             wallet = build_test_account_wallet(account_id, db)
@@ -2740,6 +2846,12 @@ async def api_dashboard_snapshot(
                 },
                 "ts": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             }
+        try:
+            stale_threshold_sec = float(os.environ.get("WALLET_SNAPSHOT_WARN_AGE_SEC", "900"))
+        except Exception:
+            stale_threshold_sec = 900.0
+        if keys_configured and not is_test_wallet and (wallet_age_sec is None or float(wallet_age_sec) >= stale_threshold_sec):
+            wallet_refresh_scheduled = _schedule_snapshot_wallet_refresh(account_id, request_id)
 
     # On wallet error: use last-known total_usd from cache so UI does not flash to 0 (stale fallback)
     SNAPSHOT_WALLET_STALE_FALLBACK_SEC = 120.0
@@ -2877,6 +2989,8 @@ async def api_dashboard_snapshot(
     if need_wallet:
         meta["wallet_source"] = wallet_source
         meta["wallet_age_sec"] = wallet_age_sec
+        meta["wallet_ts_iso"] = wallet_ts_iso
+        meta["wallet_refresh_scheduled"] = wallet_refresh_scheduled
 
     _log.info(
         "snapshot_served wallet_source=%s wallet_age_sec=%s request_id=%s payload_bytes=%s server_ms=%s fields=%s",

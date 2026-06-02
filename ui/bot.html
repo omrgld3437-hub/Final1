@@ -429,6 +429,8 @@
         }
         .cycle-trade-chip--buy { background: rgba(14, 203, 129, 0.15); color: #0ecb81; border-color: rgba(14, 203, 129, 0.4); }
         .cycle-trade-chip--sell { background: rgba(246, 70, 93, 0.15); color: #f6465d; border-color: rgba(246, 70, 93, 0.4); }
+        .cycle-trade-chip--buy,
+        .cycle-trade-chip--sell { min-width: 3.55rem; height: 1.55rem; padding-inline: 0.55rem; }
         .cycle-trade-chip--muted { background: rgba(128, 128, 128, 0.12); color: var(--ds-text-secondary, #848e9c); border-color: rgba(128, 128, 128, 0.25); font-weight: 500; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
         .cycle-trade-chip--pct-pos { background: rgba(14, 203, 129, 0.12); color: #0ecb81; border-color: rgba(14, 203, 129, 0.35); font-weight: 600; }
         .cycle-trade-chip--pct-neg { background: rgba(246, 70, 93, 0.12); color: #f6465d; border-color: rgba(246, 70, 93, 0.35); font-weight: 600; }
@@ -1169,6 +1171,8 @@
             <div id="perfMetrics" class="perf-metrics-rows"></div>
         </div>
 
+        <div id="walletStaleBotDetailNotice" style="display:none; align-items:center; gap:0.5rem; padding:0.55rem 0.9rem; margin-bottom:0.75rem; background:rgba(240,185,11,0.1); border:1px solid rgba(240,185,11,0.35); border-radius:6px; color:#f0b90b; font-size:0.82rem;" role="status" aria-live="polite"></div>
+
         <div class="panel" id="engineLogPanel" style="display: none;">
             <h2>Bot Logları</h2>
             <p class="muted poll-note" style="font-size: 0.85rem; margin-bottom: 0.75rem;">Tabloda son 500 kayıt gösterilir. Dışarı aktar ile bütün log kayıtlarını .txt ve .json indirirsiniz.</p>
@@ -1247,12 +1251,12 @@
             </div>
         </div>
     </div>
-    <script src="/ui/assets/utils/trTime.js?v=1"></script>
+    <script src="/ui/assets/utils/trTime.js?v=utc-naive1"></script>
     <script src="/ui/assets/utils/coinLogo.js?v=1"></script>
     <script src="/ui/assets/core/apiClient.js?v=refactor1"></script>
     <script src="/ui/assets/utils/gridTrailEnvelope.js?v=2"></script>
     <script src="/ui/assets/utils/engineLogArchive.js?v=1"></script>
-    <script src="/ui/assets/utils/botHealthAlerts.js?v=30"></script>
+    <script src="/ui/assets/utils/botHealthAlerts.js?v=31"></script>
 <script src="/ui/assets/utils/engineLogFormat.js?v=69"></script>
 <script src="/ui/assets/utils/engineLogLive.js?v=35"></script>
     <script src="/ui/assets/core/intervalRegistry.js?v=1"></script>
@@ -1308,6 +1312,24 @@
         else base += 'account_id=';
         base += '&tab=bots';
         backLink.href = base;
+        function updateBackLinkHealthParams(picked) {
+            if (!backLink || !botId) return;
+            try {
+                var url = new URL(backLink.href, location.origin);
+                var hasCrit = picked && picked.criticals && picked.criticals.length > 0;
+                var hasWarn = picked && picked.warns && picked.warns.length > 0;
+                if (hasCrit || hasWarn) {
+                    url.searchParams.set('health_bot_id', String(botId));
+                    url.searchParams.set('health_level', hasCrit ? 'critical' : 'warn');
+                    url.searchParams.set('health_ts', String(Date.now()));
+                } else {
+                    url.searchParams.delete('health_bot_id');
+                    url.searchParams.delete('health_level');
+                    url.searchParams.delete('health_ts');
+                }
+                backLink.href = url.pathname + url.search;
+            } catch (e) {}
+        }
         backLink.addEventListener('click', function () {
             if (window.TtScrollRestore) window.TtScrollRestore.save();
             if (_botDetailHydrated && botId) persistBotDetailUiCache(botId);
@@ -1627,19 +1649,29 @@
             var n = Number(v);
             return n.toLocaleString('en-US', { minimumFractionDigits: decimals != null ? decimals : 2, maximumFractionDigits: decimals != null ? decimals : 8 });
         }
+        function parseBotDetailUtcDate(ts) {
+            if (!ts) return null;
+            var s = String(ts).trim();
+            if (!s) return null;
+            if (s.indexOf('T') < 0 && s.indexOf(' ') > 0) s = s.replace(' ', 'T');
+            if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(s) && !/[zZ]|[+\-]\d{2}:?\d{2}$/.test(s)) s += 'Z';
+            var d = new Date(s);
+            return isNaN(d.getTime()) ? null : d;
+        }
         function formatTradeTs(ts) {
             if (window.trTime && trTime.trFormatDateTime) return trTime.trFormatDateTime(ts);
             if (!ts) return '—';
             try {
-                return new Date(ts).toLocaleString('tr-TR', { timeZone: 'Europe/Istanbul' });
+                var d = parseBotDetailUtcDate(ts);
+                return d ? d.toLocaleString('tr-TR', { timeZone: 'Europe/Istanbul' }) : '—';
             } catch (e) { return '—'; }
         }
         function formatTradeTsNoSec(ts) {
             if (!ts) return '—';
             try {
                 var tz = (window.trTime && trTime.TR_TZ) ? trTime.TR_TZ : 'Europe/Istanbul';
-                var d = new Date(ts);
-                if (isNaN(d.getTime())) return '—';
+                var d = parseBotDetailUtcDate(ts);
+                if (!d) return '—';
                 return d.toLocaleString('tr-TR', {
                     timeZone: tz,
                     day: '2-digit', month: '2-digit', year: 'numeric',
@@ -1870,33 +1902,55 @@
             }
             return fmtSignedUsd(karUsd);
         }
+        function botDurationStartMonthDays(startedAtIso) {
+            var d = parseBotDetailUtcDate(startedAtIso);
+            if (!d) return 30;
+            var yyyy = d.getFullYear();
+            var mm = d.getMonth();
+            var key = 'botDurationStartMonthDays:v1:' + (botId || 'detail') + ':' + yyyy + '-' + (mm + 1);
+            try {
+                var cached = Number(sessionStorage.getItem(key));
+                if (cached >= 28 && cached <= 31) return cached;
+            } catch (e) {}
+            var days = new Date(yyyy, mm + 1, 0).getDate();
+            try { sessionStorage.setItem(key, String(days)); } catch (e2) {}
+            return days;
+        }
+        function formatBotTotalDuration(startedAtIso, nowMs) {
+            var d = parseBotDetailUtcDate(startedAtIso);
+            if (!d) return '';
+            var ms = Math.max(0, (nowMs || Date.now()) - d.getTime());
+            var totalMinutes = Math.floor(ms / 60000);
+            var totalHours = Math.floor(ms / 3600000);
+            var totalDays = Math.floor(ms / 86400000);
+            var startMonthDays = botDurationStartMonthDays(startedAtIso);
+            if (totalDays >= startMonthDays) {
+                var months = Math.floor(totalDays / startMonthDays);
+                var remDays = totalDays % startMonthDays;
+                return months + ' ay ' + remDays + ' gün';
+            }
+            if (totalDays >= 1) {
+                return totalDays + ' gün ' + Math.floor((ms % 86400000) / 3600000) + ' sa';
+            }
+            return totalHours + ' sa ' + Math.max(0, totalMinutes % 60) + ' dk';
+        }
         /** Bot başlangıç tarihi ve çalışma süresi (stateHeroMeta). Döner: { start: string, durationValue: string | null } */
         function formatStartMeta(startedAtIso, status) {
             if (!startedAtIso || typeof startedAtIso !== 'string') return { start: '', durationValue: null };
-            var d = new Date(startedAtIso);
-            if (isNaN(d.getTime())) return { start: '', durationValue: null };
+            var d = parseBotDetailUtcDate(startedAtIso);
+            if (!d) return { start: '', durationValue: null };
             var pad = function (n) { return (n < 10 ? '0' : '') + n; };
             var dateOnly = pad(d.getDate()) + '.' + pad(d.getMonth() + 1) + '.' + d.getFullYear();
             var stLow = (status || '').toLowerCase();
             if (stLow === 'running' || stLow === 'paused_error' || stLow === 'starting') {
-                var sec = Math.max(0, Math.floor((Date.now() - d.getTime()) / 1000));
-                var h = Math.floor(sec / 3600);
-                var m = Math.floor((sec % 3600) / 60);
-                var s = sec % 60;
-                var dur = h > 0 ? (h + ' sa ' + m + ' dk') : (m > 0 ? (m + ' dk ' + s + ' sn') : (s + ' sn'));
+                var dur = formatBotTotalDuration(startedAtIso);
                 return { start: 'Başlangıç: ' + dateOnly, durationValue: dur };
             }
             return { start: 'Başlangıç: ' + dateOnly, durationValue: null };
         }
         function formatStartMetaDurationOnly(startedAtIso) {
             if (!startedAtIso || typeof startedAtIso !== 'string') return '';
-            var d = new Date(startedAtIso);
-            if (isNaN(d.getTime())) return '';
-            var sec = Math.max(0, Math.floor((Date.now() - d.getTime()) / 1000));
-            var h = Math.floor(sec / 3600);
-            var m = Math.floor((sec % 3600) / 60);
-            var s = sec % 60;
-            return h > 0 ? (h + ' sa ' + m + ' dk') : (m > 0 ? (m + ' dk ' + s + ' sn') : (s + ' sn'));
+            return formatBotTotalDuration(startedAtIso);
         }
         /** stateHeroMeta «Süre» — canlı tick (applyLive shallowEqual erken çıkışında da çalışır). */
         function tickStateHeroMetaDuration() {
@@ -2125,14 +2179,27 @@
             window._cycleReportStartedAt = merged || null;
             if (merged) writeCycleStartedAtPersisted(cid, merged);
         }
+        function latestCycleOpenTradeRow(cycleNum) {
+            var cid = cycleNum != null ? Number(cycleNum) : null;
+            if (cid == null || isNaN(cid)) return null;
+            var st = (lastBotDetail && lastBotDetail.state) ? lastBotDetail.state : {};
+            var rows = Array.isArray(st.cycle_open_trades) ? st.cycle_open_trades : [];
+            for (var i = rows.length - 1; i >= 0; i--) {
+                var row = rows[i];
+                if (row && Number(row.cycle_id) === cid) return row;
+            }
+            return null;
+        }
         function resolveOpenCycleStartedAt(summary, cycleNum) {
             var cid = cycleNum != null ? Number(cycleNum) : null;
             if (cid == null || isNaN(cid)) return null;
-            var candidates = [];
-            if (summary && summary.started_at) candidates.push(String(summary.started_at).trim());
             var curCid = (lastBotDetail && lastBotDetail.currentCycleId != null) ? Number(lastBotDetail.currentCycleId) : null;
             var st = (lastBotDetail && lastBotDetail.state) ? lastBotDetail.state : {};
+            var candidates = [];
             if (curCid != null && cid === curCid) {
+                var cot = latestCycleOpenTradeRow(cid);
+                if (cot && (cot.ts || cot.started_at)) return String(cot.ts || cot.started_at).trim();
+                if (summary && summary.started_at) candidates.push(String(summary.started_at).trim());
                 if (st.cycle_opened_at) candidates.push(String(st.cycle_opened_at).trim());
                 var ledger = st.cycle_ledger_current;
                 if (ledger && Number(ledger.cycle_id) === cid && ledger.started_at) {
@@ -2142,20 +2209,16 @@
                 if (dp && dp.started_at && Number(dp.cycle_id || curCid) === cid) {
                     candidates.push(String(dp.started_at).trim());
                 }
-                var cot = (st.cycle_open_trades || []).find(function (row) {
-                    return row && Number(row.cycle_id) === cid;
-                });
-                if (cot && cot.ts) candidates.push(String(cot.ts).trim());
                 if (cid === 1) {
                     var tb = st.target_budgets;
                     if (tb && typeof tb === 'object' && tb.ts) candidates.push(String(tb.ts).trim());
                 }
             } else if (summary && summary.completed_at && summary.started_at) {
+                return String(summary.started_at).trim();
+            } else if (summary && summary.started_at) {
                 candidates.push(String(summary.started_at).trim());
             }
-            var persisted = readCycleStartedAtPersisted(cid);
-            if (persisted) candidates.push(persisted);
-            return earliestStartedAtIso(candidates);
+            return earliestStartedAtIso(candidates) || readCycleStartedAtPersisted(cid) || null;
         }
         function applyCycleReportStartedFromApi(summary, cycleNum) {
             if (!summary || cycleNum == null) return;
@@ -2166,7 +2229,7 @@
                 window._cycleReportStartedAt = null;
             }
             window._cycleReportDurationCycleId = cid;
-            window._cycleReportStartedAt = mergeCycleStartedAt(window._cycleReportStartedAt, iso, cid) || iso;
+            window._cycleReportStartedAt = iso;
             writeCycleStartedAtPersisted(cid, window._cycleReportStartedAt);
         }
         function updateCycleReportDurationLive() {
@@ -2176,14 +2239,7 @@
             var cur = (lastBotDetail && lastBotDetail.currentCycleId != null) ? lastBotDetail.currentCycleId : lastKnownCycleId;
             if (sel == null || cur == null || Number(sel) !== Number(cur)) return;
             var cacheSum = _cycleTradesCache[String(sel)] && _cycleTradesCache[String(sel)].summary;
-            var st = (lastBotDetail && lastBotDetail.state) ? lastBotDetail.state : {};
-            var stateOpen = (st.cycle_opened_at && Number(st.cycle_id) === Number(sel)) ? String(st.cycle_opened_at).trim() : null;
-            var startedAt = earliestStartedAtIso([
-                stateOpen,
-                cacheSum && cacheSum.started_at ? String(cacheSum.started_at).trim() : null,
-                window._cycleReportStartedAt,
-                resolveOpenCycleStartedAt(cacheSum || null, sel)
-            ]);
+            var startedAt = resolveOpenCycleStartedAt(cacheSum || null, sel) || window._cycleReportStartedAt;
             if (startedAt) applyCycleReportStartedFromApi({ started_at: startedAt }, sel);
             else startedAt = window._cycleReportStartedAt;
             var v = formatDurationFromStartedAt(startedAt);
@@ -2770,14 +2826,54 @@
             return st === 'running' || st === 'starting';
         }
 
+        function _syncWalletStaleBotDetailBadge() {
+            var notice = document.getElementById('walletStaleBotDetailNotice');
+            if (!notice) return;
+            if (!isBotRunning()) { notice.style.display = 'none'; return; }
+            try {
+                var raw = localStorage.getItem('wallet_stale_for_botdetail_v1');
+                if (!raw) { notice.style.display = 'none'; return; }
+                var info = JSON.parse(raw);
+                if (!info || !info.ts || (Date.now() - info.ts) > 120000) { notice.style.display = 'none'; return; }
+                var msg = '⚠ ' + (info.msg || 'Cüzdan verisi güncel değil') + ' — Bakiye bilgisi anlık olmayabilir. Bot işlemleri etkilenmez.';
+                notice.textContent = msg;
+                notice.style.display = 'flex';
+            } catch (e) { notice.style.display = 'none'; }
+        }
+
         function syncHealthFromState() {
             if (!window.BotHealthAlerts) return;
-            window.BotHealthAlerts.applyHealth(
+            var picked = window.BotHealthAlerts.applyHealth(
                 botId,
                 window._lastHealthData || { alerts: [] },
                 isBotRunning(),
                 window._lastEngineEvents || []
             );
+            updateBackLinkHealthParams(picked);
+            _syncWalletStaleBotDetailBadge();
+            var healthBlock = canonicalHealthBlocking();
+            if (isBotRunning() && healthBlock.active) {
+                var healthErrCode = healthBlock.code || 'BINANCE_UNREACHABLE';
+                rememberBotBlockingStatus(healthErrCode, healthBlock.message || '');
+                applyStatusBadge((lastBotDetail && (lastBotDetail.status || lastBotDetail.display_status)) || 'running', {
+                    fromHealth: true,
+                    showAsError: true,
+                    lastErrorCode: healthErrCode,
+                    healthCode: healthErrCode,
+                    blockingMessage: healthBlock.message || '',
+                    connectivityError: healthBlock.connectivity
+                });
+            } else if (!healthBlock.active && window._serverUnreachable !== true) {
+                clearBotBlockingStatus();
+                if (isBotRunning()) {
+                    applyStatusBadge((lastBotDetail && (lastBotDetail.status || lastBotDetail.display_status)) || 'running', {
+                        fromHealth: true,
+                        showAsError: false,
+                        initialAllocationDone: lastBotDetail && lastBotDetail.initialAllocationDone === true,
+                        baseBalance: lastBotDetail && lastBotDetail.baseBalance != null ? lastBotDetail.baseBalance : 0
+                    });
+                }
+            }
         }
 
         function fetchBotHealth() {
@@ -2996,6 +3092,80 @@
             return { API_UNAUTHORIZED: 1, ACCOUNT_KEYS_MISSING: 1, BINANCE_UNREACHABLE: 1, BINANCE_RATE_LIMIT: 1, SERVER_UNREACHABLE: 1 };
         }
 
+        function blockingBotHealthCodes() {
+            return {
+                API_UNAUTHORIZED: 1,
+                ACCOUNT_KEYS_MISSING: 1,
+                BINANCE_UNREACHABLE: 1,
+                BINANCE_RATE_LIMIT: 1,
+                SERVER_UNREACHABLE: 1,
+                LOOP_TASK_MISSING: 1,
+                NO_TICK_YET: 1,
+                TICK_STALE_CRIT: 1,
+                REST_HEALTH_CRITICAL: 1,
+                PRICE_FEED_STALE: 1,
+                EQUITY_UNAVAILABLE: 1,
+                INSUFFICIENT_BALANCE: 1
+            };
+        }
+
+        function rememberBotBlockingStatus(code, message) {
+            window._botBlockingStatus = {
+                code: String(code || 'BOT_HEALTH_CRITICAL').toUpperCase(),
+                message: message || '',
+                ts: Date.now()
+            };
+        }
+
+        function clearBotBlockingStatus() {
+            window._botBlockingStatus = null;
+        }
+
+        function activeBotBlockingStatus() {
+            var b = window._botBlockingStatus;
+            if (!b || !b.ts) return null;
+            var healthBlock = canonicalHealthBlocking();
+            if (!healthBlock.active) {
+                clearBotBlockingStatus();
+                return null;
+            }
+            if (Date.now() - Number(b.ts) > 120000) {
+                clearBotBlockingStatus();
+                return null;
+            }
+            return b;
+        }
+
+        function canonicalHealthBlocking() {
+            var health = window._lastHealthData || null;
+            if (!health) return { active: false };
+            if (window.BotHealthAlerts && typeof window.BotHealthAlerts.classifyRowAlerts === 'function') {
+                var classified = window.BotHealthAlerts.classifyRowAlerts(botId, health, isBotRunning());
+                var level = classified && String(classified.level || '').toLowerCase();
+                if (level !== 'critical' && level !== 'both') return { active: false };
+            }
+            var alerts = Array.isArray(health.alerts) ? health.alerts : [];
+            var criticals = alerts.filter(function (a) {
+                return a && String(a.level || '').toLowerCase() === 'critical';
+            });
+            if (health.connectivity_ok === false && health.connectivity_failure) {
+                criticals.push({
+                    code: health.connectivity_failure.error_code || 'BINANCE_UNREACHABLE',
+                    message: health.connectivity_failure.message || 'Binance bağlantısı alınamıyor'
+                });
+            }
+            if (!criticals.length) return { active: false };
+            var top = criticals[0] || {};
+            var meta = top.meta || {};
+            var code = String(meta.error_code || top.error_code || top.health_code || top.code || 'BOT_HEALTH_CRITICAL').trim().toUpperCase();
+            return {
+                active: true,
+                code: code,
+                message: top.message || top.title || '',
+                connectivity: !!connectivityErrorCodes()[code] || health.connectivity_ok === false
+            };
+        }
+
         function clearServerUnreachable() {
             window._serverUnreachable = false;
         }
@@ -3072,10 +3242,40 @@
         function applyStatusBadge(status, opts) {
             opts = opts || {};
             var st = (status || 'stopped').toLowerCase();
+            var healthBlock = canonicalHealthBlocking();
+            var rememberedBlock = st === 'running' ? activeBotBlockingStatus() : null;
+            if (rememberedBlock && opts.showAsError !== false) {
+                opts = Object.assign({}, opts, {
+                    showAsError: true,
+                    lastErrorCode: opts.lastErrorCode || rememberedBlock.code,
+                    healthCode: opts.healthCode || rememberedBlock.code,
+                    blockingMessage: opts.blockingMessage || rememberedBlock.message
+                });
+            }
             var waitingFirstBuy = botWaitingFirstBuy(st, opts);
-            var showAsError = opts.showAsError === true || botShowAsError(st, opts.lastErrorCode, opts);
+            var healthDriven = opts.fromHealth === true || opts.connectivityError === true;
+            var showAsError = opts.showAsError === true || (healthDriven && botShowAsError(st, opts.lastErrorCode, opts));
+            if (!healthDriven && healthBlock.active && st === 'running') {
+                opts = Object.assign({}, opts, {
+                    showAsError: true,
+                    lastErrorCode: healthBlock.code,
+                    healthCode: healthBlock.code,
+                    blockingMessage: healthBlock.message,
+                    connectivityError: healthBlock.connectivity
+                });
+                showAsError = true;
+            } else if (!healthBlock.active && !healthDriven && st === 'running') {
+                showAsError = false;
+            }
+            var statusErrorCode = String(opts.healthCode || opts.lastErrorCode || '').trim().toUpperCase();
+            var isConnectivityError = !!connectivityErrorCodes()[statusErrorCode] || opts.connectivityError === true;
+            if (st === 'running' && showAsError && healthBlock.active && (blockingBotHealthCodes()[statusErrorCode] || opts.stale === true || opts.equityUnavailable === true || opts.connectivityError === true)) {
+                rememberBotBlockingStatus(statusErrorCode || 'BOT_HEALTH_CRITICAL', opts.blockingMessage || opts.message || '');
+            } else if (st !== 'running') {
+                clearBotBlockingStatus();
+            }
             var statusText = st === 'starting' ? 'Başlatılıyor'
-                : st === 'running' ? (showAsError ? 'Hata (bağlantı)' : waitingFirstBuy ? 'Alım bekliyor' : 'Çalışıyor')
+                : st === 'running' ? (showAsError ? 'Durduruldu' : waitingFirstBuy ? 'Alım bekliyor' : 'Çalışıyor')
                 : st === 'error' || (st && st.indexOf('paused') === 0) ? 'Hata'
                 : st === 'stopped' ? 'Durduruldu' : 'Bekliyor';
             var badgeEl = document.getElementById('statusBadge');
@@ -3083,15 +3283,17 @@
                 badgeEl.textContent = statusText;
                 badgeEl.className = 'status-badge ' + (showAsError || st === 'error' || (st && st.indexOf('paused') === 0) ? 'status-error' : st === 'running' ? 'status-running' : 'status-stopped');
                 badgeEl.title = showAsError
-                    ? (opts.stale === true
+                    ? (isConnectivityError
+                        ? 'Binance erişimi alınamıyor; bot güvenli bekleme modunda izleniyor. API Key, IP beyaz listesi, Spot izinleri veya ağ erişimini kontrol edin.'
+                        : opts.stale === true
                         ? 'Güncel veri alınamıyor; son tick eski veya fiyat/bakiye güncellenemiyor.'
-                        : 'Binance API anahtarı geçersiz veya IP/Spot izni yok. API Key, IP beyaz listesi ve Spot izinlerini kontrol edin.')
+                        : (opts.blockingMessage || 'Kritik bot sağlığı uyarısı var; bot işlem akışı güvenli şekilde durduruldu. Logları ve bağlantı durumunu kontrol edin.'))
                     : (waitingFirstBuy ? 'Bot başlatıldı; ilk base alımı henüz gerçekleşmedi.' : '');
             }
             var stateHeroTitleEl = document.getElementById('stateHeroTitle');
             if (stateHeroTitleEl) {
                 var titleText = st === 'starting' ? 'Durum · Başlatılıyor'
-                    : st === 'running' ? (showAsError ? 'Durum · Hata' : waitingFirstBuy ? 'Durum · Alım bekliyor' : 'Durum · Canlı')
+                    : st === 'running' ? (showAsError ? 'Durum · Durduruldu' : waitingFirstBuy ? 'Durum · Alım bekliyor' : 'Durum · Canlı')
                     : 'Durum · ' + statusText;
                 if (stateHeroTitleEl.textContent !== titleText) stateHeroTitleEl.textContent = titleText;
             }
@@ -4269,7 +4471,7 @@
             }
             if (st.cycle_id != null) {
                 var openedShow = resolveOpenCycleStartedAt(null, Number(st.cycle_id));
-                if (openedShow) anchorCycleStartedAt(openedShow, Number(st.cycle_id), { force: false });
+                if (openedShow) anchorCycleStartedAt(openedShow, Number(st.cycle_id), { force: true });
             }
 
             var refPrice = data.reference_display != null && !isNaN(data.reference_display) ? Number(data.reference_display) : (data.state && data.state.reference_price != null ? Number(data.state.reference_price) : null);
@@ -4325,11 +4527,8 @@
                 trades = trades.slice().sort(function(a, b) {
                     function tradeTsMs(t) {
                         if (!t || !t.ts) return 0;
-                        var s = String(t.ts).trim();
-                        if (s.indexOf('T') < 0 && s.indexOf(' ') > 0) s = s.replace(' ', 'T');
-                        if (s.indexOf('Z') < 0 && s.indexOf('+') < 0 && s.indexOf('-', 10) < 0) s = s + 'Z';
-                        var d = new Date(s);
-                        return isNaN(d.getTime()) ? 0 : d.getTime();
+                        var d = parseBotDetailUtcDate(t.ts);
+                        return d ? d.getTime() : 0;
                     }
                     var ta = tradeTsMs(a);
                     var tb = tradeTsMs(b);
@@ -4521,10 +4720,10 @@
                 if (isOpenCycle) {
                     var startedAt = resolveOpenCycleStartedAt(summary, cycleNum);
                     if (startedAt) applyCycleReportStartedFromApi({ started_at: startedAt }, cycleNum);
-                    if (summary && summary.duration_sec != null) {
-                        dur = formatDurationSec(summary.duration_sec);
-                    } else if (startedAt) {
+                    if (startedAt) {
                         dur = formatDurationFromStartedAt(startedAt);
+                    } else if (summary && summary.duration_sec != null) {
+                        dur = formatDurationSec(summary.duration_sec);
                     }
                 } else {
                     if (window.intervalRegistry) window.intervalRegistry.stop('bot-cycle-report-duration');
@@ -4579,7 +4778,7 @@
                     if (Number(cycleId) === Number(currentCycleFromState)) {
                         var opened = resolveOpenCycleStartedAt(entry.summary, cycleId);
                         if (opened) {
-                            setCycleReportStartedAt(opened, cycleId);
+                            anchorCycleStartedAt(opened, cycleId, { force: true });
                             updateCycleReportDurationLive();
                         }
                     }
@@ -4666,7 +4865,7 @@
                             if (Number(cycleId) === Number(currentCycleFromState)) {
                                 var opened = resolveOpenCycleStartedAt(summary, cycleId);
                                 if (opened) {
-                                    anchorCycleStartedAt(opened, cycleId, { force: false });
+                                    anchorCycleStartedAt(opened, cycleId, { force: true });
                                     updateCycleReportDurationLive();
                                 }
                             }
@@ -4920,7 +5119,7 @@
             if (lastBotDetail.symbol) applyLiveHeroBalances(st, lastBotDetail.symbol);
             if (st.cycle_id != null && Number(st.cycle_id) === Number(window._botDetailSelectedCycleId)) {
                 var openedPatch = resolveOpenCycleStartedAt(null, Number(st.cycle_id));
-                if (openedPatch) anchorCycleStartedAt(openedPatch, Number(st.cycle_id), { force: false });
+                if (openedPatch) anchorCycleStartedAt(openedPatch, Number(st.cycle_id), { force: true });
                 updateCycleReportDurationLive();
                 syncCycleReportDurationPoll();
             }
@@ -5536,7 +5735,7 @@
             if (newState.cycle_id != null
                 && Number(newState.cycle_id) === Number(window._botDetailSelectedCycleId)) {
                 var openedLive = resolveOpenCycleStartedAt(null, Number(newState.cycle_id));
-                if (openedLive) anchorCycleStartedAt(openedLive, Number(newState.cycle_id), { force: false });
+                if (openedLive) anchorCycleStartedAt(openedLive, Number(newState.cycle_id), { force: true });
                 updateCycleReportDurationLive();
                 syncCycleReportDurationPoll();
             }
@@ -5687,10 +5886,7 @@
             if (!parametrelerModal) return;
             var cfg = (lastBotDetail && lastBotDetail.config) || {};
             var symbol = (lastBotDetail && lastBotDetail.symbol) || (botSymbolEl && botSymbolEl.textContent) || '';
-            var ref = (lastBotDetail && lastBotDetail.reference_display != null && !isNaN(Number(lastBotDetail.reference_display)))
-                ? Number(lastBotDetail.reference_display)
-                : (lastBotDetail && lastBotDetail.state && lastBotDetail.state.reference_price != null
-                    ? Number(lastBotDetail.state.reference_price) : null);
+            var ref = resolveBotStartReferencePrice();
             if (configGrid) {
                 if (botDetailConfigReady(cfg)) {
                     renderConfig(cfg, symbol, ref);
@@ -5704,6 +5900,46 @@
         function closeParametrelerModal() {
             if (parametrelerModal) parametrelerModal.style.display = 'none';
             unlockBodyScroll();
+        }
+        function finitePositiveNumber(v) {
+            var n = Number(v);
+            return Number.isFinite(n) && n > 0 ? n : null;
+        }
+        function resolveBotStartReferencePrice() {
+            var detail = lastBotDetail || {};
+            var st = detail.state || {};
+            var cfg = detail.config || {};
+            var candidates = [
+                st.initial_alloc_price,
+                st.initial_allocation_price,
+                st.bot_start_price,
+                st.start_price,
+                st.initial_reference_price,
+                detail.initial_alloc_price,
+                detail.initial_allocation_price,
+                detail.bot_start_price,
+                detail.start_price,
+                cfg.initial_alloc_price,
+                cfg.initial_allocation_price,
+                cfg.start_price
+            ];
+            for (var i = 0; i < candidates.length; i++) {
+                var n = finitePositiveNumber(candidates[i]);
+                if (n != null) return n;
+            }
+            var openTrades = Array.isArray(st.cycle_open_trades) ? st.cycle_open_trades.slice() : [];
+            openTrades.sort(function (a, b) {
+                return (Number(a && a.cycle_id) || 0) - (Number(b && b.cycle_id) || 0);
+            });
+            for (var j = 0; j < openTrades.length; j++) {
+                var row = openTrades[j] || {};
+                var rowPrice = finitePositiveNumber(row.reference_price) || finitePositiveNumber(row.price) || finitePositiveNumber(row.fill_price);
+                if (rowPrice != null) return rowPrice;
+            }
+            return finitePositiveNumber(st.reference_price)
+                || finitePositiveNumber(detail.reference_display)
+                || finitePositiveNumber(cfg.reference_price)
+                || null;
         }
         function closeGridTradeDetailModal() {
             var modal = document.getElementById('gridTradeDetailModal');

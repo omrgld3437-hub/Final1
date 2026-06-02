@@ -1,7 +1,7 @@
 """
 Trade Ledger - Record and Snapshot Management
 """
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Dict, Optional, Tuple
 from sqlalchemy.orm import Session
 from app.db.models import Trade
@@ -9,6 +9,16 @@ from app.db.models import Trade
 
 class Ledger:
     """Trade ledger manager"""
+
+    @staticmethod
+    def _trade_ts_iso_utc(dt: Optional[datetime]) -> Optional[str]:
+        if not dt:
+            return None
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        else:
+            dt = dt.astimezone(timezone.utc)
+        return dt.isoformat().replace("+00:00", "Z")
 
     @staticmethod
     def record_trade(
@@ -93,7 +103,7 @@ class Ledger:
         for t in trades:
             d = {
                 "id": t.id,
-                "ts": t.ts.isoformat() if t.ts else None,
+                "ts": Ledger._trade_ts_iso_utc(t.ts),
                 "side": t.side,
                 "qty": t.qty,
                 "price": t.price,

@@ -25,6 +25,10 @@ _current_source: contextvars.ContextVar[str] = contextvars.ContextVar(
 REST_LOG_ENABLED = os.getenv("REST_LOG_ENABLED", "1").strip().lower() in ("1", "true", "yes")
 REST_LOG_INTERVAL_SEC = float(os.getenv("REST_LOG_INTERVAL_SEC", "60"))
 REST_LOG_PATH = Path(os.getenv("REST_LOG_PATH", "rest.log"))
+# rest.log maksimum boyut (bayt); aşılırsa rotate edilir. Varsayılan 20 MB.
+REST_LOG_MAX_BYTES = int(os.getenv("REST_LOG_MAX_BYTES", str(20 * 1024 * 1024)))
+# Saklanacak yedek sayısı (rest.log.1, rest.log.2, ...)
+REST_LOG_BACKUP_COUNT = int(os.getenv("REST_LOG_BACKUP_COUNT", "3"))
 REST_WEIGHT_LIMIT = int(os.getenv("BINANCE_WEIGHT_LIMIT_PER_MIN", "1200"))
 REST_SOFT_LIMIT = int(os.getenv("REST_SOFT_WEIGHT_LIMIT", str(int(REST_WEIGHT_LIMIT * 0.85))))
 
@@ -298,8 +302,28 @@ def _format_window_report(start_ts: float, end_ts: float, agg: Dict[str, Any]) -
     return "\n".join(lines)
 
 
+def _rotate_rest_log_if_needed(log_path: Path) -> None:
+    """rest.log REST_LOG_MAX_BYTES'ı aşmışsa .1/.2/.3 olarak rotate et."""
+    try:
+        if not log_path.exists() or log_path.stat().st_size <= REST_LOG_MAX_BYTES:
+            return
+        # rest.log.3 → drop, rest.log.2 → .3, ..., rest.log → .1
+        for i in range(REST_LOG_BACKUP_COUNT, 0, -1):
+            src = log_path.parent / f"{log_path.name}.{i}"
+            dst = log_path.parent / f"{log_path.name}.{i + 1}" if i < REST_LOG_BACKUP_COUNT else None
+            if dst and src.exists():
+                src.replace(dst)
+            elif not dst and src.exists():
+                src.unlink(missing_ok=True)
+        # rest.log → rest.log.1
+        backup = log_path.parent / f"{log_path.name}.1"
+        log_path.replace(backup)
+    except Exception as e:
+        logger.debug("rest.log rotate failed: %s", e)
+
+
 def flush_rest_log(force: bool = False) -> None:
-    """Mevcut pencereyi rest.log dosyasına yaz."""
+    """Mevcut pencereyi rest.log dosyasına yaz; gerekirse rotate et."""
     if not REST_LOG_ENABLED and not force:
         return
     with _lock:
@@ -319,6 +343,7 @@ def flush_rest_log(force: bool = False) -> None:
             root = Path(__file__).resolve().parents[2]
             log_path = root / log_path
         log_path.parent.mkdir(parents=True, exist_ok=True)
+        _rotate_rest_log_if_needed(log_path)
         with open(log_path, "a", encoding="utf-8") as f:
             f.write(report + "\n")
     except Exception as e:

@@ -61,6 +61,7 @@ _MANAGER_LOG = _LOGS_DIR / "manager.log"
 _HTML_PID = _RUN_DIR / "html.pid"
 _HTML_LOG = _LOGS_DIR / "html.log"
 _WEB_PORT = int(os.environ.get("WEB_PORT", "8000"))
+_MANAGER_PORT = int(os.environ.get("MANAGER_PORT", "7999"))
 _HTML_PORT = int(os.environ.get("OMERALTINHTML_PORT", "8080"))
 # marketing sitesi: env > marketing/ > eski klasor adlari > parent
 if os.environ.get("OMERALTINHTML_PATH"):
@@ -436,6 +437,26 @@ def _read_json_capped(path: Path, max_paths: int = _METRICS_TOP_PATHS, max_ips: 
         return {}
 
 
+def _metrics_recent(data: dict, max_age_sec: float = 8.0) -> bool:
+    try:
+        ts = float((data or {}).get("ts") or 0)
+        return ts > 0 and (time.time() - ts) <= max_age_sec
+    except Exception:
+        return False
+
+
+def _pid_alive_or_none(pid: Optional[int]) -> Optional[int]:
+    return pid if _process_alive(pid) else None
+
+
+def _pid_from_metrics(data: dict) -> Optional[int]:
+    try:
+        pid = int((data or {}).get("pid") or 0)
+        return pid if pid > 0 else None
+    except Exception:
+        return None
+
+
 def _process_metrics(pid: Optional[int], started_at: Optional[float]) -> dict:
     """Return { pid, cpu_pct, rss_mb, uptime_s, restart_count, thread_count } for a process. Bounded/safe."""
     out: dict = {"pid": pid, "cpu_pct": None, "rss_mb": None, "uptime_s": None, "restart_count": 0, "thread_count": None}
@@ -573,7 +594,11 @@ def _collect_metrics() -> None:
     os_uptime = _system_uptime_s()
     if os_uptime is not None:
         system["os_uptime_s"] = os_uptime
+    web_app = _read_json_capped(_WEB_METRICS_FILE)
+    engine_app = _read_json_capped(_ENGINE_METRICS_FILE)
     manager_pid = _read_pid(_MANAGER_PID_FILE) if _MANAGER_PID_FILE.exists() else os.getpid()
+    if not _process_alive(manager_pid):
+        manager_pid = _pid_on_port(_MANAGER_PORT) or os.getpid()
     manager_started = None
     if _MANAGER_STARTED_FILE.exists():
         try:
@@ -581,6 +606,8 @@ def _collect_metrics() -> None:
         except Exception:
             pass
     web_pid = _read_pid(_WEB_PID)
+    if not _process_alive(web_pid):
+        web_pid = _pid_on_port(_WEB_PORT) or _pid_from_metrics(web_app)
     web_started = None
     if (_RUN_DIR / "web.started_at").exists():
         try:
@@ -588,6 +615,8 @@ def _collect_metrics() -> None:
         except Exception:
             pass
     engine_pid = _read_pid(_ENGINE_PID)
+    if not _process_alive(engine_pid):
+        engine_pid = _pid_from_metrics(engine_app)
     engine_started = None
     if (_RUN_DIR / "worker.started_at").exists():
         try:
@@ -606,8 +635,6 @@ def _collect_metrics() -> None:
         except Exception:
             pass
     html_proc = _process_metrics(html_pid, html_started)
-    web_app = _read_json_capped(_WEB_METRICS_FILE)
-    engine_app = _read_json_capped(_ENGINE_METRICS_FILE)
     _update_hourly_ticks(
         manager_proc, web_proc, engine_proc, html_proc, web_app, engine_app, html_running, web_started
     )
@@ -811,8 +838,13 @@ def init_state() -> None:
     _RUN_DIR.mkdir(parents=True, exist_ok=True)
     _init_session_chrono_on_manager_start()
     try:
-        _MANAGER_PID_FILE.write_text(str(os.getpid()), encoding="utf-8")
-        _MANAGER_STARTED_FILE.write_text(str(time.time()), encoding="utf-8")
+        current_pid = os.getpid()
+        port_pid = _pid_on_port(_MANAGER_PORT)
+        # FastAPI startup socket bind'dan önce çalışır. Portu eski manager tutuyorsa
+        # başarısız yeni süreç eski canlı PID dosyasını ezmesin.
+        if not port_pid or port_pid == current_pid:
+            _MANAGER_PID_FILE.write_text(str(current_pid), encoding="utf-8")
+            _MANAGER_STARTED_FILE.write_text(str(time.time()), encoding="utf-8")
     except Exception:
         pass
     _load_audit()
@@ -1722,12 +1754,24 @@ def start_tail_threads() -> None:
 def get_status() -> dict:
     locks = load_locks()
     out = {}
+    engine_app = _read_json_capped(_ENGINE_METRICS_FILE)
+    web_app = _read_json_capped(_WEB_METRICS_FILE)
     for key in ("web", "engine"):
         pid = _read_pid(_pid_path(key))
         alive = _process_alive(pid)
         # Web: PID guncel olmasa bile port aciksa calisiyor say (hata sonrasi yeniden baslatilinca durdu yazilmasin)
-        if key == "web" and not alive and _is_port_in_use(_WEB_PORT):
-            alive = True
+        if key == "web" and not alive:
+            port_pid = _pid_on_port(_WEB_PORT)
+            metric_pid = _pid_from_metrics(web_app)
+            if port_pid or _is_port_in_use(_WEB_PORT):
+                alive = True
+                pid = port_pid or metric_pid or pid
+        if key == "engine" and not alive:
+            metric_pid = _pid_from_metrics(engine_app)
+            metric_alive = _process_alive(metric_pid)
+            if metric_alive or _metrics_recent(engine_app):
+                alive = True
+                pid = metric_pid or pid
         status[key]["running"] = alive
         status[key]["pid"] = pid
         status[key]["locked"] = locks.get(key, False)
@@ -1746,6 +1790,9 @@ def get_status() -> dict:
         }
     # Manager: always running (we are it)
     manager_pid = _read_pid(_MANAGER_PID_FILE) if _MANAGER_PID_FILE.exists() else os.getpid()
+    if not _process_alive(manager_pid):
+        manager_pid = _pid_on_port(_MANAGER_PORT) or os.getpid()
+    status["manager"]["pid"] = manager_pid
     with _diagnosis_lock:
         mgr_diag = _diagnosis.get("manager") or {}
     if mgr_diag.get("reason_code") != "RUNNING":

@@ -60,6 +60,7 @@ def get_config() -> dict:
         "home_fast_cache_ttl_sec": int(os.environ.get("HOME_FAST_CACHE_TTL_SEC", "2")),
         "wallet_live_ttl_sec": int(os.environ.get("WALLET_LIVE_TTL_SEC", "5")),
         "wallet_cooldown_sec": int(os.environ.get("WALLET_COOLDOWN_SEC", "30")),
+        "wallet_snapshot_warn_age_sec": float(os.environ.get("WALLET_SNAPSHOT_WARN_AGE_SEC", "900")),
         "home_fast_max_assets": int(os.environ.get("HOME_FAST_MAX_ASSETS", "20")),
         "home_fast_warn_bytes": int(os.environ.get("HOME_FAST_WARN_BYTES", "200000")),
     }

@@ -12,6 +12,8 @@ from app.botengine.cycle_ledger import (
     cycle_ledger_breakeven_price,
     cycle_ledger_trigger_price,
     get_cycle_type_and_base_delta,
+    heal_cycle_opened_at,
+    resolve_cycle_opened_at_for_cycle,
     CYCLE_FILL_REASONS,
 )
 
@@ -26,6 +28,28 @@ def test_cycle_ledger_empty():
     assert led["buy_qty_total"] == 0.0
     assert led["sell_qty_total"] == 0.0
     assert led["realized_pnl_quote"] == 0.0
+
+
+def test_cycle_opened_at_uses_latest_duplicate_open_trade_row():
+    """Aynı tur için eski kalıntı varsa açık tur süresi son cycle_open_trades satırından başlar."""
+    state = {
+        "cycle_id": 6,
+        "initial_allocation_done": True,
+        "cycle_opened_at": "2026-06-02T02:09:00+00:00",
+        "cycle_ledger_current": {
+            "cycle_id": 6,
+            "started_at": "2026-06-02T02:09:00+00:00",
+        },
+        "cycle_open_trades": [
+            {"cycle_id": 6, "ts": "2026-06-02T02:09:00+00:00", "qty": 0.0061, "price": 1987.0},
+            {"cycle_id": 6, "ts": "2026-06-02T09:33:07+00:00", "qty": 0.0061, "price": 1987.0},
+        ],
+    }
+
+    heal_cycle_opened_at(state)
+
+    assert state["cycle_opened_at"] == "2026-06-02T09:33:07+00:00"
+    assert resolve_cycle_opened_at_for_cycle(state, 6) == "2026-06-02T09:33:07+00:00"
 
 
 def test_cycle_ledger_pnl_buy_sell_fee():
@@ -90,6 +114,47 @@ def test_cycle_ledger_with_total_basis_includes_initial():
     assert abs(merged["avg_cost_quote_per_base"] - expected_avg) < 0.01
     grid_only = cycle_ledger_with_basis(state, led, "grid_only")
     assert abs(grid_only["avg_cost_quote_per_base"] - 2039.69) < 0.01
+
+
+def test_cycle_ledger_with_total_basis_includes_initial_alloc_fee():
+    """basis_mode=total: initial_alloc_fee_quote dahil edilmeli; fee eksikse avg_cost düşük kalır (breakeven hatalı)."""
+    from app.botengine.cycle_ledger import cycle_ledger_with_basis
+
+    # Grid: 0.005 ETH @ 1900, fee = 0.95 USDT
+    led = build_cycle_ledger_empty(1, "ETHUSDT")
+    cycle_ledger_add_fill(led, "2026-02-01T12:00:00Z", "o1", "c1", "BUY", 0.005, 1900.0, 0.95, "USDT", "trail_buy_grid")
+
+    # Initial alloc: 0.01 ETH @ 2000, fee = 2.0 USDT
+    state_with_fee = {
+        "initial_allocation_done": True,
+        "initial_alloc_base_qty": 0.01,
+        "initial_alloc_price": 2000.0,
+        "initial_alloc_fee_quote": 2.0,
+    }
+    state_no_fee = {
+        "initial_allocation_done": True,
+        "initial_alloc_base_qty": 0.01,
+        "initial_alloc_price": 2000.0,
+        # initial_alloc_fee_quote eksik → geriye dönük uyumluluk: 0 kabul edilir
+    }
+
+    merged_fee = cycle_ledger_with_basis(state_with_fee, led, "total")
+    merged_no_fee = cycle_ledger_with_basis(state_no_fee, led, "total")
+
+    total_qty = 0.005 + 0.01  # 0.015
+    total_quote = 0.005 * 1900.0 + 0.01 * 2000.0  # 9.5 + 20 = 29.5
+    total_fee_with = 0.95 + 2.0   # 2.95
+    total_fee_without = 0.95      # 0.95
+
+    expected_with_fee = (total_quote + total_fee_with) / total_qty    # ~2196.67
+    expected_no_fee   = (total_quote + total_fee_without) / total_qty  # ~2030.0
+
+    assert abs(merged_fee["avg_cost_quote_per_base"] - expected_with_fee) < 0.01, \
+        f"fee dahil avg_cost yanlış: {merged_fee['avg_cost_quote_per_base']:.4f} != {expected_with_fee:.4f}"
+    assert abs(merged_no_fee["avg_cost_quote_per_base"] - expected_no_fee) < 0.01, \
+        f"fee eksik avg_cost yanlış: {merged_no_fee['avg_cost_quote_per_base']:.4f} != {expected_no_fee:.4f}"
+    # fee dahil breakeven mutlaka fee eksikten büyük olmalı
+    assert merged_fee["avg_cost_quote_per_base"] > merged_no_fee["avg_cost_quote_per_base"]
 
 
 def test_reentry_arm_and_max_buy_price():

@@ -1162,6 +1162,74 @@ h1, h2, h3, h4 {
     box-shadow: inset 0 0 0 1px rgba(240, 185, 11, 0.35), 0 1px 4px rgba(0, 0, 0, 0.18);
 }
 
+@keyframes bots-tab-warn-blink {
+    0%, 100% {
+        color: #f8d33a;
+        background: rgba(240, 185, 11, 0.2);
+        box-shadow: inset 0 0 0 1px rgba(240, 185, 11, 0.72), 0 0 14px rgba(240, 185, 11, 0.22);
+    }
+    50% {
+        color: var(--ds-text-secondary);
+        background: rgba(240, 185, 11, 0.04);
+        box-shadow: inset 0 0 0 1px rgba(240, 185, 11, 0.18), 0 0 4px rgba(240, 185, 11, 0.06);
+    }
+}
+
+@keyframes bots-tab-crit-blink {
+    0%, 100% {
+        color: #ff7a86;
+        background: rgba(246, 70, 93, 0.22);
+        box-shadow: inset 0 0 0 1px rgba(246, 70, 93, 0.82), 0 0 16px rgba(246, 70, 93, 0.28);
+    }
+    50% {
+        color: var(--ds-text-secondary);
+        background: rgba(246, 70, 93, 0.04);
+        box-shadow: inset 0 0 0 1px rgba(246, 70, 93, 0.2), 0 0 4px rgba(246, 70, 93, 0.08);
+    }
+}
+
+@keyframes bots-tab-both-blink {
+    0%, 100% {
+        color: #fff;
+        background: rgba(246, 70, 93, 0.34);
+        box-shadow: inset 0 0 0 1px rgba(246, 70, 93, 0.98), 0 0 20px rgba(246, 70, 93, 0.42);
+    }
+    50% {
+        color: #ffb3ba;
+        background: rgba(246, 70, 93, 0.06);
+        box-shadow: inset 0 0 0 1px rgba(246, 70, 93, 0.18), 0 0 5px rgba(246, 70, 93, 0.1);
+    }
+}
+
+.page-dashboard .dm-tab.bots-tab-alert-warn,
+.page-dashboard .mobile-nav-item.bots-tab-alert-warn {
+    animation: bots-tab-warn-blink 1.6s ease-in-out infinite;
+}
+
+.page-dashboard .dm-tab.bots-tab-alert-crit,
+.page-dashboard .mobile-nav-item.bots-tab-alert-crit {
+    animation: bots-tab-crit-blink 0.65s ease-in-out infinite;
+}
+
+.page-dashboard .dm-tab.bots-tab-alert-both,
+.page-dashboard .mobile-nav-item.bots-tab-alert-both {
+    animation: bots-tab-both-blink 0.32s ease-in-out infinite;
+}
+
+.page-dashboard .wallet-stale-bot-notice {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.55rem 0.9rem;
+    margin-bottom: 0.75rem;
+    background: rgba(240, 185, 11, 0.1);
+    border: 1px solid rgba(240, 185, 11, 0.35);
+    border-radius: 6px;
+    color: #f0b90b;
+    font-size: 0.82rem;
+    line-height: 1.4;
+}
+
 .page-dashboard .dm-tab-content {
     display: none !important;
 }
@@ -3741,31 +3809,37 @@ body.tab-bots-active #tabBinance #globalLeaderboardPanel {
 @keyframes mevcut-bot-row-warn-blink {
     0%, 100% {
         border-color: rgba(240, 185, 11, 0.88);
+        box-shadow: inset 0 0 0 9999px rgba(240, 185, 11, 0.08);
     }
     50% {
         border-color: rgba(240, 185, 11, 0.18);
+        box-shadow: inset 0 0 0 9999px rgba(240, 185, 11, 0.02);
     }
 }
 @keyframes mevcut-bot-row-crit-blink {
     0%, 100% {
         border-color: rgba(246, 70, 93, 0.92);
+        box-shadow: inset 0 0 0 9999px rgba(246, 70, 93, 0.16);
     }
     50% {
         border-color: rgba(246, 70, 93, 0.2);
+        box-shadow: inset 0 0 0 9999px rgba(246, 70, 93, 0.035);
     }
 }
 @keyframes mevcut-bot-row-both-blink {
     0%, 100% {
         border-color: rgba(246, 70, 93, 0.98);
+        box-shadow: inset 0 0 0 9999px rgba(246, 70, 93, 0.2);
     }
     50% {
         border-color: rgba(246, 70, 93, 0.12);
+        box-shadow: inset 0 0 0 9999px rgba(246, 70, 93, 0.04);
     }
 }
 .page-dashboard table.binance-assets-table.mevcut-botlar-table tbody tr[data-bot-id].mevcut-bot-row-alert-warn td:not(:first-child):not(:last-child),
 .page-dashboard table.binance-assets-table.mevcut-botlar-table tbody tr[data-bot-id].mevcut-bot-row-alert-crit td:not(:first-child):not(:last-child),
 .page-dashboard table.binance-assets-table.mevcut-botlar-table tbody tr[data-bot-id].mevcut-bot-row-alert-both td:not(:first-child):not(:last-child) {
-    box-shadow: none !important;
+    box-shadow: var(--finance-bot-row-alert-shadow, none);
     border-left: none !important;
     border-right: none !important;
     border-top-width: 1px;
@@ -3776,7 +3850,7 @@ body.tab-bots-active #tabBinance #globalLeaderboardPanel {
 .page-dashboard table.binance-assets-table.mevcut-botlar-table tbody tr[data-bot-id].mevcut-bot-row-alert-warn td:first-child,
 .page-dashboard table.binance-assets-table.mevcut-botlar-table tbody tr[data-bot-id].mevcut-bot-row-alert-crit td:first-child,
 .page-dashboard table.binance-assets-table.mevcut-botlar-table tbody tr[data-bot-id].mevcut-bot-row-alert-both td:first-child {
-    box-shadow: none !important;
+    box-shadow: var(--finance-bot-row-alert-shadow, none);
     border-right: none !important;
     border-top-width: 1px !important;
     border-top-style: solid !important;
@@ -3788,7 +3862,7 @@ body.tab-bots-active #tabBinance #globalLeaderboardPanel {
 .page-dashboard table.binance-assets-table.mevcut-botlar-table tbody tr[data-bot-id].mevcut-bot-row-alert-warn td:last-child,
 .page-dashboard table.binance-assets-table.mevcut-botlar-table tbody tr[data-bot-id].mevcut-bot-row-alert-crit td:last-child,
 .page-dashboard table.binance-assets-table.mevcut-botlar-table tbody tr[data-bot-id].mevcut-bot-row-alert-both td:last-child {
-    box-shadow: none !important;
+    box-shadow: var(--finance-bot-row-alert-shadow, none);
     border-left: none !important;
     border-top-width: 1px !important;
     border-top-style: solid !important;
@@ -3826,19 +3900,19 @@ body.tab-bots-active #tabBinance #globalLeaderboardPanel {
 }
 .page-dashboard .mevcut-botlar-mobile-card.mevcut-bot-row-alert-warn {
     animation: mevcut-bot-row-warn-blink 2.2s ease-in-out infinite;
-    box-shadow: none;
+    box-shadow: var(--finance-bot-row-alert-shadow, none);
     border-width: 1px;
     border-style: solid;
 }
 .page-dashboard .mevcut-botlar-mobile-card.mevcut-bot-row-alert-crit {
     animation: mevcut-bot-row-crit-blink 0.65s ease-in-out infinite;
-    box-shadow: none;
+    box-shadow: var(--finance-bot-row-alert-shadow, none);
     border-width: 1px;
     border-style: solid;
 }
 .page-dashboard .mevcut-botlar-mobile-card.mevcut-bot-row-alert-both {
     animation: mevcut-bot-row-both-blink 0.35s ease-in-out infinite;
-    box-shadow: none;
+    box-shadow: var(--finance-bot-row-alert-shadow, none);
     border-width: 1px;
     border-style: solid;
 }
