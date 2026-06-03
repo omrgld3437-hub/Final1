@@ -2062,9 +2062,12 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
     <script src="/ui/assets/storageCache.js?v=flash1"></script>
     <script src="/ui/assets/renderHome.js?v=wallet-stable6"></script>
     <script src="/ui/assets/homeFlash.js?v=wallet-inflight-poll1"></script>
+    <!-- dashboard modules: format önce yüklenir (State bağımsız) -->
+    <script src="/ui/assets/modules/dashboard-format.js?v=1"></script>
     <!-- Main dashboard (refactored) -->
-  <script src="/ui/assets/dashboard.js?v=wallet-live-refresh-manager2"></script>
-  <script src="/ui/assets/wallet-stale-fix.js?v=1"></script>
+    <script src="/ui/assets/dashboard.js?v=wallet-live-refresh-manager4"></script>
+    <!-- dashboard modules: leaderboard sonra yüklenir (State'e runtime erişim) -->
+    <script src="/ui/assets/modules/dashboard-leaderboard.js?v=1"></script>
     <script src="/ui/assets/ticker.js?v=chg-pct1" defer></script>
 </body>
 </html>
