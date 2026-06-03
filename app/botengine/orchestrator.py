@@ -612,6 +612,21 @@ async def _bot_loop(bot_id: int) -> None:
                     strategy = get_strategy_safe(raw)
                     t0 = time.perf_counter()
                     actions, next_wake = strategy.tick(state, cfg, price, base_balance, quote_balance)
+                    # Günlük kayıp limiti aşıldıysa botu durdur
+                    if state.get("_daily_loss_limit_hit"):
+                        try:
+                            flush_queued_events(db, bot_id, account_id, state)
+                            row.status = "paused_error"
+                            state["last_error_code"] = "DAILY_LOSS_LIMIT"
+                            save_state(db, bot_id, account_id, state)
+                            db.commit()
+                            logger.warning(
+                                "BOT_DAILY_LOSS_LIMIT_PAUSED bot_id=%s account_id=%s", bot_id, account_id
+                            )
+                        except Exception as _dll_ex:
+                            logger.debug("daily_loss_limit pause bot_id=%s: %s", bot_id, _dll_ex)
+                        await asyncio.sleep(next_wake)
+                        continue
                     try:
                         from app.botengine.strategies.grid_outage_recovery import flush_outage_recovery_log_to_events
 
@@ -704,6 +719,23 @@ async def _bot_loop(bot_id: int) -> None:
                                 logger.debug("bot_engine release_symbol_lock bot_id=%s err=%s", bot_id, ex)
                             lock_held = False
                     save_state(db, bot_id, account_id, state)
+                    # BNB fee dönüşüm uyarılarını bot event'e çevir
+                    _fee_warns = state.get("cycle_ledger_current", {}).get("_fee_conversion_warn") or []
+                    if _fee_warns:
+                        for _fw in _fee_warns:
+                            try:
+                                append_event(
+                                    db, bot_id, account_id, "WARN",
+                                    f"Komisyon USDT'ye çevrilemedi: {_fw.get('fee_asset')} "
+                                    f"{_fw.get('fee_raw'):.8f} — dönem K/Z eksik hesaplanıyor",
+                                    {"error_code": "FEE_CONVERSION_FAILED", **_fw},
+                                )
+                            except Exception:
+                                pass
+                        try:
+                            state["cycle_ledger_current"].pop("_fee_conversion_warn", None)
+                        except Exception:
+                            pass
                     if state.get("_pending_connectivity_stable"):
                         try:
                             from app.services.binance_connectivity import flush_pending_connectivity_stable

@@ -2,11 +2,14 @@
 Trailing Grid DCA Bot Engine
 Two-way trailing grid with profit triggers and compound growth cycles
 """
+import logging
 import threading
 import time
 from typing import List, Optional, Dict
 from datetime import datetime
 from enum import Enum
+
+logger = logging.getLogger(__name__)
 
 from app.bot.models import (
     TrailingGridConfig, GridSlot, SlotState,
@@ -105,7 +108,7 @@ class TrailingGridEngine:
                 self.binance_client = BinanceClient(api_key, api_secret, testnet=False)
                 return self.binance_client
             except Exception as e:
-                print(f"Error creating Binance client: {e}")
+                logger.error("Error creating Binance client: %s", e)
                 return None
         else:
             # Paper mode - return None (simulated trades)
@@ -177,7 +180,7 @@ class TrailingGridEngine:
                     fee=total_fee, slot_id=-1, cycle_id=1  # -1 for initial allocation
                 )
             except Exception as e:
-                print(f"Error in initial allocation: {e}")
+                logger.error("Error in initial allocation: %s", e)
                 self.state = BotState.ERROR
                 return False
         
@@ -329,7 +332,7 @@ class TrailingGridEngine:
             self._check_cycle_completion(current_price)
             
         except Exception as e:
-            print(f"Bot {self.bot_id} tick error: {e}")
+            logger.error("Bot %s tick error: %s", self.bot_id, e)
             import traceback
             traceback.print_exc()
     
@@ -388,7 +391,7 @@ class TrailingGridEngine:
             self.last_order_ts = now
             
         except Exception as e:
-            print(f"Error executing sell: {e}")
+            logger.error("Error executing sell: %s", e)
         finally:
             self.order_in_flight = False
     
@@ -449,7 +452,7 @@ class TrailingGridEngine:
             self.last_order_ts = now
             
         except Exception as e:
-            print(f"Error executing buy: {e}")
+            logger.error("Error executing buy: %s", e)
         finally:
             self.order_in_flight = False
     
@@ -547,7 +550,7 @@ class TrailingGridEngine:
                 
                 time.sleep(0.25)  # 250ms tick
             except Exception as e:
-                print(f"Bot {self.bot_id} loop error: {e}")
+                logger.error("Bot %s loop error: %s", self.bot_id, e)
                 import traceback
                 traceback.print_exc()
                 time.sleep(1.0)

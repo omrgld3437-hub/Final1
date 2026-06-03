@@ -874,13 +874,24 @@ async def lockdown_middleware(request, call_next):
         headers={"Retry-After": "60"},
     )
 
-# CORS
+# CORS — ALLOWED_ORIGINS env var ile konfigüre edilebilir (virgülle ayrılmış).
+# Örn: ALLOWED_ORIGINS=https://tradertrailing.com,https://www.tradertrailing.com
+# Belirtilmezse geliştirme kolaylığı için ["*"] (credentials=False) kullanılır.
+_cors_env = os.environ.get("ALLOWED_ORIGINS", "").strip()
+_cors_origins: list = [o.strip() for o in _cors_env.split(",") if o.strip()] if _cors_env else ["*"]
+_cors_credentials: bool = bool(_cors_origins != ["*"])
+if not _cors_credentials:
+    import logging as _lg
+    _lg.getLogger(__name__).warning(
+        "CORS: ALLOWED_ORIGINS env var belirtilmedi — wildcard (*) credentials=False ile çalışıyor. "
+        "Production'da ALLOWED_ORIGINS=https://tradertrailing.com gibi set edin."
+    )
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=_cors_origins,
+    allow_credentials=_cors_credentials,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "X-Request-ID", "X-CSRF-Token"],
 )
 
 
@@ -1493,23 +1504,85 @@ async def api_admin_delete_popup(
 
 @app.get("/api/health")
 async def api_health():
-    """Sağlık kontrolü; bakım ekranı retry için. Auth yok. project_path = hangi klasörün kodu çalışıyor. total_requests = log sayfası (7999) için."""
+    """Sağlık kontrolü — DB, DataHub ve worker durumunu döner. Auth yok."""
     from datetime import datetime, timezone
     _project_root = str(BASE_DIR) if BASE_DIR else ""
     total_requests = None
+    db_ok = False
+    db_error = None
+    binance_fail = False
+    worker_running = False
+    prices_count = 0
     try:
         from app.middleware.request_metrics import get_metrics
         total_requests = get_metrics().get("total_requests")
     except Exception:
         pass
+    try:
+        from app.db.base import SessionLocal
+        _db = SessionLocal()
+        try:
+            _db.execute(__import__("sqlalchemy").text("SELECT 1"))
+            db_ok = True
+        finally:
+            _db.close()
+    except Exception as _dbe:
+        db_error = str(_dbe)[:120]
+    try:
+        from app.services.data_hub import data_hub
+        prices_count = len(getattr(data_hub, "prices", {}) or {})
+    except Exception:
+        pass
+    try:
+        from app.botengine.worker_main import is_worker_running
+        worker_running = bool(is_worker_running())
+    except Exception:
+        pass
+    try:
+        from app.services.binance_connectivity import _by_account
+        binance_fail = len(_by_account) > 0
+    except Exception:
+        pass
+    status = "ok" if db_ok else "degraded"
     return {
-        "ok": True,
+        "ok": db_ok,
+        "status": status,
         "ts": datetime.now(timezone.utc).isoformat(),
         "version": "1.0.0",
         "lockdown": server_state.get_lockdown(),
         "project_path": _project_root,
         "total_requests": total_requests,
+        "db": "ok" if db_ok else f"error: {db_error}",
+        "prices_count": prices_count,
+        "worker_running": worker_running,
+        "binance_failure_active": binance_fail,
     }
+
+
+@app.get("/api/ready")
+async def api_ready():
+    """Readiness probe — yük dengeleyici için. DB + DataHub hazır olduğunda 200, değilse 503 döner."""
+    from fastapi.responses import JSONResponse
+    db_ok = False
+    prices_ok = False
+    try:
+        from app.db.base import SessionLocal
+        _db = SessionLocal()
+        try:
+            _db.execute(__import__("sqlalchemy").text("SELECT 1"))
+            db_ok = True
+        finally:
+            _db.close()
+    except Exception:
+        pass
+    try:
+        from app.services.data_hub import data_hub
+        prices_ok = len(getattr(data_hub, "prices", {}) or {}) > 0
+    except Exception:
+        pass
+    ready = db_ok
+    payload = {"ready": ready, "db": db_ok, "prices": prices_ok}
+    return JSONResponse(content=payload, status_code=200 if ready else 503)
 
 
 @app.get("/api/config/public")

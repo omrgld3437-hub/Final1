@@ -5,9 +5,12 @@ DATE: 2026-01-21
 CHANGE: DCA Bot V2 Engine - State machine with trailing extremes and profit cycles
 """
 import json
+import logging
 import time
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 from sqlalchemy.orm import Session
 from app.bot.models_v2 import (
     BotV2, BotBalanceV2, BotGridV2, BotCycleV2, BotTradeV2, BotStateV2
@@ -212,7 +215,7 @@ class BotEngineV2:
             self.db.commit()
 
         except Exception as e:
-            print(f"Error executing sell grid {grid.idx}: {e}")
+            logger.error("Error executing sell grid %s: %s", grid.idx, e)
             grid.state = "SKIPPED"
             self.db.rollback()
 
@@ -261,7 +264,7 @@ class BotEngineV2:
             self.db.commit()
 
         except Exception as e:
-            print(f"Error executing buy grid {grid.idx}: {e}")
+            logger.error("Error executing buy grid %s: %s", grid.idx, e)
             grid.state = "SKIPPED"
             self.db.rollback()
 

@@ -251,7 +251,7 @@ class BotEngine:
                 # Sleep to prevent tight loop
                 threading.Event().wait(1.0)  # 1 second tick
             except Exception as e:
-                print(f"Bot {self.bot_id} error: {e}")
+                logger.error("Bot %s error: %s", self.bot_id, e)
                 threading.Event().wait(5.0)
 
     def start(self):

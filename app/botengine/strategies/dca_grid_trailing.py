@@ -386,6 +386,48 @@ def tick_dca_grid_trailing(
     actions: List[Dict[str, Any]] = []
     next_wake = config.tick_interval_ms / 1000.0
 
+    # ---- Günlük kayıp limiti (daily_loss_limit_usd) ----
+    _dll = _f(getattr(config, "daily_loss_limit_usd", 0.0)) or 0.0
+    if _dll > 0 and initial_done:
+        _current_equity = base_balance * P + quote_balance
+        # Günlük referans: bugünkü TR günü başı equity; yoksa initial_capital
+        _today_tr = None
+        try:
+            from app.utils.tz_utils import turkey_today_date_str
+            _today_tr = turkey_today_date_str()
+        except Exception:
+            pass
+        _dll_ref_date = state.get("_dll_ref_date")
+        _dll_ref_usd = _f(state.get("_dll_ref_usd")) or 0.0
+        if _dll_ref_date != _today_tr or _dll_ref_usd <= 0:
+            # Yeni gün — referans equity'yi sıfırla
+            state["_dll_ref_date"] = _today_tr
+            state["_dll_ref_usd"] = round(_current_equity, 2)
+            _dll_ref_usd = _current_equity
+        _daily_loss = _dll_ref_usd - _current_equity
+        if _daily_loss >= _dll:
+            bot_id_log = state.get("bot_id", 0)
+            logger.warning(
+                "BOT_DAILY_LOSS_LIMIT_HIT bot_id=%s daily_limit=%.2f loss=%.2f equity=%.2f ref=%.2f — tick durduruldu",
+                bot_id_log, _dll, _daily_loss, _current_equity, _dll_ref_usd,
+            )
+            if not state.get("_daily_loss_limit_hit"):
+                state["_daily_loss_limit_hit"] = True
+                from app.botengine.state_store import queue_engine_event
+                queue_engine_event(
+                    state, "HEALTH_WARN",
+                    f"Günlük kayıp limiti aşıldı — kayıp {_daily_loss:.2f} USDT, limit {_dll:.2f} USDT",
+                    {
+                        "error_code": "DAILY_LOSS_LIMIT",
+                        "daily_loss_usd": round(_daily_loss, 4),
+                        "daily_loss_limit_usd": _dll,
+                        "current_equity": round(_current_equity, 4),
+                        "ref_equity": round(_dll_ref_usd, 4),
+                        "cycle_id": cycle,
+                    },
+                )
+            return [], next_wake
+
     # ---- Initial allocation (t0) ----
     # Strategy: only produce intent. ia_done set ONLY in execution after real fill. No state mutation here.
     if not initial_done:

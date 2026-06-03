@@ -109,6 +109,9 @@ class DcaGridTrailingConfig:
         self.initial_fee_buffer_pct = _float_or(r.get("initial_fee_buffer_pct") or r.get("fee_buffer_pct"), 0.002)
         # Virtual/real drift buffer: available_quote_for_orders = free_quote * (1 - available_quote_buffer_pct)
         self.available_quote_buffer_pct = _float_or(r.get("available_quote_buffer_pct") or r.get("quote_buffer_pct"), 0.005)
+        # Günlük kayıp limiti (USDT). 0 veya None = limit yok.
+        _dll = r.get("daily_loss_limit_usd")
+        self.daily_loss_limit_usd: float = _float_or(_dll, 0.0) if _dll not in (None, "", 0) else 0.0
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -139,6 +142,7 @@ class DcaGridTrailingConfig:
             "min_notional_guard": self.min_notional_guard,
             "initial_fee_buffer_pct": self.initial_fee_buffer_pct,
             "available_quote_buffer_pct": self.available_quote_buffer_pct,
+            "daily_loss_limit_usd": self.daily_loss_limit_usd,
         }
 
 

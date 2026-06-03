@@ -273,6 +273,19 @@ def cycle_ledger_add_fill(
             asset,
             raw_fee,
         )
+        # Kullanıcıya görünür bot event — PnL'nin eksik gösterildiğini bilmeli
+        try:
+            from app.botengine.state_store import queue_engine_event
+            bot_id_log = None  # ledger'dan bot_id alınamaz; orchestrator flush eder
+            # ledger içinde state referansı yok — event state üzerinden orchestrator'da yazılır
+            # ledger.setdefault kullanarak meta olarak işaretle; orchestrator flush'ta yakalar
+            ledger.setdefault("_fee_conversion_warn", []).append({
+                "fee_asset": asset,
+                "fee_raw": round(raw_fee, 8),
+                "order_id": order_id,
+            })
+        except Exception:
+            pass
     entry = {
         "ts": ts,
         "order_id": order_id,

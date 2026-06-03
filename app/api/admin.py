@@ -213,6 +213,10 @@ class ServerExitRequest(BaseModel):
     password: str
 
 
+class ServerRestartRequest(BaseModel):
+    password: str
+
+
 class CreatePopupRequest(BaseModel):
     target: str  # first_login | normal_user
     title_key: str  # info | warning | success | maintenance | announcement
@@ -1135,8 +1139,30 @@ async def server_exit(
 
 
 @router.post("/admin/server/restart")
-async def server_restart(current: dict = Depends(_require_admin)) -> Dict:
-    """Sunucuyu 5 sn sonra kapatıp yeniden başlatır. Unix: run.sh; Windows: calistir.bat/Server Start.bat. Restart işlemi ayrı proses ile yapılır."""
+async def server_restart(
+    req: ServerRestartRequest = Body(...),
+    current: dict = Depends(_require_admin),
+    db: Session = Depends(get_db),
+) -> Dict:
+    """Sunucuyu yeniden başlatır. Admin şifresi gereklidir (exit ile aynı koruma). Unix: run.sh; Windows: calistir.bat."""
+    password = (req.password or "").strip()
+    if not password:
+        raise HTTPException(status_code=400, detail="Şifre girin. Sunucuyu yeniden başlatmak için admin şifrenizi girin.")
+    user = db.query(User).filter(User.id == current["user_id"]).first()
+    if not user:
+        raise HTTPException(status_code=403, detail="Kullanıcı bulunamadı.")
+    stored_hash = getattr(user, "password_hash", None)
+    if not stored_hash or not isinstance(stored_hash, str) or len(stored_hash) < 10:
+        raise HTTPException(status_code=403, detail="Admin şifresi tanımlı değil.")
+    try:
+        password_valid = bool(verify_password(password, stored_hash))
+    except Exception as e:
+        logger.warning("Server restart password verification error (rejecting): %s", e)
+        raise HTTPException(status_code=400, detail="Şifre doğrulanamadı.")
+    if not password_valid:
+        logger.warning("Server restart rejected: wrong password for user_id=%s", current.get("user_id"))
+        raise HTTPException(status_code=400, detail="Yanlış şifre. Sunucuyu yeniden başlatmak için admin şifrenizi girin.")
+    logger.warning("Server restart confirmed by admin (password OK) user_id=%s", current.get("user_id"))
     import os
     import sys
     import subprocess
