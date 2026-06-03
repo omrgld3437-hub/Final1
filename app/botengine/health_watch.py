@@ -762,20 +762,29 @@ def evaluate_bot_health(bot, state: Optional[Dict[str, Any]], db: Session) -> Li
     status = (bot.status or "stopped").lower()
     alerts: List[Dict[str, Any]] = []
 
-    # Binance bağlantı hatası — bot durdurulmuş/pause olsa da göster (manager + bot log)
+    # Binance bağlantı hatası — bot durdurulmuş/pause olsa da göster (manager + bot log).
+    # Geçici kesintilerde (< _TRANSIENT_OUTAGE_LOG_DELAY_SEC) CRITICAL gösterme.
     try:
-        from app.services.binance_connectivity import active_failure
+        import time as _time
+        from app.services.binance_connectivity import (
+            active_failure,
+            _first_fail_ts_by_account,
+            _TRANSIENT_OUTAGE_LOG_DELAY_SEC,
+        )
         bfail = active_failure(bot.account_id)
         if bfail:
-            tmpl = _HEALTH_MESSAGES["BINANCE_UNREACHABLE"]
-            alerts.append(_alert_from_tmpl(
-                "BINANCE_UNREACHABLE", "critical", tmpl,
-                {
-                    "error_code": bfail.get("error_code"),
-                    "source": bfail.get("source"),
-                },
-                message=bfail.get("message") or tmpl.get("title"),
-            ))
+            first_fail = _first_fail_ts_by_account.get(int(bot.account_id), 0)
+            fail_age = _time.time() - first_fail if first_fail > 0 else _TRANSIENT_OUTAGE_LOG_DELAY_SEC + 1
+            if fail_age >= _TRANSIENT_OUTAGE_LOG_DELAY_SEC:
+                tmpl = _HEALTH_MESSAGES["BINANCE_UNREACHABLE"]
+                alerts.append(_alert_from_tmpl(
+                    "BINANCE_UNREACHABLE", "critical", tmpl,
+                    {
+                        "error_code": bfail.get("error_code"),
+                        "source": bfail.get("source"),
+                    },
+                    message=bfail.get("message") or tmpl.get("title"),
+                ))
     except Exception as e:
         logger.debug("health_watch binance_connectivity bot_id=%s: %s", bot.id, e)
     if not any(a.get("code") == "BINANCE_UNREACHABLE" for a in alerts):
@@ -971,16 +980,28 @@ def evaluate_bot_health_lite(
         except Exception:
             account_failure = None
     if account_failure:
-        tmpl = _HEALTH_MESSAGES["BINANCE_UNREACHABLE"]
-        alerts.append(_alert_from_tmpl(
-            "BINANCE_UNREACHABLE", "critical", tmpl,
-            {
-                "error_code": account_failure.get("error_code"),
-                "source": account_failure.get("source"),
-            },
-            message=account_failure.get("message") or tmpl.get("title"),
-        ))
-    elif account_wallet_alert:
+        # Geçici kesintilerde CRITICAL gösterme (aynı filtre evaluate_bot_health'te de var)
+        try:
+            import time as _time
+            from app.services.binance_connectivity import (
+                _first_fail_ts_by_account,
+                _TRANSIENT_OUTAGE_LOG_DELAY_SEC,
+            )
+            first_fail = _first_fail_ts_by_account.get(int(bot.account_id), 0)
+            fail_age = _time.time() - first_fail if first_fail > 0 else _TRANSIENT_OUTAGE_LOG_DELAY_SEC + 1
+        except Exception:
+            fail_age = _TRANSIENT_OUTAGE_LOG_DELAY_SEC + 1
+        if fail_age >= _TRANSIENT_OUTAGE_LOG_DELAY_SEC:
+            tmpl = _HEALTH_MESSAGES["BINANCE_UNREACHABLE"]
+            alerts.append(_alert_from_tmpl(
+                "BINANCE_UNREACHABLE", "critical", tmpl,
+                {
+                    "error_code": account_failure.get("error_code"),
+                    "source": account_failure.get("source"),
+                },
+                message=account_failure.get("message") or tmpl.get("title"),
+            ))
+    if not any(a.get("code") == "BINANCE_UNREACHABLE" for a in alerts) and account_wallet_alert:
         alerts.append(dict(account_wallet_alert))
 
     # paused_insufficient_balance: status running değil ama kullanıcıya kritik bildir

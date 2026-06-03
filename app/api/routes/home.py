@@ -608,7 +608,8 @@ async def _do_wallet_refresh(account_id: int, db: Session, request_id: str, forc
             duration_ms, request_id, account_id,
         )
         _wallet_last_error_code[account_id] = "BINANCE_TIMEOUT"
-        _wallet_cooldown_until[account_id] = time.monotonic() + cfg.get("wallet_cooldown_sec", 30)
+        # Geçici timeout: kısa cooldown (10s) — hızlı toparlanma için
+        _wallet_cooldown_until[account_id] = time.monotonic() + min(cfg.get("wallet_cooldown_sec", 30), 10)
         _note_wallet_refresh_failure(account_id, "BINANCE_TIMEOUT")
         return {"_error": "timeout", "code": "BINANCE_TIMEOUT"}
     except Exception as e:

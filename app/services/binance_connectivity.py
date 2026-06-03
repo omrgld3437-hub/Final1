@@ -23,12 +23,19 @@ _RUN_DIR = _PROJECT_ROOT / ".run"
 _FAILURE_TTL_SEC = 180.0
 _BOT_EVENT_THROTTLE_SEC = 300.0
 _PROBE_THROTTLE_SEC = 30.0
+# Kısa geçici kesintiler için log bekleme süresi: bu süreden önce "Hata" event yazılmaz.
+# Binance 30-60 saniyelik anlık kesintilerde bot log'una gereksiz kalıcı hata satırı eklenmez.
+_TRANSIENT_OUTAGE_LOG_DELAY_SEC = 90.0
+# Aktif hata varken yeniden probe sıklığı (normal 30s yerine).
+_FAST_PROBE_SEC = 12.0
 
 _lock = threading.Lock()
 _by_account: Dict[int, Dict[str, Any]] = {}
 _last_emit_by_bot: Dict[int, float] = {}
 _last_probe_by_bot: Dict[int, float] = {}
 _last_auto_resume_by_account: Dict[int, float] = {}
+# İlk hata anı — geçici mi kalıcı mı ayrımı için
+_first_fail_ts_by_account: Dict[int, float] = {}
 
 _AUTO_RESUME_THROTTLE_SEC = 45.0
 _AUTO_RESUME_ERROR_CODES = frozenset({
@@ -159,9 +166,16 @@ def note_binance_failure(
         prev = _by_account.get(aid) or {}
         rec["since_ts"] = prev.get("since_ts") or now
         _by_account[aid] = rec
+        # İlk hata anını kaydet (geçici/kalıcı ayrımı için)
+        if aid not in _first_fail_ts_by_account:
+            _first_fail_ts_by_account[aid] = now
     _persist_failure(aid, rec)
+    # Geçici kesintilerde (< _TRANSIENT_OUTAGE_LOG_DELAY_SEC) async event yazma;
+    # kalıcı hata olursa emit gönderilir.
     if emit_async:
-        _emit_bot_events_async(aid, code, msg, source)
+        first_fail = _first_fail_ts_by_account.get(aid, now)
+        if now - first_fail >= _TRANSIENT_OUTAGE_LOG_DELAY_SEC:
+            _emit_bot_events_async(aid, code, msg, source)
 
 
 def note_binance_success(account_id: int, *, schedule_resume: bool = True) -> None:
@@ -170,6 +184,7 @@ def note_binance_success(account_id: int, *, schedule_resume: bool = True) -> No
     aid = int(account_id)
     with _lock:
         _by_account.pop(aid, None)
+        _first_fail_ts_by_account.pop(aid, None)  # geçici/kalıcı sayacı sıfırla
     _clear_persisted_failure(aid)
     if schedule_resume:
         _schedule_auto_resume_after_success(aid)
@@ -839,6 +854,14 @@ def emit_connectivity_events_for_bot(
     account_id = int(bot.account_id)
     now = time.time()
     code = (error_code or "BINANCE_UNREACHABLE").strip()
+
+    # Geçici kesintiler (< _TRANSIENT_OUTAGE_LOG_DELAY_SEC) için log yazma.
+    # API_UNAUTHORIZED gibi kalıcı hatalar bu filtreden geçmez.
+    if not force and code == "BINANCE_UNREACHABLE":
+        first_fail = _first_fail_ts_by_account.get(int(account_id), now)
+        if now - first_fail < _TRANSIENT_OUTAGE_LOG_DELAY_SEC:
+            return False
+
     if not force:
         last = _last_emit_by_bot.get(bot_id, 0.0)
         if now - last < _BOT_EVENT_THROTTLE_SEC:
@@ -939,7 +962,10 @@ async def sync_bot_connectivity_on_view(
     now = time.time()
     if not force_probe:
         last_probe = _last_probe_by_bot.get(bot_id, 0.0)
-        if now - last_probe < _PROBE_THROTTLE_SEC:
+        # Aktif hata varsa daha sık probe yap (hızlı toparlanma için)
+        had_fail = bool(active_failure(account_id))
+        throttle = _FAST_PROBE_SEC if had_fail else _PROBE_THROTTLE_SEC
+        if now - last_probe < throttle:
             fail = active_failure(account_id)
             if fail:
                 emit_connectivity_events_for_bot(

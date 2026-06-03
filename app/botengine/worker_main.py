@@ -613,8 +613,20 @@ async def worker_loop():
                     else:
                         await ensure_running_bots(db)
 
-                # IP/API düzelince paused_error botları otomatik devam (probe + START)
-                auto_resume_interval = max(30, int(60 / command_poll_interval))
+                # IP/API düzelince paused_error botları otomatik devam (probe + START).
+                # Aktif Binance hatası varken daha sık kontrol et (hızlı toparlanma).
+                try:
+                    from app.services.binance_connectivity import active_failure as _af
+                    from app.db.models import Bot as _BotM
+                    _any_fail = any(
+                        _af(int(aid))
+                        for (aid,) in db.query(_BotM.account_id).distinct().all()
+                        if aid
+                    )
+                except Exception:
+                    _any_fail = False
+                _resume_target_sec = 15 if _any_fail else 60
+                auto_resume_interval = max(5, int(_resume_target_sec / command_poll_interval))
                 if loop_count % auto_resume_interval == 0 and loop_count > 0:
                     try:
                         from app.services.binance_connectivity import run_connectivity_auto_resume_pass
