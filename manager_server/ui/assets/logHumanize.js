@@ -1446,9 +1446,54 @@
         };
       }
     },
+    // USER_STREAM handler — genel Binance handler'ından ÖNCE gelmeli
     {
       test: function (msg) {
-        if (/\[BinanceWS\]|binance_ws/i.test(msg)) return false;
+        return /user_stream|USER_STREAM/i.test(msg);
+      },
+      apply: function (ctx) {
+        var detail = technicalDetail(ctx) || '';
+        var _msg = ctx.message || ctx.raw || '';
+        var is410 = /410|Gone|listenKey/i.test(detail) || /410|Gone/i.test(_msg);
+        var isConnected = /USER_STREAM_CONNECTED/i.test(_msg);
+        var isKeyExpired = /USER_STREAM_KEY_EXPIRED|listenKey/i.test(_msg);
+        var isReconnect = /USER_STREAM_RECONNECT/i.test(_msg);
+
+        if (isConnected) {
+          return {
+            konu: 'Binance veri akışı bağlandı',
+            sebep: 'Hesap user data stream başarıyla açıldı; ORDER_TRADE_UPDATE eventleri alınıyor.',
+            etki: 'Emir doldurma bildirimleri artık gerçek zamanlı.',
+            oneri: 'İşlem gerekmez.'
+          };
+        }
+        if (isKeyExpired || (is410 && isReconnect)) {
+          return {
+            konu: 'Binance veri akışı yeniden bağlanıyor',
+            sebep: 'listenKey süresi doldu (Binance 410). Sistem otomatik olarak yeni anahtar alıp yeniden bağlanıyor.',
+            etki: 'Yeniden bağlanma sırasında (~5 sn) ORDER_TRADE_UPDATE eventleri alınamaz; bot REST reconcile ile telafi eder.',
+            oneri: 'Otomatik işlem; müdahale gerekmez. Sorun devam ederse API anahtarı izinlerini kontrol edin.'
+          };
+        }
+        if (is410) {
+          return {
+            konu: 'Binance veri akışı kesintisi (410)',
+            sebep: 'Binance user data stream listenKey geçersiz oldu (410 Gone). Sistem yeniden bağlanıyor.',
+            etki: 'Kısa süreliğine ORDER_TRADE_UPDATE eventleri alınamaz; bot otomatik telafi eder.',
+            oneri: 'Otomatik yeniden bağlanma başladı. Sorun sürekli tekrarlanıyorsa API anahtarı süresi ve izinleri kontrol edin.'
+          };
+        }
+        return {
+          konu: 'Binance veri akışı bağlantı sorunu',
+          sebep: 'User data stream geçici olarak bağlantısını kesti; bot otomatik yeniden bağlanacak.',
+          etki: 'Geçici: yeniden bağlanana kadar anlık emir dolum bildirimleri REST polling ile sağlanır.',
+          oneri: 'Birkaç saniye bekleyin. Tekrar bağlandığında USER_STREAM_CONNECTED logu görünür.'
+        };
+      }
+    },
+    {
+      test: function (msg) {
+        if (/\[BinanceWS\]|binance_ws|user_stream|USER_STREAM/i.test(msg)) return false;
         return /Binance|binance_spot|APIError|-\d{4}\s|MIN_NOTIONAL|LOT_SIZE|insufficient balance|Account has insufficient/i.test(msg);
       },
       apply: function () {

@@ -147,15 +147,16 @@ def reset_stale_processing_commands(db, max_age_sec: int = 120) -> int:
     """Worker crash recovery: reclaim commands stuck in PROCESSING."""
     from sqlalchemy import text
     try:
+        cutoff = datetime.fromtimestamp(time.time() - int(max_age_sec), tz=timezone.utc).isoformat()
         r = db.execute(
             text("""
                 UPDATE bot_engine_commands
                 SET status = 'PENDING', processed_at = NULL, error_code = NULL, error_id = NULL
                 WHERE status = 'PROCESSING'
                   AND processed_at IS NOT NULL
-                  AND processed_at < datetime('now', :offset)
+                  AND processed_at < :cutoff
             """),
-            {"offset": f"-{int(max_age_sec)} seconds"},
+            {"cutoff": cutoff},
         )
         db.commit()
         n = r.rowcount or 0
@@ -445,6 +446,67 @@ async def _reconciler_background_task():
             logger.warning("reconciler_background err=%s", e)
 
 
+async def _user_stream_background_task():
+    """Start Binance user streams for accounts with running live bots."""
+    if os.getenv("BINANCE_USER_STREAM_ENABLED", "1").strip().lower() not in ("1", "true", "yes"):
+        logger.info("USER_STREAM_DISABLED")
+        return
+    from app.db.models import Bot
+    from app.services.binance_assets import get_account_keys
+    from app.botengine.user_stream import apply_user_stream_event_to_db, start_user_stream_for_account
+
+    async def _on_order_update(account_id: int, event: Dict[str, Any]) -> None:
+        db = _get_db()
+        try:
+            apply_user_stream_event_to_db(db, account_id, event)
+        except Exception as exc:
+            logger.debug("USER_STREAM_EVENT_APPLY_FAILED account_id=%s event=%s err=%s", account_id, event.get("event_type"), exc)
+            try:
+                db.rollback()
+            except Exception:
+                pass
+        finally:
+            db.close()
+
+    started: set[tuple[int, str]] = set()
+    while True:
+        try:
+            db = _get_db()
+            try:
+                rows = db.query(Bot.account_id).filter(Bot.status == "running", Bot.mode == "live").distinct().all()
+                market = os.getenv("BINANCE_USER_STREAM_MARKET", "spot").strip().lower()
+                for (account_id,) in rows:
+                    if not account_id:
+                        continue
+                    key = (int(account_id), market)
+                    if key in started:
+                        continue
+                    keys = await get_account_keys(int(account_id), db)
+                    if not keys:
+                        continue
+                    ok = await start_user_stream_for_account(
+                        int(account_id),
+                        keys=keys,
+                        market=market,
+                        on_order_update=_on_order_update,
+                        db=db,  # Hesap adı/kodu log'larda gösterilsin
+                    )
+                    if ok:
+                        started.add(key)
+                        # Hesap adı/kodu al — log mesajı için
+                        try:
+                            from app.botengine.user_stream import _build_account_label
+                            _label = _build_account_label(account_id, db)
+                        except Exception:
+                            _label = f"account_id={account_id}"
+                        logger.info("USER_STREAM_STARTED %s market=%s", _label, market)
+            finally:
+                db.close()
+        except Exception as exc:
+            logger.debug("USER_STREAM_START_PASS_FAILED err=%s", exc)
+        await asyncio.sleep(30)
+
+
 def _running_bot_symbols() -> list:
     """Çalışan botların sembolleri — worker slim cache'te asla düşmesin."""
     from app.db.session import SessionLocal
@@ -547,6 +609,7 @@ async def worker_loop():
         finally:
             db2.close()
         asyncio.create_task(_reconciler_background_task())
+        asyncio.create_task(_user_stream_background_task())
         asyncio.create_task(v5_scheduler.run_loop())
         logger.info("WORKER_V5_SCHEDULER_STARTED")
     else:
@@ -555,6 +618,8 @@ async def worker_loop():
             await ensure_running_bots(db)
         finally:
             db.close()
+        asyncio.create_task(_reconciler_background_task())
+        asyncio.create_task(_user_stream_background_task())
 
     heartbeat_interval = 60  # log WORKER_HEARTBEAT every 60s to avoid log spam
     command_poll_interval = 1.0
