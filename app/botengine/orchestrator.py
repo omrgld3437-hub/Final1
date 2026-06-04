@@ -587,6 +587,14 @@ async def _bot_loop(bot_id: int) -> None:
                     if state.pop("price_stale_since", None):
                         save_state(db, bot_id, account_id, state)
                     logger.debug("BOT_PRICE bot_id=%s loop=%s tick=%s status=OK price=%.2f symbol=%s", bot_id, loop_instance_id, tick_count, price, symbol)
+                    # Tur içi fiyat aralığı takibi (_cycle_price_high / _cycle_price_low)
+                    if state.get("initial_allocation_done"):
+                        _ph = state.get("_cycle_price_high")
+                        _pl = state.get("_cycle_price_low")
+                        if _ph is None or price > _ph:
+                            state["_cycle_price_high"] = round(price, 10)
+                        if _pl is None or price < _pl:
+                            state["_cycle_price_low"] = round(price, 10)
                     init_quote = float(getattr(cfg, "initial_capital_usdt", 0) or getattr(cfg, "bot_budget_usdt", 0) or 0)
                     if init_quote <= 0 and paper_mode:
                         from app.services.test_account import TEST_PAPER_BALANCE_USDT
@@ -771,6 +779,18 @@ async def _bot_loop(bot_id: int) -> None:
                             True,
                         )
                     # Skip routine TICK log (elapsed_ms/actions) to reduce noise; only errors/skips/fills are logged
+
+                    # Periyodik sanal vs gerçek bakiye doğrulaması (live, her 50 tick, ilk alım sonrası)
+                    if (not paper_mode and not acct_test
+                            and state.get("initial_allocation_done")
+                            and tick_count > 0 and tick_count % 50 == 0):
+                        try:
+                            from app.botengine.execution import _emit_balance_sync_check
+                            await _emit_balance_sync_check(
+                                adapter, db, bot_id, account_id, symbol, state, price
+                            )
+                        except Exception as _bsc_ex:
+                            logger.debug("balance_sync_check bot_id=%s: %s", bot_id, _bsc_ex)
 
                     tick_count += 1
                     state_ver = state.get("state_version", 0)

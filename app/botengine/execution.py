@@ -56,6 +56,280 @@ logger = logging.getLogger(__name__)
 # Binance REST yavaş ortamda 3s yetersiz; reconcile yine devreye girer ama gecikme + ORDER_TIMEOUT uyarısı üretir.
 EXEC_ORDER_TIMEOUT_SEC = 15.0
 
+
+# ---------------------------------------------------------------------------
+# Cycle event enrichment helpers (CYCLE_END / CYCLE_START meta zenginleştirme)
+# ---------------------------------------------------------------------------
+
+def _cycle_duration_sec(state: Dict[str, Any], ledger: Optional[Dict[str, Any]]) -> Optional[float]:
+    """Tur süresi saniye cinsinden. opened_at → şimdi."""
+    opened = None
+    if ledger:
+        opened = ledger.get("started_at")
+    if not opened:
+        opened = state.get("cycle_opened_at")
+    if not opened:
+        return None
+    try:
+        from datetime import timezone as _tz
+        s = str(opened).strip().replace(" ", "T")
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return round((datetime.now(timezone.utc) - dt).total_seconds(), 1)
+    except Exception:
+        return None
+
+
+def _grid_utilization(state: Dict[str, Any], config: Any) -> Dict[str, Any]:
+    """Tur boyunca kaç sell/buy grid'i tetiklendi."""
+    n = len(getattr(config, "sell_grids", []) or [])
+    m = len(getattr(config, "buy_grids", []) or [])
+    sell_fired = state.get("sell_grid_fired") or []
+    buy_fired = state.get("buy_grid_fired") or []
+    return {
+        "sell_grids_fired": sum(1 for x in sell_fired if x),
+        "sell_grids_total": n,
+        "buy_grids_fired": sum(1 for x in buy_fired if x),
+        "buy_grids_total": m,
+    }
+
+
+def _ledger_avg_prices(ledger: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Ledger'dan ortalama alış/satış fiyatları."""
+    if not ledger:
+        return {}
+    bq = float(ledger.get("buy_qty_total") or 0)
+    bv = float(ledger.get("buy_quote_total") or 0)
+    sq = float(ledger.get("sell_qty_total") or 0)
+    sv = float(ledger.get("sell_quote_total") or 0)
+    result: Dict[str, Any] = {}
+    if bq > 0 and bv > 0:
+        result["avg_buy_price"] = round(bv / bq, 8)
+    if sq > 0 and sv > 0:
+        result["avg_sell_price"] = round(sv / sq, 8)
+    return result
+
+
+def _cumulative_pnl(state: Dict[str, Any]) -> Dict[str, Any]:
+    """Tüm tamamlanan turların kümülatif K/Z toplamı."""
+    completed = state.get("completed_cycle_dual_pnls") or []
+    cash_total = 0.0
+    inv_total = 0.0
+    for c in completed:
+        cash_total += float(c.get("cash_pnl_usdt") or 0)
+        inv_total += float(c.get("inventory_coin_adv_qty") or 0)
+    return {
+        "cum_cash_pnl_usdt": round(cash_total, 4),
+        "cum_inventory_qty": round(inv_total, 8),
+        "cum_cycles": len(completed),
+    }
+
+
+def _grid_trigger_prices(config: Any, reference_price: float) -> Dict[str, Any]:
+    """Tüm sell/buy grid seviyelerinin tetikleme fiyatları."""
+    ref = float(reference_price or 0)
+    if ref <= 0:
+        return {}
+    sell_grids = getattr(config, "sell_grids", []) or []
+    buy_grids = getattr(config, "buy_grids", []) or []
+    sell_triggers = {}
+    for i, g in enumerate(sell_grids):
+        pct = float(g.get("sell_grid_pct") or g.get("trigger_pct") or 0)
+        sell_triggers[f"Y{i+1}"] = round(ref * (1 + pct / 100.0), 8)
+    buy_triggers = {}
+    for i, g in enumerate(buy_grids):
+        pct = float(g.get("buy_grid_pct") or g.get("trigger_pct") or 0)
+        buy_triggers[f"A{i+1}"] = round(ref * (1 - pct / 100.0), 8)
+    return {"sell_trigger_prices": sell_triggers, "buy_trigger_prices": buy_triggers}
+
+
+def _rebalance_ratio(base_bal: float, quote_bal: float, price: float) -> Dict[str, Any]:
+    """Gerçek base/quote oranı ve hedeften sapma."""
+    if price <= 0:
+        return {}
+    base_usd = round(base_bal * price, 2)
+    quote_usd = round(quote_bal, 2)
+    total = base_usd + quote_usd
+    if total <= 0:
+        return {}
+    return {
+        "base_usd": base_usd,
+        "quote_usd": quote_usd,
+        "base_ratio_pct": round(base_usd / total * 100, 2),
+        "quote_ratio_pct": round(quote_usd / total * 100, 2),
+    }
+
+
+def _build_cycle_end_meta(
+    state: Dict[str, Any],
+    config: Any,
+    ledger: Optional[Dict[str, Any]],
+    base_meta: Dict[str, Any],
+) -> Dict[str, Any]:
+    """CYCLE_END meta'sını ek analitik verilerle zenginleştir."""
+    meta = dict(base_meta)
+    # Tur süresi
+    dur = _cycle_duration_sec(state, ledger)
+    if dur is not None:
+        meta["duration_sec"] = dur
+    # Grid dolum oranı (reset'ten önce çağrılmalı)
+    meta.update(_grid_utilization(state, config))
+    # Ortalama alış/satış fiyatları
+    meta.update(_ledger_avg_prices(ledger))
+    # Fiyat aralığı
+    ph = state.get("_cycle_price_high")
+    pl = state.get("_cycle_price_low")
+    if ph is not None:
+        meta["price_high"] = round(float(ph), 8)
+    if pl is not None:
+        meta["price_low"] = round(float(pl), 8)
+    # Kümülatif K/Z (Bu tur dahil edilmeden önceki toplam; tur bittikten sonra state güncellenir)
+    meta.update(_cumulative_pnl(state))
+    return meta
+
+
+def _build_cycle_start_meta(
+    state: Dict[str, Any],
+    config: Any,
+    base_meta: Dict[str, Any],
+    fill_price: float,
+    base_bal: float,
+    quote_bal: float,
+) -> Dict[str, Any]:
+    """CYCLE_START meta'sını ek analitik verilerle zenginleştir."""
+    meta = dict(base_meta)
+    # Grid tetikleme fiyatları
+    meta.update(_grid_trigger_prices(config, fill_price))
+    # Base/Quote rebalance oranı
+    meta.update(_rebalance_ratio(base_bal, quote_bal, fill_price))
+    # Hedef tahsis yüzdeleri
+    meta["target_base_alloc_pct"] = float(getattr(config, "base_alloc_pct", 50) or 50)
+    meta["target_quote_alloc_pct"] = float(getattr(config, "quote_alloc_pct", 50) or 50)
+    # Breakeven tahmini: avg_cost * (1 + sell_fee) / (1 - sell_fee) yaklaşık
+    sell_fee = float(getattr(config, "sell_fee_rate", 0.001) or 0.001)
+    profit_exit_rise = float(getattr(config, "profit_exit_rise_pct", 1.0) or 1.0)
+    estimated_breakeven = round(fill_price * (1 + sell_fee * 2), 6)
+    estimated_profit_target = round(fill_price * (1 + profit_exit_rise / 100.0), 6)
+    meta["estimated_breakeven"] = estimated_breakeven
+    meta["estimated_profit_target"] = estimated_profit_target
+    # Fiyat aralığı sıfırla (yeni tur için)
+    state.pop("_cycle_price_high", None)
+    state.pop("_cycle_price_low", None)
+    state["_cycle_price_high"] = round(fill_price, 10)
+    state["_cycle_price_low"] = round(fill_price, 10)
+    return meta
+
+
+async def _emit_balance_sync_check(
+    adapter: Any,
+    db: Any,
+    bot_id: int,
+    account_id: int,
+    symbol: str,
+    state: Dict[str, Any],
+    price: float,
+) -> None:
+    """
+    Periyodik sanal vs gerçek Binance bakiye doğrulaması.
+    Sanal bakiye ile gerçek Binance bakiyesi arasında ciddi sapma varsa WARN loglar.
+    Her 50 tick'te bir çağrılır (live botlarda).
+    """
+    try:
+        balances = await adapter.get_account_balances()
+    except Exception:
+        return  # Binance erişilemiyorsa sessiz geç
+    base_asset = (symbol or "BTCUSDT").replace("USDT", "").replace("BUSD", "").strip() or "BTC"
+    real_base = float((balances.get(base_asset) or {}).get("free", 0) or 0)
+    real_quote = float((balances.get("USDT") or {}).get("free", 0) or 0)
+    virt_base = float(state.get("base_balance") or 0)
+    virt_quote = float(state.get("quote_balance") or 0)
+    # Sapma eşiği: base %2 veya quote $1
+    base_drift_pct = abs(real_base - virt_base) / max(virt_base, 0.000001) * 100 if virt_base > 0 else 0
+    quote_drift = abs(real_quote - virt_quote)
+    if base_drift_pct > 5.0 or quote_drift > 5.0:
+        severity = "WARN"
+        msg = (
+            f"Bakiye sapması tespit edildi · "
+            f"Sanal {base_asset}: {virt_base:.6f} / Gerçek: {real_base:.6f} "
+            f"(sapma %{base_drift_pct:.1f}) · "
+            f"Sanal USDT: ${virt_quote:.2f} / Gerçek: ${real_quote:.2f} "
+            f"(sapma ${quote_drift:.2f})"
+        )
+    else:
+        severity = "INFO"
+        msg = (
+            f"Bakiye senkronizasyonu ✓ · "
+            f"Sanal {base_asset}: {virt_base:.6f} ≈ Gerçek: {real_base:.6f} · "
+            f"Sanal USDT: ${virt_quote:.2f} ≈ Gerçek: ${real_quote:.2f}"
+        )
+    from app.botengine.state_store import append_event as _ae
+    _ae(db, bot_id, account_id, severity,
+        msg,
+        {
+            f"virtual_{base_asset.lower()}": round(virt_base, 8),
+            f"real_{base_asset.lower()}": round(real_base, 8),
+            "virtual_usdt": round(virt_quote, 2),
+            "real_usdt": round(real_quote, 2),
+            f"drift_{base_asset.lower()}_pct": round(base_drift_pct, 2),
+            "drift_usdt": round(quote_drift, 2),
+            "price": round(float(price or 0), 8),
+            "error_code": "BALANCE_DRIFT_WARN" if severity == "WARN" else "BALANCE_SYNC_OK",
+        },
+    )
+    if severity == "WARN":
+        logger.warning(
+            "BOT_BALANCE_DRIFT bot_id=%s account_id=%s %s_drift=%.2f%% usdt_drift=%.2f",
+            bot_id, account_id, base_asset.lower(), base_drift_pct, quote_drift,
+        )
+
+
+def _maybe_emit_grid_summary(
+    db: Any,
+    bot_id: int,
+    account_id: int,
+    state: Dict[str, Any],
+    config: Any,
+    new_cycle_id: int,
+) -> None:
+    """Her 10 turda bir grid kullanım özeti emitla (GRID_SUMMARY event)."""
+    if new_cycle_id % 10 != 1 or new_cycle_id <= 1:
+        return
+    try:
+        completed = state.get("completed_cycle_dual_pnls") or []
+        # Son 10 tur
+        last10 = completed[-10:] if len(completed) >= 10 else completed
+        cash_turs = sum(1 for c in last10 if c.get("cycle_type") == "CASH")
+        inv_turs = sum(1 for c in last10 if c.get("cycle_type") == "INVENTORY")
+        cash_sum = sum(float(c.get("cash_pnl_usdt") or 0) for c in last10)
+        inv_sum = sum(float(c.get("inventory_coin_adv_qty") or 0) for c in last10)
+        symbol = getattr(config, "symbol", "") or state.get("symbol") or ""
+        base_asset = symbol.replace("USDT", "").replace("BUSD", "") if symbol else "BASE"
+        # Kümülatif toplamlar
+        cum = _cumulative_pnl(state)
+        from app.botengine.state_store import append_event as _ae
+        _ae(
+            db, bot_id, account_id, "GRID_SUMMARY",
+            f"Tur {new_cycle_id - 10}–{new_cycle_id - 1} özet · "
+            f"Nakit: {cash_turs} tur, +${round(cash_sum, 2)} · "
+            f"Envanter: {inv_turs} tur, +{round(inv_sum, 4)} {base_asset}",
+            {
+                "from_cycle": new_cycle_id - 10,
+                "to_cycle": new_cycle_id - 1,
+                "cash_cycles": cash_turs,
+                "inventory_cycles": inv_turs,
+                "period_cash_pnl_usdt": round(cash_sum, 4),
+                f"period_inventory_{base_asset.lower()}_qty": round(inv_sum, 8),
+                "cum_cash_pnl_usdt": cum["cum_cash_pnl_usdt"],
+                f"cum_inventory_{base_asset.lower()}_qty": cum["cum_inventory_qty"],
+                "cum_cycles_total": cum["cum_cycles"],
+            },
+        )
+    except Exception as ex:
+        logger.debug("_maybe_emit_grid_summary bot_id=%s: %s", bot_id, ex)
+
 # Track initial_allocation skip count per (bot_id, action_key) for WARN when > 3
 _initial_alloc_skip_count: Dict[Tuple[int, str], int] = {}
 
@@ -1339,27 +1613,25 @@ async def run_actions(
                     cid_ia = int(state.get("cycle_id") or 1)
                     tur_ts = fill_ts_utc + timedelta(seconds=1)
                     tb_ia = state.get("target_budgets") if isinstance(state.get("target_budgets"), dict) else {}
-                    append_event(
-                        db,
-                        bot_id,
-                        account_id,
-                        "CYCLE_START",
-                        "Tur başladı",
-                        {
-                            "cycle_id": cid_ia,
-                            "reason": "initial_allocation",
-                            "first_tur": True,
-                            "reference_price": round(float(fill_price), 10),
-                            "base_qty": round(float(exec_qty), 10),
-                            "base_balance": round(float(state.get("base_balance") or 0), 10),
-                            "quote_balance": round(float(state.get("quote_balance") or 0), 2),
-                            "equity_usdt": round(float(state.get("cycle_start_equity") or 0), 2),
-                            "target_quote_usdt": tb_ia.get("target_quote_usdt"),
-                            "target_base_usdt": tb_ia.get("target_base_usdt"),
-                            "symbol": symbol,
-                        },
-                        ts=tur_ts,
+                    _base_ia = round(float(state.get("base_balance") or 0), 10)
+                    _quote_ia = round(float(state.get("quote_balance") or 0), 2)
+                    _ia_base_meta = {
+                        "cycle_id": cid_ia,
+                        "reason": "initial_allocation",
+                        "first_tur": True,
+                        "reference_price": round(float(fill_price), 10),
+                        "base_qty": round(float(exec_qty), 10),
+                        "base_balance": _base_ia,
+                        "quote_balance": _quote_ia,
+                        "equity_usdt": round(float(state.get("cycle_start_equity") or 0), 2),
+                        "target_quote_usdt": tb_ia.get("target_quote_usdt"),
+                        "target_base_usdt": tb_ia.get("target_base_usdt"),
+                        "symbol": symbol,
+                    }
+                    _ia_enriched = _build_cycle_start_meta(
+                        state, config, _ia_base_meta, float(fill_price), _base_ia, _quote_ia
                     )
+                    append_event(db, bot_id, account_id, "CYCLE_START", "Tur başladı", _ia_enriched, ts=tur_ts)
                 # Cycle reset MUST run before any load_state: in-memory state has _cycle_complete and updated balances.
                 ref_price_for_ledger = state.get("reference_price")  # referansı reset'ten önce al (gerçekleşme % doğru kalsın)
                 if state.get("_cycle_complete") or reason in ("trail_reentry_buy", "trail_profit_sell"):
@@ -1532,7 +1804,9 @@ async def run_actions(
                         try:
                             cycle_end_ts = fill_ts_utc + timedelta(milliseconds=100)
                             cycle_start_ts = fill_ts_utc + timedelta(milliseconds=200)
-                            append_event(db, bot_id, account_id, "CYCLE_END", "Tur bitti", meta, ts=cycle_end_ts)
+                            # CYCLE_END — zenginleştirilmiş meta (grid dolum, süre, fiyat aralığı, kümülatif K/Z)
+                            enriched_end_meta = _build_cycle_end_meta(state, config, ledger, meta)
+                            append_event(db, bot_id, account_id, "CYCLE_END", "Tur bitti", enriched_end_meta, ts=cycle_end_ts)
                             logger.info(
                                 "BOT_CYCLE_END bot_id=%s cycle_id=%s pnl_usdt_net=%.4f cycle_type=%s base_delta=%s matched_qty=%s fees_usdt=%.4f pnl_mode=%s",
                                 bot_id, cycle_id_for_trade, pnl, cycle_type, base_delta, matched_qty, fees, pnl_mode,
@@ -1551,7 +1825,8 @@ async def run_actions(
                                 "target_base_usdt": target_base_cs,
                                 "ts": datetime.now(timezone.utc).isoformat(),
                             }
-                            append_event(db, bot_id, account_id, "CYCLE_START", "Tur başladı", {
+                            # CYCLE_START base meta
+                            _cs_base_meta = {
                                 "cycle_id": new_cid,
                                 "reference_price": round(float(fill_price), 10),
                                 "base_qty": round(float(base_bal_cs), 10),
@@ -1563,7 +1838,14 @@ async def run_actions(
                                 "symbol": symbol,
                                 "carry_over": True,
                                 "prev_close_reason": close_reason,
-                            }, ts=cycle_start_ts)
+                            }
+                            # CYCLE_START — zenginleştirilmiş meta (breakeven, grid fiyatları, rebalance oranı)
+                            enriched_start_meta = _build_cycle_start_meta(
+                                state, config, _cs_base_meta, fill_price, base_bal_cs, quote_bal_cs
+                            )
+                            append_event(db, bot_id, account_id, "CYCLE_START", "Tur başladı", enriched_start_meta, ts=cycle_start_ts)
+                            # Grid özet — her 10 turda bir
+                            _maybe_emit_grid_summary(db, bot_id, account_id, state, config, new_cid)
                             for row in reversed(state.get("cycle_open_trades") or []):
                                 if not isinstance(row, dict):
                                     continue
