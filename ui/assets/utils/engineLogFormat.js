@@ -35,11 +35,14 @@
         LOCK_BUSY: 'Meşgul',
         LOCK_LEASE_EXPIRED: 'Kilit',
         INFO: 'Bilgi',
+        WARN: 'Bilgi',
         BOT_ACTION: 'Aksiyon',
         CYCLE_END: 'Tur',
         CYCLE_START: 'Tur',
         HEALTH_WARN: 'Uyarı',
-        HEALTH_CRITICAL: 'Kritik'
+        HEALTH_CRITICAL: 'Kritik',
+        GRID_SUMMARY: 'Özet',
+        ORDER_UPDATE: 'Emir'
     };
 
     var META_SKIP_KEYS = {
@@ -58,7 +61,19 @@
         source: 1, health_code: 1, healthCode: 1,
         slip_pct: 1, trigger_price: 1, action_key: 1, account_id: 1, bot_id: 1,
         pnl_primary_mode: 1, pnl_mode: 1, status: 1, trades_match_count: 1,
-        realized_pnl_cycle_net: 1, fee_totals_quote: 1, inventory_fees_usdt: 1
+        realized_pnl_cycle_net: 1, fee_totals_quote: 1, inventory_fees_usdt: 1,
+        // Zenginleştirilmiş CYCLE_END alanları
+        duration_sec: 1, sell_grids_fired: 1, sell_grids_total: 1,
+        buy_grids_fired: 1, buy_grids_total: 1, price_high: 1, price_low: 1,
+        cum_cash_pnl_usdt: 1, cum_inventory_qty: 1, cum_cycles: 1,
+        avg_buy_price: 1, avg_sell_price: 1,
+        // Zenginleştirilmiş CYCLE_START alanları
+        sell_trigger_prices: 1, buy_trigger_prices: 1, estimated_breakeven: 1,
+        estimated_profit_target: 1, base_usd: 1, quote_usd: 1,
+        base_ratio_pct: 1, quote_ratio_pct: 1,
+        target_base_alloc_pct: 1, target_quote_alloc_pct: 1,
+        // Bakiye senkronizasyon alanları
+        drift_usdt: 1, virtual_usdt: 1, real_usdt: 1, price: 1
     };
 
     function num(v) {
@@ -495,6 +510,23 @@
         return null;
     }
 
+    function fmtDuration(sec) {
+        if (sec == null || isNaN(sec) || sec <= 0) return null;
+        var s = Math.round(sec);
+        if (s < 60) return s + 'sn';
+        var m = Math.floor(s / 60);
+        var rs = s % 60;
+        if (m < 60) return m + 'dk' + (rs > 0 ? ' ' + rs + 'sn' : '');
+        var h = Math.floor(m / 60);
+        var rm = m % 60;
+        return h + 's' + (rm > 0 ? ' ' + rm + 'dk' : '');
+    }
+
+    function fmtGridUtil(fired, total) {
+        if (fired == null || total == null) return null;
+        return fired + '/' + total;
+    }
+
     function formatCycleEnd(meta) {
         meta = meta || {};
         var cycleNum = meta.cycle_id != null ? meta.cycle_id : '?';
@@ -506,6 +538,45 @@
         var fees = num(meta.fees_usdt);
         if (fees == null) fees = num(isInventory ? meta.inventory_fees_usdt : meta.cash_fees_usdt);
         if (fees != null && fees > 0) parts.push('komisyon ' + fmtUsd(fees, false));
+
+        // --- Zenginleştirilmiş alanlar ---
+        // Tur süresi
+        var dur = fmtDuration(num(meta.duration_sec));
+        if (dur) parts.push('süre ' + dur);
+
+        // Grid dolum oranı
+        var sellFired = num(meta.sell_grids_fired), sellTotal = num(meta.sell_grids_total);
+        var buyFired  = num(meta.buy_grids_fired),  buyTotal  = num(meta.buy_grids_total);
+        var gridParts = [];
+        var sellUtil = fmtGridUtil(sellFired, sellTotal);
+        var buyUtil  = fmtGridUtil(buyFired, buyTotal);
+        if (sellUtil) gridParts.push(sellUtil + ' satış');
+        if (buyUtil)  gridParts.push(buyUtil  + ' alış');
+        if (gridParts.length) parts.push('grid: ' + gridParts.join(' · '));
+
+        // Fiyat aralığı
+        var ph = num(meta.price_high), pl = num(meta.price_low);
+        if (ph != null && pl != null && ph > 0 && pl > 0) {
+            parts.push('fiyat: $' + pl.toFixed(4) + '–$' + ph.toFixed(4));
+        }
+
+        // Kümülatif K/Z
+        var cumCash = num(meta.cum_cash_pnl_usdt);
+        var cumInv  = num(meta.cum_inventory_qty);
+        var cumCycles = num(meta.cum_cycles);
+        var cumParts = [];
+        if (cumCash != null && Math.abs(cumCash) >= 0.01)
+            cumParts.push((cumCash >= 0 ? '+' : '') + fmtUsd(cumCash, false) + ' nakit');
+        if (cumInv != null && Math.abs(cumInv) >= 0.0001) {
+            var coin = coinFromSymbol(meta.symbol);
+            cumParts.push((cumInv >= 0 ? '+' : '') + fmtQty(cumInv) + (coin ? ' ' + coin : '') + ' envanter');
+        }
+        if (cumParts.length) {
+            var cumLabel = 'kümülatif: ' + cumParts.join(' · ');
+            if (cumCycles != null) cumLabel += ' (' + cumCycles + ' tur)';
+            parts.push(cumLabel);
+        }
+
         return joinParts(parts);
     }
 
@@ -933,6 +1004,45 @@
         }
         if (quoteBal != null && quoteBal >= 0.01) parts.push('Quote ' + fmtUsd(quoteBal, false));
         if (eq != null && eq > 0) parts.push('Bakiye ' + fmtUsd(eq, false));
+
+        // --- Zenginleştirilmiş alanlar ---
+        // Rebalance oranı (hedeften sapma göster)
+        var baseRatio = num(meta.base_ratio_pct), quoteRatio = num(meta.quote_ratio_pct);
+        var targetBase = num(meta.target_base_alloc_pct), targetQuote = num(meta.target_quote_alloc_pct);
+        if (baseRatio != null && quoteRatio != null) {
+            var ratioParts = ['Base %' + baseRatio.toFixed(1), 'Quote %' + quoteRatio.toFixed(1)];
+            if (targetBase != null && Math.abs(baseRatio - targetBase) > 2.0) {
+                ratioParts.push('⚠ hedef %' + targetBase);
+            }
+            parts.push(ratioParts.join(' / '));
+        }
+
+        // Başabaş tahmini
+        var breakeven = num(meta.estimated_breakeven);
+        if (breakeven != null && breakeven > 0) {
+            parts.push('başabaş ~$' + breakeven.toFixed(4));
+        }
+
+        // Grid tetikleme fiyatları
+        var sellTriggers = meta.sell_trigger_prices;
+        var buyTriggers  = meta.buy_trigger_prices;
+        var triggerParts = [];
+        if (buyTriggers && typeof buyTriggers === 'object') {
+            var bkeys = Object.keys(buyTriggers).sort();
+            bkeys.forEach(function(k) {
+                var v = num(buyTriggers[k]);
+                if (v != null) triggerParts.push(k + ': $' + v.toFixed(4));
+            });
+        }
+        if (sellTriggers && typeof sellTriggers === 'object') {
+            var skeys = Object.keys(sellTriggers).sort();
+            skeys.forEach(function(k) {
+                var v = num(sellTriggers[k]);
+                if (v != null) triggerParts.push(k + ': $' + v.toFixed(4));
+            });
+        }
+        if (triggerParts.length) parts.push('grid tetik: ' + triggerParts.join(' · '));
+
         return joinParts(parts);
     }
 
@@ -1443,6 +1553,24 @@
             typeLabel = 'Açılış';
         } else if (ty === 'CYCLE_SPACER' || meta.tur_spacer === true) {
             return { hidden: true };
+        } else if (ty === 'GRID_SUMMARY') {
+            // Her 10 turda bir grid kullanım özeti
+            message = raw || '—';
+            typeLabel = 'Özet';
+            severity = 'info';
+        } else if (ty === 'INFO' && meta.error_code === 'BALANCE_SYNC_OK') {
+            // Periyodik bakiye senkronizasyon başarılı — sessiz
+            return { hidden: true };
+        } else if (ty === 'WARN' && meta.error_code === 'BALANCE_DRIFT_WARN') {
+            // Bakiye sapması uyarısı
+            severity = 'warn';
+            typeLabel = 'Uyarı';
+            message = raw || 'Bakiye sapması tespit edildi';
+        } else if (ty === 'WARN') {
+            // Genel WARN (BALANCE_SYNC_OK hariç)
+            severity = 'warn';
+            typeLabel = 'Bilgi';
+            message = raw || '—';
         } else if (ty === 'HEALTH_CRITICAL') {
             if (meta.health_resolved || meta.recovery_report) {
                 severity = 'success';
