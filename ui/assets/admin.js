@@ -727,9 +727,11 @@ function renderTiles(accounts, container = null) {
                 </div>
                 
                 <div class="acct-foot">
-                    ${acc.user_last_login_at || acc.user_last_logout_at ? `
+                    ${acc.user_last_activity_at || acc.user_last_login_at || acc.user_last_logout_at ? `
                         <div style="font-size: 0.75rem; color: var(--ds-text-secondary);">
-                            ${acc.user_last_login_at ? `<div>Giriş: ${formatDateTime(acc.user_last_login_at)}</div>` : ''}
+                            ${acc.user_last_activity_at
+                                ? `<div title="Son aktivite (60s ping)">Aktif: ${formatDateTime(acc.user_last_activity_at)}</div>`
+                                : (acc.user_last_login_at ? `<div>Giriş: ${formatDateTime(acc.user_last_login_at)}</div>` : '')}
                             ${acc.user_last_logout_at ? `<div>Çıkış: ${formatDateTime(acc.user_last_logout_at)}</div>` : ''}
                         </div>
                     ` : ''}
@@ -857,7 +859,12 @@ function openAccountSettingsModal(acc) {
     if (!modal) return;
     title && (title.textContent = "Hesap Ayarları – " + (acc.name || "Hesap"));
     idEl && (idEl.textContent = (acc.account_code && String(acc.account_code).trim()) ? ("ID: " + String(acc.account_code)) : "ID: —");
-    loginAtEl && (loginAtEl.textContent = acc.user_last_login_at ? formatDateTime(acc.user_last_login_at) : "—");
+    if (loginAtEl) {
+        // last_activity_at (60s ping) > last_login_at ise daha güncel
+        var bestLoginTs = acc.user_last_activity_at || acc.user_last_login_at;
+        var bestLabel = acc.user_last_activity_at ? formatDateTime(acc.user_last_activity_at) + ' (aktivite)' : (acc.user_last_login_at ? formatDateTime(acc.user_last_login_at) + ' (giriş)' : '—');
+        loginAtEl.textContent = bestLabel;
+    }
     loginIpEl && (loginIpEl.textContent = (acc.user_last_login_ip && String(acc.user_last_login_ip).trim()) ? acc.user_last_login_ip : "—");
     var phoneDisplay = document.getElementById("accountSettingsPhoneDisplay");
     if (phoneDisplay) phoneDisplay.textContent = (acc.user_phone && String(acc.user_phone).trim()) ? acc.user_phone : "—";
@@ -1645,8 +1652,6 @@ function renderServerStatsData(data) {
     }
     var cpuEl = document.getElementById('serverCpuPercent');
     if (cpuEl) cpuEl.textContent = data.cpu_percent != null ? String(data.cpu_percent) : '—';
-    var linkEl = document.getElementById('serverNetworkLink');
-    if (linkEl) linkEl.textContent = data.network_link_mbps != null ? String(data.network_link_mbps) : '—';
     var ipEl = document.getElementById('serverIp');
     if (ipEl) ipEl.textContent = data.server_ip && String(data.server_ip).trim() ? String(data.server_ip).trim() : '—';
     var netDownEl = document.getElementById('serverNetworkDown');
@@ -2352,10 +2357,12 @@ async function loadServerStats() {
         }
         var cpuEl = document.getElementById('serverCpuPercent');
         if (cpuEl) cpuEl.textContent = data.cpu_percent != null ? String(data.cpu_percent) : '—';
-        var linkEl = document.getElementById('serverNetworkLink');
-        if (linkEl) linkEl.textContent = data.network_link_mbps != null ? String(data.network_link_mbps) : '—';
         var ipEl = document.getElementById('serverIp');
         if (ipEl) ipEl.textContent = data.server_ip && String(data.server_ip).trim() ? String(data.server_ip).trim() : '—';
+        var netDownEl2 = document.getElementById('serverNetworkDown');
+        var netUpEl2 = document.getElementById('serverNetworkUp');
+        if (netDownEl2) netDownEl2.textContent = data.network_mbps_down != null ? Number(data.network_mbps_down).toFixed(2) : '—';
+        if (netUpEl2) netUpEl2.textContent = data.network_mbps_up != null ? Number(data.network_mbps_up).toFixed(2) : '—';
         var noStats = data.psutil_available === false || (data.memory_mb == null && data.cpu_percent == null);
         if (msgEl) msgEl.textContent = noStats ? 'Bellek, CPU için sunucuda psutil gerekir: pip install psutil' : '';
     } catch (e) {

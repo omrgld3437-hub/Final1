@@ -1458,6 +1458,28 @@
         var isConnected = /USER_STREAM_CONNECTED/i.test(_msg);
         var isKeyExpired = /USER_STREAM_KEY_EXPIRED|listenKey/i.test(_msg);
         var isReconnect = /USER_STREAM_RECONNECT/i.test(_msg);
+        var isPersistentFailure = /USER_STREAM_PERSISTENT_FAILURE/i.test(_msg);
+        var isCreate410 = /USER_STREAM_CREATE_410/i.test(_msg);
+
+        if (isCreate410) {
+          return {
+            konu: 'Binance user stream — listenKey oluşturulamıyor (410)',
+            sebep: 'Binance, API anahtarı için user data stream listenKey yaratmayı reddetti (POST 410). Teknik detayda Binance hata kodu ve mesajı yer alıyor.',
+            etki: 'User stream devre dışı; ORDER_TRADE_UPDATE eventleri alınamaz. Bot işlemleri REST polling ile devam eder.',
+            oneri: '1) Binance → API Yönetimi → ilgili API key → "Enable Reading" ve "Enable Spot & Margin Trading" izinlerini kontrol edin. 2) Sunucu IP\'si API key beyaz listesinde yer alıyor mu? 3) API key süresi dolmuşsa yenileyin. Düzeltme sonrası stream otomatik yeniden bağlanır.'
+          };
+        }
+
+        if (isPersistentFailure) {
+          var consecutiveMatch = _msg.match(/consecutive=(\d+)/);
+          var consecutive = consecutiveMatch ? consecutiveMatch[1] : '3+';
+          return {
+            konu: 'Binance veri akışı kalıcı hata — müdahale gerekli',
+            sebep: 'User data stream ' + consecutive + ' ardışık başarısız bağlantı sonrası durdu (410 Gone). Yeni listenKey oluşturulurken Binance hata döndürüyor; bu API anahtarı izin veya kısıtlama sorununa işaret eder.',
+            etki: 'Bağlantı 5 dakikada bir yeniden deneniyor. Bu süre zarfında ORDER_TRADE_UPDATE eventleri alınamaz; bot REST reconcile ile telafi eder.',
+            oneri: 'Binance → API Yönetimi sayfasında API anahtarının "Enable Reading" iznini ve IP beyaz listesini doğrulayın. Anahtar süresi dolduysa yenileyin. Sorun çözülünce stream otomatik bağlanır.'
+          };
+        }
 
         if (isConnected) {
           return {

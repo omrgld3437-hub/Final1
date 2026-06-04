@@ -315,6 +315,15 @@ def _account_wallet_stale_alert(db: Optional[Session], account_id: int) -> Optio
             age_s = max(0.0, (now - ts).total_seconds())
             ts_iso = ts.isoformat().replace("+00:00", "Z")
         threshold_s = _wallet_snapshot_warn_age_sec()
+        # Stream kopukken wallet snapshot güncellenemez; eşiği 2x'e çıkar
+        # (gecici stream kopukluğu sahte uyarı üretmesin).
+        try:
+            from app.botengine.user_stream import stream_down_since
+            down_ts = stream_down_since(int(account_id))
+            if down_ts is not None:
+                threshold_s = max(threshold_s, threshold_s * 2)
+        except Exception:
+            pass
         if age_s is not None and age_s < threshold_s:
             return None
         tmpl = _HEALTH_MESSAGES["WALLET_SNAPSHOT_STALE"]

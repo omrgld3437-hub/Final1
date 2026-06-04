@@ -982,18 +982,17 @@ function applySnapshotToUI(data) {
     }
     if (data.pnl && typeof data.pnl === 'object' && !data.pnl._error) {
         var spotUsd = (data.wallet && typeof data.wallet.total_usd === 'number' && data.wallet.total_usd >= 0) ? data.wallet.total_usd : (State.summary && State.summary.account && typeof State.summary.account.spot_balance_usd === 'number' ? State.summary.account.spot_balance_usd : (typeof (assetsState && assetsState.wallet && assetsState.wallet.total_usd) === 'number' ? assetsState.wallet.total_usd : 0));
-        if (data.bots && Array.isArray(data.bots) && data.bots.length > 0) {
+        if (data.bots && Array.isArray(data.bots)) {
             State.bots = hydrateBotsWithMetricsCache(data.bots);
             resetFinanceBotsLiveCache(State.bots);
         }
-        const merged = { ...data.pnl, binance_balance_usd: spotUsd, spot_balance_usd: spotUsd, free_usd: data.wallet?.free_usd ?? 0, locked_usd: data.wallet?.locked_usd ?? 0, available_usd: data.wallet?.available_usd ?? 0, bot_locked_usd: data.wallet?.bot_locked_usd ?? 0, account: data.account || {}, bots: (data.bots && data.bots.length > 0) ? data.bots : (State.bots || []), bot_summary: data.pnl.bot_summary || [] };
+        const merged = { ...data.pnl, binance_balance_usd: spotUsd, spot_balance_usd: spotUsd, free_usd: data.wallet?.free_usd ?? 0, locked_usd: data.wallet?.locked_usd ?? 0, available_usd: data.wallet?.available_usd ?? 0, bot_locked_usd: data.wallet?.bot_locked_usd ?? 0, account: data.account || {}, bots: Array.isArray(data.bots) ? data.bots : (State.bots || []), bot_summary: data.pnl.bot_summary || [] };
         if (typeof updateFinanceKPIs === 'function') updateFinanceKPIs(merged);
     }
     if (data.bots && Array.isArray(data.bots) && data.account) {
         var incomingBots = data.bots;
-        if (!(incomingBots.length === 0 && State.bots && State.bots.length > 0)) {
-            State.bots = hydrateBotsWithMetricsCache(incomingBots);
-            resetFinanceBotsLiveCache(State.bots);
+        State.bots = hydrateBotsWithMetricsCache(incomingBots);
+        resetFinanceBotsLiveCache(State.bots);
             State.isTestAccount = !!(data.account.is_test_account);
             const summaryShape = {
                 account: data.account,
@@ -1016,10 +1015,10 @@ function applySnapshotToUI(data) {
                     if (snapIds === _financeBotsIdsSignature) {
                         patchFinanceBotsMetrics(State.bots);
                     } else {
-                        renderBotsList(State.bots);
+                        renderBotsList(State.bots, { clearWhenEmpty: true });
                     }
                 } else {
-                    renderBotsList(State.bots);
+                    renderBotsList(State.bots, { clearWhenEmpty: true });
                 }
             }
             if (typeof updateKPIs === 'function') updateKPIs(summaryShape);
@@ -1027,7 +1026,6 @@ function applySnapshotToUI(data) {
             if (typeof updateAccountName === 'function') updateAccountName(data.account.name || "Hesap Dashboard");
             if (typeof setAppbarAccountHolderName === 'function') setAppbarAccountHolderName(summaryShape);
             hideError();
-        }
     }
     if (State.accountId && typeof loadBotPerformance === 'function') {
         loadBotPerformance(State.botPerformancePeriod || 'all');

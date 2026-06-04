@@ -1377,6 +1377,7 @@
         var lastPriceForBlink = null;
         var lastKnownCycleId = null;
         var _botDetailHydrated = false;
+        var _botDetailMissing = false;
         var BOT_DETAIL_UI_CACHE_PREFIX = 'bot_detail_ui_v2_';
         var BOT_DETAIL_LIVE_POLL_MS = 3000;
         var BOT_DETAIL_HEALTH_POLL_MS = 10000;
@@ -1564,6 +1565,41 @@
             } catch (e) {
                 return false;
             }
+        }
+        function clearBotDetailPersistentCache(id) {
+            if (!id) return;
+            try {
+                sessionStorage.removeItem(BOT_DETAIL_UI_CACHE_PREFIX + id);
+                localStorage.removeItem(BOT_DETAIL_UI_CACHE_PREFIX + id);
+                sessionStorage.removeItem('bot_detail_ui_v1_' + id);
+                localStorage.removeItem('bot_detail_ui_v1_' + id);
+                sessionStorage.removeItem(botLogoStorageKey(id));
+            } catch (e) {}
+        }
+        function isBotDetailNotFoundError(e) {
+            var status = Number((e && e.status) || 0);
+            if (status === 404) return true;
+            var msg = String((e && (e.message || e.detail)) || '').toLowerCase();
+            return msg.indexOf('bot not found') >= 0
+                || msg.indexOf('bot bulunamad') >= 0
+                || msg.indexOf('not_found') >= 0;
+        }
+        function showBotDetailNotFound() {
+            _botDetailMissing = true;
+            stopEngineLogLive();
+            if (window.intervalRegistry) window.intervalRegistry.stopByOwner('bot-detail');
+            clearBotDetailPersistentCache(botId);
+            _botDetailHydrated = false;
+            lastBotDetail = { symbol: '', baseBalance: 0, quoteAsset: 'USDT' };
+            if (loadingEl) loadingEl.style.display = 'none';
+            if (statePanel) statePanel.style.display = 'none';
+            if (botTopStrip) botTopStrip.style.display = 'none';
+            if (gridPointsPanel) gridPointsPanel.style.display = 'none';
+            if (profitPointsPanel) profitPointsPanel.style.display = 'none';
+            if (tradesPanel) tradesPanel.style.display = 'none';
+            if (perfPanel) perfPanel.style.display = 'none';
+            if (engineLogPanel) engineLogPanel.style.display = 'none';
+            setError('Bot bulunamadı veya daha önce sonlandırıldı. Dashboard üzerinden mevcut botları kontrol edin.');
         }
         function wrapHasStripSvg() {
             var wrap = document.getElementById('botStripMiniChartSvg');
@@ -1983,12 +2019,35 @@
         function formatDurationSec(sec) {
             if (sec == null || isNaN(sec) || sec < 0) return '—';
             sec = Math.floor(Number(sec));
-            var h = Math.floor(sec / 3600);
-            var m = Math.floor((sec % 3600) / 60);
-            var s = sec % 60;
-            if (h > 0) return h + ' sa ' + m + ' dk';
-            if (m > 0) return m + ' dk ' + s + ' sn';
-            return s + ' sn';
+            var totalMin = Math.floor(sec / 60);
+            var totalH   = Math.floor(sec / 3600);
+            var totalD   = Math.floor(sec / 86400);
+            var totalMo  = Math.floor(totalD / 30);   // yaklaşık ay
+            var totalY   = Math.floor(totalD / 365);  // yaklaşık yıl
+
+            if (totalY >= 1) {
+                // 1 yıl ve üzeri: ay:gün
+                var remD = totalD - totalY * 365;
+                var mo   = Math.floor(remD / 30);
+                return totalY + ' yıl ' + mo + ' ay';
+            }
+            if (totalMo >= 1) {
+                // 1 ay – 1 yıl: ay:gün
+                var remD2 = totalD - totalMo * 30;
+                return totalMo + ' ay ' + remD2 + ' gün';
+            }
+            if (totalD >= 1) {
+                // 24 saat – 1 ay: gün:saat
+                var remH = totalH - totalD * 24;
+                return totalD + ' gün ' + remH + ' sa';
+            }
+            if (totalH >= 1) {
+                // 1 saat – 24 saat: saat:dakika
+                var remM = totalMin - totalH * 60;
+                return totalH + ' sa ' + remM + ' dk';
+            }
+            if (totalMin >= 1) return totalMin + ' dk ' + (sec % 60) + ' sn';
+            return sec + ' sn';
         }
         /** Tur detayı: varsayılan = açık tur (state.cycle_id); önbellekte kalmış eski tur seçilmez. */
         function resolveDefaultTradesCycleId(currentCycleFromState) {
@@ -2877,7 +2936,7 @@
         }
 
         function fetchBotHealth() {
-            if (!botId || !window.apiClient || document.hidden) return Promise.resolve();
+            if (_botDetailMissing || !botId || !window.apiClient || document.hidden) return Promise.resolve();
             var q = accountCode ? '?account_code=' + encodeURIComponent(accountCode) : '?account_id=' + (accountId || '');
             return window.apiClient.get('/api/bots-engine/' + botId + '/health' + q).then(function(res) {
                 var wasServerDown = window._serverUnreachable === true;
@@ -5194,6 +5253,10 @@
 
         function patchDualPerfMetricsInPlace(res) {
             if (!perfMetrics || !res || !res.dual_perf || !res.dual_perf.aggregates) return false;
+            var dp0 = res.dual_perf;
+            var cashClosed0 = dp0.cash_closed_cycles != null ? Number(dp0.cash_closed_cycles) : 0;
+            var invClosed0 = dp0.inventory_closed_cycles != null ? Number(dp0.inventory_closed_cycles) : 0;
+            if (cashClosed0 === 0 && invClosed0 === 0) return false; // renderDualPerfMetrics boş durum göstersin
             var dp = res.dual_perf;
             var ag = dp.aggregates;
             var baseAsset = perfBaseAssetLabel();
@@ -5242,6 +5305,15 @@
                 var invPct = dp.inventory_pnl_pct != null ? Number(dp.inventory_pnl_pct) : null;
                 var invFees = dp.inventory_fees_usdt != null ? Number(dp.inventory_fees_usdt) : 0;
                 var invClosed = dp.inventory_closed_cycles != null ? Number(dp.inventory_closed_cycles) : 0;
+
+                // Hiç tamamlanan tur yoksa (yeni başlatılmış / dönem içi sıfır aktivite) boş durum göster
+                if (cashClosed === 0 && invClosed === 0) {
+                    perfMetrics.innerHTML =
+                        '<p class="muted" style="font-size:0.85rem;padding:0.75rem 0;text-align:center;">' +
+                        'Bu dönemde henüz tamamlanan tur yok.</p>';
+                    _lastPerfRenderFp = perfMetricsFingerprint(res);
+                    return;
+                }
 
                 var cashColor = cashPnl >= 0 ? '#0ecb81' : '#f6465d';
                 var cashSign = cashPnl >= 0 ? '+' : '';
@@ -5556,6 +5628,7 @@
 
         function loadDetail() {
             if (!botId || !window.apiClient) return;
+            _botDetailMissing = false;
             var urlSymBoot = getBotDetailUrlSymbol();
             if (urlSymBoot) syncBotStripSymbol(urlSymBoot, { forceChart: false });
             var restoredFromCache = restoreBotDetailUiCache(botId);
@@ -5611,6 +5684,14 @@
                     return res;
                 })
                 .catch(function (e) {
+                    if (isBotDetailNotFoundError(e)) {
+                        showBotDetailNotFound();
+                        if (window.TtScrollRestore) {
+                            window.TtScrollRestore.scheduleFinalize();
+                            window.TtScrollRestore.ensureRestored();
+                        }
+                        return;
+                    }
                     setError('Bot yüklenemedi: ' + (e.message || 'Hata'));
                     if (window.TtScrollRestore) {
                         window.TtScrollRestore.scheduleFinalize();
@@ -5741,7 +5822,7 @@
             }
         }
         function fetchLive() {
-            if (document.hidden || !botId || !window.apiClient) return;
+            if (_botDetailMissing || document.hidden || !botId || !window.apiClient) return;
             var q = '?account_id=' + (accountId || '');
             window.apiClient.get('/api/bots-engine/' + botId + '/live' + q).then(function (data) {
                 clearServerUnreachable();
@@ -5749,7 +5830,11 @@
                 _botLivePollSeen = true;
                 data._liveSnapshot = true;
                 applyLive(data);
-            }).catch(function() {
+            }).catch(function(e) {
+                if (isBotDetailNotFoundError(e)) {
+                    showBotDetailNotFound();
+                    return;
+                }
                 window._botLiveFailStreak = (window._botLiveFailStreak || 0) + 1;
                 if (isBotRunning() && window._botLiveFailStreak >= 3) reportServerUnreachable();
             });
@@ -5784,7 +5869,7 @@
         }
 
         function refreshAll() {
-            if (!botId || !window.apiClient) return;
+            if (_botDetailMissing || !botId || !window.apiClient) return;
             window.apiClient.get('/api/bots-engine/' + botId + '?account_id=' + (accountId || ''))
                 .then(function (res) {
                     if (res && res.bot_id != null && String(res.bot_id) !== String(botId)) return;
@@ -5795,7 +5880,9 @@
                         showDetail(res);
                     }
                 })
-                .catch(function () {});
+                .catch(function (e) {
+                    if (isBotDetailNotFoundError(e)) showBotDetailNotFound();
+                });
         }
 
         function exportEngineLogArchive() {
@@ -6400,14 +6487,14 @@
             }
         });
         window.addEventListener('pagehide', function () {
-            if (_botDetailHydrated && botId) persistBotDetailUiCache(botId);
+            if (!_botDetailMissing && _botDetailHydrated && botId) persistBotDetailUiCache(botId);
         });
         window.addEventListener('visibilitychange', function () {
             if (!document.hidden && botId) {
                 if (document.body.classList.contains('modal-scroll-locked')) {
                     unlockBodyScroll();
                 }
-                if (window.intervalRegistry) {
+                if (!_botDetailMissing && window.intervalRegistry) {
                     window.intervalRegistry.start('bot-detail-live', fetchLive, BOT_DETAIL_LIVE_POLL_MS, 'bot-detail');
                     syncStateHeroDurationPoll((lastBotDetail.status || '').toLowerCase() === 'running' && !!lastBotStartedAt);
                 }

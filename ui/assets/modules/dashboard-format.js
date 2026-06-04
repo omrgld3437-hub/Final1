@@ -391,7 +391,7 @@ function _perfPeriodPrefix(period) {
 }
 
 function _perfPeriodPnlLabel(period) {
-    return _perfPeriodPrefix(period) + ' K/Z (komisyon hariç)';
+    return _perfPeriodPrefix(period) + ' Kapanan Tur K/Z';
 }
 
 function _perfPeriodFeesLabel(period) {

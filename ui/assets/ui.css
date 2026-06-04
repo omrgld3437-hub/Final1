@@ -372,13 +372,15 @@
 }
 
 .btn-secondary {
-    background-color: var(--bg-tertiary);
-    color: var(--text-primary);
-    border: 1px solid var(--border-color);
+    background-color: var(--ds-bg-tertiary, var(--bg-tertiary));
+    color: var(--ds-text-primary, var(--text-primary));
+    border: 1px solid var(--ds-border, var(--border-color));
+    font-weight: 500;
+    cursor: pointer;
+    transition: opacity 0.15s;
 }
 
 .btn-secondary:hover {
-    background-color: var(--bg-tertiary);
     opacity: 0.8;
 }
 
@@ -492,6 +494,18 @@
 
 .btn-warning:hover {
     background-color: var(--accent-hover);
+}
+
+.btn-danger {
+    background-color: var(--ds-danger, #f6465d);
+    color: #fff;
+    border: none;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity 0.15s;
+}
+.btn-danger:hover {
+    opacity: 0.88;
 }
 
 .empty-state {

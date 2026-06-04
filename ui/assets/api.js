@@ -6,6 +6,7 @@
  */
 
 const API_BASE = "/api";
+const nativeFetch = window.fetch ? window.fetch.bind(window) : null;
 
 // Simple in-memory cache
 const cache = new Map();
@@ -25,7 +26,8 @@ async function apiFetch(endpoint, options = {}) {
     }
     
     try {
-        const response = await fetch(url, {
+        if (!nativeFetch) throw new Error("Tarayıcı fetch desteği bulunamadı");
+        const response = await nativeFetch(url, {
             ...options,
             headers: {
                 'Content-Type': 'application/json',
@@ -48,6 +50,9 @@ async function apiFetch(endpoint, options = {}) {
             });
         }
         
+        if (options.method && options.method !== 'GET') {
+            clearCache();
+        }
         return data;
     } catch (error) {
         console.error(`API Error [${endpoint}]:`, error);
@@ -136,4 +141,3 @@ window.API_BASE = API_BASE; // Export for ticker.js and other scripts
 window.API.apiDelete = apiDelete;
 window.apiFetch = apiFetch;
 window.clearCache = clearCache;
-

@@ -420,6 +420,7 @@ async def get_admin_accounts(
 
             user_login_info = None
             user_logout_info = None
+            user_activity_info = None
             user_username = None
             user_is_suspended = None
             user_id = None
@@ -446,6 +447,9 @@ async def get_admin_accounts(
                             user_login_info = user.last_login_at.isoformat() if hasattr(user.last_login_at, 'isoformat') else str(user.last_login_at)
                         if user.last_logout_at:
                             user_logout_info = user.last_logout_at.isoformat() if hasattr(user.last_logout_at, 'isoformat') else str(user.last_logout_at)
+                        # last_activity_at: her 60s ping ile güncellenir — giriş saatinden daha güncel
+                        if getattr(user, 'last_activity_at', None):
+                            user_activity_info = user.last_activity_at.isoformat() if hasattr(user.last_activity_at, 'isoformat') else str(user.last_activity_at)
                         user_is_suspended = user.is_suspended
                         user_id = user.id
 
@@ -476,6 +480,7 @@ async def get_admin_accounts(
                 "last_update_ts": datetime.utcnow().isoformat() + "Z",
                 "user_last_login_at": user_login_info,
                 "user_last_logout_at": user_logout_info,
+                "user_last_activity_at": user_activity_info,
                 "user_username": user_username,
                 "user_is_suspended": user_is_suspended,
                 "user_id": user_id,

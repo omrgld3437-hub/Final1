@@ -461,12 +461,15 @@ function bindCreateBotModal() {
         });
     }
     
-    // Grid rows builders
+    // Grid rows builders (max 15 her yön)
     document.getElementById("fUpCount")?.addEventListener("input", (e) => {
-        buildGridRows("upGridRows", parseInt(e.target.value) || 0, "up");
+        var v = Math.min(15, Math.max(0, parseInt(e.target.value) || 0));
+        e.target.value = v;
+        buildGridRows("upGridRows", v, "up");
     });
     document.getElementById("fDownCount")?.addEventListener("input", (e) => {
-        var count = parseInt(e.target.value) || 0;
+        var count = Math.min(15, Math.max(0, parseInt(e.target.value) || 0));
+        e.target.value = count;
         buildGridRows("downGridRows", count, "down");
         syncMaxBuyLevelsWithDownCount(count);
     });
@@ -575,29 +578,49 @@ function bindCreateBotModal() {
     // Submit: openCreateBotModal sets dmSubmitBtn.onclick → createAndStartBot (do not add createBot listener — it skips engine start)
 }
 
+function _gridInputWheelHandler(e) {
+    e.preventDefault();
+    var step = parseFloat(this.dataset.wheelStep) || 0.5;
+    var cur = parseFloat(this.value) || 0;
+    var delta = e.deltaY < 0 ? step : -step;
+    var min = this.min !== '' ? parseFloat(this.min) : -Infinity;
+    var max = this.max !== '' ? parseFloat(this.max) : Infinity;
+    var next = Math.round((cur + delta) * 1000) / 1000;
+    if (next < min) next = min;
+    if (next > max) next = max;
+    this.value = next;
+    this.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
 function buildGridRows(containerId, count, mode) {
     const container = document.getElementById(containerId);
     if (!container) return;
-    
+
+    // Mevcut değerleri koru (count azaldığında kaybetme)
+    const prev = {};
+    container.querySelectorAll('input[id]').forEach(function(el) { prev[el.id] = el.value; });
+
     let html = '';
     for (let i = 0; i < count; i++) {
-        const triggerLabel = mode === 'up' ? 'Tetik Fiyatı % (yukarı)' : 'Tetik Fiyatı % (aşağı)';
-        const triggerTooltip = mode === 'up' 
-            ? 'Referans fiyatından yukarı yönde %X kadar artışta bu grid tetiklenir. Örn: 0.5% = fiyat %0.5 yükselirse satış yapılır.'
-            : 'Referans fiyatından aşağı yönde %X kadar düşüşte bu grid tetiklenir. Örn: 0.5% = fiyat %0.5 düşerse alış yapılır.';
+        const triggerLabel = mode === 'up' ? 'Tetik %' : 'Tetik %';
+        const triggerTooltip = mode === 'up'
+            ? 'Referans fiyatından yukarı yönde %X kadar artışta bu grid tetiklenir.'
+            : 'Referans fiyatından aşağı yönde %X kadar düşüşte bu grid tetiklenir.';
         const qtyTooltip = mode === 'up'
-            ? 'Bu grid tetiklendiğinde mevcut coin miktarının %X\'i satılacak. Örn: 10% = coin miktarının %10\'u satılır.'
-            : 'Bu grid tetiklendiğinde mevcut USDT miktarının %X\'i ile alış yapılacak. Örn: 10% = USDT\'nin %10\'u ile coin alınır.';
-        
+            ? 'Bu grid tetiklendiğinde coin miktarının %X\'i satılır. Tüm satış gridlerinin toplamı %100 olmalı.'
+            : 'Bu grid tetiklendiğinde USDT miktarının %X\'i ile alış yapılır. Tüm alış gridlerinin toplamı %100 olmalı.';
+        const defaultTrigger = ((i + 1) * 0.5).toFixed(1);
+        const defaultQty = count > 0 ? (100 / count).toFixed(1) : '10';
+
         html += `
             <div class="grid-row">
                 <div class="form-group">
                     <label class="label-with-tooltip">
-                        ${triggerLabel}
+                        ${triggerLabel} <span style="color:var(--ds-text-secondary);font-size:0.78rem">#${i+1}</span>
                         <span class="tooltip-icon">ℹ</span>
                         <span class="tooltip-text">${triggerTooltip}</span>
                     </label>
-                    <input type="number" id="${mode}Grid_${i}_trigger" class="form-input" step="0.01" placeholder="${(i + 1) * 0.5}" />
+                    <input type="number" id="${mode}Grid_${i}_trigger" class="form-input" step="0.5" min="0.1" data-wheel-step="0.5" placeholder="${defaultTrigger}" />
                 </div>
                 <div class="form-group">
                     <label class="label-with-tooltip">
@@ -605,12 +628,55 @@ function buildGridRows(containerId, count, mode) {
                         <span class="tooltip-icon">ℹ</span>
                         <span class="tooltip-text">${qtyTooltip}</span>
                     </label>
-                    <input type="number" id="${mode}Grid_${i}_qty" class="form-input" step="0.1" min="0" max="100" placeholder="10" />
+                    <input type="number" id="${mode}Grid_${i}_qty" class="form-input" step="0.5" min="0.1" max="100" data-wheel-step="0.5" placeholder="${defaultQty}" />
                 </div>
             </div>
         `;
     }
     container.innerHTML = html;
+
+    // Önceki değerleri geri yaz
+    container.querySelectorAll('input[id]').forEach(function(el) {
+        if (prev[el.id] != null && prev[el.id] !== '') el.value = prev[el.id];
+    });
+
+    // Scroll (wheel) ile 0.5 adımlı artış
+    container.querySelectorAll('input[data-wheel-step]').forEach(function(el) {
+        el.removeEventListener('wheel', _gridInputWheelHandler);
+        el.addEventListener('wheel', _gridInputWheelHandler, { passive: false });
+    });
+
+    // Qty değişince toplamı göster
+    container.addEventListener('input', function(e) {
+        if (e.target && e.target.id && e.target.id.indexOf('_qty') !== -1) {
+            _updateGridQtySum(containerId, mode);
+        }
+    });
+    _updateGridQtySum(containerId, mode);
+}
+
+function _updateGridQtySum(containerId, mode) {
+    var container = document.getElementById(containerId);
+    if (!container) return;
+    var inputs = container.querySelectorAll('input[id$="_qty"]');
+    var sum = 0;
+    inputs.forEach(function(el) { sum += parseFloat(el.value) || 0; });
+    sum = Math.round(sum * 10) / 10;
+
+    var summaryId = containerId + '_qtysum';
+    var existing = document.getElementById(summaryId);
+    if (inputs.length === 0) { if (existing) existing.remove(); return; }
+
+    if (!existing) {
+        existing = document.createElement('div');
+        existing.id = summaryId;
+        existing.style.cssText = 'font-size:0.8rem;margin-top:0.4rem;padding:0.3rem 0.5rem;border-radius:5px;text-align:right;';
+        container.parentNode.insertBefore(existing, container.nextSibling);
+    }
+    var ok = Math.abs(sum - 100) < 0.15;
+    existing.style.background = ok ? 'rgba(14,203,129,0.08)' : 'rgba(246,70,93,0.10)';
+    existing.style.color = ok ? '#0ecb81' : '#f6465d';
+    existing.textContent = 'Miktar toplamı: %' + sum.toFixed(1) + (ok ? ' ✓' : ' — %100 olmalı');
 }
 
 function syncMaxBuyLevelsWithDownCount(count) {
@@ -1285,8 +1351,6 @@ function collectForm() {
 
     const downCount = parseInt(document.getElementById("fDownCount").value) || 0;
     const downTrail = parseDecimal(document.getElementById("fDownTrail")?.value, 0.5);
-    syncMaxBuyLevelsWithDownCount(downCount);
-    const maxBuyLevels = parseInt(document.getElementById("fMaxBuyLevels")?.value, 10) || 0;
     const downGrids = [];
     for (let i = 0; i < downCount; i++) {
         const trigger = parseFloat(document.getElementById(`downGrid_${i}_trigger`)?.value);
@@ -1310,7 +1374,7 @@ function collectForm() {
         allocation: { base_pct: basePct, quote_pct: quotePct },
         up: { trail_pct: upTrail, grids: upGrids },
         down: { trail_pct: downTrail, grids: downGrids },
-        max_buy_levels: maxBuyLevels,
+        max_buy_levels: Math.max(1, downGrids.length),
         profit: {
             rebuy_trigger_pct: rebuyTrigger,
             rebuy_trail_pct: rebuyTrail,
@@ -1380,15 +1444,19 @@ function validateForm(payload) {
         return "Base ve Quote toplamı 100 olmalı";
     }
     var downGrids = (payload.down && payload.down.grids) || [];
-    var maxBuyLevels = Number(payload.max_buy_levels);
-    if (!Number.isInteger(maxBuyLevels) || maxBuyLevels < 1) {
-        return "Maksimum alış seviyesi zorunlu ve 1 veya daha büyük olmalı";
-    }
     if (downGrids.length < 1) {
         return "En az bir alış grid seviyesi tanımlayın";
     }
-    if (maxBuyLevels > downGrids.length) {
-        return "Maksimum alış seviyesi alış grid sayısını aşamaz";
+    var upGrids = (payload.up && payload.up.grids) || [];
+    if (upGrids.length > 0) {
+        var upSum = upGrids.reduce(function(s, g) { return s + (Number(g.qty_pct) || 0); }, 0);
+        if (Math.abs(upSum - 100) >= 0.5) {
+            return "Satış grid miktar toplamı %100 olmalı (şu an %" + upSum.toFixed(1) + ")";
+        }
+    }
+    var downSum = downGrids.reduce(function(s, g) { return s + (Number(g.qty_pct) || 0); }, 0);
+    if (Math.abs(downSum - 100) >= 0.5) {
+        return "Alış grid miktar toplamı %100 olmalı (şu an %" + downSum.toFixed(1) + ")";
     }
     var gridErr = validateDcaGridNotionals(payload);
     if (gridErr) return gridErr;

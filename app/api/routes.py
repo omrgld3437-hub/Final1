@@ -623,6 +623,103 @@ async def get_transaction_history_revision(
         return {"revision": "0", "latest_time": "", "count": 0}
 
 
+def _get_test_account_tx_history(
+    db: Session,
+    account_id: int,
+    period: str = "weekly",
+    type_filter: str = "all",
+    page: int = 1,
+    per_page: int = 20,
+) -> dict:
+    """Test (paper) hesabı işlem geçmişi: Trade tablosundaki simüle bot emirleri."""
+    from datetime import timedelta
+    from app.utils.tz_utils import turkey_today_start_utc
+    from sqlalchemy import desc
+
+    # Yatırım/çekim: test hesabında yok
+    tf = (type_filter or "all").strip().lower()
+    if tf in ("deposit", "withdraw", "depositwithdraw"):
+        return {"items": [], "total": 0, "page": page, "per_page": per_page,
+                "total_pages": 0, "is_test": True}
+
+    # Dönem aralığı
+    today_start = turkey_today_start_utc()
+    end_dt = datetime.utcnow()
+    period_days = {"daily": 1, "weekly": 7, "monthly": 30, "all": None}
+    days = period_days.get(period, 7)
+    start_dt = (today_start - timedelta(days=days - 1)) if days is not None else (end_dt - timedelta(days=365))
+
+    q = db.query(Trade).filter(
+        Trade.account_id == account_id,
+        Trade.ts >= start_dt,
+        Trade.ts <= end_dt,
+    )
+    if tf in ("buy",):
+        q = q.filter(Trade.side == "BUY")
+    elif tf in ("sell",):
+        q = q.filter(Trade.side == "SELL")
+
+    total = q.count()
+    offset = (page - 1) * per_page
+    trades = q.order_by(desc(Trade.ts)).offset(offset).limit(per_page).all()
+
+    # Bot isimlerini çöz
+    bot_ids = {t.bot_id for t in trades if t.bot_id}
+    bot_map: dict = {}
+    if bot_ids:
+        bots = db.query(Bot).filter(Bot.id.in_(bot_ids), Bot.account_id == account_id).all()
+        bot_map = {b.id: (b.symbol or "?") for b in bots}
+
+    items = []
+    for t in trades:
+        qty = float(t.qty or 0)
+        price = float(t.price or 0)
+        fee = float(t.fee or 0)
+        quote_qty = round(qty * price, 4)
+        bid = t.bot_id
+        ts_iso = (t.ts.isoformat() + "Z") if t.ts else None
+        side_u = (t.side or "BUY").upper()
+        source = ("Bot " + bot_map[bid]) if bid and bid in bot_map else ("Bot" if bid else "Kullanıcı")
+        items.append({
+            "id": f"paper_{t.id}",
+            "trade_id": t.order_id or f"paper_{t.id}",
+            "order_id": t.order_id or f"paper_{t.id}",
+            "time": ts_iso,
+            "type": "buy" if side_u == "BUY" else "sell",
+            "side": side_u,
+            "symbol": t.symbol or "—",
+            # _txDisplayAmounts qty + price + quote_qty alanlarını okur
+            "qty": round(qty, 8),
+            "price": round(price, 8),
+            "quote_qty": quote_qty,
+            # finance_reports uyumluluğu için executed_qty / avg_price de taşı
+            "executed_qty": round(qty, 8),
+            "avg_price": round(price, 8),
+            "commission": round(fee, 8),
+            "commission_usdt": round(fee, 4),
+            "commission_asset": t.fee_asset or "USDT",
+            "fills_count": 1,
+            "bot_id": bid,
+            "is_bot": bid is not None,
+            "source": "bot" if bid else "spot",
+            "source_label": source,
+            "platform": "TraderTrailing",
+            "is_paper": True,
+            "type_label": ("Simüle Alış" if side_u == "BUY" else "Simüle Satış"),
+        })
+
+    total_pages = max(1, -(-total // per_page)) if total > 0 else 0
+    return {
+        "items": items,
+        "total": total,
+        "page": page,
+        "per_page": per_page,
+        "total_pages": total_pages,
+        "is_test": True,
+        "revision": "0",
+    }
+
+
 @router.get("/accounts/{account_id}/transaction-history")
 async def get_transaction_history(
     account_id: int,
@@ -755,6 +852,11 @@ async def get_transaction_history(
             page=page,
             per_page=TransactionHistoryService.PER_PAGE,
         )
+    # Test (paper) hesabı: Binance trade yok, Trade tablosundan paper bot işlemlerini döndür
+    from app.services.test_account import is_test_account
+    if is_test_account(account_id, db):
+        return _get_test_account_tx_history(db, account_id, period=p, type_filter=tf, page=page)
+
     return TransactionHistoryService.get_transactions(db, account_id, period=p, type_filter=tf, source_filter=sf, page=page)
 
 
@@ -1327,6 +1429,7 @@ async def delete_bot(
         if bot.status == "running":
             bot.status = "stopped"
             db.commit()
+            invalidate_dashboard_summary_cache(account_id)
     except Exception as e:
         import logging
         logger = logging.getLogger(__name__)
@@ -1381,6 +1484,7 @@ async def delete_bot(
         db.execute(text("DELETE FROM bots WHERE id = :bot_id AND account_id = :account_id"), 
                    {"bot_id": bot_id, "account_id": account_id})
         db.commit()
+        invalidate_dashboard_summary_cache(account_id)
         return {"message": "Bot deleted successfully"}
     except Exception as e:
         db.rollback()
@@ -1417,6 +1521,7 @@ async def start_bot(
         bot.status = "running"
         touch_bot_started_at(bot, connectivity_resume=False)
         db.commit()
+        invalidate_dashboard_summary_cache(account_id)
         seed_perf_chart_state_on_bot_start(db, bot.id)
         cmd_id = _insert_engine_command(db, account_id, bot.id, "START", request_id=getattr(request.state, "request_id", None))
         st = load_state(db, bot.id) or {}
@@ -1457,6 +1562,7 @@ async def stop_bot(
         from app.api.bots_engine import _insert_engine_command
         bot.status = "stopped"
         db.commit()
+        invalidate_dashboard_summary_cache(account_id)
         _insert_engine_command(db, account_id, bot.id, "STOP", request_id=getattr(request.state, "request_id", None))
         account = db.query(Account).filter(Account.id == account_id).first()
         audit_svc.log_event(
@@ -2128,6 +2234,14 @@ _dashboard_summary_cache: Dict[int, tuple] = {}  # account_id -> (response_dict,
 DASHBOARD_SUMMARY_CACHE_TTL = 20.0  # seconds
 _DASHBOARD_SUMMARY_CACHE_MAX_KEYS = 100
 
+
+def invalidate_dashboard_summary_cache(account_id: int) -> None:
+    """Drop cached dashboard summary after bot/account mutations."""
+    try:
+        _dashboard_summary_cache.pop(int(account_id), None)
+    except Exception:
+        pass
+
 def _is_binance_invalid_key(exc: Exception) -> bool:
     """True if upstream error is 401 or 400 with Binance code -2015 (Invalid API-key, IP, or permissions)."""
     resp = getattr(exc, "response", None)
@@ -2206,6 +2320,7 @@ async def invalidate_wallet_cache(account_id: int) -> None:
         _wallet_response_cache.pop(account_id, None)
         _wallet_total_cache.pop(account_id, None)
         _wallet_inflight.pop(account_id, None)
+    invalidate_dashboard_summary_cache(account_id)
     try:
         from app.api.routes.home import invalidate_home_wallet_cache
         invalidate_home_wallet_cache(account_id)

@@ -112,10 +112,11 @@ function _renderTxHistoryItemHtml(tx) {
         : (amtRow.notional > 0 ? (typeof fmtUsd === 'function' ? fmtUsd(amtRow.notional) : '$' + amtRow.notional) : '—');
     var sourceLabel = tx.source_label || (tx.source === 'bot' ? 'Bot' : tx.source === 'spot' ? 'Spot' : '—');
     var platformLabel = _txPlatformLabel(tx);
+    var paperBadge = tx.is_paper ? ' <span style="font-size:0.7rem;padding:1px 5px;border-radius:4px;background:rgba(240,185,11,0.15);color:#f0b90b;font-weight:600;vertical-align:middle;">SİMÜLE</span>' : '';
     var metaRight = (tx.type === 'buy' || tx.type === 'sell') ? ('Miktar ' + qtyStr + ' · Fiyat ' + priceStr) : (qtyStr + (tx.symbol ? ' ' + tx.symbol : ''));
     return '<div class="tx-history-item" data-tx="' + _txEncodeAttr(tx) + '" role="button" tabindex="0">' +
         '<div class="tx-history-item-left">' +
-        '<div class="tx-history-item-title"><span class="' + typeClass + '">' + typeLabel + '</span> ' + (tx.symbol || '') + '</div>' +
+        '<div class="tx-history-item-title"><span class="' + typeClass + '">' + typeLabel + '</span>' + paperBadge + ' ' + (tx.symbol || '') + '</div>' +
         '<div class="tx-history-item-meta">' + timeStr + ' · ' + sourceLabel + ' · ' + platformLabel + (tx.bot_name ? ' · ' + tx.bot_name : '') + '</div>' +
         '</div>' +
         '<div class="tx-history-item-right">' +
@@ -330,8 +331,8 @@ function formatSpotTradeFillToast(result, side, orderType, symbol) {
 
 async function pollTransactionHistoryRevision() {
     if (!State.accountId || !window.apiClient || _txHistoryPollInFlight) return;
-    if (!isTransactionHistoryPanelVisible()) return;
     if (Date.now() < _txHistoryRateLimitUntil) return;
+    var panelVisible = isTransactionHistoryPanelVisible();
     _txHistoryPollInFlight = true;
     try {
         var res = await window.apiClient.get(
@@ -343,6 +344,8 @@ async function pollTransactionHistoryRevision() {
         if (!rev) return;
         if (!_txHistoryLoaded || rev !== _txHistoryRevision) {
             _txHistoryRevision = rev;
+            // Panel görünür değilse sadece revision'ı kaydet; görünür olunca hemen yüklesin
+            if (!panelVisible) { _txHistoryLastSig = ''; return; }
             await loadTransactionHistory(
                 State.txHistoryPeriod || 'daily',
                 State.txHistoryType || 'buysell',

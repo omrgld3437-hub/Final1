@@ -7,9 +7,13 @@ import uuid
 logger = logging.getLogger(__name__)
 
 
+_CLIENT_ERROR_CODES = frozenset({"NOT_FOUND", "ACCOUNT_NOT_FOUND", "ACCOUNT_REQUIRED"})
+
+
 def detail_err(code: str, message: str, request_id: str) -> dict:
     error_id = str(uuid.uuid4())[:16]
-    logger.warning(
+    log = logger.debug if code in _CLIENT_ERROR_CODES else logger.warning
+    log(
         "API_ERR error_code=%s error_id=%s request_id=%s msg=%s",
         code,
         error_id,

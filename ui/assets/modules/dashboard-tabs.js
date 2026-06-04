@@ -747,12 +747,15 @@ function bindTabs() {
                 if (targetTab === "binance" && txPanel) {
                     txPanel.style.display = "block";
                     if (State.accountId && typeof loadTransactionHistory === "function") {
+                        // Bekleyen revision varsa (başka sekmede işlem oldu) force yükle
+                        var forceLoad = typeof _txHistoryLastSig !== 'undefined' && _txHistoryLastSig === ''
+                                        && typeof _txHistoryRevision !== 'undefined' && !!_txHistoryRevision;
                         loadTransactionHistory(
                             State.txHistoryPeriod || "daily",
                             State.txHistoryType || "buysell",
                             State.txHistoryPage || 1,
                             false,
-                            { silent: _txHistoryLoaded }
+                            { silent: !forceLoad && _txHistoryLoaded, force: forceLoad }
                         );
                     }
                 }

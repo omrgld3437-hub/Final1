@@ -295,7 +295,7 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
             <p class="binance-connection-notice__text">Cüzdan ve işlem verilerini görebilmek için <strong>Ayarlar</strong> sekmesinden Binance API Key ve Secret kodlarınızı girebilirsiniz. Bağlantı kurulduğunda bu uyarı otomatik olarak kalkar.</p>
         </div>
 
-        <!-- Ortak KPI şeridi: tek satırda 2 bölüm – [Cüzdan + Cüzdan PnL] | [Botlar Bakiye + Botlar PnL] -->
+        <!-- Ortak KPI şeridi: tek satırda 2 bölüm – [Cüzdan + Günlük Değişim] | [Botlar Bakiye + Kapanan Tur K/Z] -->
         <div id="unifiedKpiStrip" class="kpi-strip kpi-strip-unified kpi-strip-row" style="margin-bottom: 2rem; display: none;">
             <div class="kpi-block kpi-block-cuzdan">
                 <div class="kpi-block-row kpi-block-row-with-status">
@@ -318,7 +318,7 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
                 </div>
                 <div class="kpi-block-divider"></div>
                 <div class="kpi-block-row">
-                    <div id="kpiBotPnlLabel" class="kpi-label-small">Günlük PnL</div>
+                    <div id="kpiBotPnlLabel" class="kpi-label-small">Tur K/Z (Bugün)</div>
                     <div id="kpiBotPnl" class="kpi-value-small value-blink">$0.00</div>
                     <div id="kpiBotPnlPct" class="kpi-value-sub">0.00%</div>
                 </div>
@@ -542,7 +542,7 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
                     <div style="text-align: center; color: var(--ds-text-secondary); padding: 1rem;">Yükleniyor…</div>
                 </div>
             </div>
-            <!-- Bot Performans: hesap geneli günlük K/Z toplamı (tüm botlar, silinen dahil) -->
+            <!-- Bot Performans: hesap geneli kapanan tur K/Z toplamı (tüm botlar, silinen dahil) -->
             <div id="botPerformancePanel" class="panel bot-performance-panel" style="margin-top: 2rem; margin-bottom: 2rem; width: 100%; max-width: 100%;">
                 <div class="bot-performance-header">
                     <h3 class="bot-performance-title">Bot Performansı</h3>
@@ -557,7 +557,7 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
                 <div id="botPerformanceSummary" class="bot-performance-summary">
                     <div class="bot-perf-summary-row bot-perf-summary-row--single">
                         <div class="bot-perf-summary-card bot-perf-summary-card--primary">
-                            <div id="botPerfPnlLabel" class="bot-perf-summary-label">K/Z (komisyon hariç)</div>
+                            <div id="botPerfPnlLabel" class="bot-perf-summary-label">Kapanan Tur K/Z</div>
                             <div id="botPerfTotalPnl" class="bot-perf-summary-value">—</div>
                         </div>
                         <div class="bot-perf-summary-card">
@@ -711,7 +711,7 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
                 <div id="botPerformanceSummaryBots" class="bot-performance-summary">
                     <div class="bot-perf-summary-row bot-perf-summary-row--single">
                         <div class="bot-perf-summary-card bot-perf-summary-card--primary">
-                            <div id="botPerfPnlLabelBots" class="bot-perf-summary-label">K/Z (komisyon hariç)</div>
+                            <div id="botPerfPnlLabelBots" class="bot-perf-summary-label">Kapanan Tur K/Z</div>
                             <div id="botPerfTotalPnlBots" class="bot-perf-summary-value">—</div>
                         </div>
                         <div class="bot-perf-summary-card">
@@ -1256,7 +1256,7 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
                                 <span class="tooltip-icon">ℹ</span>
                                 <span class="tooltip-text">Yukarı yönde (satış) kaç grid seviyesi oluşturulacak. Her grid için tetik fiyatı ve miktar belirlenir.</span>
                             </label>
-                            <input id="fUpCount" type="number" min="0" step="1" value="0" />
+                            <input id="fUpCount" type="number" min="0" max="15" step="1" value="0" />
                         </div>
                         <div class="form-group">
                             <label class="label-with-tooltip">
@@ -1280,7 +1280,7 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
                                 <span class="tooltip-icon">ℹ</span>
                                 <span class="tooltip-text">Aşağı yönde (alış) kaç grid seviyesi oluşturulacak. Her grid için tetik fiyatı ve miktar belirlenir.</span>
                             </label>
-                            <input id="fDownCount" type="number" min="0" step="1" value="0" />
+                            <input id="fDownCount" type="number" min="0" max="15" step="1" value="0" />
                         </div>
                         <div class="form-group">
                             <label class="label-with-tooltip">
@@ -1290,14 +1290,7 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
                             </label>
                             <input id="fDownTrail" type="number" min="0" step="0.01" placeholder="0,5 veya 0.5" value="0.5" lang="tr" inputmode="decimal" />
                         </div>
-                        <div class="form-group">
-                            <label class="label-with-tooltip">
-                                Maksimum Alış Seviyesi
-                                <span class="tooltip-icon">ℹ</span>
-                                <span class="tooltip-text">Botun bu turda açabileceği en fazla alış grid seviyesi. Alış grid sayısını aşamaz.</span>
-                            </label>
-                            <input id="fMaxBuyLevels" type="number" min="1" step="1" value="1" required />
-                        </div>
+
                     </div>
                     <div id="downGridRows" class="rows"></div>
                 </div>

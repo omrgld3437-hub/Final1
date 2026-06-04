@@ -3050,22 +3050,26 @@ def _build_live_snapshot_from_state(bot: Bot, state: Optional[Dict[str, Any]], d
             last_error_code = None
 
     last_price: Optional[float] = None
+    price_source: Optional[str] = None
     sym = (bot.symbol or "").strip().upper()
     try:
         p = price_hub.get_price(sym)
         if p is not None and float(p) > 0:
             last_price = float(p)
+            price_source = "price_hub"
     except Exception:
         pass
     if last_price is None and sym:
         hub_p = _get_price_from_datahub(sym)
         if hub_p is not None and float(hub_p) > 0:
             last_price = float(hub_p)
+            price_source = "data_hub"
     if last_price is None and state:
         ref = state.get("reference_price")
         if ref is not None:
             try:
                 last_price = float(ref)
+                price_source = "reference_price"
             except (TypeError, ValueError):
                 pass
 
@@ -3130,6 +3134,7 @@ def _build_live_snapshot_from_state(bot: Bot, state: Optional[Dict[str, Any]], d
         "last_price": last_price,
         "last_tick_at": last_tick_at,
         "last_error_code": last_error_code,
+        "price_source": price_source,
         "initial_capital": initial_capital,
         "daily_pnl_usd": round(daily_pnl_usd, 2) if daily_pnl_usd is not None else None,
         "daily_pnl_pct": round(daily_pnl_pct, 2) if daily_pnl_pct is not None else None,
@@ -3149,6 +3154,33 @@ def _build_live_snapshot_from_state(bot: Bot, state: Optional[Dict[str, Any]], d
         out["stale"] = True
     if equity_unavailable:
         out["equity_unavailable"] = True
+    if (
+        state
+        and equity is not None
+        and not equity_unavailable
+        and not first_buy_pending
+        and initial_allocation_done
+        and (base_balance <= 0 or price_source in ("price_hub", "data_hub"))
+    ):
+        try:
+            PnlService.save_snapshot_if_due(
+                db,
+                bot.id,
+                bot.account_id,
+                {
+                    "total_usd": float(equity),
+                    "realized": 0.0,
+                    "unrealized": float(equity) - initial_capital if initial_capital > 0 else 0.0,
+                    "daily": daily_pnl_usd or 0.0,
+                    "monthly": 0.0,
+                },
+            )
+        except Exception as e:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            logger.debug("live snapshot pnl persist skipped bot_id=%s: %s", bot.id, e)
     return out
 
 
@@ -3878,6 +3910,13 @@ async def bots_start(
     touch_bot_started_at(bot, connectivity_resume=False)
     db.commit()
     seed_perf_chart_state_on_bot_start(db, bot.id)
+    invalidate_live_snapshot_cache(bot.id)
+    try:
+        from app.api.routes import invalidate_dashboard_summary_cache
+
+        invalidate_dashboard_summary_cache(bot.account_id)
+    except Exception:
+        pass
     command_id = _insert_engine_command(db, bot.account_id, bot.id, "START", request_id=rid)
     state = load_state(db, bot.id) or {}
     state["run_id"] = f"cmd{command_id}"
@@ -3930,6 +3969,7 @@ async def bots_stop(
     clear_bot_run_started(state)
     save_state(db, bot.id, bot.account_id, state)
     db.commit()
+    invalidate_live_snapshot_cache(bot.id)
     command_id = _insert_engine_command(db, bot.account_id, bot.id, "STOP", request_id=rid)
     account = db.query(Account).filter(Account.id == bot.account_id).first()
     audit_svc.log_event(
@@ -3940,8 +3980,9 @@ async def bots_stop(
         meta={"bot_id": bot.id, "account_id": bot.account_id, "symbol": (bot.symbol or "") or ""},
     )
     try:
-        from app.api.routes import invalidate_wallet_cache
+        from app.api.routes import invalidate_dashboard_summary_cache, invalidate_wallet_cache
 
+        invalidate_dashboard_summary_cache(bot.account_id)
         await invalidate_wallet_cache(bot.account_id)
     except Exception:
         pass
@@ -4070,6 +4111,7 @@ async def bots_delete(
     from app.services.test_account import is_test_account
 
     is_test = is_test_account(bot.account_id, db)
+    delete_account_id = bot.account_id
     if convert_base and is_test:
         logger.info("bots_delete skip convert (test/paper account) bot_id=%s", bot.id)
         convert_base = False
@@ -4126,13 +4168,21 @@ async def bots_delete(
                 if not _is_worker_only_order_error(e) and not _delete_convert_error_skippable(e, is_test):
                     raise HTTPException(status_code=400, detail=_detail_err("CONVERT_FAILED", str(e), rid))
         try:
-            from app.api.routes import invalidate_open_orders_cache, invalidate_wallet_cache
+            from app.api.routes import invalidate_dashboard_summary_cache, invalidate_open_orders_cache, invalidate_wallet_cache
+            invalidate_dashboard_summary_cache(bot.account_id)
             await invalidate_wallet_cache(bot.account_id)
             await invalidate_open_orders_cache(bot.account_id)
         except Exception:
             pass
     _insert_engine_command(db, bot.account_id, bot.id, "STOP", request_id=rid)
+    invalidate_live_snapshot_cache(bot.id)
     await delete_bot_fully(bot.id, db)
+    try:
+        from app.api.routes import invalidate_dashboard_summary_cache
+
+        invalidate_dashboard_summary_cache(delete_account_id)
+    except Exception:
+        pass
     return {"ok": True, "bot_id": bot_id, "request_id": rid}
 
 

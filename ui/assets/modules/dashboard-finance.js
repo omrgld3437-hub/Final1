@@ -1133,17 +1133,19 @@ async function loadFinanceSummary() {
         // Update KPI cards
         updateFinanceKPIs(data);
         
-        // Mevcut Botlar: dolu bot listesi öncelikli (boş State.summary.bots tabloyu silmesin)
+        // Mevcut Botlar: canlı API boş liste döndürürse silinmiş bot satırlarını temizle.
         if (State.summary && Array.isArray(State.summary.bots) && State.summary.bots.length > 0) {
             renderFinanceBots(State.summary.bots);
         } else if (data.bots && Array.isArray(data.bots) && data.bots.length) {
             renderFinanceBots(data.bots);
+        } else if (State.summary && Array.isArray(State.summary.bots)) {
+            renderFinanceBots(State.summary.bots, { clearWhenEmpty: true });
+        } else if (data.bots && Array.isArray(data.bots)) {
+            renderFinanceBots(data.bots, { clearWhenEmpty: true });
         } else if (State.bots && State.bots.length) {
             renderFinanceBots(State.bots);
-        } else if (State.summary && Array.isArray(State.summary.bots)) {
-            renderFinanceBots(State.summary.bots);
         } else {
-            renderFinanceBots(data.bot_summary || []);
+            renderFinanceBots(data.bot_summary || [], { clearWhenEmpty: true });
         }
         
     } catch (error) {
@@ -1532,6 +1534,18 @@ function restoreFinanceBotsFromSessionCache(accountId) {
     }
 }
 
+function clearFinanceBotsUiState(accountId) {
+    State.bots = [];
+    _financeBotsMetricsCache = {};
+    _financeBotsStructureSignature = null;
+    _financeBotsIdsSignature = null;
+    _financeBotsHealthCache = {};
+    _financeBotsLiveSig = '';
+    _financeBotsLiveHydrated = true;
+    State.botLiveEquity = {};
+    if (accountId) clearFinanceBotsSessionCache(accountId);
+}
+
 function _financeBotsPanelHasRows(el) {
     return !!(el && (el.querySelector('tr[data-bot-id]') || el.querySelector('.mevcut-botlar-mobile-card[data-bot-id]')));
 }
@@ -1735,7 +1749,7 @@ function applyFinanceBotsLiveEquityToDom() {
             var label = el.parentElement && el.parentElement.querySelector('.mevcut-botlar-mobile-stat-label');
             if (!label) return;
             if ((label.textContent || '') === 'Bakiye') setTextIfChanged(el, balanceTxt);
-            if ((label.textContent || '') === 'K/Z') {
+            if ((label.textContent || '') === 'K/Z' || (label.textContent || '') === 'Toplam K/Z') {
                 setTextIfChanged(el, pnlTxt);
                 if (el.style.color !== sc) el.style.color = sc;
             }
@@ -2217,10 +2231,8 @@ function renderFinanceBots(bots, opts) {
 
     var emptyHtml = '<div style="color: var(--ds-text-secondary); padding: 2rem; text-align: center;">Bot bulunamadı</div>';
     if (!bots || bots.length === 0) {
-        if (_financeBotsTableHasRows() || (State.bots && State.bots.length)) return;
-        _financeBotsStructureSignature = null;
-        _financeBotsIdsSignature = null;
-        _financeBotsHealthCache = {};
+        if (!opts.clearWhenEmpty && !opts.forceFullRender && _financeBotsTableHasRows()) return;
+        clearFinanceBotsUiState(State.accountId);
         clearBotsTabCache();
         if (containerAnasayfa) containerAnasayfa.innerHTML = emptyHtml;
         if (containerBotsTab) containerBotsTab.innerHTML = emptyHtml;
@@ -2341,7 +2353,7 @@ function renderFinanceBots(bots, opts) {
         '<th class="col-status col-center">Durum</th>' +
         '<th class="col-budget col-center">Bütçe</th>' +
         '<th class="col-balance col-center">Bakiye</th>' +
-        '<th class="col-pnl col-center">K/Z</th>' +
+        '<th class="col-pnl col-center" title="Başlangıç bütçesine göre anlık toplam kar/zarar">Toplam K/Z</th>' +
         '<th class="col-tur col-center">Tur</th>' +
         '<th class="col-action col-center">İşlem</th>' +
         '</tr></thead>';
@@ -2379,7 +2391,7 @@ function renderFinanceBots(bots, opts) {
             '<td class="col-status col-center"><span class="mevcut-botlar-status ' + statusMeta.className + '"' + (statusMeta.title ? ' title="' + escapeHtml(statusMeta.title).replace(/"/g, '&quot;') + '"' : '') + '>' + statusMeta.text + '</span></td>' +
             '<td class="col-budget col-center">' + fmtUsd(bot.budget_usd || 0) + '</td>' +
             '<td class="mevcut-botlar-balance-cell col-balance col-center finance-bot-balance' + (balanceDisplay === '—' ? ' finance-bot-metric-pending' : '') + '" data-bot-id="' + botId + '" data-balance="' + (currentUsd != null ? currentUsd : '') + '" title="Bot bakiyesi (bot detay /live equity ile aynı)">' + balanceDisplay + '</td>' +
-            '<td class="col-pnl col-center" style="color:' + sc + '">' + formatHeroKzDisplay(rowPnl, rowPnlPct, budgetUsd) + '</td>' +
+            '<td class="col-pnl col-center" title="Başlangıç bütçesine göre anlık toplam kar/zarar" style="color:' + sc + '">' + formatHeroKzDisplay(rowPnl, rowPnlPct, budgetUsd) + '</td>' +
             '<td class="col-tur col-center">' + cyclesDisplay + '</td>' +
             '<td class="col-action col-center"><a href="' + href + '" class="mevcut-botlar-detay-btn">Detay</a></td></tr>';
     }).join('');
@@ -2422,7 +2434,7 @@ function renderFinanceBots(bots, opts) {
             '<div class="mevcut-botlar-mobile-stat"><span class="mevcut-botlar-mobile-stat-label">Durum</span><span class="mevcut-botlar-status ' + statusMeta.className + '"' + (statusMeta.title ? ' title="' + escapeHtml(statusMeta.title).replace(/"/g, '&quot;') + '"' : '') + '>' + statusMeta.text + '</span></div>' +
             '<div class="mevcut-botlar-mobile-stat"><span class="mevcut-botlar-mobile-stat-label">Bütçe</span><span class="mevcut-botlar-mobile-stat-value">' + fmtUsd(bot.budget_usd || 0) + '</span></div>' +
             '<div class="mevcut-botlar-mobile-stat"><span class="mevcut-botlar-mobile-stat-label">Bakiye</span><span class="mevcut-botlar-mobile-stat-value">' + balanceDisplay + '</span></div>' +
-            '<div class="mevcut-botlar-mobile-stat"><span class="mevcut-botlar-mobile-stat-label">K/Z</span><span class="mevcut-botlar-mobile-stat-value mevcut-botlar-mobile-pnl" style="color:' + sc + '">' + formatHeroKzDisplay(rowPnl, rowPnlPct, budgetUsd) + '</span></div>' +
+            '<div class="mevcut-botlar-mobile-stat"><span class="mevcut-botlar-mobile-stat-label">Toplam K/Z</span><span class="mevcut-botlar-mobile-stat-value mevcut-botlar-mobile-pnl" style="color:' + sc + '">' + formatHeroKzDisplay(rowPnl, rowPnlPct, budgetUsd) + '</span></div>' +
             '<div class="mevcut-botlar-mobile-stat"><span class="mevcut-botlar-mobile-stat-label">Tur</span><span class="mevcut-botlar-mobile-stat-value">' + cyclesDisplay + '</span></div>' +
             '</div>' +
             '<a href="' + href + '" class="mevcut-botlar-detay-btn mevcut-botlar-mobile-detay">Detay</a>' +
@@ -2860,17 +2872,17 @@ async function loadFinancePeriodData() {
             feesInfoEl.textContent = periodNames[financePeriod] || 'Seçilen dönem';
         }
         
-        // PnL etiketini seçilen döneme göre güncelle (Günlük PnL, Haftalık PnL, ...)
+        // PnL etiketini seçilen döneme göre güncelle (gerçekleşen işlem K/Z)
         const pnlLabelEl = document.getElementById('financePeriodPnlLabel');
         if (pnlLabelEl) {
             const periodLabels = {
-                'daily': 'Günlük PnL',
-                'weekly': 'Haftalık PnL',
-                'monthly': 'Aylık PnL',
-                'yearly': 'Yıllık PnL',
-                'all': 'Genel PnL'
+                'daily': 'Günlük Gerçekleşen K/Z',
+                'weekly': 'Haftalık Gerçekleşen K/Z',
+                'monthly': 'Aylık Gerçekleşen K/Z',
+                'yearly': 'Yıllık Gerçekleşen K/Z',
+                'all': 'Genel Gerçekleşen K/Z'
             };
-            pnlLabelEl.textContent = periodLabels[financePeriod] || 'PnL';
+            pnlLabelEl.textContent = periodLabels[financePeriod] || 'Gerçekleşen K/Z';
         }
         
         // Bot bazında PnL ve Komisyon (alt özet)

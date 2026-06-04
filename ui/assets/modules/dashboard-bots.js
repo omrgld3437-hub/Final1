@@ -191,7 +191,11 @@ function loadBotsListFast(accountId) {
             if (State.summary && Array.isArray(State.summary.bots) && State.summary.bots.length > 0) return;
             if (_financeBotsTableHasRows() && isBotsTabCacheReady()) {
                 var list = Array.isArray(res.bots) ? res.bots : [];
-                if (!list.length) return;
+                if (!list.length) {
+                    State.bots = [];
+                    renderBotsList([], { clearWhenEmpty: true });
+                    return;
+                }
                 var mapped = list.map(function(r) {
                     var cfg = r.config || {};
                     var budget = Number(cfg.initial_capital_usdt || cfg.budget_usd || cfg.bot_budget_usdt) || 0;
@@ -259,7 +263,7 @@ function loadBotsListFast(accountId) {
                 });
             });
             State.bots = hydrateBotsWithMetricsCache(mapped);
-            renderBotsList(State.bots);
+            renderBotsList(State.bots, { clearWhenEmpty: true });
             if (typeof maybeRefreshWalletOnBotsChange === 'function') {
                 maybeRefreshWalletOnBotsChange(State.bots, State.summary && State.summary.account);
             }

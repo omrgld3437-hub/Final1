@@ -240,7 +240,9 @@ CHANGE: Fix navigation links + route pinning - ensure admin link works, update c
                             </div>
                             <div class="kpi-card-compact">
                                 <div class="kpi-label-small">İnternet hızı (Mbps)</div>
-                                <div id="serverNetworkLink" class="kpi-value-small">—</div>
+                                <div id="serverNetworkLink" class="kpi-value-small" style="font-size:0.78rem;">
+                                    <span id="serverNetworkDown">—</span><span style="color:var(--ds-text-secondary);font-size:0.7rem"> ↓ </span><span id="serverNetworkUp">—</span><span style="color:var(--ds-text-secondary);font-size:0.7rem"> ↑</span>
+                                </div>
                             </div>
                             <div class="kpi-card-compact">
                                 <div class="kpi-label-small">Sunucu IP</div>
@@ -294,15 +296,13 @@ CHANGE: Fix navigation links + route pinning - ensure admin link works, update c
                         <div id="adminPasswordStatus" class="form-status" style="margin-top: 0.5rem;"></div>
                     </div>
                     <div style="margin-top: 2rem; padding-top: 1.5rem; border-top: 1px solid var(--ds-border);">
-                        <div style="display: flex; flex-wrap: wrap; gap: 0.5rem;">
-                            <button type="button" class="btn btn-sm" style="background: var(--ds-danger); color: #fff;" onclick="adminDropAllAdminSessions()">Tüm admin oturumlarını sonlandır</button>
-                        </div>
+                        <button type="button" class="btn btn-warning" onclick="adminDropAllAdminSessions()">Tüm admin oturumlarını sonlandır</button>
                     </div>
-                    <div style="margin-top: 2rem; padding-top: 1.5rem; border-top: 1px solid var(--ds-border);">
-                        <button type="button" id="btnOpenAdminAuditModal" class="btn btn-sm" style="width: 100%; background: var(--ds-bg-tertiary); color: var(--ds-text-primary); border: 1px solid var(--ds-border); padding: 10px 20px; border-radius: 8px; cursor: pointer; font-weight: 500;" onclick="openAdminAuditModal()">İşlem Geçmişi</button>
+                    <div style="margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px solid var(--ds-border);">
+                        <button type="button" id="btnOpenAdminAuditModal" class="btn btn-secondary" onclick="openAdminAuditModal()">İşlem Geçmişi</button>
                     </div>
                     <div style="margin-top: 1rem;">
-                        <button type="button" id="btnOpenErrorLogsModal" class="btn btn-sm" style="width: 100%; background: var(--ds-danger, #f6465d); color: #fff; border: 1px solid var(--ds-danger); padding: 10px 20px; border-radius: 8px; cursor: pointer; font-weight: 500;" onclick="openErrorLogsModal()">Hatalar</button>
+                        <button type="button" id="btnOpenErrorLogsModal" class="btn btn-danger" onclick="openErrorLogsModal()">Hatalar</button>
                     </div>
                 </div>
             </div>
@@ -522,7 +522,7 @@ CHANGE: Fix navigation links + route pinning - ensure admin link works, update c
                     <div id="accountSettingsId" style="font-family: monospace; font-size: 14px;"></div>
                 </div>
                 <div class="form-group" style="margin: 0;">
-                    <label style="font-size: 11px; color: var(--ds-text-secondary);">GİRİŞ ZAMANI</label>
+                    <label style="font-size: 11px; color: var(--ds-text-secondary);">SON AKTİVİTE / GİRİŞ</label>
                     <div id="accountSettingsLoginAt" style="font-size: 14px;"></div>
                 </div>
                 <div class="form-group" style="margin: 0;">

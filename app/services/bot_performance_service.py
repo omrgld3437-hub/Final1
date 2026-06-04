@@ -518,6 +518,23 @@ def load_bot_closed_cycles_for_period(
     reconcile_bot_cycles_file_with_state(bot_id, account_id, sym, completed)
 
     date_from, date_to, _ = resolve_perf_date_range(period, bot_id=bot_id, account_id=account_id)
+
+    # Mevcut çalışma öncesindeki turları dışla: bot.started_at alt sınır olarak kullan.
+    # Böylece bot yeniden başlatıldığında eski çalışmadan kalan döngüler performans bölümünde görünmez.
+    started_at_date: Optional[str] = None
+    if bot and getattr(bot, "started_at", None):
+        try:
+            sa = bot.started_at
+            if sa.tzinfo is None:
+                sa = sa.replace(tzinfo=timezone.utc)
+            # TR saati (UTC+3) — ts_to_date_tr ile tutarlı
+            sa_tr = sa.astimezone(timezone(timedelta(hours=3)))
+            started_at_date = sa_tr.strftime("%Y-%m-%d")
+        except Exception:
+            pass
+    if started_at_date and started_at_date > date_from:
+        date_from = started_at_date
+
     cycles = query_bot_cycles_by_date_range(bot_id, date_from, date_to)
     return cycles, date_from, date_to
 

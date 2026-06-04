@@ -47,6 +47,64 @@ _deposit_withdraw_error_lock = asyncio.Lock()
 _DEPOSIT_WITHDRAW_ERROR_THROTTLE_SEC = 300.0
 
 
+def _bot_initial_usd(bot: Bot) -> float:
+    try:
+        config = json.loads(bot.config_json or "{}")
+    except Exception:
+        config = {}
+    try:
+        return float(
+            config.get("initial_capital_usdt")
+            or config.get("budget_usd")
+            or config.get("bot_budget_usdt")
+            or config.get("bot_budget_quote")
+            or 0
+        )
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _bot_current_equity_usd(db: Session, bot: Bot, account_id: int) -> tuple[float, float]:
+    initial_usd = _bot_initial_usd(bot)
+    pnl_data = PnlService.calculate_bot_pnl(db, bot.id, account_id)
+    current_usd = pnl_data.get("total_usd", initial_usd) if not pnl_data.get("error") else initial_usd
+    try:
+        from app.botengine.state_store import load_state
+        from app.services.bot_equity import compute_bot_equity_usd
+
+        state = load_state(db, bot.id) or {}
+        current_usd = compute_bot_equity_usd(db, bot, state, pnl_data, initial_usd=initial_usd)
+    except Exception:
+        pass
+    return float(current_usd or 0.0), float(initial_usd or 0.0)
+
+
+def _finance_bot_summary_row(bot: Bot, bot_pnl_30d: Dict, current_usd: float, initial_usd: float) -> Dict:
+    mark_to_market_pnl = current_usd - initial_usd
+    mark_to_market_pct = (mark_to_market_pnl / initial_usd * 100.0) if initial_usd > 0 else 0.0
+    realized_30d = float(bot_pnl_30d.get("pnl") or 0.0)
+    return {
+        "bot_id": bot.id,
+        "id": bot.id,
+        "symbol": bot.symbol,
+        "status": bot.status,
+        "mode": bot.mode,
+        "pnl_30d": realized_30d,
+        "realized_30d_pnl_usd": round(realized_30d, 2),
+        "mark_to_market_pnl_usd": round(mark_to_market_pnl, 2),
+        "total_pnl": round(mark_to_market_pnl, 2),
+        "total_pnl_usd": round(mark_to_market_pnl, 2),
+        "total_pnl_pct": round(mark_to_market_pct, 2),
+        "fees": float(bot_pnl_30d.get("fees") or 0.0),
+        "trades_count": int(bot_pnl_30d.get("count") or 0),
+        "budget_usd": round(initial_usd, 2),
+        "initial_usd": round(initial_usd, 2),
+        "current_usd": round(current_usd, 2),
+        "created_at": bot.created_at.isoformat() if hasattr(bot, "created_at") and bot.created_at else None,
+        "started_at": bot.started_at.isoformat() if hasattr(bot, "started_at") and bot.started_at else None,
+    }
+
+
 async def _should_log_deposit_withdraw_error(account_id: int, kind: str) -> bool:
     """Aynı account_id+kind için True döner (log yazılacak); throttle süresi dolmamışsa False."""
     key = (account_id, kind)
@@ -139,38 +197,9 @@ async def get_finance_summary(
         total_bot_equity_usd = 0.0
         for bot in bots:
             bot_pnl = pnl_30d["by_bot"].get(bot.id, {"pnl": 0.0, "fees": 0.0, "count": 0})
-            pnl_data = PnlService.calculate_bot_pnl(db, bot.id, account_id)
-            current_usd = pnl_data.get("total_usd", 0.0) if not pnl_data.get("error") else 0.0
-            if not pnl_data.get("error"):
-                total_bot_equity_usd += current_usd
-
-            # Get initial balance from config
-            initial_balance = 0.0
-            try:
-                config = json.loads(bot.config_json or "{}")
-                initial_balance = float(config.get("budget_usd") or config.get("bot_budget_quote") or 0)
-            except:
-                pass
-
-            # Get total PnL (realized + unrealized approximation)
-            total_pnl = bot_pnl["pnl"]  # For now, use 30d PnL as total
-
-            bot_summary.append({
-                "bot_id": bot.id,
-                "id": bot.id,
-                "symbol": bot.symbol,
-                "status": bot.status,
-                "pnl_30d": bot_pnl["pnl"],
-                "total_pnl": total_pnl,
-                "total_pnl_usd": total_pnl,
-                "fees": bot_pnl["fees"],
-                "trades_count": bot_pnl["count"],
-                "budget_usd": initial_balance,
-                "initial_usd": initial_balance,
-                "current_usd": round(current_usd, 2),
-                "created_at": bot.created_at.isoformat() if hasattr(bot, 'created_at') and bot.created_at else None,
-                "started_at": bot.started_at.isoformat() if hasattr(bot, 'started_at') and bot.started_at else None
-            })
+            current_usd, initial_balance = _bot_current_equity_usd(db, bot, account_id)
+            total_bot_equity_usd += current_usd
+            bot_summary.append(_finance_bot_summary_row(bot, bot_pnl, current_usd, initial_balance))
         
         # Günlük bot PnL = sadece o gün tamamlanan turların (cycle) kârlarının toplamı (dashboard KPI ile aynı)
         daily_bot_pnl_usd = PnlService.daily_realized_from_cycles_completed_today(db, account_id)
@@ -614,6 +643,22 @@ async def get_finance_trades(
         if not account:
             raise HTTPException(status_code=404, detail="Account not found")
 
+        # Test (paper) hesabı: TradeNormalized boş, Trade tablosundan gerçekleşmiş bot işlemlerini döndür
+        from app.services.test_account import is_test_account
+        if is_test_account(account_id, db):
+            return await _get_test_account_trades(
+                account_id=account_id,
+                start=start,
+                end=end,
+                type_filter=type_filter,
+                symbol=symbol,
+                bot_id=bot_id,
+                side=side,
+                limit=limit,
+                offset=offset,
+                db=db,
+            )
+
         if sync:
             now = time.monotonic()
             last = _trade_sync_last_at.get(account_id, 0)
@@ -981,6 +1026,115 @@ async def get_finance_trades(
         }
 
 
+async def _get_test_account_trades(
+    account_id: int,
+    start: Optional[str],
+    end: Optional[str],
+    type_filter: Optional[str],
+    symbol: Optional[str],
+    bot_id: Optional[int],
+    side: Optional[str],
+    limit: int,
+    offset: int,
+    db: Session,
+) -> Dict:
+    """Test (paper) hesabı için işlem geçmişi: Trade tablosundan bot emirlerini döndür."""
+    from app.db.models import Trade
+
+    tf = (type_filter or "").strip().lower()
+
+    # Test hesabında yatırım/çekim yoktur
+    if tf in ("depositwithdraw", "deposit_withdraw", "yatirim_cekim"):
+        return {
+            "total": 0, "limit": limit, "offset": offset,
+            "trades": [], "data_status": "ready",
+            "is_test": True,
+            "request_id": f"req_{datetime.utcnow().timestamp()}",
+        }
+
+    # Tarih aralığı
+    start_dt: Optional[datetime] = None
+    end_dt: Optional[datetime] = None
+    if start:
+        start_dt = datetime.fromisoformat(start.replace("Z", "+00:00")).replace(tzinfo=None)
+    if end:
+        end_dt = datetime.fromisoformat(end.replace("Z", "+00:00")).replace(tzinfo=None)
+    if start_dt is None and end_dt is None:
+        end_dt = datetime.utcnow()
+        start_dt = end_dt - timedelta(days=365)
+
+    q = db.query(Trade).filter(Trade.account_id == account_id)
+    if start_dt is not None:
+        q = q.filter(Trade.ts >= start_dt)
+    if end_dt is not None:
+        q = q.filter(Trade.ts <= end_dt)
+    if symbol:
+        q = q.filter(Trade.symbol == symbol.upper())
+    if bot_id:
+        q = q.filter(Trade.bot_id == bot_id)
+    if side:
+        q = q.filter(Trade.side == side.upper())
+
+    total = q.count()
+    trades = q.order_by(desc(Trade.ts)).offset(offset).limit(limit).all()
+
+    # Bot isimlerini çöz
+    bot_ids = {t.bot_id for t in trades if t.bot_id}
+    bot_map: Dict[int, str] = {}
+    if bot_ids:
+        bots = db.query(Bot).filter(Bot.id.in_(bot_ids), Bot.account_id == account_id).all()
+        bot_map = {b.id: (b.symbol or "?") for b in bots}
+
+    rows = []
+    for t in trades:
+        qty = float(t.qty or 0)
+        price = float(t.price or 0)
+        fee = float(t.fee or 0)
+        quote_qty = qty * price
+        bid = t.bot_id
+        source = ("Bot " + bot_map[bid]) if bid and bid in bot_map else ("Bot (bilinmiyor)" if bid else "Kullanıcı")
+        ts_iso = (t.ts.isoformat() + "Z") if t.ts else None
+        side_u = (t.side or "BUY").upper()
+        rows.append({
+            "order_id": t.order_id or f"paper_{t.id}",
+            "trade_id": t.order_id or f"paper_{t.id}",
+            "symbol": t.symbol or "—",
+            "side": side_u,
+            "type": "buy" if side_u == "BUY" else "sell",
+            "type_label": "Simüle Alış" if side_u == "BUY" else "Simüle Satış",
+            # _txDisplayAmounts okuma alanları
+            "qty": round(qty, 8),
+            "price": round(price, 8),
+            "quote_qty": round(quote_qty, 4),
+            # finance_reports uyumluluğu
+            "executed_qty": round(qty, 8),
+            "avg_price": round(price, 8),
+            "commission": round(fee, 8),
+            "commission_usdt": round(fee, 4),
+            "commission_asset": t.fee_asset or "USDT",
+            "first_fill_time": ts_iso,
+            "last_fill_time": ts_iso,
+            "time": ts_iso,
+            "fills_count": 1,
+            "bot_id": bid,
+            "is_bot": bid is not None,
+            "source": "bot" if bid else "spot",
+            "source_label": source,
+            "platform": "TraderTrailing",
+            "is_paper": True,
+        })
+
+    return {
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "trades": rows,
+        "data_status": "ready",
+        "is_test": True,
+        "request_id": f"req_{datetime.utcnow().timestamp()}",
+    }
+
+
 @router.get("/finance/bots")
 async def get_finance_bots(
     account_id: int = Query(..., description="Account ID"),
@@ -1006,15 +1160,8 @@ async def get_finance_bots(
     bot_list = []
     for bot in bots:
         bot_pnl = pnl_30d["by_bot"].get(bot.id, {"pnl": 0.0, "fees": 0.0, "count": 0})
-        bot_list.append({
-            "bot_id": bot.id,
-            "symbol": bot.symbol,
-            "status": bot.status,
-            "mode": bot.mode,
-            "pnl_30d": bot_pnl["pnl"],
-            "fees": bot_pnl["fees"],
-            "trades_count": bot_pnl["count"]
-        })
+        current_usd, initial_balance = _bot_current_equity_usd(db, bot, account_id)
+        bot_list.append(_finance_bot_summary_row(bot, bot_pnl, current_usd, initial_balance))
     
     return {
         "account_id": account_id,
@@ -1053,6 +1200,8 @@ async def get_finance_bot_detail(
     last_30d = now - timedelta(days=30)
     pnl_30d = calculator.calculate_realized_pnl(account_id, last_30d, now)
     bot_pnl = pnl_30d["by_bot"].get(bot_id, {"pnl": 0.0, "fees": 0.0, "count": 0})
+    current_usd, initial_usd = _bot_current_equity_usd(db, bot, account_id)
+    summary_row = _finance_bot_summary_row(bot, bot_pnl, current_usd, initial_usd)
     
     # Get config
     config = {}
@@ -1068,9 +1217,17 @@ async def get_finance_bot_detail(
         "status": bot.status,
         "mode": bot.mode,
         "config": config,
-        "pnl_30d": bot_pnl["pnl"],
-        "fees": bot_pnl["fees"],
-        "trades_count": bot_pnl["count"],
+        "pnl_30d": summary_row["pnl_30d"],
+        "realized_30d_pnl_usd": summary_row["realized_30d_pnl_usd"],
+        "mark_to_market_pnl_usd": summary_row["mark_to_market_pnl_usd"],
+        "total_pnl": summary_row["total_pnl"],
+        "total_pnl_usd": summary_row["total_pnl_usd"],
+        "total_pnl_pct": summary_row["total_pnl_pct"],
+        "current_usd": summary_row["current_usd"],
+        "initial_usd": summary_row["initial_usd"],
+        "budget_usd": summary_row["budget_usd"],
+        "fees": summary_row["fees"],
+        "trades_count": summary_row["trades_count"],
         "trades": [
             {
                 "id": t.id,

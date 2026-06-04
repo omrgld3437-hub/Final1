@@ -76,6 +76,22 @@ class UserStreamClient:
         headers = {"X-MBX-APIKEY": getattr(self.keys, "api_key", "")}
         async with httpx.AsyncClient(timeout=10.0) as client:
             res = await client.post(url, headers=headers)
+            if res.status_code == 410:
+                # 410 POST'ta: Binance bu API key ile listenKey yaratmıyor.
+                # Olası nedenler: API key devre dışı, IP kısıtlaması, izin eksikliği.
+                # Hata metnini logla ve raise_for_status ile standart yola devam et.
+                try:
+                    err_body = res.json()
+                    binance_code = err_body.get("code")
+                    binance_msg = err_body.get("msg", "")
+                except Exception:
+                    binance_code, binance_msg = None, res.text[:200]
+                logger.warning(
+                    "USER_STREAM_CREATE_410 %s market=%s — "
+                    "Binance listenKey oluşturma reddedildi (POST 410). "
+                    "Binance code=%s msg=%s. API key izni veya IP kısıtlaması kontrol edin.",
+                    self._log_id(), self.market, binance_code, binance_msg,
+                )
             res.raise_for_status()
             data = res.json()
         listen_key = data.get("listenKey")
@@ -153,10 +169,19 @@ class UserStreamClient:
 
         self.stop_event = asyncio.Event()
         backoff = 1.0
+        # Ardışık listenKey oluşturma (POST) başarısızlıkları; tekrarlı log spam'ı önlemek için.
+        _consecutive_create_failures = 0
+        # Maksimum ardışık başarısızlık sonrası backoff süresi (saniye): 5 dakika.
+        _MAX_CREATE_BACKOFF = 300.0
+
         while not self.stop_event.is_set():
             self._force_reconnect = False
             try:
                 self.listen_key = await self._create_listen_key()
+                # Başarılı bağlantı — sayaçları sıfırla
+                _consecutive_create_failures = 0
+                backoff = 1.0
+
                 # Keepalive'ı başlat (önceki varsa durdur)
                 if self.keepalive_task and not self.keepalive_task.done():
                     self.keepalive_task.cancel()
@@ -173,11 +198,11 @@ class UserStreamClient:
                     open_timeout=20,
                     close_timeout=5,
                 ) as ws:
+                    mark_stream_connected(self.account_id)
                     logger.info(
                         "USER_STREAM_CONNECTED %s market=%s",
                         self._log_id(), self.market,
                     )
-                    backoff = 1.0
                     await self.on_order_update(self.account_id, {
                         "event_type": "USER_STREAM_CONNECTED",
                         "market": self.market,
@@ -204,23 +229,64 @@ class UserStreamClient:
 
             except asyncio.CancelledError:
                 break
+            except httpx.HTTPStatusError as exc:
+                status = exc.response.status_code if exc.response is not None else 0
+                _consecutive_create_failures += 1
+                mark_stream_down(self.account_id)
+                # İlk 410 hatası veya bağlantı kopması: WARNING olarak logla ve bildir.
+                # Ardışık başarısızlıklarda (3+): DEBUG seviyesine indir, log spam'ını önle.
+                if _consecutive_create_failures == 1:
+                    logger.warning(
+                        "USER_STREAM_DISCONNECTED %s market=%s status=%s err=%s",
+                        self._log_id(), self.market, status, exc,
+                    )
+                    await self.on_order_update(self.account_id, {
+                        "event_type": "USER_STREAM_DISCONNECTED",
+                        "market": self.market,
+                        "account_label": self.account_label,
+                        "error": str(exc)[:300],
+                        "ts": int(time.time() * 1000),
+                    })
+                elif _consecutive_create_failures == 3:
+                    logger.error(
+                        "USER_STREAM_PERSISTENT_FAILURE %s market=%s status=%s consecutive=%s — "
+                        "API anahtarı izni veya Binance sorunu; daha seyrek yeniden denenecek.",
+                        self._log_id(), self.market, status, _consecutive_create_failures,
+                    )
+                else:
+                    logger.debug(
+                        "USER_STREAM_CREATE_RETRY %s market=%s status=%s consecutive=%s",
+                        self._log_id(), self.market, status, _consecutive_create_failures,
+                    )
             except Exception as exc:
-                logger.warning(
-                    "USER_STREAM_DISCONNECTED %s market=%s err=%s",
-                    self._log_id(), self.market, exc,
-                )
-                await self.on_order_update(self.account_id, {
-                    "event_type": "USER_STREAM_DISCONNECTED",
-                    "market": self.market,
-                    "account_label": self.account_label,
-                    "error": str(exc)[:300],
-                    "ts": int(time.time() * 1000),
-                })
+                _consecutive_create_failures += 1
+                mark_stream_down(self.account_id)
+                if _consecutive_create_failures <= 2:
+                    logger.warning(
+                        "USER_STREAM_DISCONNECTED %s market=%s err=%s",
+                        self._log_id(), self.market, exc,
+                    )
+                    await self.on_order_update(self.account_id, {
+                        "event_type": "USER_STREAM_DISCONNECTED",
+                        "market": self.market,
+                        "account_label": self.account_label,
+                        "error": str(exc)[:300],
+                        "ts": int(time.time() * 1000),
+                    })
+                else:
+                    logger.debug(
+                        "USER_STREAM_RETRY %s market=%s consecutive=%s err=%s",
+                        self._log_id(), self.market, _consecutive_create_failures, exc,
+                    )
 
             if self.stop_event.is_set():
                 break
-            delay = min(60.0, backoff) + random.uniform(0, 0.3 * backoff)
-            backoff = min(60.0, backoff * 2)
+            # Ardışık başarısızlıklarda backoff'u uzat; 3+ hatadan sonra max 5 dakika.
+            if _consecutive_create_failures >= 3:
+                delay = _MAX_CREATE_BACKOFF + random.uniform(0, 30.0)
+            else:
+                delay = min(60.0, backoff) + random.uniform(0, 0.3 * backoff)
+                backoff = min(60.0, backoff * 2)
             try:
                 await asyncio.wait_for(self.stop_event.wait(), timeout=delay)
             except asyncio.TimeoutError:
@@ -240,6 +306,23 @@ class UserStreamClient:
 
 
 _clients: Dict[tuple[int, str], UserStreamClient] = {}
+
+# account_id → stream'in son kopuş timestamp'i (float, epoch).
+# health_watch bu değeri okuyarak wallet stale alert eşiğini artırır.
+_stream_down_since: Dict[int, float] = {}
+
+
+def mark_stream_down(account_id: int) -> None:
+    _stream_down_since[account_id] = time.time()
+
+
+def mark_stream_connected(account_id: int) -> None:
+    _stream_down_since.pop(account_id, None)
+
+
+def stream_down_since(account_id: int) -> Optional[float]:
+    """Stream'in kopuş zamanını döner (epoch float). Bağlıysa None."""
+    return _stream_down_since.get(account_id)
 
 
 def normalize_order_update(event: Dict[str, Any], *, market: str) -> Optional[Dict[str, Any]]:
@@ -455,3 +538,34 @@ def apply_user_stream_event_to_db(db: Session, account_id: int, event: Dict[str,
         },
     )
     db.commit()
+
+    # Emir dolduğunda tx_history dosyasını anında güncelle —
+    # hem bot emirleri (execution.py'deki record_bot_trade_fill için güvence)
+    # hem Binance-direct emirler (myTrades sync beklenmeden) kapsanır.
+    if status_raw == "FILLED":
+        try:
+            qty = float(event.get("cum_qty") or 0)
+            price = float(event.get("avg_price") or event.get("last_price") or 0)
+            if qty > 0 and price > 0:
+                from datetime import datetime, timezone as _tz
+                from app.services.transaction_history_file_store import upsert_trade_fill
+                ts_ms = int(event.get("ts") or (time.time() * 1000))
+                ts_dt = datetime.fromtimestamp(ts_ms / 1000, tz=_tz.utc).replace(tzinfo=None)
+                order_id_str = str(event.get("order_id") or client_order_id or "")
+                upsert_trade_fill(
+                    int(account_id),
+                    trade_id=order_id_str or client_order_id,
+                    order_id=order_id_str or None,
+                    symbol=(event.get("symbol") or "").upper(),
+                    side=(event.get("side") or "BUY").upper(),
+                    qty=qty,
+                    price=price,
+                    quote_qty=round(qty * price, 8),
+                    commission=0.0,
+                    commission_asset="USDT",
+                    is_maker=False,
+                    time=ts_dt,
+                    bot_id=int(intent.get("bot_id") or 0) or None,
+                )
+        except Exception as _ue:
+            logger.debug("user_stream tx_history upsert account_id=%s: %s", account_id, _ue)
