@@ -74,6 +74,7 @@ def test_validate_dca_payload_ui_shape():
         "allocation": {"base_pct": 50, "quote_pct": 50},
         "up": {"grids": [{"trigger_pct": 1, "qty_pct": 40}, {"trigger_pct": 2, "qty_pct": 60}]},
         "down": {"grids": [{"trigger_pct": 1, "qty_pct": 40}]},
+        "max_buy_levels": 1,
     })
     assert not ok
     assert viol

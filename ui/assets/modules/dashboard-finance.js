@@ -1329,15 +1329,15 @@ function getFinanceBotHealthStatus(bot) {
 function getFinanceBotStatusMeta(bot) {
     if (typeof isDashboardServerUnreachable === 'function' && isDashboardServerUnreachable()
         && typeof isFinanceBotRunningForHealth === 'function' && isFinanceBotRunningForHealth(bot)) {
-        return { text: 'DURDURULDU', className: 'mevcut-botlar-status--stopped', title: 'Sunucuya ulaşılamadığı için bot akışı güvenli durumda izleniyor.' };
+        return { text: 'ÇALIŞIYOR', className: 'mevcut-botlar-status--running', title: 'Sunucuya ulaşılamıyor; botun son bilinen durumu çalışıyor. Sağlık uyarısını detaydan kontrol edin.' };
     }
     var health = getFinanceBotHealthStatus(bot);
     if (typeof isFinanceBotRunningForHealth === 'function' && isFinanceBotRunningForHealth(bot)
         && (health.level === 'crit' || health.level === 'both')) {
         return {
-            text: 'DURDURULDU',
-            className: 'mevcut-botlar-status--stopped',
-            title: health.message || 'Kritik hata nedeniyle bot işlem akışı durdu; detay sayfasındaki uyarı ve logları kontrol edin.'
+            text: 'ÇALIŞIYOR',
+            className: 'mevcut-botlar-status--running',
+            title: health.message || 'Bot çalışıyor; kritik sağlık uyarısı var. Detay sayfasındaki logları kontrol edin.'
         };
     }
     if (isBotWaitingFirstBuy(bot)) {
@@ -1376,6 +1376,32 @@ var FINANCE_BOTS_HEALTH_POLL_MS = 15000;
 var FINANCE_BOT_ROW_ALERT_CLASSES = ['mevcut-bot-row-alert-warn', 'mevcut-bot-row-alert-crit', 'mevcut-bot-row-alert-both'];
 var FINANCE_BOTS_TAB_ALERT_CLASSES = ['bots-tab-alert-warn', 'bots-tab-alert-crit', 'bots-tab-alert-both'];
 var _financeBotsMetricsCache = {};
+var _financeBotsModuleLoadedAt = Date.now();
+
+function isFinanceBotsTestAccountContext() {
+    if (typeof State === 'undefined') return false;
+    var code = String(State.accountCode || '').trim().toUpperCase();
+    return !!State.isTestAccount || /^TEST/.test(code);
+}
+
+function isFinanceBotAccountWalletStaleAlert(alert) {
+    var code = String((alert && (alert.code || alert.health_code || alert.error_code)) || '').toUpperCase();
+    return code === 'WALLET_SNAPSHOT_STALE';
+}
+
+function financeBotRowHealthAlerts(alerts) {
+    return (Array.isArray(alerts) ? alerts : []).filter(function (a) {
+        return a && !isFinanceBotAccountWalletStaleAlert(a);
+    });
+}
+
+function isStoredFinanceBotWalletStaleAlert(row) {
+    var msg = String((row && row.message) || '').toLowerCase();
+    return msg.indexOf('cüzdan verisi güncel değil') >= 0
+        || msg.indexOf('cuzdan verisi guncel degil') >= 0
+        || msg.indexOf('wallet snapshot stale') >= 0
+        || msg.indexOf('wallet_snapshot_stale') >= 0;
+}
 
 function financeBotsSessionCacheKey(accountId) {
     return 'financeBotsTable_' + (accountId || '');
@@ -1450,8 +1476,8 @@ function persistFinanceBotsSessionCache(bots) {
                 status: b.status,
                 display_status: b.display_status,
                 initial_allocation_done: b.initial_allocation_done,
-                health_alert_level: b.health_alert_level || null,
-                health_alerts: Array.isArray(b.health_alerts) ? b.health_alerts : [],
+                health_alert_level: null,
+                health_alerts: [],
                 budget_usd: b.budget_usd || b.initial_usd,
                 initial_usd: b.initial_usd || b.budget_usd,
                 current_usd: b.current_usd,
@@ -1483,7 +1509,12 @@ function restoreFinanceBotsFromSessionCache(accountId) {
             _financeBotsMetricsCache = data.metrics;
         }
         if (data.bots && Array.isArray(data.bots) && data.bots.length) {
-            State.bots = hydrateBotsWithMetricsCache(data.bots);
+            State.bots = hydrateBotsWithMetricsCache(data.bots.map(function (bot) {
+                return Object.assign({}, bot, {
+                    health_alert_level: null,
+                    health_alerts: []
+                });
+            }));
             if (Object.keys(_financeBotsMetricsCache).length > 0) _financeBotsLiveHydrated = true;
             if (typeof restoreFinanceBotsDomFromSessionCache === 'function' && restoreFinanceBotsDomFromSessionCache(accountId, State.bots)) {
                 patchFinanceBotsMetrics(State.bots);
@@ -1862,10 +1893,13 @@ function clearFinanceBotsServerOfflineState() {
 window.clearFinanceBotsServerOfflineState = clearFinanceBotsServerOfflineState;
 
 function classifyFinanceBotHealth(botId, healthData) {
+    if (healthData && Array.isArray(healthData.alerts)) {
+        healthData = Object.assign({}, healthData, { alerts: financeBotRowHealthAlerts(healthData.alerts) });
+    }
     if (window.BotHealthAlerts && typeof window.BotHealthAlerts.classifyRowAlerts === 'function') {
         return window.BotHealthAlerts.classifyRowAlerts(botId, healthData, true);
     }
-    var alerts = (healthData && healthData.alerts) ? healthData.alerts : [];
+    var alerts = financeBotRowHealthAlerts(healthData && healthData.alerts);
     var hasCrit = alerts.some(function (a) { return a && String(a.level || '').toLowerCase() === 'critical'; });
     var hasWarn = alerts.some(function (a) { return a && String(a.level || '').toLowerCase() === 'warn'; });
     if (healthData && healthData.connectivity_ok === false) hasCrit = true;
@@ -1882,6 +1916,7 @@ function financeBotsHealthAccountKey() {
 }
 
 function hydrateFinanceBotsStoredHealthAlerts() {
+    if (isFinanceBotsTestAccountContext()) return;
     var stored = {};
     if (window.BotHealthAlerts && typeof window.BotHealthAlerts.getStoredRowAlerts === 'function') {
         stored = Object.assign(
@@ -1900,6 +1935,7 @@ function hydrateFinanceBotsStoredHealthAlerts() {
         }
     } catch (e) {}
     Object.keys(stored).forEach(function (id) {
+        if (isStoredFinanceBotWalletStaleAlert(stored[id])) return;
         if (!_financeBotsHealthCache[id] || !_financeBotsHealthCache[id].level) {
             _financeBotsHealthCache[id] = stored[id];
         }
@@ -2000,7 +2036,8 @@ function updateFinanceBotsTabAlertState() {
 }
 
 function financeBotsWalletStaleInfo() {
-    if (typeof State !== 'undefined' && State.isTestAccount) return null;
+    if (isFinanceBotsTestAccountContext()) return null;
+    if ((Date.now() - _financeBotsModuleLoadedAt) < 3500) return null;
     if (!assetsState || !assetsState.wallet || assetsState.wallet.keys_configured !== true) return null;
     if (typeof isWalletDataLive === 'function' && isWalletDataLive()) return null;
     var msg = typeof walletStaleStatusText === 'function'
@@ -2068,11 +2105,14 @@ function hydrateFinanceBotsInlineHealthAlerts(bots) {
     bots.forEach(function (bot) {
         var botId = String((bot && (bot.bot_id || bot.id)) || '');
         if (!botId) return;
-        var level = String(bot.health_alert_level || bot.health_level || '').toLowerCase();
-        if (!level && Array.isArray(bot.health_alerts)) {
-            var hasCrit = bot.health_alerts.some(function (a) { return a && String(a.level || '').toLowerCase() === 'critical'; });
-            var hasWarn = bot.health_alerts.some(function (a) { return a && String(a.level || '').toLowerCase() === 'warn'; });
+        var rowAlerts = financeBotRowHealthAlerts(bot.health_alerts);
+        var level = '';
+        if (rowAlerts.length) {
+            var hasCrit = rowAlerts.some(function (a) { return a && String(a.level || '').toLowerCase() === 'critical'; });
+            var hasWarn = rowAlerts.some(function (a) { return a && String(a.level || '').toLowerCase() === 'warn'; });
             level = hasCrit && hasWarn ? 'both' : (hasCrit ? 'critical' : (hasWarn ? 'warn' : ''));
+        } else if (!Array.isArray(bot.health_alerts)) {
+            level = String(bot.health_alert_level || bot.health_level || '').toLowerCase();
         }
         if (level === 'critical' || level === 'warn' || level === 'both') {
             _financeBotsHealthCache[botId] = {

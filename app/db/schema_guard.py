@@ -38,6 +38,10 @@ def _get_existing_columns(conn, table: str) -> set:
     return {row[1] for row in result.fetchall()}
 
 
+def _is_sqlite(engine) -> bool:
+    return getattr(getattr(engine, "dialect", None), "name", "") == "sqlite"
+
+
 def ensure_devices_columns(engine):
     """
     If devices table exists, add any missing columns to the devices table.
@@ -672,6 +676,44 @@ def ensure_bots_bot_code(engine):
         conn.commit()
 
 
+def ensure_bots_max_buy_levels(engine):
+    """SQLite compatibility guard: add/backfill bots.max_buy_levels for existing DBs."""
+    if not _is_sqlite(engine):
+        return
+    from app.botengine.dca_manager import derive_max_buy_levels_for_existing_config
+
+    with engine.connect() as conn:
+        r = conn.execute(text(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='bots'"
+        ))
+        if not r.fetchone():
+            conn.commit()
+            return
+        existing = _get_existing_columns(conn, "bots")
+        if "max_buy_levels" not in existing:
+            try:
+                conn.execute(text("ALTER TABLE bots ADD COLUMN max_buy_levels INTEGER NOT NULL DEFAULT 1"))
+                conn.commit()
+                logger.info("schema_guard: added column bots.max_buy_levels")
+            except Exception as e:
+                logger.warning("schema_guard: could not add bots.max_buy_levels: %s", e)
+                conn.rollback()
+        try:
+            rows = conn.execute(text("SELECT id, config_json, max_buy_levels FROM bots")).fetchall()
+            for bot_id, config_json, current_limit in rows:
+                limit = int(current_limit or 0)
+                desired = derive_max_buy_levels_for_existing_config(config_json)
+                if limit <= 0 or limit != desired:
+                    conn.execute(
+                        text("UPDATE bots SET max_buy_levels = :limit WHERE id = :id"),
+                        {"limit": desired, "id": bot_id},
+                    )
+            conn.commit()
+        except Exception as e:
+            logger.warning("schema_guard: could not backfill bots.max_buy_levels: %s", e)
+            conn.rollback()
+
+
 def ensure_core_tables(engine):
     """Create core tables (accounts, bots, etc.) from models if they don't exist. init_db.py ayrıca çalıştırılabilir; yoksa ilk açılışta otomatik oluşturulur."""
     with engine.connect() as conn:
@@ -736,6 +778,13 @@ def cleanup_old_error_logs(engine, retain_days: int = 30) -> int:
 def run_schema_guard(engine):
     """Entry point: ensure core tables + devices columns + audit_events table + chat_threads.rating + chat_ratings + pending_registrations.password_hash + accounts.isolate_from_admin + error_logs + bot_engine_state/events. Call once at startup."""
     try:
+        if not _is_sqlite(engine):
+            from app.db.base import Base
+            from app.db import models  # noqa: F401 - register all models
+
+            Base.metadata.create_all(bind=engine)
+            logger.info("schema_guard: non-sqlite dialect=%s; legacy SQLite guards skipped (use Alembic migrations)", engine.dialect.name)
+            return
         ensure_core_tables(engine)
         ensure_devices_columns(engine)
         ensure_audit_events_table(engine)
@@ -750,6 +799,7 @@ def run_schema_guard(engine):
         ensure_bot_perf_chart_state_table(engine)
         ensure_trades_engine_columns(engine)
         ensure_bots_bot_code(engine)
+        ensure_bots_max_buy_levels(engine)
         ensure_symbol_locks_table(engine)
         ensure_bot_virtual_wallet_table(engine)
         ensure_account_daily_realized_pnl_table(engine)

@@ -428,6 +428,18 @@ def tick_dca_grid_trailing(
                 )
             return [], next_wake
 
+    # ---- max_buy_levels hard limit ----
+    # Kaç buy grid'i zaten tetiklendi? Limit zorunlu ve pozitif; yeni BUY bu sınırı aşamaz.
+    _mbl = max(1, int(getattr(config, "max_buy_levels", 1) or 1))
+    _fired_buys = sum(1 for x in (state.get("buy_grid_fired") or []) if x)
+    state["_buy_levels_fired"] = _fired_buys
+    state["_buy_levels_max"] = _mbl
+    if _fired_buys >= _mbl:
+        # Mevcut grid tetiklemelerini engelle ama trailing + profit exit çalışmaya devam etsin
+        state["_buy_levels_blocked"] = True
+    else:
+        state.pop("_buy_levels_blocked", None)
+
     # ---- Initial allocation (t0) ----
     # Strategy: only produce intent. ia_done set ONLY in execution after real fill. No state mutation here.
     if not initial_done:
@@ -597,6 +609,9 @@ def tick_dca_grid_trailing(
 
     # Active buy trails: update per-grid trough, execute when price rises
     if buy_enabled:
+        # max_buy_levels hard guard: kaç BUY grid'i bu tick'e KADAR tetiklendi?
+        _mbl_limit = max(1, int(getattr(config, "max_buy_levels", 1) or 1))
+        _buy_fired_count = sum(1 for x in (state.get("buy_grid_fired") or []) if x)
         for idx in range(m):
             if idx < len(state["buy_grid_fired"]) and state["buy_grid_fired"][idx]:
                 continue
@@ -613,6 +628,20 @@ def tick_dca_grid_trailing(
             state["buy_grid_trough_price"] = troughs
             exec_thr = cur_trough * (1 + buy_trail_pct / 100.0)
             if P >= exec_thr or idx in favorable_buy:
+                # max_buy_levels: bu seviye limiti aşıyorsa hard block
+                if _buy_fired_count >= _mbl_limit:
+                    logger.warning(
+                        "BOT_BUY_LEVEL_BLOCKED bot_id=%s grid_idx=%s fired=%s max=%s — max_buy_levels hard limit",
+                        state.get("bot_id", 0), idx, _buy_fired_count, _mbl_limit,
+                    )
+                    from app.botengine.state_store import queue_engine_event
+                    queue_engine_event(
+                        state, "SKIP_REASON",
+                        f"max_buy_levels={_mbl_limit} aşıldı — grid {idx} engellendi",
+                        {"error_code": "MAX_BUY_LEVELS_EXCEEDED",
+                         "grid_index": idx, "fired": _buy_fired_count, "max": _mbl_limit},
+                    )
+                    continue
                 avail_quote = max(0.0, (_f(quote_balance) or 0.0) - quote_reserved)
                 quote_q = _buy_qty_for_grid(state, config, idx, avail_quote, price=P)
                 if quote_q and quote_q > 0:
@@ -624,6 +653,7 @@ def tick_dca_grid_trailing(
                         _queue_grid_skip(state, side="BUY", grid_index=idx, notional=quote_q, config=config, reason="trail_buy_grid")
                         continue
                     quote_reserved += quote_q
+                    _buy_fired_count += 1  # Bu tick'te tetiklenen buy sayısını artır
                     actions.append({
                         "type": "place",
                         "side": "BUY",

@@ -121,7 +121,9 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func, text
 
 from app.api.auth import get_account_or_403, require_auth, get_client_ip
+from app.api.bots_engine_services import detail_err as _detail_err
 from app.botengine.models import DcaGridTrailingConfig, config_from_ui_payload
+from app.botengine.dca_manager import MaxBuyLevelsError, normalize_max_buy_levels_payload
 from app.services import audit as audit_svc
 from app.botengine.orchestrator import delete_bot_fully, invalidate_config_cache
 from app.botengine.state_store import append_event, ensure_state_row, list_events, load_state, normalize_event_ts_iso_z, save_state
@@ -220,12 +222,6 @@ def _worker_process_alive() -> bool:
         return True
     except (OSError, ValueError, ProcessLookupError):
         return False
-
-
-def _detail_err(code: str, message: str, request_id: str) -> dict:
-    eid = str(uuid.uuid4())[:16]
-    logger.warning("API_ERR error_code=%s error_id=%s request_id=%s msg=%s", code, eid, request_id, message)
-    return {"error_code": code, "message": message, "request_id": request_id, "error_id": eid}
 
 
 def _parse_event_ts_ms(ts: Any) -> int:
@@ -1710,7 +1706,12 @@ async def bots_list(
     rid = _request_id(request)
     get_account_or_403(current, account_id, db)
     rows = db.query(Bot).filter(Bot.account_id == account_id).order_by(Bot.id.desc()).all()
-    from app.botengine.health_watch import _account_wallet_stale_alert, evaluate_bot_health_lite
+    from app.botengine.health_watch import (
+        _account_wallet_stale_alert,
+        _expected_tick_interval_sec,
+        _parse_last_tick_ts,
+        evaluate_bot_health_lite,
+    )
     from app.botengine.state_store import load_states_bulk, load_states_list_meta
 
     state_meta = load_states_list_meta(db, [r.id for r in rows])
@@ -1733,6 +1734,16 @@ async def bots_list(
             account_failure=account_failure,
             account_wallet_alert=account_wallet_alert,
         )
+        last_tick_ts = _parse_last_tick_ts(state)
+        if last_tick_ts is not None:
+            now_ts = int(datetime.now(timezone.utc).timestamp())
+            tick_age = now_ts - last_tick_ts
+            crit_thresh = max(60.0, _expected_tick_interval_sec(r) * 5.0)
+            if tick_age < crit_thresh:
+                health_alerts = [
+                    a for a in health_alerts
+                    if str((a or {}).get("code") or "").upper() != "LOOP_TASK_MISSING"
+                ]
         has_crit = any((a.get("level") or "").lower() == "critical" for a in health_alerts)
         has_warn = any((a.get("level") or "").lower() == "warn" for a in health_alerts)
         health_level = "both" if (has_crit and has_warn) else ("critical" if has_crit else ("warn" if has_warn else None))
@@ -1760,12 +1771,12 @@ async def bots_list(
 
 class BotCreateBody(BaseModel):
     account_id: int
-    config_json: Optional[dict] = None
+    config_json: Optional[Any] = None
 
 
 def create_bot_engine_core(account_id: int, config_dict: Dict[str, Any], db: Session) -> Dict[str, Any]:
     """Shared create logic. config_dict = UI payload. Returns bot_id, bot_code, account_id, symbol, status."""
-    raw = config_dict or {}
+    raw = normalize_max_buy_levels_payload(config_dict or {})
     cfg = config_from_ui_payload(raw)
     symbol = (raw.get("symbol") or cfg.symbol or "BTCUSDT").upper().strip()
     # Yeni botlar her zaman canlı modda oluşturulur.
@@ -1784,6 +1795,7 @@ def create_bot_engine_core(account_id: int, config_dict: Dict[str, Any], db: Ses
         config_json=config_json,
         status="stopped",
         bot_code=bot_code,
+        max_buy_levels=cfg.max_buy_levels,
     )
     db.add(bot)
     db.commit()
@@ -1809,7 +1821,15 @@ async def bots_create(
     rid = _request_id(request)
     get_account_or_403(current, body.account_id, db)
     raw = body.config_json or {}
-    result = create_bot_engine_core(body.account_id, raw, db)
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except Exception:
+            raise HTTPException(status_code=400, detail=_detail_err("INVALID_CONFIG_JSON", "config_json geçerli JSON olmalı", rid))
+    try:
+        result = create_bot_engine_core(body.account_id, raw, db)
+    except MaxBuyLevelsError as e:
+        raise HTTPException(status_code=400, detail=_detail_err("MAX_BUY_LEVELS_INVALID", str(e), rid))
     return {**result, "request_id": rid}
 
 
@@ -3714,19 +3734,33 @@ def _insert_engine_command(
 ) -> Optional[int]:
     """Insert into bot_engine_commands; returns command id."""
     now = datetime.now(timezone.utc).isoformat()
+    params = {
+        "created_at": now,
+        "account_id": account_id,
+        "bot_id": bot_id,
+        "command": command,
+        "payload_json": payload_json,
+        "request_id": request_id,
+    }
+    dialect = getattr(getattr(db, "bind", None), "dialect", None)
+    is_postgres = getattr(dialect, "name", "") == "postgresql"
+    if is_postgres:
+        row = db.execute(
+            text("""
+                INSERT INTO bot_engine_commands (created_at, account_id, bot_id, command, payload_json, status, request_id)
+                VALUES (:created_at, :account_id, :bot_id, :command, :payload_json, 'PENDING', :request_id)
+                RETURNING id
+            """),
+            params,
+        ).fetchone()
+        db.commit()
+        return int(row[0]) if row and row[0] else None
     db.execute(
         text("""
             INSERT INTO bot_engine_commands (created_at, account_id, bot_id, command, payload_json, status, request_id)
             VALUES (:created_at, :account_id, :bot_id, :command, :payload_json, 'PENDING', :request_id)
         """),
-        {
-            "created_at": now,
-            "account_id": account_id,
-            "bot_id": bot_id,
-            "command": command,
-            "payload_json": payload_json,
-            "request_id": request_id,
-        },
+        params,
     )
     db.commit()
     row = db.execute(text("SELECT last_insert_rowid()")).fetchone()
@@ -3775,6 +3809,14 @@ async def bots_start(
     except Exception:
         raw_cfg = {}
     if strategy_id not in ("trdca_pro", "multi_asset_rebalance") and (bot.symbol or "").upper() != "MULTI":
+        try:
+            raw_cfg = normalize_max_buy_levels_payload(raw_cfg)
+            if getattr(bot, "max_buy_levels", None) != raw_cfg.get("max_buy_levels"):
+                bot.max_buy_levels = int(raw_cfg["max_buy_levels"])
+                bot.config_json = json.dumps(raw_cfg, ensure_ascii=False)
+                db.commit()
+        except MaxBuyLevelsError as e:
+            raise HTTPException(status_code=400, detail=_detail_err("MAX_BUY_LEVELS_INVALID", str(e), rid))
         from app.botengine.config_validate import validate_dca_payload
         from app.botengine.state_store import append_event
         ok_grid, grid_err, grid_viol, min_budget = validate_dca_payload(raw_cfg)
@@ -4108,8 +4150,13 @@ async def bots_update_config(
     bot = _resolve_bot(bot_id, account_id, current, db)
     if not bot:
         raise HTTPException(status_code=404, detail=_detail_err("NOT_FOUND", "Bot not found", rid))
-    cfg = config_from_ui_payload(body or {})
+    try:
+        normalized_body = normalize_max_buy_levels_payload(body or {})
+        cfg = config_from_ui_payload(normalized_body)
+    except MaxBuyLevelsError as e:
+        raise HTTPException(status_code=400, detail=_detail_err("MAX_BUY_LEVELS_INVALID", str(e), rid))
     bot.config_json = json.dumps(cfg.to_dict(), ensure_ascii=False)
+    bot.max_buy_levels = cfg.max_buy_levels
     db.commit()
     invalidate_config_cache(bot.id)
     return {"ok": True, "bot_id": bot.id, "request_id": rid}
@@ -4147,6 +4194,11 @@ async def bots_health(
     last_tick = _parse_last_tick_ts(state)
     tick_age = (now_ts - last_tick) if last_tick is not None else None
     interval_s = _expected_tick_interval_sec(bot)
+    if tick_age is not None and tick_age < max(60.0, interval_s * 5.0):
+        alerts = [
+            a for a in alerts
+            if str((a or {}).get("code") or "").upper() != "LOOP_TASK_MISSING"
+        ]
     conn_fail = None
     connectivity_ok = True
     try:

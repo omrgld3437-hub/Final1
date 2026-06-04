@@ -4,7 +4,7 @@
  * dashboard.html'de dashboard.js'ten SONRA yüklenir.
  */
 
-let spotTradeState = {
+var spotTradeState = (window.spotTradeState && typeof window.spotTradeState === 'object') ? window.spotTradeState : {
     symbol: null,
     side: 'BUY',
     type: 'MARKET',
@@ -24,10 +24,28 @@ let spotTradeState = {
     minNotional: 10.0,        // Minimum order value
     selectedPercent: null     // 25 | 50 | 75 | 100 — aktif yüzde butonu
 };
+window.spotTradeState = spotTradeState;
+
+var TRADE_MODAL_INVALID_CHART_SYMBOLS = Array.isArray(window.TRADE_MODAL_INVALID_CHART_SYMBOLS)
+    ? window.TRADE_MODAL_INVALID_CHART_SYMBOLS
+    : ['USDTUSDT', 'USDCUSDT', 'FDUSDUSDT', 'BUSDUSDT', 'TUSDUSDT', 'DAIUSDT'];
+window.TRADE_MODAL_INVALID_CHART_SYMBOLS = TRADE_MODAL_INVALID_CHART_SYMBOLS;
+var STABLE_COINS = Array.isArray(window.STABLE_COINS)
+    ? window.STABLE_COINS
+    : ['USDT', 'USDC', 'FDUSD', 'BUSD', 'TUSD', 'DAI', 'USDP', 'USDD'];
+window.STABLE_COINS = STABLE_COINS;
+
+function isTradeModalInvalidChartSymbol(symbol) {
+    var invalidSymbols = Array.isArray(TRADE_MODAL_INVALID_CHART_SYMBOLS)
+        ? TRADE_MODAL_INVALID_CHART_SYMBOLS
+        : ['USDTUSDT', 'USDCUSDT', 'FDUSDUSDT', 'BUSDUSDT', 'TUSDUSDT', 'DAIUSDT'];
+    return invalidSymbols.indexOf((symbol || '').toUpperCase()) >= 0;
+}
 
 // Legacy alias for portfolioState (if referenced elsewhere)
 // This prevents "portfolioState is not defined" errors from cached/old code
-let portfolioState = spotTradeState;
+var portfolioState = (window.portfolioState && typeof window.portfolioState === 'object') ? window.portfolioState : spotTradeState;
+window.portfolioState = portfolioState;
 
 // Bind spot trade modal
 function bindSpotTradeModal() {
@@ -888,8 +906,6 @@ var _tradeModalChartCache = Object.create(null);
 var _tradeModalChartInflight = Object.create(null);
 var _tradeModalChartLoadSeq = 0;
 var TRADE_MODAL_CHART_TTL_MS = 90000;
-var TRADE_MODAL_INVALID_CHART_SYMBOLS = ['USDTUSDT', 'USDCUSDT', 'FDUSDUSDT', 'BUSDUSDT', 'TUSDUSDT', 'DAIUSDT'];
-
 function tradeModalChartPlaceholderHtml() {
     return '<svg width="100%" height="100%" viewBox="0 0 400 120" preserveAspectRatio="none"><rect width="400" height="120" fill="#1a1d24"/></svg>';
 }
@@ -990,7 +1006,7 @@ function prefetchTradeModalChart(symbol) {
     var normalized = normalizeModalSymbol(symbol || '');
     if (normalized.invalid || !normalized.normalized) return;
     var chartSymbol = normalized.normalized;
-    if (TRADE_MODAL_INVALID_CHART_SYMBOLS.indexOf(chartSymbol.toUpperCase()) >= 0) return;
+    if (isTradeModalInvalidChartSymbol(chartSymbol)) return;
     var cached = _tradeModalChartCache[chartSymbol];
     if (cached && (Date.now() - cached.ts) < TRADE_MODAL_CHART_TTL_MS) return;
     fetchAndCacheTradeModalChart(chartSymbol).catch(function () {});
@@ -1002,7 +1018,7 @@ async function loadTradeModalChart(symbol) {
     const container = document.getElementById('bnTradeChart');
     if (!wrap || !container) return;
     const normalized = normalizeModalSymbol(symbol || '');
-    if (normalized.invalid || !normalized.normalized || TRADE_MODAL_INVALID_CHART_SYMBOLS.indexOf((normalized.normalized || '').toUpperCase()) >= 0) {
+    if (normalized.invalid || !normalized.normalized || isTradeModalInvalidChartSymbol(normalized.normalized)) {
         container.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--ds-text-tertiary);font-size:0.85rem;">Geçersiz parite</div>';
         applyTradeModalHighLow(normalized.normalized || symbol, null, null, null, null);
         return;
@@ -1035,8 +1051,7 @@ async function loadExchangeInfo() {
     if (!State.accountId || !spotTradeState.symbol) return;
     
     // Filter out invalid symbols like USDTUSDT, USDCUSDT, FDUSDUSDT
-    const invalidSymbols = ["USDTUSDT", "USDCUSDT", "FDUSDUSDT", "BUSDUSDT", "TUSDUSDT", "DAIUSDT"];
-    if (invalidSymbols.includes(spotTradeState.symbol.toUpperCase())) {
+    if (isTradeModalInvalidChartSymbol(spotTradeState.symbol)) {
         console.warn("[dashboard] Invalid symbol for exchange_info:", spotTradeState.symbol);
         return;
     }
@@ -1877,9 +1892,8 @@ function updateActiveOrdersLivePricesFromWallet(walletData) {
     const priceMap = {};
     walletData.assets.forEach(asset => {
         // Don't create invalid symbols like USDTUSDT, USDCUSDT, FDUSDUSDT
-        const stablecoins = ["USDT", "USDC", "FDUSD", "BUSD", "TUSD", "DAI"];
         let tradingPair = asset.trading_pair;
-        if (!tradingPair && !stablecoins.includes(asset.asset)) {
+        if (!tradingPair && !isStableCoinAsset(asset.asset)) {
             tradingPair = `${asset.asset}USDT`;
         } else if (!tradingPair) {
             tradingPair = null; // Skip stablecoins
@@ -1893,8 +1907,7 @@ function updateActiveOrdersLivePricesFromWallet(walletData) {
     // Get missing prices from marketStore (no API fallback)
     const symbols = [...new Set(activeOrders.map(o => o.symbol))];
     // Filter out invalid symbols like USDTUSDT, USDCUSDT, FDUSDUSDT
-    const invalidSymbols = ["USDTUSDT", "USDCUSDT", "FDUSDUSDT", "BUSDUSDT", "TUSDUSDT", "DAIUSDT"];
-    const validSymbols = symbols.filter(s => !invalidSymbols.includes(s));
+    const validSymbols = symbols.filter(s => !isTradeModalInvalidChartSymbol(s));
     const missingSymbols = validSymbols.filter(s => !priceMap[s]);
     
     // Fill missing prices from marketStore
@@ -2024,8 +2037,7 @@ async function updateActiveOrdersLivePrices() {
     // Fetch prices if needed
     if (needFetch) {
         // Filter out invalid symbols like USDTUSDT, USDCUSDT, FDUSDUSDT
-        const invalidSymbols = ["USDTUSDT", "USDCUSDT", "FDUSDUSDT", "BUSDUSDT", "TUSDUSDT", "DAIUSDT"];
-        const validSymbols = symbols.filter(s => !invalidSymbols.includes(s));
+        const validSymbols = symbols.filter(s => !isTradeModalInvalidChartSymbol(s));
         
         if (validSymbols.length === 0) return;
         
@@ -2230,8 +2242,12 @@ let coinListAllCoins = []; // All coins for search (includes all from Binance)
 let coinListUpdateInterval = null;
 let coinListSortBy = 'marketCap'; // 'marketCap', 'volume', 'change'
 
-// Stable coins list (excluded from top 10)
-const STABLE_COINS = ["USDT", "USDC", "FDUSD", "BUSD", "TUSD", "DAI", "USDP", "USDD"];
+function isStableCoinAsset(asset) {
+    var stableCoins = Array.isArray(STABLE_COINS)
+        ? STABLE_COINS
+        : ['USDT', 'USDC', 'FDUSD', 'BUSD', 'TUSD', 'DAI', 'USDP', 'USDD'];
+    return stableCoins.indexOf((asset || '').toUpperCase()) >= 0;
+}
 
 function bindCoinList() {
     const searchInput = document.getElementById("coinListSearch");
@@ -2452,7 +2468,7 @@ async function loadCoinList(updateOnly = false) {
                 return false; // Don't include in nonStableCoins, we'll add it separately
             }
             const baseAsset = coin.baseAsset || coin.symbol?.replace(/USDT$|BTC$|ETH$|BNB$|FDUSD$|BUSD$|TUSD$|DAI$/i, '') || '';
-            return !STABLE_COINS.includes(baseAsset.toUpperCase());
+            return !isStableCoinAsset(baseAsset);
         });
         
         // Apply sorting to get top 10
@@ -2643,7 +2659,7 @@ async function loadCoinList(updateOnly = false) {
                 return false; // Don't include in nonStableCoins, we'll add it separately
             }
             const baseAsset = coin.baseAsset || coin.symbol?.replace(/USDT$|BTC$|ETH$|BNB$|FDUSD$|BUSD$|TUSD$|DAI$/i, '') || '';
-            return !STABLE_COINS.includes(baseAsset.toUpperCase());
+            return !isStableCoinAsset(baseAsset);
         });
         
         // Apply sorting to get top 10

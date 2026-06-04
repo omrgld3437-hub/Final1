@@ -3890,29 +3890,32 @@ body.tab-bots-active #tabBinance #globalLeaderboardPanel {
     background: var(--ds-bg-tertiary, #242932) !important;
 }
 .page-dashboard table.binance-assets-table.mevcut-botlar-table tbody tr[data-bot-id].mevcut-bot-row-alert-warn td {
-    animation: mevcut-bot-row-warn-blink 2.2s ease-in-out infinite;
+    border-color: rgba(240, 185, 11, 0.52);
+    box-shadow: inset 0 0 0 9999px rgba(240, 185, 11, 0.045);
 }
 .page-dashboard table.binance-assets-table.mevcut-botlar-table tbody tr[data-bot-id].mevcut-bot-row-alert-crit td {
-    animation: mevcut-bot-row-crit-blink 0.65s ease-in-out infinite;
+    border-color: rgba(246, 70, 93, 0.58);
+    box-shadow: inset 0 0 0 9999px rgba(246, 70, 93, 0.065);
 }
 .page-dashboard table.binance-assets-table.mevcut-botlar-table tbody tr[data-bot-id].mevcut-bot-row-alert-both td {
-    animation: mevcut-bot-row-both-blink 0.35s ease-in-out infinite;
+    border-color: rgba(246, 70, 93, 0.68);
+    box-shadow: inset 0 0 0 9999px rgba(246, 70, 93, 0.08);
 }
 .page-dashboard .mevcut-botlar-mobile-card.mevcut-bot-row-alert-warn {
-    animation: mevcut-bot-row-warn-blink 2.2s ease-in-out infinite;
-    box-shadow: var(--finance-bot-row-alert-shadow, none);
+    box-shadow: inset 0 0 0 9999px rgba(240, 185, 11, 0.045);
+    border-color: rgba(240, 185, 11, 0.52);
     border-width: 1px;
     border-style: solid;
 }
 .page-dashboard .mevcut-botlar-mobile-card.mevcut-bot-row-alert-crit {
-    animation: mevcut-bot-row-crit-blink 0.65s ease-in-out infinite;
-    box-shadow: var(--finance-bot-row-alert-shadow, none);
+    box-shadow: inset 0 0 0 9999px rgba(246, 70, 93, 0.065);
+    border-color: rgba(246, 70, 93, 0.58);
     border-width: 1px;
     border-style: solid;
 }
 .page-dashboard .mevcut-botlar-mobile-card.mevcut-bot-row-alert-both {
-    animation: mevcut-bot-row-both-blink 0.35s ease-in-out infinite;
-    box-shadow: var(--finance-bot-row-alert-shadow, none);
+    box-shadow: inset 0 0 0 9999px rgba(246, 70, 93, 0.08);
+    border-color: rgba(246, 70, 93, 0.68);
     border-width: 1px;
     border-style: solid;
 }

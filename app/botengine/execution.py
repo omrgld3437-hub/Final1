@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session as SQLASession
 from app.bot.ledger import Ledger
 from app.botengine.adapters.binance_adapter import BinanceAdapter
 from app.botengine.models import DcaGridTrailingConfig
+from app.botengine.dca_manager import MaxBuyLevelsError, assert_can_open_buy_level
 from app.botengine.risk import acquire_bot_lock, check_idempotency, guard_min_notional
 from app.botengine.intent_ledger import (
     build_intent_id,
@@ -331,6 +332,7 @@ async def run_actions(
         logger.warning("run_actions kill_switch bot_id=%s: %s", bot_id, kill_err)
         return results
     async with await acquire_bot_lock(bot_id):
+        pending_buy_level_actions = 0
         for a in actions:
             if a.get("type") != "place":
                 continue
@@ -368,6 +370,22 @@ async def run_actions(
                 symbol = (a.get("symbol") or getattr(config, "symbol", "BTCUSDT")).upper()
                 qty = _num(a.get("quantity"))
                 quote_qty_raw = a.get("quote_qty")
+                if side == "BUY" and reason == "trail_buy_grid":
+                    try:
+                        assert_can_open_buy_level(
+                            state=state,
+                            max_buy_levels=getattr(config, "max_buy_levels", 0),
+                            pending_buy_actions=pending_buy_level_actions,
+                            reason=reason,
+                        )
+                    except MaxBuyLevelsError as mbl_err:
+                        logger.warning("BOT_EXECUTION_SKIP bot_id=%s skip_reason=MAX_BUY_LEVELS_EXCEEDED %s", bot_id, mbl_err)
+                        _append_skip(
+                            db, bot_id, account_id, "MAX_BUY_LEVELS_EXCEEDED",
+                            str(mbl_err),
+                            _cycle_meta(state, symbol, grid_index=a.get("grid_index"), max_buy_levels=getattr(config, "max_buy_levels", 0)),
+                        )
+                        continue
                 if reason == "initial_allocation":
                     try:
                         qq = float(quote_qty_raw) if quote_qty_raw is not None else None
@@ -517,6 +535,8 @@ async def run_actions(
                                             append_event(db, bot_id, account_id, "ORDER_FILLED", f"repaired=true orderId={order_id_ex} trades_match={trades_match_count}", {"repaired": True, "orderId": order_id_ex, "trades_match_count": trades_match_count})
                                     logger.info("INITIAL_ALLOC_VERIFY result=OK orderId=%s trades_match_count=%s", order_id_ex, trades_match_count)
                                     results.append({"order_id": order_id_ex, "client_order_id": client_order_id, "side": side, "fill_qty": exec_qty, "fill_price": fill_price, "fee": fee, "reason": reason, "event_logged": True})
+                                    if side == "BUY" and reason == "trail_buy_grid":
+                                        pending_buy_level_actions += 1
                                     continue
                             if existing_order and status in ("NEW", "PARTIALLY_FILLED"):
                                 logger.info("BOT_EXECUTION_SKIP bot_id=%s reason=%s skip_reason=ORDER_ALREADY_SENT intent_id=%s status=%s", bot_id, reason, intent_id, status)
@@ -1271,6 +1291,8 @@ async def run_actions(
                     )
                 fill_evt["event_logged"] = True
                 results.append(fill_evt)
+                if side == "BUY" and reason == "trail_buy_grid":
+                    pending_buy_level_actions += 1
                 # Persist fill before tur kapanışı (CYCLE_END hata verse bile trades tablosunda kalsın)
                 if db is not None:
                     try:

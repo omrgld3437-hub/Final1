@@ -891,8 +891,12 @@ def evaluate_bot_health(bot, state: Optional[Dict[str, Any]], db: Session) -> Li
 
     loop_ok = _loop_task_alive(bot.id)
     if loop_ok is False:
-        tmpl = _HEALTH_MESSAGES["LOOP_TASK_MISSING"]
-        alerts.append(_alert_from_tmpl("LOOP_TASK_MISSING", "critical", tmpl, {}))
+        # A fresh tick proves the scheduler is advancing this bot. In newer scheduler
+        # modes there may be no long-lived per-bot task to inspect, so do not raise
+        # a false critical while the state is actively updating.
+        if last_tick is None or tick_age is None or tick_age >= crit_thresh:
+            tmpl = _HEALTH_MESSAGES["LOOP_TASK_MISSING"]
+            alerts.append(_alert_from_tmpl("LOOP_TASK_MISSING", "critical", tmpl, {}))
 
     try:
         from app.botengine.state_store import list_events
@@ -1099,8 +1103,12 @@ def evaluate_bot_health_lite(
 
     loop_ok = _loop_task_alive(bot.id)
     if loop_ok is False:
-        tmpl = _HEALTH_MESSAGES["LOOP_TASK_MISSING"]
-        alerts.append(_alert_from_tmpl("LOOP_TASK_MISSING", "critical", tmpl, {}))
+        # A fresh tick proves the scheduler is advancing this bot. In newer scheduler
+        # modes there may be no long-lived per-bot task to inspect, so do not raise
+        # a false critical while the state is actively updating.
+        if last_tick is None or tick_age is None or tick_age >= crit_thresh:
+            tmpl = _HEALTH_MESSAGES["LOOP_TASK_MISSING"]
+            alerts.append(_alert_from_tmpl("LOOP_TASK_MISSING", "critical", tmpl, {}))
 
     return alerts
 

@@ -1256,7 +1256,7 @@
     <script src="/ui/assets/core/apiClient.js?v=refactor1"></script>
     <script src="/ui/assets/utils/gridTrailEnvelope.js?v=2"></script>
     <script src="/ui/assets/utils/engineLogArchive.js?v=1"></script>
-    <script src="/ui/assets/utils/botHealthAlerts.js?v=31"></script>
+    <script src="/ui/assets/utils/botHealthAlerts.js?v=34"></script>
 <script src="/ui/assets/utils/engineLogFormat.js?v=69"></script>
 <script src="/ui/assets/utils/engineLogLive.js?v=35"></script>
     <script src="/ui/assets/core/intervalRegistry.js?v=1"></script>
@@ -3275,25 +3275,25 @@
                 clearBotBlockingStatus();
             }
             var statusText = st === 'starting' ? 'Başlatılıyor'
-                : st === 'running' ? (showAsError ? 'Durduruldu' : waitingFirstBuy ? 'Alım bekliyor' : 'Çalışıyor')
+                : st === 'running' ? (waitingFirstBuy ? 'Alım bekliyor' : 'Çalışıyor')
                 : st === 'error' || (st && st.indexOf('paused') === 0) ? 'Hata'
                 : st === 'stopped' ? 'Durduruldu' : 'Bekliyor';
             var badgeEl = document.getElementById('statusBadge');
             if (badgeEl) {
                 badgeEl.textContent = statusText;
-                badgeEl.className = 'status-badge ' + (showAsError || st === 'error' || (st && st.indexOf('paused') === 0) ? 'status-error' : st === 'running' ? 'status-running' : 'status-stopped');
+                badgeEl.className = 'status-badge ' + (st === 'error' || (st && st.indexOf('paused') === 0) ? 'status-error' : st === 'running' ? 'status-running' : 'status-stopped');
                 badgeEl.title = showAsError
                     ? (isConnectivityError
-                        ? 'Binance erişimi alınamıyor; bot güvenli bekleme modunda izleniyor. API Key, IP beyaz listesi, Spot izinleri veya ağ erişimini kontrol edin.'
+                        ? 'Botun son bilinen durumu çalışıyor; Binance erişim uyarısı var. API Key, IP beyaz listesi, Spot izinleri veya ağ erişimini kontrol edin.'
                         : opts.stale === true
-                        ? 'Güncel veri alınamıyor; son tick eski veya fiyat/bakiye güncellenemiyor.'
-                        : (opts.blockingMessage || 'Kritik bot sağlığı uyarısı var; bot işlem akışı güvenli şekilde durduruldu. Logları ve bağlantı durumunu kontrol edin.'))
+                        ? 'Botun son bilinen durumu çalışıyor; güncel veri alınamıyor veya son tick eski.'
+                        : (opts.blockingMessage || 'Bot çalışıyor; kritik sağlık uyarısı var. Logları ve bağlantı durumunu kontrol edin.'))
                     : (waitingFirstBuy ? 'Bot başlatıldı; ilk base alımı henüz gerçekleşmedi.' : '');
             }
             var stateHeroTitleEl = document.getElementById('stateHeroTitle');
             if (stateHeroTitleEl) {
                 var titleText = st === 'starting' ? 'Durum · Başlatılıyor'
-                    : st === 'running' ? (showAsError ? 'Durum · Durduruldu' : waitingFirstBuy ? 'Durum · Alım bekliyor' : 'Durum · Canlı')
+                    : st === 'running' ? (waitingFirstBuy ? 'Durum · Alım bekliyor' : 'Durum · Canlı')
                     : 'Durum · ' + statusText;
                 if (stateHeroTitleEl.textContent !== titleText) stateHeroTitleEl.textContent = titleText;
             }

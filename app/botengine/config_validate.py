@@ -151,5 +151,8 @@ def format_grid_notional_error(
 
 def validate_dca_payload(payload: Dict[str, Any]) -> Tuple[bool, str, List[Dict[str, Any]], Optional[float]]:
     """UI/API ham payload → DcaGridTrailingConfig → grid notional kontrolü."""
-    cfg = config_from_ui_payload(payload or {})
+    try:
+        cfg = config_from_ui_payload(payload or {})
+    except Exception as exc:
+        return False, str(exc), [], None
     return validate_dca_grid_notionals(cfg)

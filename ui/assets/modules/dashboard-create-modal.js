@@ -104,8 +104,10 @@ function applyLastCreateParamsToForm() {
         if (downCountEl && downGrids.length > 0) { downCountEl.value = downGrids.length; buildGridRows("downGridRows", downGrids.length, "down"); }
         var upTrailEl = document.getElementById("fUpTrail");
         var downTrailEl = document.getElementById("fDownTrail");
+        var maxBuyEl = document.getElementById("fMaxBuyLevels");
         if (upTrailEl && (up.trail_pct != null || up.trail_pct === 0)) upTrailEl.value = up.trail_pct;
         if (downTrailEl && (down.trail_pct != null || down.trail_pct === 0)) downTrailEl.value = down.trail_pct;
+        if (maxBuyEl) maxBuyEl.value = p.max_buy_levels || Math.max(1, downGrids.length || 1);
         for (var i = 0; i < upGrids.length; i++) {
             var tEl = document.getElementById("upGrid_" + i + "_trigger");
             var qEl = document.getElementById("upGrid_" + i + "_qty");
@@ -237,6 +239,7 @@ function closeCreateBotModal() {
         if (input.id === "fBasePct") input.value = "50";
         else if (input.id === "fQuotePct") input.value = "50";
         else if (input.id === "fUpCount" || input.id === "fDownCount") input.value = "0";
+        else if (input.id === "fMaxBuyLevels") input.value = "1";
         else if (input.id === "fUpTrail" || input.id === "fDownTrail" || input.id === "fResellTrail") input.value = "0.5";
         else if (input.id === "fRebuyTrigger" || input.id === "fResellTrigger") input.value = "1.5";
         else if (input.id === "fRebuyTrail") input.value = "0.30";
@@ -463,7 +466,9 @@ function bindCreateBotModal() {
         buildGridRows("upGridRows", parseInt(e.target.value) || 0, "up");
     });
     document.getElementById("fDownCount")?.addEventListener("input", (e) => {
-        buildGridRows("downGridRows", parseInt(e.target.value) || 0, "down");
+        var count = parseInt(e.target.value) || 0;
+        buildGridRows("downGridRows", count, "down");
+        syncMaxBuyLevelsWithDownCount(count);
     });
     document.getElementById("fMultiCoinCount")?.addEventListener("input", (e) => {
         buildMultiAssetRows(parseInt(e.target.value, 10) || 2);
@@ -606,6 +611,19 @@ function buildGridRows(containerId, count, mode) {
         `;
     }
     container.innerHTML = html;
+}
+
+function syncMaxBuyLevelsWithDownCount(count) {
+    var el = document.getElementById("fMaxBuyLevels");
+    if (!el) return;
+    var n = Math.max(0, parseInt(count, 10) || 0);
+    el.max = String(Math.max(1, n));
+    var current = parseInt(el.value, 10);
+    if (!Number.isFinite(current) || current < 1) {
+        el.value = String(Math.max(1, n));
+    } else if (n > 0 && current > n) {
+        el.value = String(n);
+    }
 }
 
 function normalizeSymbol(symbol) {
@@ -1267,6 +1285,8 @@ function collectForm() {
 
     const downCount = parseInt(document.getElementById("fDownCount").value) || 0;
     const downTrail = parseDecimal(document.getElementById("fDownTrail")?.value, 0.5);
+    syncMaxBuyLevelsWithDownCount(downCount);
+    const maxBuyLevels = parseInt(document.getElementById("fMaxBuyLevels")?.value, 10) || 0;
     const downGrids = [];
     for (let i = 0; i < downCount; i++) {
         const trigger = parseFloat(document.getElementById(`downGrid_${i}_trigger`)?.value);
@@ -1290,6 +1310,7 @@ function collectForm() {
         allocation: { base_pct: basePct, quote_pct: quotePct },
         up: { trail_pct: upTrail, grids: upGrids },
         down: { trail_pct: downTrail, grids: downGrids },
+        max_buy_levels: maxBuyLevels,
         profit: {
             rebuy_trigger_pct: rebuyTrigger,
             rebuy_trail_pct: rebuyTrail,
@@ -1357,6 +1378,17 @@ function validateForm(payload) {
     }
     if (payload.allocation.base_pct + payload.allocation.quote_pct !== 100) {
         return "Base ve Quote toplamı 100 olmalı";
+    }
+    var downGrids = (payload.down && payload.down.grids) || [];
+    var maxBuyLevels = Number(payload.max_buy_levels);
+    if (!Number.isInteger(maxBuyLevels) || maxBuyLevels < 1) {
+        return "Maksimum alış seviyesi zorunlu ve 1 veya daha büyük olmalı";
+    }
+    if (downGrids.length < 1) {
+        return "En az bir alış grid seviyesi tanımlayın";
+    }
+    if (maxBuyLevels > downGrids.length) {
+        return "Maksimum alış seviyesi alış grid sayısını aşamaz";
     }
     var gridErr = validateDcaGridNotionals(payload);
     if (gridErr) return gridErr;

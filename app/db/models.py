@@ -4,7 +4,7 @@ VERSION: v3
 DATE: 2026-01-26
 CHANGE: Add Device and DeviceApprovalRequest for device approval / revoke flow
 """
-from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, Text, Boolean, UniqueConstraint, Index
+from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, Text, Boolean, UniqueConstraint, Index, CheckConstraint
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from app.db.base import Base
@@ -286,6 +286,9 @@ class Account(Base):
 
 class Bot(Base):
     __tablename__ = "bots"
+    __table_args__ = (
+        CheckConstraint("max_buy_levels > 0", name="ck_bots_max_buy_levels_positive"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False, index=True)
@@ -295,6 +298,7 @@ class Bot(Base):
     started_at = Column(DateTime)
     status = Column(String(20), default="stopped")  # stopped, running, paused
     bot_code = Column(String(16), nullable=True, unique=True, index=True)  # 6-digit display id
+    max_buy_levels = Column(Integer, nullable=False, default=1)
 
     account = relationship("Account", back_populates="bots")
     trades = relationship("Trade", back_populates="bot")
@@ -480,4 +484,3 @@ class AdminPopupDismissal(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     popup_id = Column(Integer, ForeignKey("admin_popups.id"), nullable=False, index=True)
     dismissed_at = Column(DateTime, default=datetime.utcnow)
-

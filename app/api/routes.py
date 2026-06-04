@@ -2588,8 +2588,12 @@ def _enrich_snapshot_wallet_with_bot_locked(wallet: Dict[str, Any], account_id: 
     free_usd_tot = 0.0
     locked_usd_tot = 0.0
     total_bot_locked_usd = 0.0
+    snapshot_assets = set()
     for a in wallet["assets"]:
         asset = (a.get("asset") or "").strip()
+        if not asset:
+            continue
+        snapshot_assets.add(asset)
         free = float(a.get("free") or 0)
         locked = float(a.get("locked") or 0)
         usdt_value = a.get("usdt_value")
@@ -2612,6 +2616,50 @@ def _enrich_snapshot_wallet_with_bot_locked(wallet: Dict[str, Any], account_id: 
         free_usd_tot += free_val
         locked_usd_tot += locked_val
         total_bot_locked_usd += bot_locked_val
+
+    # Snapshot listesi düşük değerli varlıkları kesebilir. Botun tuttuğu coin
+    # snapshot'ta yoksa bile cüzdanda görünmeli; aksi halde ETH gibi açık bot
+    # varlıkları tabloda kaybolur ve kullanılabilir bakiye yanlış görünür.
+    try:
+        prices_map = data_hub.get_all_prices() or {}
+    except Exception:
+        prices_map = {}
+    stable = {"USDT", "BUSD", "USDC", "FDUSD", "TUSD", "DAI"}
+    for asset, bl_qty in bot_locked.items():
+        if not asset or asset in snapshot_assets:
+            continue
+        bl_qty = float(bl_qty or 0)
+        if bl_qty <= 0:
+            continue
+        if asset in stable:
+            price = 1.0
+        else:
+            price = None
+            for quote in ("USDT", "BUSD", "FDUSD", "USDC"):
+                raw = prices_map.get(f"{asset}{quote}")
+                if raw is not None and float(raw) > 0:
+                    price = float(raw)
+                    break
+        if price is None:
+            continue
+        bl_val = round(bl_qty * price, 2)
+        total_bot_locked_usd += bl_val
+        wallet["assets"].append({
+            "asset": asset,
+            "free": 0.0,
+            "locked": 0.0,
+            "total": bl_qty,
+            "bot_locked": round(bl_qty, 8),
+            "available": 0.0,
+            "free_usd": 0.0,
+            "locked_usd": 0.0,
+            "total_usd": bl_val,
+            "usdt_value": bl_val,
+            "bot_locked_usd": bl_val,
+            "available_usd": 0.0,
+            "_synthetic": True,
+        })
+        wallet["total_usd"] = round((wallet.get("total_usd") or 0) + bl_val, 2)
     wallet["free_usd"] = round(free_usd_tot, 2)
     wallet["locked_usd"] = round(locked_usd_tot, 2)
     wallet["bot_locked_usd"] = round(total_bot_locked_usd, 2)
@@ -2636,13 +2684,18 @@ def _get_snapshot_wallet_cached(account_id: int, db: Session):
         ts = getattr(row, "timestamp", None)
         if not ts:
             return (None, None, "none", None)
-        ts_iso = ts.isoformat() if getattr(ts, "tzinfo", None) else (ts.replace(tzinfo=timezone.utc).isoformat() if hasattr(ts, "replace") else str(ts))
+        ts_utc = None
+        if hasattr(ts, "tzinfo"):
+            ts_utc = ts.replace(tzinfo=timezone.utc) if ts.tzinfo is None else ts.astimezone(timezone.utc)
+            ts_iso = ts_utc.isoformat()
+        else:
+            ts_iso = str(ts)
         if not ts_iso.endswith("Z"):
             ts_iso = ts_iso.replace("+00:00", "Z") if "+00:00" in ts_iso else ts_iso + "Z"
         wallet = _snapshot_wallet_from_asset_row(row)
         now = time.time()
         try:
-            ts_epoch = ts.timestamp() if hasattr(ts, "timestamp") else (ts.replace(tzinfo=timezone.utc).timestamp() if getattr(ts, "replace", None) else now)
+            ts_epoch = ts_utc.timestamp() if ts_utc is not None else now
         except Exception:
             ts_epoch = now
         age_sec = round(now - ts_epoch, 2) if ts_epoch else None
@@ -3205,11 +3258,32 @@ def _wallet_response(
         if asset in processed_assets:
             continue
         if asset in stable:
-            total_bot_locked_usd += float(qty) * 1.0
+            price_usd = 1.0
+            value_usd = float(qty) * price_usd
         else:
             free_val, locked_val = _resolve_asset_price_usd(asset, float(qty), 0.0, prices)
-            if free_val is not None:
-                total_bot_locked_usd += free_val
+            if free_val is None:
+                continue
+            price_usd = free_val / float(qty) if float(qty) > 0 else None
+            value_usd = free_val
+        total_bot_locked_usd += value_usd
+        total_usd += round(value_usd, 2)
+        assets.append({
+            "asset": asset,
+            "free": 0.0,
+            "locked": 0.0,
+            "total": float(qty),
+            "bot_locked": round(float(qty), 8),
+            "available": 0.0,
+            "price_usd": round(price_usd, 8) if price_usd is not None else None,
+            "value_usd": round(value_usd, 2),
+            "free_usd": 0.0,
+            "locked_usd": 0.0,
+            "total_usd": round(value_usd, 2),
+            "bot_locked_usd": round(value_usd, 2),
+            "available_usd": 0.0,
+            "_synthetic": True,
+        })
     available_usd = max(0.0, free_usd - total_bot_locked_usd)
     ts_iso = datetime.utcnow().isoformat() + "Z"
     ts_ms = int(time.time() * 1000)

@@ -6,7 +6,7 @@
  */
 
 // Global State
-const State = {
+var State = (window.State && typeof window.State === 'object') ? window.State : {
     accountId: null,
     accountCode: null,
     accountMeta: null,
@@ -18,6 +18,57 @@ const State = {
     lastSummaryHash: "",
     timers: { summary: null, bots: null }
 };
+State.timers = State.timers && typeof State.timers === 'object' ? State.timers : { summary: null, bots: null };
+window.State = State;
+
+var WALLET_FX_ASSETS = Array.isArray(window.WALLET_FX_ASSETS)
+    ? window.WALLET_FX_ASSETS
+    : ['TRY', 'EUR', 'GBP'];
+window.WALLET_FX_ASSETS = WALLET_FX_ASSETS;
+var QUOTE = (typeof window.QUOTE === 'string' && window.QUOTE.trim())
+    ? window.QUOTE.trim().toUpperCase()
+    : 'USDT';
+window.QUOTE = QUOTE;
+var TEST_WALLET_STABLE_ASSETS = Array.isArray(window.TEST_WALLET_STABLE_ASSETS)
+    ? window.TEST_WALLET_STABLE_ASSETS
+    : ['USDT', 'USDC', 'FDUSD', 'BUSD', 'TUSD', 'DAI'];
+window.TEST_WALLET_STABLE_ASSETS = TEST_WALLET_STABLE_ASSETS;
+var _varlikDisplayPriceCache = (window._varlikDisplayPriceCache && typeof window._varlikDisplayPriceCache === 'object')
+    ? window._varlikDisplayPriceCache
+    : Object.create(null);
+window._varlikDisplayPriceCache = _varlikDisplayPriceCache;
+var _varlikDisplayChangeCache = (window._varlikDisplayChangeCache && typeof window._varlikDisplayChangeCache === 'object')
+    ? window._varlikDisplayChangeCache
+    : Object.create(null);
+window._varlikDisplayChangeCache = _varlikDisplayChangeCache;
+var _varlikPriceBlinkUntil = (window._varlikPriceBlinkUntil && typeof window._varlikPriceBlinkUntil === 'object')
+    ? window._varlikPriceBlinkUntil
+    : Object.create(null);
+window._varlikPriceBlinkUntil = _varlikPriceBlinkUntil;
+
+function ensureVarlikDisplayPriceCache() {
+    if (!_varlikDisplayPriceCache || typeof _varlikDisplayPriceCache !== 'object') {
+        _varlikDisplayPriceCache = Object.create(null);
+    }
+    window._varlikDisplayPriceCache = _varlikDisplayPriceCache;
+    return _varlikDisplayPriceCache;
+}
+
+function ensureVarlikDisplayChangeCache() {
+    if (!_varlikDisplayChangeCache || typeof _varlikDisplayChangeCache !== 'object') {
+        _varlikDisplayChangeCache = Object.create(null);
+    }
+    window._varlikDisplayChangeCache = _varlikDisplayChangeCache;
+    return _varlikDisplayChangeCache;
+}
+
+function ensureVarlikPriceBlinkCache() {
+    if (!_varlikPriceBlinkUntil || typeof _varlikPriceBlinkUntil !== 'object') {
+        _varlikPriceBlinkUntil = Object.create(null);
+    }
+    window._varlikPriceBlinkUntil = _varlikPriceBlinkUntil;
+    return _varlikPriceBlinkUntil;
+}
 
 /** Mobil görünüm (≤768px) – tek kaynak, resize'ta güncellenir */
 // ============================================================
@@ -38,8 +89,10 @@ const DataHub = {
 window.DataHub = DataHub;
 
 // Price cache for instant updates (JET HIZLI)
-let priceCache = {};
-let priceCacheTime = {};
+var priceCache = (window.priceCache && typeof window.priceCache === 'object') ? window.priceCache : {};
+var priceCacheTime = (window.priceCacheTime && typeof window.priceCacheTime === 'object') ? window.priceCacheTime : {};
+window.priceCache = priceCache;
+window.priceCacheTime = priceCacheTime;
 
 // ============================================================
 // PERFORMANCE HOTFIX: SpotCache - Global Warm Cache Layer
@@ -1013,7 +1066,12 @@ function isBotsTabActive() {
 }
 
 /** Botlar sekmesi: ilk açılışta tam DOM; sonraki geçişlerde yalnızca metrik/fiyat güncellemesi. */
-const WALLET_BACKOFF_MAX = 60000;
+var WALLET_POLL_MS = Number.isFinite(Number(window.WALLET_POLL_MS)) ? Number(window.WALLET_POLL_MS) : 12000;
+var WALLET_BACKOFF_MIN = Number.isFinite(Number(window.WALLET_BACKOFF_MIN)) ? Number(window.WALLET_BACKOFF_MIN) : 3000;
+var WALLET_BACKOFF_MAX = Number.isFinite(Number(window.WALLET_BACKOFF_MAX)) ? Number(window.WALLET_BACKOFF_MAX) : 60000;
+window.WALLET_POLL_MS = WALLET_POLL_MS;
+window.WALLET_BACKOFF_MIN = WALLET_BACKOFF_MIN;
+window.WALLET_BACKOFF_MAX = WALLET_BACKOFF_MAX;
 var walletPollBackoffUntil = 0; // 429 sonrası bir süre poll atlanır (Date.now() + ms)
 const LOADING_HTML = '<tr><td colspan="7" style="text-align: center; padding: 2rem; color: var(--ds-text-secondary);">Yükleniyor...</td></tr>';
 const LOADING_HTML_VARLIKLAR = '<tr><td colspan="10" style="text-align: center; padding: 2rem; color: var(--ds-text-secondary);">Yükleniyor...</td></tr>';
@@ -1776,9 +1834,9 @@ function renderAssetsSummary() {
 
 // Wallet tablosu tek kaynak: backend /api/binance/wallet assets[]. Coin list / FX ticker asla satır üretmez.
 // FX guard: TRY/EUR/GBP için total_usd > quantity imkansız (1 birim < 1 USD); böyle satırları gösterme.
-var WALLET_FX_ASSETS = ['TRY', 'EUR', 'GBP'];
 function isWalletAssetSuspiciousFx(a) {
-    if (!a || !WALLET_FX_ASSETS.includes((a.asset || '').toUpperCase())) return false;
+    var fxAssets = Array.isArray(WALLET_FX_ASSETS) ? WALLET_FX_ASSETS : ['TRY', 'EUR', 'GBP'];
+    if (!a || fxAssets.indexOf((a.asset || '').toUpperCase()) === -1) return false;
     var totalQty = (a.free || 0) + (a.locked || 0);
     var totalUsd = a.total_usd != null ? Number(a.total_usd) : null;
     if (totalQty <= 0 || totalUsd == null) return false;
@@ -2011,7 +2069,7 @@ function syncFavoriteButtonUI() {
 function rememberVarlikDisplayChange(asset, pct) {
     var sym = (asset || '').toUpperCase();
     if (!sym || pct == null || !Number.isFinite(Number(pct))) return;
-    _varlikDisplayChangeCache[sym] = Number(pct);
+    ensureVarlikDisplayChangeCache()[sym] = Number(pct);
 }
 
 function getAssetChangePct(asset) {
@@ -2027,8 +2085,9 @@ function getAssetChangePct(asset) {
         return derived;
     }
     var sym = (asset || '').toUpperCase();
-    if (sym && _varlikDisplayChangeCache[sym] != null && Number.isFinite(_varlikDisplayChangeCache[sym])) {
-        return _varlikDisplayChangeCache[sym];
+    var changeCache = ensureVarlikDisplayChangeCache();
+    if (sym && changeCache[sym] != null && Number.isFinite(changeCache[sym])) {
+        return changeCache[sym];
     }
     return null;
 }
@@ -2097,14 +2156,20 @@ function refreshVarliklarWalletMarketData(force) {
 }
 
 /** Varlıklar tablosu: marketStore anlık boşalsa son bilinen fiyat/% (… flicker önleme). */
-var _varlikDisplayPriceCache = Object.create(null);
-var _varlikDisplayChangeCache = Object.create(null);
+_varlikDisplayPriceCache = (_varlikDisplayPriceCache && typeof _varlikDisplayPriceCache === 'object')
+    ? _varlikDisplayPriceCache
+    : Object.create(null);
+window._varlikDisplayPriceCache = _varlikDisplayPriceCache;
+_varlikDisplayChangeCache = (_varlikDisplayChangeCache && typeof _varlikDisplayChangeCache === 'object')
+    ? _varlikDisplayChangeCache
+    : Object.create(null);
+window._varlikDisplayChangeCache = _varlikDisplayChangeCache;
 
 function rememberVarlikDisplayPrice(asset, price) {
     var sym = (asset || '').toUpperCase();
     if (!sym) return;
     var p = Number(price);
-    if (Number.isFinite(p) && p > 0) _varlikDisplayPriceCache[sym] = p;
+    if (Number.isFinite(p) && p > 0) ensureVarlikDisplayPriceCache()[sym] = p;
 }
 
 function getVarlikDisplayPrice(asset, rowEl) {
@@ -2131,7 +2196,7 @@ function getVarlikDisplayPrice(asset, rowEl) {
             }
         }
     }
-    var cached = _varlikDisplayPriceCache[sym];
+    var cached = ensureVarlikDisplayPriceCache()[sym];
     if (cached != null && Number.isFinite(cached) && cached > 0) return cached;
     return null;
 }
@@ -2140,7 +2205,7 @@ function getVarlikDisplayChangePct(asset, rowEl) {
     var sym = (asset || '').toUpperCase();
     var live = getAssetChangePct(asset);
     if (live != null && Number.isFinite(live)) {
-        if (sym) _varlikDisplayChangeCache[sym] = live;
+        if (sym) ensureVarlikDisplayChangeCache()[sym] = live;
         return live;
     }
     if (rowEl) {
@@ -2150,15 +2215,16 @@ function getVarlikDisplayChangePct(asset, rowEl) {
             if (Number.isFinite(fromAttr)) return fromAttr;
         }
     }
-    if (sym && _varlikDisplayChangeCache[sym] != null && Number.isFinite(_varlikDisplayChangeCache[sym])) {
-        return _varlikDisplayChangeCache[sym];
+    var changeCache = ensureVarlikDisplayChangeCache();
+    if (sym && changeCache[sym] != null && Number.isFinite(changeCache[sym])) {
+        return changeCache[sym];
     }
     return null;
 }
 
 function formatVarlikPriceDisplay(asset, price) {
     if (price != null && Number.isFinite(price) && price > 0) return fmtCoinPrice(price);
-    var cached = _varlikDisplayPriceCache[(asset || '').toUpperCase()];
+    var cached = ensureVarlikDisplayPriceCache()[(asset || '').toUpperCase()];
     if (cached != null && Number.isFinite(cached) && cached > 0) return fmtCoinPrice(cached);
     return '…';
 }
@@ -2203,10 +2269,11 @@ function repairTestWalletAssets(assets) {
     });
 }
 
-var TEST_WALLET_STABLE_ASSETS = ['USDT', 'USDC', 'FDUSD', 'BUSD', 'TUSD', 'DAI'];
-
 function isTestWalletStableAsset(asset) {
-    return TEST_WALLET_STABLE_ASSETS.indexOf((asset || '').toUpperCase()) >= 0;
+    var stableAssets = Array.isArray(TEST_WALLET_STABLE_ASSETS)
+        ? TEST_WALLET_STABLE_ASSETS
+        : ['USDT', 'USDC', 'FDUSD', 'BUSD', 'TUSD', 'DAI'];
+    return stableAssets.indexOf((asset || '').toUpperCase()) >= 0;
 }
 
 /** Test paper: stable Toplam/Değer = kullanılabilir + kilitli + bot kilitli (quote bot bakiyesi dahil). */
@@ -2933,7 +3000,10 @@ function renderVarliklarList() {
     }
 }
 
-var _varlikPriceBlinkUntil = {};
+_varlikPriceBlinkUntil = (_varlikPriceBlinkUntil && typeof _varlikPriceBlinkUntil === 'object')
+    ? _varlikPriceBlinkUntil
+    : Object.create(null);
+window._varlikPriceBlinkUntil = _varlikPriceBlinkUntil;
 
 /** Cüzdan tablosu fiyat blink — Mevcut Botlar ile aynı efekt (mevcutBotPriceFlashUp/Down). */
 function applyVarlikPriceBlink(priceCell, newPrice, oldPrice, asset) {
@@ -2943,8 +3013,9 @@ function applyVarlikPriceBlink(priceCell, newPrice, oldPrice, asset) {
     var key = (asset || '') + '|' + (priceCell.closest('tr') && priceCell.closest('tr').getAttribute('data-asset') || '');
     var now = Date.now();
     var cooldownMs = (typeof FINANCE_BOT_PRICE_BLINK_COOLDOWN_MS === 'number') ? FINANCE_BOT_PRICE_BLINK_COOLDOWN_MS : 350;
-    if (_varlikPriceBlinkUntil[key] && now < _varlikPriceBlinkUntil[key]) return;
-    _varlikPriceBlinkUntil[key] = now + cooldownMs;
+    var blinkCache = ensureVarlikPriceBlinkCache();
+    if (blinkCache[key] && now < blinkCache[key]) return;
+    blinkCache[key] = now + cooldownMs;
     var tone = newPrice > oldPrice ? 'up' : 'down';
     if (typeof applyFinanceBotPriceBlink === 'function') {
         applyFinanceBotPriceBlink(priceCell, newPrice, oldPrice, tone);
@@ -4564,7 +4635,10 @@ window.closeFirstLoginModal = closeFirstLoginModal;
 // FINANCIAL ACCOUNT TAB (Finansal Hesap)
 // ============================================
 
-window.dismissUserPopup = dismissUserPopup;
+window.dismissUserPopup = (typeof window.dismissUserPopup === 'function') ? window.dismissUserPopup : function () {
+    var overlay = document.getElementById("userPopupOverlay");
+    if (overlay) overlay.style.display = "none";
+};
 
 // Init on DOM ready
 if (document.readyState === "loading") {

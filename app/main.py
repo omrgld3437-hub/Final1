@@ -874,24 +874,29 @@ async def lockdown_middleware(request, call_next):
         headers={"Retry-After": "60"},
     )
 
-# CORS — ALLOWED_ORIGINS env var ile konfigüre edilebilir (virgülle ayrılmış).
-# Örn: ALLOWED_ORIGINS=https://tradertrailing.com,https://www.tradertrailing.com
-# Belirtilmezse geliştirme kolaylığı için ["*"] (credentials=False) kullanılır.
-_cors_env = os.environ.get("ALLOWED_ORIGINS", "").strip()
-_cors_origins: list = [o.strip() for o in _cors_env.split(",") if o.strip()] if _cors_env else ["*"]
-_cors_credentials: bool = bool(_cors_origins != ["*"])
-if not _cors_credentials:
-    import logging as _lg
-    _lg.getLogger(__name__).warning(
-        "CORS: ALLOWED_ORIGINS env var belirtilmedi — wildcard (*) credentials=False ile çalışıyor. "
-        "Production'da ALLOWED_ORIGINS=https://tradertrailing.com gibi set edin."
+# CORS: production'da explicit ALLOWED_ORIGINS zorunlu; wildcard kullanilmaz.
+from app.core.config import get_cors_config
+
+_cors_cfg = get_cors_config()
+_cors_origins = _cors_cfg["allow_origins"]
+if not _cors_origins and _cors_cfg["is_production"]:
+    suggested = ",".join(_cors_cfg.get("suggested_origins") or []) or "https://tradertrailing.com,https://www.tradertrailing.com"
+    raise RuntimeError(f"Production CORS requires ALLOWED_ORIGINS. Suggested: {suggested}")
+if _cors_cfg.get("invalid_origins"):
+    logger.warning("CORS: invalid ALLOWED_ORIGINS ignored: %s", _cors_cfg["invalid_origins"])
+if not os.environ.get("ALLOWED_ORIGINS", "").strip() and not _cors_cfg["is_production"]:
+    logger.warning(
+        "CORS: ALLOWED_ORIGINS empty; development localhost origins enabled. Suggested production origins: %s",
+        ",".join(_cors_cfg.get("suggested_origins") or []) or "-",
     )
+logger.info("CORS origins configured env=%s origins=%s", _cors_cfg["environment"], _cors_origins)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
-    allow_credentials=_cors_credentials,
+    allow_credentials=_cors_cfg["allow_credentials"],
     allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization", "X-Request-ID", "X-CSRF-Token"],
+    expose_headers=["X-Request-ID"],
 )
 
 

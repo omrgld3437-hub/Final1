@@ -89,7 +89,7 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
     <link rel="stylesheet" href="/ui/assets/theme.css?v=clean1">
     <link rel="stylesheet" href="/ui/assets/ui.css?v=footer-sticky1">
     <link rel="stylesheet" href="/ui/assets/design.css?v=footer-sticky2">
-    <link rel="stylesheet" href="/ui/assets/dashboard.css?v=bot-tab-health-blink1">
+    <link rel="stylesheet" href="/ui/assets/dashboard.css?v=bot-row-alert-static1">
     <link rel="stylesheet" href="/ui/assets/binance-colors.css?v=bin1">
     <link rel="stylesheet" href="/ui/assets/blink.css?v=1">
     <link rel="stylesheet" href="/ui/assets/dashboard-login-theme.css?v=spot-modal-chart1">
@@ -1290,6 +1290,14 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
                             </label>
                             <input id="fDownTrail" type="number" min="0" step="0.01" placeholder="0,5 veya 0.5" value="0.5" lang="tr" inputmode="decimal" />
                         </div>
+                        <div class="form-group">
+                            <label class="label-with-tooltip">
+                                Maksimum Alış Seviyesi
+                                <span class="tooltip-icon">ℹ</span>
+                                <span class="tooltip-text">Botun bu turda açabileceği en fazla alış grid seviyesi. Alış grid sayısını aşamaz.</span>
+                            </label>
+                            <input id="fMaxBuyLevels" type="number" min="1" step="1" value="1" required />
+                        </div>
                     </div>
                     <div id="downGridRows" class="rows"></div>
                 </div>
@@ -2057,7 +2065,7 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
     <!-- <script src="/ui/assets/binanceMarketData.js?v=1.0&nocache=202601230000"></script> -->
     <script src="/ui/assets/spot_engine.js?v=1.0&nocache=202601222350"></script>
     <script src="/ui/assets/utils/coinLogo.js?v=1"></script>
-    <script src="/ui/assets/utils/botHealthAlerts.js?v=31"></script>
+    <script src="/ui/assets/utils/botHealthAlerts.js?v=34"></script>
     <!-- Flash Home (Patch H). Deploy ui/assets/ so storageCache, renderHome, homeFlash exist (else 404). -->
     <script src="/ui/assets/storageCache.js?v=flash1"></script>
     <script src="/ui/assets/renderHome.js?v=wallet-stable6"></script>
@@ -2065,7 +2073,7 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
     <!-- [1] Önce: State/DOM bağımsız format/utility fonksiyonları -->
     <script src="/ui/assets/modules/dashboard-format.js?v=1"></script>
     <!-- [2] Ana dashboard: State, assetsState, normalizeAndApplyWallet vb. tanımlar -->
-    <script src="/ui/assets/dashboard.js?v=wallet-live-refresh-manager4"></script>
+    <script src="/ui/assets/dashboard.js?v=wallet-live-refresh-manager5"></script>
     <!-- [3] Sonra: State'e runtime erişen modüller (DOMContentLoaded öncesi hazır olurlar) -->
     <script src="/ui/assets/modules/dashboard-appbar.js?v=1"></script>
     <script src="/ui/assets/modules/dashboard-wallet-state.js?v=1"></script>
@@ -2076,8 +2084,8 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
     <script src="/ui/assets/modules/dashboard-bot-create.js?v=1"></script>
     <script src="/ui/assets/modules/dashboard-tabs.js?v=1"></script>
     <script src="/ui/assets/modules/dashboard-create-modal.js?v=1"></script>
-    <script src="/ui/assets/modules/dashboard-spot-trade.js?v=1"></script>
-    <script src="/ui/assets/modules/dashboard-finance.js?v=1"></script>
+    <script src="/ui/assets/modules/dashboard-spot-trade.js?v=2"></script>
+    <script src="/ui/assets/modules/dashboard-finance.js?v=4"></script>
     <script src="/ui/assets/ticker.js?v=chg-pct1" defer></script>
 </body>
 </html>

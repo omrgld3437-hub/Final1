@@ -19,6 +19,7 @@ export interface NewBotForm {
   upTrail: number;
   downCount: number;
   downTrail: number;
+  maxBuyLevels: number;
   rebuyTrigger: number;
   rebuyTrail: number;
   resellTrigger: number;
@@ -40,6 +41,7 @@ export default function BotsTab({ bots, setBots, availableUSDT }: BotsTabProps) 
     upTrail: 0.5,
     downCount: 2,
     downTrail: 0.5,
+    maxBuyLevels: 2,
     rebuyTrigger: 1.5,
     rebuyTrail: 0.30,
     resellTrigger: 1.5,
@@ -91,6 +93,16 @@ export default function BotsTab({ bots, setBots, availableUSDT }: BotsTabProps) 
         return;
       }
     }
+    if (currentStep === 4) {
+      if (form.downCount < 1) {
+        setWizardError("En az bir alış grid seviyesi tanımlayın.");
+        return;
+      }
+      if (form.maxBuyLevels < 1 || form.maxBuyLevels > form.downCount) {
+        setWizardError("Maksimum alış seviyesi 1 ile alış grid sayısı arasında olmalıdır.");
+        return;
+      }
+    }
     setWizardError("");
     setCurrentStep(prev => prev + 1);
   };
@@ -101,11 +113,25 @@ export default function BotsTab({ bots, setBots, availableUSDT }: BotsTabProps) 
   };
 
   const handleCreateBot = () => {
+    const payload = {
+      ...form,
+      strategy_id: "dca_grid_trailing",
+      allocation: { base_pct: form.base_pct, quote_pct: form.quote_pct },
+      up: { trail_pct: form.upTrail, grids: Array.from({ length: form.upCount }, (_, i) => ({ trigger_pct: (i + 1) * 0.5, qty_pct: 10 })) },
+      down: { trail_pct: form.downTrail, grids: Array.from({ length: form.downCount }, (_, i) => ({ trigger_pct: (i + 1) * 0.5, qty_pct: 10 })) },
+      max_buy_levels: form.maxBuyLevels,
+      profit: {
+        rebuy_trigger_pct: form.rebuyTrigger,
+        rebuy_trail_pct: form.rebuyTrail,
+        resell_trigger_pct: form.resellTrigger,
+        resell_trail_pct: form.resellTrail,
+      },
+    };
     apiFetch<{ success?: boolean; bot_id?: number }>("/api/bots/create", {
       method: "POST",
       body: JSON.stringify({
         account_id: accountId,
-        config_json: JSON.stringify(form),
+        config_json: JSON.stringify(payload),
       }),
     })
       .then((data) => {
@@ -323,7 +349,10 @@ export default function BotsTab({ bots, setBots, availableUSDT }: BotsTabProps) 
                     <input
                       type="number"
                       value={form.downCount}
-                      onChange={e => setForm({ ...form, downCount: parseInt(e.target.value) || 0 })}
+                      onChange={e => {
+                        const downCount = parseInt(e.target.value) || 0;
+                        setForm({ ...form, downCount, maxBuyLevels: Math.min(Math.max(1, form.maxBuyLevels), Math.max(1, downCount)) });
+                      }}
                       className="w-full bg-[#1e2026] text-white border border-neutral-800 rounded-lg p-2.5 text-sm"
                     />
                   </div>
@@ -334,6 +363,17 @@ export default function BotsTab({ bots, setBots, availableUSDT }: BotsTabProps) 
                       value={form.downTrail}
                       step="0.01"
                       onChange={e => setForm({ ...form, downTrail: parseFloat(e.target.value) || 0 })}
+                      className="w-full bg-[#1e2026] text-white border border-neutral-800 rounded-lg p-2.5 text-sm"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-semibold text-neutral-400">Maksimum Alış Seviyesi</label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={Math.max(1, form.downCount)}
+                      value={form.maxBuyLevels}
+                      onChange={e => setForm({ ...form, maxBuyLevels: Math.min(parseInt(e.target.value) || 1, Math.max(1, form.downCount)) })}
                       className="w-full bg-[#1e2026] text-white border border-neutral-800 rounded-lg p-2.5 text-sm"
                     />
                   </div>

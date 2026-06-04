@@ -7,6 +7,8 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 import json
 
+from app.botengine.dca_manager import normalize_max_buy_levels_payload
+
 
 class BotEngineMode(str, Enum):
     IDLE = "IDLE"
@@ -112,6 +114,10 @@ class DcaGridTrailingConfig:
         # Günlük kayıp limiti (USDT). 0 veya None = limit yok.
         _dll = r.get("daily_loss_limit_usd")
         self.daily_loss_limit_usd: float = _float_or(_dll, 0.0) if _dll not in (None, "", 0) else 0.0
+        # Max buy grid seviyesi hard limiti. Production'da zorunlu ve pozitif.
+        _mbl = r.get("max_buy_levels")
+        _mbl_val = _int_or(_mbl, 0) if _mbl not in (None, "") else 0
+        self.max_buy_levels: int = max(1, _mbl_val)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -143,6 +149,7 @@ class DcaGridTrailingConfig:
             "initial_fee_buffer_pct": self.initial_fee_buffer_pct,
             "available_quote_buffer_pct": self.available_quote_buffer_pct,
             "daily_loss_limit_usd": self.daily_loss_limit_usd,
+            "max_buy_levels": self.max_buy_levels,
         }
 
 
@@ -327,6 +334,7 @@ def config_multi_asset_from_payload(payload: Dict[str, Any]) -> MultiAssetRebala
 
 def config_from_ui_payload(payload: Dict[str, Any]) -> DcaGridTrailingConfig:
     """Map UI create-form payload to DcaGridTrailingConfig."""
+    payload = normalize_max_buy_levels_payload(payload or {})
     # UI: up.grids[].trigger_pct, qty_pct; down same.
     sell_grids = []
     for g in (payload.get("up") or {}).get("grids") or []:
@@ -353,6 +361,7 @@ def config_from_ui_payload(payload: Dict[str, Any]) -> DcaGridTrailingConfig:
         "tick_interval_ms": payload.get("tick_interval_ms", 2000),
         "max_orders_per_minute": payload.get("max_orders_per_minute", 12),
         "max_slippage_pct": payload.get("max_slippage_pct", 0.5),
+        "max_buy_levels": payload.get("max_buy_levels"),
     }
     return DcaGridTrailingConfig(raw)
 

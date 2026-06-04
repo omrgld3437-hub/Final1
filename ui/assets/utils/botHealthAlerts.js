@@ -191,6 +191,83 @@
         return String((a && a.level) || '').toLowerCase();
     }
 
+    function isAccountWalletStaleAlert(alert) {
+        var code = String((alert && (alert.code || alert.health_code || alert.error_code)) || '').toUpperCase();
+        return code === 'WALLET_SNAPSHOT_STALE';
+    }
+
+    function isFreshLoopTaskMissingAlert(alert, healthSnapshot) {
+        var code = String((alert && (alert.code || alert.health_code || alert.error_code)) || '').toUpperCase();
+        if (code !== 'LOOP_TASK_MISSING') return false;
+        var tickAge = Number(healthSnapshot && healthSnapshot.tick_age_s);
+        if (!Number.isFinite(tickAge)) return false;
+        var interval = Number(healthSnapshot && healthSnapshot.tick_interval_s);
+        var threshold = Math.max(60, (Number.isFinite(interval) && interval > 0 ? interval : 2) * 5);
+        return tickAge < threshold;
+    }
+
+    function healthAlertCode(alert) {
+        return String((alert && (alert.code || alert.health_code || alert.error_code)) || '').toUpperCase();
+    }
+
+    function eventTimestampMs(ev) {
+        var ts = ev && ev.ts ? new Date(ev.ts).getTime() : 0;
+        return Number.isFinite(ts) ? ts : 0;
+    }
+
+    function eventResolvedHealthCode(ev) {
+        var meta = (ev && ev.meta) || {};
+        var code = String(meta.health_code || meta.error_code || '').toUpperCase();
+        if (meta.health_resolved === true) return String(meta.health_code || code || '').toUpperCase();
+        if (meta.connectivity_stable === true || code === 'CONNECTIVITY_STABLE' || code === 'CONNECTIVITY_RECOVERED') {
+            return 'CONNECTIVITY_STABLE';
+        }
+        if (/bağlantı kuruldu|baglanti kuruldu|sorunsuz çalışıyor|sorunsuz calisiyor|tekrar aktif edildi|normal çalışmaya devam/i.test(String(ev && ev.message || ''))) {
+            return 'CONNECTIVITY_STABLE';
+        }
+        return '';
+    }
+
+    function isRecoveryMatchForAlert(alertCode, recoveryCode) {
+        if (!alertCode || !recoveryCode) return false;
+        if (recoveryCode === alertCode) return true;
+        if (recoveryCode === 'CONNECTIVITY_STABLE') {
+            return /LOOP_TASK_MISSING|BOT_LOOP_AUTO_RESTART|BOT_CONTINUES_ON_ERROR|TICK_STALE_WARN|TICK_STALE_CRIT|CONNECTIVITY_DEGRADED|BINANCE_UNREACHABLE|SERVER_UNREACHABLE/.test(alertCode);
+        }
+        return false;
+    }
+
+    function latestEventTimeForCode(events, code, matcher) {
+        var latest = 0;
+        (events || []).forEach(function (ev) {
+            if (!matcher(ev, code)) return;
+            var ts = eventTimestampMs(ev);
+            if (ts > latest) latest = ts;
+        });
+        return latest;
+    }
+
+    function hasRecoveryAfterAlert(alert, recentEvents) {
+        var code = healthAlertCode(alert);
+        if (!code || !(recentEvents || []).length) return false;
+        var latestProblem = latestEventTimeForCode(recentEvents, code, function (ev, c) {
+            return resolveEventLogCode(ev) === c || eventHealthCode(ev) === c;
+        });
+        var latestRecovery = latestEventTimeForCode(recentEvents, code, function (ev, c) {
+            return isRecoveryMatchForAlert(c, eventResolvedHealthCode(ev));
+        });
+        return latestRecovery > 0 && latestRecovery >= latestProblem;
+    }
+
+    function normalizeActiveAlerts(alerts, healthSnapshot, recentEvents) {
+        return (alerts || []).filter(function (a) {
+            return a
+                && !isAccountWalletStaleAlert(a)
+                && !isFreshLoopTaskMissingAlert(a, healthSnapshot)
+                && !hasRecoveryAfterAlert(a, recentEvents || []);
+        });
+    }
+
     function alertSortKey(a) {
         var lv = alertLevel(a);
         var base = ALERT_PRIORITY[a && a.code] || (lv === 'critical' ? 600 : 300);
@@ -549,6 +626,8 @@
 
     function filterAlertsForUi(alerts, dismissInfo, recentEvents, healthSnapshot) {
         if (!alerts || !alerts.length) return { warns: [], criticals: [] };
+        alerts = normalizeActiveAlerts(alerts, healthSnapshot, recentEvents);
+        if (!alerts.length) return { warns: [], criticals: [] };
         if (!dismissInfo) return pickAllAlerts(alerts);
         var filtered = alerts.filter(function (a) {
             return a && !isAlertSuppressed(a, dismissInfo, recentEvents, healthSnapshot);
@@ -581,7 +660,7 @@
         var reg = loadLogRegistry(botId);
         if (!reg.entries) reg.entries = {};
 
-        var activeList = (alerts || []).filter(function (a) {
+        var activeList = normalizeActiveAlerts(alerts || [], healthSnapshot, recentEvents).filter(function (a) {
             return a && a.code && !isAlertSuppressed(a, dismissInfo, recentEvents, healthSnapshot);
         });
         var activeCodes = {};
@@ -736,7 +815,7 @@
         events = filterDismissedFromEvents(botId, events, healthData);
         if (!botId) return events;
 
-        var alerts = (healthData && healthData.alerts) ? healthData.alerts : [];
+        var alerts = normalizeActiveAlerts((healthData && healthData.alerts) ? healthData.alerts : [], healthData, events);
         var dismiss = getDismissInfo(botId);
         var reg = syncLogRegistry(botId, alerts, dismiss, events, healthData);
 
@@ -1021,7 +1100,7 @@
 
     function classifyRowAlerts(botId, healthData, running) {
         if (!running) return { level: null, hasCrit: false, hasWarn: false };
-        var alerts = (healthData && healthData.alerts) ? healthData.alerts.slice() : [];
+        var alerts = normalizeActiveAlerts((healthData && healthData.alerts) ? healthData.alerts.slice() : [], healthData, []);
         if (healthData && healthData.connectivity_ok === false && healthData.connectivity_failure) {
             alerts.push({
                 code: healthData.connectivity_failure.error_code || 'BINANCE_UNREACHABLE',
