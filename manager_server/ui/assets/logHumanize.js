@@ -1460,6 +1460,16 @@
         var isReconnect = /USER_STREAM_RECONNECT/i.test(_msg);
         var isPersistentFailure = /USER_STREAM_PERSISTENT_FAILURE/i.test(_msg);
         var isCreate410 = /USER_STREAM_CREATE_410/i.test(_msg);
+        var isNetworkBlock = /USER_STREAM_NETWORK_BLOCK/i.test(_msg);
+
+        if (isNetworkBlock) {
+          return {
+            konu: 'Binance API\'ye ulaşılamıyor — ağ engeli',
+            sebep: 'Sunucu Binance API\'ye bağlanmaya çalışırken HTML yanıt aldı. Bu, isteğin Binance\'e ulaşmadan bir proxy, güvenlik duvarı veya ISP tarafından kesildiğini gösteriyor. API key ile ilgisi yok.',
+            etki: 'User data stream açılamıyor; ORDER_TRADE_UPDATE eventleri alınamaz. Bot REST polling ile çalışmaya devam eder.',
+            oneri: '1) Sunucu ağ bağlantısını kontrol edin: ping api.binance.com. 2) ISP/firewall Binance\'i engelliyor olabilir — DNS değiştirmeyi veya VPN kullanmayı deneyin. 3) Sunucu güvenlik duvarında api.binance.com:443 çıkış izni var mı kontrol edin.'
+          };
+        }
 
         if (isCreate410) {
           return {

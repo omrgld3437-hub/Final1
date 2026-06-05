@@ -76,22 +76,32 @@ class UserStreamClient:
         headers = {"X-MBX-APIKEY": getattr(self.keys, "api_key", "")}
         async with httpx.AsyncClient(timeout=10.0) as client:
             res = await client.post(url, headers=headers)
-            if res.status_code == 410:
-                # 410 POST'ta: Binance bu API key ile listenKey yaratmıyor.
-                # Olası nedenler: API key devre dışı, IP kısıtlaması, izin eksikliği.
-                # Hata metnini logla ve raise_for_status ile standart yola devam et.
+            if not res.is_success:
+                # JSON mu HTML mi? HTML → ağ/proxy engeli; JSON → Binance API hatası
+                raw_text = res.text[:300] if res.text else ""
+                is_html = raw_text.lstrip().startswith("<")
                 try:
-                    err_body = res.json()
+                    err_body = res.json() if not is_html else {}
                     binance_code = err_body.get("code")
-                    binance_msg = err_body.get("msg", "")
+                    binance_msg = err_body.get("msg", raw_text)
                 except Exception:
-                    binance_code, binance_msg = None, res.text[:200]
-                logger.warning(
-                    "USER_STREAM_CREATE_410 %s market=%s — "
-                    "Binance listenKey oluşturma reddedildi (POST 410). "
-                    "Binance code=%s msg=%s. API key izni veya IP kısıtlaması kontrol edin.",
-                    self._log_id(), self.market, binance_code, binance_msg,
-                )
+                    binance_code, binance_msg = None, raw_text
+
+                if is_html:
+                    # HTML yanıt = istek Binance'e ulaşmadı (proxy/güvenlik duvarı/ISP engeli)
+                    logger.warning(
+                        "USER_STREAM_NETWORK_BLOCK %s market=%s status=%s — "
+                        "Binance API'ye ulaşılamıyor: yanıt HTML (proxy/güvenlik duvarı/ISP engeli). "
+                        "VPN, DNS veya ağ ayarları kontrol edilmeli.",
+                        self._log_id(), self.market, res.status_code,
+                    )
+                else:
+                    logger.warning(
+                        "USER_STREAM_CREATE_410 %s market=%s status=%s — "
+                        "Binance listenKey oluşturma reddedildi. "
+                        "Binance code=%s msg=%s. API key izni veya IP kısıtlaması kontrol edin.",
+                        self._log_id(), self.market, res.status_code, binance_code, binance_msg,
+                    )
             res.raise_for_status()
             data = res.json()
         listen_key = data.get("listenKey")
