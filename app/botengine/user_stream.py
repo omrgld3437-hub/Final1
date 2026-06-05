@@ -183,6 +183,11 @@ class UserStreamClient:
         _consecutive_create_failures = 0
         # Maksimum ardışık başarısızlık sonrası backoff süresi (saniye): 5 dakika.
         _MAX_CREATE_BACKOFF = 300.0
+        # Servis başlangıcından itibaren geçen süre: ilk 120 saniye "başlangıç dönemi".
+        # Bu süre içindeki ardışık başarısızlıklar ERROR yerine WARNING olarak kalır
+        # (yeniden başlatma sırasındaki geçici bağlantı sorunları hata listesine düşmesin).
+        _start_time = time.time()
+        _STARTUP_GRACE_SEC = 120.0
 
         while not self.stop_event.is_set():
             self._force_reconnect = False
@@ -258,11 +263,20 @@ class UserStreamClient:
                         "ts": int(time.time() * 1000),
                     })
                 elif _consecutive_create_failures == 3:
-                    logger.error(
-                        "USER_STREAM_PERSISTENT_FAILURE %s market=%s status=%s consecutive=%s — "
-                        "API anahtarı izni veya Binance sorunu; daha seyrek yeniden denenecek.",
-                        self._log_id(), self.market, status, _consecutive_create_failures,
-                    )
+                    _in_startup = (time.time() - _start_time) < _STARTUP_GRACE_SEC
+                    if _in_startup:
+                        # Başlangıç dönemi: hata listesine düşmemesi için WARNING kullan
+                        logger.warning(
+                            "USER_STREAM_PERSISTENT_FAILURE %s market=%s status=%s consecutive=%s — "
+                            "başlangıç dönemi, daha seyrek yeniden denenecek.",
+                            self._log_id(), self.market, status, _consecutive_create_failures,
+                        )
+                    else:
+                        logger.error(
+                            "USER_STREAM_PERSISTENT_FAILURE %s market=%s status=%s consecutive=%s — "
+                            "API anahtarı izni veya Binance sorunu; daha seyrek yeniden denenecek.",
+                            self._log_id(), self.market, status, _consecutive_create_failures,
+                        )
                 else:
                     logger.debug(
                         "USER_STREAM_CREATE_RETRY %s market=%s status=%s consecutive=%s",
