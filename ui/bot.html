@@ -1,0 +1,1889 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script>
+    (function(){
+        var tok = sessionStorage.getItem('token');
+        var usr = sessionStorage.getItem('user');
+        if (!tok || !usr) {
+            location.replace('/ui/login.html');
+            return;
+        }
+    })();
+    </script>
+    <title>Bot Detay - TraderTrailing</title>
+    <link rel="stylesheet" href="/ui/assets/theme.css?v=1">
+    <link rel="stylesheet" href="/ui/assets/design.css?v=1">
+    <link rel="stylesheet" href="/ui/assets/blink.css?v=1">
+    <style>
+        body { margin: 0; padding: 2rem; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--ds-bg-primary, #0b0e11); color: var(--ds-text-primary, #eaecef); min-height: 100vh; }
+        .container { max-width: 960px; margin: 0 auto; }
+        .back { display: inline-flex; align-items: center; gap: 0.5rem; color: var(--ds-accent, #f0b90b); text-decoration: none; margin-bottom: 1.5rem; font-weight: 500; }
+        .back:hover { text-decoration: underline; }
+        .panel { background: var(--ds-bg-secondary, #1e2329); border-radius: 8px; padding: 1.5rem; margin-bottom: 1rem; border: 1px solid var(--ds-border, #2b3139); }
+        .panel h2 { margin: 0 0 1rem 0; font-size: 1.1rem; font-weight: 600; color: var(--ds-text-primary); }
+        .muted { color: var(--ds-text-secondary); font-size: 0.9rem; }
+        .grid-2 { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 1rem; }
+        .kvi { display: flex; flex-direction: column; gap: 2px; }
+        .kvi-label { font-size: 0.75rem; color: var(--ds-text-secondary); text-transform: uppercase; }
+        .kvi-value { font-size: 1rem; font-weight: 600; color: var(--ds-text-primary); }
+        .kvi-value.green { color: #0ecb81; }
+        .kvi-value.red { color: #f6465d; }
+        .status-badge { display: inline-flex; align-items: center; padding: 0 10px; min-height: 36px; border-radius: 6px; font-size: 0.8rem; font-weight: 600; box-sizing: border-box; }
+        .status-running { background: rgba(14, 203, 129, 0.15); color: #0ecb81; }
+        .status-stopped { background: rgba(108, 117, 125, 0.2); color: #6c757d; }
+        .status-error { background: rgba(246, 70, 93, 0.15); color: #f6465d; }
+        .btn-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 1rem; }
+        .bot-top-strip .strip-right .btn-row { margin-top: 0; align-items: center; }
+        .btn { padding: 8px 16px; min-height: 36px; border-radius: 6px; font-weight: 600; cursor: pointer; border: none; font-size: 0.9rem; box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center; }
+        .btn-primary { background: var(--ds-accent, #f0b90b); color: #000; }
+        .btn-ghost { background: var(--ds-bg-tertiary, #2b3139); color: var(--ds-text-primary); }
+        .btn-danger { background: rgba(246, 70, 93, 0.2); color: #f6465d; }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .grid-points-table, .profit-points-table, .cycle-pnls-list { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+        .grid-sell-table, .grid-buy-table { table-layout: fixed; width: 100%; min-width: 560px; }
+        .grid-sell-table th, .grid-sell-table td, .grid-buy-table th, .grid-buy-table td { padding: 10px 14px; border-bottom: 1px solid var(--ds-border, #2b3139); }
+        .grid-sell-table thead th, .grid-buy-table thead th { white-space: nowrap; min-width: 0; }
+        .grid-sell-table th, .grid-sell-table td, .grid-buy-table th, .grid-buy-table td { width: 16.666%; min-width: 90px; box-sizing: border-box; }
+        .grid-sell-table th:nth-child(1), .grid-sell-table td:nth-child(1), .grid-buy-table th:nth-child(1), .grid-buy-table td:nth-child(1) { text-align: left; }
+        .grid-sell-table th:nth-child(2), .grid-sell-table td:nth-child(2), .grid-buy-table th:nth-child(2), .grid-buy-table td:nth-child(2) { text-align: right; }
+        .grid-sell-table th:nth-child(3), .grid-sell-table td:nth-child(3), .grid-buy-table th:nth-child(3), .grid-buy-table td:nth-child(3) { text-align: right; }
+        .grid-sell-table th:nth-child(4), .grid-sell-table td:nth-child(4), .grid-buy-table th:nth-child(4), .grid-buy-table td:nth-child(4) { text-align: right; }
+        .grid-sell-table th:nth-child(5), .grid-sell-table td:nth-child(5), .grid-buy-table th:nth-child(5), .grid-buy-table td:nth-child(5) { text-align: right; }
+        .grid-sell-table th:nth-child(6), .grid-sell-table td:nth-child(6), .grid-buy-table th:nth-child(6), .grid-buy-table td:nth-child(6) { text-align: center; }
+        .grid-points-table th, .grid-points-table td, .profit-points-table th, .profit-points-table td { padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--ds-border, #2b3139); }
+        .grid-sell-table th, .grid-sell-table td, .grid-buy-table th, .grid-buy-table td { padding: 10px 14px; }
+        .grid-points-table th, .profit-points-table th { color: var(--ds-text-secondary); font-weight: 500; }
+        .cycle-pnls-list { max-height: 320px; overflow-y: auto; }
+        .cycle-pnl-item { padding: 10px 12px; border-bottom: 1px solid var(--ds-border, #2b3139); display: flex; justify-content: space-between; align-items: center; }
+        #engineLogList .engine-log-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+        #engineLogList .engine-log-table th, #engineLogList .engine-log-table td { padding: 0.35rem 0.5rem; border-bottom: 1px solid var(--ds-border, #2b3139); text-align: left; vertical-align: top; word-break: break-word; }
+        #engineLogList .engine-log-table th { color: var(--ds-text-secondary); font-weight: 500; }
+        #engineLogList .engine-log-table td:first-child { white-space: nowrap; }
+        #engineLogList .engine-log-table td:last-child { white-space: nowrap; }
+        #engineLogList { overflow-x: auto; }
+        #engineLogList .log-row-warn { color: var(--ds-text-warning, #f0b90b); }
+        #engineLogList .log-repeat-badge { font-size: 0.65rem; color: var(--ds-text-tertiary); font-weight: 600; white-space: nowrap; }
+        .trade-side-buy { color: #0ecb81; }
+        .trade-side-sell { color: #f6465d; }
+        .loading { text-align: center; padding: 2rem; color: var(--ds-text-secondary); }
+        .error-box { background: rgba(246, 70, 93, 0.1); border: 1px solid rgba(246, 70, 93, 0.3); border-radius: 6px; padding: 12px; color: #f6465d; margin-top: 1rem; }
+        .poll-note { font-size: 0.8rem; color: var(--ds-text-secondary); margin-top: 0.5rem; }
+        .live-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #0ecb81; margin-right: 6px; animation: pulse 1.5s ease-in-out infinite; }
+        @keyframes pulse { 0%,100%{ opacity: 1 } 50%{ opacity: 0.4 } }
+        .config-detail-block { margin-bottom: 0.5rem; }
+        .parametreler-modal-panel { max-width: 520px; max-height: 85vh; overflow: hidden; display: flex; flex-direction: column; }
+        .parametreler-modal-panel .parametreler-body { overflow-y: auto; flex: 1; min-height: 0; font-size: 0.85rem; }
+        .modal-panel-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--ds-border, #2b3139); }
+        .parametreler-modal-close { background: none; border: none; color: var(--ds-text-secondary); font-size: 1.5rem; line-height: 1; cursor: pointer; padding: 0 0.25rem; }
+        .parametreler-modal-close:hover { color: var(--ds-text-primary); }
+        .parametreler-body { font-size: 0.85rem; }
+        .param-block { margin-bottom: 1.25rem; }
+        .param-block-title { font-size: 0.75rem; font-weight: 600; color: var(--ds-text-secondary); text-transform: uppercase; letter-spacing: 0.02em; margin-bottom: 0.5rem; }
+        .param-row { display: flex; justify-content: space-between; align-items: center; padding: 0.4rem 0; border-bottom: 1px solid var(--ds-border, #2b3139); gap: 0.75rem; }
+        .param-row .param-label { color: var(--ds-text-secondary); }
+        .param-row .param-value { font-weight: 600; color: var(--ds-text-primary); text-align: right; }
+        .param-row.param-sell .param-value { color: #f6465d; }
+        .param-row.param-buy .param-value { color: #0ecb81; }
+        .param-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; margin-top: 0.35rem; }
+        .param-table th, .param-table td { padding: 0.4rem 0.5rem; text-align: left; border-bottom: 1px solid var(--ds-border, #2b3139); }
+        .param-table th { color: var(--ds-text-secondary); font-weight: 500; }
+        .param-table .num { text-align: right; }
+        .param-hint { font-size: 0.78rem; color: var(--ds-text-secondary); margin-top: 0.5rem; line-height: 1.4; }
+        .bot-top-strip { display: flex; align-items: center; flex-wrap: wrap; gap: 1rem 1.5rem; padding: 1rem 0; border-bottom: 1px solid var(--ds-border, #2b3139); margin-bottom: 1rem; }
+        .bot-top-strip .bot-logo { width: 44px; height: 44px; border-radius: 50%; object-fit: cover; flex-shrink: 0; }
+        .bot-top-strip .bot-logo-initials { width: 44px; height: 44px; border-radius: 50%; background: var(--ds-bg-tertiary, #2b3139); display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 0.9rem; flex-shrink: 0; }
+        .bot-top-strip .bot-symbol { font-size: 1.35rem; font-weight: 700; color: var(--ds-text-primary); margin-right: 0.5rem; }
+        .bot-top-strip .bot-price { font-size: 1.25rem; font-weight: 600; color: var(--ds-text-primary); min-width: 11ch; font-variant-numeric: tabular-nums; display: inline-block; text-align: right; }
+        .bot-top-strip .bot-24h { font-size: 0.95rem; margin-left: 0.25rem; min-width: 7ch; font-variant-numeric: tabular-nums; display: inline-block; text-align: right; }
+        .bot-top-strip .bot-24h.up { color: #0ecb81; }
+        .bot-top-strip .bot-24h.down { color: #f6465d; }
+        .bot-strip-price-block { display: flex; align-items: baseline; flex-wrap: nowrap; gap: 0.35rem 0.5rem; flex-shrink: 0; }
+        .bot-strip-mini-chart-wrap { width: 100px; height: 36px; min-width: 100px; max-width: 100px; flex-shrink: 0; background: var(--ds-bg-tertiary, #2b3139); border-radius: 8px; border: 1px solid var(--ds-border, #2b3139); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: border-color 0.2s, box-shadow 0.2s; }
+        .bot-strip-mini-chart-wrap:hover { border-color: var(--ds-accent, #f0b90b); box-shadow: 0 0 0 1px rgba(240,185,11,0.2); }
+        .bot-strip-mini-chart-svg { width: 100%; height: 100%; padding: 4px; box-sizing: border-box; display: flex; align-items: center; justify-content: center; }
+        .bot-strip-mini-chart-svg svg { width: 100%; height: 100%; display: block; flex-shrink: 0; }
+        .bot-top-strip .strip-right { margin-left: auto; display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
+        .bot-top-strip .strip-right .btn,
+        .bot-top-strip .strip-right .status-badge,
+        .bot-top-strip .strip-right .btn-row .btn { min-height: 36px; }
+        .state-hero { background: linear-gradient(145deg, var(--ds-bg-secondary, #1e2329) 0%, var(--ds-bg-tertiary, #2b3139) 100%); border-radius: 14px; padding: 1.5rem 1.75rem; margin-bottom: 1.5rem; border: 1px solid var(--ds-border, #2b3139); box-shadow: 0 4px 12px rgba(0,0,0,0.15); display: flex; flex-direction: column; min-height: 200px; }
+        .state-hero-title { font-size: 0.72rem; font-weight: 600; color: var(--ds-text-secondary); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 0.25rem; text-align: center; flex-shrink: 0; }
+        .state-hero-meta { font-size: 0.65rem; color: var(--ds-text-muted, var(--ds-text-secondary)); text-align: center; margin-bottom: 1rem; display: flex; justify-content: center; align-items: center; flex-wrap: wrap; gap: 0.5rem; }
+        .state-hero-meta .state-hero-meta-dur { min-width: 14ch; display: inline-block; }
+        .state-hero-grid { display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(2, 1fr); gap: 1rem; flex: 1; width: 100%; min-height: 160px; }
+        .state-hero-item { text-align: center; padding: 0.85rem 0.75rem; border-radius: 10px; background: rgba(0,0,0,0.25); border: 1px solid rgba(255,255,255,0.04); display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 0; }
+        .state-hero-item .state-label { display: block; font-size: 0.68rem; color: var(--ds-text-tertiary); text-transform: uppercase; letter-spacing: 0.03em; margin-bottom: 0.4rem; }
+        .state-hero-item .state-value { font-size: 1.1rem; font-weight: 700; color: var(--ds-text-primary); }
+        .state-hero-item.state-bot-bakiye .state-value { font-size: 1.4rem; color: var(--ds-accent, #f0b90b); font-weight: 800; }
+        .perf-chart-wrap { min-height: 220px; background: var(--ds-bg-tertiary, #2b3139); border-radius: 12px; padding: 1rem 1.25rem; margin: 1rem 0; border: 1px solid var(--ds-border, #2b3139); cursor: pointer; transition: border-color 0.2s, box-shadow 0.2s; }
+        .perf-chart-wrap:hover { border-color: var(--ds-accent, #f0b90b); box-shadow: 0 0 0 1px rgba(240,185,11,0.2); }
+        .perf-chart-wrap .perf-chart-title { font-size: 0.75rem; color: var(--ds-text-tertiary); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 0.75rem; display: flex; align-items: center; justify-content: space-between; }
+        .perf-chart-wrap .perf-chart-open-hint { font-size: 0.7rem; color: var(--ds-text-tertiary); }
+        /* Perf chart TV (perf_chart_tv.js) */
+        .pct-chart-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.75rem; margin-bottom: 0.75rem; }
+        .pct-title { font-size: 0.75rem; color: var(--ds-text-tertiary); text-transform: uppercase; letter-spacing: 0.04em; margin: 0; }
+        .pct-controls { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+        .pct-btn { padding: 6px 12px; border-radius: 6px; font-size: 0.8rem; font-weight: 500; background: var(--ds-bg-secondary, #1e2329); color: var(--ds-text-secondary); border: 1px solid var(--ds-border, #2b3139); cursor: pointer; transition: background 0.2s, color 0.2s, border-color 0.2s; }
+        .pct-btn:hover { color: var(--ds-text-primary); border-color: var(--ds-text-tertiary); }
+        .pct-btn.pct-active { background: var(--ds-accent, #f0b90b); color: #000; border-color: var(--ds-accent); }
+        .pct-btn.pct-danger { color: #f6465d; }
+        .pct-btn.pct-danger:hover { background: rgba(246, 70, 93, 0.15); border-color: #f6465d; }
+        #pctChartMount { display: block; width: 100%; border-radius: 8px; overflow: hidden; background: #0b0f14; }
+        .pct-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 1rem; margin-top: 0.75rem; font-size: 0.78rem; color: var(--ds-text-secondary); }
+        .pct-legend span { display: inline-flex; align-items: center; gap: 0.4rem; }
+        .pct-status { font-size: 0.75rem; color: var(--ds-text-tertiary); margin-left: auto; }
+        .pct-crosshair-tooltip { position: absolute; display: none; z-index: 20; pointer-events: none; background: var(--ds-bg-secondary, #1e2329); border: 1px solid var(--ds-border, #2b3139); border-radius: 8px; padding: 0.6rem 0.75rem; font-size: 0.78rem; color: var(--ds-text-primary, #eaecef); box-shadow: 0 4px 12px rgba(0,0,0,0.35); min-width: 200px; }
+        .pct-crosshair-tooltip .pct-tooltip-row { margin-bottom: 0.25rem; line-height: 1.35; }
+        .pct-crosshair-tooltip .pct-tooltip-row:last-child { margin-bottom: 0; }
+        #perfChartWrap { position: relative; }
+        /* Şimdilik parite/bot performans grafiği gizli; DOM'da kalıyor, tekrar göstermek için bu satırı kaldırın */
+        #perfChartWrap { display: none !important; }
+        .pct-fatal { padding: 1.5rem; text-align: center; color: #f6465d; font-weight: 600; background: rgba(246,70,93,0.1); border-radius: 8px; margin: 0.5rem 0; }
+        .perf-chart-svg-wrap { width: 100%; height: 200px; border-radius: 8px; overflow: hidden; }
+        .perf-chart-svg-wrap svg { width: 100%; height: 100%; display: block; }
+        .perf-chart-legend { display: flex; gap: 1.25rem; margin-top: 0.75rem; font-size: 0.78rem; color: var(--ds-text-secondary); }
+        .perf-chart-legend span { display: inline-flex; align-items: center; gap: 0.4rem; }
+        .perf-chart-legend .leg-dot { width: 10px; height: 3px; border-radius: 2px; }
+        .perf-chart-legend .leg-dot.balance { background: #f0b90b; }
+        .perf-chart-legend .leg-dot.pair { background: #0ecb81; }
+        /* Alan dolgusu: sıfır çizgisine kadar gradient; hafif giriş animasyonu */
+        .perf-chart-area-draw { opacity: 0; animation: perfChartAreaFade 1.2s ease-out forwards; }
+        .perf-chart-area-draw-2 { animation-delay: 0.2s; }
+        @keyframes perfChartAreaFade { to { opacity: 1; } }
+        /* Kalp atışı: çizgiler soldan sağa çizilir */
+        .perf-chart-path-draw { stroke-dasharray: 100; stroke-dashoffset: 100; animation: perfChartDraw 1.8s ease-out forwards; }
+        .perf-chart-path-draw-2 { animation-delay: 0.25s; }
+        @keyframes perfChartDraw { to { stroke-dashoffset: 0; } }
+        .perf-chart-modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.65); z-index: 9999; display: none; align-items: center; justify-content: center; padding: 1.5rem; }
+        .perf-chart-modal-overlay.is-open { display: flex; }
+        .perf-chart-modal { background: var(--ds-bg-secondary, #1e2329); border-radius: 16px; max-width: 90vw; width: 640px; max-height: 90vh; overflow: hidden; border: 1px solid var(--ds-border, #2b3139); box-shadow: 0 24px 48px rgba(0,0,0,0.4); display: flex; flex-direction: column; }
+        .perf-chart-modal.symbol-chart-full { width: 95vw; max-width: 1200px; height: 90vh; max-height: 720px; }
+        .perf-chart-modal .perf-chart-modal-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.5rem; padding: 1rem 1.25rem; border-bottom: 1px solid var(--ds-border, #2b3139); }
+        .perf-chart-modal .perf-chart-modal-title { font-size: 1rem; font-weight: 600; color: var(--ds-text-primary); }
+        .perf-chart-modal .perf-chart-modal-close { background: none; border: none; color: var(--ds-text-secondary); font-size: 1.5rem; line-height: 1; cursor: pointer; padding: 0 0.25rem; }
+        .perf-chart-modal .perf-chart-modal-close:hover { color: var(--ds-text-primary); }
+        .perf-chart-range-btns { display: flex; gap: 0.5rem; flex-wrap: wrap; flex-basis: 100%; margin-top: 0.25rem; }
+        .perf-chart-range-btn { padding: 6px 12px; border-radius: 6px; font-size: 0.85rem; background: var(--ds-bg-tertiary, #2b3139); color: var(--ds-text-secondary); border: 1px solid var(--ds-border, #2b3139); cursor: pointer; }
+        .perf-chart-range-btn:hover { color: var(--ds-text-primary); }
+        .perf-chart-range-btn.active { background: var(--ds-accent, #f0b90b); color: #000; border-color: var(--ds-accent); }
+        .perf-chart-modal .perf-chart-modal-body { padding: 1.25rem; flex: 1; min-height: 280px; }
+        .perf-chart-modal .perf-chart-modal-body.symbol-chart-iframe-wrap { padding: 0; flex: 1; min-height: 400px; display: flex; }
+        .perf-chart-modal .perf-chart-modal-body.symbol-chart-iframe-wrap iframe { flex: 1; width: 100%; height: 100%; min-height: 500px; border: none; border-radius: 0 0 16px 16px; }
+        .perf-chart-modal .perf-chart-svg-wrap { height: 320px; }
+        .perf-chart-modal.perf-chart-modal-large { width: 92vw; max-width: 1000px; height: 85vh; max-height: 720px; }
+        .perf-chart-modal.perf-chart-modal-large .perf-chart-modal-body-chart { flex: 1; min-height: 400px; display: flex; flex-direction: column; position: relative; }
+        .perf-chart-modal.perf-chart-modal-large .perf-chart-modal-svg-wrap { flex: 1; min-height: 380px; height: 65vh; }
+        @media (max-width: 768px) {
+            .perf-chart-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+            .perf-chart-wrap .perf-chart-svg-wrap { min-width: 560px; }
+        }
+
+        /* ========== MOBİL: Bot detay sayfası tam revizyon (simetrik, buton boyutları mobil) ========== */
+        @media (max-width: 768px) {
+            /* Sabit birim: 12px = 0.75rem, 16px = 1rem */
+            html { scrollbar-width: none; -ms-overflow-style: none; }
+            html::-webkit-scrollbar, body::-webkit-scrollbar, .container::-webkit-scrollbar { display: none; width: 0; height: 0; }
+            body { padding: 0; min-height: 100vh; -webkit-overflow-scrolling: touch; overflow-x: hidden; }
+            .container { max-width: 100%; padding: 0 1rem calc(2rem + env(safe-area-inset-bottom)); margin: 0; }
+            .back { display: flex; align-items: center; min-height: 52px; padding: 0 0; margin: 0; font-size: 0.95rem; border-bottom: 1px solid var(--ds-border, #2b3139); position: sticky; top: 0; background: var(--ds-bg-primary, #0b0e11); z-index: 100; -webkit-tap-highlight-color: transparent; }
+            .panel { padding: 0.85rem; margin-bottom: 0.75rem; border-radius: 12px; }
+            .panel h2 { font-size: 1rem; margin: 0 0 1rem 0; }
+            .muted.poll-note { font-size: 0.8rem; margin-bottom: 0.75rem; }
+
+            /* Tüm butonlar mobil: aynı yükseklik, aynı padding, simetrik */
+            .btn { min-height: 48px; height: 48px; padding: 0 1.25rem; font-size: 0.9rem; font-weight: 600; border-radius: 10px; display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box; }
+            .btn-row { display: flex; gap: 0.75rem; margin-top: 1rem; flex-wrap: wrap; }
+            .btn-row .btn { flex: 1 1 calc(50% - 0.375rem); min-width: 0; }
+            .status-badge { min-height: 48px; padding: 0 1.25rem; border-radius: 10px; font-size: 0.9rem; display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box; }
+
+            /* Üst strip mobil: 1. satır logo + grafik yan yana, 2. satır fiyat, 3. satır aksiyonlar */
+            .bot-top-strip { display: grid; grid-template-columns: auto 1fr; grid-template-rows: auto auto auto; gap: 0.5rem 0.75rem; padding: 0.65rem 0; align-items: center; }
+            .bot-top-strip #botLogoWrap { grid-column: 1; grid-row: 1; align-self: center; }
+            .bot-top-strip #botStripMiniChartWrap { grid-column: 2; grid-row: 1; width: 120px; min-width: 120px; max-width: 120px; height: 44px; min-height: 44px; justify-self: start; align-self: center; flex-shrink: 0; }
+            .bot-top-strip .bot-strip-price-block { grid-column: 1 / -1; grid-row: 2; display: flex; align-items: center; gap: 0.75rem; flex-wrap: nowrap; flex-shrink: 0; }
+            .bot-top-strip .strip-right { grid-column: 1 / -1; grid-row: 3; margin-left: 0; width: 100%; display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; align-items: stretch; }
+            .bot-top-strip .strip-right .status-badge { grid-column: 1 / -1; width: 100%; }
+            .bot-top-strip .strip-right .btn-row { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; margin: 0; }
+            .bot-top-strip .strip-right .btn-row .btn { flex: none; width: 100%; }
+            .bot-top-strip .strip-right .btn-row .btn:only-child { grid-column: 1 / -1; }
+            .bot-top-strip .strip-right .btn { width: 100%; }
+            .bot-top-strip .bot-symbol { font-size: 1.2rem; }
+            .bot-top-strip .bot-price { font-size: 1.1rem; }
+            .bot-top-strip .bot-24h { font-size: 0.9rem; }
+
+            /* State hero: sabit, kaymaz; 2 sütun eşit simetrik kutular; mobilde boşluk minimize */
+            .state-hero { padding: 0.85rem; margin-bottom: 0.75rem; min-height: auto; overflow: hidden; width: 100%; max-width: 100%; box-sizing: border-box; -webkit-overflow-scrolling: touch; }
+            .state-hero-title { font-size: 0.68rem; margin-bottom: 0.35rem; text-align: center; }
+            .state-hero-meta { font-size: 0.68rem; margin-bottom: 0.6rem; flex-direction: column; gap: 0.25rem; text-align: center; }
+            .state-hero-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: auto auto auto; gap: 0.5rem; width: 100%; max-width: 100%; min-width: 0; overflow: hidden; box-sizing: border-box; align-items: stretch; }
+            .state-hero-item { padding: 0.5rem 0.4rem; min-height: 58px; height: 58px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; box-sizing: border-box; overflow: hidden; border-radius: 8px; flex: 0 0 auto; }
+            .state-hero-item .state-label { font-size: 0.58rem; margin-bottom: 0.2rem; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+            .state-hero-item .state-value { font-size: 0.82rem; font-weight: 700; line-height: 1.2; word-break: break-all; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+            .state-hero-item.state-bot-bakiye { min-height: 58px; height: 58px; }
+            .state-hero-item.state-bot-bakiye .state-value { font-size: 0.82rem; }
+
+            /* Grid / kar noktaları: mobilde kayma olmasın; panel sabit, tablo yatay kaydırma panel içinde */
+            #gridPointsPanel,
+            #profitPointsPanel { width: 100%; max-width: 100%; box-sizing: border-box; min-height: 0; contain: layout; }
+            .grid-section-title { font-size: 0.8rem; margin: 1.25rem 0 0.75rem 0; padding-bottom: 0.5rem; }
+            .grid-section-title.first { margin-top: 0; }
+            #gridPointsPanel > div[style*="overflow-x"],
+            #profitPointsPanel > div[style*="overflow-x"] { margin-left: -0.85rem; margin-right: -0.85rem; padding-left: 0.85rem; padding-right: 0.85rem; -webkit-overflow-scrolling: touch; overflow-x: auto; overflow-y: visible; min-width: 0; }
+            .grid-points-table, .profit-points-table { font-size: 0.8rem; min-width: 480px; }
+            .grid-points-table th, .grid-points-table td, .profit-points-table th, .profit-points-table td { padding: 0.6rem 0.5rem; }
+            .grid-status-badge { padding: 6px 10px; font-size: 0.75rem; border-radius: 8px; }
+
+            /* Tur işlemleri: cycle butonları eşit, simetrik */
+            #cycleTradesTurButtons { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1rem; align-items: center; }
+            #cycleTradesTurButtons .cycle-tur-btn { min-height: 36px; height: 36px; padding: 0 1rem; font-size: 0.8rem; border-radius: 8px; flex: 0 0 auto; box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center; white-space: nowrap; }
+            .cycle-report { padding: 0.75rem 1rem; font-size: 0.8rem; flex-direction: column; gap: 0.5rem; border-radius: 10px; }
+            .cycle-pnls-list { max-height: 320px; -webkit-overflow-scrolling: touch; border-radius: 10px; }
+            .cycle-pnl-item { padding: 0.75rem 1rem; min-height: 48px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; }
+
+            /* Performans: periyot butonları 4 eşit, metrik kartları 2 sütun eşit */
+            .perf-genel-block { padding: 1.25rem; margin-bottom: 1rem; text-align: center; border-radius: 12px; }
+            .perf-genel-block .perf-genel-value { font-size: 1.75rem; }
+            .perf-chart-wrap { padding: 1rem; margin: 1rem 0; border-radius: 12px; }
+            .perf-chart-wrap .perf-chart-title { font-size: 0.7rem; flex-wrap: wrap; gap: 0.35rem; }
+            .perf-period-btns { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 1rem; }
+            .perf-period-btns .btn-period { min-height: 34px; height: 34px; padding: 0 0.6rem; font-size: 0.78rem; border-radius: 8px; flex: 1 1 0; min-width: 0; box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center; }
+            #perfMetrics { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-bottom: 1rem; }
+            .perf-metric-card { min-width: calc(50% - 0.375rem); flex: 1 1 calc(50% - 0.375rem); padding: 1rem; border-radius: 10px; box-sizing: border-box; }
+            .perf-metric-label { font-size: 0.7rem; margin-bottom: 0.25rem; }
+            .perf-metric-value { font-size: 1rem; }
+            .perf-report { padding: 1.25rem; font-size: 0.85rem; margin-top: 1rem; border-radius: 10px; }
+
+            /* Loglar: mesaj sütunu taşmasın, iç içe girmesin; mesajlar alt alta; sadece masaüstü */
+            #engineLogPanel { overflow: hidden; max-width: 100%; }
+            #engineLogPanel .btn, #engineLogPanel .btn-secondary { min-height: 48px; height: 48px; padding: 0 1.25rem; border-radius: 10px; }
+            #engineLogPanel #btnEngineLogRefresh { min-height: 28px; height: 28px; padding: 0 0.5rem; font-size: 0.72rem; border-radius: 6px; }
+            @media (max-width: 768px) {
+                #engineLogPanel { display: none !important; }
+            }
+            #engineLogList { max-height: 360px; overflow: auto; -webkit-overflow-scrolling: touch; border-radius: 10px; padding: 0.75rem; font-family: ui-monospace, monospace; font-size: 0.72rem; line-height: 1.5; border: 1px solid var(--ds-border, #2b3139); box-sizing: border-box; width: 100%; max-width: 100%; }
+            #engineLogList table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+            #engineLogList th, #engineLogList td { padding: 0.5rem 0.4rem; border-bottom: 1px solid var(--ds-border, #2b3139); vertical-align: top; box-sizing: border-box; word-break: break-word; overflow-wrap: break-word; }
+            #engineLogList th:nth-child(1), #engineLogList td:nth-child(1) { width: 22%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 0.68rem; }
+            #engineLogList th:nth-child(2), #engineLogList td:nth-child(2) { width: 14%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 0.68rem; }
+            #engineLogList th:nth-child(3), #engineLogList td:nth-child(3) { width: 64%; font-size: 0.7rem; min-width: 0; }
+            #engineLogList th { color: var(--ds-text-secondary); font-weight: 600; }
+
+            /* Modaller: aksiyon butonları eşit 50-50 */
+            .modal-overlay { padding: 1rem; align-items: flex-end; }
+            .modal-panel { max-width: 100%; width: 100%; margin: 0; border-radius: 16px 16px 0 0; padding: 1.25rem 1rem; max-height: 90vh; overflow-y: auto; }
+            .stop-delete-option .option-card { padding: 1rem 1.25rem; min-height: 56px; border-radius: 10px; }
+            .modal-actions { display: flex; gap: 0.75rem; margin-top: 1.25rem; }
+            .modal-actions .btn { min-height: 48px; height: 48px; flex: 1; min-width: 0; border-radius: 10px; }
+            .parametreler-modal-panel { max-width: 100%; width: 100%; max-height: 88vh; border-radius: 16px 16px 0 0; padding: 1.25rem 1rem; }
+            .parametreler-modal-panel .parametreler-body { padding-bottom: 2rem; }
+            .param-row { padding: 0.75rem 0; min-height: 44px; align-items: center; }
+            .perf-chart-modal-overlay { padding: 0.5rem; align-items: flex-end; }
+            .perf-chart-modal { width: 100%; max-width: 100%; border-radius: 16px 16px 0 0; max-height: 92vh; }
+            .perf-chart-modal .perf-chart-modal-head { padding: 1rem 1.25rem; flex-wrap: wrap; gap: 0.75rem; }
+            .perf-chart-modal .perf-chart-modal-body { padding: 1rem 1.25rem; min-height: 260px; }
+            .perf-chart-modal .perf-chart-range-btns { display: flex; flex-wrap: wrap; gap: 0.5rem; flex-basis: 100%; margin-top: 0.5rem; }
+            .perf-chart-modal .perf-chart-range-btn { min-height: 44px; padding: 0 1rem; border-radius: 10px; flex: 1 1 auto; min-width: calc(20% - 0.4rem); }
+            .perf-chart-modal-overlay .perf-chart-modal-close { min-width: 48px; min-height: 48px; padding: 0; display: flex; align-items: center; justify-content: center; border-radius: 10px; }
+            .perf-chart-modal.symbol-chart-full { height: 85vh; max-height: 85vh; border-radius: 16px 16px 0 0; }
+            .perf-chart-modal.symbol-chart-full .perf-chart-modal-body { min-height: 60vh; }
+
+            /* KVI / genel */
+            .grid-2 { grid-template-columns: 1fr 1fr; gap: 0.75rem; }
+            .kvi { padding: 0.5rem 0; }
+            .kvi-label { font-size: 0.7rem; }
+            .kvi-value { font-size: 0.95rem; }
+            .error-box { padding: 1.25rem; margin-top: 1rem; border-radius: 10px; }
+            .loading { padding: 2rem; font-size: 0.9rem; }
+        }
+
+        .perf-period-btns { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 1rem; }
+        .perf-period-btns .btn-period { padding: 6px 14px; border-radius: 6px; font-size: 0.85rem; background: var(--ds-bg-tertiary); color: var(--ds-text-secondary); border: 1px solid var(--ds-border); cursor: pointer; }
+        .perf-period-btns .btn-period.active { background: var(--ds-accent, #f0b90b); color: #000; border-color: var(--ds-accent); }
+        .grid-section-title { font-size: 0.85rem; font-weight: 600; color: var(--ds-text-secondary); text-transform: uppercase; margin: 1rem 0 0.5rem 0; padding-bottom: 0.25rem; }
+        .grid-section-title.first { margin-top: 0; }
+        .grid-sell-table .trade-side-sell { color: #f6465d; }
+        .grid-buy-table .trade-side-buy { color: #0ecb81; }
+        .grid-sell-table thead th { background: rgba(246,70,93,0.08); }
+        .grid-buy-table thead th { background: rgba(14,203,129,0.08); }
+        /* Grid Durum: Bekliyor kırmızı, Tetiklendi sarı, Tamamlandı yeşil kutu */
+        .grid-status-badge { display: inline-block; padding: 4px 10px; border-radius: 6px; font-size: 0.8rem; font-weight: 600; }
+        .grid-status-bekliyor { background: rgba(246, 70, 93, 0.15); color: #f6465d; border: 1px solid rgba(246, 70, 93, 0.4); }
+        .grid-status-tetiklendi { background: rgba(240, 185, 11, 0.15); color: #f0b90b; border: 1px solid rgba(240, 185, 11, 0.5); }
+        .grid-status-tamamlandi { background: rgba(14, 203, 129, 0.15); color: #0ecb81; border: 1px solid rgba(14, 203, 129, 0.4); }
+        .perf-genel-block { background: linear-gradient(135deg, var(--ds-bg-tertiary, #2b3139) 0%, rgba(0,0,0,0.3) 100%); border-radius: 12px; padding: 1.5rem 2rem; margin-bottom: 1.25rem; border: 1px solid var(--ds-border, #2b3139); text-align: center; }
+        .perf-genel-block .perf-genel-title { font-size: 0.8rem; font-weight: 600; color: var(--ds-text-secondary); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.5rem; }
+        .perf-genel-block .perf-genel-value { font-size: 2.25rem; font-weight: 700; line-height: 1.2; }
+        .perf-genel-block .perf-genel-hint { font-size: 0.78rem; color: var(--ds-text-tertiary); margin-top: 0.5rem; }
+        .perf-metric-card { background: var(--ds-bg-tertiary, #2b3139); border-radius: 8px; padding: 1rem; min-width: 120px; }
+        .perf-metric-label { font-size: 0.75rem; color: var(--ds-text-secondary); text-transform: uppercase; margin-bottom: 0.25rem; }
+        .perf-metric-value { font-size: 1.1rem; font-weight: 600; }
+        .perf-report { background: var(--ds-bg-tertiary, #2b3139); border-radius: 8px; padding: 1.25rem; margin-top: 1rem; font-size: 0.9rem; line-height: 1.6; color: var(--ds-text-secondary); }
+        .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 9998; display: flex; align-items: center; justify-content: center; padding: 1.5rem; }
+        .modal-panel { background: var(--ds-bg-secondary, #1e2329); border-radius: 12px; padding: 1.5rem 1.75rem; max-width: 440px; width: 100%; border: 1px solid var(--ds-border, #2b3139); box-shadow: 0 12px 40px rgba(0,0,0,0.4); }
+        .modal-title { margin: 0 0 0.5rem 0; font-size: 1.15rem; font-weight: 600; color: var(--ds-text-primary); }
+        .modal-desc { color: var(--ds-text-secondary); font-size: 0.9rem; margin-bottom: 1.25rem; line-height: 1.45; }
+        .stop-delete-options { display: flex; flex-direction: column; gap: 0.75rem; margin-bottom: 1.5rem; }
+        .stop-delete-option { display: block; cursor: pointer; }
+        .stop-delete-option input { position: absolute; opacity: 0; pointer-events: none; }
+        .stop-delete-option .option-card { display: block; padding: 1rem 1.1rem; border-radius: 10px; border: 2px solid var(--ds-border, #2b3139); background: var(--ds-bg-tertiary, #2b3139); transition: border-color 0.2s, background 0.2s; }
+        .stop-delete-option input:checked + .option-card { border-color: var(--ds-accent, #f0b90b); background: rgba(240, 185, 11, 0.08); }
+        .stop-delete-option .option-title { display: block; font-weight: 600; color: var(--ds-text-primary); font-size: 0.95rem; margin-bottom: 0.35rem; }
+        .stop-delete-option .option-detail { display: block; font-size: 0.82rem; color: var(--ds-text-secondary); line-height: 1.4; }
+        .modal-actions { display: flex; gap: 0.75rem; justify-content: flex-end; }
+        /* Tur (cycle) seçim butonları – küçük, tasarıma uyumlu */
+        #cycleTradesTurButtons .cycle-tur-btn { padding: 4px 10px; font-size: 0.75rem; font-weight: 500; border-radius: 6px; border: 1px solid var(--ds-border, #2b3139); background: var(--ds-bg-tertiary, #2b3139); color: var(--ds-text-secondary, #848e9c); cursor: pointer; transition: background 0.2s, border-color 0.2s, color 0.2s; }
+        #cycleTradesTurButtons .cycle-tur-btn:hover { background: var(--ds-bg-secondary, #1e2329); color: var(--ds-text-primary, #eaecef); border-color: var(--ds-border, #2b3139); }
+        #cycleTradesTurButtons .cycle-tur-btn.active { background: rgba(240, 185, 11, 0.15); color: var(--ds-accent, #f0b90b); border-color: var(--ds-accent, #f0b90b); }
+        .cycle-report { background: var(--ds-bg-tertiary, #2b3139); border-radius: 8px; padding: 0.75rem 1rem; font-size: 0.82rem; color: var(--ds-text-secondary); display: flex; flex-wrap: wrap; gap: 1rem; align-items: center; }
+        .cycle-report .cycle-report-item { display: flex; align-items: center; gap: 0.35rem; }
+        .cycle-report .cycle-report-label { text-transform: uppercase; letter-spacing: 0.04em; opacity: 0.9; }
+        .cycle-report .cycle-report-value { font-weight: 600; color: var(--ds-text-primary, #eaecef); }
+        .cycle-report .cycle-report-value.positive { color: #0ecb81; }
+        .cycle-report .cycle-report-value.negative { color: #f6465d; }
+        /* Bot tipi üst başlık – modal’daki yapı adıyla aynı */
+        .bot-type-header { display: none; margin-bottom: 0.5rem; padding: 0.5rem 0; text-align: center; }
+        .bot-type-header__name { font-size: 1.35rem; font-weight: 700; color: var(--ds-text-primary, #eaecef); letter-spacing: -0.02em; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <a href="#" id="backLink" class="back">← Dashboard'a dön</a>
+        <div class="bot-type-header" id="botTypeHeader">
+            <div class="bot-type-header__name" id="botTypeHeaderName">—</div>
+        </div>
+        <div class="state-hero" id="statePanel" style="display: none;">
+            <div class="state-hero-title" id="stateHeroTitle">Durum</div>
+            <div class="state-hero-meta" id="stateHeroMeta"></div>
+            <div class="state-hero-grid" id="stateGrid"></div>
+        </div>
+
+        <div class="panel" id="headerPanel">
+            <div id="botTopStrip" class="bot-top-strip" style="display: none;">
+                <div id="botLogoWrap"></div>
+                <div class="bot-strip-price-block">
+                    <span id="botSymbolEl" class="bot-symbol">—</span>
+                    <span id="botPriceEl" class="bot-price value-blink">—</span>
+                    <span id="bot24hEl" class="bot-24h"></span>
+                </div>
+                <div id="botStripMiniChartWrap" class="bot-strip-mini-chart-wrap" title="Sembol grafiği (mum/çizgi) için tıklayın" role="button" tabindex="0">
+                    <div id="botStripMiniChartSvg" class="bot-strip-mini-chart-svg"></div>
+                </div>
+                <div class="strip-right">
+                    <span id="statusBadge" class="status-badge status-stopped">—</span>
+                    <button id="btnParametreler" class="btn btn-ghost" type="button">Parametreler</button>
+                    <button id="btnStopAndDelete" class="btn btn-danger">Sonlandır ve Sil</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="panel" id="gridPointsPanel" style="display: none;">
+            <h2>Grid alım satım noktaları</h2>
+            <p class="muted poll-note" style="font-size: 0.85rem; margin-bottom: 1rem;">Tepe/dip noktası grid tetiklendikten sonra aktif olur; anlık en tepe veya en dip her yakalandığında güncellenir, gerçekleşme fiyatı da belirlenen yüzdeliğe göre anlık güncellenir.</p>
+            <div class="grid-section-title grid-section-title first">Satış gridleri</div>
+            <div style="overflow-x: auto;">
+                <table class="grid-points-table grid-sell-table" id="gridSellTable">
+                    <thead><tr><th>Seviye</th><th>Miktar</th><th>Tetik fiyat</th><th>Tepe</th><th>Gerçekleşme fiyatı</th><th>Durum</th></tr></thead>
+                    <tbody id="gridSellBody"></tbody>
+                </table>
+            </div>
+            <div class="grid-section-title">Alım gridleri</div>
+            <p class="muted poll-note" style="font-size: 0.8rem; margin-bottom: 0.5rem;">Alım, fiyat <strong>Gerçekleşme fiyatı</strong>na (dip + trailing %) ulaşınca yapılır. Alış olmadıysa fiyat o seviyeye gelmemiştir veya bütçe/limit nedeniyle atlanmıştır.</p>
+            <div style="overflow-x: auto;">
+                <table class="grid-points-table grid-buy-table" id="gridBuyTable">
+                    <thead><tr><th>Seviye</th><th>Tutar</th><th>Tetik fiyat</th><th title="Tetik sonrası yakalanan en düşük fiyat">Dip</th><th title="Alış, piyasa fiyatı bu değere ulaştığında yapılır">Gerçekleşme fiyatı</th><th>Durum</th></tr></thead>
+                    <tbody id="gridBuyBody"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="panel" id="profitPointsPanel" style="display: none;">
+            <h2>Kar alım satım noktaları</h2>
+            <p class="muted poll-note" style="font-size: 0.85rem; margin-bottom: 1rem;">Kar alım satım noktaları ortalama maliyete göre hesaplanır. Her grid alış veya satışından sonra değişen maliyetle birlikte bu noktalar güncellenir.</p>
+            <p class="muted poll-note" style="font-size: 0.8rem; margin-bottom: 0.5rem;" id="profitAvgCostNote"></p>
+            <div class="grid-section-title grid-section-title first">Kar noktaları</div>
+            <div style="overflow-x: auto;">
+                <table class="grid-points-table profit-points-table" id="profitPointsTable">
+                    <thead><tr><th>Tür</th><th>Ortalama maliyet</th><th>Tetik fiyat</th><th>Tepe / Dip</th><th>Gerçekleşme fiyatı</th><th>Durum</th></tr></thead>
+                    <tbody id="profitPointsBody"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="panel" id="tradesPanel" style="display: none;">
+            <h2>Bot tur işlemleri</h2>
+            <p class="muted poll-note" style="font-size: 0.85rem; margin-bottom: 0.75rem;">Her turun işlemleri ayrı sayfada. Turu seçin, o tura ait alım/satım detayları listelenir.</p>
+            <div id="cycleTradesTurButtons" style="display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1rem; align-items: center;"></div>
+            <div id="cycleReport" class="cycle-report" style="display: none; margin-bottom: 1rem;"></div>
+            <div class="cycle-pnls-list" id="cycleTradesList" style="max-height: 400px;"></div>
+        </div>
+
+        <div class="panel" id="perfPanel" style="display: none;">
+            <h2>Bot Performansı</h2>
+            <div class="perf-genel-block" id="perfGenelBlock" style="display: none;">
+                <div class="perf-genel-title">Bot Performansı</div>
+                <div class="perf-genel-value" id="perfGenelValue">—</div>
+                <div class="perf-genel-hint" style="display:none;"></div>
+            </div>
+            <div class="perf-chart-wrap" id="perfChartWrap" title="Grafiği büyütmek için tıklayın">
+                <div class="perf-chart-title">Parite % &amp; Bot bakiyesi % (başlangıçtan itibaren) <span class="perf-chart-open-hint">Grafiği aç</span></div>
+                <div class="perf-chart-svg-wrap" id="perfChartSvgWrap">
+                    <p class="muted" id="perfChartPlaceholder" style="text-align: center; padding: 2rem; margin: 0; font-size: 0.9rem;">Bot başlangıcından itibaren parite ve bakiye yüzde hareketi yüklenecek.</p>
+                </div>
+                <div class="perf-chart-legend" id="perfChartLegend" style="display: none;">
+                    <span><i class="leg-dot balance" id="perfInlineLegBalance"></i> Bot bakiyesi %</span>
+                    <span><i class="leg-dot pair" id="perfInlineLegPair"></i> Parite %</span>
+                </div>
+            </div>
+            <div class="perf-chart-modal-overlay" id="perfChartModalOverlay">
+                <div class="perf-chart-modal perf-chart-modal-large" id="perfChartModal">
+                    <div class="perf-chart-modal-head">
+                        <span class="perf-chart-modal-title">Parite % &amp; Bot bakiyesi %</span>
+                        <button type="button" class="perf-chart-modal-close" id="perfChartModalClose" aria-label="Kapat">&times;</button>
+                        <div class="perf-chart-range-btns perf-chart-range-btns-modal">
+                            <button type="button" class="perf-chart-range-btn" data-range="1m">1m</button>
+                            <button type="button" class="perf-chart-range-btn" data-range="5m">5m</button>
+                            <button type="button" class="perf-chart-range-btn" data-range="1h">1h</button>
+                            <button type="button" class="perf-chart-range-btn active" data-range="4h">4h</button>
+                            <button type="button" class="perf-chart-range-btn" data-range="1d">1d</button>
+                        </div>
+                    </div>
+                    <div class="perf-chart-modal-body perf-chart-modal-body-chart">
+                        <div class="perf-chart-svg-wrap perf-chart-modal-svg-wrap" id="perfChartModalSvgWrap"></div>
+                        <div class="perf-chart-legend" style="margin-top: 1rem;">
+                            <span><i class="leg-dot balance" id="perfModalLegBalance"></i> Bot bakiyesi %</span>
+                            <span><i class="leg-dot pair" id="perfModalLegPair"></i> Parite %</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="perf-period-btns" id="perfPeriodBtns">
+                <button type="button" class="btn-period" data-period="day">Günlük</button>
+                <button type="button" class="btn-period" data-period="week">Haftalık</button>
+                <button type="button" class="btn-period" data-period="month">Aylık</button>
+                <button type="button" class="btn-period active" data-period="all">Genel</button>
+            </div>
+            <div id="perfMetrics" style="display: flex; flex-wrap: wrap; gap: 1rem; margin-bottom: 1rem;"></div>
+        </div>
+
+        <div class="panel" id="engineLogPanel" style="display: none;">
+            <h2>Bot Logları</h2>
+            <p class="muted poll-note" style="font-size: 0.85rem; margin-bottom: 0.75rem;">Bot açıldığından beri kaydedilen eventler (tick, aksiyon, skip, hata). En son 500 kayıt; yenile ile güncelleyebilirsiniz.</p>
+            <div style="display: flex; justify-content: flex-end; margin-bottom: 0.5rem;">
+                <button type="button" class="btn btn-sm btn-secondary" id="btnEngineLogRefresh">Yenile</button>
+            </div>
+            <div id="engineLogList" style="max-height: 420px; overflow: auto; font-family: monospace; font-size: 0.8rem; border: 1px solid var(--ds-border, #2b3139); border-radius: 8px; padding: 0.5rem;"></div>
+        </div>
+
+        <div id="loadingEl" class="loading">Bot bilgisi yükleniyor…</div>
+        <div id="errorEl" class="error-box" style="display: none;"></div>
+
+        <div id="stopAndDeleteModal" class="modal-overlay" style="display: none;">
+            <div class="modal-panel stop-delete-modal">
+                <h3 class="modal-title">Sonlandır ve Sil</h3>
+                <p class="modal-desc">Botu kapatıp sileceksiniz. Nasıl devam etmek istiyorsunuz?</p>
+                <div class="stop-delete-options">
+                    <label class="stop-delete-option">
+                        <input type="radio" name="stopDeleteChoice" value="convert" id="stopDeleteConvert">
+                        <span class="option-card">
+                            <span class="option-title">Tüm bakiyemi quote varlığıma çevir</span>
+                            <span class="option-detail" id="stopDeleteConvertDetail">Mevcut base (coin) bakiyesi piyasa emri ile USDT’ye satılır; sonra bot silinir.</span>
+                        </span>
+                    </label>
+                    <label class="stop-delete-option">
+                        <input type="radio" name="stopDeleteChoice" value="as_is" id="stopDeleteAsIs" checked>
+                        <span class="option-card">
+                            <span class="option-title">Hiçbir işlem yapmadan sonlandır</span>
+                            <span class="option-detail">Alım satım yapılmaz; bakiye olduğu gibi kalır, yalnızca bot kapatılıp silinir.</span>
+                        </span>
+                    </label>
+                </div>
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-ghost" id="stopDeleteModalCancel">İptal</button>
+                    <button type="button" class="btn btn-danger" id="stopDeleteModalConfirm">Sonlandır ve Sil</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="parametrelerModal" class="modal-overlay" style="display: none;">
+            <div class="modal-panel parametreler-modal-panel">
+                <div class="modal-panel-head">
+                    <h3 class="modal-title">Parametreler</h3>
+                    <button type="button" class="parametreler-modal-close" id="parametrelerModalClose" aria-label="Kapat">&times;</button>
+                </div>
+                <div id="configGrid" class="parametreler-body"></div>
+                <div class="modal-actions" style="margin-top: 1rem;">
+                    <button type="button" class="btn btn-ghost" id="parametrelerModalKapat">Kapat</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="perf-chart-modal-overlay" id="symbolChartModalOverlay">
+            <div class="perf-chart-modal symbol-chart-full" id="symbolChartModal">
+                <div class="perf-chart-modal-head">
+                    <span class="perf-chart-modal-title" id="symbolChartModalTitle">Sembol grafiği</span>
+                    <button type="button" class="perf-chart-modal-close" id="symbolChartModalClose" aria-label="Kapat">&times;</button>
+                </div>
+                <div class="perf-chart-modal-body symbol-chart-iframe-wrap">
+                    <iframe id="symbolChartIframe" title="Sembol grafiği" src="about:blank"></iframe>
+                </div>
+            </div>
+        </div>
+    </div>
+    <script src="/ui/assets/utils/coinLogo.js?v=1"></script>
+    <script src="/ui/assets/core/apiClient.js?v=refactor1"></script>
+    <script src="/ui/assets/core/intervalRegistry.js?v=1"></script>
+    <script src="/ui/vendor/lightweight-charts.standalone.production.js"></script>
+    <script src="/ui/assets/perf_chart_tv.js?v=1"></script>
+    <script>
+    (function() {
+        var qs = new URLSearchParams(location.search);
+        var botId = qs.get('bot_id') || qs.get('id');
+        var accountId = qs.get('account_id');
+        var accountCode = qs.get('account_code');
+
+        var backLink = document.getElementById('backLink');
+        var base = '/ui/dashboard.html?';
+        if (accountCode) base += 'account_code=' + encodeURIComponent(accountCode);
+        else if (accountId) base += 'account_id=' + accountId;
+        else base += 'account_id=';
+        base += '&tab=bots';
+        backLink.href = base;
+
+        var botTopStrip = document.getElementById('botTopStrip');
+        var botLogoWrap = document.getElementById('botLogoWrap');
+        var botSymbolEl = document.getElementById('botSymbolEl');
+        var botPriceEl = document.getElementById('botPriceEl');
+        var bot24hEl = document.getElementById('bot24hEl');
+        var statusBadge = document.getElementById('statusBadge');
+        var btnStart = null; /* Başlat butonu kaldırıldı: bot oluşturulunca otomatik başlar */
+        var btnStopAndDelete = document.getElementById('btnStopAndDelete');
+        var stopAndDeleteModal = document.getElementById('stopAndDeleteModal');
+        var stopDeleteModalCancel = document.getElementById('stopDeleteModalCancel');
+        var stopDeleteModalConfirm = document.getElementById('stopDeleteModalConfirm');
+        var stopDeleteConvertDetail = document.getElementById('stopDeleteConvertDetail');
+        var lastBotDetail = { symbol: '', baseBalance: 0, quoteAsset: 'USDT' };
+        var STRUCTURE_NAMES = { trailing_dca: 'Trailing DCA Bot' };
+        var configGrid = document.getElementById('configGrid');
+        var btnParametreler = document.getElementById('btnParametreler');
+        var statePanel = document.getElementById('statePanel');
+        var stateGrid = document.getElementById('stateGrid');
+        var gridPointsPanel = document.getElementById('gridPointsPanel');
+        var gridSellBody = document.getElementById('gridSellBody');
+        var gridBuyBody = document.getElementById('gridBuyBody');
+        var profitPointsPanel = document.getElementById('profitPointsPanel');
+        var profitPointsBody = document.getElementById('profitPointsBody');
+        var profitAvgCostNote = document.getElementById('profitAvgCostNote');
+        var tradesPanel = document.getElementById('tradesPanel');
+        var cycleTradesList = document.getElementById('cycleTradesList');
+        var perfPanel = document.getElementById('perfPanel');
+        var engineLogPanel = document.getElementById('engineLogPanel');
+        var engineLogList = document.getElementById('engineLogList');
+        var perfPeriodBtns = document.getElementById('perfPeriodBtns');
+        var perfMetrics = document.getElementById('perfMetrics');
+        var perfChartWrap = document.getElementById('perfChartWrap');
+        var perfChartModalOverlay = document.getElementById('perfChartModalOverlay');
+        var perfChartModalClose = document.getElementById('perfChartModalClose');
+        var perfReport = document.getElementById('perfReport');
+        var loadingEl = document.getElementById('loadingEl');
+        var errorEl = document.getElementById('errorEl');
+        var lastPriceForBlink = null;
+        var lastKnownCycleId = null;
+        var stripKlinesRefreshMs = 120000;
+        var lastRefPriceForPerf = null;
+        var initialCapForPerf = null;
+        var lastBotStartedAt = null;
+        var stateHeroMetaInterval = null;
+        var prevLiveState = null;
+
+        function fmtUsd(v) {
+            if (v == null || v === '' || isNaN(v)) return '—';
+            var n = Number(v);
+            return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        }
+        function fmtNum(v, decimals) {
+            if (v == null || v === '' || isNaN(v)) return '—';
+            var n = Number(v);
+            return n.toLocaleString('en-US', { minimumFractionDigits: decimals != null ? decimals : 2, maximumFractionDigits: decimals != null ? decimals : 8 });
+        }
+        /** Base bakiye için: sondaki sıfırları kaldır, en fazla 8 ondalık (0.01820000 → 0.0182) */
+        function fmtBaseCompact(v) {
+            if (v == null || v === '' || isNaN(v)) return '—';
+            var n = Number(v);
+            var s = n.toFixed(8).replace(/\.?0+$/, '');
+            return s;
+        }
+        /** Bot başlangıç tarihi ve çalışma süresi (stateHeroMeta). Döner: { start: string, duration: string | null } */
+        function formatStartMeta(startedAtIso, status) {
+            if (!startedAtIso || typeof startedAtIso !== 'string') return { start: '', duration: null };
+            var d = new Date(startedAtIso);
+            if (isNaN(d.getTime())) return { start: '', duration: null };
+            var pad = function (n) { return (n < 10 ? '0' : '') + n; };
+            var dateOnly = pad(d.getDate()) + '.' + pad(d.getMonth() + 1) + '.' + d.getFullYear();
+            if ((status || '').toLowerCase() === 'running') {
+                var sec = Math.max(0, Math.floor((Date.now() - d.getTime()) / 1000));
+                var h = Math.floor(sec / 3600);
+                var m = Math.floor((sec % 3600) / 60);
+                var s = sec % 60;
+                var dur = h > 0 ? (h + 's ' + m + 'dk') : (m > 0 ? (m + 'dk ' + s + 'sn') : (s + 'sn'));
+                return { start: 'Başlangıç: ' + dateOnly, duration: 'Süre: ' + dur };
+            }
+            return { start: 'Başlangıç: ' + dateOnly, duration: null };
+        }
+        function formatStartMetaDurationOnly(startedAtIso) {
+            if (!startedAtIso || typeof startedAtIso !== 'string') return '';
+            var d = new Date(startedAtIso);
+            if (isNaN(d.getTime())) return '';
+            var sec = Math.max(0, Math.floor((Date.now() - d.getTime()) / 1000));
+            var h = Math.floor(sec / 3600);
+            var m = Math.floor((sec % 3600) / 60);
+            var s = sec % 60;
+            var dur = h > 0 ? (h + 's ' + m + 'dk') : (m > 0 ? (m + 'dk ' + s + 'sn') : (s + 'sn'));
+            return 'Süre: ' + dur;
+        }
+        function setStateHeroMetaHtml(metaEl, startedAtIso, status) {
+            if (!metaEl) return;
+            var o = formatStartMeta(startedAtIso, status);
+            if (o.duration != null) {
+                metaEl.innerHTML = '<span class="state-hero-meta-start">' + escapeHtml(o.start) + '</span><span class="state-hero-meta-dur" id="stateHeroMetaDur">' + escapeHtml(o.duration) + '</span>';
+            } else {
+                metaEl.innerHTML = '<span class="state-hero-meta-start">' + escapeHtml(o.start) + '</span>';
+            }
+        }
+        function escapeHtml(s) { return (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+
+        function setError(msg) {
+            loadingEl.style.display = 'none';
+            errorEl.style.display = msg ? 'block' : 'none';
+            errorEl.textContent = msg || '';
+        }
+        /** Strip mini chart: aynı veri kaynağı ile alım/satım modalındaki grafik (sembol 5m klines, son 24h). */
+        function loadStripKlinesChart(symbol) {
+            var wrap = document.getElementById('botStripMiniChartSvg');
+            if (!wrap || !symbol || !window.apiClient) return;
+            var sym = (symbol || '').toString().trim().toUpperCase();
+            var invalid = ['USDTUSDT', 'USDCUSDT', 'FDUSDUSDT', 'BUSDUSDT', 'TUSDUSDT', 'DAIUSDT'];
+            if (invalid.indexOf(sym) >= 0) { wrap.innerHTML = ''; return; }
+            var interval = '5m';
+            var limit = 288;
+            window.apiClient.get('/api/spot/klines?symbol=' + encodeURIComponent(sym) + '&interval=' + interval + '&limit=' + limit)
+                .then(function (data) {
+                    if (!Array.isArray(data) || data.length < 2) { if (wrap) wrap.innerHTML = ''; return; }
+                    var points = data.map(function (k) { return { c: Number(k.c) }; });
+                    var w = 92, h = 28, pad = 2;
+                    var dataMin = Math.min.apply(null, points.map(function (p) { return p.c; }));
+                    var dataMax = Math.max.apply(null, points.map(function (p) { return p.c; }));
+                    var range = dataMax - dataMin || 1;
+                    var linePoints = points.map(function (p, i) {
+                        var x = pad + (i / (points.length - 1 || 1)) * (w - 2 * pad);
+                        var y = h - pad - ((p.c - dataMin) / range) * (h - 2 * pad);
+                        return { x: x, y: y };
+                    });
+                    var pathD = linePoints.map(function (pt, i) { return (i === 0 ? 'M' : 'L') + ' ' + pt.x + ' ' + pt.y; }).join(' ');
+                    var firstC = points[0].c, lastC = points[points.length - 1].c;
+                    var isUp = lastC >= firstC;
+                    var stroke = isUp ? '#0ecb81' : '#f6465d';
+                    var gradId = 'stripChartGrad_' + (sym || 'x').replace(/[^a-z0-9]/gi, '_');
+                    var closePath = ' L ' + linePoints[linePoints.length - 1].x + ' ' + (h - pad) + ' L ' + pad + ' ' + (h - pad) + ' Z';
+                    wrap.innerHTML = '<svg viewBox="0 0 ' + w + ' ' + h + '" preserveAspectRatio="none">' +
+                        '<defs><linearGradient id="' + gradId + '" x1="0" y1="0" x2="0" y2="1">' +
+                        '<stop offset="0" stop-color="' + stroke + '" stop-opacity="0.25"/>' +
+                        '<stop offset="1" stop-color="' + stroke + '" stop-opacity="0"/></linearGradient></defs>' +
+                        '<path d="' + pathD + closePath + '" fill="url(#' + gradId + ')" stroke="' + stroke + '" stroke-width="1.5" fill-opacity="1"/>' +
+                        '</svg>';
+                })
+                .catch(function () { if (wrap) wrap.innerHTML = ''; });
+        }
+        function openPerfChartModal() {
+            var series = window._lastPerfChartSeries || [];
+            var pairSeries = window._lastPerfPairSeries || [];
+            if ((series.length >= 2 || (pairSeries && pairSeries.length >= 2)) && perfChartModalOverlay) {
+                var modalWrap = document.getElementById('perfChartModalSvgWrap');
+                if (modalWrap) {
+                    modalWrap.innerHTML = buildPerfChartSvg(series, pairSeries, 600, 320, 'perfModal');
+                }
+                perfChartModalOverlay.classList.add('is-open');
+            }
+        }
+        var symbolChartModalOverlay = document.getElementById('symbolChartModalOverlay');
+        var symbolChartModalClose = document.getElementById('symbolChartModalClose');
+        var symbolChartModalTitle = document.getElementById('symbolChartModalTitle');
+        var symbolChartIframe = document.getElementById('symbolChartIframe');
+        function openSymbolChartModal(symbol) {
+            if (!symbolChartModalOverlay || !symbol) return;
+            var sym = (symbol || '').toString().trim().toUpperCase();
+            symbolChartModalTitle.textContent = 'Sembol grafiği · ' + sym;
+            if (symbolChartIframe) symbolChartIframe.src = '/ui/chart.html?symbol=' + encodeURIComponent(sym) + '&embed=1';
+            symbolChartModalOverlay.classList.add('is-open');
+        }
+        function closeSymbolChartModal() {
+            if (symbolChartIframe) symbolChartIframe.src = 'about:blank';
+            if (symbolChartModalOverlay) symbolChartModalOverlay.classList.remove('is-open');
+        }
+
+        function renderConfig(cfg, symbol, referencePrice) {
+            var alloc = cfg.allocation || {};
+            var up = cfg.up || {};
+            var down = cfg.down || {};
+            var sellGrids = cfg.sell_grids || up.grids || [];
+            var buyGrids = cfg.buy_grids || down.grids || [];
+            var budget = cfg.initial_capital_usdt != null ? cfg.initial_capital_usdt : (cfg.budget_usd != null ? cfg.budget_usd : null);
+            var basePct = cfg.base_alloc_pct != null ? cfg.base_alloc_pct : (alloc.base_pct != null ? alloc.base_pct : null);
+            var quotePct = cfg.quote_alloc_pct != null ? cfg.quote_alloc_pct : (alloc.quote_pct != null ? alloc.quote_pct : null);
+            var sellTrail = cfg.sell_trigger_trailing_pct != null ? cfg.sell_trigger_trailing_pct : (up.trail_pct != null ? up.trail_pct : null);
+            var buyTrail = cfg.buy_trigger_trailing_pct != null ? cfg.buy_trigger_trailing_pct : (down.trail_pct != null ? down.trail_pct : null);
+            var refPriceVal = referencePrice != null && !isNaN(referencePrice) ? fmtNum(referencePrice, 4) : '—';
+            var pr = cfg.profit || {};
+            var reTr = cfg.profit_reentry_drop_pct != null ? cfg.profit_reentry_drop_pct : pr.rebuy_trigger_pct;
+            var reTrl = cfg.profit_reentry_rise_pct != null ? cfg.profit_reentry_rise_pct : pr.rebuy_trail_pct;
+            var exTr = cfg.profit_exit_rise_pct != null ? cfg.profit_exit_rise_pct : pr.resell_trigger_pct;
+            var exTrl = cfg.profit_exit_drop_pct != null ? cfg.profit_exit_drop_pct : pr.resell_trail_pct;
+            function row(l, v, cls) { return '<div class="param-row' + (cls ? ' ' + cls : '') + '"><span class="param-label">' + l + '</span><span class="param-value">' + (v !== undefined && v !== '' ? v : '—') + '</span></div>'; }
+            var html = '';
+            html += '<div class="param-block"><div class="param-block-title">Genel</div>';
+            html += row('Sembol', symbol || cfg.symbol || '—');
+            html += row('Bütçe (USDT)', fmtUsd(budget));
+            html += row('Başlangıç fiyatı (referans)', refPriceVal);
+            html += row('Base dağılım (%)', basePct != null ? basePct + '%' : '—');
+            html += row('Quote dağılım (%)', quotePct != null ? quotePct + '%' : '—');
+            html += '</div>';
+            html += '<div class="param-block"><div class="param-block-title">Satış gridleri</div>';
+            html += row('Grid sayısı', sellGrids.length || cfg.sell_grids_count || 0, 'param-sell');
+            html += row('Trailing % (tetik sonrası gerçekleşme)', sellTrail != null ? sellTrail + '%' : '—', 'param-sell');
+            if (sellGrids.length) {
+                html += '<table class="param-table"><thead><tr><th>Seviye</th><th class="num">Tetik %</th><th class="num">Miktar (base %)</th></tr></thead><tbody>';
+                sellGrids.forEach(function(g, i) {
+                    var pct = g.sell_grid_pct != null ? g.sell_grid_pct : g.trigger_pct;
+                    var qty = g.sell_qty_pct_of_base != null ? g.sell_qty_pct_of_base : g.qty_pct;
+                    html += '<tr><td>#' + (i + 1) + '</td><td class="num">+' + (pct != null ? pct : '—') + '%</td><td class="num">' + (qty != null ? qty : '—') + '%</td></tr>';
+                });
+                html += '</tbody></table>';
+            } else {
+                html += '<p class="param-hint">Tanımlı değil.</p>';
+            }
+            html += '</div>';
+            html += '<div class="param-block"><div class="param-block-title">Alım gridleri</div>';
+            html += row('Grid sayısı', buyGrids.length || cfg.buy_grids_count || 0, 'param-buy');
+            html += row('Trailing % (tetik sonrası gerçekleşme)', buyTrail != null ? buyTrail + '%' : '—', 'param-buy');
+            if (buyGrids.length) {
+                html += '<table class="param-table"><thead><tr><th>Seviye</th><th class="num">Tetik %</th><th class="num">Miktar (quote %)</th></tr></thead><tbody>';
+                buyGrids.forEach(function(g, i) {
+                    var pct = g.buy_grid_pct != null ? g.buy_grid_pct : g.trigger_pct;
+                    var qty = g.buy_qty_pct_of_quote != null ? g.buy_qty_pct_of_quote : g.qty_pct;
+                    html += '<tr><td>#' + (i + 1) + '</td><td class="num">-' + (pct != null ? pct : '—') + '%</td><td class="num">' + (qty != null ? qty : '—') + '%</td></tr>';
+                });
+                html += '</tbody></table>';
+            } else {
+                html += '<p class="param-hint">Tanımlı değil.</p>';
+            }
+            html += '</div>';
+            html += '<div class="param-block"><div class="param-block-title">Kar alım / kar satış</div>';
+            html += row('Kar alım tetik %', reTr != null ? reTr + '%' : '—');
+            html += row('Kar alım trailing %', reTrl != null ? reTrl + '%' : '—');
+            html += row('Kar satış tetik %', exTr != null ? exTr + '%' : '—');
+            html += row('Kar satış trailing %', exTrl != null ? exTrl + '%' : '—');
+            html += '<p class="param-hint">Kar alım: fiyat düşünce tekrar alım. Kar satış: fiyat yükselince kar realizasyonu satışı.</p>';
+            html += '</div>';
+            configGrid.innerHTML = html;
+        }
+
+        function baseFromSymbol(sym) {
+            return (sym || '').replace(/USDT$|FDUSD$|BUSD$/i, '') || (sym || '').substring(0, 4) || '—';
+        }
+
+        function loadEngineEvents(bid) {
+            if (!engineLogList || !bid || !window.apiClient) return;
+            engineLogList.innerHTML = '<div class="muted" style="padding: 0.75rem;">Yükleniyor…</div>';
+            window.apiClient.get('/api/bots-engine/' + bid + '/events?limit=500')
+                .then(function(res) {
+                    var events = (res && res.events) ? res.events : [];
+                    if (!events.length) {
+                        engineLogList.innerHTML = '<div class="muted" style="padding: 0.75rem;">Henüz event yok.</div>';
+                        return;
+                    }
+                    /* Ardışık aynı type+message event'leri tek satırda birleştir (benzer hatalar şişmesin) */
+                    var collapsed = [];
+                    var prev = null;
+                    events.forEach(function(ev) {
+                        var ty = (ev.type || '—').trim();
+                        var msg = (ev.message || '').trim();
+                        if (ev.meta && typeof ev.meta === 'object' && Object.keys(ev.meta).length) {
+                            try { msg += ' ' + JSON.stringify(ev.meta); } catch (e) {}
+                        }
+                        var key = ty + '\0' + msg;
+                        if (prev && prev.key === key) {
+                            prev.count++;
+                            prev.lastTs = ev.ts;
+                        } else {
+                            collapsed.push({ type: ty, message: msg, ts: ev.ts, key: key, count: 1, lastTs: ev.ts });
+                            prev = collapsed[collapsed.length - 1];
+                        }
+                    });
+                    var html = '<table class="engine-log-table" style="width:100%; border-collapse: collapse;"><thead><tr><th>Zaman</th><th>Tür</th><th>Mesaj</th></tr></thead><tbody>';
+                    collapsed.forEach(function(item) {
+                        var ts = item.ts ? (function() { var d = new Date(item.ts); return d.toLocaleString('tr-TR', { timeZone: 'Europe/Istanbul' }); })() : '—';
+                        if (item.count > 1) ts += ' <span class="log-repeat-badge" title="Aynı kayıttan ' + item.count + ' adet">(' + item.count + 'x)</span>';
+                        var ty = (item.type || '—').replace(/</g, '&lt;');
+                        var msg = (item.message || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                        var rowCl = (item.type || '').indexOf('ERROR') >= 0 || (item.type || '').indexOf('SKIP') >= 0 ? ' class="log-row-warn"' : '';
+                        html += '<tr' + rowCl + '><td>' + ts + '</td><td>' + ty + '</td><td>' + msg + '</td></tr>';
+                    });
+                    html += '</tbody></table>';
+                    engineLogList.innerHTML = html;
+                })
+                .catch(function() {
+                    engineLogList.innerHTML = '<div class="muted" style="padding: 0.75rem;">Loglar yüklenemedi.</div>';
+                });
+        }
+
+        /** Grid alım/satım noktaları tablolarını günceller (tepe/dip, gerçekleşme fiyatı anlık). */
+        function renderGridPointsPanel(data) {
+            if (!gridSellBody || !gridBuyBody) return;
+            var gps = data.grid_points || [];
+            var sellPoints = gps.filter(function(p) { return p.type === 'sell'; });
+            var buyPoints = gps.filter(function(p) { return p.type === 'buy'; });
+            var st = data.state || {};
+            var symbol = data.symbol || lastBotDetail.symbol || '?';
+            var baseBal = st.base_balance != null ? Number(st.base_balance) : 0;
+            var quoteBal = st.quote_balance != null ? Number(st.quote_balance) : 0;
+            var baseAsset = baseFromSymbol(symbol) || '';
+            var refD = data.reference_display != null && !isNaN(data.reference_display) ? Number(data.reference_display) : null;
+            gridPointsPanel.style.display = 'block';
+            gridSellBody.innerHTML = '';
+            sellPoints.forEach(function (p) {
+                var tr = document.createElement('tr');
+                var level = '#' + (p.i + 1);
+                if (refD && p.trigger_price != null) level += ' (+' + ((p.trigger_price / refD - 1) * 100).toFixed(2) + '%)';
+                else level += ' (satış)';
+                if (p.qty_pct != null && !isNaN(p.qty_pct)) level += ' %' + Number(p.qty_pct);
+                var statusText = p.fired ? 'Tamamlandı' : ((p.anchor != null || (p.trigger_hit_price != null)) ? 'Tetiklendi' : 'Bekliyor');
+                var statusClass = p.fired ? 'grid-status-tamamlandi' : ((p.anchor != null || (p.trigger_hit_price != null)) ? 'grid-status-tetiklendi' : 'grid-status-bekliyor');
+                var trigger = (p.trigger_price != null && !isNaN(p.trigger_price)) ? fmtNum(p.trigger_price, 4) : '—';
+                var anchor = p.anchor != null ? fmtNum(p.anchor, 4) : '—';
+                var exec = p.execution_price != null ? fmtNum(p.execution_price, 4) : '—';
+                var miktar = '—';
+                if (p.qty_pct != null && !isNaN(p.qty_pct)) {
+                    if (baseBal > 0) {
+                        var sellQty = baseBal * (Number(p.qty_pct) / 100);
+                        miktar = fmtBaseCompact(sellQty) + (baseAsset ? ' ' + baseAsset : '');
+                    } else {
+                        miktar = Number(p.qty_pct) + '%';
+                    }
+                }
+                tr.innerHTML = '<td>' + level + '</td><td title="Satılacak miktar (base\'in %' + (p.qty_pct != null ? p.qty_pct : '') + ')">' + miktar + '</td><td>' + trigger + '</td><td>' + anchor + '</td><td>' + exec + '</td><td><span class="grid-status-badge ' + statusClass + '">' + statusText + '</span></td>';
+                gridSellBody.appendChild(tr);
+            });
+            if (!sellPoints.length) {
+                var tr = document.createElement('tr');
+                tr.innerHTML = '<td colspan="6" class="muted">Satış gridi yok.</td>';
+                gridSellBody.appendChild(tr);
+            }
+            gridBuyBody.innerHTML = '';
+            buyPoints.forEach(function (p) {
+                var tr = document.createElement('tr');
+                var level = '#' + (p.i + 1);
+                if (refD && p.trigger_price != null) level += ' (-' + ((1 - p.trigger_price / refD) * 100).toFixed(2) + '%)';
+                else level += ' (alım)';
+                if (p.qty_pct != null && !isNaN(p.qty_pct)) level += ' %' + Number(p.qty_pct);
+                var statusText = p.fired ? 'Tamamlandı' : ((p.anchor != null || (p.trigger_hit_price != null)) ? 'Tetiklendi' : 'Bekliyor');
+                var statusClass = p.fired ? 'grid-status-tamamlandi' : ((p.anchor != null || (p.trigger_hit_price != null)) ? 'grid-status-tetiklendi' : 'grid-status-bekliyor');
+                var trigger = (p.trigger_price != null && !isNaN(p.trigger_price)) ? fmtNum(p.trigger_price, 4) : '—';
+                var anchor = p.anchor != null ? fmtNum(p.anchor, 4) : '—';
+                var exec = p.execution_price != null ? fmtNum(p.execution_price, 4) : '—';
+                var tutar = '—';
+                if (p.qty_pct != null && !isNaN(p.qty_pct)) {
+                    if (quoteBal > 0) {
+                        var buyUsd = quoteBal * (Number(p.qty_pct) / 100);
+                        tutar = fmtUsd(buyUsd);
+                    } else {
+                        tutar = Number(p.qty_pct) + '%';
+                    }
+                }
+                tr.innerHTML = '<td>' + level + '</td><td title="Alım yapılacak tutar (quote\'un %' + (p.qty_pct != null ? p.qty_pct : '') + ')">' + tutar + '</td><td>' + trigger + '</td><td>' + anchor + '</td><td>' + exec + '</td><td><span class="grid-status-badge ' + statusClass + '">' + statusText + '</span></td>';
+                gridBuyBody.appendChild(tr);
+            });
+            if (!buyPoints.length) {
+                var tr = document.createElement('tr');
+                tr.innerHTML = '<td colspan="6" class="muted">Alım gridi yok.</td>';
+                gridBuyBody.appendChild(tr);
+            }
+        }
+
+        /** Kar alım/satım noktaları tablosunu günceller (ortalama maliyet, tepe/dip, gerçekleşme anlık). */
+        function renderProfitPointsPanel(data) {
+            if (!profitPointsBody) return;
+            var st = data.state || {};
+            var sellHist = st.sell_history || [];
+            var buyHist = st.buy_history || [];
+            var cfg = data.config || {};
+            function avgFromHist(hist, gridOnly) {
+                var h = gridOnly && Array.isArray(hist) ? hist.filter(function(x) { return x != null && (x.grid_index != null || x.slot_id != null); }) : (hist || []);
+                if (!h.length) return null;
+                var tq = h.reduce(function(s, x) { return s + (Number(x.qty) || 0); }, 0);
+                if (tq <= 0) return null;
+                var tv = h.reduce(function(s, x) { return s + (Number(x.qty) || 0) * (Number(x.price) || 0); }, 0);
+                return (tv / tq).toFixed(4);
+            }
+            var avgSellGrid = avgFromHist(sellHist, true);
+            var avgBuyGrid = avgFromHist(buyHist, true);
+            profitPointsPanel.style.display = 'block';
+            if (profitAvgCostNote) {
+                profitAvgCostNote.textContent = (avgSellGrid != null || avgBuyGrid != null) ? ('Ortalama maliyet (sadece grid): Satış bazı ' + (avgSellGrid || '—') + ', Alım bazı ' + (avgBuyGrid || '—') + '.') : '';
+            }
+            var pr = cfg.profit || {};
+            var profitExitPctConfig = cfg.profit_exit_rise_pct != null ? cfg.profit_exit_rise_pct : pr.resell_trigger_pct;
+            var reentryPctConfig = cfg.profit_reentry_drop_pct != null ? cfg.profit_reentry_drop_pct : pr.rebuy_trigger_pct;
+            var pps = data.profit_points || [];
+            profitPointsBody.innerHTML = '';
+            pps.forEach(function (p) {
+                var tr = document.createElement('tr');
+                var typ = p.type === 'reentry' ? 'Kar alım (Re-entry)' : 'Kar satış (Profit exit)';
+                var configPct = p.type === 'reentry' ? reentryPctConfig : profitExitPctConfig;
+                var karPctVal = (p.profit_pct != null && !isNaN(p.profit_pct)) ? Number(p.profit_pct) : (configPct != null && !isNaN(configPct) ? configPct : null);
+                var karPct = karPctVal != null ? ((p.type === 'reentry' ? '-' : '+') + karPctVal + '%') : '';
+                var labelCell = typ + (karPct ? ' <span class="muted" style="font-size:0.85em">' + karPct + '</span>' : '');
+                var triggerStr = (p.trigger_price != null && !isNaN(p.trigger_price)) ? fmtNum(p.trigger_price, 4) : '—';
+                var avgCostStr = (p.average_cost != null && !isNaN(p.average_cost)) ? fmtNum(p.average_cost, 4) : (p.type === 'profit_exit' && avgBuyGrid ? fmtNum(avgBuyGrid, 4) : (p.type === 'reentry' && avgSellGrid ? fmtNum(avgSellGrid, 4) : '—'));
+                var tepeDipLabel = p.type === 'reentry' ? 'Dip' : 'Tepe';
+                var tepeDipVal = (p.trigger_hit && (p.type === 'reentry' ? p.dip : p.tepe) != null) ? fmtNum(p.type === 'reentry' ? p.dip : p.tepe, 4) : '—';
+                var tepeDipStr = tepeDipLabel + ': ' + tepeDipVal;
+                var execStr = (p.trigger_hit && p.execution_price != null && !isNaN(p.execution_price)) ? fmtNum(p.execution_price, 4) : '—';
+                var statusKey = (p.status || '').toLowerCase();
+                var statusText = statusKey === 'tamamlandi' ? 'Tamamlandı' : (statusKey === 'tetiklendi' ? 'Tetiklendi' : 'Bekliyor');
+                var statusClass = statusKey === 'tamamlandi' ? 'grid-status-tamamlandi' : (statusKey === 'tetiklendi' ? 'grid-status-tetiklendi' : 'grid-status-bekliyor');
+                tr.innerHTML = '<td>' + labelCell + '</td><td>' + avgCostStr + '</td><td>' + triggerStr + '</td><td>' + tepeDipStr + '</td><td>' + execStr + '</td><td><span class="grid-status-badge ' + statusClass + '">' + statusText + '</span></td>';
+                profitPointsBody.appendChild(tr);
+            });
+            if (!pps.length) {
+                var tr = document.createElement('tr');
+                tr.innerHTML = '<td colspan="6" class="muted">İlk grid alış veya satışından sonra kar noktaları aktif olur.</td>';
+                profitPointsBody.appendChild(tr);
+            }
+        }
+
+        function showDetail(data) {
+            loadingEl.style.display = 'none';
+            setError(null);
+            var symbol = (data.symbol || '?').toString().toUpperCase();
+            var cfg = data.config || {};
+            if (symbol === 'MULTI' || (cfg.strategy_id === 'multi_asset_rebalance')) {
+                var q = accountCode ? 'account_code=' + encodeURIComponent(accountCode) : 'account_id=' + (accountId || '');
+                window.location.replace('/ui/bot_multi.html?bot_id=' + botId + '&' + q);
+                return;
+            }
+            var code = data.bot_code || data.bot_id || botId;
+
+            botTopStrip.style.display = 'flex';
+            var base = baseFromSymbol(symbol);
+            var initials = (base || '—').substring(0, 2).toUpperCase();
+            var logoUrl = (typeof getCoinLogoUrl === 'function' && getCoinLogoUrl(base)) || null;
+            botLogoWrap.innerHTML = logoUrl
+                ? '<img class="bot-logo" src="' + logoUrl + '" alt="' + base + '" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\'" /><span class="bot-logo-initials" style="display:none">' + initials + '</span>'
+                : '<span class="bot-logo-initials">' + initials + '</span>';
+            botSymbolEl.textContent = symbol;
+            var price = data.current_price;
+            if (botPriceEl) {
+                var priceStr = (price != null && !isNaN(price) && price > 0) ? fmtNum(price, 4) : '—';
+                if (lastPriceForBlink != null && price != null && !isNaN(price) && price > 0) {
+                    var numPrice = Number(price);
+                    if (numPrice > lastPriceForBlink) {
+                        botPriceEl.textContent = priceStr;
+                        botPriceEl.classList.add('blink-positive');
+                        setTimeout(function() { if (botPriceEl) botPriceEl.classList.remove('blink-positive'); }, 700);
+                    } else if (numPrice < lastPriceForBlink) {
+                        botPriceEl.textContent = priceStr;
+                        botPriceEl.classList.add('blink-negative');
+                        setTimeout(function() { if (botPriceEl) botPriceEl.classList.remove('blink-negative'); }, 700);
+                    } else {
+                        botPriceEl.textContent = priceStr;
+                    }
+                } else {
+                    botPriceEl.textContent = priceStr;
+                }
+                lastPriceForBlink = (price != null && !isNaN(price) && price > 0) ? Number(price) : null;
+            }
+            if (symbol) loadStripKlinesChart(symbol);
+            var ch24 = data.price_24h_change_pct;
+            if (ch24 != null && !isNaN(ch24)) {
+                bot24hEl.textContent = (ch24 >= 0 ? '+' : '') + Number(ch24).toFixed(2) + '%';
+                bot24hEl.className = 'bot-24h ' + (ch24 >= 0 ? 'up' : 'down');
+            } else {
+                bot24hEl.textContent = '';
+                bot24hEl.className = 'bot-24h';
+            }
+
+            var status = (data.status || 'stopped').toLowerCase();
+            var st = data.state || {};
+            var baseBal = st.base_balance != null ? Number(st.base_balance) : 0;
+            var quoteBal = st.quote_balance != null ? Number(st.quote_balance) : 0;
+            var iaDone = st.initial_allocation_done === true;
+            var lastErrorCode = (st.last_error_code || '').trim();
+            var hasApiKeyError = lastErrorCode === 'API_UNAUTHORIZED';
+            var waitingFirstBuy = status === 'running' && !iaDone && baseBal <= 0 && quoteBal > 0;
+            var showAsError = hasApiKeyError && waitingFirstBuy;
+            var statusText = status === 'running' ? (showAsError ? 'Hata (API anahtarı)' : waitingFirstBuy ? 'İlk alım bekleniyor' : 'Çalışıyor') : status === 'error' || (status && status.indexOf('paused') === 0) ? 'Hata' : status === 'stopped' ? 'Durduruldu' : 'Bekliyor';
+            statusBadge.textContent = statusText;
+            statusBadge.className = 'status-badge ' + (showAsError || status === 'error' || (status && status.indexOf('paused') === 0) ? 'status-error' : status === 'running' ? 'status-running' : 'status-stopped');
+            statusBadge.title = showAsError ? 'Binance API anahtarı geçersiz veya IP/Spot izni yok. API Key, IP beyaz listesi ve Spot izinlerini kontrol edin.' : (waitingFirstBuy ? 'Bot çalışıyor; ilk base alımı henüz gerçekleşmedi.' : '');
+
+            if (btnStart) btnStart.style.display = status !== 'running' ? 'flex' : 'none';
+            if (btnStopAndDelete) btnStopAndDelete.style.display = 'inline-block';
+            lastBotDetail.symbol = symbol || '';
+            lastBotDetail.baseBalance = Number((data.state || {}).base_balance) || 0;
+            lastBotDetail.quoteAsset = (symbol || '').match(/USDT|FDUSD|BUSD$/i) ? (symbol.match(/USDT|FDUSD|BUSD$/i)[0] || 'USDT') : 'USDT';
+            lastBotDetail.dual_pnl = data.dual_pnl || null;
+            lastBotDetail.currentCycleId = (data.state && data.state.cycle_id != null) ? Number(data.state.cycle_id) : 1;
+
+            var st = data.state || {};
+            var priceForBot = data.current_price != null && !isNaN(data.current_price) ? Number(data.current_price) : null;
+            var baseBal = st.base_balance != null ? Number(st.base_balance) : 0;
+            var quoteBal = st.quote_balance != null ? Number(st.quote_balance) : 0;
+            var botBalanceUsd = data.current_usd != null && !isNaN(data.current_usd) ? fmtUsd(data.current_usd) : (priceForBot != null && priceForBot > 0 ? fmtUsd(baseBal * priceForBot + quoteBal) : '—');
+            statePanel.style.display = 'block';
+            var cfgForType = data.config || {};
+            var structureId = (cfgForType.structure_id || cfgForType.bot_type || '').toLowerCase().replace(/\s+/g, '_');
+            var botTypeName = STRUCTURE_NAMES[structureId] || 'Trailing DCA Bot';
+            var botTypeHeaderEl = document.getElementById('botTypeHeader');
+            var botTypeHeaderNameEl = document.getElementById('botTypeHeaderName');
+            if (botTypeHeaderEl && botTypeHeaderNameEl) {
+                botTypeHeaderNameEl.textContent = botTypeName;
+                botTypeHeaderEl.style.display = 'block';
+            }
+            var dailyUsd = data.daily_pnl_usd;
+            if (dailyUsd == null || isNaN(dailyUsd)) dailyUsd = 0;
+            var dailyPct = data.daily_pnl_pct;
+            if (dailyPct == null || isNaN(dailyPct)) dailyPct = null;
+            var dailyKzStr = (dailyUsd >= 0 ? '+' : '') + fmtUsd(dailyUsd);
+            if (dailyPct != null) dailyKzStr += ' ' + (dailyPct >= 0 ? '+' : '') + dailyPct.toFixed(2) + '%';
+            var dailyKzCl = dailyUsd >= 0 ? '#0ecb81' : '#f6465d';
+            var cfg = data.config || {};
+            var initialCapital = Number(cfg.initial_capital_usdt || cfg.budget_usd || cfg.bot_budget_quote || 0) || 0;
+            var currentUsdNum = data.current_usd != null && !isNaN(data.current_usd) ? Number(data.current_usd) : (priceForBot != null && priceForBot > 0 ? baseBal * priceForBot + quoteBal : 0);
+            var sellHist = st.sell_history || [];
+            var buyHist = st.buy_history || [];
+            var hasTradedOnce = (sellHist.length > 0 || buyHist.length > 0);
+            /* Toplam K/Z: ilk alım henüz yapılmadıysa (veya hiç işlem yoksa) 0 göster; aksi halde current_usd - initial_capital */
+            var totalPnlUsd = null;
+            if (waitingFirstBuy || !hasTradedOnce) {
+                totalPnlUsd = 0;
+            } else if (initialCapital > 0 && (currentUsdNum != null && !isNaN(currentUsdNum))) {
+                totalPnlUsd = currentUsdNum - initialCapital;
+            }
+            var totalPctStr = (totalPnlUsd != null && initialCapital > 0) ? ' ' + (totalPnlUsd >= 0 ? '+' : '') + (totalPnlUsd / initialCapital * 100).toFixed(2) + '%' : '';
+            var totalKzStr = totalPnlUsd != null ? ((totalPnlUsd >= 0 ? '+' : '') + fmtUsd(totalPnlUsd) + totalPctStr) : '—';
+            var totalKzCl = totalPnlUsd != null ? (totalPnlUsd >= 0 ? '#0ecb81' : '#f6465d') : 'var(--ds-text-secondary)';
+            var cycleVal = st.cycle_id != null ? st.cycle_id : '—';
+            var baseAsset = baseFromSymbol(symbol) || '';
+            var baseVal = st.base_balance != null ? fmtBaseCompact(st.base_balance) + (baseAsset ? ' ' + baseAsset : '') : '—';
+            var quoteVal = st.quote_balance != null ? fmtUsd(st.quote_balance) : '—';
+            stateGrid.innerHTML =
+                '<div class="state-hero-item state-bot-bakiye"><span class="state-label">Bot bakiyesi (USD)</span><span class="state-value" id="stateBotBalanceValue" title="Base + Quote (USD toplam)">' + botBalanceUsd + '</span></div>' +
+                '<div class="state-hero-item"><span class="state-label">Base bakiye</span><span class="state-value" id="stateBaseValue">' + baseVal + '</span></div>' +
+                '<div class="state-hero-item"><span class="state-label">Quote bakiye</span><span class="state-value" id="stateQuoteValue">' + quoteVal + '</span></div>' +
+                '<div class="state-hero-item"><span class="state-label">Tur sayısı</span><span class="state-value" id="stateCycleValue">' + cycleVal + '</span></div>' +
+                '<div class="state-hero-item" title="Gece 00:00 referans bakiyesine göre; her gün sıfırlanır"><span class="state-label">Günlük K/Z</span><span class="state-value" id="stateDailyKzValue" style="color:' + dailyKzCl + '">' + dailyKzStr + '</span></div>' +
+                '<div class="state-hero-item" title="Başlangıç sermayesine göre toplam kar/zarar"><span class="state-label">Toplam K/Z</span><span class="state-value" id="stateTotalKzValue" style="color:' + totalKzCl + '">' + totalKzStr + '</span></div>';
+            var stateHeroTitleEl = document.getElementById('stateHeroTitle');
+            if (stateHeroTitleEl) stateHeroTitleEl.textContent = status === 'running' ? (showAsError ? 'Durum · Hata' : waitingFirstBuy ? 'Durum · İlk alım bekleniyor' : 'Durum · Canlı') : 'Durum · ' + statusText;
+            lastBotStartedAt = data.started_at || null;
+            if (stateHeroMetaInterval) { clearInterval(stateHeroMetaInterval); stateHeroMetaInterval = null; }
+            if (window.intervalRegistry) window.intervalRegistry.stop('bot-detail-duration');
+            var stateHeroMetaEl = document.getElementById('stateHeroMeta');
+            if (stateHeroMetaEl) {
+                setStateHeroMetaHtml(stateHeroMetaEl, data.started_at, status);
+                if (status === 'running' && data.started_at && window.intervalRegistry) {
+                    window.intervalRegistry.start('bot-detail-duration', function () {
+                        var durEl = document.getElementById('stateHeroMetaDur');
+                        if (durEl) durEl.textContent = formatStartMetaDurationOnly(lastBotStartedAt);
+                    }, 1000, 'bot-detail');
+                }
+            }
+
+            var refPrice = data.reference_display != null && !isNaN(data.reference_display) ? Number(data.reference_display) : (data.state && data.state.reference_price != null ? Number(data.state.reference_price) : null);
+            renderConfig(data.config || {}, symbol, refPrice);
+
+            renderGridPointsPanel(data);
+            renderProfitPointsPanel(data);
+
+            tradesPanel.style.display = 'block';
+            lastKnownCycleId = st.cycle_id != null ? st.cycle_id : 1;
+            var cycleTradesTurButtons = document.getElementById('cycleTradesTurButtons');
+            var currentCycleFromState = st.cycle_id != null ? Number(st.cycle_id) : 1;
+            var selectedCycleId = currentCycleFromState;
+            var botSymbolForTrades = symbol || '';
+            function renderCycleTradesList(trades, cycleNum) {
+                cycleTradesList.innerHTML = '';
+                if (!trades || !trades.length) {
+                    cycleTradesList.innerHTML = '<div class="cycle-pnl-item muted">Tur ' + (cycleNum || selectedCycleId) + ' için henüz işlem yok.</div>';
+                    return;
+                }
+                function tradeReason(t) {
+                    var cid = (t.client_order_id || '').toLowerCase();
+                    var slot = t.slot_id;
+                    if (cid.indexOf('init_') === 0) return 'Base';
+                    if (cid.indexOf('reentry') >= 0) return 'Kar alımı';
+                    if (cid.indexOf('profit_exit') >= 0 || cid.indexOf('profit') >= 0) return 'Kar satışı';
+                    if (slot != null && slot >= 0) return 'Grid #' + (slot + 1);
+                    if (cid.indexOf('sell_grid') >= 0 || cid.indexOf('buy_grid') >= 0 || cid.indexOf('grid') >= 0) return (slot != null && slot >= 0) ? 'Grid #' + (slot + 1) : 'Grid';
+                    return 'Grid';
+                }
+                trades.forEach(function(t) {
+                    var div = document.createElement('div');
+                    div.className = 'cycle-pnl-item';
+                    var side = (t.side || '').toUpperCase();
+                    var sideCl = side === 'BUY' ? 'trade-side-buy' : 'trade-side-sell';
+                    var baseLabel = side === 'BUY' ? 'Alış' : 'Satış';
+                    var coin = baseFromSymbol(t.symbol || botSymbolForTrades) || '—';
+                    var reason = tradeReason(t);
+                    var qty = fmtNum(t.qty, 8);
+                    var price = fmtNum(t.price, 4);
+                    var quoteQty = (t.qty && t.price) ? fmtUsd(t.qty * t.price) : '—';
+                    var feeVal = t.fee != null ? t.fee : t.commission;
+                    var feeStr = (feeVal != null && feeVal !== '') ? fmtUsd(Number(feeVal)) : '—';
+                    var ts = t.ts ? (function() { var d = new Date(t.ts); return d.toLocaleString('tr-TR'); })() : '—';
+                    var refP = t.reference_price != null && !isNaN(Number(t.reference_price)) ? Number(t.reference_price) : null;
+                    var priceNum = t.price != null && !isNaN(Number(t.price)) ? Number(t.price) : null;
+                    var realizedPctStr = '';
+                    if (refP != null && refP > 0 && priceNum != null) {
+                        var pct = (side === 'SELL') ? ((priceNum - refP) / refP * 100) : ((refP - priceNum) / refP * 100);
+                        realizedPctStr = ' · Gerçekleşme ' + (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%';
+                    }
+                    var midPart = reason + ' · ' + coin;
+                    div.innerHTML = '<div><span class="' + sideCl + '" style="font-weight:600">' + baseLabel + '</span> · ' + midPart + ' · Miktar ' + qty + ' · Fiyat @ ' + price + ' · ' + quoteQty + ' · Komisyon ' + feeStr + realizedPctStr + '</div><div class="muted" style="font-size:0.8rem">' + ts + '</div>';
+                    cycleTradesList.appendChild(div);
+                });
+            }
+            function formatDurationSec(sec) {
+                if (sec == null || isNaN(sec) || sec < 0) return '—';
+                sec = Math.floor(Number(sec));
+                var h = Math.floor(sec / 3600);
+                var m = Math.floor((sec % 3600) / 60);
+                var s = sec % 60;
+                if (h > 0) return h + 's ' + m + 'dk';
+                if (m > 0) return m + 'dk ' + s + 'sn';
+                return s + 'sn';
+            }
+            function renderCycleReport(summary, cycleNum) {
+                var cycleReportEl = document.getElementById('cycleReport');
+                if (!cycleReportEl) return;
+                var isOpenCycle = cycleNum != null && currentCycleFromState != null && Number(cycleNum) === Number(currentCycleFromState);
+                var isCompletedCycle = cycleNum != null && currentCycleFromState != null && Number(cycleNum) < Number(currentCycleFromState);
+                if (!summary && !isOpenCycle) {
+                    cycleReportEl.style.display = 'none';
+                    return;
+                }
+                var dur = formatDurationSec(summary && summary.duration_sec != null ? summary.duration_sec : null);
+                var count = summary && summary.trade_count != null ? summary.trade_count : '—';
+                var baseAsset = (typeof baseFromSymbol === 'function' ? baseFromSymbol((lastBotDetail && lastBotDetail.symbol) || '') : '') || 'BASE';
+                var cycleTypeRaw = summary && summary.cycle_type ? summary.cycle_type : (isOpenCycle ? 'Açık tur' : '—');
+                var cycleTypeLabel = cycleTypeRaw === 'LONG_SCALP' ? 'CASH' : cycleTypeRaw === 'INVENTORY_REBALANCE' ? 'INVENTORY' : cycleTypeRaw;
+                var parts = [
+                    '<div class="cycle-report-item cycle-report-type"><span class="cycle-report-label">Tur tipi</span><span class="cycle-report-value">' + cycleTypeLabel + '</span></div>',
+                    '<div class="cycle-report-item"><span class="cycle-report-label">Tur süresi</span><span class="cycle-report-value">' + dur + '</span></div>',
+                    '<div class="cycle-report-item"><span class="cycle-report-label">İşlem sayısı</span><span class="cycle-report-value">' + count + '</span></div>'
+                ];
+                var cashUsdt = summary && summary.cash_pnl_usdt != null ? Number(summary.cash_pnl_usdt) : 0;
+                var cashFees = summary && summary.cash_fees_usdt != null ? Number(summary.cash_fees_usdt) : 0;
+                var invQty = summary && summary.inventory_coin_adv_qty != null ? Number(summary.inventory_coin_adv_qty) : 0;
+                var invFees = summary && summary.inventory_fees_usdt != null ? Number(summary.inventory_fees_usdt) : 0;
+                var cashStr = (cashUsdt >= 0 ? '+' : '') + fmtUsd(cashUsdt) + (cashFees !== 0 ? ' (Komisyon: ' + fmtUsd(cashFees) + ')' : '');
+                var invStr = (invQty >= 0 ? '+' : '') + fmtBaseCompact(invQty) + ' ' + baseAsset + (invFees !== 0 ? ' (Komisyon: ' + fmtUsd(invFees) + ')' : '');
+                var curPrice = (lastBotDetail.dual_pnl && lastBotDetail.dual_pnl.current_price != null) ? Number(lastBotDetail.dual_pnl.current_price) : null;
+                var invUsdtEquiv = (curPrice != null && curPrice > 0 && invQty !== 0) ? (invQty * curPrice - invFees) : null;
+                parts.push('<div class="cycle-report-item"><span class="cycle-report-label">CASH PNL (USDT)</span><span class="cycle-report-value ' + (cashUsdt >= 0 ? 'positive' : 'negative') + '">' + cashStr + '</span></div>');
+                parts.push('<div class="cycle-report-item"><span class="cycle-report-label">INVENTORY PNL (coin)</span><span class="cycle-report-value ' + (invQty >= 0 ? 'positive' : 'negative') + '">' + invStr + '</span></div>');
+                if (invUsdtEquiv != null && !isNaN(invUsdtEquiv)) {
+                    parts.push('<div class="cycle-report-item"><span class="cycle-report-label">INVENTORY (USDT eşdeğer)</span><span class="cycle-report-value ' + (invUsdtEquiv >= 0 ? 'positive' : 'negative') + '">' + (invUsdtEquiv >= 0 ? '+' : '') + fmtUsd(invUsdtEquiv) + '</span></div>');
+                }
+                cycleReportEl.innerHTML = parts.join('');
+                cycleReportEl.style.display = 'flex';
+            }
+            function loadCycleTrades(cycleId) {
+                selectedCycleId = cycleId;
+                cycleTradesTurButtons.querySelectorAll('button[data-cycle]').forEach(function(btn) {
+                    btn.classList.toggle('active', Number(btn.getAttribute('data-cycle')) === cycleId);
+                });
+                cycleTradesList.innerHTML = '<div class="cycle-pnl-item muted">Yükleniyor…</div>';
+                var cycleReportEl = document.getElementById('cycleReport');
+                if (cycleReportEl) cycleReportEl.style.display = 'none';
+                var q = 'account_id=' + (accountId || '') + '&limit=100&cycle_id=' + cycleId;
+                window.apiClient.get('/api/bots-engine/' + botId + '/trades?' + q)
+                    .then(function(res) {
+                        renderCycleTradesList(res.trades || [], cycleId);
+                        var summary = res.cycle_summary;
+                        if (cycleId === currentCycleFromState && lastBotDetail.dual_pnl && lastBotDetail.dual_pnl.current_cycle) {
+                            var cur = lastBotDetail.dual_pnl.current_cycle;
+                            summary = {
+                                cycle_type: 'Açık tur',
+                                cash_pnl_usdt: cur.cash_pnl_usdt,
+                                cash_fees_usdt: cur.cash_fees_usdt,
+                                inventory_coin_adv_qty: cur.inventory_coin_adv_qty,
+                                inventory_fees_usdt: cur.inventory_fees_usdt,
+                                trade_count: cur.fills_count,
+                                duration_sec: null,
+                                pnl_primary_mode: (cur.cash_pnl_usdt != null && cur.cash_pnl_usdt !== 0) ? 'CASH_USDT_V1' : 'INVENTORY_QTY_V1'
+                            };
+                        }
+                        renderCycleReport(summary, cycleId);
+                    })
+                    .catch(function() {
+                        cycleTradesList.innerHTML = '<div class="cycle-pnl-item muted">İşlemler yüklenemedi.</div>';
+                        if (cycleReportEl) cycleReportEl.style.display = 'none';
+                    });
+            }
+            cycleTradesTurButtons.innerHTML = '';
+            window.apiClient.get('/api/bots-engine/' + botId + '/cycles?account_id=' + (accountId || ''))
+                .then(function(cyRes) {
+                    var cycles = cyRes.cycles || [1];
+                    if (!cycles.length) cycles = [1];
+                    var sel = cycles.indexOf(selectedCycleId) >= 0 ? selectedCycleId : cycles[0];
+                    selectedCycleId = sel;
+                    cycles.forEach(function(c) {
+                        var btn = document.createElement('button');
+                        btn.type = 'button';
+                        btn.className = 'cycle-tur-btn' + (c === selectedCycleId ? ' active' : '');
+                        btn.setAttribute('data-cycle', c);
+                        btn.textContent = 'Tur ' + c;
+                        btn.onclick = function() { loadCycleTrades(c); };
+                        cycleTradesTurButtons.appendChild(btn);
+                    });
+                    loadCycleTrades(selectedCycleId);
+                })
+                .catch(function() {
+                    cycleTradesTurButtons.innerHTML = '<span class="muted">Tur listesi alınamadı.</span>';
+                    loadCycleTrades(currentCycleFromState || 1);
+                });
+
+            function refreshTradesPanel(newCycleId) {
+                if (!cycleTradesTurButtons || !cycleTradesList) return;
+                currentCycleFromState = newCycleId != null ? Number(newCycleId) : 1;
+                selectedCycleId = currentCycleFromState;
+                cycleTradesTurButtons.innerHTML = '';
+                window.apiClient.get('/api/bots-engine/' + botId + '/cycles?account_id=' + (accountId || ''))
+                    .then(function(cyRes) {
+                        var cycles = cyRes.cycles || [1];
+                        if (!cycles.length) cycles = [1];
+                        var sel = cycles.indexOf(selectedCycleId) >= 0 ? selectedCycleId : (cycles[cycles.length - 1] || 1);
+                        selectedCycleId = sel;
+                        cycles.forEach(function(c) {
+                            var btn = document.createElement('button');
+                            btn.type = 'button';
+                            btn.className = 'cycle-tur-btn' + (c === selectedCycleId ? ' active' : '');
+                            btn.setAttribute('data-cycle', c);
+                            btn.textContent = 'Tur ' + c;
+                            btn.onclick = function() { loadCycleTrades(c); };
+                            cycleTradesTurButtons.appendChild(btn);
+                        });
+                        loadCycleTrades(selectedCycleId);
+                    })
+                    .catch(function() {
+                        cycleTradesTurButtons.innerHTML = '<span class="muted">Tur listesi alınamadı.</span>';
+                        loadCycleTrades(selectedCycleId);
+                    });
+            }
+            window._botDetailRefreshTradesPanel = refreshTradesPanel;
+
+            lastRefPriceForPerf = refPrice != null ? refPrice : null;
+            initialCapForPerf = initialCapital > 0 ? initialCapital : null;
+            if (perfReport) {
+                var refPStr = (lastRefPriceForPerf != null ? lastRefPriceForPerf.toFixed(4) : '—');
+                var startBalStr = (initialCapForPerf != null ? fmtUsd(initialCapForPerf) : '—');
+                perfReport.innerHTML =
+                    '<p><strong>Başlangıç bakiyesi:</strong> <span id="perfReportStartBakiye">' + startBalStr + '</span></p>' +
+                    '<p><strong>Güncel bakiye:</strong> <span id="perfReportGuncelBakiye">' + (botBalanceUsd || '—') + '</span></p>' +
+                    '<p><strong>Bakiye Değişimi:</strong> <span id="perfReportBakiyeDegisim" style="color:' + totalKzCl + '">' + totalKzStr + (initialCapital > 0 && totalPnlUsd != null ? ' ' + (totalPnlUsd >= 0 ? '+' : '') + (initialCapital > 0 ? (totalPnlUsd / initialCapital * 100).toFixed(2) : '0') + '%' : '') + '</span></p>' +
+                    '<p style="margin-top:1rem;"><strong>Parite Başlangıç Fiyatı (referans):</strong> <span id="perfReportRefPrice">' + refPStr + '</span></p>' +
+                    '<p><strong>Parite Güncel Fiyatı:</strong> <span id="perfReportPariteGuncel">' + (priceForBot != null ? priceForBot.toFixed(4) : '—') + '</span></p>' +
+                    '<p><strong>Parite Değişimi:</strong> <span id="perfReportPariteDegisim">' + (lastRefPriceForPerf != null && priceForBot != null ? (priceForBot - lastRefPriceForPerf >= 0 ? '+' : '') + (priceForBot - lastRefPriceForPerf).toFixed(4) + ' ' + (priceForBot >= lastRefPriceForPerf ? '+' : '') + ((priceForBot - lastRefPriceForPerf) / lastRefPriceForPerf * 100).toFixed(2) + '%' : '—') + '</span></p>' +
+                    '<p><strong>Gerçek performans</strong> (Bakiye % − Parite %): <span id="perfReportGercekPerf" style="font-weight:600">—</span></p>';
+                var bakiyePct0 = initialCapForPerf > 0 && currentUsdNum != null ? (currentUsdNum - initialCapForPerf) / initialCapForPerf * 100 : null;
+                var paritePct0 = lastRefPriceForPerf != null && lastRefPriceForPerf > 0 && priceForBot != null ? (priceForBot - lastRefPriceForPerf) / lastRefPriceForPerf * 100 : null;
+                var realPct0 = (bakiyePct0 != null && paritePct0 != null) ? (bakiyePct0 - paritePct0) : null;
+                var genelBlock = document.getElementById('perfGenelBlock');
+                var genelValueEl = document.getElementById('perfGenelValue');
+                if (genelBlock) genelBlock.style.display = 'block';
+                var dual = data.dual_pnl;
+                if (dual && dual.aggregates) {
+                    var ag = dual.aggregates;
+                    var cur = dual.current_cycle || {};
+                    var cashTotal = ag.cash_pnl_usdt_total != null ? Number(ag.cash_pnl_usdt_total) : 0;
+                    var cashFeesTotal = ag.cash_fees_usdt_total != null ? Number(ag.cash_fees_usdt_total) : 0;
+                    var invQtyTotal = ag.inventory_coin_adv_qty_total != null ? Number(ag.inventory_coin_adv_qty_total) : 0;
+                    var invFeesTotal = ag.inventory_fees_usdt_total != null ? Number(ag.inventory_fees_usdt_total) : 0;
+                    var invUsdtEquiv = ag.inventory_usdt_equiv_total != null ? Number(ag.inventory_usdt_equiv_total) : (invQtyTotal * (priceForBot || 0) - invFeesTotal);
+                    var baseA = baseFromSymbol(symbol) || 'BASE';
+                    var cashStr = (cashTotal >= 0 ? '+' : '') + fmtUsd(cashTotal) + '  |  Komisyon: ' + fmtUsd(cashFeesTotal);
+                    var invQtyStr = (invQtyTotal >= 0 ? '+' : '') + fmtNum(invQtyTotal, 8) + ' ' + baseA + '  |  Komisyon: ' + fmtUsd(invFeesTotal);
+                    var invUsdtStr = (invUsdtEquiv >= 0 ? '+' : '') + fmtUsd(invUsdtEquiv) + ' (≈ @ güncel fiyat)';
+                    var openCycleHtml = '';
+                    if (cur.fills_count != null && cur.fills_count === 0) {
+                        openCycleHtml = '<p class="perf-dual-open-cycle muted">Açık tur (Cycle #' + (cur.cycle_id || '—') + '): Bu turda henüz işlem yok.</p>';
+                    } else if (cur.cash_pnl_usdt != null || cur.inventory_coin_adv_qty != null) {
+                        var ocCash = (cur.cash_pnl_usdt != null ? (cur.cash_pnl_usdt >= 0 ? '+' : '') + fmtUsd(cur.cash_pnl_usdt) : '—');
+                        var ocInv = (cur.inventory_coin_adv_qty != null ? (cur.inventory_coin_adv_qty >= 0 ? '+' : '') + fmtNum(cur.inventory_coin_adv_qty, 8) + ' ' + baseA : '—');
+                        openCycleHtml = '<p class="perf-dual-open-cycle"><strong>Açık tur (Cycle #' + (cur.cycle_id || '—') + '):</strong> Nakit ' + ocCash + '  |  Envanter ' + ocInv + '</p>';
+                    }
+                    genelBlock.innerHTML = '<div class="perf-genel-title">Genel PNL</div>' +
+                        '<div class="perf-dual-pnl">' +
+                        '<div class="perf-dual-line"><span class="perf-dual-label">CASH PNL (USDT):</span> <span class="perf-dual-value" style="color:' + (cashTotal >= 0 ? '#0ecb81' : '#f6465d') + '">' + cashStr + '</span></div>' +
+                        '<div class="perf-dual-line"><span class="perf-dual-label">INVENTORY PNL (COIN):</span> <span class="perf-dual-value" style="color:' + (invQtyTotal >= 0 ? '#0ecb81' : '#f6465d') + '">' + invQtyStr + '</span></div>' +
+                        '<div class="perf-dual-line perf-dual-line-secondary"><span class="perf-dual-label">INVENTORY (USDT eşdeğer):</span> <span class="perf-dual-value" style="color:' + (invUsdtEquiv >= 0 ? '#0ecb81' : '#f6465d') + '">' + invUsdtStr + '</span></div>' +
+                        openCycleHtml +
+                        '</div>';
+                } else {
+                    if (genelValueEl && realPct0 != null) {
+                        genelValueEl.textContent = (realPct0 >= 0 ? '+' : '') + realPct0.toFixed(2) + '%';
+                        genelValueEl.style.color = realPct0 >= 0 ? '#0ecb81' : '#f6465d';
+                    }
+                }
+                var perfReportGercekPerf = document.getElementById('perfReportGercekPerf');
+                if (perfReportGercekPerf && realPct0 != null) {
+                    perfReportGercekPerf.textContent = (realPct0 >= 0 ? '+' : '') + realPct0.toFixed(2) + '%';
+                    perfReportGercekPerf.style.color = realPct0 >= 0 ? '#0ecb81' : '#f6465d';
+                }
+                if (window.PerfChartTV && typeof window.PerfChartTV.init === 'function') {
+                    var chartBotId = data.bot_id != null ? String(data.bot_id) : (botId != null ? String(botId) : '');
+                    try { window.PerfChartTV.init(chartBotId, accountId, accountCode); } catch (err) { console.warn('PerfChartTV.init', err); }
+                }
+            }
+            perfPanel.style.display = 'block';
+            if (window.innerWidth > 768) { engineLogPanel.style.display = 'block'; } else { engineLogPanel.style.display = 'none'; }
+            loadEngineEvents(botId);
+            loadPerfMetrics();
+        }
+
+        function getPerfPeriod() {
+            var btn = perfPeriodBtns && perfPeriodBtns.querySelector('.btn-period.active');
+            return btn ? btn.getAttribute('data-period') : 'all';
+        }
+
+        function loadPerfMetrics() {
+            var period = getPerfPeriod();
+            var q = 'account_id=' + (accountId || '') + '&period=' + encodeURIComponent(period);
+            window.apiClient.get('/api/bots-engine/' + botId + '/performance?' + q)
+                .then(function(res) {
+                    var period = getPerfPeriod();
+                    /* perfGenelValue sadece showDetail ve polling ile güncellenir; Genel butonuna tıklanınca API yanıtıyla üzerine yazma (alakası yok). */
+                    if (!perfMetrics) return;
+                    var pnlUsd = res.pnl_usd != null ? Number(res.pnl_usd) : 0;
+                    var pnlPct = res.pnl_pct != null ? Number(res.pnl_pct) : null;
+                    var pnlColor = pnlUsd >= 0 ? '#0ecb81' : '#f6465d';
+                    var pnlSign = pnlUsd >= 0 ? '+' : '';
+                    var pnlStr = pnlSign + (pnlUsd || 0).toFixed(2) + ' USDT';
+                    var pctStr = (pnlPct != null && !isNaN(pnlPct)) ? ((pnlPct >= 0 ? '+' : '') + pnlPct.toFixed(2) + '%') : '—%';
+                    pnlStr += ' <span class="perf-pnl-pct">(' + pctStr + ')</span>';
+                    perfMetrics.innerHTML =
+                        '<div class="perf-metric-card"><div class="perf-metric-label">PnL</div><div class="perf-metric-value" style="color:' + pnlColor + '">' + pnlStr + '</div></div>' +
+                        '<div class="perf-metric-card"><div class="perf-metric-label">Tur</div><div class="perf-metric-value">' + (res.cycles_count != null ? res.cycles_count : 0) + '</div></div>' +
+                        '<div class="perf-metric-card"><div class="perf-metric-label">Komisyon (USDT)</div><div class="perf-metric-value">' + (res.fees_usd != null ? Number(res.fees_usd).toFixed(2) : '0.00') + '</div></div>';
+                    window._lastPerfChartSeries = res.chart_series || [];
+                    window._lastPerfPairSeries = res.pair_series || [];
+                })
+                .catch(function() {
+                    if (perfMetrics) perfMetrics.innerHTML = '<p class="muted">Metrikler yüklenemedi.</p>';
+                });
+        }
+
+        function formatPerfChartTime(isoStr) {
+            if (!isoStr || typeof isoStr !== 'string') return '—';
+            var d = new Date(isoStr);
+            if (isNaN(d.getTime())) return '—';
+            var day = ('0' + d.getDate()).slice(-2);
+            var month = ('0' + (d.getMonth() + 1)).slice(-2);
+            var h = ('0' + d.getHours()).slice(-2);
+            var m = ('0' + d.getMinutes()).slice(-2);
+            return day + '.' + month + ' ' + h + ':' + m;
+        }
+        function buildPerfChartSvg(series, pairSeries, width, height, gradientIdPrefix) {
+            gradientIdPrefix = gradientIdPrefix || 'perf';
+            series = series || [];
+            pairSeries = pairSeries || [];
+            var n = Math.max(series.length || 0, pairSeries.length || 0);
+            if (n < 2) return '';
+            var balancePcts = series.map(function(x) { return x.pct != null ? Number(x.pct) : 0; });
+            var pricePcts = pairSeries.map(function(x) { return x.pct != null ? Number(x.pct) : 0; });
+            var timeStrs = (series.length >= n ? series : pairSeries).map(function(x) { return x.t; });
+            while (balancePcts.length < n) balancePcts.push(balancePcts.length ? balancePcts[balancePcts.length - 1] : 0);
+            while (pricePcts.length < n) pricePcts.push(pricePcts.length ? pricePcts[pricePcts.length - 1] : 0);
+            while (timeStrs.length < n) timeStrs.push('');
+            // Çizgiler her zaman 0 noktasından başlasın (perfReport'taki yüzdelerle uyumlu)
+            var firstT = timeStrs[0] || '';
+            balancePcts = [0].concat(balancePcts);
+            pricePcts = [0].concat(pricePcts);
+            timeStrs = [firstT].concat(timeStrs);
+            n = balancePcts.length;
+            var allPcts = balancePcts.concat(pricePcts);
+            var minPct = Math.min.apply(null, allPcts);
+            var maxPct = Math.max.apply(null, allPcts);
+            var rangePct = maxPct - minPct;
+            var minRangePct = 2;
+            if (rangePct < minRangePct) {
+                var mid = (minPct + maxPct) / 2;
+                rangePct = minRangePct;
+                minPct = mid - rangePct / 2;
+                maxPct = mid + rangePct / 2;
+            }
+            // Y ekseni her zaman 0'ı içersin (sıfır çizgisi görünsün)
+            var padPct = rangePct * 0.08 || 0.5;
+            var yMin = Math.min(0, minPct) - padPct;
+            var yMax = Math.max(0, maxPct) + padPct;
+            var yRange = yMax - yMin || 1;
+            var finalBal = balancePcts[n - 1];
+            var finalPrice = pricePcts[n - 1];
+            var balanceColor = (finalBal >= 0) ? '#0ecb81' : '#f6465d';
+            var priceColor = (finalPrice >= 0) ? '#0ecb81' : '#f6465d';
+            var w = width || 400;
+            var h = height || 200;
+            var leftPad = 44;
+            var rightPad = 12;
+            var topPad = 14;
+            var bottomPad = 28;
+            var gw = w - leftPad - rightPad;
+            var gh = h - topPad - bottomPad;
+            function yToPx(pct) { return topPad + (1 - (pct - yMin) / yRange) * gh; }
+            function xToPx(i) { return leftPad + (i / (n - 1)) * gw; }
+            var parts = [];
+            parts.push('<svg width="100%" height="100%" viewBox="0 0 ' + w + ' ' + h + '" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg">');
+            parts.push('<defs><linearGradient id="' + gradientIdPrefix + 'BalGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="' + balanceColor + '" stop-opacity="0.35"/><stop offset="0.6" stop-color="' + balanceColor + '" stop-opacity="0.12"/><stop offset="1" stop-color="' + balanceColor + '" stop-opacity="0"/></linearGradient>');
+            parts.push('<linearGradient id="' + gradientIdPrefix + 'PairGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="' + priceColor + '" stop-opacity="0.35"/><stop offset="0.6" stop-color="' + priceColor + '" stop-opacity="0.12"/><stop offset="1" stop-color="' + priceColor + '" stop-opacity="0"/></linearGradient></defs>');
+            var gridColor = 'rgba(255,255,255,0.06)';
+            var textColor = 'rgba(255,255,255,0.5)';
+            var fontSz = 10;
+            var numGridLines = 5;
+            for (var g = 0; g <= numGridLines; g++) {
+                var pct = yMin + (g / numGridLines) * yRange;
+                var y = yToPx(pct);
+                var isZero = Math.abs(pct) < (yRange / 50);
+                parts.push('<line x1="' + leftPad + '" y1="' + y + '" x2="' + (w - rightPad) + '" y2="' + y + '" stroke="' + (isZero ? 'rgba(255,255,255,0.12)' : gridColor) + '" stroke-width="' + (isZero ? 1 : 0.5) + '" stroke-dasharray="' + (isZero ? '0' : '4 4') + '"/>');
+            }
+            for (var g = 0; g <= numGridLines; g++) {
+                var pct = yMin + (g / numGridLines) * yRange;
+                var y = yToPx(pct);
+                var label = (pct >= 0 ? '+' : '') + pct.toFixed(1) + '%';
+                parts.push('<text x="' + (leftPad - 6) + '" y="' + (y + fontSz / 3) + '" fill="' + textColor + '" font-size="' + fontSz + '" font-family="system-ui,-apple-system,sans-serif" text-anchor="end">' + label + '</text>');
+            }
+            var chartBottomY = topPad + gh;
+            parts.push('<line x1="' + leftPad + '" y1="' + chartBottomY + '" x2="' + (w - rightPad) + '" y2="' + chartBottomY + '" stroke="rgba(255,255,255,0.2)" stroke-width="1"/>');
+            var numTimeLabels = 5;
+            var timeLabelY = chartBottomY + 14;
+            var timeColor = 'rgba(255,255,255,0.7)';
+            for (var ti = 0; ti < numTimeLabels; ti++) {
+                var idx = ti === numTimeLabels - 1 ? n - 1 : Math.round((ti / (numTimeLabels - 1)) * (n - 1));
+                var x = xToPx(idx);
+                var timeLabel = formatPerfChartTime(timeStrs[idx] || '');
+                parts.push('<line x1="' + x + '" y1="' + chartBottomY + '" x2="' + x + '" y2="' + (chartBottomY + 4) + '" stroke="rgba(255,255,255,0.25)" stroke-width="1"/>');
+                parts.push('<text x="' + x + '" y="' + timeLabelY + '" fill="' + timeColor + '" font-size="' + fontSz + '" font-family="system-ui,-apple-system,sans-serif" text-anchor="middle">' + timeLabel + '</text>');
+            }
+            var pathBal = balancePcts.map(function(pct, i) { return (i === 0 ? 'M' : 'L') + ' ' + xToPx(i) + ' ' + yToPx(pct); }).join(' ');
+            var pathPrice = pricePcts.map(function(pct, i) { return (i === 0 ? 'M' : 'L') + ' ' + xToPx(i) + ' ' + yToPx(pct); }).join(' ');
+            var yZero = yToPx(0);
+            var xFirst = xToPx(0);
+            var xLast = xToPx(n - 1);
+            var pathBalArea = pathBal + ' L ' + xLast + ' ' + yZero + ' L ' + xFirst + ' ' + yZero + ' Z';
+            var pathPriceArea = pathPrice + ' L ' + xLast + ' ' + yZero + ' L ' + xFirst + ' ' + yZero + ' Z';
+            parts.push('<path class="perf-chart-area-draw" d="' + pathBalArea + '" fill="url(#' + gradientIdPrefix + 'BalGrad)" stroke="none"/>');
+            parts.push('<path class="perf-chart-area-draw perf-chart-area-draw-2" d="' + pathPriceArea + '" fill="url(#' + gradientIdPrefix + 'PairGrad)" stroke="none"/>');
+            parts.push('<path class="perf-chart-path-draw" pathLength="100" d="' + pathBal + '" fill="none" stroke="' + balanceColor + '" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>');
+            parts.push('<path class="perf-chart-path-draw perf-chart-path-draw-2" pathLength="100" d="' + pathPrice + '" fill="none" stroke="' + priceColor + '" stroke-width="2.5" stroke-dasharray="6 4" stroke-linecap="round" stroke-linejoin="round"/>');
+            parts.push('</svg>');
+            return parts.join('');
+        }
+        function drawPerfChart(series, pairSeries) {
+            var wrap = document.getElementById('perfChartSvgWrap');
+            var placeholder = document.getElementById('perfChartPlaceholder');
+            var legend = document.getElementById('perfChartLegend');
+            if (!wrap) return;
+            var n = (series && series.length) || (pairSeries && pairSeries.length) || 0;
+            if (n < 2) {
+                if (placeholder) placeholder.style.display = 'block';
+                if (legend) legend.style.display = 'none';
+                wrap.innerHTML = '';
+                return;
+            }
+            if (placeholder) placeholder.style.display = 'none';
+            if (legend) legend.style.display = 'flex';
+            var lastBal = (series && series.length) ? (series[series.length - 1].pct != null ? Number(series[series.length - 1].pct) : 0) : 0;
+            var lastPrice = (pairSeries && pairSeries.length) ? (pairSeries[pairSeries.length - 1].pct != null ? Number(pairSeries[pairSeries.length - 1].pct) : 0) : 0;
+            var balColor = (lastBal >= 0) ? '#0ecb81' : '#f6465d';
+            var priceCol = (lastPrice >= 0) ? '#0ecb81' : '#f6465d';
+            var svgHtml = buildPerfChartSvg(series, pairSeries, 400, 200, 'perfInline');
+            wrap.innerHTML = svgHtml;
+            var legBalInline = document.getElementById('perfInlineLegBalance');
+            var legPairInline = document.getElementById('perfInlineLegPair');
+            if (legBalInline) legBalInline.style.background = balColor;
+            if (legPairInline) legPairInline.style.background = priceCol;
+            var modalWrap = document.getElementById('perfChartModalSvgWrap');
+            if (modalWrap) {
+                var modalSvg = buildPerfChartSvg(series, pairSeries, 600, 320, 'perfModal');
+                modalWrap.innerHTML = modalSvg;
+                var legBal = document.getElementById('perfModalLegBalance');
+                var legPair = document.getElementById('perfModalLegPair');
+                if (legBal) legBal.style.background = balColor;
+                if (legPair) legPair.style.background = priceCol;
+            }
+        }
+
+        function updatePerfReportFromApi(res) {
+            if (!perfReport) return;
+            var refP = res.reference_price != null ? Number(res.reference_price) : null;
+            var curP = res.current_price != null ? Number(res.current_price) : null;
+            var pricePct = res.price_change_pct != null ? Number(res.price_change_pct) : ((refP != null && curP != null && refP > 0) ? ((curP - refP) / refP * 100) : null);
+            var realPct = res.real_performance_pct != null ? Number(res.real_performance_pct) : null;
+            // Başlangıç bakiyesi: botun config'taki bütçesi (kullanıcının belirlediği); yoksa period initial
+            var startUsd = (res.config_budget_usd != null && res.config_budget_usd > 0) ? Number(res.config_budget_usd) : (res.initial_usd != null ? Number(res.initial_usd) : (res.balance_start_usd != null ? Number(res.balance_start_usd) : null));
+            var endUsd = res.total_usd != null ? Number(res.total_usd) : (res.balance_end_usd != null ? Number(res.balance_end_usd) : null);
+            var pnlUsd = res.pnl_usd != null ? Number(res.pnl_usd) : (endUsd != null && startUsd != null ? endUsd - startUsd : null);
+            var pnlPct = res.pnl_pct != null ? Number(res.pnl_pct) : null;
+            var pnlColor = (pnlUsd != null && pnlUsd >= 0) ? '#0ecb81' : '#f6465d';
+            var pnlSign = (pnlUsd != null && pnlUsd >= 0) ? '+' : '';
+            var priceDiffUsd = (refP != null && curP != null) ? (curP - refP) : null;
+            var priceColor = (pricePct != null && pricePct >= 0) ? '#0ecb81' : '#f6465d';
+            var priceSign = (pricePct != null && pricePct >= 0) ? '+' : '';
+            var realColor = (realPct != null && realPct >= 0) ? '#0ecb81' : '#f6465d';
+            var realSign = (realPct != null && realPct >= 0) ? '+' : '';
+
+            var html = '<p><strong>Başlangıç bakiyesi:</strong> <span id="perfReportStartBakiye">' + (startUsd != null ? fmtUsd(startUsd) : '—') + '</span></p>' +
+                '<p><strong>Güncel bakiye:</strong> <span id="perfReportGuncelBakiye">' + (endUsd != null ? fmtUsd(endUsd) : '—') + '</span></p>' +
+                '<p><strong>Bakiye Değişimi:</strong> <span id="perfReportBakiyeDegisim" style="color:' + pnlColor + '">' + (pnlUsd != null ? pnlSign + fmtUsd(pnlUsd) + ' ' : '') + (pnlPct != null ? (pnlPct >= 0 ? '+' : '') + pnlPct.toFixed(2) + '%' : '—') + '</span></p>' +
+                '<p style="margin-top:1rem;"><strong>Parite Başlangıç Fiyatı (referans):</strong> <span id="perfReportRefPrice">' + (refP != null ? refP.toFixed(4) : '—') + '</span></p>' +
+                '<p><strong>Parite Güncel Fiyatı:</strong> <span id="perfReportPariteGuncel">' + (curP != null ? curP.toFixed(4) : '—') + '</span></p>' +
+                (priceDiffUsd != null && pricePct != null ? '<p><strong>Parite Değişimi:</strong> <span id="perfReportPariteDegisim" style="color:' + priceColor + '">' + (priceDiffUsd >= 0 ? '+' : '') + priceDiffUsd.toFixed(4) + ' ' + (pricePct >= 0 ? '+' : '') + pricePct.toFixed(2) + '%</span></p>' : '<p><strong>Parite Değişimi:</strong> <span id="perfReportPariteDegisim">—</span></p>');
+            if (realPct != null) {
+                html += '<p><strong>Gerçek performans</strong> (Bakiye % − Parite %): <span style="color:' + realColor + '; font-weight:600">' + (realPct >= 0 ? '+' : '') + realPct.toFixed(2) + '%</span></p>';
+            }
+            html += '<p class="muted" style="font-size:0.85rem; margin-top:1rem;">Parite fiyatı bot açılışından bu yana değişir; bot bakiyesi değişimi ile karşılaştırılarak botun eklediği değer (gerçek performans) hesaplanır.</p>';
+            perfReport.innerHTML = html;
+        }
+
+        if (perfPeriodBtns) {
+            perfPeriodBtns.addEventListener('click', function(e) {
+                var btn = e.target && e.target.classList && e.target.classList.contains('btn-period') ? e.target : null;
+                if (!btn) return;
+                perfPeriodBtns.querySelectorAll('.btn-period').forEach(function(b) { b.classList.remove('active'); });
+                btn.classList.add('active');
+                loadPerfMetrics();
+            });
+        }
+        var botStripMiniChartWrap = document.getElementById('botStripMiniChartWrap');
+        if (botStripMiniChartWrap) {
+            botStripMiniChartWrap.addEventListener('click', function(e) {
+                e.preventDefault();
+                if (lastBotDetail.symbol) openSymbolChartModal(lastBotDetail.symbol);
+            });
+            botStripMiniChartWrap.addEventListener('keydown', function(e) {
+                if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); if (lastBotDetail.symbol) openSymbolChartModal(lastBotDetail.symbol); }
+            });
+        }
+        if (symbolChartModalClose) {
+            symbolChartModalClose.addEventListener('click', closeSymbolChartModal);
+        }
+        if (symbolChartModalOverlay) {
+            symbolChartModalOverlay.addEventListener('click', function(e) {
+                if (e.target === symbolChartModalOverlay) closeSymbolChartModal();
+            });
+        }
+        window.addEventListener('message', function(e) {
+            if (e.data === 'closeChartModal' && typeof closeSymbolChartModal === 'function') closeSymbolChartModal();
+        });
+        if (perfChartModalClose) {
+            perfChartModalClose.addEventListener('click', function() {
+                if (window.PerfChartTV && typeof window.PerfChartTV.closeModal === 'function') window.PerfChartTV.closeModal();
+                else if (perfChartModalOverlay) perfChartModalOverlay.classList.remove('is-open');
+            });
+        }
+        if (perfChartModalOverlay) {
+            perfChartModalOverlay.addEventListener('click', function(e) {
+                if (e.target === perfChartModalOverlay) {
+                    if (window.PerfChartTV && typeof window.PerfChartTV.closeModal === 'function') window.PerfChartTV.closeModal();
+                    else perfChartModalOverlay.classList.remove('is-open');
+                }
+            });
+            var perfChartModal = document.getElementById('perfChartModal');
+            if (perfChartModal) perfChartModal.addEventListener('click', function(e) { e.stopPropagation(); });
+            /* Mobil: büyük performans grafiği açılınca ekranı yatay (landscape) kilitle */
+            var _perfChartLandscapeActive = false;
+            function unlockPerfChartLandscape() {
+                if (!_perfChartLandscapeActive) return;
+                _perfChartLandscapeActive = false;
+                if (screen.orientation && typeof screen.orientation.unlock === 'function') screen.orientation.unlock().catch(function() {});
+                if (document.fullscreenElement) document.exitFullscreen().catch(function() {});
+            }
+            var mo = new MutationObserver(function() {
+                var isOpen = perfChartModalOverlay.classList.contains('is-open');
+                if (isOpen && window.matchMedia('(max-width: 768px)').matches) {
+                    _perfChartLandscapeActive = true;
+                    perfChartModalOverlay.requestFullscreen().then(function() {
+                        if (screen.orientation && typeof screen.orientation.lock === 'function') return screen.orientation.lock('landscape');
+                    }).catch(function() { _perfChartLandscapeActive = false; });
+                } else if (!isOpen) unlockPerfChartLandscape();
+            });
+            mo.observe(perfChartModalOverlay, { attributes: true, attributeFilter: ['class'] });
+            perfChartModalOverlay.addEventListener('fullscreenchange', function() {
+                if (!document.fullscreenElement && _perfChartLandscapeActive) unlockPerfChartLandscape();
+            });
+        }
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') {
+                if (symbolChartModalOverlay && symbolChartModalOverlay.classList.contains('is-open')) closeSymbolChartModal();
+                else if (perfChartModalOverlay && perfChartModalOverlay.classList.contains('is-open')) {
+                    if (window.PerfChartTV && typeof window.PerfChartTV.closeModal === 'function') window.PerfChartTV.closeModal();
+                    else perfChartModalOverlay.classList.remove('is-open');
+                }
+            }
+        });
+
+        function loadDetail() {
+            if (!botId || !window.apiClient) return;
+            var q = '?account_id=' + (accountId || '');
+            window.apiClient.get('/api/bots-engine/' + botId + q)
+                .then(function (res) {
+                    showDetail(res);
+                    fetchLive();
+                    if (window.intervalRegistry) window.intervalRegistry.start('bot-detail-live', fetchLive, 2500, 'bot-detail');
+                    if (lastBotDetail.symbol && lastBotDetail.symbol !== 'MULTI' && accountId && window.intervalRegistry) {
+                        window.intervalRegistry.start('bot-detail-strip-price', fetchStripPrice, 1500, 'bot-detail');
+                    }
+                    return res;
+                })
+                .catch(function (e) {
+                    setError('Bot yüklenemedi: ' + (e.message || 'Hata'));
+                });
+        }
+
+        function shallowEqualLive(a, b) {
+            if (a === b) return true;
+            if (!a || !b) return false;
+            return a.status === b.status && a.pnl_pct === b.pnl_pct && a.equity === b.equity && a.last_price === b.last_price && a.last_tick_at === b.last_tick_at && a.last_error_code === b.last_error_code
+                && a.initial_capital === b.initial_capital && a.daily_pnl_usd === b.daily_pnl_usd && a.daily_pnl_pct === b.daily_pnl_pct;
+        }
+        function applyLive(newState) {
+            if (shallowEqualLive(prevLiveState, newState)) return;
+            prevLiveState = newState;
+            var price = newState.last_price;
+            if (botPriceEl) {
+                var priceStr = (price != null && !isNaN(price) && price > 0) ? fmtNum(price, 4) : '—';
+                if (price != null && !isNaN(price) && price > 0) {
+                var numPrice = Number(price);
+                if (lastPriceForBlink != null) {
+                    if (numPrice > lastPriceForBlink) {
+                        botPriceEl.textContent = priceStr;
+                        botPriceEl.classList.add('blink-positive');
+                        setTimeout(function() { if (botPriceEl) botPriceEl.classList.remove('blink-positive'); }, 700);
+                    } else if (numPrice < lastPriceForBlink) {
+                        botPriceEl.textContent = priceStr;
+                        botPriceEl.classList.add('blink-negative');
+                        setTimeout(function() { if (botPriceEl) botPriceEl.classList.remove('blink-negative'); }, 700);
+                    } else {
+                        if (botPriceEl.textContent !== priceStr) botPriceEl.textContent = priceStr;
+                    }
+                } else {
+                    botPriceEl.textContent = priceStr;
+                }
+                lastPriceForBlink = numPrice;
+                } else {
+                    botPriceEl.textContent = '—';
+                    lastPriceForBlink = null;
+                }
+            }
+            var pollStatus = (newState.status || 'stopped').toLowerCase();
+            var pollStatusText = pollStatus === 'running' ? 'Çalışıyor' : pollStatus === 'error' || (pollStatus && pollStatus.indexOf('paused') === 0) ? 'Hata' : pollStatus === 'stopped' ? 'Durduruldu' : 'Bekliyor';
+            var stateHeroTitleEl = document.getElementById('stateHeroTitle');
+            if (stateHeroTitleEl) {
+                var titleText = pollStatus === 'running' ? 'Durum · Canlı' : 'Durum · ' + pollStatusText;
+                if (stateHeroTitleEl.textContent !== titleText) stateHeroTitleEl.textContent = titleText;
+            }
+            if (stateHeroMetaInterval) { clearInterval(stateHeroMetaInterval); stateHeroMetaInterval = null; }
+            if (window.intervalRegistry) window.intervalRegistry.stop('bot-detail-duration');
+            if (pollStatus === 'running' && lastBotStartedAt) {
+                var stateHeroMetaElPoll = document.getElementById('stateHeroMeta');
+                if (stateHeroMetaElPoll) setStateHeroMetaHtml(stateHeroMetaElPoll, lastBotStartedAt, pollStatus);
+                if (window.intervalRegistry) {
+                    window.intervalRegistry.start('bot-detail-duration', function() {
+                        var durEl = document.getElementById('stateHeroMetaDur');
+                        if (durEl) durEl.textContent = formatStartMetaDurationOnly(lastBotStartedAt);
+                    }, 1000, 'bot-detail');
+                }
+            }
+            var stateBotBalanceEl = document.getElementById('stateBotBalanceValue');
+            var eq = newState.equity;
+            if (stateBotBalanceEl && eq != null && !isNaN(eq)) {
+                var botBalanceStr = fmtUsd(eq);
+                if (stateBotBalanceEl.textContent !== botBalanceStr) stateBotBalanceEl.textContent = botBalanceStr;
+            }
+            var initialCap = newState.initial_capital != null && !isNaN(newState.initial_capital) ? Number(newState.initial_capital) : 0;
+            var stateTotalKzEl = document.getElementById('stateTotalKzValue');
+            if (stateTotalKzEl) {
+                var totalPnlUsd = null;
+                if (newState.first_buy_pending === true) {
+                    totalPnlUsd = 0;
+                } else if (eq != null && !isNaN(eq) && initialCap > 0) {
+                    totalPnlUsd = eq - initialCap;
+                }
+                if (totalPnlUsd != null) {
+                    var totalPct = initialCap > 0 ? (totalPnlUsd / initialCap * 100) : 0;
+                    var totalKzStr = (totalPnlUsd >= 0 ? '+' : '') + fmtUsd(totalPnlUsd) + ' ' + (totalPct >= 0 ? '+' : '') + totalPct.toFixed(2) + '%';
+                    if (stateTotalKzEl.textContent !== totalKzStr) {
+                        stateTotalKzEl.textContent = totalKzStr;
+                        stateTotalKzEl.style.color = totalPnlUsd >= 0 ? '#0ecb81' : '#f6465d';
+                    }
+                }
+            }
+            var stateDailyKzEl = document.getElementById('stateDailyKzValue');
+            var dailyUsd = newState.daily_pnl_usd;
+            var dailyPct = newState.daily_pnl_pct;
+            if (stateDailyKzEl && dailyUsd != null && !isNaN(dailyUsd)) {
+                var dailyKzStr = (dailyUsd >= 0 ? '+' : '') + fmtUsd(dailyUsd);
+                if (dailyPct != null && !isNaN(dailyPct)) dailyKzStr += ' ' + (dailyPct >= 0 ? '+' : '') + dailyPct.toFixed(2) + '%';
+                if (stateDailyKzEl.textContent !== dailyKzStr) {
+                    stateDailyKzEl.textContent = dailyKzStr;
+                    stateDailyKzEl.style.color = dailyUsd >= 0 ? '#0ecb81' : '#f6465d';
+                }
+            }
+        }
+        function fetchLive() {
+            if (document.hidden || !botId || !window.apiClient) return;
+            var q = '?account_id=' + (accountId || '');
+            window.apiClient.get('/api/bots-engine/' + botId + '/live' + q).then(applyLive).catch(function() {});
+        }
+        function fetchStripPrice() {
+            if (document.hidden || !window.apiClient || !lastBotDetail.symbol || !accountId || !botPriceEl) return;
+            var sym = lastBotDetail.symbol;
+            window.apiClient.get('/api/spot/price?account_id=' + encodeURIComponent(accountId) + '&symbol=' + encodeURIComponent(sym))
+                .then(function(r) {
+                    if (!r || r.price == null || isNaN(r.price) || r.price <= 0) return;
+                    var priceStr = fmtNum(r.price, 4);
+                    var numPrice = Number(r.price);
+                    if (lastPriceForBlink != null) {
+                        if (numPrice > lastPriceForBlink) {
+                            botPriceEl.textContent = priceStr;
+                            botPriceEl.classList.add('blink-positive');
+                            setTimeout(function() { if (botPriceEl) botPriceEl.classList.remove('blink-positive'); }, 700);
+                        } else if (numPrice < lastPriceForBlink) {
+                            botPriceEl.textContent = priceStr;
+                            botPriceEl.classList.add('blink-negative');
+                            setTimeout(function() { if (botPriceEl) botPriceEl.classList.remove('blink-negative'); }, 700);
+                        } else {
+                            if (botPriceEl.textContent !== priceStr) botPriceEl.textContent = priceStr;
+                        }
+                    } else {
+                        botPriceEl.textContent = priceStr;
+                    }
+                    lastPriceForBlink = numPrice;
+                })
+                .catch(function() {});
+        }
+
+        function refreshAll() {
+            if (!botId || !window.apiClient) return;
+            window.apiClient.get('/api/bots-engine/' + botId + '?account_id=' + (accountId || ''))
+                .then(showDetail)
+                .catch(function () {});
+        }
+
+        var btnEngineLogRefresh = document.getElementById('btnEngineLogRefresh');
+        if (btnEngineLogRefresh) btnEngineLogRefresh.addEventListener('click', function() { if (botId) loadEngineEvents(botId); });
+        /* Başlat butonu kaldırıldı; bot oluşturulunca otomatik başlar */
+
+        function openStopAndDeleteModal() {
+            if (!stopAndDeleteModal) return;
+            var base = baseFromSymbol(lastBotDetail.symbol);
+            var q = lastBotDetail.quoteAsset || 'USDT';
+            if (stopDeleteConvertDetail) {
+                stopDeleteConvertDetail.textContent = lastBotDetail.baseBalance > 0
+                    ? 'Mevcut ' + (base || 'base') + ' bakiyesi (' + fmtNum(lastBotDetail.baseBalance, 8) + ') piyasa emri ile ' + q + ' ye çevrilir; ardından bot silinir.'
+                    : 'Base bakiyesi yok; yalnızca bot silinir.';
+            }
+            document.getElementById('stopDeleteAsIs').checked = true;
+            stopAndDeleteModal.style.display = 'flex';
+        }
+        function closeStopAndDeleteModal() {
+            if (stopAndDeleteModal) stopAndDeleteModal.style.display = 'none';
+        }
+        function openParametrelerModal() {
+            if (parametrelerModal) parametrelerModal.style.display = 'flex';
+        }
+        function closeParametrelerModal() {
+            if (parametrelerModal) parametrelerModal.style.display = 'none';
+        }
+        if (btnParametreler) {
+            btnParametreler.addEventListener('click', openParametrelerModal);
+        }
+        if (parametrelerModalClose) parametrelerModalClose.addEventListener('click', closeParametrelerModal);
+        if (parametrelerModalKapat) parametrelerModalKapat.addEventListener('click', closeParametrelerModal);
+        if (parametrelerModal) {
+            parametrelerModal.addEventListener('click', function (e) {
+                if (e.target === parametrelerModal) closeParametrelerModal();
+            });
+        }
+        if (btnStopAndDelete) {
+            btnStopAndDelete.addEventListener('click', function () {
+                if (!botId || !window.apiClient) return;
+                openStopAndDeleteModal();
+            });
+        }
+        if (stopDeleteModalCancel) stopDeleteModalCancel.addEventListener('click', closeStopAndDeleteModal);
+        if (stopDeleteModalConfirm) {
+            stopDeleteModalConfirm.addEventListener('click', function () {
+                if (!botId || !window.apiClient) return;
+                var convert = document.getElementById('stopDeleteConvert') && document.getElementById('stopDeleteConvert').checked;
+                stopDeleteModalConfirm.disabled = true;
+                var url = '/api/bots-engine/' + botId + '/delete?account_id=' + (accountId || '');
+                var body = { convert_base_to_quote: !!convert };
+                window.apiClient.post(url, body)
+                    .then(function () {
+                        if (window.Toast) window.Toast.success('Bot sonlandırıldı ve silindi');
+                        window.location.href = backLink.href;
+                    })
+                    .catch(function (e) {
+                        if (window.Toast) window.Toast.error(e.detail && e.detail.message ? e.detail.message : (e.message || 'Silinemedi'));
+                        stopDeleteModalConfirm.disabled = false;
+                    });
+            });
+        }
+        stopAndDeleteModal.addEventListener('click', function (e) {
+            if (e.target === stopAndDeleteModal) closeStopAndDeleteModal();
+        });
+
+        if (!botId) {
+            setError('Geçersiz sayfa. Lütfen dashboard üzerinden bot detayına gidin.');
+            pageTitle.textContent = 'Bot Detay';
+            pageInfo.textContent = 'Bot ID bulunamadı.';
+            return;
+        }
+
+        function run() {
+            loadDetail();
+        }
+
+        if (accountCode && !accountId && window.apiClient) {
+            window.apiClient.get('/api/accounts/by-code/' + encodeURIComponent(accountCode))
+                .then(function (r) {
+                    accountId = r.id || r.account_id;
+                    run();
+                })
+                .catch(function () {
+                    run();
+                });
+        } else {
+            run();
+        }
+        if (window.intervalRegistry) {
+            window.intervalRegistry.start('bot-detail-klines', function () {
+                if (document.hidden || !lastBotDetail.symbol) return;
+                loadStripKlinesChart(lastBotDetail.symbol);
+            }, stripKlinesRefreshMs, 'bot-detail');
+        } else {
+            setInterval(function () {
+                if (document.hidden || !lastBotDetail.symbol) return;
+                loadStripKlinesChart(lastBotDetail.symbol);
+            }, stripKlinesRefreshMs);
+        }
+        window.addEventListener('visibilitychange', function () {
+            if (!document.hidden && botId) refreshAll();
+        });
+    })();
+    </script>
+</body>
+</html>

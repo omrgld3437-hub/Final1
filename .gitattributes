@@ -1,0 +1,17 @@
+# Satir sonlari: Mac/Linux ve Windows uyumlulugu.
+# .bat/.cmd Windows'ta CRLF ile calisir; .py/.sh her yerde LF kullanir.
+
+* text=auto
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+*.py text eol=lf
+*.sh text eol=lf
+*.command text eol=lf
+*.html text eol=lf
+*.js text eol=lf
+*.css text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf

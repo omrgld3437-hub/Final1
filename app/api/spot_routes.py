@@ -1,0 +1,518 @@
+"""
+FILE: spot_routes.py
+VERSION: v1.0
+DATE: 2026-01-22
+CHANGE: YENİ - Bağımsız Spot Trading Engine Routes - Flash Hızında
+"""
+from fastapi import APIRouter, Depends, HTTPException, Query, Body, Request
+from sqlalchemy.orm import Session
+from typing import Optional, Dict, Tuple, Set
+from pydantic import BaseModel
+import asyncio
+import time
+import logging
+import httpx
+
+from app.db.session import get_db
+from app.db.models import Account
+from app.api.auth import require_auth, get_account_or_403, get_client_ip
+from app.api.routes import invalidate_wallet_cache, invalidate_open_orders_cache
+from app.botengine.virtual_wallet import get_bot_locked_balances_for_account
+from app.services.binance_spot import invalidate_account_cache_for_keys
+from app.services import audit as audit_svc
+from app.services.spot_engine import SpotEngine
+from app.core.errors import AppError as AppErrorBase
+try:
+    from app.services.binance_assets import get_account_keys
+except ImportError:
+    get_account_keys = None
+
+logger = logging.getLogger(__name__)
+router = APIRouter()
+
+# Semboller: Binance'te yok veya 500 üreten çiftler – blacklist + base==quote
+INVALID_QUICK_DATA_SYMBOLS = frozenset({
+    "USDTUSDT", "USDCUSDT", "FDUSDUSDT", "BUSDUSDT", "TUSDUSDT", "DAIUSDT"
+})
+
+# In-flight dedupe: (account_id, symbol) -> asyncio.Task (sadece quick_data/price için)
+_SPOT_INFLIGHT: Dict[Tuple[int, str], asyncio.Task] = {}
+# Hata log rate-limit: symbol -> last_log_ts
+_ERROR_LOG_LAST: Dict[str, float] = {}
+_ERROR_LOG_INTERVAL = 10.0
+
+# ExchangeInfo valid symbols cache (TTL 300s)
+_VALID_SPOT_SYMBOLS: Optional[Set[str]] = None
+_VALID_SPOT_SYMBOLS_TS: float = 0
+_VALID_SPOT_SYMBOLS_TTL = 300.0
+
+
+def _is_invalid_spot_symbol(symbol: str) -> bool:
+    """Blacklist + base==quote (USDTUSDT vb.)."""
+    if not symbol or not isinstance(symbol, str):
+        return True
+    s = symbol.upper().strip()
+    if s in INVALID_QUICK_DATA_SYMBOLS:
+        return True
+    # base == quote (e.g. USDTUSDT)
+    if len(s) >= 8 and s.endswith("USDT"):
+        base = s[:-4] or ""
+        if base and (s == base + "USDT" and base == "USDT"):
+            return True
+    if s == "USDTUSDT" or (len(s) >= 6 and s[:4] == s[-4:] and s[:4] == "USDT"):
+        return True
+    return False
+
+
+async def _get_valid_spot_symbols_async() -> Set[str]:
+    """ExchangeInfo cache'ten geçerli sembol seti; TTL 300s."""
+    global _VALID_SPOT_SYMBOLS, _VALID_SPOT_SYMBOLS_TS
+    now = time.time()
+    if _VALID_SPOT_SYMBOLS is not None and (now - _VALID_SPOT_SYMBOLS_TS) < _VALID_SPOT_SYMBOLS_TTL:
+        return _VALID_SPOT_SYMBOLS
+    try:
+        from app.services.binance_spot import fetch_exchange_info
+        info = await fetch_exchange_info(False, force_refresh=False)
+    except Exception:
+        info = {}
+    symbols = set()
+    for s in info.get("symbols", []):
+        sym = s.get("symbol")
+        if sym and s.get("status") == "TRADING":
+            symbols.add(sym)
+    _VALID_SPOT_SYMBOLS = symbols or set()
+    _VALID_SPOT_SYMBOLS_TS = now
+    return _VALID_SPOT_SYMBOLS
+
+def _default_quick_data_response(symbol: str):
+    import time
+    sym = (symbol or "BTCUSDT").upper()
+    base = sym.replace("USDT", "") or "BTC"
+    return {
+        "symbol": sym,
+        "price": 0.0,
+        "priceChange24h": 0.0,
+        "baseAsset": base,
+        "quoteAsset": "USDT",
+        "baseBalance": 0.0,
+        "quoteBalance": 0.0,
+        "baseLockedByBots": 0.0,
+        "quoteLockedByBots": 0.0,
+        "baseAvailable": 0.0,
+        "quoteAvailable": 0.0,
+        "filters": {
+            "tickSize": "0.01",
+            "stepSize": "0.00001",
+            "minNotional": "5"
+        },
+        "ts": time.time()
+    }
+
+# ============================================================
+# SPOT ENGINE ENDPOINTS - Flash Hızlı
+# ============================================================
+
+@router.get("/spot/quick_data")
+async def get_spot_quick_data(
+    account_id: int = Query(..., description="Account ID"),
+    symbol: str = Query(..., description="Trading pair symbol (e.g., BTCUSDT)"),
+    db: Session = Depends(get_db),
+    current: dict = Depends(require_auth),
+):
+    """
+    FLASH HIZLI: Tek istek ile tüm spot trading verilerini getir.
+    Auth zorunlu; account ownership doğrulanır.
+    """
+    get_account_or_403(current, account_id, db)
+    sym = (symbol or "").upper().strip()
+    if _is_invalid_spot_symbol(sym):
+        return {"ok": False, "error_code": "INVALID_SYMBOL", "symbol": sym}
+    valid = await _get_valid_spot_symbols_async()
+    if valid and sym not in valid:
+        return {"ok": False, "error_code": "INVALID_SYMBOL", "symbol": sym}
+    key = (account_id, sym)
+    if key in _SPOT_INFLIGHT:
+        try:
+            return await _SPOT_INFLIGHT[key]
+        except Exception:
+            _SPOT_INFLIGHT.pop(key, None)
+    async def _do():
+        try:
+            if get_account_keys is None:
+                return _default_quick_data_response(sym)
+            keys = await get_account_keys(account_id, db)
+            bot_locked = get_bot_locked_balances_for_account(db, account_id)
+            async with SpotEngine(keys) as engine:
+                spot_data = await engine.get_quick_data(symbol, account_id)
+                base_locked = float(bot_locked.get(spot_data.base_asset, 0) or 0)
+                quote_locked = float(bot_locked.get(spot_data.quote_asset, 0) or 0)
+                base_available = max(0.0, spot_data.base_balance - base_locked)
+                quote_available = max(0.0, spot_data.quote_balance - quote_locked)
+                return {
+                    "ok": True,
+                    "symbol": spot_data.symbol,
+                    "price": spot_data.price,
+                    "priceChange24h": spot_data.price_change_24h,
+                    "baseAsset": spot_data.base_asset,
+                    "quoteAsset": spot_data.quote_asset,
+                    "baseBalance": spot_data.base_balance,
+                    "quoteBalance": spot_data.quote_balance,
+                    "baseLockedByBots": round(base_locked, 8),
+                    "quoteLockedByBots": round(quote_locked, 8),
+                    "baseAvailable": round(base_available, 8),
+                    "quoteAvailable": round(quote_available, 8),
+                    "filters": {
+                        "tickSize": spot_data.tick_size,
+                        "stepSize": spot_data.step_size,
+                        "minNotional": spot_data.min_notional
+                    },
+                    "ts": spot_data.timestamp
+                }
+        except Exception as e:
+            from app.services.binance_assets import KEY_ERROR_CODES
+            def _is_keys_missing(ex):
+                if ex is None:
+                    return False
+                s = str(ex).strip()
+                if any(c in s for c in KEY_ERROR_CODES):
+                    return True
+                args = getattr(ex, "args", ()) or ()
+                if any(any(c in str(x) for c in KEY_ERROR_CODES) for x in args):
+                    return True
+                return _is_keys_missing(getattr(ex, "__cause__", None))
+            if _is_keys_missing(e):
+                logger.debug("Spot quick_data for %s: account keys not configured", sym)
+            else:
+                now = time.time()
+                if now - _ERROR_LOG_LAST.get(sym, 0) > _ERROR_LOG_INTERVAL:
+                    _ERROR_LOG_LAST[sym] = now
+                    logger.warning("Spot quick_data error for %s: %s", sym, e)
+            return _default_quick_data_response(sym)
+        finally:
+            _SPOT_INFLIGHT.pop(key, None)
+    task = asyncio.create_task(_do())
+    _SPOT_INFLIGHT[key] = task
+    return await task
+
+class SpotOrderRequest(BaseModel):
+    account_id: int
+    symbol: str
+    side: str  # BUY or SELL
+    type: str  # MARKET or LIMIT
+    quantity: Optional[float] = None
+    quote_order_qty: Optional[float] = None
+    price: Optional[float] = None
+
+@router.post("/spot/order")
+async def place_spot_order(
+    request_body: SpotOrderRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current: dict = Depends(require_auth),
+):
+    """
+    FLASH HIZLI: Place spot order. Auth zorunlu; account ownership doğrulanır.
+    """
+    request_id = getattr(request.state, "request_id", None) or ""
+    try:
+        get_account_or_403(current, request_body.account_id, db)
+    except HTTPException as e:
+        if e.status_code == 403:
+            logger.warning(
+                "spot_order_403 account_id=%s current_user_id=%s current_account_id=%s request_id=%s detail=%s",
+                request_body.account_id, current.get("user_id"), current.get("account_id"), request_id,
+                (e.detail.get("error_code") if isinstance(e.detail, dict) else str(e.detail)[:80]),
+            )
+        raise
+    acc = db.query(Account).filter(Account.id == request_body.account_id).first()
+    try:
+        keys = await get_account_keys(request_body.account_id, db)
+        bot_locked = get_bot_locked_balances_for_account(db, request_body.account_id)
+        async with SpotEngine(keys) as engine:
+            spot_data = await engine.get_quick_data(request_body.symbol, request_body.account_id)
+            base_available = max(0.0, spot_data.base_balance - float(bot_locked.get(spot_data.base_asset, 0) or 0))
+            quote_available = max(0.0, spot_data.quote_balance - float(bot_locked.get(spot_data.quote_asset, 0) or 0))
+            side = (request_body.side or "").upper()
+            if side == "BUY":
+                if request_body.quote_order_qty is not None and request_body.quote_order_qty > 0:
+                    if quote_available < request_body.quote_order_qty:
+                        raise HTTPException(
+                            status_code=400,
+                            detail={
+                                "error": "INSUFFICIENT_AVAILABLE_BALANCE",
+                                "detail": "Bot bakiyesi kilitli; kullanılabilir quote bakiyesi yetersiz.",
+                                "available_quote": round(quote_available, 2),
+                                "required": request_body.quote_order_qty,
+                            },
+                        )
+                elif request_body.quantity is not None and request_body.quantity > 0 and spot_data.price > 0:
+                    required_quote = request_body.quantity * spot_data.price
+                    if quote_available < required_quote:
+                        raise HTTPException(
+                            status_code=400,
+                            detail={
+                                "error": "INSUFFICIENT_AVAILABLE_BALANCE",
+                                "detail": "Bot bakiyesi kilitli; kullanılabilir quote bakiyesi yetersiz.",
+                                "available_quote": round(quote_available, 2),
+                                "required_quote": round(required_quote, 2),
+                            },
+                        )
+            elif side == "SELL" and request_body.quantity is not None and request_body.quantity > 0:
+                if base_available < request_body.quantity:
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "error": "INSUFFICIENT_AVAILABLE_BALANCE",
+                            "detail": "Bot bakiyesi kilitli; kullanılabilir base bakiyesi yetersiz.",
+                            "available_base": round(base_available, 8),
+                            "required": request_body.quantity,
+                        },
+                    )
+            result = await engine.place_order(
+                symbol=request_body.symbol,
+                side=request_body.side,
+                order_type=request_body.type,
+                quantity=request_body.quantity,
+                quote_order_qty=request_body.quote_order_qty,
+                price=request_body.price,
+                allow_web=True,
+            )
+            order_id = result.get("orderId") if isinstance(result, dict) else getattr(result, "orderId", None)
+            executed_qty = result.get("executedQty") if isinstance(result, dict) else getattr(result, "executedQty", None)
+            cum_quote = result.get("cummulativeQuoteQty") or result.get("cumulativeQuoteQty") if isinstance(result, dict) else getattr(result, "cummulativeQuoteQty", None) or getattr(result, "cumulativeQuoteQty", None)
+            price_val = result.get("price") if isinstance(result, dict) else getattr(result, "price", None)
+            meta = {
+                "symbol": request_body.symbol,
+                "side": request_body.side,
+                "type": request_body.type,
+                "order_id": order_id,
+                "quantity": request_body.quantity,
+                "price": request_body.price or price_val,
+                "quote_order_qty": request_body.quote_order_qty,
+                "executed_qty": executed_qty,
+                "executed_value_usdt": float(cum_quote) if cum_quote is not None else None,
+                "user_agent": (request.headers.get("user-agent") or "")[:200],
+            }
+            audit_svc.log_event(
+                db, actor_type="admin" if current.get("is_admin") else "user", event_type="SPOT_ORDER_CREATE", severity="INFO",
+                actor_user_id=current.get("user_id"), target_user_id=acc.user_id if acc else None, target_account_id=request_body.account_id,
+                ip=get_client_ip(request), device_id=current.get("device_id"),
+                request_id=getattr(request.state, "request_id", None),
+                meta=meta,
+            )
+            await invalidate_wallet_cache(request_body.account_id)
+            await invalidate_open_orders_cache(request_body.account_id)
+            await invalidate_account_cache_for_keys(keys)
+            return {
+                "success": True,
+                "order": result
+            }
+    except AppErrorBase:
+        raise
+    except ValueError as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning(f"Spot order validation error: {e}")
+        raise HTTPException(status_code=400, detail={"error": "VALIDATION_ERROR", "detail": str(e)})
+    except httpx.HTTPStatusError as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        status = e.response.status_code
+        error_data = e.response.json() if e.response.headers.get("content-type", "").startswith("application/json") else {}
+        error_msg = error_data.get("msg", e.response.text) if error_data else e.response.text
+        logger.error(f"Spot order Binance API error: {status} - {error_msg}")
+        # Binance 4xx (parametre/hassasiyet vb.) -> 400; 5xx/ağ -> 502
+        status_code = 400 if 400 <= status < 500 else 502
+        raise HTTPException(
+            status_code=status_code,
+            detail={"error": "BINANCE_API_ERROR", "detail": error_msg, "code": error_data.get("code")}
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        import logging
+        import traceback
+        logger = logging.getLogger(__name__)
+        logger.exception(f"Spot order error: {e}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "SPOT_ORDER_FAILED", "detail": str(e)}
+        )
+
+BINANCE_PUBLIC = "https://api.binance.com"
+
+# Klines cache: (symbol, interval, limit) -> (data, ts). TTL by interval (seconds).
+KLINES_CACHE: dict = {}
+KLINES_TTL_BY_INTERVAL = {
+    "1m": 30, "3m": 45, "5m": 60, "15m": 120, "30m": 180,
+    "1h": 300, "2h": 600, "4h": 600, "1d": 1800, "1w": 1800,
+}
+KLINES_INFLIGHT: dict = {}  # (symbol, interval, limit) -> asyncio.Task
+
+def _klines_cache_ttl(interval: str) -> float:
+    return float(KLINES_TTL_BY_INTERVAL.get(interval.lower(), 60))
+
+@router.get("/spot/klines")
+async def get_spot_klines(
+    symbol: str = Query(..., description="Trading pair (e.g. BTCUSDT)"),
+    interval: str = Query("5m", description="Kline interval: 1m, 3m, 5m, 15m, 30m, 1h, 2h, 4h, 1d, 1w"),
+    limit: int = Query(48, ge=1, le=500, description="Number of candles"),
+    end_time: Optional[int] = Query(None, description="Optional end time (ms). For backfill: older candles before this time."),
+):
+    """Public: Kline verisi (grafik). Geçersiz sembolde Binance çağrılmadan [] döner."""
+    sym = (symbol or "").upper().strip()
+    if _is_invalid_spot_symbol(sym):
+        return []
+    symbol = sym
+    interval = (interval or "5m").lower()
+    cache_key = (symbol, interval, limit, end_time if end_time is not None else "latest")
+    now = time.time()
+    ttl = _klines_cache_ttl(interval)
+    if cache_key in KLINES_CACHE:
+        data, ts = KLINES_CACHE[cache_key]
+        if now - ts < ttl:
+            logger.debug("Klines cache hit %s", cache_key)
+            return data
+    if cache_key in KLINES_INFLIGHT:
+        try:
+            return await KLINES_INFLIGHT[cache_key]
+        except Exception:
+            pass
+        KLINES_INFLIGHT.pop(cache_key, None)
+
+    async def _fetch():
+        try:
+            params = {"symbol": symbol, "interval": interval, "limit": limit}
+            if end_time is not None:
+                params["endTime"] = end_time
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                r = await client.get(
+                    f"{BINANCE_PUBLIC}/api/v3/klines",
+                    params=params
+                )
+                if r.status_code != 200:
+                    return []
+                data = r.json()
+                out = [{"t": c[0], "o": float(c[1]), "h": float(c[2]), "l": float(c[3]), "c": float(c[4]), "v": float(c[5])} for c in data]
+                KLINES_CACHE[cache_key] = (out, time.time())
+                return out
+        except Exception as e:
+            logger.warning("Klines error: %s", e)
+            return []
+        finally:
+            KLINES_INFLIGHT.pop(cache_key, None)
+
+    task = asyncio.create_task(_fetch())
+    KLINES_INFLIGHT[cache_key] = task
+    return await task
+
+
+@router.get("/spot/ticker_24h")
+async def get_spot_ticker_24h(
+    symbol: str = Query(..., description="Trading pair (e.g. BTCUSDT)"),
+):
+    """Public: 24 saat özeti. Geçersiz sembolde Binance çağrılmadan varsayılan döner."""
+    sym = (symbol or "").upper().strip()
+    if _is_invalid_spot_symbol(sym):
+        return {"lowPrice": 0, "highPrice": 0, "priceChangePercent": 0, "lastPrice": 0}
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            r = await client.get(
+                f"{BINANCE_PUBLIC}/api/v3/ticker/24hr",
+                params={"symbol": sym}
+            )
+            if r.status_code != 200:
+                return {"lowPrice": 0, "highPrice": 0, "priceChangePercent": 0, "lastPrice": 0}
+            data = r.json()
+            return {
+                "lowPrice": float(data.get("lowPrice", 0)),
+                "highPrice": float(data.get("highPrice", 0)),
+                "priceChangePercent": float(data.get("priceChangePercent", 0)),
+                "lastPrice": float(data.get("lastPrice", 0)),
+            }
+    except Exception as e:
+        logger.warning("ticker_24h error: %s", e)
+        return {"lowPrice": 0, "highPrice": 0, "priceChangePercent": 0, "lastPrice": 0}
+
+
+# Commission (tradeFee) cache: account_id -> (rates_dict, ts). TTL 30 min.
+_commission_cache: Dict[int, Tuple[dict, float]] = {}
+_COMMISSION_CACHE_TTL = 1800.0
+
+
+@router.get("/spot/commission")
+async def get_spot_commission(
+    account_id: int = Query(..., description="Account ID"),
+    db: Session = Depends(get_db),
+    current: dict = Depends(require_auth),
+):
+    """Hesaba ait komisyon oranları. Auth zorunlu; account ownership doğrulanır."""
+    get_account_or_403(current, account_id, db)
+    default_rates = {"maker": 0.001, "taker": 0.001, "maker_pct": 0.1, "taker_pct": 0.1}
+    now = time.time()
+    if account_id in _commission_cache:
+        cached, ts = _commission_cache[account_id]
+        if now - ts < _COMMISSION_CACHE_TTL:
+            return cached
+    try:
+        if get_account_keys is None:
+            return default_rates
+        keys = await get_account_keys(account_id, db)
+        from app.services.spot_engine import SpotEngine
+        async with SpotEngine(keys) as engine:
+            rates = await engine.get_commission_rates()
+            if rates:
+                _commission_cache[account_id] = (rates, time.time())
+                return rates
+    except Exception as e:
+        logger.debug("Commission fetch failed, using default: %s", e)
+    return default_rates
+
+@router.get("/spot/price")
+async def get_spot_price(
+    account_id: int = Query(..., description="Account ID"),
+    symbol: str = Query(..., description="Trading pair symbol"),
+    db: Session = Depends(get_db),
+    current: dict = Depends(require_auth),
+):
+    """
+    FLASH HIZLI: Get current price only. Auth zorunlu; account ownership doğrulanır.
+    """
+    get_account_or_403(current, account_id, db)
+    sym = (symbol or "").upper().strip()
+    if _is_invalid_spot_symbol(sym):
+        return {"ok": False, "error_code": "INVALID_SYMBOL", "symbol": sym}
+    valid = await _get_valid_spot_symbols_async()
+    if valid and sym not in valid:
+        return {"ok": False, "error_code": "INVALID_SYMBOL", "symbol": sym}
+    try:
+        keys = await get_account_keys(account_id, db)
+        from app.services.spot_engine import spot_cache
+        price = spot_cache.get_price(sym)
+        if price is not None:
+            return {"ok": True, "symbol": sym, "price": price, "cached": True}
+        async with SpotEngine(keys) as engine:
+            spot_data = await engine.get_quick_data(symbol, account_id)
+            return {"ok": True, "symbol": spot_data.symbol, "price": spot_data.price, "cached": False}
+    except Exception as e:
+        from app.services.binance_assets import KEY_ERROR_CODES
+        def _is_keys_missing(ex):
+            if ex is None:
+                return False
+            s = str(ex).strip()
+            if any(c in s for c in KEY_ERROR_CODES):
+                return True
+            args = getattr(ex, "args", ()) or ()
+            if any(any(c in str(x) for c in KEY_ERROR_CODES) for x in args):
+                return True
+            return _is_keys_missing(getattr(ex, "__cause__", None))
+        if _is_keys_missing(e):
+            logger.debug("Spot price for %s: account keys not configured", sym)
+        else:
+            now = time.time()
+            if now - _ERROR_LOG_LAST.get(sym, 0) > _ERROR_LOG_INTERVAL:
+                _ERROR_LOG_LAST[sym] = now
+                logger.warning("Spot price error for %s: %s", sym, e)
+        return {"ok": True, "symbol": sym, "price": 0.0, "error": str(e)}
+

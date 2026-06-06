@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta name="robots" content="noindex, follow">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Sunucu Yöneticisi</title>
+    <style>
+        * { box-sizing: border-box; }
+        body { font-family: system-ui, sans-serif; margin: 1rem; max-width: 640px; background: #1a1a1a; color: #e0e0e0; }
+        h1 { font-size: 1.25rem; margin-bottom: 1rem; }
+        .step { margin-bottom: 1.5rem; padding: 1rem; background: #252525; border-radius: 6px; }
+        .step.hidden { display: none; }
+        .os-prompt { margin-bottom: 0.75rem; }
+        .btn { padding: 0.4rem 0.8rem; margin-right: 0.5rem; margin-bottom: 0.5rem; border: 1px solid #555; border-radius: 4px; background: #333; color: #e0e0e0; cursor: pointer; font-size: 0.9rem; }
+        .btn:hover { background: #444; }
+        .btn.primary { border-color: #0a7; background: #0a7; color: #fff; }
+        .btn.danger { border-color: #c44; background: #c44; color: #fff; }
+        .btn.warn { border-color: #c84; background: #c84; color: #000; }
+        select { padding: 0.4rem; background: #333; color: #e0e0e0; border: 1px solid #555; border-radius: 4px; margin-left: 0.5rem; }
+        .panel { margin-bottom: 1rem; padding: 1rem; background: #252525; border-radius: 6px; border: 1px solid #333; }
+        .panel h3 { margin: 0 0 0.75rem 0; font-size: 1rem; }
+        .status { display: inline-block; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.85rem; margin-right: 0.75rem; }
+        .status.running { background: #0a5; color: #000; }
+        .status.stopped { background: #c44; color: #fff; }
+        .row { margin-bottom: 0.5rem; }
+        .note { font-size: 0.8rem; color: #888; margin-top: 1rem; }
+    </style>
+</head>
+<body>
+    <h1>Sunucu Yöneticisi</h1>
+
+    <div id="stepOs" class="step">
+        <div class="os-prompt">İşletim sistemi algılandı: <strong id="detectedOs">-</strong>. Doğru mu?</div>
+        <button type="button" class="btn primary" id="btnOsYes">Evet</button>
+        <button type="button" class="btn" id="btnOsNo">Hayır, manuel seç</button>
+        <div id="manualOs" style="display: none; margin-top: 0.75rem;">
+            <label>Seçin:</label>
+            <select id="selectOs">
+                <option value="windows">Windows</option>
+                <option value="darwin">macOS</option>
+                <option value="linux">Linux</option>
+            </select>
+            <button type="button" class="btn primary" id="btnOsDone">Tamam</button>
+        </div>
+    </div>
+
+    <div id="stepPanels" class="step hidden">
+        <div class="panel" id="panelWeb">
+            <h3>Web Server (port 8000)</h3>
+            <div class="row">
+                <span class="status stopped" id="statusWeb">Durdurulmuş</span>
+                <span id="pidWeb"></span>
+            </div>
+            <div class="row">
+                <button type="button" class="btn primary" data-start="web">Başlat</button>
+                <button type="button" class="btn danger" data-stop="web">Kapat</button>
+                <button type="button" class="btn warn" data-restart="web">Yeniden Başlat</button>
+            </div>
+        </div>
+        <div class="panel" id="panelWorker">
+            <h3>Worker (Bot Engine)</h3>
+            <div class="row">
+                <span class="status stopped" id="statusWorker">Durdurulmuş</span>
+                <span id="pidWorker"></span>
+            </div>
+            <div class="row">
+                <button type="button" class="btn primary" data-start="worker">Başlat</button>
+                <button type="button" class="btn danger" data-stop="worker">Kapat</button>
+                <button type="button" class="btn warn" data-restart="worker">Yeniden Başlat</button>
+            </div>
+        </div>
+        <p class="note">Bu sayfa sadece proje klasörünün bulunduğu cihazda çalışır (127.0.0.1). Ana uygulama sunucusundan bağımsızdır.</p>
+    </div>
+
+    <script>
+        (function () {
+            var BASE = window.location.origin;
+            var osConfirmed = false;
+
+            function detectOs() {
+                var ua = navigator.userAgent || "";
+                var p = navigator.platform || "";
+                if (/Win|Windows/i.test(ua) || /Win/i.test(p)) return "windows";
+                if (/Mac|Darwin/i.test(ua) || /Mac|Darwin/i.test(p)) return "darwin";
+                if (/Linux/i.test(ua) || /Linux/i.test(p)) return "linux";
+                return null;
+            }
+
+            function osLabel(v) {
+                if (v === "windows") return "Windows";
+                if (v === "darwin") return "macOS";
+                if (v === "linux") return "Linux";
+                return v || "Bilinmiyor";
+            }
+
+            var detected = detectOs();
+            document.getElementById("detectedOs").textContent = osLabel(detected);
+            if (detected === "darwin") document.querySelector("#selectOs option[value=darwin]").selected = true;
+            if (detected === "linux") document.querySelector("#selectOs option[value=linux]").selected = true;
+
+            document.getElementById("btnOsYes").onclick = function () {
+                osConfirmed = true;
+                document.getElementById("stepOs").classList.add("hidden");
+                document.getElementById("stepPanels").classList.remove("hidden");
+                poll();
+            };
+
+            document.getElementById("btnOsNo").onclick = function () {
+                document.getElementById("manualOs").style.display = "block";
+            };
+
+            document.getElementById("btnOsDone").onclick = function () {
+                osConfirmed = true;
+                document.getElementById("stepOs").classList.add("hidden");
+                document.getElementById("stepPanels").classList.remove("hidden");
+                poll();
+            };
+
+            function poll() {
+                fetch(BASE + "/api/status", { credentials: "same-origin" })
+                    .then(function (r) { return r.ok ? r.json() : null; })
+                    .then(function (data) {
+                        if (!data) return;
+                        updateStatus("web", data.web);
+                        updateStatus("worker", data.worker);
+                    })
+                    .catch(function () {});
+            }
+
+            function updateStatus(name, info) {
+                var running = info && info.running;
+                var pidEl = document.getElementById("pid" + (name === "web" ? "Web" : "Worker"));
+                var statusEl = document.getElementById("status" + (name === "web" ? "Web" : "Worker"));
+                if (statusEl) {
+                    statusEl.textContent = running ? "Çalışıyor" : "Durdurulmuş";
+                    statusEl.className = "status " + (running ? "running" : "stopped");
+                }
+                if (pidEl) pidEl.textContent = info && info.pid ? "PID: " + info.pid : "";
+            }
+
+            function act(action, target) {
+                var url = BASE + "/api/" + target + "/" + action;
+                fetch(url, { method: "POST", credentials: "same-origin" })
+                    .then(function (r) { return r.json(); })
+                    .then(function () { setTimeout(poll, 800); })
+                    .catch(function () { setTimeout(poll, 800); });
+            }
+
+            document.getElementById("stepPanels").addEventListener("click", function (e) {
+                var t = e.target;
+                if (!t.classList.contains("btn") || !t.dataset.start && !t.dataset.stop && !t.dataset.restart) return;
+                var target = t.dataset.start || t.dataset.stop || t.dataset.restart;
+                var action = t.dataset.start ? "start" : t.dataset.stop ? "stop" : "restart";
+                act(action, target);
+            });
+
+            setInterval(poll, 3000);
+        })();
+    </script>
+</body>
+</html>

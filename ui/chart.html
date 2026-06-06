@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta name="robots" content="noindex, follow">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Grafik - TraderTrailing</title>
+    <link rel="stylesheet" href="/ui/assets/theme.css?v=1">
+    <link rel="stylesheet" href="/ui/assets/design.css?v=1">
+    <link rel="stylesheet" href="/ui/assets/blink.css?v=1">
+    <script src="/ui/vendor/lightweight-charts.standalone.production.js"></script>
+    <style>
+        body { margin: 0; padding: 0; min-height: 100vh; min-height: 100dvh; background: var(--ds-bg-primary); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+        .chart-page { padding: 1rem 1.5rem; max-width: 1200px; margin: 0 auto; min-height: 100vh; min-height: 100dvh; box-sizing: border-box; width: 100%; overflow-x: hidden; }
+        .chart-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem; margin-bottom: 1rem; }
+        .chart-header-left { display: flex; align-items: center; flex-wrap: wrap; gap: 1rem; }
+        .chart-back { text-decoration: none; display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.5rem 1rem; font-size: 0.9rem; font-weight: 500; color: var(--ds-text-primary); background: var(--ds-bg-secondary); border: 1px solid var(--ds-border); border-radius: 8px; transition: color 0.2s, background 0.2s, border-color 0.2s; flex-shrink: 0; }
+        .chart-back:hover { color: var(--ds-bg-primary); background: var(--ds-accent); border-color: var(--ds-accent); }
+        .chart-title-row { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
+        .chart-logo { width: 40px; height: 40px; border-radius: 50%; object-fit: cover; }
+        .chart-symbol { font-size: 1.5rem; font-weight: 700; color: var(--ds-text-primary); }
+        .chart-price { font-size: 1.25rem; font-weight: 600; }
+        .chart-pct { font-size: 0.95rem; font-weight: 500; }
+        .chart-pct.up { color: #0ecb81; }
+        .chart-pct.down { color: #f6465d; }
+        .chart-year-stats { display: flex; align-items: center; gap: 0.75rem; font-size: 0.8rem; color: var(--ds-text-muted); font-weight: 400; }
+        .chart-year-stats span { white-space: nowrap; }
+        .chart-year-stats .chart-year-high { color: rgba(14, 203, 129, 0.85); }
+        .chart-year-stats .chart-year-low { color: rgba(246, 70, 93, 0.85); }
+        .chart-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem; }
+        .chart-toolbar button { padding: 0.4rem 0.75rem; font-size: 0.85rem; border-radius: 6px; border: 1px solid var(--ds-border); background: var(--ds-bg-secondary); color: var(--ds-text-primary); cursor: pointer; }
+        .chart-toolbar button:hover { background: var(--ds-bg-tertiary); }
+        .chart-toolbar button.active { background: var(--ds-accent); color: #000; border-color: var(--ds-accent); }
+        #chartContainer { height: 480px; width: 100%; background: var(--ds-bg-tertiary); border-radius: 8px; position: relative; }
+        #chartCandleTooltip { margin-top: 0.75rem; padding: 0.75rem 1rem; font-size: 0.9rem; font-weight: 500; min-height: 2rem; line-height: 1.5; border-radius: 8px; transition: opacity 0.15s ease, background 0.15s ease; }
+        #chartCandleTooltip .tooltip-placeholder { color: var(--ds-text-muted); font-weight: normal; }
+        #chartCandleTooltip.chart-tooltip-visible { color: var(--ds-text-primary); background: var(--ds-bg-secondary); border: 1px solid var(--ds-border); box-shadow: 0 2px 12px rgba(0,0,0,0.15); opacity: 0.96; }
+        #chartCandleTooltip:not(.chart-tooltip-visible) { background: transparent; border: 1px solid transparent; }
+        #chartCandleTooltip span { margin-right: 1rem; white-space: nowrap; }
+        #chartCandleTooltip .tooltip-label { color: var(--ds-text-secondary); font-weight: 600; }
+        #chartCandleTooltip .tooltip-value { color: var(--ds-text-primary); }
+        .chart-loading, .chart-error { text-align: center; padding: 3rem; color: var(--ds-text-secondary); }
+        .chart-error { color: var(--ds-danger, #f6465d); }
+        .chart-back-wrap { display: flex; align-items: center; gap: 0.5rem; flex-shrink: 0; }
+        .chart-landscape-btn { display: none; padding: 0.4rem 0.75rem; font-size: 0.85rem; border-radius: 8px; border: 1px solid var(--ds-border); background: var(--ds-bg-secondary); color: var(--ds-text-primary); cursor: pointer; white-space: nowrap; }
+        .chart-landscape-btn:hover { background: var(--ds-bg-tertiary); }
+        .chart-landscape-btn.visible { display: inline-flex; align-items: center; gap: 0.35rem; }
+
+        /* Mobile: tek sütun, dokunma alanları, grafik alanı maksimum */
+        @media (max-width: 768px) {
+            .chart-page {
+                padding: 0.75rem;
+                padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+                min-height: 100dvh;
+                display: flex;
+                flex-direction: column;
+            }
+            .chart-header {
+                flex-direction: column;
+                align-items: stretch;
+                gap: 0.75rem;
+                margin-bottom: 0.75rem;
+                flex-shrink: 0;
+            }
+            .chart-header .chart-back-wrap {
+                order: 1;
+                display: flex;
+                align-items: center;
+                gap: 0.5rem;
+                flex-wrap: wrap;
+            }
+            .chart-header-left { order: 2; }
+            .chart-back {
+                min-height: 44px;
+                min-width: 44px;
+                padding: 0.5rem 0.85rem;
+                font-size: 0.9rem;
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+            }
+            .chart-landscape-btn.visible {
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                min-height: 44px;
+                padding: 0.5rem 0.85rem;
+                font-size: 0.85rem;
+            }
+            .chart-title-row {
+                gap: 0.5rem;
+                flex-wrap: wrap;
+                align-items: baseline;
+            }
+            .chart-logo { width: 32px; height: 32px; flex-shrink: 0; }
+            .chart-symbol { font-size: 1.2rem; }
+            .chart-price { font-size: 1.05rem; }
+            .chart-pct { font-size: 0.85rem; }
+            .chart-year-stats {
+                font-size: 0.75rem;
+                gap: 0.5rem;
+                flex-wrap: wrap;
+            }
+            .chart-toolbar {
+                flex-wrap: nowrap;
+                overflow-x: auto;
+                gap: 0.4rem;
+                margin-bottom: 0.5rem;
+                padding: 0.25rem 0;
+                padding-bottom: 0.35rem;
+                -webkit-overflow-scrolling: touch;
+                flex-shrink: 0;
+            }
+            .chart-toolbar button {
+                padding: 0.45rem 0.65rem;
+                font-size: 0.8rem;
+                flex-shrink: 0;
+                min-height: 40px;
+            }
+            .chart-toolbar span { flex-shrink: 0; font-size: 0.8rem !important; }
+            #chartContainer {
+                flex: 1 1 0;
+                min-height: 280px;
+                height: calc(100dvh - 220px);
+                width: 100%;
+            }
+            #chartCandleTooltip {
+                margin-top: 0.5rem;
+                padding: 0.6rem 0.75rem;
+                font-size: 0.8rem;
+                min-height: 2.5rem;
+                word-wrap: break-word;
+                overflow-wrap: break-word;
+            }
+            #chartCandleTooltip span { margin-right: 0.5rem; }
+            #chartCandleTooltip .tooltip-placeholder { font-size: 0.8rem; white-space: normal; }
+        }
+        @media (max-width: 480px) {
+            .chart-page { padding: 0.6rem; }
+            .chart-header { gap: 0.6rem; margin-bottom: 0.6rem; }
+            .chart-symbol { font-size: 1.1rem; }
+            .chart-year-stats { font-size: 0.7rem; }
+            #chartContainer { min-height: 260px; height: calc(100dvh - 200px); }
+        }
+        /* Landscape mobile: grafik yüksekliği artır */
+        @media (max-width: 768px) and (orientation: landscape) {
+            .chart-page { padding: 0.5rem 0.75rem; }
+            .chart-header { margin-bottom: 0.4rem; gap: 0.5rem; }
+            .chart-header-left { flex-direction: row; flex-wrap: wrap; gap: 0.5rem; }
+            .chart-year-stats { font-size: 0.7rem; }
+            #chartContainer { height: calc(100dvh - 120px); min-height: 200px; flex: none; }
+        }
+    </style>
+</head>
+<body>
+    <div class="chart-page">
+        <div class="chart-header">
+            <div class="chart-header-left">
+                <div class="chart-title-row">
+                    <img id="chartLogo" class="chart-logo" src="" alt="" style="display: none;" />
+                    <span id="chartSymbol" class="chart-symbol">—</span>
+                    <span id="chartPrice" class="chart-price">—</span>
+                    <span id="chartPct" class="chart-pct">—</span>
+                </div>
+                <div class="chart-year-stats" id="chartYearStats">
+                    <span>Yıllık en yüksek <span id="chartYearHigh" class="chart-year-high">—</span></span>
+                    <span>Yıllık en düşük <span id="chartYearLow" class="chart-year-low">—</span></span>
+                </div>
+            </div>
+            <div class="chart-back-wrap">
+                <a id="chartBackLink" href="/ui/dashboard.html" class="chart-back" aria-label="Geri"><span aria-hidden="true">←</span> Geri</a>
+                <button type="button" id="chartLandscapeBtn" class="chart-landscape-btn" aria-label="Grafik için yan çevir">↻ Yan çevir</button>
+            </div>
+            <script>
+            (function(){ var p = new URLSearchParams(location.search); if (p.get('embed') === '1') { var el = document.getElementById('chartBackLink'); if (el) { el.href = '#'; el.textContent = 'Kapat'; el.setAttribute('aria-label', 'Kapat'); el.addEventListener('click', function(e) { e.preventDefault(); try { if (window.parent !== window) window.parent.postMessage('closeChartModal', '*'); } catch(err) {} }); } } })();
+            </script>
+        </div>
+        <div class="chart-toolbar">
+            <span style="font-size: 0.85rem; color: var(--ds-text-secondary); margin-right: 0.25rem;">Zaman:</span>
+            <button type="button" data-interval="1m">1m</button>
+            <button type="button" data-interval="5m">5m</button>
+            <button type="button" data-interval="15m">15m</button>
+            <button type="button" data-interval="1h">1h</button>
+            <button type="button" data-interval="4h">4h</button>
+            <button type="button" data-interval="1d">1d</button>
+            <button type="button" data-interval="1w">1w</button>
+            <span style="width: 1rem;"></span>
+            <span style="font-size: 0.85rem; color: var(--ds-text-secondary);">Tip:</span>
+            <button type="button" id="chartTypeCandle" class="active">Mum</button>
+            <button type="button" id="chartTypeLine">Çizgi</button>
+        </div>
+        <div id="chartContainer"></div>
+        <div id="chartCandleTooltip" aria-live="polite"><span class="tooltip-placeholder">Grafikte bir mumun üzerine gelin veya dokunun; o mumun açılış, kapanış, en yüksek, en düşük ve tarih/saat bilgisi anlık olarak burada görünecek.</span></div>
+        <div id="chartLoading" class="chart-loading" style="display: none;">Yükleniyor...</div>
+        <div id="chartError" class="chart-error" style="display: none;"></div>
+    </div>
+    <script src="/ui/assets/core/apiClient.js"></script>
+    <script src="/ui/assets/utils/trTime.js?v=1"></script>
+    <script src="/ui/assets/utils/coinLogo.js"></script>
+    <script src="/ui/assets/chart.js?v=5"></script>
+</body>
+</html>

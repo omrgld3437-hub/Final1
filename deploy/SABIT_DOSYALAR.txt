@@ -1,0 +1,45 @@
+# SABİT DOSYALAR - Sunucuda ASLA değiştirilmemeli
+# Deploy sırasında bu dosyalar ATLANIR (sunucudaki mevcut hali korunur)
+# 
+# Kullanım: rsync --exclude-from=deploy/SABIT_DOSYALAR.txt
+# veya: deploy/deploy.sh scripti otomatik kullanır
+
+# Ortam ve gizli bilgiler
+.env
+.env.local
+.env.*
+
+# Veritabanı (işlem verileri)
+*.db
+*.sqlite
+*.sqlite3
+
+# Loglar
+logs/
+*.log
+
+# Virtual environment
+venv/
+.venv/
+env/
+ENV/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Git (versiyon geçmişi)
+.git/
+.gitignore
+
+# IDE / IDE özel ayarları
+.vscode/
+.idea/
+
+# Kullanıcı/ziyaretçi verileri (runtime oluşur)
+Omeraltinhtml/visits.json
+
+# Sunucuya özel config (varsa)
+config_local.py
+config_production.py

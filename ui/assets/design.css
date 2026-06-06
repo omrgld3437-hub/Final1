@@ -1,0 +1,1300 @@
+/*
+ FILE: design.css
+ VERSION: v5
+ DATE: 2026-01-22
+ CHANGE: Force create bot modal visibility - !important rules to ensure modal is always visible when opened
+*/
+
+/* ===== RETRO 90s WINDOWS THEME ===== */
+:root {
+    --retro-pink: #ff6b9d;
+    --retro-pink-shadow: #d63384;
+    --retro-orange: #ffa500;
+    --retro-orange-shadow: #cc8400;
+    --retro-cyan: #00d4ff;
+    --retro-cyan-shadow: #0080c0;
+    --retro-green: #06ffa5;
+    --retro-green-shadow: #04cc84;
+    --retro-purple: #9d4edd;
+    --retro-purple-shadow: #7b2cbf;
+}
+
+h1, h2 {
+    font-family: 'Arial', sans-serif;
+    font-weight: bold;
+    color: var(--retro-pink);
+}
+
+h3 {
+    font-family: 'Arial', sans-serif;
+    font-weight: bold;
+    color: var(--retro-purple);
+}
+
+.back {
+    font-family: 'Arial', sans-serif;
+    font-weight: bold;
+    color: var(--retro-cyan);
+}
+
+.back:hover {
+    color: var(--retro-green);
+}
+/* ===== END RETRO THEME ===== */
+
+/* Design System Variables */
+:root {
+    /* Colors - Binance Dark + Gold */
+    --ds-bg-primary: #0b0e11;
+    --ds-bg-secondary: #181a20;
+    --ds-bg-tertiary: #1e2026;
+    --ds-bg-panel: #1e2026;
+    --ds-bg-glass: rgba(30, 32, 38, 0.8);
+    
+    --ds-text-primary: #eaecef;
+    --ds-text-secondary: #848e9c;
+    --ds-text-muted: #5e6673;
+    
+    --ds-accent: #f0b90b;
+    --ds-accent-hover: #f8c622;
+    --ds-accent-dark: #c9930a;
+    
+    --ds-success: #0ecb81;
+    --ds-danger: #f6465d;
+    --ds-warning: #f0b90b;
+    
+    --ds-border: #2b3139;
+    --ds-border-light: #3a3f4a;
+    
+    /* Spacing - iOS-like */
+    --ds-space-xs: 4px;
+    --ds-space-sm: 8px;
+    --ds-space-md: 12px;
+    --ds-space-lg: 16px;
+    --ds-space-xl: 24px;
+    --ds-space-2xl: 32px;
+    
+    /* Radius */
+    --ds-radius-sm: 8px;
+    --ds-radius-md: 12px;
+    --ds-radius-lg: 16px;
+    --ds-radius-xl: 20px;
+    --ds-radius-full: 999px;
+    
+    /* Shadows - iOS-like soft */
+    --ds-shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.15);
+    --ds-shadow-md: 0 4px 16px rgba(0, 0, 0, 0.2);
+    --ds-shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.25);
+    
+    /* Typography */
+    --ds-font-system: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --ds-font-mono: "SF Mono", Monaco, "Cascadia Code", "Roboto Mono", monospace;
+}
+
+/* Base Reset */
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    padding: 0;
+    font-family: var(--ds-font-system);
+    background-color: var(--ds-bg-primary);
+    color: var(--ds-text-primary);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+/* Brand name – shimmer animation (login, dashboard, admin) */
+.brand-name-animated {
+    display: inline-block;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    background: linear-gradient(110deg, #f0b90b 0%, #f8c622 25%, #fff8e0 50%, #f8c622 75%, #c9930a 100%);
+    background-size: 200% auto;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    animation: brandShimmer 4s ease-in-out infinite;
+}
+@keyframes brandShimmer {
+    0%, 100% { background-position: 0% center; }
+    50% { background-position: 100% center; }
+}
+
+/* Page brand strip (dashboard anasayfa / main pages) – optional, appbar center now primary */
+.page-brand {
+    text-align: center;
+    padding: 0.75rem 1.5rem;
+    margin: -0.5rem 0 1rem 0;
+    border-bottom: 1px solid rgba(240, 185, 11, 0.15);
+}
+.page-brand .brand-name-animated {
+    font-size: 1.05rem;
+}
+
+/* Unified appbar: left = user name, center = company, right = logout */
+.appbar-user-name {
+    font-size: 0.8rem;
+    font-weight: 500;
+    color: var(--ds-text-secondary);
+    letter-spacing: 0.03em;
+    opacity: 0.92;
+}
+.appbar-company {
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--ds-accent);
+    letter-spacing: 0.02em;
+}
+
+/* TraderTrailing logo: parlama animasyonu (dashboard appbar, admin appbar) */
+.tt-logo-text,
+.admin-appbar-brand {
+    font-size: 1.15rem;
+    letter-spacing: 0.02em;
+    display: inline-block;
+    font-weight: 700;
+    background: linear-gradient(135deg, var(--ds-text-primary, #eaecef) 0%, var(--ds-text-secondary, #848e9c) 35%, var(--ds-accent, #f0b90b) 50%, var(--ds-text-secondary, #848e9c) 65%, var(--ds-text-primary, #eaecef) 100%);
+    background-size: 200% auto;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    animation: brandShimmer 6s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .tt-logo-text,
+    .admin-appbar-brand {
+        animation: none !important;
+    }
+}
+
+/* Admin page appbar: üstte şirket adı (büyük, ortalı, efektli), altta admin adı + düğmeler */
+.page-admin .admin-appbar {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    padding: 0;
+    gap: 0;
+    background: var(--ds-bg-secondary);
+    border-bottom: 1px solid var(--ds-border);
+}
+.page-admin .admin-appbar-brand {
+    font-size: 1.35rem;
+    font-weight: 700;
+    text-align: center;
+    padding: 1rem 1.5rem;
+    letter-spacing: 0.02em;
+    background: linear-gradient(110deg, #f0b90b 0%, #f8c622 25%, #fff8e0 50%, #f8c622 75%, #c9930a 100%);
+    background-size: 200% auto;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    animation: brandShimmer 4s ease-in-out infinite;
+}
+.page-admin .admin-appbar-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.6rem 1.5rem;
+    gap: 1rem;
+    border-top: 1px solid var(--ds-border);
+}
+.page-admin .admin-appbar-left {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+}
+.page-admin .admin-appbar-user-name {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: var(--ds-text-primary);
+    letter-spacing: 0.02em;
+}
+.page-admin .admin-appbar-right {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+.page-admin .admin-appbar .btn-create-account {
+    white-space: nowrap;
+}
+
+/* Page footer (login hariç tüm sayfalar) – içerikle iç içe girmesin */
+.page-footer {
+    margin-top: 3rem;
+    padding: 1.5rem 2rem;
+    border-top: 1px solid var(--ds-border);
+    background: var(--ds-bg-secondary);
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--ds-text-secondary);
+    flex-shrink: 0;
+}
+/* Admin ve dashboard: container alt boşluk, footer ile sohbet/form çakışmasın */
+.page-admin .container,
+body.page-dashboard .container {
+    padding-bottom: 6rem;
+}
+.page-footer-legal {
+    text-align: center;
+    margin-bottom: 1rem;
+}
+.page-footer-legal strong {
+    color: var(--ds-accent);
+}
+.page-footer-license {
+    max-width: 56ch;
+    margin: 0 auto;
+    text-align: center;
+    font-size: 11px;
+    line-height: 1.55;
+    opacity: 0.88;
+}
+
+/* App Bar */
+.appbar {
+    background: var(--ds-bg-secondary);
+    border-bottom: 1px solid var(--ds-border);
+    padding: var(--ds-space-lg) var(--ds-space-xl);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--ds-space-xl);
+    backdrop-filter: blur(10px);
+    position: sticky;
+    top: 0;
+    z-index: 100;
+}
+
+.appbar-left {
+    display: flex;
+    align-items: center;
+    gap: var(--ds-space-lg);
+}
+
+.appbar-logo {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--ds-accent);
+    letter-spacing: -0.5px;
+}
+
+.appbar-right {
+    display: flex;
+    align-items: center;
+    gap: var(--ds-space-md);
+}
+
+/* Chips Navigation */
+.chips {
+    display: flex;
+    gap: var(--ds-space-sm);
+    padding: var(--ds-space-md) var(--ds-space-xl);
+    background: var(--ds-bg-secondary);
+    border-bottom: 1px solid var(--ds-border);
+    overflow-x: auto;
+}
+
+.chip {
+    padding: var(--ds-space-sm) var(--ds-space-lg);
+    background: transparent;
+    border: 1px solid var(--ds-border);
+    border-radius: var(--ds-radius-full);
+    color: var(--ds-text-secondary);
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    white-space: nowrap;
+}
+
+.chip:hover {
+    background: var(--ds-bg-tertiary);
+    border-color: var(--ds-border-light);
+    color: var(--ds-text-primary);
+}
+
+.chip.active {
+    background: var(--ds-accent);
+    border-color: var(--ds-accent);
+    color: var(--ds-bg-primary);
+    font-weight: 600;
+}
+
+/* KPI Grid */
+.kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: var(--ds-space-lg);
+    padding: var(--ds-space-xl);
+}
+
+.kpi-card {
+    background: var(--ds-bg-panel);
+    border: 1px solid var(--ds-border);
+    border-radius: var(--ds-radius-lg);
+    padding: var(--ds-space-lg);
+    box-shadow: var(--ds-shadow-sm);
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.kpi-card:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--ds-shadow-md);
+}
+
+.kpi-label {
+    font-size: 12px;
+    color: var(--ds-text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: var(--ds-space-sm);
+}
+
+.kpi-value {
+    font-size: 24px;
+    font-weight: 600;
+    color: var(--ds-accent);
+    line-height: 1.2;
+}
+
+.kpi-value.positive {
+    color: var(--ds-success);
+}
+
+.kpi-value.negative {
+    color: var(--ds-danger);
+}
+
+.kpi-value.small {
+    font-size: 18px;
+}
+
+/* List Card (for account/bot/asset rows) */
+.list-card {
+    background: var(--ds-bg-panel);
+    border: 1px solid var(--ds-border);
+    border-radius: var(--ds-radius-lg);
+    padding: var(--ds-space-lg);
+    margin-bottom: var(--ds-space-md);
+    box-shadow: var(--ds-shadow-sm);
+    transition: all 0.2s ease;
+}
+
+.list-card:hover {
+    border-color: var(--ds-border-light);
+    box-shadow: var(--ds-shadow-md);
+}
+
+.list-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: var(--ds-space-md);
+}
+
+.list-card-title {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--ds-text-primary);
+}
+
+.list-card-metrics {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: var(--ds-space-md);
+    margin-bottom: var(--ds-space-md);
+}
+
+.metric-item {
+    display: flex;
+    flex-direction: column;
+    gap: var(--ds-space-xs);
+}
+
+.metric-label {
+    font-size: 11px;
+    color: var(--ds-text-secondary);
+    text-transform: uppercase;
+}
+
+.metric-value {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--ds-text-primary);
+}
+
+.metric-value.positive {
+    color: var(--ds-success);
+}
+
+.metric-value.negative {
+    color: var(--ds-danger);
+}
+
+/* Badges */
+.badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 4px 10px;
+    border-radius: var(--ds-radius-full);
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.badge.ok {
+    background: rgba(14, 203, 129, 0.15);
+    color: var(--ds-success);
+}
+
+.badge.warn {
+    background: rgba(240, 185, 11, 0.15);
+    color: var(--ds-warning);
+}
+
+.badge.stop {
+    background: rgba(246, 70, 93, 0.15);
+    color: var(--ds-danger);
+}
+
+.badge.neutral {
+    background: var(--ds-bg-tertiary);
+    color: var(--ds-text-secondary);
+}
+
+/* Pills */
+.pill {
+    display: inline-flex;
+    align-items: center;
+    padding: var(--ds-space-xs) var(--ds-space-md);
+    background: var(--ds-bg-tertiary);
+    border: 1px solid var(--ds-border);
+    border-radius: var(--ds-radius-full);
+    font-size: 12px;
+    color: var(--ds-text-secondary);
+}
+
+/* Buttons */
+.btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: var(--ds-space-sm) var(--ds-space-lg);
+    border: 1px solid transparent;
+    border-radius: var(--ds-radius-md);
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    white-space: nowrap;
+}
+
+.btn.primary {
+    background: var(--ds-accent);
+    color: var(--ds-bg-primary);
+    border-color: var(--ds-accent);
+}
+
+.btn.primary:hover {
+    background: var(--ds-accent-hover);
+    border-color: var(--ds-accent-hover);
+}
+
+.btn.ghost {
+    background: transparent;
+    color: var(--ds-text-primary);
+    border-color: var(--ds-border);
+}
+
+.btn.ghost:hover {
+    background: var(--ds-bg-tertiary);
+    border-color: var(--ds-border-light);
+}
+
+.btn.danger {
+    background: transparent;
+    color: var(--ds-danger);
+    border-color: var(--ds-danger);
+}
+
+.btn.danger:hover {
+    background: rgba(246, 70, 93, 0.15);
+}
+
+.btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* Skeleton Loading */
+.skeleton {
+    background: linear-gradient(
+        90deg,
+        var(--ds-bg-tertiary) 25%,
+        var(--ds-bg-secondary) 50%,
+        var(--ds-bg-tertiary) 75%
+    );
+    background-size: 200% 100%;
+    animation: loading 1.5s ease-in-out infinite;
+    border-radius: var(--ds-radius-md);
+}
+
+@keyframes loading {
+    0% {
+        background-position: 200% 0;
+    }
+    100% {
+        background-position: -200% 0;
+    }
+}
+
+/* Empty State */
+.empty-state {
+    text-align: center;
+    padding: var(--ds-space-2xl);
+    color: var(--ds-text-secondary);
+    font-size: 14px;
+}
+
+/* Toast Notification */
+.toast-container {
+    position: fixed;
+    top: var(--ds-space-xl);
+    right: var(--ds-space-xl);
+    z-index: 1000;
+    display: flex;
+    flex-direction: column;
+    gap: var(--ds-space-sm);
+}
+
+.toast {
+    background: var(--ds-bg-panel);
+    border: 1px solid var(--ds-border);
+    border-radius: var(--ds-radius-md);
+    padding: var(--ds-space-md) var(--ds-space-lg);
+    box-shadow: var(--ds-shadow-lg);
+    min-width: 300px;
+    animation: slideIn 0.3s ease-out;
+}
+
+@keyframes slideIn {
+    from {
+        transform: translateX(100%);
+        opacity: 0;
+    }
+    to {
+        transform: translateX(0);
+        opacity: 1;
+    }
+}
+
+.toast.success {
+    border-left: 3px solid var(--ds-success);
+}
+
+.toast.error {
+    border-left: 3px solid var(--ds-danger);
+}
+
+.toast.warning {
+    border-left: 3px solid var(--ds-warning);
+}
+
+/* Form Elements */
+select,
+input[type="text"],
+input[type="number"],
+input[type="email"],
+textarea {
+    width: 100%;
+    padding: var(--ds-space-sm) var(--ds-space-md);
+    background: var(--ds-bg-tertiary);
+    border: 1px solid var(--ds-border);
+    border-radius: var(--ds-radius-md);
+    color: var(--ds-text-primary);
+    font-size: 14px;
+    font-family: inherit;
+    transition: all 0.2s ease;
+}
+
+select:focus,
+input:focus,
+textarea:focus {
+    outline: none;
+    border-color: var(--ds-accent);
+    box-shadow: 0 0 0 3px rgba(240, 185, 11, 0.1);
+}
+
+/* Table */
+.table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.table thead {
+    position: sticky;
+    top: 0;
+    background: var(--ds-bg-secondary);
+    z-index: 10;
+}
+
+.table th {
+    padding: var(--ds-space-md);
+    text-align: left;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--ds-text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    border-bottom: 1px solid var(--ds-border);
+}
+
+.table td {
+    padding: var(--ds-space-md);
+    border-bottom: 1px solid var(--ds-border);
+    color: var(--ds-text-primary);
+    font-size: 14px;
+}
+
+.table tbody tr:hover {
+    background: var(--ds-bg-tertiary);
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .appbar {
+        flex-direction: column;
+        align-items: stretch;
+        gap: var(--ds-space-md);
+    }
+    
+    .appbar-left,
+    .appbar-right {
+        width: 100%;
+        justify-content: space-between;
+    }
+    
+    .kpi-grid {
+        grid-template-columns: 1fr;
+    }
+    
+    .list-card-metrics {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* Dashboard Modal Z-Index Fix (above ticker 5000) */
+.page-dashboard #createBotModal.modal {
+    position: fixed;
+    inset: 0;
+    z-index: 6000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.page-dashboard #createBotModal.modal.hidden {
+    display: none !important;
+}
+
+.page-dashboard #createBotModal .modal-card {
+    z-index: 6001;
+    pointer-events: auto;
+}
+
+/* Finance Button Styling (admin theme) */
+.btn-finance {
+    color: var(--ds-accent) !important;
+    text-decoration: none !important;
+}
+
+.btn-finance:hover {
+    border-color: rgba(240, 185, 11, 0.25);
+    box-shadow: 0 14px 36px rgba(0, 0, 0, 0.55);
+}
+
+/* ---- Dashboard clickability hardening ---- */
+.page-dashboard .admin-appbar,
+.page-dashboard .dash-appbar,
+.page-dashboard .dashboard-appbar,
+.page-dashboard .admin-appbar *,
+.page-dashboard .dash-appbar *,
+.page-dashboard .dashboard-appbar * {
+    pointer-events: auto;
+}
+
+.page-dashboard .container,
+.page-dashboard .container * {
+    pointer-events: auto;
+}
+
+/* Kill unexpected fullscreen overlays on dashboard */
+.page-dashboard .top-ticker {
+    pointer-events: none !important;
+}
+
+/* Target common overlay patterns (safe list) */
+.page-dashboard .overlay,
+.page-dashboard .backdrop,
+.page-dashboard .blur,
+.page-dashboard .glass,
+.page-dashboard .fullscreen,
+.page-dashboard .screen-blocker,
+.page-dashboard .ui-blocker {
+    pointer-events: none !important;
+}
+
+/* Appbar: sticky ile scroll'da üstte sabit kalır (Safari dahil) */
+.page-dashboard .admin-appbar,
+.page-dashboard .dash-appbar,
+.page-dashboard .dashboard-appbar {
+    position: -webkit-sticky;
+    position: sticky;
+    top: 0;
+    z-index: 200;
+}
+
+/* Butonları kesin tıklanır yap (süper garantiler) */
+.page-dashboard #btnOpenCreateBot,
+.page-dashboard #btnFinance {
+    pointer-events: auto !important;
+    cursor: pointer !important;
+    z-index: 9999 !important;
+    position: relative !important;
+}
+
+/* Modal hidden garantisi */
+.page-dashboard #createBotModal.hidden {
+    display: none !important;
+    pointer-events: none !important;
+}
+
+.page-dashboard #createBotModal.modal:not(.hidden) {
+    pointer-events: auto !important;
+}
+
+/* ---- Dashboard clickability hardening ---- */
+.page-dashboard .dashboard-appbar,
+.page-dashboard .dashboard-appbar * {
+    pointer-events: auto;
+}
+
+.page-dashboard .container,
+.page-dashboard .container * {
+    pointer-events: auto;
+}
+
+/* Ticker yukarıda kalsın ama butonların üstüne binmesin */
+.page-dashboard .top-ticker {
+    pointer-events: none; /* ticker tıklanmasın, alttaki UI tıklansın */
+}
+
+/* Appbar scroll'da üstte sabit (sticky) */
+.page-dashboard .dashboard-appbar {
+    position: -webkit-sticky;
+    position: sticky;
+    top: 0;
+    z-index: 200;
+}
+
+/* Butonları kesin tıklanır yap */
+.page-dashboard #btnOpenCreateBot,
+.page-dashboard #btnFinanceLink {
+    pointer-events: auto !important;
+    cursor: pointer !important;
+    position: relative;
+    z-index: 210;
+}
+
+/* Eğer görünmez bir overlay layer varsa (ör: blur/backdrop) onu kapalıyken tıklanmaz yap */
+.page-dashboard .modal.hidden {
+    display: none !important;
+    pointer-events: none !important;
+}
+
+/* Dashboard clickability hardening */
+.page-dashboard .dashboard-appbar,
+.page-dashboard .admin-appbar,
+.page-dashboard .dashboard-appbar *,
+.page-dashboard .admin-appbar * {
+    pointer-events: auto;
+}
+
+.page-dashboard .container,
+.page-dashboard .container * {
+    pointer-events: auto;
+}
+
+/* Ticker yukarıda kalsın ama butonların üstüne binmesin */
+.page-dashboard .top-ticker {
+    pointer-events: none;  /* ticker tıklanmasın, alttaki UI tıklansın */
+}
+
+/* Appbar: sticky + z-index */
+.page-dashboard .dashboard-appbar,
+.page-dashboard .admin-appbar {
+    position: -webkit-sticky;
+    position: sticky;
+    top: 0;
+    z-index: 200;
+}
+
+/* Butonları kesin tıklanır yap */
+.page-dashboard #btnOpenCreateBot,
+.page-dashboard #btnFinanceLink {
+    pointer-events: auto !important;
+    cursor: pointer !important;
+    position: relative;
+    z-index: 210;
+}
+
+/* Modal hidden durumunda tıklanmaz */
+.page-dashboard .modal.hidden {
+    display: none !important;
+    pointer-events: none !important;
+}
+
+
+/* ===== FORCE CREATE BOT MODAL VISIBILITY ===== */
+.page-dashboard #createBotModal {
+  position: fixed !important;
+  inset: 0 !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  background: rgba(0, 0, 0, 0.55) !important;
+  z-index: 999999 !important;
+  pointer-events: auto !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+}
+
+.page-dashboard #createBotModal.hidden {
+  display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+.page-dashboard #createBotModal:not(.hidden) {
+  display: flex !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+}
+
+.page-dashboard #createBotModal .modal-card {
+  display: block !important;
+  z-index: 1000000 !important;
+  pointer-events: auto !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+  position: relative !important;
+}
+
+/* backdrop varsa çakışmayı önle */
+.page-dashboard #modalBackdrop {
+  z-index: 999998 !important;
+  position: fixed !important;
+  inset: 0 !important;
+}
+
+.page-dashboard #modalBackdrop.hidden {
+  display: none !important;
+}
+
+/* Admin Page Tabs */
+.tabs-container {
+    margin-top: 0.75rem;
+}
+
+.tabs-header {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 1.5rem;
+    border-bottom: 1px solid var(--ds-border);
+    padding-bottom: 0.5rem;
+}
+
+/* Admin: masaüstünde toggle gizli, sekmeler yatay */
+/* Portal for mobile tabs dropdown: no clipping, correct stacking */
+#adminTabsPortal {
+    position: fixed;
+    inset: 0;
+    z-index: 10001;
+    pointer-events: none;
+    overflow: visible;
+}
+#adminTabsPortal .admin-tabs-list {
+    pointer-events: auto;
+}
+
+.admin-tabs-toggle {
+    display: none;
+}
+#adminTabsToggle {
+    touch-action: manipulation;
+}
+.admin-tabs-toggle-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.25rem;
+    height: 1.25rem;
+    margin-right: 0.5rem;
+    color: inherit;
+}
+.admin-tabs-toggle-icon svg {
+    width: 100%;
+    height: 100%;
+}
+.admin-tabs-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+.admin-tabs-list .tab-indicator {
+    transition: transform 200ms ease, width 200ms ease;
+}
+
+.tab-btn {
+    padding: 0.75rem 1.5rem;
+    background: transparent;
+    border: none;
+    color: var(--ds-text-secondary);
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    transition: all 0.2s;
+    position: relative;
+}
+
+.tab-btn:hover {
+    color: var(--ds-text-primary);
+}
+
+.tab-btn.active {
+    color: var(--ds-accent);
+    border-bottom-color: var(--ds-accent);
+}
+
+.tab-content {
+    display: none;
+}
+
+.tab-content.active {
+    display: block;
+    animation: fadeIn 0.3s;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+.badge {
+    display: inline-block;
+    background: var(--ds-danger);
+    color: #fff;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 6px;
+    border-radius: 10px;
+    margin-left: 0.5rem;
+    min-width: 18px;
+    text-align: center;
+}
+
+.pending-list {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.pending-item {
+    background: var(--ds-bg-secondary);
+    border: 1px solid var(--ds-border);
+    border-radius: 12px;
+    padding: 1.5rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.settings-panel {
+    background: var(--ds-bg-secondary);
+    border: 1px solid var(--ds-border);
+    border-radius: 12px;
+    padding: 2rem;
+    max-width: 600px;
+    margin: 0 auto;
+    width: 100%;
+}
+
+.settings-panel h3 {
+    margin: 0 0 1.5rem 0;
+    color: var(--ds-text-primary);
+    font-size: 20px;
+}
+
+/* Favori yıldız (Binance coin list + trade modal) */
+.fav-star {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 0.25rem;
+    font-size: 1.1rem;
+    line-height: 1;
+    color: var(--ds-text-secondary);
+    opacity: 0.85;
+}
+.fav-star:hover {
+    opacity: 1;
+    color: var(--ds-text-primary);
+}
+.fav-star.is-favorite {
+    color: var(--ds-accent);
+}
+.fav-star:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+}
+
+/* Breach alert overlay - admin güvenlik ihlali uyarısı */
+.breach-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 10000;
+    background: rgba(0, 0, 0, 0.85);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem;
+}
+.breach-modal {
+    background: var(--ds-bg-panel);
+    border: 2px solid var(--ds-danger);
+    border-radius: var(--ds-radius-lg);
+    max-width: 560px;
+    width: 100%;
+    max-height: 85vh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 16px 48px rgba(246, 70, 93, 0.25);
+}
+.breach-modal-header {
+    padding: 1.25rem 1.5rem;
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: var(--ds-danger);
+    background: rgba(246, 70, 93, 0.12);
+    text-align: center;
+}
+.breach-modal-header.breach-header-suspension {
+    font-size: 1.4rem;
+    padding: 1.5rem 1.5rem;
+    background: rgba(246, 70, 93, 0.2);
+}
+.breach-suspension-notice {
+    margin-bottom: 1rem;
+    padding: 1rem;
+    background: rgba(246, 70, 93, 0.15);
+    border-radius: var(--ds-radius-sm);
+    font-weight: 600;
+    color: var(--ds-danger);
+}
+.breach-modal-body {
+    padding: 1.5rem;
+    overflow-y: auto;
+    color: var(--ds-text-primary);
+    font-size: 0.95rem;
+    line-height: 1.5;
+}
+.breach-modal-body .breach-item {
+    margin-bottom: 1rem;
+    padding: 0.75rem;
+    background: rgba(246, 70, 93, 0.08);
+    border-radius: var(--ds-radius-sm);
+    border-left: 4px solid var(--ds-danger);
+}
+.breach-modal-body .breach-item:last-child { margin-bottom: 0; }
+
+/* Tüm modallarda kaydırma çubuğu gizle */
+.dm-modal__content,
+.audit-modal__content,
+.modal-content,
+.modal-card,
+.modal-body,
+.breach-modal-body,
+.perf-chart-modal .perf-chart-modal-body,
+.perf-chart-modal .perf-chart-modal-body-chart,
+.perf-chart-modal .perf-chart-modal-body.symbol-chart-iframe-wrap,
+.dm-modal__body,
+#accountSettingsBody,
+#errorLogsList,
+#accountUserAuditList,
+#adminAuditList,
+#chatMessages,
+.parametreler-body,
+.binance-modal-body,
+.modal-panel {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+}
+.dm-modal__content::-webkit-scrollbar,
+.audit-modal__content::-webkit-scrollbar,
+.modal-content::-webkit-scrollbar,
+.modal-card::-webkit-scrollbar,
+.modal-body::-webkit-scrollbar,
+.breach-modal-body::-webkit-scrollbar,
+.perf-chart-modal .perf-chart-modal-body::-webkit-scrollbar,
+.perf-chart-modal .perf-chart-modal-body-chart::-webkit-scrollbar,
+.perf-chart-modal .perf-chart-modal-body.symbol-chart-iframe-wrap::-webkit-scrollbar,
+.dm-modal__body::-webkit-scrollbar,
+#accountSettingsBody::-webkit-scrollbar,
+#errorLogsList::-webkit-scrollbar,
+#accountUserAuditList::-webkit-scrollbar,
+#adminAuditList::-webkit-scrollbar,
+#chatMessages::-webkit-scrollbar,
+.parametreler-body::-webkit-scrollbar,
+.binance-modal-body::-webkit-scrollbar,
+.modal-panel::-webkit-scrollbar {
+    display: none;
+}
+
+.breach-modal-footer {
+    padding: 1rem 1.5rem;
+    display: flex;
+    justify-content: center;
+    border-top: 1px solid var(--ds-border);
+}
+
+/* ========== MOBİL UYUMLULUK (temel) ========== */
+@media (max-width: 768px) {
+    body {
+        overflow-x: hidden;
+        -webkit-overflow-scrolling: touch;
+    }
+    .tab-btn,
+    .tabs-header button {
+        min-height: 44px;
+        min-width: 44px;
+    }
+    /* Dokunma: gecikme azaltma, tap highlight kaldırma */
+    button, a, [role="button"], .tab-btn {
+        -webkit-tap-highlight-color: transparent;
+        touch-action: manipulation;
+    }
+}
+
+/* Admin: mobilde sekmeler dropdown – toggle ile açılır/kapanır, kapalıyken liste gizli */
+@media (max-width: 768px) {
+    .page-admin .tabs-header {
+        flex-direction: column;
+        align-items: stretch;
+        position: relative;
+        z-index: 30;
+        overflow: visible;
+        pointer-events: auto;
+    }
+    .page-admin .admin-tabs-toggle {
+        display: inline-flex !important;
+        align-items: center;
+        justify-content: center;
+        gap: 0.5rem;
+        position: relative;
+        z-index: 31;
+        pointer-events: auto;
+        cursor: pointer;
+        min-height: 44px;
+        -webkit-tap-highlight-color: transparent;
+        touch-action: manipulation;
+    }
+    .page-admin .admin-tabs-list {
+        display: none !important;
+        flex-direction: column !important;
+        position: static !important;
+        top: auto;
+        left: auto;
+        right: auto;
+        margin-top: 0;
+        padding: 0.35rem 0;
+        background: transparent !important;
+        border: none !important;
+        border-radius: 0;
+        box-shadow: none;
+        max-height: none;
+        overflow: visible;
+        z-index: 1;
+        gap: 0.25rem;
+    }
+    .page-admin .admin-tabs-list.admin-tabs-list--open {
+        display: flex !important;
+        flex-direction: column !important;
+    }
+    .page-admin .admin-tabs-list .tab-btn {
+        width: 100%;
+        text-align: left;
+        padding: 0.85rem 1rem;
+        min-height: 48px;
+        border-radius: var(--ds-radius-sm);
+        border-bottom: none;
+        flex-shrink: 0;
+        -webkit-tap-highlight-color: transparent;
+        touch-action: manipulation;
+        cursor: pointer;
+    }
+    .page-admin .admin-tabs-list .tab-btn:hover {
+        background: var(--ds-bg-tertiary);
+    }
+    .page-admin .admin-tabs-list .tab-btn.active {
+        background: rgba(var(--ds-accent-rgb, 242, 201, 76), 0.15);
+        border-bottom: none;
+    }
+    .page-admin .admin-tabs-list .tab-indicator {
+        display: none;
+    }
+}
+
+/* Mobil: grafik modalları yatay kaydırılabilir (grafik tam genişlikte açılsın) */
+@media (max-width: 768px) {
+    .perf-chart-modal-overlay {
+        padding: 0;
+        align-items: stretch;
+    }
+    .perf-chart-modal,
+    .perf-chart-modal.perf-chart-modal-large,
+    .perf-chart-modal.symbol-chart-full {
+        width: 100%;
+        max-width: 100%;
+        height: 100%;
+        max-height: 100%;
+        border-radius: 0;
+    }
+    .perf-chart-modal .perf-chart-modal-body-chart {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        flex: 1;
+        min-height: 0;
+    }
+    .perf-chart-modal .perf-chart-modal-svg-wrap,
+    .perf-chart-modal #pctChartMount {
+        min-width: 560px;
+        width: 100%;
+    }
+    .perf-chart-modal .perf-chart-modal-body.symbol-chart-iframe-wrap {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        min-height: 0;
+    }
+    .perf-chart-modal .perf-chart-modal-body.symbol-chart-iframe-wrap iframe {
+        min-width: 560px;
+        flex: 1;
+    }
+}

@@ -1,0 +1,34 @@
+# DEĞİŞKEN DOSYALAR - Her deploy'da sunucuya KOPYALANIR
+# Bu dosyalar geliştirme sırasında değişir, sunucuda güncel tutulmalı
+# 
+# Kullanım: rsync --include-from=deploy/DEGISKEN_DOSYALAR.txt --exclude='*'
+# veya: deploy/deploy.sh scripti kullanır
+
+# Ana uygulama kodu
+app/
+manager_server/
+ui/
+scripts/
+tests/
+
+# Dokümantasyon
+docs/
+
+# Bağımlılıklar
+requirements.txt
+
+# Başlatma/durdurma scriptleri
+start.bat
+start.command
+stop.bat
+stop.command
+restart.bat
+restart.command
+guncelle.bat
+Kurulum.bat
+
+# .env örneği (şablon - güncellenebilir)
+.env.example
+
+# Omeraltinhtml (statik site - visits.json hariç)
+Omeraltinhtml/

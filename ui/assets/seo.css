@@ -1,0 +1,174 @@
+/*
+ * SEO sayfaları — minimal, hızlı, mobil uyumlu
+ */
+
+.seo-page {
+    margin: 0;
+    min-height: 100vh;
+    font-family: var(--login-font);
+    color: var(--login-text);
+    background: #020203;
+    overflow-x: hidden;
+}
+
+.seo-page-bg {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    background: linear-gradient(180deg, #010101 0%, #020202 50%, #010102 100%);
+    pointer-events: none;
+}
+
+.seo-topbar {
+    position: fixed;
+    top: 36px;
+    left: 0;
+    right: 0;
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 1rem 1.25rem;
+    padding-top: max(1rem, env(safe-area-inset-top));
+    padding-left: max(1.25rem, env(safe-area-inset-left));
+    padding-right: max(1.25rem, env(safe-area-inset-right));
+}
+
+.seo-nav-link {
+    color: var(--login-text-secondary);
+    text-decoration: none;
+    font-weight: 500;
+    font-size: 0.9375rem;
+}
+.seo-nav-link:hover {
+    color: var(--login-accent);
+}
+
+.seo-cta-btn {
+    margin-left: auto;
+    padding: 0.5rem 1rem;
+    background: linear-gradient(135deg, var(--login-accent) 0%, #b8921e 100%);
+    color: #000;
+    font-weight: 600;
+    font-size: 0.8125rem;
+    text-decoration: none;
+    border-radius: 8px;
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+.seo-cta-btn:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 16px rgba(201, 162, 39, 0.35);
+}
+
+.seo-topbar .login-flag {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.35rem 0.5rem;
+    border-radius: 8px;
+}
+
+.seo-main {
+    position: relative;
+    z-index: 10;
+    max-width: 720px;
+    margin: 0 auto;
+    padding: max(5.5rem, 10vw) 1.5rem 3rem;
+}
+
+.seo-h1 {
+    font-size: clamp(1.9rem, 5.5vw, 2.75rem);
+    font-weight: 700;
+    margin: 0 0 2rem 0;
+    letter-spacing: -0.02em;
+    background: linear-gradient(135deg, var(--login-text) 0%, var(--login-text-secondary) 40%, var(--login-accent) 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    color: var(--login-text);
+}
+
+.seo-hero,
+.seo-content {
+    margin-bottom: 2rem;
+    line-height: 1.75;
+    font-size: 1rem;
+    color: var(--login-text-secondary);
+}
+
+.seo-hero p,
+.seo-content p {
+    margin: 0 0 1.25rem 0;
+}
+
+.seo-hero strong,
+.seo-content strong {
+    color: var(--login-text);
+}
+
+.seo-cta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    margin: 2.5rem 0;
+}
+
+.seo-btn-primary {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.75rem 1.5rem;
+    background: linear-gradient(135deg, var(--login-accent) 0%, #b8921e 100%);
+    color: #000;
+    font-weight: 600;
+    font-size: 0.9375rem;
+    text-decoration: none;
+    border-radius: 8px;
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+.seo-btn-primary:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 20px rgba(201, 162, 39, 0.4);
+}
+
+.seo-btn-secondary {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.75rem 1.5rem;
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--login-text-secondary);
+    font-weight: 600;
+    font-size: 0.9375rem;
+    text-decoration: none;
+    border-radius: 8px;
+    border: 1px solid var(--login-border);
+    transition: background 0.2s, color 0.2s;
+}
+.seo-btn-secondary:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: var(--login-text);
+}
+
+.seo-footer {
+    margin-top: 3rem;
+    padding-top: 2rem;
+    border-top: 1px solid var(--login-border);
+    font-size: 0.875rem;
+    color: var(--login-text-muted);
+}
+.seo-footer p {
+    margin: 0.5rem 0;
+}
+.seo-footer a {
+    color: var(--login-accent);
+    text-decoration: none;
+}
+.seo-footer a:hover {
+    text-decoration: underline;
+}
+
+@media (max-width: 768px) {
+    .seo-topbar { top: 38px; }
+    .seo-main { padding: max(6rem, 14vw) 1rem 2rem; }
+}

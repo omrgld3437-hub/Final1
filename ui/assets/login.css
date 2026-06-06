@@ -1,0 +1,1859 @@
+/*
+ * TraderTrailing Login — Güvenlik & hız öncelikli; borsa/trading arayüzü
+ * Masaüstü: nebula (Samanyolu), hafif animasyonlar; mobil: minimum animasyon, jet hız
+ */
+
+/* Sayfa gövdesi — hız: contain, izole boyama; mobilde scroll ile alttaki yazılar okunabilir */
+body.login-page {
+    margin: 0;
+    min-height: 100vh;
+    font-family: var(--login-font);
+    color: var(--login-text);
+    background: #020203;
+    overflow-x: hidden;
+    -webkit-tap-highlight-color: transparent;
+    contain: layout style;
+}
+body.login-page:not(.login-mobile) {
+    max-height: 100vh;
+    overflow: hidden;
+}
+body.login-mobile {
+    overflow-y: auto;
+}
+
+:root {
+    --login-bg: #020203;
+    --login-bg-deep: #010102;
+    --login-text: #f8f7f5;
+    --login-text-secondary: #a8a6a1;
+    --login-text-muted: #6b6966;
+    --login-accent: #c9a227;
+    --login-accent-bright: #e4c04a;
+    --login-green: #0ecb81;
+    --login-red: #f6465d;
+    --login-border: rgba(255, 255, 255, 0.06);
+    --login-card-bg: rgba(10, 10, 12, 0.78);
+    --login-radius: 16px;
+    --login-ease: cubic-bezier(0.32, 0.72, 0, 1);
+    --login-font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+/* Arka plan katmanları — fixed, contain ile repaint sınırı */
+.login-page-bg {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    overflow: hidden;
+    contain: strict;
+}
+
+.login-bg-base {
+    position: absolute;
+    inset: 0;
+    contain: strict;
+    background:
+        linear-gradient(180deg, #010101 0%, #020202 50%, #010102 100%);
+}
+
+.login-bg-mesh {
+    position: absolute;
+    inset: -30%;
+    background:
+        radial-gradient(ellipse 50% 50% at 88% 12%, rgba(25, 24, 22, 0.5) 0%, transparent 55%);
+}
+body:not(.login-mobile) .login-bg-mesh {
+    background:
+        radial-gradient(ellipse 55% 55% at 88% 12%, rgba(30, 28, 26, 0.6) 0%, transparent 55%);
+}
+
+.login-bg-glow {
+    position: absolute;
+    border-radius: 50%;
+    filter: blur(80px);
+    opacity: 0.16;
+}
+
+.login-bg-glow-1 {
+    width: 70vmax;
+    height: 70vmax;
+    background: radial-gradient(circle, rgba(201, 162, 39, 0.08) 0%, transparent 60%);
+    top: -40%;
+    right: -35%;
+}
+
+.login-bg-glow-2 {
+    width: 50vmax;
+    height: 50vmax;
+    background: radial-gradient(circle, rgba(10, 10, 12, 0.5) 0%, transparent 60%);
+    bottom: -20%;
+    left: -15%;
+}
+
+/* Nebula / bulutsu — sağ üstte parlaklık ucu görünür */
+.login-bg-nebula {
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 55%;
+    height: 60%;
+    z-index: 1;
+    /* Parlaklık merkezi sağ üst dışında; ucu köşede görünsün */
+    background:
+        radial-gradient(ellipse 100% 100% at 102% -5%, rgba(85, 70, 120, 0.5) 0%, transparent 48%);
+    mask-image: radial-gradient(ellipse 100% 100% at 100% 0%, black 0%, transparent 55%);
+    -webkit-mask-image: radial-gradient(ellipse 100% 100% at 100% 0%, black 0%, transparent 55%);
+}
+body:not(.login-mobile) .login-bg-nebula {
+    background:
+        radial-gradient(ellipse 110% 100% at 102% -3%, rgba(100, 82, 145, 0.48) 0%, transparent 46%),
+        radial-gradient(ellipse 70% 65% at 100% 2%, rgba(125, 100, 175, 0.32) 0%, transparent 50%);
+    animation: loginNebulaShimmer 6s ease-in-out infinite;
+}
+@keyframes loginNebulaShimmer {
+    0%, 100% { opacity: 0.94; }
+    50% { opacity: 1; }
+}
+
+/* Samanyolu / yıldız kümesi — yavaş dönüş ve sürüklenme; yumuşak maske ile keskin köşe yok */
+.login-bg-milkyway {
+    display: none;
+    position: absolute;
+    top: -50%;
+    left: -50%;
+    right: -50%;
+    bottom: -50%;
+    transform-origin: 50% 50%;
+    background:
+        radial-gradient(ellipse 90% 50% at 50% 45%, rgba(120, 110, 160, 0.08) 0%, transparent 55%),
+        linear-gradient(105deg, transparent 0%, transparent 35%, rgba(100, 95, 140, 0.12) 48%, rgba(140, 130, 200, 0.15) 52%, rgba(100, 95, 140, 0.1) 65%, transparent 80%);
+    animation: loginMilkywayMove 180s linear infinite;
+    mask-image: radial-gradient(ellipse 70% 70% at 50% 50%, black 0%, transparent 72%);
+    -webkit-mask-image: radial-gradient(ellipse 70% 70% at 50% 50%, black 0%, transparent 72%);
+}
+body:not(.login-mobile) .login-bg-milkyway {
+    display: block;
+}
+@keyframes loginMilkywayMove {
+    0% { transform: rotate(0deg) translate(0, 0); opacity: 0.85; }
+    50% { transform: rotate(180deg) translate(1%, -0.5%); opacity: 1; }
+    100% { transform: rotate(360deg) translate(0, 0); opacity: 0.85; }
+}
+
+.login-bg-stars {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 2;
+}
+
+/* Kayan yıldız — masaüstü, arada bir */
+.login-shooting-stars {
+    position: absolute;
+    inset: 0;
+    z-index: 3;
+    pointer-events: none;
+    overflow: hidden;
+}
+/* Kayan yıldız — ok gibi: döndürülmüş yönde düz gider (translateX) */
+.login-shooting-star {
+    position: absolute;
+    left: var(--sx, 0);
+    top: var(--sy, 0);
+    width: 80px;
+    height: 2px;
+    background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.15) 30%, rgba(255,255,255,0.7) 55%, #fff 75%, transparent 100%);
+    border-radius: 0;
+    transform-origin: left center;
+    animation: loginShootStar var(--dur, 1s) linear forwards;
+    opacity: 0;
+}
+@keyframes loginShootStar {
+    0% { transform: rotate(var(--angle)) translateX(0); opacity: 0; }
+    6% { opacity: 1; }
+    94% { opacity: 0.7; }
+    100% { transform: rotate(var(--angle)) translateX(var(--dist, 800px)); opacity: 0; }
+}
+
+/* Grid — borsa/trading hissi: order book / veri akışı görünümü */
+.login-bg-grid {
+    position: absolute;
+    inset: 0;
+    contain: strict;
+    background-image:
+        linear-gradient(rgba(255,255,255,0.022) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.022) 1px, transparent 1px);
+    background-size: 40px 40px;
+    mask-image: radial-gradient(ellipse 100% 100% at 50% 50%, black 0%, transparent 70%);
+    -webkit-mask-image: radial-gradient(ellipse 100% 100% at 50% 50%, black 0%, transparent 70%);
+    opacity: 0.85;
+}
+body:not(.login-mobile) .login-bg-grid {
+    animation: loginGridPulse 6s ease-in-out infinite;
+}
+@keyframes loginGridPulse {
+    0%, 100% { opacity: 0.8; }
+    50% { opacity: 0.95; }
+}
+.login-mobile .login-bg-grid {
+    animation: none;
+}
+
+/* Yatay “fiyat seviyesi” çizgileri — hafif nabız */
+.login-bg-levels {
+    display: none;
+    position: absolute;
+    inset: 0;
+    background-image:
+        linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px);
+    background-size: 100% 120px;
+    mask-image: linear-gradient(180deg, transparent 0%, black 15%, black 85%, transparent 100%);
+    -webkit-mask-image: linear-gradient(180deg, transparent 0%, black 15%, black 85%, transparent 100%);
+    opacity: 0.7;
+    pointer-events: none;
+    z-index: 0;
+}
+body:not(.login-mobile) .login-bg-levels {
+    display: block;
+    animation: loginLevelsPulse 4s ease-in-out infinite;
+}
+@keyframes loginLevelsPulse {
+    0%, 100% { opacity: 0.5; }
+    50% { opacity: 0.85; }
+}
+.login-mobile .login-bg-levels {
+    display: none !important;
+}
+
+.login-bg-vignette {
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(ellipse 90% 80% at 50% 50%, transparent 35%, rgba(0,0,0,0.4) 95%);
+}
+
+/* Mum şeridi — altta, daha kurumsal: ince çizgi grafik hissi, kenarlarda soluk */
+/* Masaüstü: mesh ve glow hafif hareket */
+body:not(.login-mobile) .login-bg-mesh {
+    animation: loginMeshDrift 35s ease-in-out infinite alternate;
+}
+
+body:not(.login-mobile) .login-bg-glow-1 {
+    animation: loginGlowDrift 45s ease-in-out infinite;
+}
+
+body:not(.login-mobile) .login-bg-glow-2 {
+    animation: loginGlowDrift 45s ease-in-out infinite 15s;
+}
+
+@keyframes loginMeshDrift {
+    0% { transform: translate(0, 0) scale(1); }
+    100% { transform: translate(-2%, -1.5%) scale(1.015); }
+}
+
+@keyframes loginGlowDrift {
+    0%, 100% { transform: translate(0, 0); }
+    50% { transform: translate(1.5%, -2%); }
+}
+
+/* Mobil: hız için animasyon azalt, kasma yok */
+.login-mobile .login-bg-mesh,
+.login-mobile .login-bg-glow-1,
+.login-mobile .login-bg-glow-2,
+.login-mobile .login-bg-milkyway {
+    animation: none !important;
+    will-change: auto !important;
+}
+
+/* Mobil: nebula sağ üstte parlaklık */
+.login-mobile .login-bg-nebula {
+    background:
+        radial-gradient(ellipse 100% 100% at 102% -5%, rgba(80, 65, 110, 0.42) 0%, transparent 48%);
+    mask-image: radial-gradient(ellipse 100% 100% at 100% 0%, black 0%, transparent 55%);
+    -webkit-mask-image: radial-gradient(ellipse 100% 100% at 100% 0%, black 0%, transparent 55%);
+    animation: loginNebulaShimmer 6s ease-in-out infinite;
+}
+
+.login-mobile .login-bg-glow {
+    opacity: 0.06 !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .login-bg-mesh,
+    .login-bg-glow-1,
+    .login-bg-glow-2,
+    .login-bg-nebula,
+    .login-bg-milkyway,
+    .login-bg-grid,
+    .login-bg-levels { animation: none !important; filter: none !important; }
+    .login-bg-nebula { will-change: auto !important; }
+    .login-flag__img { animation: none !important; }
+    .login-brand { animation: none !important; }
+}
+
+/* Ana içerik */
+.login-wrap {
+    position: relative;
+    z-index: 10;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: clamp(1rem, 4vw, 2rem);
+    padding-top: max(1.5rem, env(safe-area-inset-top));
+    padding-bottom: max(2rem, env(safe-area-inset-bottom));
+    box-sizing: border-box;
+}
+
+.login-header {
+    text-align: center;
+    margin-bottom: 1.5rem;
+}
+
+.login-brand {
+    font-family: var(--login-font);
+    font-size: clamp(1.5rem, 4vw, 2rem);
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    color: var(--login-text);
+    text-decoration: none;
+    display: inline-block;
+    background: linear-gradient(135deg, var(--login-text) 0%, var(--login-text-secondary) 35%, var(--login-accent) 50%, var(--login-text-secondary) 65%, var(--login-text) 100%);
+    background-size: 200% auto;
+    background-origin: border-box;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    transition: opacity 0.3s var(--login-ease);
+    animation: loginBrandShine 6s ease-in-out infinite;
+}
+
+.login-brand:hover {
+    opacity: 0.9;
+}
+
+@keyframes loginBrandShine {
+    0%, 100% { background-position: 0% center; }
+    50% { background-position: 100% center; }
+}
+
+/* Üst toolbar — Sekmeler + Giriş Yap, bayrak en sağda; hepsi aynı yükseklik */
+/* Ticker şeridi — GPU-accelerated, akıcı animasyon */
+.login-ticker {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 50;
+    height: 36px;
+    background: rgba(2, 2, 3, 0.88);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    border-bottom: 1px solid var(--login-border);
+    overflow: hidden;
+    pointer-events: none;
+    contain: layout style paint;
+}
+.login-ticker__track {
+    display: flex;
+    align-items: center;
+    height: 100%;
+    width: max-content;
+    will-change: transform;
+    transform: translateZ(0);
+    backface-visibility: hidden;
+    animation: loginTickerScroll 40s linear infinite;
+    animation-delay: -20s;
+}
+.login-ticker__item {
+    flex-shrink: 0;
+    padding: 0 20px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    color: var(--login-text-muted);
+    white-space: nowrap;
+    border-right: 1px solid var(--login-border);
+}
+.login-ticker__item:nth-child(3n) { color: var(--login-accent); }
+.login-ticker__item:nth-child(3n+1) { color: var(--login-green); }
+@keyframes loginTickerScroll {
+    0% { transform: translate3d(0, 0, 0); }
+    100% { transform: translate3d(-50%, 0, 0); }
+}
+
+.login-topbar {
+    position: fixed;
+    top: 36px;
+    left: 0;
+    right: 0;
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 1rem 1.25rem;
+    padding-top: max(1rem, env(safe-area-inset-top));
+    padding-left: max(1.25rem, env(safe-area-inset-left));
+    padding-right: max(1.25rem, env(safe-area-inset-right));
+}
+.login-topbar .login-flag {
+    margin-left: auto;
+    flex-shrink: 0;
+}
+
+/* Çıkış sonrası uyarı — kısa, kutu içinde, topbar altında */
+.login-logout-toast {
+    position: fixed;
+    top: 56px;
+    left: 50%;
+    z-index: 99;
+    transform: translate(-50%, -100%);
+    padding: 0.5rem 1rem;
+    max-width: 90vw;
+    font-size: 0.8125rem;
+    font-weight: 500;
+    color: #0a0a0c;
+    background: rgba(14, 203, 129, 0.95);
+    border: 1px solid rgba(14, 203, 129, 0.5);
+    border-radius: 10px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+    opacity: 0;
+    visibility: hidden;
+    transition: transform 0.3s var(--login-ease), opacity 0.3s ease, visibility 0.3s;
+}
+.login-logout-toast.show {
+    transform: translate(-50%, 0);
+    opacity: 1;
+    visibility: visible;
+}
+
+.login-menu-wrap {
+    position: relative;
+}
+
+/* Sekmeler butonu — şık, ikon + chevron */
+.login-menu-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 1rem;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    font-family: var(--login-font);
+    letter-spacing: 0.02em;
+    color: var(--login-text);
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0.04) 100%);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 10px;
+    cursor: pointer;
+    transition: color 0.2s, background 0.2s, border-color 0.2s, box-shadow 0.2s;
+    -webkit-tap-highlight-color: transparent;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+.login-menu-btn:hover {
+    color: var(--login-accent-bright);
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.1) 0%, rgba(255, 255, 255, 0.06) 100%);
+    border-color: rgba(201, 162, 39, 0.25);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+}
+.login-menu-btn.is-open {
+    color: var(--login-accent-bright);
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.12) 0%, rgba(255, 255, 255, 0.06) 100%);
+    border-color: rgba(201, 162, 39, 0.3);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+.login-menu-btn__icon {
+    width: 16px;
+    height: 16px;
+    position: relative;
+    display: block;
+    opacity: 0.9;
+    background: linear-gradient(to bottom, currentColor 0 2px, transparent 2px 4px, currentColor 4px 6px, transparent 6px 8px, currentColor 8px 10px, transparent 10px 12px, currentColor 12px 14px);
+    background-size: 100% 14px;
+    background-repeat: no-repeat;
+    border-radius: 2px;
+}
+.login-menu-btn__label {
+    margin-left: 0;
+}
+.login-menu-btn__chevron {
+    width: 0;
+    height: 0;
+    margin-left: 0.15rem;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 5px solid currentColor;
+    opacity: 0.8;
+    transition: transform 0.2s var(--login-ease);
+}
+.login-menu-btn.is-open .login-menu-btn__chevron {
+    transform: rotate(180deg);
+}
+
+/* Açılır liste — gruplu, ince gölge, açılış animasyonu */
+.login-menu-dropdown {
+    position: absolute;
+    top: calc(100% + 0.5rem);
+    left: 0;
+    min-width: 200px;
+    padding: 0.5rem;
+    background: rgba(12, 12, 14, 0.95);
+    backdrop-filter: blur(24px);
+    -webkit-backdrop-filter: blur(24px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 12px;
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(255, 255, 255, 0.03) inset;
+    display: none;
+    flex-direction: column;
+    gap: 0;
+    animation: loginMenuDropdownIn 0.2s var(--login-ease) forwards;
+    transform-origin: top left;
+}
+.login-menu-wrap .login-menu-btn.is-open + .login-menu-dropdown,
+.login-menu-dropdown[aria-hidden="false"] {
+    display: flex;
+}
+@keyframes loginMenuDropdownIn {
+    from {
+        opacity: 0;
+        transform: translateY(-6px) scale(0.98);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+}
+
+.login-menu-dropdown__group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.125rem;
+}
+.login-menu-dropdown__group + .login-menu-dropdown__divider {
+    margin: 0.35rem 0;
+}
+.login-menu-dropdown__divider {
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.08), transparent);
+    flex-shrink: 0;
+}
+
+.login-menu-dropdown button {
+    padding: 0.6rem 0.9rem;
+    font-size: 0.875rem;
+    font-family: var(--login-font);
+    font-weight: 500;
+    letter-spacing: 0.01em;
+    color: var(--login-text-secondary);
+    background: transparent;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    text-align: left;
+    transition: color 0.2s, background 0.2s;
+}
+.login-menu-dropdown button:hover {
+    color: var(--login-text);
+    background: rgba(255, 255, 255, 0.06);
+}
+.login-menu-dropdown button:active {
+    background: rgba(255, 255, 255, 0.08);
+}
+.login-menu-dropdown__group:first-child button:hover {
+    color: var(--login-accent-bright);
+    background: rgba(201, 162, 39, 0.08);
+}
+
+/* Ana sayfa: landing — saatler + kripto; masaüstü tek ekran, mobilde scroll ile alttaki yazılar okunabilir */
+.login-landing {
+    position: relative;
+    z-index: 10;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: clamp(1rem, 4vw, 2.5rem);
+    padding-top: max(3rem, 4vw);
+    padding-bottom: max(1rem, env(safe-area-inset-bottom));
+    box-sizing: border-box;
+    contain: layout style;
+}
+body:not(.login-mobile) .login-landing {
+    max-height: 100vh;
+    overflow: hidden;
+}
+body.login-mobile .login-landing {
+    overflow: visible;
+}
+
+.login-landing-brand {
+    margin: clamp(1rem, 3vw, 2rem) 0;
+    flex-shrink: 0;
+    padding: 0 0.5rem;
+}
+.login-landing-brand .login-brand {
+    font-size: clamp(1.9rem, 5.5vw, 2.75rem);
+    letter-spacing: 0.04em;
+}
+
+/* Bölüm başlıkları */
+.login-section-title {
+    font-size: 0.9375rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    color: var(--login-accent);
+    margin: 0 0 1rem 0;
+    text-align: center;
+}
+
+/* Analog saatler — premium racon, kaliteli renkler */
+.login-clocks {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+    gap: 1.5rem;
+    max-width: 820px;
+    margin: 0 auto clamp(1rem, 2vw, 2rem);
+    flex-shrink: 0;
+}
+
+.login-clock {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+.login-clock__face {
+    position: relative;
+    width: 96px;
+    height: 96px;
+    border-radius: 50%;
+    border: 2px solid rgba(175, 145, 75, 0.75);
+    box-shadow:
+        0 0 0 1px rgba(0, 0, 0, 0.6),
+        0 0 0 3px rgba(120, 95, 45, 0.22),
+        inset 0 0 0 1px rgba(195, 165, 95, 0.4),
+        inset 0 0 0 2px rgba(0, 0, 0, 0.2),
+        inset 0 2px 6px rgba(0, 0, 0, 0.3),
+        0 8px 28px rgba(0, 0, 0, 0.5);
+    background: #031a0e;
+    overflow: hidden;
+}
+
+.login-clock__face::before {
+    content: '';
+    position: absolute;
+    inset: -4px;
+    border-radius: 50%;
+    border: 1px solid transparent;
+    background: linear-gradient(165deg, rgba(200, 170, 95, 0.28) 0%, transparent 32%, transparent 68%, rgba(55, 95, 65, 0.18) 100%) border-box;
+    -webkit-mask: linear-gradient(#fff 0 0) padding-box, linear-gradient(#fff 0 0);
+    mask: linear-gradient(#fff 0 0) padding-box, linear-gradient(#fff 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    pointer-events: none;
+}
+
+/* Merkez pim — kadran ortasında nazik kapak */
+.login-clock__face::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 35% 35%, rgba(201, 162, 39, 0.9), rgba(139, 105, 24, 0.85));
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 248, 220, 0.25);
+    z-index: 2;
+    pointer-events: none;
+}
+
+/* 6 tarafı am/pm — Omeraltinhtml gibi saat altında göster */
+.login-clock__ampm {
+    position: absolute;
+    left: 50%;
+    bottom: 10px;
+    transform: translateX(-50%);
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    color: rgba(201, 162, 39, 0.65);
+    text-transform: lowercase;
+    z-index: 0;
+    pointer-events: none;
+}
+
+/* 12 indeks — ana saatler (12/3/6/9) daha belirgin, işlemeli */
+.login-clock__ticks {
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    pointer-events: none;
+    background:
+        /* Ana dört saat: daha kalın altın çizgiler */
+        conic-gradient(from 0deg at 50% 50%, rgba(215, 195, 145, 0.95) 0deg 1.8deg, transparent 1.8deg 88.2deg, rgba(215, 195, 145, 0.95) 88.2deg 90deg, transparent 90deg 178.2deg, rgba(215, 195, 145, 0.95) 178.2deg 180deg, transparent 180deg 268.2deg, rgba(215, 195, 145, 0.95) 268.2deg 270deg, transparent 270deg 358.2deg, rgba(215, 195, 145, 0.95) 358.2deg 360deg),
+        /* 12 ince çizgi */
+        repeating-conic-gradient(at 50% 50%, transparent 0deg 28deg, rgba(200, 182, 135, 0.8) 28deg 30deg);
+    mask: radial-gradient(circle, transparent 62%, black 76%);
+    -webkit-mask: radial-gradient(circle, transparent 62%, black 76%);
+}
+
+/* Akrep — işlemeli gövde, uçta zengin işleme */
+.login-clock__hand {
+    position: absolute;
+    left: 50%;
+    bottom: 50%;
+    transform-origin: center 100%;
+    transition: transform 0.05s linear;
+    z-index: 1;
+}
+.login-clock__hand--h {
+    width: 4px;
+    height: 20px;
+    margin-left: -2px;
+    border-radius: 2px;
+    background: linear-gradient(90deg, #e8d070 0%, #c9a227 18%, #b8921e 50%, #8b6918 100%);
+    box-shadow:
+        inset 1px 0 0 rgba(255, 248, 220, 0.35),
+        0 1px 4px rgba(0, 0, 0, 0.5);
+}
+.login-clock__hand--m {
+    width: 2.5px;
+    height: 27px;
+    margin-left: -1.25px;
+    border-radius: 1px;
+    background: linear-gradient(90deg, #b8b4a8 0%, #e0dcd2 18%, #f5f2ea 50%, #e0dcd2 82%, #b8b4a8 100%);
+    box-shadow:
+        inset 0 0 0 1px rgba(255, 255, 255, 0.18),
+        0 0 3px rgba(0, 0, 0, 0.35);
+}
+.login-clock__hand--s {
+    display: none;
+    width: 1.5px;
+    height: 32px;
+    margin-left: -0.75px;
+    background: linear-gradient(180deg, #c0392b 0%, #8b2118 100%);
+    border-radius: 0;
+    box-shadow: 0 0 1px rgba(0, 0, 0, 0.3);
+}
+.login-clock__hand--s::after {
+    content: '';
+    position: absolute;
+    bottom: -2px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 35% 35%, #a82a1f, #5c1510);
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4);
+}
+
+.login-clock__city {
+    margin: 0.9rem 0 0.2rem 0;
+    font-size: 0.875rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    color: #ebe9e4;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+.login-clock__exchange {
+    margin: 0;
+    font-size: 0.65rem;
+    letter-spacing: 0.06em;
+    color: rgba(195, 190, 178, 0.9);
+    text-transform: uppercase;
+    font-weight: 600;
+}
+
+/* Kripto fiyat listesi — tek sayfaya sığar, 2 sütun, kompakt */
+.login-crypto {
+    width: 100%;
+    max-width: 420px;
+    margin: 0 auto clamp(0.4rem, 1vw, 1rem);
+    flex: 0 0 auto;
+    display: flex;
+    flex-direction: column;
+}
+.login-crypto__list {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0.4rem;
+}
+
+.login-crypto__item {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.4rem 0.6rem;
+    min-height: 0;
+    background: linear-gradient(135deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0.02) 100%);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 8px;
+    font-size: 0.75rem;
+    transition: background 0.2s, border-color 0.2s, box-shadow 0.2s;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12);
+}
+
+.login-crypto__item:hover {
+    background: linear-gradient(135deg, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0.04) 100%);
+    border-color: rgba(201, 162, 39, 0.2);
+    box-shadow: 0 3px 10px rgba(0, 0, 0, 0.18);
+}
+
+.login-crypto__item img {
+    width: 20px;
+    height: 20px;
+    object-fit: contain;
+    flex-shrink: 0;
+}
+
+.login-crypto__sym {
+    font-weight: 600;
+    color: var(--login-text);
+    min-width: 2.8em;
+}
+
+.login-crypto__price {
+    color: var(--login-text-secondary);
+    margin-left: auto;
+    padding: 0 0.25rem;
+    font-size: 0.7em;
+    font-variant-numeric: tabular-nums;
+    transition: background-color 0.15s, color 0.15s;
+    white-space: nowrap;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.login-crypto__price--blink-up {
+    animation: loginPriceBlinkUp 0.6s ease;
+}
+.login-crypto__price--blink-down {
+    animation: loginPriceBlinkDown 0.6s ease;
+}
+
+@keyframes loginPriceBlinkUp {
+    0% { background-color: transparent; color: var(--login-text-secondary); }
+    30% { background-color: rgba(14, 203, 129, 0.35); color: var(--login-green); }
+    100% { background-color: transparent; color: var(--login-text-secondary); }
+}
+@keyframes loginPriceBlinkDown {
+    0% { background-color: transparent; color: var(--login-text-secondary); }
+    30% { background-color: rgba(246, 70, 93, 0.35); color: var(--login-red); }
+    100% { background-color: transparent; color: var(--login-text-secondary); }
+}
+
+.login-crypto__chg {
+    font-weight: 600;
+    min-width: 3.6em;
+    font-size: 0.95em;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    flex-shrink: 0;
+}
+.login-crypto__chg.up { color: var(--login-green); }
+.login-crypto__chg.down { color: var(--login-red); }
+
+/* Döviz & Altın bölümü */
+.login-forex {
+    width: 100%;
+    max-width: 420px;
+    margin: 0 auto clamp(0.75rem, 1.5vw, 2rem);
+    flex-shrink: 0;
+}
+
+.login-forex__grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0.75rem;
+}
+
+.login-forex__item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 1rem 0.75rem;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--login-border);
+    border-radius: 12px;
+    transition: background 0.2s, border-color 0.2s;
+}
+
+.login-forex__item:hover {
+    background: rgba(255, 255, 255, 0.05);
+    border-color: rgba(201, 162, 39, 0.15);
+}
+
+.login-forex__label {
+    font-size: 0.6875rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    color: var(--login-text-muted);
+    text-transform: uppercase;
+}
+
+.login-forex__value {
+    font-size: 1rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    color: var(--login-accent);
+}
+
+/* Web (masaüstü): kripto ve döviz listeleri büyük */
+@media (min-width: 769px) {
+    .login-crypto {
+        max-width: 680px;
+        margin: 0 auto clamp(0.6rem, 1.5vw, 1.25rem);
+    }
+    .login-crypto__list {
+        gap: 0.7rem;
+    }
+    .login-crypto__item {
+        padding: 0.75rem 1rem;
+        font-size: 0.9375rem;
+    }
+    .login-crypto__item img {
+        width: 32px;
+        height: 32px;
+    }
+    .login-crypto__sym {
+        min-width: 3em;
+    }
+    .login-crypto__price {
+        font-size: 0.95em;
+    }
+    .login-crypto__chg {
+        font-size: 1.05em;
+        min-width: 4.2em;
+    }
+
+    .login-forex {
+        max-width: 680px;
+        margin: 0 auto clamp(1rem, 2vw, 2rem);
+    }
+    .login-forex__grid {
+        gap: 1.25rem;
+    }
+    .login-forex__item {
+        padding: 1.5rem 1.25rem;
+    }
+    .login-forex__label {
+        font-size: 0.8125rem;
+    }
+    .login-forex__value {
+        font-size: 1.25rem;
+    }
+}
+
+.login-landing-footer {
+    margin-top: auto;
+    padding-top: clamp(0.75rem, 2vw, 1.5rem);
+    flex-shrink: 0;
+}
+
+/* Giriş/Kayıt modalı */
+.login-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 200;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+    padding-right: max(1rem, env(safe-area-inset-right));
+    box-sizing: border-box;
+}
+.login-modal.show {
+    display: flex;
+}
+.login-modal[aria-hidden="false"] {
+    display: flex;
+}
+.login-modal__backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(4px);
+}
+
+.login-modal__content {
+    position: relative;
+    width: 100%;
+    max-width: 440px;
+    max-height: 90vh;
+    overflow-y: auto;
+    contain: layout style paint;
+    margin: auto;
+    align-self: center;
+}
+
+.login-modal__close {
+    position: absolute;
+    top: -2.5rem;
+    right: 0;
+    width: 36px;
+    height: 36px;
+    font-size: 1.5rem;
+    line-height: 1;
+    color: var(--login-text-secondary);
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    border-radius: 8px;
+    transition: color 0.2s, background 0.2s;
+}
+.login-modal__close:hover {
+    color: var(--login-text);
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.login-modal .login-card {
+    animation: none;
+}
+
+/* Kart — Giriş/Kayıt geçişinde yükseklik animasyonu; kayıt sekmesinde içerik kaydırılabilir */
+.login-card {
+    width: 100%;
+    max-width: 440px;
+    max-height: 480px;
+    background: var(--login-card-bg);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid var(--login-border);
+    border-radius: var(--login-radius);
+    padding: 1.75rem 1.5rem;
+    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.35);
+    animation: loginCardIn 0.6s var(--login-ease) forwards;
+    overflow: hidden;
+    transition: max-height 0.4s var(--login-ease);
+    display: flex;
+    flex-direction: column;
+}
+.login-card.login-card--register {
+    max-height: min(640px, 85vh);
+}
+.login-card.login-card--info-only {
+    max-height: 520px;
+}
+/* Sekme içeriği: kayıt formu ve üyelik onaylarına kaydırmak için */
+.login-card .login-card-title,
+.login-card .login-message,
+.login-card .login-tabs {
+    flex-shrink: 0;
+}
+.login-card .login-tab-content.active {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+}
+.login-card .login-tab-content.active .login-form {
+    padding-bottom: 0.25rem;
+}
+
+@keyframes loginCardIn {
+    from {
+        opacity: 0;
+        transform: translateY(24px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.login-card-title {
+    font-size: 0.95rem;
+    color: var(--login-text-secondary);
+    margin: 0 0 1.25rem 0;
+    text-align: center;
+}
+
+/* Bilgi sekmeleri: sadece içerik + çarpı (başlık ve sekme çubuğu gizli) */
+.login-card--info-only .login-card-title,
+.login-card--info-only .login-tabs,
+.login-card--info-only .login-message {
+    display: none !important;
+}
+
+/* Kart üstü: sekmeler + Giriş Yap butonu + bayrak */
+.login-card-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    margin-bottom: 1.25rem;
+}
+
+.login-cta-wrap {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-shrink: 0;
+}
+
+.login-cta-btn {
+    padding: 0.5rem 1rem;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    font-family: var(--login-font);
+    color: #0a0a0c;
+    background: var(--login-accent);
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: transform 0.2s var(--login-ease), box-shadow 0.2s;
+    -webkit-tap-highlight-color: transparent;
+    white-space: nowrap;
+}
+
+.login-cta-btn:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 6px 20px rgba(201, 162, 39, 0.35);
+}
+
+/* Türk bayrağı — butonlarla aynı yükseklik, en sağda */
+.login-flag {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 0;
+    min-width: 48px;
+    min-height: 36px;
+    padding: 0.5rem 0.6rem;
+    border-radius: 8px;
+    transition: background 0.2s;
+}
+.login-flag:hover {
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.login-flag__img {
+    display: block;
+    width: 48px;
+    height: 32px;
+    object-fit: contain;
+}
+
+/* Sekmeler */
+.login-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    flex: 1;
+    min-width: 0;
+    background: rgba(255, 255, 255, 0.04);
+    padding: 0.35rem;
+    border-radius: 12px;
+}
+
+.login-tab {
+    flex: 1;
+    min-width: 0;
+    padding: 0.6rem 0.5rem;
+    font-size: 0.8rem;
+    font-weight: 500;
+    font-family: var(--login-font);
+    color: var(--login-text-secondary);
+    background: transparent;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: color 0.25s, background 0.25s var(--login-ease);
+    -webkit-tap-highlight-color: transparent;
+}
+
+.login-tab:hover {
+    color: var(--login-text);
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.login-tab.active {
+    color: #0a0a0c;
+    background: var(--login-accent);
+}
+
+.login-tab-content {
+    display: none;
+}
+
+.login-tab-content.active {
+    display: block;
+    animation: loginFadeIn 0.35s ease;
+}
+
+@keyframes loginFadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+/* Form */
+.login-form .form-group {
+    margin-bottom: 1.25rem;
+}
+
+.login-form label {
+    display: block;
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: var(--login-text);
+    margin-bottom: 0.4rem;
+}
+
+.login-form .form-input {
+    width: 100%;
+    padding: 0.75rem 1rem;
+    font-size: 0.9375rem;
+    font-family: var(--login-font);
+    color: var(--login-text);
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--login-border);
+    border-radius: 10px;
+    box-sizing: border-box;
+    transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.login-form .form-input::placeholder {
+    color: var(--login-text-muted);
+}
+
+.login-form .form-input:focus {
+    outline: none;
+    border-color: var(--login-accent);
+    box-shadow: 0 0 0 3px rgba(201, 162, 39, 0.15);
+}
+
+/* Şifre alanı sarmalayıcı ve göster/gizle butonu — yayında tutarlı görünsün diye genişlik ve piksel değerler */
+#loginForm .password-input-wrap,
+#registerForm .password-input-wrap,
+.login-form .password-input-wrap {
+    position: relative;
+    display: block;
+    width: 100%;
+}
+#loginForm .password-input-wrap .form-input,
+#registerForm .password-input-wrap .form-input,
+.login-form .password-input-wrap .form-input {
+    padding-right: 3.25rem;
+    width: 100%;
+    box-sizing: border-box;
+}
+#loginForm .password-toggle-btn,
+#registerForm .password-toggle-btn,
+.login-form .password-toggle-btn {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    left: auto;
+    width: 44px;
+    min-width: 44px;
+    height: 100%;
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0;
+    padding: 0;
+    font-family: var(--login-font);
+    color: var(--login-text-muted);
+    background: transparent;
+    border: none;
+    border-radius: 0 10px 10px 0;
+    cursor: pointer;
+    transition: color 0.2s, background 0.2s;
+    -webkit-tap-highlight-color: transparent;
+}
+#loginForm .password-toggle-btn:hover,
+#registerForm .password-toggle-btn:hover,
+.login-form .password-toggle-btn:hover {
+    color: var(--login-accent);
+    background: rgba(201, 162, 39, 0.12);
+}
+#loginForm .password-toggle-btn:focus,
+#registerForm .password-toggle-btn:focus,
+.login-form .password-toggle-btn:focus {
+    outline: none;
+    color: var(--login-accent);
+}
+#loginForm .password-toggle-icon,
+#registerForm .password-toggle-icon,
+.login-form .password-toggle-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+#loginForm .password-toggle-icon svg,
+#registerForm .password-toggle-icon svg,
+.login-form .password-toggle-icon svg {
+    flex-shrink: 0;
+    width: 20px;
+    height: 20px;
+}
+
+.login-form .form-hint {
+    font-size: 0.75rem;
+    color: var(--login-text-muted);
+    margin-top: 0.25rem;
+    margin-bottom: 0.5rem;
+}
+
+.login-btn {
+    width: 100%;
+    padding: 0.85rem 1rem;
+    font-size: 0.9375rem;
+    font-weight: 600;
+    font-family: var(--login-font);
+    border: none;
+    border-radius: 10px;
+    cursor: pointer;
+    transition: transform 0.2s var(--login-ease), box-shadow 0.2s;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.login-btn-primary {
+    background: var(--login-accent);
+    color: #0a0a0c;
+}
+
+.login-btn-primary:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 8px 24px rgba(201, 162, 39, 0.3);
+}
+
+.login-btn-secondary {
+    background: transparent;
+    color: var(--login-text-secondary);
+    border: 1px solid var(--login-border);
+    margin-top: 0.5rem;
+}
+
+.login-btn-secondary:hover {
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--login-text);
+}
+
+.login-form-footer {
+    text-align: center;
+    margin-top: 1rem;
+}
+
+.login-form-footer a {
+    color: var(--login-accent);
+    font-size: 0.875rem;
+    text-decoration: none;
+}
+
+.login-form-footer a:hover {
+    text-decoration: underline;
+}
+
+/* Hata / bilgi kutusu */
+.login-message {
+    padding: 0.75rem 1rem;
+    border-radius: 10px;
+    font-size: 0.875rem;
+    margin-bottom: 1rem;
+    display: none;
+}
+
+.login-message.show {
+    display: block;
+    animation: loginFadeIn 0.3s ease;
+}
+.login-message.error.show {
+    animation: loginShake 0.4s ease;
+}
+
+.login-message.error {
+    background: rgba(246, 70, 93, 0.12);
+    border: 1px solid rgba(246, 70, 93, 0.3);
+    color: var(--login-red);
+}
+
+.login-message.success {
+    background: rgba(14, 203, 129, 0.15);
+    border: 1px solid rgba(14, 203, 129, 0.35);
+    color: var(--login-green);
+}
+
+.login-message.info {
+    background: rgba(59, 130, 246, 0.12);
+    border: 1px solid rgba(59, 130, 246, 0.35);
+    color: #60a5fa;
+}
+
+@keyframes loginShake {
+    0%, 100% { transform: translateX(0); }
+    25% { transform: translateX(-8px); }
+    75% { transform: translateX(8px); }
+}
+
+/* Bilgi sekmeleri: Biz Kimiz, Vizyon, Hakkımızda */
+.login-info-block {
+    padding: 0.5rem 0;
+}
+
+.login-info-block h3 {
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--login-accent);
+    margin: 0 0 0.75rem 0;
+}
+
+.login-info-block p {
+    font-size: 0.9rem;
+    line-height: 1.65;
+    color: var(--login-text-secondary);
+    margin: 0 0 0.75rem 0;
+}
+
+.login-info-block p:last-child {
+    margin-bottom: 0;
+}
+
+.login-info-block ul {
+    margin: 0.5rem 0 0.75rem 1.25rem;
+    padding: 0;
+    font-size: 0.9rem;
+    line-height: 1.65;
+    color: var(--login-text-secondary);
+}
+.login-info-block ul li {
+    margin-bottom: 0.35rem;
+}
+
+.login-info-block h4 {
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--login-text);
+    margin: 1rem 0 0.4rem 0;
+}
+.login-info-block h4:first-of-type {
+    margin-top: 0.5rem;
+}
+
+.login-register-consents {
+    margin: 1rem 0;
+    padding: 0.75rem 0;
+    border-top: 1px solid var(--login-border);
+}
+.login-consent-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    margin-bottom: 0.6rem;
+    font-size: 0.85rem;
+    line-height: 1.5;
+    color: var(--login-text-secondary);
+    cursor: pointer;
+}
+.login-consent-row input[type="checkbox"],
+.login-consent-checkbox {
+    margin-top: 0.25rem;
+    flex-shrink: 0;
+    cursor: pointer;
+}
+.login-consent-link {
+    color: var(--login-accent);
+    text-decoration: underline;
+}
+.login-consent-link:hover {
+    color: var(--login-accent);
+    opacity: 0.9;
+}
+
+.login-tab-content:not(.active) {
+    display: none !important;
+}
+.login-tab-content.active.login-legal-doc {
+    display: flex;
+    flex-direction: column;
+}
+.login-tab-content.active.login-legal-doc .login-info-block {
+    flex: 1;
+    min-height: 0;
+    max-height: none;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+}
+.login-tab-content.active.login-legal-doc .login-legal-doc-footer {
+    flex-shrink: 0;
+    margin-top: 1rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--login-border);
+    display: flex;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+}
+.login-legal-doc-footer .login-btn-secondary {
+    flex: 1;
+    min-width: 100px;
+    margin-top: 0;
+}
+.login-legal-doc-footer .login-btn-primary {
+    flex: 1;
+    min-width: 140px;
+}
+
+.login-register-section {
+    margin-top: 1.5rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid var(--login-border);
+}
+
+.login-register-section h3 {
+    font-size: 0.95rem;
+    color: var(--login-text);
+    margin: 0 0 1rem 0;
+    text-align: center;
+}
+
+/* Footer */
+.login-footer {
+    max-width: 440px;
+    width: 100%;
+    text-align: center;
+    padding: 1.5rem 0.5rem 0;
+    font-size: 0.75rem;
+    line-height: 1.6;
+    color: var(--login-text-muted);
+}
+
+.login-footer strong {
+    color: var(--login-accent);
+    font-weight: 600;
+}
+
+.login-footer p {
+    margin: 0 0 0.5rem 0;
+}
+
+.login-footer p:last-child {
+    margin-bottom: 0;
+}
+
+/* Lockdown */
+#lockdown-screen {
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    background: var(--login-bg);
+    font-family: var(--login-font);
+    color: var(--login-text);
+}
+
+#lockdown-screen.show {
+    display: flex;
+}
+
+#lockdown-screen .lockdown-card {
+    text-align: center;
+    max-width: 420px;
+    padding: 2.5rem;
+    margin: 2rem;
+    background: var(--login-card-bg);
+    backdrop-filter: blur(20px);
+    border-radius: var(--login-radius);
+    border: 1px solid var(--login-border);
+}
+
+#lockdown-screen .lockdown-icon {
+    font-size: 3rem;
+    color: var(--login-accent);
+    margin-bottom: 1rem;
+}
+
+#lockdown-screen .lockdown-title {
+    margin: 0 0 0.5rem 0;
+    font-size: 1.35rem;
+    font-weight: 700;
+}
+
+#lockdown-screen .lockdown-subtitle {
+    margin: 0;
+    font-size: 0.95rem;
+    color: var(--login-text-secondary);
+}
+
+/* Device approval popup */
+#device-approval-popup {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 9000;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0,0,0,0.6);
+}
+
+#device-approval-popup.show {
+    display: flex;
+}
+
+#device-approval-popup .popup-card {
+    max-width: 420px;
+    padding: 1.5rem;
+    margin: 1rem;
+    background: var(--login-card-bg);
+    border-radius: var(--login-radius);
+    border: 1px solid var(--login-border);
+    color: var(--login-text);
+}
+
+#device-approval-popup .popup-title { font-size: 1.1rem; margin: 0 0 0.75rem 0; }
+#device-approval-popup .popup-body { font-size: 0.95rem; color: var(--login-text-secondary); margin-bottom: 1rem; }
+
+/* Mobil — topbar: Sekmeler (ikon) + Giriş Yap solda, bayrak en sağda; hepsi aynı yükseklik */
+@media (min-width: 769px) {
+    .login-landing {
+        padding-top: max(4.5rem, 6vw);
+    }
+    .login-clocks {
+        max-width: 920px;
+        gap: 1.75rem;
+    }
+    .login-clock__face {
+        width: 120px;
+        height: 120px;
+    }
+    .login-clock__face::after {
+        width: 8px;
+        height: 8px;
+    }
+    .login-clock__ampm {
+        font-size: 0.78rem;
+        bottom: 12px;
+    }
+    .login-clock__hand--h { width: 5px; height: 25px; margin-left: -2.5px; }
+    .login-clock__hand--m { width: 3px; height: 34px; margin-left: -1.5px; }
+    .login-clock__city { font-size: 0.95rem; margin-top: 1rem; }
+    .login-clock__exchange { font-size: 0.7rem; }
+}
+
+@media (max-width: 768px) {
+    .login-ticker {
+        height: 38px;
+        backdrop-filter: none !important;
+        -webkit-backdrop-filter: none !important;
+        background: rgba(2, 2, 3, 0.95);
+    }
+    .login-ticker__track { animation-duration: 55s; }
+    .login-ticker__item { font-size: 0.8125rem; padding: 0 18px; }
+    .login-topbar {
+        top: 38px;
+        padding: 0.5rem 0.75rem;
+        padding-top: max(0.5rem, env(safe-area-inset-top));
+        padding-left: max(0.75rem, env(safe-area-inset-left));
+        padding-right: max(0.75rem, env(safe-area-inset-right));
+        gap: 0.5rem;
+        align-items: center;
+        min-height: 48px;
+    }
+    .login-topbar .login-menu-wrap { order: 1; }
+    .login-topbar .login-cta-btn { order: 2; }
+    .login-topbar .login-flag { order: 3; }
+    .login-topbar .login-menu-btn__label {
+        display: none;
+    }
+    .login-topbar .login-menu-btn {
+        min-height: 38px;
+        min-width: 38px;
+        padding: 0.45rem;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 10px;
+    }
+    .login-topbar .login-menu-btn .login-menu-btn__chevron {
+        margin-left: 0;
+    }
+    .login-topbar .login-cta-btn {
+        min-height: 38px;
+        padding: 0.45rem 0.85rem;
+        font-size: 0.8125rem;
+        font-weight: 600;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 10px;
+    }
+    .login-topbar .login-flag {
+        margin-left: auto;
+        min-width: 83px;
+        min-height: 38px;
+        padding: 0.45rem 0.85rem;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 10px;
+    }
+    .login-topbar .login-flag__img {
+        width: 52px;
+        height: 35px;
+    }
+
+    /* Sekmeler dropdown — mobilde sayfa içinde açılsın (sol kenara yasla, taşmasın) */
+    .login-menu-dropdown {
+        right: auto;
+        left: 0;
+        min-width: 200px;
+        max-width: calc(100vw - 2rem);
+    }
+
+    .login-landing {
+        padding: 0.75rem 1rem;
+        padding-top: max(5.5rem, 12vw);
+    }
+
+    .login-landing-brand {
+        margin-bottom: 1rem;
+    }
+
+    .login-landing-brand .login-brand {
+        font-size: 1.5rem;
+    }
+
+    .login-clocks {
+        grid-template-columns: repeat(3, 1fr);
+        gap: 0.85rem;
+        margin-bottom: 0.85rem;
+    }
+
+    .login-clock__face {
+        width: 96px;
+        height: 96px;
+    }
+    .login-clock__hand--h { height: 20px; margin-top: -20px; }
+    .login-clock__hand--m { height: 27px; margin-top: -27px; }
+    .login-clock__hand--s { height: 32px; margin-top: -32px; }
+    .login-clock__city {
+        font-size: 0.875rem;
+        margin-top: 0.5rem;
+    }
+    .login-clock__exchange {
+        font-size: 0.7rem;
+    }
+
+    .login-section-title {
+        font-size: 0.8125rem;
+        margin-bottom: 0.5rem;
+    }
+
+    .login-crypto {
+        width: 100%;
+        max-width: none;
+        margin: 0 0 0.5rem 0;
+        padding: 0;
+    }
+    .login-crypto__list {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 0.35rem;
+    }
+    .login-crypto__item {
+        padding: 0.4rem 0.5rem;
+        font-size: 0.8125rem;
+        gap: 0.4rem;
+        min-width: 0;
+    }
+    .login-crypto__item img {
+        width: 20px;
+        height: 20px;
+        flex-shrink: 0;
+    }
+    .login-crypto__sym {
+        min-width: 2.2em;
+        flex-shrink: 0;
+    }
+    .login-crypto__price {
+        font-size: 0.8em;
+        padding: 0 0.15rem;
+        min-width: 0;
+        flex: 1 1 auto;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .login-crypto__chg {
+        font-size: 0.9em;
+        min-width: 3em;
+        flex-shrink: 0;
+    }
+
+    .login-forex {
+        width: 100%;
+        max-width: none;
+        margin: 0 0 0.5rem 0;
+    }
+    .login-forex__grid {
+        gap: 0.5rem;
+    }
+    .login-forex__item {
+        padding: 0.45rem 0.4rem;
+    }
+    .login-forex__value {
+        font-size: 0.8125rem;
+    }
+    .login-forex__label {
+        font-size: 0.5625rem;
+    }
+
+    .login-landing-footer {
+        padding-top: 0.5rem;
+    }
+    .login-landing-footer p {
+        font-size: 0.6875rem;
+    }
+
+    /* Modal ortada */
+    .login-modal {
+        align-items: center;
+        justify-content: center;
+        padding: 0.75rem;
+    }
+    .login-modal__content {
+        margin: auto;
+        max-height: 85vh;
+    }
+
+    .login-card-toolbar {
+        gap: 0.5rem;
+    }
+
+    .login-tabs {
+        overflow-x: auto;
+        flex-wrap: nowrap;
+        -webkit-overflow-scrolling: touch;
+        padding: 0.3rem;
+        order: 1;
+        width: 100%;
+    }
+
+    .login-cta-wrap {
+        order: 2;
+        width: 100%;
+        justify-content: flex-end;
+    }
+
+    .login-tab {
+        flex: 1;
+        min-width: 0;
+        white-space: nowrap;
+        font-size: 0.75rem;
+        padding: 0.55rem 0.6rem;
+        text-align: center;
+    }
+
+    .login-card {
+        padding: 1.25rem 1rem;
+    }
+}

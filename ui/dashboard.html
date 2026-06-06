@@ -1,0 +1,1796 @@
+<!--
+FILE: dashboard.html
+VERSION: vBOTFIX8
+DATE: 2026-01-22
+CHANGE: Update script version for bot list fix v8 (full debugging)
+-->
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta name="robots" content="noindex, follow">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <script>window.__APP_PAGE__ = 'dashboard';</script>
+    <script>
+    (function(){
+      var r = document.documentElement;
+      r.style.visibility = 'hidden';
+      try {
+        // Önce sessionStorage (aynı sekme), yoksa localStorage (grafik sekmesinden geri gelince)
+        var tok = sessionStorage.getItem('token') || localStorage.getItem('token');
+        var usr = sessionStorage.getItem('user') || localStorage.getItem('user');
+        if (!tok || !usr) {
+          // Cookie ile oturum var mı kontrol et (örn. "Dashboard'a dön" tıklanınca storage bazen boş kalabiliyor)
+          var origin = window.location.origin || '';
+          fetch(origin + '/api/auth/whoami', { credentials: 'include', method: 'GET' })
+            .then(function(res) {
+              if (res.ok) {
+                return res.json().then(function(data) {
+                  var user = { id: data.user_id, username: data.username || '', account_id: data.account_id };
+                  try { sessionStorage.setItem('user', JSON.stringify(user)); } catch (_) {}
+                  r.style.visibility = 'visible';
+                });
+              }
+              try { localStorage.removeItem('last_route'); } catch (_) {}
+              location.replace('/ui/login.html');
+            })
+            .catch(function() {
+              try { localStorage.removeItem('last_route'); } catch (_) {}
+              location.replace('/ui/login.html');
+            });
+          return;
+        }
+        if (!sessionStorage.getItem('token')) {
+          sessionStorage.setItem('token', tok);
+          sessionStorage.setItem('user', usr);
+        }
+        r.style.visibility = 'visible';
+      } catch (e) {
+        location.replace('/ui/login.html');
+        return;
+      }
+      // İleri tuşu ile bfcache'den gelindiğinde tekrar şifre iste: login'e yönlendir
+      window.addEventListener('pageshow', function(e) {
+        if (e.persisted) {
+          location.replace('/ui/login.html');
+        }
+      });
+    })();
+    </script>
+    <title>Dashboard - TraderTrailing</title>
+    <link rel="stylesheet" href="/ui/assets/ticker.css?v=mobile1">
+    <link rel="stylesheet" href="/ui/assets/theme.css?v=clean1">
+    <link rel="stylesheet" href="/ui/assets/ui.css?v=clean1">
+    <link rel="stylesheet" href="/ui/assets/design.css?v=clean1">
+    <link rel="stylesheet" href="/ui/assets/dashboard.css?v=mobile1">
+    <link rel="stylesheet" href="/ui/assets/binance-colors.css?v=bin1">
+    <link rel="stylesheet" href="/ui/assets/blink.css?v=1">
+    <link rel="stylesheet" href="/ui/assets/dashboard-login-theme.css?v=1">
+    <style id="chat-animations">
+        /* Sohbet: Admin yazıyor + mesaj giriş animasyonu */
+        #chatMessages .chat-typing-bubble {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.5rem 0.85rem;
+            background: var(--ds-bg-tertiary);
+            color: var(--ds-text-secondary);
+            border-radius: 12px 12px 12px 4px;
+            align-self: flex-start;
+            max-width: 85%;
+            opacity: 0;
+            transform: translateY(4px) scale(0.98);
+            animation: chatTypingIn 0.35s ease-out forwards;
+            will-change: transform, opacity;
+        }
+        @keyframes chatTypingIn {
+            to { opacity: 1; transform: translateY(0) scale(1); }
+        }
+        #chatMessages .chat-typing-dots {
+            display: inline-flex;
+            gap: 2px;
+            align-items: center;
+        }
+        #chatMessages .chat-typing-dots span {
+            width: 4px;
+            height: 4px;
+            border-radius: 50%;
+            background: currentColor;
+            animation: chatDotBlink 1.2s ease-in-out infinite;
+        }
+        #chatMessages .chat-typing-dots span:nth-child(1) { animation-delay: 0s; }
+        #chatMessages .chat-typing-dots span:nth-child(2) { animation-delay: 0.15s; }
+        #chatMessages .chat-typing-dots span:nth-child(3) { animation-delay: 0.3s; }
+        @keyframes chatDotBlink {
+            0%, 60%, 100% { opacity: 0.35; transform: scale(0.9); }
+            30% { opacity: 1; transform: scale(1); }
+        }
+        #chatMessages .chat-bubble-in {
+            opacity: 0;
+            transform: translateY(6px) scale(0.97);
+            animation: chatBubbleIn 0.4s ease-out forwards;
+            will-change: transform, opacity;
+        }
+        @keyframes chatBubbleIn {
+            to { opacity: 1; transform: translateY(0) scale(1); }
+        }
+    </style>
+</head>
+<body class="binance-theme page-dashboard">
+    <div id="topTicker" class="top-ticker"></div>
+    
+    <!-- Appbar: sayfa genişliği (container) ile hizalı; sol = isim, orta = çıkış, sağ = WS + logo -->
+    <div class="dashboard-appbar">
+        <div class="dashboard-appbar-inner">
+            <div class="dashboard-appbar-left">
+                <div class="appbar-user-block">
+                    <span id="appbarUserName" class="appbar-user-name">—</span>
+                    <span id="appbarAccountId" class="appbar-account-id" style="display: block; font-size: 0.75rem; color: var(--ds-text-tertiary, rgba(255,255,255,0.5)); margin-top: 2px;">ID: —</span>
+                </div>
+                <button type="button" id="btnLogout" class="btn-logout btn-logout-mobile" title="Hesaptan çıkış" aria-label="Çıkış" onclick="window.handleSecureLogout && window.handleSecureLogout()">
+                    <span class="btn-logout-icon" aria-hidden="true">⏻</span>
+                </button>
+                <a id="adminLink" class="btn-admin-back" href="/ui/admin.html" style="display: none;" title="Admin paneline dön">← Admin'e dön</a>
+            </div>
+            <div class="dashboard-appbar-right appbar-company" style="display: flex; align-items: center; gap: 0.5rem;">
+                <span id="datahubWsIndicator" class="datahub-ws-indicator" title="Piyasa verisi WebSocket durumu" aria-label="WS durumu">
+                    <span class="datahub-ws-dot"></span><span class="datahub-ws-label">WS</span>
+                </span>
+                <span class="tt-logo-text">TraderTrailing</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Error Banner -->
+    <div id="errorBanner" class="error-banner" style="display: none;">
+        <span id="errorMessage"></span>
+        <button class="icon-btn" onclick="document.getElementById('errorBanner').style.display='none'">✕</button>
+    </div>
+
+
+    <!-- Main Container (hidden until tab restored to avoid Anasayfa blink) -->
+    <div id="dashboardMainContainer" class="container" style="padding: 2rem; visibility: hidden;">
+        <!-- Tabs (git commit 46e3874 görünümü) -->
+        <div class="dm-tabs" style="display: flex; align-items: center; flex-wrap: wrap;">
+            <button class="dm-tab is-active" id="btnBinanceTab" data-tab="binance">Anasayfa</button>
+            <button class="dm-tab" id="btnTradeTab" data-tab="trade">Trade</button>
+            <button class="dm-tab" id="btnBotsTab" data-tab="bots">Botlar</button>
+            <button class="dm-tab" id="btnFinanceTab" data-tab="finance">Portföy</button>
+            <button class="dm-tab" id="btnContactTab" data-tab="contact">İletişim <span id="contactTabBadge" class="badge" style="display: none; margin-left: 0.35rem;">0</span></button>
+            <button class="dm-tab" id="btnSettingsTab" data-tab="settings">Ayarlar</button>
+        </div>
+
+        <!-- API bağlantı uyarısı: tüm sekmelerde; API key girilmemişse nazikçe gösterilir, bağlanınca kalkar -->
+        <div id="binanceConnectionNotice" class="panel binance-connection-notice" style="max-width: 560px; margin: 0 auto 1.5rem auto; display: none;">
+            <div class="binance-connection-notice__icon" aria-hidden="true"></div>
+            <h3 class="binance-connection-notice__title">Binance API bağlantısı</h3>
+            <p class="binance-connection-notice__text">Cüzdan ve işlem verilerini görebilmek için <strong>Ayarlar</strong> sekmesinden Binance API Key ve Secret kodlarınızı girebilirsiniz. Bağlantı kurulduğunda bu uyarı otomatik olarak kalkar.</p>
+        </div>
+
+        <!-- Ortak KPI şeridi: tek satırda 2 bölüm – [Cüzdan + Cüzdan PnL] | [Botlar Bakiye + Botlar PnL] -->
+        <div id="unifiedKpiStrip" class="kpi-strip kpi-strip-unified kpi-strip-row" style="margin-bottom: 2rem; display: none;">
+            <div class="kpi-block kpi-block-cuzdan">
+                <div class="kpi-block-row kpi-block-row-with-status">
+                    <div class="kpi-label-small">TOPLAM SPOT BAKİYESİ</div>
+                    <div id="kpiCuzdan" class="kpi-value-small value-blink">$0.00</div>
+                    <div id="kpiCuzdanLive" class="kpi-value-sub kpi-spot-status">—</div>
+                </div>
+                <div class="kpi-block-divider"></div>
+                <div class="kpi-block-row">
+                    <div id="kpiCuzdanPnlLabel" class="kpi-label-small">Günlük Değişim</div>
+                    <div id="kpiCuzdanPnl" class="kpi-value-small value-blink">$0.00</div>
+                    <div id="kpiCuzdanPnlPct" class="kpi-value-sub">0.00%</div>
+                </div>
+            </div>
+            <div class="kpi-block kpi-block-botlar">
+                <div class="kpi-block-row">
+                    <div class="kpi-label-small">BOTLAR BAKİYE</div>
+                    <div id="kpiBotBakiye" class="kpi-value-small value-blink">$0.00</div>
+                    <div id="kpiBotBakiyePct" class="kpi-value-sub">—</div>
+                </div>
+                <div class="kpi-block-divider"></div>
+                <div class="kpi-block-row">
+                    <div id="kpiBotPnlLabel" class="kpi-label-small">Günlük PnL</div>
+                    <div id="kpiBotPnl" class="kpi-value-small value-blink">$0.00</div>
+                    <div id="kpiBotPnlPct" class="kpi-value-sub">0.00%</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tab Content: Anasayfa (Binance - cüzdan, varlıklar, coin listesi) -->
+        <div id="tabBinance" class="dm-tab-content is-active">
+            <!-- Tek uzun bölme: Kullanılabilir (bot hariç) / Bot kilitli / Kilitli (emir vb.) -->
+            <div class="panel binance-assets-strip" style="margin-top: 2rem; width: 100%; max-width: 100%;">
+                <div class="binance-assets-strip-grid">
+                    <div class="binance-assets-strip-item">
+                        <div class="binance-assets-strip-label">Kullanılabilir varlıklar</div>
+                        <div id="binanceAvailableAssets" class="binance-assets-strip-value value-blink" title="Serbest bakiyeden botlara ayrılan çıkarıldı; manuel işlem için kullanılabilir">$0.00</div>
+                    </div>
+                    <div class="binance-assets-strip-item">
+                        <div class="binance-assets-strip-label">Bot kilitli</div>
+                        <div id="binanceBotLockedAssets" class="binance-assets-strip-value value-blink" title="Bot bakiyelerinde kilitli (manuel işlemde kullanılamaz)">$0.00</div>
+                    </div>
+                    <div class="binance-assets-strip-item">
+                        <div class="binance-assets-strip-label">Kilitli varlıklar</div>
+                        <div id="binanceLockedAssets" class="binance-assets-strip-value value-blink" title="Açık emirlerde kilitli">$0.00</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Cüzdan varlıkları tablosu (1 USD üstü, Al/Sat ortak modal) -->
+            <div class="panel binance-varliklar-panel">
+                <h3 class="binance-varliklar-panel__title">Cüzdan Varlıkları
+                    <span id="flashHomeUpdatingBadge" style="display:none; margin-left:0.5rem; font-size:0.75rem; color:var(--ds-text-tertiary); font-weight:normal;">Güncelleniyor…</span>
+                </h3>
+                <div id="flashHomeWalletContent"><div class="varliklar-table-wrap">
+                <table class="varliklar-table">
+                    <thead>
+                        <tr style="border-bottom: 1px solid var(--ds-border); text-align: left;">
+                            <th style="padding: 0.75rem; font-size: 0.8rem; font-weight: 600; color: var(--ds-text-secondary); width: 48px;">Logo</th>
+                            <th style="padding: 0.75rem; font-size: 0.8rem; font-weight: 600; color: var(--ds-text-secondary);">Sembol</th>
+                            <th style="padding: 0.75rem; font-size: 0.8rem; font-weight: 600; color: var(--ds-text-secondary); text-align: right;">Fiyat</th>
+                            <th style="padding: 0.75rem; font-size: 0.8rem; font-weight: 600; color: var(--ds-text-secondary); text-align: right;" title="Toplam miktar">Toplam</th>
+                            <th style="padding: 0.75rem; font-size: 0.8rem; font-weight: 600; color: var(--ds-text-secondary); text-align: right;" title="Bot bakiyelerinde kilitli">Bot kilitli</th>
+                            <th style="padding: 0.75rem; font-size: 0.8rem; font-weight: 600; color: var(--ds-text-secondary); text-align: right;" title="Açık emirlerde kilitli">Kilitli</th>
+                            <th style="padding: 0.75rem; font-size: 0.8rem; font-weight: 600; color: var(--ds-text-secondary); text-align: right;" title="Manuel işlem için kullanılabilir">Kullanılabilir</th>
+                            <th style="padding: 0.75rem; font-size: 0.8rem; font-weight: 600; color: var(--ds-text-secondary); text-align: right;">Değer</th>
+                            <th style="padding: 0.75rem; font-size: 0.8rem; font-weight: 600; color: var(--ds-text-secondary); text-align: right;" title="Portföyümüze dağılım yüzdesi">Dağılım %</th>
+                            <th style="padding: 0.75rem; font-size: 0.8rem; font-weight: 600; color: var(--ds-text-secondary); text-align: center;">Alış / Satış</th>
+                        </tr>
+                    </thead>
+                    <tbody id="varliklarTableBody">
+                        <tr><td colspan="10" style="padding: 2rem; text-align: center; color: var(--ds-text-secondary);">Yükleniyor...</td></tr>
+                    </tbody>
+                </table>
+                </div>
+                <div id="varliklarEmpty" class="varliklar-empty">Varlık bulunamadı veya 1 USDT altı varlıklar gizlidir.</div>
+                <div id="varliklarUnpricedNotice" class="varliklar-unpriced-notice"></div>
+                </div></div>
+            </div>
+
+            <!-- Mevcut Botlar (Anasayfa altında – Botlar sekmesiyle aynı veri) -->
+            <div class="panel mevcut-botlar-panel" style="margin-bottom: 2rem; margin-top: 2rem; width: 100%; max-width: 100%;">
+                <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1rem;">
+                    <div style="display: flex; align-items: center; gap: 0.75rem;">
+                        <h3 style="margin: 0; font-size: 1.2rem; font-weight: 600; color: var(--ds-text-primary);">Mevcut Botlar</h3>
+                        <button type="button" class="btn primary" id="btnCreateBotBotsTab" onclick="window.openCreateBotModal()" style="padding: 8px 16px; font-weight: 600; background: var(--ds-accent); color: #000;">+ Bot Oluştur</button>
+                    </div>
+                    <button type="button" id="btnSortBotsBy" class="btn btn-sm profit-sort-btn" title="Kâra göre sırala: oran (%) veya tutar ($)" aria-label="Kâra göre sırala">
+                        <span id="btnSortBotsByIcon" aria-hidden="true">⇅</span>
+                    </button>
+                </div>
+                <div id="financeBotsList" class="mevcut-botlar-list" style="display: flex; flex-direction: column; gap: 0; width: 100%;">
+                    <div style="text-align: center; padding: 2rem; color: var(--ds-text-secondary);">Yükleniyor...</div>
+                </div>
+            </div>
+
+            <!-- En İyi 5 Bot: tüm kullanıcılar, yalnızca aktif (running) kârdaki botlar -->
+            <div id="globalLeaderboardPanel" class="panel global-leaderboard-panel" style="margin-top: 2rem; margin-bottom: 0; width: 100%; max-width: 100%; display: none;">
+                <h3 style="margin: 0 0 1rem 0; font-size: 1.2rem; font-weight: 600; color: var(--ds-text-primary);">En İyi 5 Bot</h3>
+                <p style="margin: 0 0 1rem 0; font-size: 0.85rem; color: var(--ds-text-secondary);">Bütün kullanıcılar arasındaki aktif olan en iyi 5 bot burada listelenir.</p>
+                <div id="globalLeaderboardList" class="global-leaderboard-list" style="display: flex; flex-direction: column; gap: 0.75rem;">
+                    <div style="text-align: center; color: var(--ds-text-secondary); padding: 1rem;">Yükleniyor…</div>
+                </div>
+            </div>
+            <!-- Leaderboard parametre detay modal: bütçe/sahiplik asla gösterilmez -->
+            <div id="leaderboardParamsModal" class="modal-overlay leaderboard-params-modal-overlay">
+                <div class="modal-panel leaderboard-params-modal-panel">
+                    <div class="leaderboard-params-modal-header">
+                        <h4 id="leaderboardParamsModalTitle" class="leaderboard-params-modal-title">Parametreler</h4>
+                        <button type="button" id="leaderboardParamsModalClose" class="btn btn-ghost leaderboard-params-modal-close" aria-label="Kapat">&times;</button>
+                    </div>
+                    <div id="leaderboardParamsModalBody" class="leaderboard-params-modal-body"></div>
+                </div>
+            </div>
+
+            <!-- Bot Performans: varsayılan Toplam K/Z (mevcut bakiye − başlangıç sermayesi); isteğe bağlı dönem gerçekleşen PnL -->
+            <div id="botPerformancePanel" class="panel bot-performance-panel" style="margin-top: 2rem; margin-bottom: 2rem; width: 100%; max-width: 100%;">
+                <h3 style="margin: 0 0 1rem 0; font-size: 1.2rem; font-weight: 600; color: var(--ds-text-primary);">Bot Performansı</h3>
+                <p style="margin: 0 0 1rem 0; font-size: 0.9rem; color: var(--ds-text-secondary);">Filtrelere göre botlardan elde edilen toplam karınız listelenir.</p>
+                <div class="bot-performance-buttons" style="display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1rem;">
+                    <button type="button" class="btn bot-perf-btn" data-period="daily">Günlük</button>
+                    <button type="button" class="btn bot-perf-btn" data-period="weekly">Haftalık</button>
+                    <button type="button" class="btn bot-perf-btn" data-period="monthly">Aylık</button>
+                    <button type="button" class="btn bot-perf-btn active" data-period="all">Genel</button>
+                </div>
+                <div class="bot-performance-value" style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
+                    <span id="botPerformancePnl" class="bot-perf-pnl">$0.00</span>
+                </div>
+            </div>
+
+            <!-- İşlem Geçmişi – alım/satım/yatırım/çekim, Spot vs Bot (Anasayfada her zaman görünür) -->
+            <div id="transactionHistoryPanel" class="panel transaction-history-panel" style="margin-top: 2rem; margin-bottom: 2rem; width: 100%; max-width: 100%; display: block;">
+                <div style="margin-bottom: 1rem;">
+                    <h3 style="margin: 0; font-size: 1.2rem; font-weight: 600; color: var(--ds-text-primary);">İşlem Geçmişi</h3>
+                </div>
+                <p style="margin: 0 0 1rem 0; font-size: 0.9rem; color: var(--ds-text-secondary);">Seçilen dönemdeki alım/satım ve yatırım/çekim işlemleri. İşleme tıklayarak detay görün.</p>
+                <div class="tx-history-filters" style="display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1rem;">
+                    <div class="tx-history-period-btns" style="display: flex; flex-wrap: wrap; gap: 0.35rem;">
+                        <button type="button" class="btn tx-period-btn active" data-period="daily">Günlük</button>
+                        <button type="button" class="btn tx-period-btn" data-period="weekly">Haftalık</button>
+                        <button type="button" class="btn tx-period-btn" data-period="monthly">Aylık</button>
+                        <button type="button" class="btn tx-period-btn" data-period="all">Genel</button>
+                    </div>
+                    <div class="tx-history-type-btns" style="display: flex; flex-wrap: wrap; gap: 0.35rem; margin-left: 0.5rem;">
+                        <button type="button" class="btn tx-type-btn active" data-type="buysell">Alım / Satım</button>
+                        <button type="button" class="btn tx-type-btn" data-type="depositwithdraw">Yatırım / Çekim</button>
+                    </div>
+                </div>
+                <div id="txHistoryList" class="tx-history-list" style="min-height: 120px;">
+                    <div class="tx-history-loading" style="text-align: center; padding: 2rem; color: var(--ds-text-secondary);">Yükleniyor...</div>
+                </div>
+                <div id="txHistoryPagination" class="tx-history-pagination" style="display: flex; justify-content: center; align-items: center; gap: 0.5rem; margin-top: 1rem; flex-wrap: wrap;"></div>
+            </div>
+
+            <!-- Aktif Emirler (bekleyen / kısmen gerçekleşen) – Binance API openOrders; en altta -->
+            <div id="bnActiveOrdersPanel" class="panel binance-active-orders-panel" style="margin-top: 2rem; margin-bottom: 2rem; width: 100%; max-width: 100%; display: none;">
+                <h3 style="margin: 0 0 1rem 0; font-size: 1.2rem; font-weight: 600; color: var(--ds-text-primary);">Aktif Emirler</h3>
+                <div id="bnActiveOrdersList" class="binance-active-orders-list" style="display: flex; flex-direction: column; gap: 12px;">
+                    <!-- Kartlar loadActiveOrders ile doldurulur -->
+                </div>
+            </div>
+
+        </div>
+
+        <!-- Tab Content: Botlar -->
+        <div id="tabBots" class="dm-tab-content" style="display: none;"></div>
+
+        <!-- Tab Content: Finansal Hesap (Portföy Yönetimi) -->
+        <div id="tabFinance" class="dm-tab-content" style="display: none;">
+            <div class="panel" style="margin-bottom: 2rem;">
+                <h2 style="margin: 0 0 1.5rem 0; font-size: 1.5rem; font-weight: 700; color: var(--ds-text-primary);">Portföy Yönetimi</h2>
+                <!-- Ekran 1: Kurulum -->
+                <div id="financeScreen1">
+                    <div class="input-group" style="margin-bottom: 1.5rem;">
+                        <label for="portfolioNameInput" style="display: block; margin-bottom: 0.5rem; color: var(--ds-text-primary); font-weight: 500;">Portföy İsmi</label>
+                        <input type="text" id="portfolioNameInput" placeholder="Örn: Kripto Portföyü" class="form-input" style="width: 100%; max-width: 400px;">
+                    </div>
+                    <div class="input-group" style="margin-bottom: 1.5rem;">
+                        <label for="itemCount" style="display: block; margin-bottom: 0.5rem; color: var(--ds-text-primary); font-weight: 500;">Kaç başlık?</label>
+                        <div style="display: flex; gap: 12px; align-items: center;">
+                            <input type="number" id="itemCount" min="1" value="3" class="form-input" style="width: 120px;">
+                            <button type="button" id="createBtn" class="btn btn-primary-gold">Oluştur</button>
+                        </div>
+                    </div>
+                    <div id="itemsContainer"></div>
+                    <div id="error1" class="error hidden" style="margin-top: 1rem; color: #dc3545; background: #f8d7da; padding: 10px; border-radius: 4px;"></div>
+                    <button type="button" id="saveRefBtn" class="btn btn-primary-gold hidden" style="margin-top: 1rem;">Referansı Kaydet</button>
+                </div>
+                <!-- Ekran 2: Güncelleme / Tekrar Ortalama -->
+                <div id="financeScreen2" class="hidden">
+                    <h3 id="portfolioTitle" style="margin: 0 0 1.5rem 0; font-size: 1.3rem; font-weight: 600; color: var(--ds-text-primary);">Portföy Güncelleme</h3>
+                    <div class="table-wrap" style="margin-bottom: 1.5rem;">
+                        <table id="portfolioTable" class="binance-assets-table">
+                            <thead>
+                                <tr>
+                                    <th style="text-align: left;">Başlık Adı</th>
+                                    <th style="text-align: right;">Hedef Yüzde</th>
+                                    <th style="text-align: right;">Güncel Değer (USD)</th>
+                                    <th style="text-align: right;">Adet (Not)</th>
+                                    <th style="text-align: center;">Sonuç</th>
+                                </tr>
+                            </thead>
+                            <tbody id="portfolioBody"></tbody>
+                        </table>
+                    </div>
+                    <div id="error2" class="error hidden" style="margin-bottom: 1rem; color: #dc3545; background: #f8d7da; padding: 10px; border-radius: 4px;"></div>
+                    <div style="display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 1.5rem;">
+                        <button type="button" id="rebalanceBtn" class="btn btn-primary-gold">Tekrar Ortalama Hesapla</button>
+                        <button type="button" id="saveCurrentBtn" class="btn btn-secondary">Yeni Referans Yap</button>
+                        <button type="button" id="resetBtn" class="btn btn-danger">Referansı Sıfırla</button>
+                    </div>
+                    <div id="summary" class="panel hidden" style="margin-top: 1.5rem;">
+                        <h3 style="margin: 0 0 1rem 0; font-size: 1.1rem; font-weight: 600; color: var(--ds-text-primary);">Özet</h3>
+                        <div id="summaryContent"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tab Content: İletişim (Yönetim ile mesajlaşma) -->
+        <div id="tabContact" class="dm-tab-content" style="display: none;">
+            <div style="display: flex; justify-content: center; align-items: flex-start; width: 100%; padding: 2rem 0;">
+                <div class="panel" style="max-width: 560px; width: 100%; text-align: center;">
+                    <h2 style="margin: 0 0 1rem 0; font-size: 1.25rem; font-weight: 600; color: var(--ds-text-primary);">Yönetim ile İletişim</h2>
+                    <p style="margin: 0 0 1.25rem 0; font-size: 0.95rem; color: var(--ds-text-secondary); line-height: 1.5;">Yönetim ekibiyle güvenli mesajlaşma. Soru ve taleplerinizi buradan iletebilirsiniz; mesaj geçmişi saklanır.</p>
+                    <button type="button" id="btnOpenChatModal" class="btn primary" style="background: var(--ds-accent); color: #000; font-weight: 600;" onclick="openChatScreen()">Sohbeti Aç</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tab Content: Ayarlar -->
+        <div id="tabSettings" class="dm-tab-content" style="display: none;">
+            <div class="panel settings-panel" style="max-width: 560px; width: 100%; margin: 0 auto;">
+                <h2 style="margin: 0 0 1.5rem 0; font-size: 1.25rem; font-weight: 600; color: var(--ds-text-primary);">Hesap Ayarları</h2>
+                
+                <div style="margin-bottom: 1.5rem;">
+                    <label style="display: block; font-size: 0.9rem; font-weight: 600; color: var(--ds-text-primary); margin-bottom: 0.5rem;">Sunucu dış IP (Binance beyaz liste)</label>
+                    <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
+                        <input id="settingsServerPublicIp" type="text" class="form-input" readonly autocomplete="off" style="flex: 1; min-width: 200px; background: var(--ds-bg-secondary, #1e2026); cursor: not-allowed;" placeholder="Yükleniyor…" />
+                    </div>
+                    <div style="font-size: 0.8rem; color: var(--ds-text-secondary); margin-top: 0.35rem;">
+                        İşlemler sunucudan gittiği için Binance API ayarlarında bu IP'yi beyaz listeye ekleyin. Değer sunucunun internet IP'sinden otomatik alınır.
+                    </div>
+                </div>
+
+                <div style="margin-bottom: 1.5rem;">
+                    <label style="display: block; font-size: 0.9rem; font-weight: 600; color: var(--ds-text-primary); margin-bottom: 0.5rem;">API Key güncelle</label>
+                    <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
+                        <input id="settingsApiKey" type="password" class="form-input" placeholder="Yeni Binance API Key" autocomplete="off" style="flex: 1; min-width: 200px;" />
+                        <button id="settingsApiKeyBtn" class="btn btn-sm">Güncelle</button>
+                    </div>
+                    <div id="settingsApiKeyStatus" style="font-size: 0.85rem; margin-top: 0.35rem; min-height: 1.2em;"></div>
+                </div>
+
+                <div style="margin-bottom: 1.5rem;">
+                    <label style="display: block; font-size: 0.9rem; font-weight: 600; color: var(--ds-text-primary); margin-bottom: 0.5rem;">API Secret güncelle</label>
+                    <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
+                        <input id="settingsApiSecret" type="password" class="form-input" placeholder="Yeni Binance API Secret" autocomplete="off" style="flex: 1; min-width: 200px;" />
+                        <button id="settingsApiSecretBtn" class="btn btn-sm">Güncelle</button>
+                    </div>
+                    <div id="settingsApiSecretStatus" style="font-size: 0.85rem; margin-top: 0.35rem; min-height: 1.2em;"></div>
+                </div>
+
+                <div style="margin-bottom: 1.5rem;">
+                    <label style="display: block; font-size: 0.9rem; font-weight: 600; color: var(--ds-text-secondary); margin-bottom: 0.5rem;">Ad Soyad</label>
+                    <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
+                        <input id="settingsUsername" type="text" class="form-input" placeholder="Ad Soyad" autocomplete="off" readonly style="flex: 1; min-width: 200px; background: var(--ds-bg-secondary, #1e2026); cursor: not-allowed;" />
+                    </div>
+                </div>
+                <div style="margin-bottom: 1.5rem;">
+                    <label style="display: block; font-size: 0.9rem; font-weight: 600; color: var(--ds-text-primary); margin-bottom: 0.5rem;">Telefon güncelle</label>
+                    <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
+                        <input id="settingsPhone" type="text" class="form-input" placeholder="5XXXXXXXXX" autocomplete="tel" style="flex: 1; min-width: 200px;" />
+                        <button id="settingsPhoneBtn" class="btn btn-sm">Güncelle</button>
+                    </div>
+                    <div id="settingsPhoneStatus" style="font-size: 0.85rem; margin-top: 0.35rem; min-height: 1.2em;"></div>
+                </div>
+                <div style="margin-bottom: 1rem;">
+                    <label style="display: block; font-size: 0.9rem; font-weight: 600; color: var(--ds-text-secondary); margin-bottom: 0.5rem;">Şifre güncelle</label>
+                    <div style="display: flex; flex-direction: column; gap: 0.75rem;">
+                        <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
+                            <input id="settingsPassword" type="password" class="form-input" placeholder="Yeni şifre" autocomplete="off" style="flex: 1; min-width: 200px;" />
+                        </div>
+                        <div id="settingsPasswordStrength" style="font-size: 0.8rem; margin-top: -0.5rem; min-height: 1.2em; color: var(--ds-text-secondary);"></div>
+                        <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
+                            <input id="settingsPasswordConfirm" type="password" class="form-input" placeholder="Yeni şifre tekrar" autocomplete="off" style="flex: 1; min-width: 200px;" />
+                            <button id="settingsPasswordBtn" class="btn btn-sm">Güncelle</button>
+                        </div>
+                        <div id="settingsPasswordMatch" style="font-size: 0.8rem; margin-top: -0.5rem; min-height: 1.2em; color: var(--ds-text-secondary);"></div>
+                        <div id="settingsPasswordStatus" style="font-size: 0.85rem; margin-top: 0.35rem; min-height: 1.2em;"></div>
+                    </div>
+                </div>
+
+                <div id="settingsIsolateBlock" style="margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px solid var(--ds-border); display: none;">
+                    <label style="display: block; font-size: 0.9rem; font-weight: 600; color: var(--ds-text-primary); margin-bottom: 0.5rem;">Adminden izole</label>
+                    <p id="settingsIsolateDescription" style="font-size: 0.85rem; color: var(--ds-text-secondary); margin: 0 0 0.5rem 0;">Açıkken admin hesabınıza erişemez, bakiyelerinizi ve işlemlerinizi asla göremez, sadece siz bilirsiniz.</p>
+                    <button type="button" id="btnToggleIsolate" class="btn btn-sm" style="width: 100%; padding: 8px 16px; border-radius: 8px; font-weight: 500;">Adminden İzole Ol</button>
+                    <div id="settingsIsolateStatus" style="font-size: 0.85rem; margin-top: 0.35rem; min-height: 1.2em;"></div>
+                </div>
+
+                <div style="margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px solid var(--ds-border);">
+                    <button type="button" id="btnGoContact" class="btn btn-sm" style="background: var(--ds-accent, #f0b90b); color: #000; font-weight: 600; padding: 8px 16px; border-radius: 8px; border: none; cursor: pointer; transition: all 0.2s; width: 100%;" onclick="(typeof window.openChatScreen === 'function' && window.openChatScreen())">İletişim</button>
+                </div>
+
+                <div style="margin-top: 2rem; padding-top: 1.5rem; border-top: 1px solid var(--ds-border);">
+                    <button type="button" id="btnOpenAuditModal" class="btn btn-sm" style="width: 100%; background: var(--ds-bg-tertiary); color: var(--ds-text-primary); border: 1px solid var(--ds-border); padding: 10px 20px; border-radius: 8px; cursor: pointer; font-weight: 500;" onclick="openAuditModal()">İşlem Geçmişi</button>
+                </div>
+
+                <div style="margin-top: 2rem; padding-top: 1.5rem; border-top: 1px solid var(--ds-border);">
+                    <label style="display: block; font-size: 0.9rem; font-weight: 600; color: var(--ds-text-primary); margin-bottom: 0.5rem;">Hesap sil</label>
+                    <p style="font-size: 0.85rem; color: var(--ds-text-secondary); margin: 0 0 0.75rem 0;">Hesap ve ilgili veriler kalıcı olarak silinir. Geri alınamaz. Bot varsa önce botları silin. Hesabı silmek için şifreniz ile onaylamanız gerekir.</p>
+                    <button id="settingsDeleteAccountBtn" class="btn btn-sm" style="background: var(--ds-danger, #f6465d); color: #fff;">Hesabı sil</button>
+                    <div id="settingsDeleteAccountStatus" style="font-size: 0.85rem; margin-top: 0.35rem; min-height: 1.2em;"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Mobil Trade görünümü: coin ara + favori coinler, seçince alım satım modalı açılır (sadece mobilde) -->
+        <div id="mobileTradeView" class="mobile-trade-view dm-tab-content" style="display: none;">
+            <h3 style="margin: 0 0 0.75rem 0; font-size: 1.2rem; font-weight: 600; color: var(--ds-text-primary);">İşlem</h3>
+            <div class="coin-list-search-wrap" style="position: relative; width: 100%; max-width: 100%; margin-bottom: 1rem;" role="search">
+                <input type="search" id="mobileTradeSearchInput" class="form-input" placeholder="BTCUSDT, ETHUSDT… ara" autocomplete="off" style="width: 100%; padding: 0.6rem 1rem;" aria-label="Coin ara" />
+                <div id="mobileTradeSearchDropdown" class="coin-list-search-dropdown" style="display: none; position: absolute; left: 0; right: 0; top: 100%; margin-top: 4px; max-height: 280px; overflow-y: auto; background: var(--ds-bg-panel); border: 1px solid var(--ds-border); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.3); z-index: 100;"></div>
+            </div>
+            <h4 style="margin: 0 0 0.5rem 0; font-size: 0.95rem; font-weight: 600; color: var(--ds-text-secondary);">Favori Coinler</h4>
+            <div id="mobileTradeFavoritesList" class="mobile-trade-favorites-list" style="display: flex; flex-direction: column; gap: 0.5rem;"></div>
+        </div>
+
+        <!-- Test hesabı: sayfa bazlı hata günlüğü (bu sayfadaki işlemlere ait hatalar) + Sıfırla -->
+        <div id="pageErrorLogStrip" style="display: none; margin-top: 1.5rem; padding: 1rem; background: var(--ds-bg-tertiary); border: 1px solid var(--ds-border); border-radius: 8px; font-size: 0.8rem;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                <strong style="color: var(--ds-text-secondary);">Bu sayfa – hata günlüğü</strong>
+                <button type="button" id="pageErrorLogResetBtn" class="btn btn-sm" style="padding: 4px 10px; cursor: pointer;" tabindex="0">Sıfırla</button>
+            </div>
+            <div id="pageErrorLogList" style="max-height: 120px; overflow-y: auto; color: var(--ds-text-error, #f6465d); white-space: pre-wrap; word-break: break-word;"></div>
+        </div>
+
+        <!-- Test hesabı: anasayfada tüm sistem hata logları (backend + frontend) -->
+        <div id="allSystemErrorsBlock" style="display: none; margin-top: 1.5rem; padding: 1rem; background: var(--ds-bg-tertiary); border: 1px solid var(--ds-border); border-radius: 8px; font-size: 0.8rem;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                <strong style="color: var(--ds-text-secondary);">Tüm sistem hata logları</strong>
+                <button type="button" id="allSystemErrorsResetBtn" class="btn btn-sm" style="padding: 4px 10px; cursor: pointer;" tabindex="0">Sıfırla (frontend)</button>
+            </div>
+            <div id="allSystemErrorsList" style="max-height: 200px; overflow-y: auto; color: var(--ds-text-error, #f6465d); white-space: pre-wrap; word-break: break-word;"></div>
+        </div>
+    </div>
+
+    <script>
+    (function(){
+      var c = document.getElementById('dashboardMainContainer');
+      if (!c) return;
+      var q = new URLSearchParams(location.search);
+      var firstLogin = q.get('first_login') === 'true';
+      try {
+        var u = JSON.parse(sessionStorage.getItem('user') || '{}');
+        if (u && u.is_first_login) firstLogin = true;
+      } catch (_) {}
+      var tabParam = q.get('tab');
+      var allowedTabs = ['binance', 'bots', 'finance', 'trade', 'contact', 'settings'];
+      var saved;
+      if (firstLogin) {
+        saved = 'binance';
+        try { localStorage.setItem('dashboard_active_tab', 'binance'); } catch (_) {}
+      } else {
+        saved = (tabParam && allowedTabs.indexOf(tabParam) >= 0) ? tabParam : (localStorage.getItem('dashboard_active_tab') || 'binance');
+        if (tabParam && allowedTabs.indexOf(tabParam) >= 0) try { localStorage.setItem('dashboard_active_tab', saved); } catch (_) {}
+      }
+      var btn = document.querySelector('[data-tab="' + saved + '"]');
+      if (btn) {
+        document.querySelectorAll('.dm-tab').forEach(function(t){ t.classList.remove('is-active'); });
+        document.querySelectorAll('.dm-tab-content').forEach(function(t){ t.classList.remove('is-active'); t.style.display = 'none'; });
+        btn.classList.add('is-active');
+        var contentId = (saved === 'finance') ? 'tabFinance' : (saved === 'reports') ? 'tabBinance' : (saved === 'trade') ? 'mobileTradeView' : 'tab' + (saved.charAt(0).toUpperCase() + saved.slice(1));
+        var el = document.getElementById(contentId);
+        if (el) { el.classList.add('is-active'); el.style.display = 'block'; }
+        document.body.classList.toggle('tab-finance-active', saved === 'finance');
+        document.body.classList.toggle('tab-contact-active', saved === 'contact');
+        document.body.classList.toggle('tab-settings-active', saved === 'settings');
+        document.body.classList.toggle('tab-trade-active', saved === 'trade');
+        document.body.classList.toggle('tab-bots-active', saved === 'bots');
+        // Mobil: kaydedilen sekmeye göre alt menü + body sınıfı (yenilemede doğru sekme görünsün)
+        if (window.innerWidth <= 768) {
+          var mobileTab = (saved === 'binance' || saved === 'reports') ? 'home' : (saved === 'finance' || saved === 'contact') ? 'portfoy' : (saved === 'trade') ? 'trade' : (saved === 'bots') ? 'bots' : 'ayarlar';
+          document.body.classList.remove('mobile-tab-home', 'mobile-tab-portfoy', 'mobile-tab-trade', 'mobile-tab-bots', 'mobile-tab-ayarlar');
+          document.body.classList.add('mobile-tab-' + mobileTab);
+          var nav = document.getElementById('mobileBottomNav');
+          if (nav) {
+            nav.querySelectorAll('.mobile-nav-item').forEach(function(item) {
+              item.classList.toggle('is-active', item.getAttribute('data-mobile-tab') === mobileTab);
+            });
+          }
+          var s = document.getElementById('unifiedKpiStrip');
+          if (s) s.style.display = (mobileTab === 'home' || mobileTab === 'portfoy' || mobileTab === 'trade') ? 'block' : 'none';
+        }
+      }
+      c.style.visibility = 'visible';
+    })();
+    </script>
+
+    <!-- Mobil alt çubuk: container DIŞINDA, body'nin direkt child'ı (mobilde her zaman görünür) -->
+    <nav id="mobileBottomNav" class="mobile-bottom-nav" aria-label="Ana menü">
+        <button type="button" class="mobile-nav-item is-active" data-mobile-tab="home" aria-label="Anasayfa">
+            <span class="mobile-nav-icon mobile-nav-icon--svg" aria-hidden="true">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" focusable="false"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 22V12h6v10"/></svg>
+            </span>
+            <span class="mobile-nav-label">Home</span>
+        </button>
+        <button type="button" class="mobile-nav-item" data-mobile-tab="portfoy" aria-label="Portföy">
+            <span class="mobile-nav-icon mobile-nav-icon--svg" aria-hidden="true">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" focusable="false"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 21h5v-5"/></svg>
+            </span>
+            <span class="mobile-nav-label">Portföy</span>
+        </button>
+        <button type="button" class="mobile-nav-item mobile-nav-item--center" data-mobile-tab="trade" aria-label="Trade">
+            <span class="mobile-nav-icon" aria-hidden="true">⇄</span>
+            <span class="mobile-nav-label">Trade</span>
+        </button>
+        <button type="button" class="mobile-nav-item" data-mobile-tab="bots" aria-label="Botlar">
+            <span class="mobile-nav-icon mobile-nav-icon--bot" aria-hidden="true">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" focusable="false"><rect x="4" y="10" width="16" height="12" rx="2"/><path d="M9 16h6"/><circle cx="9" cy="6" r="2"/><circle cx="15" cy="6" r="2"/><path d="M9 6H6a2 2 0 0 1-2-2V3"/><path d="M15 6h3a2 2 0 0 0 2-2V3"/></svg>
+            </span>
+            <span class="mobile-nav-label">Botlar</span>
+        </button>
+        <button type="button" class="mobile-nav-item" data-mobile-tab="ayarlar" aria-label="Ayarlar">
+            <span class="mobile-nav-icon mobile-nav-icon--svg" aria-hidden="true">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" focusable="false"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.6V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+            </span>
+            <span class="mobile-nav-label">Ayarlar</span>
+        </button>
+    </nav>
+    <script>
+    (function(){ if (window.innerWidth <= 768) {
+      var hasMobileTab = document.body.classList.contains('mobile-tab-home') || document.body.classList.contains('mobile-tab-portfoy') || document.body.classList.contains('mobile-tab-trade') || document.body.classList.contains('mobile-tab-bots') || document.body.classList.contains('mobile-tab-ayarlar');
+      if (!hasMobileTab) { document.body.classList.add('mobile-tab-home'); var nav = document.getElementById('mobileBottomNav'); if (nav) nav.querySelectorAll('.mobile-nav-item').forEach(function(i){ i.classList.toggle('is-active', i.getAttribute('data-mobile-tab') === 'home'); }); }
+      var s = document.getElementById('unifiedKpiStrip'); if (s) s.style.display = 'block';
+    } })();
+    </script>
+
+    <!-- Spot Trading Modal -->
+    <div id="bnSpotTradeModal" class="dm-modal" aria-hidden="true" role="dialog" style="display: none;">
+        <div class="dm-modal__content" style="max-width: 500px;">
+            <div class="dm-modal__head">
+                <div class="dm-modal__title" id="bnTradeModalTitle">Spot Alım/Satım</div>
+                <button class="icon-btn" onclick="closeSpotTradeModal()">&#10005;</button>
+            </div>
+            <div class="dm-modal__body" style="padding: 1.5rem;">
+                <!-- Symbol Info -->
+                <div style="text-align: center; margin-bottom: 1rem;">
+                    <div id="bnTradeSymbolWrap" class="trade-modal-symbol-row" style="display: flex; align-items: center; justify-content: center; gap: 8px; margin-bottom: 0.5rem; flex-wrap: wrap;">
+                        <div id="bnTradeSymbolLogo" class="varlik-logo trade-modal-logo"></div>
+                        <div id="bnTradeSymbol" style="font-size: 1.5rem; font-weight: 700; color: var(--ds-accent);">-</div>
+                        <button type="button" id="bnTradeFavoriteBtn" class="icon-btn fav-star trade-modal-fav-star" title="Favorilere ekle / çıkar" aria-label="Favori">&#9734;</button>
+                    </div>
+                    <div style="display: flex; align-items: center; justify-content: center; gap: 12px; flex-wrap: wrap;">
+                        <div id="bnTradePrice" class="price-live" style="font-size: 1.2rem; font-weight: 600;">$0.00</div>
+                        <div id="bnTradePriceChange" style="font-size: 0.9rem; font-weight: 500;">-</div>
+                    </div>
+                </div>
+                <!-- Son 4 saat grafik (tıkla → detay grafik sayfası) -->
+                <div id="bnTradeChartWrap" role="button" tabindex="0" title="Detay grafik sayfasını aç" style="height: 140px; margin-bottom: 0.5rem; background: var(--ds-bg-tertiary); border-radius: var(--ds-radius-md); overflow: hidden; cursor: pointer; position: relative;">
+                    <div id="bnTradeChart" style="width: 100%; height: 100%;"></div>
+                    <div id="bnTradeChartOverlay" style="position: absolute; right: 8px; bottom: 8px; font-size: 0.75rem; color: var(--ds-text-tertiary); pointer-events: none;">Grafiği büyüt →</div>
+                </div>
+                <!-- Günlük / Yıllık en düşük - en yüksek -->
+                <div id="bnTradeChartHighLow" class="bn-trade-chart-high-low">
+                    <span>Günlük: En düşük <span id="bnTradeDailyLow" class="num">—</span> · En yüksek <span id="bnTradeDailyHigh" class="num">—</span></span>
+                    <span>Yıllık: En düşük <span id="bnTradeYearlyLow" class="num">—</span> · En yüksek <span id="bnTradeYearlyHigh" class="num">—</span></span>
+                </div>
+
+                <!-- Buy/Sell Tabs (Alış/Satış – eski stil: yeşil/kırmızı seçili, gri seçili değil) -->
+                <div style="display: flex; gap: 8px; margin-bottom: 1.5rem;">
+                    <button id="bnTradeBuyBtn" class="btn" style="flex: 1; background: rgba(14, 203, 129, 0.1); color: #0ecb81; border: 1px solid rgba(14, 203, 129, 0.3);" onclick="setTradeSide('BUY')">Alış</button>
+                    <button id="bnTradeSellBtn" class="btn" style="flex: 1; background: transparent; color: var(--ds-text-tertiary); border: 1px solid var(--ds-border);" onclick="setTradeSide('SELL')">Satış</button>
+                </div>
+
+                <!-- Order Type (Market/Limit) -->
+                <div style="display: flex; gap: 8px; margin-bottom: 1.5rem;">
+                    <button id="bnTradeTypeMarket" class="btn ghost" style="flex: 1;" onclick="setTradeType('MARKET')">Market</button>
+                    <button id="bnTradeTypeLimit" class="btn ghost" style="flex: 1;" onclick="setTradeType('LIMIT')">Limit</button>
+                </div>
+
+                <!-- Limit Price (only for LIMIT orders) -->
+                <div id="bnLimitPriceGroup" style="display: none; margin-bottom: 1rem;">
+                    <label style="display: block; margin-bottom: 0.5rem; font-size: 0.9rem; color: var(--ds-text-secondary);">Limit Fiyat</label>
+                    <input type="number" id="bnLimitPrice" class="form-input" step="0.01" min="0" placeholder="0.00" style="width: 100%;">
+                </div>
+
+                <!-- Container for dynamic ordering (BUY: USDT first, SELL: Quantity first) -->
+                <div id="bnTradeInputsContainer" style="display: flex; flex-direction: column; gap: 1rem; margin-bottom: 1.5rem;">
+                    <!-- Total/Quote Amount (USDT) - Will be first for BUY, second for SELL -->
+                    <div id="bnTradeTotalGroup" style="margin-bottom: 0;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.25rem; margin-bottom: 0.5rem;">
+                            <label style="font-size: 0.9rem; color: var(--ds-text-secondary);">
+                                <span id="bnTradeTotalLabel">Tutar</span> (<span id="bnTradeTotalUnit">USDT</span>)
+                            </label>
+                            <span id="bnTradeAvailableQuoteWrap" style="font-size: 0.8rem; color: var(--ds-text-tertiary); display: none;">Kullanılabilir: <span id="bnTradeAvailableQuote" class="num">0.00</span></span>
+                        </div>
+                        <input type="number" id="bnTradeTotal" class="form-input" step="0.01" min="0" placeholder="0.00" style="width: 100%;">
+                        <div id="bnTradeTotalValue" style="margin-top: 4px; font-size: 0.8rem; color: var(--ds-text-secondary); display: none;">
+                            Miktar: <span id="bnTradeTotalValueAmount" style="color: var(--ds-text-primary); font-weight: 600;">0.00000000</span>
+                        </div>
+                        <div id="bnTradeTotalPercentButtons" class="bn-trade-percent-btns">
+                            <button class="btn-mini ghost" onclick="setTradePercent(25)">25%</button>
+                            <button class="btn-mini ghost" onclick="setTradePercent(50)">50%</button>
+                            <button class="btn-mini ghost" onclick="setTradePercent(75)">75%</button>
+                            <button class="btn-mini ghost" onclick="setTradePercent(100)">100%</button>
+                        </div>
+                    </div>
+
+                    <!-- Quantity Input (Base Asset) - Will be second for BUY, first for SELL -->
+                    <div id="bnTradeQuantityGroup" style="margin-bottom: 0;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.25rem; margin-bottom: 0.5rem;">
+                            <label style="font-size: 0.9rem; color: var(--ds-text-secondary);">
+                                <span id="bnTradeQuantityLabel">Miktar</span> (<span id="bnTradeQuantityUnit">-</span>)
+                            </label>
+                            <span id="bnTradeAvailableBaseWrap" style="font-size: 0.8rem; color: var(--ds-text-tertiary); display: none;">Kullanılabilir: <span id="bnTradeAvailableBase" class="num">0.00</span></span>
+                        </div>
+                        <input type="number" id="bnTradeQuantity" class="form-input" step="0.00000001" min="0" placeholder="0.00" style="width: 100%;">
+                        <div id="bnTradeQuantityValue" style="margin-top: 4px; font-size: 0.8rem; color: var(--ds-text-secondary); display: none;">
+                            Tutar: <span id="bnTradeQuantityValueAmount" style="color: var(--ds-text-primary); font-weight: 600;">0.00000000</span>
+                        </div>
+                        <div id="bnTradeQuantityPercentButtons" style="display: flex; gap: 4px; margin-top: 0.5rem;">
+                            <button class="btn-mini ghost" onclick="setTradePercent(25)">25%</button>
+                            <button class="btn-mini ghost" onclick="setTradePercent(50)">50%</button>
+                            <button class="btn-mini ghost" onclick="setTradePercent(75)">75%</button>
+                            <button class="btn-mini ghost" onclick="setTradePercent(100)">100%</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Order Summary -->
+                <div style="background: var(--ds-bg-tertiary); padding: 1rem; border-radius: var(--ds-radius-md); margin-bottom: 1.5rem;">
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;">
+                        <span style="color: var(--ds-text-secondary);">Tutar:</span>
+                        <span id="bnTradeSummaryAmount" class="num">$0.00</span>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; font-size: 0.9rem;">
+                        <span style="color: var(--ds-text-secondary);">Komisyon (<span id="bnTradeFeeRate">0.1%</span>):</span>
+                        <span id="bnTradeSummaryFee" class="num muted" title="Binance komisyon oranı">$0.00</span>
+                    </div>
+                </div>
+
+                <!-- Submit Button (eski stil: Alış = yeşil, Satış = kırmızı) -->
+                <button id="bnTradeSubmitBtn" class="btn primary" style="width: 100%; padding: 1rem; font-size: 1rem; font-weight: 600; background: #0ecb81; border: 1px solid rgba(14, 203, 129, 0.5); color: #fff;" onclick="submitSpotTrade()">
+                    <span id="bnTradeSubmitText">Alış Yap</span>
+                </button>
+
+                <!-- Error Message -->
+                <div id="bnTradeError" style="display: none; margin-top: 1rem; padding: 0.75rem; background: rgba(246, 70, 93, 0.1); border: 1px solid rgba(246, 70, 93, 0.3); border-radius: var(--ds-radius-md); color: #f6465d; font-size: 0.9rem;"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- İşlem Detay Modal -->
+    <div id="txDetailModal" class="dm-modal" aria-hidden="true" role="dialog" style="display: none;">
+        <div class="dm-modal__content" style="max-width: 420px;">
+            <div class="dm-modal__head">
+                <div class="dm-modal__title">İşlem Detayı</div>
+                <button type="button" class="icon-btn" onclick="closeTxDetailModal()">&#10005;</button>
+            </div>
+            <div class="dm-modal__body" id="txDetailBody" style="padding: 1.25rem;">
+                <div class="tx-detail-row"><span class="tx-detail-label">Tarih</span><span id="txDetailTime">—</span></div>
+                <div class="tx-detail-row"><span class="tx-detail-label">Tür</span><span id="txDetailType">—</span></div>
+                <div class="tx-detail-row"><span class="tx-detail-label">Sembol</span><span id="txDetailSymbol">—</span></div>
+                <div class="tx-detail-row"><span class="tx-detail-label">Miktar</span><span id="txDetailQty">—</span></div>
+                <div class="tx-detail-row"><span class="tx-detail-label">Fiyat</span><span id="txDetailPrice">—</span></div>
+                <div class="tx-detail-row"><span class="tx-detail-label">Toplam</span><span id="txDetailTotal">—</span></div>
+                <div class="tx-detail-row"><span class="tx-detail-label">Komisyon</span><span id="txDetailCommission">—</span></div>
+                <div class="tx-detail-row"><span class="tx-detail-label">Kaynak</span><span id="txDetailSource">—</span></div>
+                <div class="tx-detail-row"><span class="tx-detail-label">Platform</span><span id="txDetailPlatform">—</span></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bot Structure Selection Modal -->
+    <div id="botStructureBackdrop" class="dm-backdrop" aria-hidden="true" style="display: none;"></div>
+    <div id="botStructureModal" class="dm-modal" aria-hidden="true" role="dialog" style="display: none;">
+        <div class="dm-modal__content">
+            <div class="dm-modal__head">
+                <div class="dm-modal__title">Bot Yapısı Seç</div>
+                <button id="botStructureCloseBtn" class="icon-btn">✕</button>
+            </div>
+            <div class="dm-modal__body">
+                <div id="botStructuresList" style="display: flex; flex-direction: column; gap: 16px;">
+                    <!-- Bot structures will be rendered here -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Create Bot Modal (Dashboard Modal - .dm-modal) -->
+    <div id="dmBackdrop" class="dm-backdrop" aria-hidden="true" style="display: none;"></div>
+    <div id="dmModal" class="dm-modal" aria-hidden="true" role="dialog" style="display: none;">
+        <div class="dm-modal__content">
+            <div class="dm-modal__head">
+                <div class="dm-modal__title">Bot Oluştur</div>
+                <button id="dmCloseBtn" class="icon-btn">✕</button>
+            </div>
+            
+            <div class="dm-modal__body">
+                <div id="dmWizardDca">
+                <!-- Seçilen işlem çifti: logo, base, çift, fiyat, 24h % + küçük grafik (tıkla → detay sayfa) -->
+                <div id="dmSelectedPairStrip" class="dm-selected-pair-strip" style="display: none;">
+                    <div class="dm-pair-strip-left">
+                        <div id="dmPairLogo" class="varlik-logo dm-pair-strip-logo" title=""></div>
+                        <span id="dmPairBaseSymbol" class="dm-pair-strip-base">—</span>
+                        <span id="dmPairSymbol" class="dm-pair-strip-pair">—</span>
+                        <span id="dmPairPrice" class="dm-pair-strip-price">—</span>
+                        <span id="dmPairChangePct" class="dm-pair-strip-pct">—</span>
+                    </div>
+                    <div id="dmPairChartWrap" class="dm-pair-strip-chart-wrap" role="button" tabindex="0" title="Detay grafik sayfasını aç">
+                        <div id="dmPairChart" class="dm-pair-strip-chart"></div>
+                        <span id="dmPairChartOverlay" class="dm-pair-strip-chart-overlay">Grafiği büyüt →</span>
+                    </div>
+                </div>
+                <!-- Tahmin: parite girildiğinde 24s değişim, yüksek/düşük, öneri -->
+                <div id="dmTahminStrip" class="dm-tahmin-strip" style="display: none;">
+                    <div class="dm-tahmin-row">
+                        <span class="dm-tahmin-label">24s değişim</span>
+                        <span id="dmTahminChange" class="dm-tahmin-value">—</span>
+                    </div>
+                    <div class="dm-tahmin-row">
+                        <span class="dm-tahmin-label">24s yüksek</span>
+                        <span id="dmTahminHigh" class="dm-tahmin-value">—</span>
+                    </div>
+                    <div class="dm-tahmin-row">
+                        <span class="dm-tahmin-label">24s düşük</span>
+                        <span id="dmTahminLow" class="dm-tahmin-value">—</span>
+                    </div>
+                </div>
+                <!-- Step 1: General -->
+                <div class="dm-step" data-step="1">
+                    <div class="section-title">Genel</div>
+                    <div class="grid-2">
+                        <div class="form-group">
+                            <label class="label-with-tooltip" for="fSymbol">
+                                İşlem çifti
+                                <span class="tooltip-icon">ℹ</span>
+                                <span class="tooltip-text">Trading çifti (örn: BTCUSDT, ETHBTC). Yazdıkça liste gelir, seçin.</span>
+                            </label>
+                            <div class="coin-list-search-wrap" style="position: relative; max-width: 100%;">
+                                <input id="fSymbol" type="text" placeholder="İşlem çifti yazın (BTCUSDT, ETHBTC…)" autocomplete="off" required style="width: 100%; padding: 0.6rem 1rem;" />
+                                <div id="dmSymbolSearchDropdown" class="coin-list-search-dropdown" style="display: none; position: absolute; left: 0; right: 0; top: 100%; margin-top: 4px; max-height: 280px; overflow-y: auto; background: var(--ds-bg-panel); border: 1px solid var(--ds-border); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.3); z-index: 100;"></div>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label class="label-with-tooltip" id="dmBotBalanceLabel">
+                                Bot Bakiyesi (<span id="dmQuoteAssetName">USDT</span>)
+                                <span class="tooltip-icon">ℹ</span>
+                                <span class="tooltip-text">Bot için ayrılacak toplam bütçe (quote varlık cinsinden). Minimum değer çifte göre değişir.</span>
+                            </label>
+                            <input id="fBudget" type="number" min="0" step="any" required placeholder="Kullanılabilir: —" style="width: 100%; padding: 0.6rem 1rem;" />
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Step 2: Initial Allocation -->
+                <div class="dm-step" data-step="2">
+                    <div class="section-title">Başlangıç Dağılım</div>
+                    <div class="grid-2">
+                        <div class="form-group">
+                            <label class="label-with-tooltip">
+                                Base % (Coin)
+                                <span class="tooltip-icon">ℹ</span>
+                                <span class="tooltip-text">Bütçenin coin (BTC, ETH vb.) olarak başlangıç yüzdesi. Kalan kısım otomatik USDT olur.</span>
+                            </label>
+                            <input id="fBasePct" type="number" min="0" max="100" step="0.1" placeholder="50" value="50" required />
+                        </div>
+                        <div class="form-group">
+                            <label class="label-with-tooltip">
+                                Quote % (USDT)
+                                <span class="tooltip-icon">ℹ</span>
+                                <span class="tooltip-text">Bütçenin USDT olarak başlangıç yüzdesi. Base % ile toplamı 100 olmalı.</span>
+                            </label>
+                            <input id="fQuotePct" type="number" min="0" max="100" step="0.1" placeholder="50" value="50" readonly />
+                        </div>
+                    </div>
+                    <div class="hint">Toplam 100 olmalı. Örn 50/50.</div>
+                </div>
+
+                <!-- Step 3: Up Grid (Sell) -->
+                <div class="dm-step" data-step="3">
+                    <div class="section-title">Yukarı Grid (Satış)</div>
+                    <div class="grid-2">
+                        <div class="form-group">
+                            <label class="label-with-tooltip">
+                                Grid Sayısı
+                                <span class="tooltip-icon">ℹ</span>
+                                <span class="tooltip-text">Yukarı yönde (satış) kaç grid seviyesi oluşturulacak. Her grid için tetik fiyatı ve miktar belirlenir.</span>
+                            </label>
+                            <input id="fUpCount" type="number" min="0" step="1" value="0" />
+                        </div>
+                        <div class="form-group">
+                            <label class="label-with-tooltip">
+                                Trailing % (tepe arama)
+                                <span class="tooltip-text">Fiyat yükselirken en yüksek noktayı takip etme yüzdesi. Örn: 0.30% = fiyat %0.30 geri çekilirse satış yapılır.</span>
+                                <span class="tooltip-icon">ℹ</span>
+                            </label>
+                            <input id="fUpTrail" type="number" min="0" step="0.01" placeholder="0,5 veya 0.5" value="0.5" lang="tr" inputmode="decimal" />
+                        </div>
+                    </div>
+                    <div id="upGridRows" class="rows"></div>
+                </div>
+
+                <!-- Step 4: Down Grid (Buy) -->
+                <div class="dm-step" data-step="4">
+                    <div class="section-title">Aşağı Grid (Alış)</div>
+                    <div class="grid-2">
+                        <div class="form-group">
+                            <label class="label-with-tooltip">
+                                Grid Sayısı
+                                <span class="tooltip-icon">ℹ</span>
+                                <span class="tooltip-text">Aşağı yönde (alış) kaç grid seviyesi oluşturulacak. Her grid için tetik fiyatı ve miktar belirlenir.</span>
+                            </label>
+                            <input id="fDownCount" type="number" min="0" step="1" value="0" />
+                        </div>
+                        <div class="form-group">
+                            <label class="label-with-tooltip">
+                                Trailing % (dip arama)
+                                <span class="tooltip-icon">ℹ</span>
+                                <span class="tooltip-text">Fiyat düşerken en düşük noktayı takip etme yüzdesi. Örn: 0.30% = fiyat %0.30 yükselirse alış yapılır.</span>
+                            </label>
+                            <input id="fDownTrail" type="number" min="0" step="0.01" placeholder="0,5 veya 0.5" value="0.5" lang="tr" inputmode="decimal" />
+                        </div>
+                    </div>
+                    <div id="downGridRows" class="rows"></div>
+                </div>
+
+                <!-- Step 5: Profit Triggers -->
+                <div class="dm-step" data-step="5">
+                    <div class="section-title">Kar Tetikleri</div>
+                    <div class="grid-2">
+                        <div class="form-group">
+                            <label class="label-with-tooltip">
+                                Kar Alımı (Rebuy) tetik %
+                                <span class="tooltip-icon">ℹ</span>
+                                <span class="tooltip-text">Ortalama fiyatın altına %X düşerse kar alımı (rebuy) moduna geçer. Örn: 1.0% = ortalama fiyatın %1 altına düşerse.</span>
+                            </label>
+                            <input id="fRebuyTrigger" type="number" step="0.01" placeholder="1,5 veya 1.5" value="1.5" lang="tr" inputmode="decimal" />
+                        </div>
+                        <div class="form-group">
+                            <label class="label-with-tooltip">
+                                Rebuy trailing %
+                                <span class="tooltip-icon">ℹ</span>
+                                <span class="tooltip-text">Kar alımı modunda en düşük noktayı takip etme yüzdesi. Fiyat %X yükselirse alış yapılır.</span>
+                            </label>
+                            <input id="fRebuyTrail" type="number" step="0.01" placeholder="0.30" value="0.30" />
+                        </div>
+                        <div class="form-group">
+                            <label class="label-with-tooltip">
+                                Kar Satışı (Resell) tetik %
+                                <span class="tooltip-icon">ℹ</span>
+                                <span class="tooltip-text">Ortalama fiyatın üstüne %X çıkarsa kar satışı (resell) moduna geçer. Örn: 1.0% = ortalama fiyatın %1 üstüne çıkarsa.</span>
+                            </label>
+                            <input id="fResellTrigger" type="number" step="0.01" placeholder="1,5 veya 1.5" value="1.5" lang="tr" inputmode="decimal" />
+                        </div>
+                        <div class="form-group">
+                            <label class="label-with-tooltip">
+                                Resell trailing %
+                                <span class="tooltip-icon">ℹ</span>
+                                <span class="tooltip-text">Kar satışı modunda en yüksek noktayı takip etme yüzdesi. Fiyat %X düşerse satış yapılır.</span>
+                            </label>
+                            <input id="fResellTrail" type="number" step="0.01" placeholder="0,5 veya 0.5" value="0.5" lang="tr" inputmode="decimal" />
+                        </div>
+                    </div>
+                </div>
+
+                <div id="createBotError" class="form-error" style="display: none;"></div>
+                </div>
+                <!-- TRDCA Pro+ (Trailing Rebalancing DCA) parametre ekranı -->
+                <div id="dmWizardTrdca" style="display: none;">
+                    <div class="section-title">TRDCA Pro+ — Genel</div>
+                    <div class="grid-2">
+                        <div class="form-group">
+                            <label class="label-with-tooltip" for="fTrdcaQuoteAsset">
+                                Quote varlık
+                                <span class="tooltip-icon">ℹ</span>
+                                <span class="tooltip-text">Tüm fiyat ve işlemler bu para birimi cinsinden. Değişim SAFE_STOP tetikler.</span>
+                            </label>
+                            <select id="fTrdcaQuoteAsset" class="form-input" style="width:100%;padding:0.6rem 1rem;">
+                                <option value="USDT" selected>USDT</option>
+                                <option value="FDUSD">FDUSD</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label class="label-with-tooltip" for="fTrdcaBotBalance">
+                                Bot bakiyesi (<span id="dmTrdcaQuoteName">USDT</span>)
+                                <span class="tooltip-icon">ℹ</span>
+                                <span class="tooltip-text">Bot için kullanılacak bakiye (isteğe bağlı). Boş bırakırsanız tüm kullanılabilir bakiye kullanılır. Test/paper’da üst sınır olarak uygulanır.</span>
+                            </label>
+                            <input id="fTrdcaBotBalance" type="number" min="0" step="any" placeholder="Kullanılabilir: —" class="form-input" style="width:100%;padding:0.6rem 1rem;" />
+                        </div>
+                    </div>
+                    <div class="grid-2" style="margin-top:12px;">
+                        <div class="form-group">
+                            <label for="fTrdcaBasePct">Base (coinler) %</label>
+                            <input id="fTrdcaBasePct" type="number" min="0" max="100" step="1" class="form-input" style="width:100%;padding:0.6rem 1rem;" placeholder="0" />
+                        </div>
+                        <div class="form-group">
+                            <label for="fTrdcaQuotePctBar">Quote %</label>
+                            <input id="fTrdcaQuotePctBar" type="number" min="0" max="100" step="1" class="form-input" style="width:100%;padding:0.6rem 1rem;" placeholder="0" />
+                        </div>
+                    </div>
+                    <div class="section-title" style="margin-top:1rem;">Rebalancing — Coin dağılımı</div>
+                    <div class="form-group">
+                        <label class="label-with-tooltip" for="fTrdcaCoinCount">
+                            Coin sayısı (2–10)
+                            <span class="tooltip-icon">ℹ</span>
+                            <span class="tooltip-text">Portföyde hedef oran gireceğiniz coin adedi. Her biri için sembol ve hedef % gireceksiniz; kalan otomatik quote (USDT) olur.</span>
+                        </label>
+                        <input id="fTrdcaCoinCount" type="number" min="2" max="10" step="1" value="4" class="form-input" style="width:100%;padding:0.6rem 1rem;" />
+                    </div>
+                    <div id="trdcaRebalanceRows" class="rows" style="margin-top:12px;"></div>
+                    <div class="hint" style="margin-top:8px;">Hedef % toplamı 100 olmalı (coinler + kalan = quote). <strong>Toplam: <span id="trdcaPctTotal">0</span>% — Kalan (quote): <span id="trdcaQuotePct">100</span>%</strong></div>
+                    <div class="grid-2" style="margin-top:1rem;">
+                        <div class="form-group">
+                            <label class="label-with-tooltip" for="fTrdcaGapArmPct">
+                                Rebalancing sapma %
+                                <span class="tooltip-icon">ℹ</span>
+                                <span class="tooltip-text">Hedef orandan bu kadar sapma olunca rebalance tetiklenir. Örn: 3 = %3 sapmada dengeleme.</span>
+                            </label>
+                            <input id="fTrdcaGapArmPct" type="number" step="0.1" min="0.5" value="3" class="form-input" style="width:100%;padding:0.6rem 1rem;" />
+                        </div>
+                        <div class="form-group">
+                            <label class="label-with-tooltip" for="fTrdcaTrailBackPct">
+                                Trailing %
+                                <span class="tooltip-icon">ℹ</span>
+                                <span class="tooltip-text">Sapma bu yüzde geri çekilince rebalance emri gönderilir.</span>
+                            </label>
+                            <input id="fTrdcaTrailBackPct" type="number" step="0.1" value="0.6" class="form-input" style="width:100%;padding:0.6rem 1rem;" />
+                        </div>
+                    </div>
+                    <div class="section-title" style="margin-top:1.25rem;">DCA (Trailing DCA / Grid)</div>
+                    <div class="grid-2">
+                        <div class="form-group">
+                            <label class="label-with-tooltip" for="fTrdcaGridUpCount">
+                                Yukarı grid sayısı
+                                <span class="tooltip-icon">ℹ</span>
+                                <span class="tooltip-text">Anchor üstü satış seviye adedi.</span>
+                            </label>
+                            <input id="fTrdcaGridUpCount" type="number" min="1" max="10" step="1" value="3" class="form-input" style="width:100%;padding:0.6rem 1rem;" />
+                        </div>
+                        <div class="form-group">
+                            <label class="label-with-tooltip" for="fTrdcaGridDownCount">
+                                Aşağı grid sayısı
+                                <span class="tooltip-icon">ℹ</span>
+                                <span class="tooltip-text">Anchor altı alış seviye adedi.</span>
+                            </label>
+                            <input id="fTrdcaGridDownCount" type="number" min="1" max="10" step="1" value="3" class="form-input" style="width:100%;padding:0.6rem 1rem;" />
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label class="label-with-tooltip" for="fTrdcaGridTrailPct">
+                            Grid trailing % (tüm seviyelerde geçerli)
+                            <span class="tooltip-icon">ℹ</span>
+                            <span class="tooltip-text">Tepe/dipten bu yüzde geri çekilince emir tetiklenir. Satış ve alış için aynı değer kullanılır.</span>
+                        </label>
+                        <input id="fTrdcaGridTrailPct" type="number" step="0.1" min="0.1" value="0.8" class="form-input" style="width:100%;padding:0.6rem 1rem;" />
+                    </div>
+                    <div class="section-title" style="margin-top:0.75rem;">Yukarı grid — Tetik % + Satım %</div>
+                    <div id="trdcaGridUpRows" class="rows" style="margin-top:8px;"></div>
+                    <div class="hint" style="margin-top:4px;">Tetik %: fiyat referanstan bu kadar yukarı gidince satış tetiklenir (örn: 2 = %2). Satım: her seviyede ne kadar varlık satılacak.</div>
+                    <div class="section-title" style="margin-top:1rem;">Aşağı grid — Tetik % + Alım %</div>
+                    <div id="trdcaGridDownRows" class="rows" style="margin-top:8px;"></div>
+                    <div class="section-title" style="margin-top:0.75rem;">DCA kar alımı</div>
+                    <div class="hint" style="margin-bottom:8px;">Yukarı ve aşağı gridde satış/alış sonrası kar alımı için ortak parametreler.</div>
+                    <div class="grid-2">
+                        <div class="form-group">
+                            <label class="label-with-tooltip" for="fTrdcaKarAlimTetikPct">
+                                Kar alım tetik %
+                                <span class="tooltip-icon">ℹ</span>
+                                <span class="tooltip-text">Fiyat bu yüzde hareket edince kar alım modu tetiklenir (satış sonrası dip veya alış sonrası tepe).</span>
+                            </label>
+                            <input id="fTrdcaKarAlimTetikPct" type="number" step="0.1" value="2" class="form-input" style="width:100%;padding:0.6rem 1rem;" />
+                        </div>
+                        <div class="form-group">
+                            <label class="label-with-tooltip" for="fTrdcaKarAlimTrailPct">
+                                Kar alım trailing %
+                                <span class="tooltip-icon">ℹ</span>
+                                <span class="tooltip-text">Tepe/dipten bu yüzde geri çekilince kar alım emri gönderilir.</span>
+                            </label>
+                            <input id="fTrdcaKarAlimTrailPct" type="number" step="0.1" value="0.8" class="form-input" style="width:100%;padding:0.6rem 1rem;" />
+                        </div>
+                    </div>
+                    <div id="createBotErrorTrdca" class="form-error" style="display: none;"></div>
+                </div>
+            </div>
+
+            <div class="dm-modal__foot">
+                <button id="dmSubmitBtn" class="btn btn-primary-gold">Oluştur</button>
+                <button id="dmCancelBtn" class="btn btn-ghost">İptal</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Trade Modal -->
+    <div id="bnTradeModalBackdrop" class="dm-backdrop" aria-hidden="true" style="display: none;"></div>
+    <div id="bnTradeModal" class="dm-modal" aria-hidden="true" role="dialog" style="display: none;">
+        <div class="dm-modal__content" style="max-width: 500px;">
+            <div class="dm-modal__head">
+                <div class="dm-modal__title" id="bnTradeModalTitle">Spot Al</div>
+                <button id="bnTradeModalClose" class="icon-btn">✕</button>
+            </div>
+            <div class="dm-modal__body">
+                <div class="form-group">
+                    <label>Parite</label>
+                    <input id="bnTradeSymbol" type="text" readonly class="form-input" />
+                </div>
+                <div class="form-group">
+                    <label>Tip</label>
+                    <div style="display: flex; gap: 8px;">
+                        <button id="bnTradeTypeMarket" class="btn btn-ghost" data-type="MARKET">Market</button>
+                        <button id="bnTradeTypeLimit" class="btn btn-ghost" data-type="LIMIT">Limit</button>
+                    </div>
+                </div>
+                <div id="bnTradeLimitPriceGroup" class="form-group" style="display: none;">
+                    <label>Fiyat</label>
+                    <input id="bnTradePrice" type="number" step="0.01" class="form-input" />
+                </div>
+                <div id="bnTradeQtyGroup" class="form-group">
+                    <label id="bnTradeQtyLabel">Miktar</label>
+                    <input id="bnTradeQty" type="number" step="0.00000001" class="form-input" />
+                    <div style="display: flex; gap: 4px; margin-top: 8px;">
+                        <button class="mini-btn" data-pct="25">25%</button>
+                        <button class="mini-btn" data-pct="50">50%</button>
+                        <button class="mini-btn" data-pct="75">75%</button>
+                        <button class="mini-btn" data-pct="100">100%</button>
+                    </div>
+                </div>
+                <div id="bnTradeQuoteQtyGroup" class="form-group" style="display: none;">
+                    <label>USDT Tutarı</label>
+                    <input id="bnTradeQuoteQty" type="number" step="0.01" class="form-input" />
+                    <div style="display: flex; gap: 4px; margin-top: 8px;">
+                        <button class="mini-btn" data-pct="25">25%</button>
+                        <button class="mini-btn" data-pct="50">50%</button>
+                        <button class="mini-btn" data-pct="75">75%</button>
+                        <button class="mini-btn" data-pct="100">100%</button>
+                    </div>
+                </div>
+                <div id="bnTradeError" class="form-error" style="display: none;"></div>
+            </div>
+            <div class="dm-modal__foot">
+                <button id="bnTradeSubmit" class="btn btn-primary-gold">Onayla</button>
+                <button id="bnTradeCancel" class="btn btn-ghost">İptal</button>
+            </div>
+        </div>
+    </div>
+
+    <footer class="page-footer">
+        <div class="page-footer-legal">
+            <strong>TraderTrailing</strong> Ömer Altın kuruluşudur. Tüm hakları saklıdır.
+        </div>
+        <div class="page-footer-license">
+            Bu web platformu, TraderTrailing adına lisanslı yazılım altyapısı ile sunulmaktadır. İçerik, tasarım ve işlevler telif hakları ile korunmaktadır; izinsiz kopyalama, dağıtım veya ticari kullanım yasaktır.
+        </div>
+    </footer>
+
+    <!-- Must Change Password Modal (zorunlu, kapatılamaz) -->
+    <div id="mustChangePasswordModal" class="modal" style="display: none; position: fixed; z-index: 20000; left: 0; top: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.95); align-items: center; justify-content: center;">
+        <div class="modal-content" style="max-width: 500px; background: var(--ds-bg-primary); border-radius: 16px; padding: 2rem; position: relative; border: 2px solid var(--ds-accent);">
+            <h2 style="margin: 0 0 1rem 0; color: var(--ds-accent); text-align: center;">Şifre Değiştirme Zorunlu</h2>
+            <div style="color: var(--ds-text-primary); line-height: 1.6; margin-bottom: 1rem; text-align: center;">
+                <p style="margin: 0 0 1rem 0; font-weight: 600;">Admin tarafından oluşturulan şifre tek kullanımlıktır.</p>
+                <p style="margin: 0; color: var(--ds-text-secondary); font-size: 0.9rem;">Güvenliğiniz için lütfen yeni bir şifre oluşturun. Yeni şifrenizi asla sizden başkası göremez. Şifre değiştirmeden başka işlem yapamazsınız.</p>
+            </div>
+            <div style="background: var(--ds-bg-secondary); padding: 0.75rem 1rem; border-radius: 8px; margin-bottom: 1.25rem; font-size: 0.8rem; color: var(--ds-text-secondary); line-height: 1.5;">
+                <strong style="color: var(--ds-text-primary);">Şifre şartları:</strong>
+                <ul style="margin: 0.35rem 0 0 1.25rem; padding: 0;">
+                    <li>En az 10 karakter</li>
+                    <li>En az 1 büyük harf, 1 küçük harf, 1 rakam</li>
+                    <li>En az 1 noktalama işareti (.,!?;:)</li>
+                    <li>İsim/soyad içeremez; şifreler aynı olmalıdır.</li>
+                </ul>
+            </div>
+            <form id="mustChangePasswordForm" style="display: contents;" onsubmit="var b=document.getElementById('mustChangePasswordBtn');if(b&&!b.disabled)b.click();return false;">
+                <div style="display: flex; flex-direction: column; gap: 0.75rem; margin-bottom: 1.5rem;">
+                    <div>
+                        <label style="display: block; font-size: 0.9rem; font-weight: 600; color: var(--ds-text-primary); margin-bottom: 0.5rem;">Yeni Şifre</label>
+                        <input id="mustChangePasswordNew" type="password" class="form-input" placeholder="Yeni şifre" autocomplete="new-password" style="width: 100%;">
+                        <div id="mustChangePasswordStrength" style="font-size: 0.8rem; margin-top: 0.25rem; min-height: 1.2em; color: var(--ds-text-secondary);"></div>
+                    </div>
+                    <div>
+                        <label style="display: block; font-size: 0.9rem; font-weight: 600; color: var(--ds-text-primary); margin-bottom: 0.5rem;">Yeni Şifre Tekrar</label>
+                        <input id="mustChangePasswordConfirm" type="password" class="form-input" placeholder="Yeni şifre tekrar" autocomplete="new-password" style="width: 100%;">
+                        <div id="mustChangePasswordMatch" style="font-size: 0.8rem; margin-top: 0.25rem; min-height: 1.2em; color: var(--ds-text-secondary);"></div>
+                    </div>
+                    <div id="mustChangePasswordStatus" style="font-size: 0.85rem; margin-top: 0.25rem; min-height: 1.2em;"></div>
+                </div>
+                <button type="submit" id="mustChangePasswordBtn" class="btn primary" style="width: 100%;">Şifreyi Güncelle</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- First Login Popup (API key uyarısı; admin first_login popup kapatıldıktan sonra gösterilir) -->
+    <div id="firstLoginModal" class="modal" style="display: none; position: fixed; z-index: 10000; left: 0; top: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.7); align-items: center; justify-content: center;">
+        <div class="modal-content first-login-modal-content" style="max-width: 600px; background: var(--ds-bg-primary); border-radius: 16px; padding: 2rem; position: relative; max-height: 90vh; overflow-y: auto;">
+            <button type="button" class="first-login-modal-close" onclick="closeFirstLoginModal()" aria-label="Kapat">&#10005;</button>
+            <h2 style="margin: 0 0 1rem 0; color: var(--ds-accent);">API Key ve Secret Gerekli</h2>
+            <div style="color: var(--ds-text-primary); line-height: 1.6;">
+                <p style="margin: 0 0 1rem 0; font-weight: 600;">Binance API Key ve Secret'inizi girmeniz zorunludur.</p>
+                <div style="background: var(--ds-bg-secondary); padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">
+                    <h3 style="margin: 0 0 0.75rem 0; font-size: 1rem;">Binance'den API Key Nasıl Alınır?</h3>
+                    <ol style="margin: 0; padding-left: 1.5rem; color: var(--ds-text-secondary);">
+                        <li>Binance hesabınıza giriş yapın</li>
+                        <li>Sol üst köşedeki profil ikonuna tıklayın</li>
+                        <li>"API Management" veya "API Yönetimi" seçeneğine gidin</li>
+                        <li>"Create API" veya "API Oluştur" butonuna tıklayın</li>
+                        <li>API adı verin (örn: "Trader Trailing")</li>
+                        <li>API Key ve Secret Key'i kopyalayın</li>
+                        <li><strong>Önemli:</strong> Secret Key'i sadece bir kez görebilirsiniz, mutlaka kaydedin!</li>
+                        <li>IP kısıtlaması ekleyin (Ayarlar sekmesinden sunucu IP adresini kopyalayıp Binance'ye yapıştırın)</li>
+                        <li>API izinlerini "Enable Reading" ve "Enable Spot & Margin Trading" olarak ayarlayın</li>
+                    </ol>
+                </div>
+                <div style="background: rgba(14, 203, 129, 0.08); border: 1px solid rgba(14, 203, 129, 0.3); padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">
+                    <h3 style="margin: 0 0 0.5rem 0; font-size: 0.95rem; color: var(--ds-success);">Güvenlik</h3>
+                    <p style="margin: 0 0 0.5rem 0; font-weight: 600; font-size: 0.9rem; color: var(--ds-text-primary);">Platformumuz para çekme yetkisine sahip değildir. Binance, üçüncü taraf API'lere varsayılan olarak para çekme izni vermez; siz açıkça vermediğiniz sürece varlıklarınız yalnızca okuma ve spot işlem ile sınırlı kalır.</p>
+                    <p style="margin: 0; font-size: 0.85rem; color: var(--ds-text-secondary);">API oluştururken <strong>"Enable Withdrawals" / "Para çekmeyi etkinleştir"</strong> seçeneğini <strong>kesinlikle işaretlemeyin</strong>. Yalnızca "Enable Reading" ve "Enable Spot & Margin Trading" yeterlidir. Bu sayede sistem alım-satım işlemlerinizi yürütebilir; para çekme yetkisi yalnızca sizin kontrolünüzde kalır.</p>
+                </div>
+                <p style="margin: 0; color: var(--ds-text-secondary); font-size: 0.9rem;">
+                    API Key ve Secret'i girdikten sonra sisteminiz tam olarak çalışacaktır.
+                </p>
+            </div>
+            <div style="display: flex; gap: 1rem; margin-top: 1.5rem;">
+                <button class="btn primary" onclick="closeFirstLoginModal()">Anladım, Ayarlara Git</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Admin Pop-Up (kullanıcıya gösterilen duyuru; X ile kapatılana kadar kalır) -->
+    <div id="userPopupOverlay" class="user-popup-overlay" style="display: none;" aria-modal="true" role="dialog" aria-labelledby="userPopupTitle">
+        <div id="userPopupCard" class="user-popup-card">
+            <button type="button" class="user-popup-close" onclick="dismissUserPopup()" aria-label="Kapat">&#10005;</button>
+            <h2 id="userPopupTitle" class="user-popup-title">Duyuru</h2>
+            <div id="userPopupMessage" class="user-popup-message"></div>
+        </div>
+    </div>
+
+    <!-- Hesap silme şifre onay modalı -->
+    <div id="deleteAccountModalBackdrop" class="dm-backdrop" aria-hidden="true" style="display: none;"></div>
+    <div id="deleteAccountModal" class="dm-modal" aria-hidden="true" role="dialog" style="display: none;">
+        <div class="dm-modal__content" style="max-width: 400px;">
+            <div class="dm-modal__head">
+                <div class="dm-modal__title" style="color: var(--ds-text-primary);">Hesabı sil</div>
+                <button type="button" class="icon-btn" id="deleteAccountModalClose" title="Kapat" style="font-size: 1.1rem;">✕</button>
+            </div>
+            <div class="dm-modal__body" style="padding: 1.5rem;">
+                <p style="font-size: 0.9rem; color: var(--ds-text-secondary); margin: 0 0 1rem 0;">Hesabı kalıcı olarak silmek istediğinize emin misiniz? Devam etmek için mevcut şifrenizi girin.</p>
+                <input type="password" id="deleteAccountPasswordInput" placeholder="Şifre" autocomplete="current-password" style="width: 100%; padding: 0.6rem 0.75rem; margin-bottom: 0.5rem; border-radius: 8px; border: 1px solid var(--ds-border); background: var(--ds-bg-secondary); color: var(--ds-text-primary); font-size: 1rem; box-sizing: border-box;">
+                <div id="deleteAccountModalError" style="font-size: 0.85rem; color: var(--ds-danger, #f6465d); min-height: 1.2em; margin-bottom: 0.5rem;"></div>
+            </div>
+            <div class="dm-modal__foot" style="display: flex; gap: 0.75rem; justify-content: flex-end;">
+                <button type="button" class="btn btn-sm" id="deleteAccountModalCancel" style="background: var(--ds-bg-tertiary); color: var(--ds-text-primary); border: 1px solid var(--ds-border);">İptal</button>
+                <button type="button" class="btn btn-sm" id="deleteAccountModalConfirm" style="background: var(--ds-danger, #f6465d); color: #fff;">Hesabı sil</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- İşlem Geçmişi modal (geniş, mobil uyumlu) -->
+    <div id="auditModalBackdrop" class="dm-backdrop" aria-hidden="true" style="display: none;"></div>
+    <div id="auditModal" class="dm-modal audit-modal" aria-hidden="true" role="dialog" style="display: none;">
+        <div class="dm-modal__content audit-modal__content">
+            <div class="dm-modal__head audit-modal__head">
+                <div class="dm-modal__title">İşlem Geçmişi</div>
+                <button type="button" class="icon-btn" onclick="closeAuditModal()" title="Kapat" aria-label="Kapat">✕</button>
+            </div>
+            <div class="audit-modal__toolbar">
+                <div class="audit-modal__toolbar-row">
+                    <span class="audit-modal__toolbar-label">Dönem:</span>
+                    <div class="audit-range-btns">
+                        <button type="button" class="audit-range-btn btn btn-sm" data-range="day">Günlük</button>
+                        <button type="button" class="audit-range-btn btn btn-sm" data-range="month">Aylık</button>
+                        <button type="button" class="audit-range-btn btn btn-sm" data-range="3month">3 Aylık</button>
+                        <button type="button" class="audit-range-btn btn btn-sm" data-range="6month">6 Aylık</button>
+                        <button type="button" class="audit-range-btn btn btn-sm" data-range="year">Yıllık</button>
+                    </div>
+                </div>
+                <div class="audit-modal__toolbar-row audit-modal__toolbar-row--filter">
+                    <span class="audit-modal__toolbar-label">İşlem türü:</span>
+                    <select id="settingsAuditTypeFilter" class="audit-type-filter btn btn-sm">
+                        <option value="">Tümü</option>
+                        <option value="LOGIN_SUCCESS">Giriş başarılı</option>
+                        <option value="LOGIN_FAILED">Giriş başarısız</option>
+                        <option value="LOGOUT">Çıkış</option>
+                        <option value="SPOT_ORDER_CREATE">Spot emir</option>
+                        <option value="BOT_CREATE">Bot oluşturuldu</option>
+                        <option value="BOT_START">Bot başlatıldı</option>
+                        <option value="BOT_STOP">Bot durduruldu</option>
+                        <option value="BOT_DELETE">Bot silindi</option>
+                        <option value="BOT_TRADE">Bot alım/satım</option>
+                        <option value="PASSWORD_CHANGE">Şifre değişti</option>
+                        <option value="PHONE_UPDATE">Telefon güncellendi</option>
+                        <option value="CHAT_USER_MESSAGE">Sohbet (siz)</option>
+                        <option value="CHAT_ADMIN_MESSAGE">Sohbet (admin)</option>
+                    </select>
+                </div>
+            </div>
+            <div id="settingsAuditList" class="dm-modal__body audit-modal__body">
+                <span style="color: var(--ds-text-secondary);">Yükleniyor...</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Chat Modal (dm-modal style, sayfa tasarımına uygun) -->
+    <div id="chatModalBackdrop" class="dm-backdrop" aria-hidden="true" style="display: none;"></div>
+    <div id="chatScreen" class="dm-modal" aria-hidden="true" role="dialog" style="display: none;">
+        <div class="dm-modal__content" style="max-width: 480px; width: 100%; max-height: 85vh; display: flex; flex-direction: column;">
+            <div class="dm-modal__head" style="flex-shrink: 0;">
+                <div class="dm-modal__title" style="color: var(--ds-accent);">Admin ile Sohbet</div>
+                <button type="button" class="icon-btn" onclick="closeChatScreen()" title="Sohbeti kapat" style="font-size: 1.1rem;">✕</button>
+            </div>
+            <div id="chatMessages" class="dm-modal__body" style="flex: 1; min-height: 200px; max-height: 320px; overflow-y: auto; padding: 1rem; display: flex; flex-direction: column; gap: 0.6rem;">
+                <div class="empty-state">Yükleniyor...</div>
+            </div>
+            <div id="chatLockedBanner" style="display: none; padding: 0.6rem 1rem; background: rgba(246,70,93,0.15); color: var(--ds-danger); font-size: 0.85rem; border-top: 1px solid var(--ds-border); flex-shrink: 0;">
+                Sohbet kilitlendi. Mesaj gönderemezsiniz.
+            </div>
+            <div id="chatEndedBanner" style="display: none; padding: 0.6rem 1rem; background: var(--ds-bg-tertiary); color: var(--ds-text-secondary); font-size: 0.85rem; border-top: 1px solid var(--ds-border); flex-shrink: 0;">
+                Sohbet sonlandırıldı.
+            </div>
+            <div id="chatReopenWrap" style="display: none; padding: 0.6rem 1rem; border-top: 1px solid var(--ds-border); flex-shrink: 0;">
+                <button type="button" class="btn primary" style="width: 100%;" onclick="reopenChat()">Yeni sohbet başlat</button>
+            </div>
+            <div id="chatEndChatWrap" style="display: none; padding: 0.5rem 1rem; border-top: 1px solid var(--ds-border); flex-shrink: 0;">
+                <button type="button" class="btn btn-sm" style="width: 100%; background: var(--ds-bg-tertiary); color: var(--ds-text-secondary);" onclick="showChatRating()">Sohbeti sonlandır</button>
+            </div>
+            <div id="chatRatingWrap" style="display: none; padding: 0.75rem 1rem; border-top: 1px solid var(--ds-border); background: var(--ds-bg-tertiary); flex-shrink: 0; text-align: center;">
+                <div style="font-size: 0.85rem; color: var(--ds-text-secondary); margin-bottom: 0.5rem;">Sohbeti puanlayın</div>
+                <div class="chat-stars-row">
+                    <button type="button" class="chat-star-btn" data-rating="1" onclick="submitChatRating(1)" title="1 yıldız">☆</button>
+                    <button type="button" class="chat-star-btn" data-rating="2" onclick="submitChatRating(2)" title="2 yıldız">☆</button>
+                    <button type="button" class="chat-star-btn" data-rating="3" onclick="submitChatRating(3)" title="3 yıldız">☆</button>
+                    <button type="button" class="chat-star-btn" data-rating="4" onclick="submitChatRating(4)" title="4 yıldız">☆</button>
+                    <button type="button" class="chat-star-btn" data-rating="5" onclick="submitChatRating(5)" title="5 yıldız">☆</button>
+                </div>
+            </div>
+            <div id="chatInputWrap" class="chat-input-wrap" style="padding: 0.75rem 1rem; border-top: 1px solid var(--ds-border); background: var(--ds-bg-secondary); flex-shrink: 0;">
+                <form id="chatForm" onsubmit="handleChatSend(event)">
+                    <div class="chat-input-row">
+                        <div class="chat-input-line">
+                            <div class="chat-input-cell">
+                                <textarea id="chatMessageInput" class="form-input" rows="2" placeholder="Mesajınız..." maxlength="2000" style="resize: none;"></textarea>
+                            </div>
+                            <button type="submit" class="btn primary chat-send-btn" title="Gönder" aria-label="Gönder"><svg class="chat-send-arrow" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg></button>
+                        </div>
+                        <div id="chatLengthWarning" class="chat-length-warning" style="display: none;" role="alert"></div>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // last_route kaldırıldı: güvenlik katmanı – her zaman login'den başla, geri ile otomatik giriş yok
+        var _chatPollTimer = null;
+        var _chatNotifyTimer = null;
+        var _chatAccountId = null;
+        var _chatLastSeenAdminId = 0;
+        var _chatNotifyHasBaseline = false;
+        var _chatLastRenderedSignature = '';
+        var _chatLastMessageCount = 0;
+        var _chatLastSentBody = '';
+        var _chatWelcomeTypingShown = false;
+        var _chatShowingRating = false;
+        var WELCOME_CHAT_BODY = 'Merhaba, size nasıl yardımcı olabiliriz?';
+        function getChatAccountId() {
+            if (typeof State !== 'undefined' && State.accountId) return State.accountId;
+            var p = new URLSearchParams(window.location.search);
+            var id = p.get('account_id');
+            return id ? parseInt(id, 10) : null;
+        }
+        function openChatScreen() {
+            _chatAccountId = getChatAccountId();
+            if (!_chatAccountId) {
+                if (window.Toast) window.Toast.error('Hesap bilgisi bulunamadı');
+                return;
+            }
+            _chatLastRenderedSignature = '';
+            _chatLastMessageCount = 0;
+            _chatWelcomeTypingShown = false;
+            updateContactTabBadge(0);
+            stopChatNotify();
+            var modal = document.getElementById('chatScreen');
+            var backdrop = document.getElementById('chatModalBackdrop');
+            if (modal && backdrop) {
+                document.body.style.overflow = 'hidden';
+                backdrop.setAttribute('aria-hidden', 'false');
+                backdrop.style.display = 'block';
+                modal.setAttribute('aria-hidden', 'false');
+                modal.style.display = 'flex';
+                var inp = document.getElementById('chatMessageInput');
+                if (inp) inp.value = '';
+                updateChatSendState();
+                loadChat();
+                startChatPoll();
+            }
+        }
+        function closeChatScreen() {
+            _chatShowingRating = false;
+            document.body.style.overflow = '';
+            var modal = document.getElementById('chatScreen');
+            var backdrop = document.getElementById('chatModalBackdrop');
+            if (backdrop) { backdrop.setAttribute('aria-hidden', 'true'); backdrop.style.display = 'none'; }
+            if (modal) { modal.setAttribute('aria-hidden', 'true'); modal.style.display = 'none'; }
+            stopChatPoll();
+            startChatNotify();
+            _chatWelcomeTypingShown = false;
+            _chatLastMessageCount = 0;
+        }
+        function startChatPoll() {
+            stopChatPoll();
+            _chatPollTimer = setInterval(loadChat, 2500);
+        }
+        function stopChatPoll() {
+            if (_chatPollTimer) { clearInterval(_chatPollTimer); _chatPollTimer = null; }
+        }
+        function updateContactTabBadge(unreadCount) {
+            var el = document.getElementById('contactTabBadge');
+            if (!el) return;
+            if (unreadCount > 0) {
+                el.textContent = unreadCount > 99 ? '99+' : String(unreadCount);
+                el.style.display = 'inline';
+            } else {
+                el.style.display = 'none';
+            }
+        }
+        async function _chatNotifyTick() {
+            var aid = getChatAccountId();
+            if (!aid) return;
+            var modal = document.getElementById('chatScreen');
+            if (modal && modal.getAttribute('aria-hidden') === 'false') return;
+            if (!window.apiClient) return;
+            try {
+                var data = await window.apiClient.get('/api/auth/chat?account_id=' + aid);
+                var msgs = (data && data.messages) ? data.messages : [];
+                var adminMsgs = msgs.filter(function(m) { return m.sender_type === 'admin'; });
+                var unread = adminMsgs.filter(function(m) { return !m.read_at; }).length;
+                updateContactTabBadge(unread);
+                var maxId = Math.max(0, ...adminMsgs.map(function(m) { return m.id || 0; }));
+                if (_chatNotifyHasBaseline && maxId > _chatLastSeenAdminId) {
+                    if (window.Toast) window.Toast.success('Yeni mesajınız var');
+                }
+                _chatLastSeenAdminId = maxId;
+                _chatNotifyHasBaseline = true;
+            } catch (e) {}
+        }
+        function startChatNotify() {
+            if (_chatNotifyTimer) return;
+            _chatNotifyTick();
+            _chatNotifyTimer = setInterval(_chatNotifyTick, 15000);
+        }
+        function stopChatNotify() {
+            if (_chatNotifyTimer) { clearInterval(_chatNotifyTimer); _chatNotifyTimer = null; }
+        }
+        function renderChatMessages(data) {
+            var container = document.getElementById('chatMessages');
+            if (!container) return;
+            var messages = data.messages || [];
+            var locked = !!data.locked;
+            var ended = !!data.ended;
+            if (ended) _chatShowingRating = false;
+            var lockEl = document.getElementById('chatLockedBanner');
+            var endEl = document.getElementById('chatEndedBanner');
+            var reopenEl = document.getElementById('chatReopenWrap');
+            var endChatWrap = document.getElementById('chatEndChatWrap');
+            var ratingWrap = document.getElementById('chatRatingWrap');
+            var inputWrap = document.getElementById('chatInputWrap');
+            if (lockEl) lockEl.style.display = locked ? 'block' : 'none';
+            if (endEl) endEl.style.display = ended ? 'block' : 'none';
+            if (reopenEl) reopenEl.style.display = ended ? 'block' : 'none';
+            if (_chatShowingRating) {
+                if (endChatWrap) endChatWrap.style.display = 'none';
+                if (ratingWrap) ratingWrap.style.display = 'block';
+                if (inputWrap) inputWrap.style.display = 'none';
+                return;
+            }
+            if (endChatWrap) endChatWrap.style.display = (!ended && !locked) ? 'block' : 'none';
+            if (ratingWrap) ratingWrap.style.display = 'none';
+            if (inputWrap) inputWrap.style.display = (locked || ended) ? 'none' : 'block';
+            var typingBubbleHtml = '<div class="chat-typing-bubble"><span class="chat-typing-dots"><span></span><span></span><span></span></span></div>';
+            if (ended) {
+                var rating = data.rating != null ? Number(data.rating) : null;
+                var ratingStr = '';
+                if (rating >= 1 && rating <= 5) {
+                    var starParts = [];
+                    for (var i = 0; i < 5; i++) {
+                        var ch = i < rating ? '\u2605' : '\u2606';
+                        starParts.push('<span class="chat-ended-star" style="animation-delay: ' + (i * 0.12) + 's">' + ch + '</span>');
+                    }
+                    ratingStr = '<div style="margin-top: 0.5rem; font-size: 1rem;">Verdiğiniz puan: <span class="chat-ended-stars" style="color: var(--ds-accent, #f0b90b);">' + starParts.join('') + '</span> (' + rating + '/5)</div>';
+                }
+                var endHtml = '<div class="empty-state chat-ended-state" style="text-align: center; padding: 1.5rem; color: var(--ds-text-secondary);">Sohbet sonlandırıldı.' + ratingStr + '<div style="margin-top: 0.75rem;">Yeni sohbet için aşağıdaki butona tıklayın.</div></div>';
+                if (container.innerHTML !== endHtml) { container.innerHTML = endHtml; container.scrollTop = 0; }
+                _chatLastRenderedSignature = 'ended';
+                return;
+            }
+            if (messages.length === 0) {
+                _chatLastMessageCount = 0;
+                if (data.admin_typing) {
+                    var onlyTypingHtml = '<div class="chat-bubble-in" style="display: flex; flex-direction: column; align-items: flex-start;">' + typingBubbleHtml + '</div>';
+                    if (container.innerHTML !== onlyTypingHtml) { container.innerHTML = onlyTypingHtml; container.scrollTop = 0; }
+                } else {
+                    var emptyHtml = '<div class="empty-state" style="text-align: center; padding: 1.5rem; color: var(--ds-text-secondary);">Henüz mesaj yok. İlk mesajınızı gönderin.</div>';
+                    if (container.innerHTML !== emptyHtml) { container.innerHTML = emptyHtml; container.scrollTop = 0; }
+                }
+                _chatLastRenderedSignature = 'empty';
+                return;
+            }
+            var contentSignature = messages.map(function(m) { return (m.id || '') + '|' + (m.body || '') + '|' + (m.created_at || ''); }).join(';');
+            function formatTime(createdAt) {
+                return createdAt && (window.trTime && window.trTime.trFormatTime ? window.trTime.trFormatTime(createdAt) : new Date(createdAt).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Istanbul' })) || '';
+            }
+            function readLabel(m) {
+                var isUser = m.sender_type === 'user';
+                if (isUser) return m.read_at ? ' <span title="Okundu">\u2713\u2713</span>' : ' <span title="\u0130letildi">\u2713</span>';
+                return '';
+            }
+            if (contentSignature === _chatLastRenderedSignature) {
+                messages.forEach(function(m) {
+                    var meta = container.querySelector('[data-chat-mid="' + m.id + '"] .chat-bubble-meta');
+                    if (meta) {
+                        meta.innerHTML = formatTime(m.created_at) + readLabel(m);
+                    }
+                });
+                var typingWrap = '<div class="chat-bubble-in" data-chat-typing="1" style="display: flex; flex-direction: column; align-items: flex-start;">' + typingBubbleHtml + '</div>';
+                if (data.admin_typing) {
+                    if (!container.querySelector('[data-chat-typing="1"]')) {
+                        container.insertAdjacentHTML('beforeend', typingWrap);
+                        container.scrollTop = container.scrollHeight;
+                    }
+                } else {
+                    var el = container.querySelector('[data-chat-typing="1"]');
+                    if (el) el.remove();
+                }
+                return;
+            }
+            var isWelcomeOnly = messages.length === 1 && messages[0].sender_type === 'admin' && messages[0].body === WELCOME_CHAT_BODY;
+            var lastIsNewAdmin = messages.length > _chatLastMessageCount && messages[messages.length - 1].sender_type === 'admin';
+            if (isWelcomeOnly && !_chatWelcomeTypingShown) {
+                _chatWelcomeTypingShown = true;
+                _chatLastRenderedSignature = contentSignature;
+                container.innerHTML = '<div class="chat-bubble-in" style="display: flex; flex-direction: column; align-items: flex-start;">' + typingBubbleHtml + '</div>';
+                container.scrollTop = container.scrollHeight;
+                setTimeout(function() {
+                    _chatLastRenderedSignature = contentSignature;
+                    _chatLastMessageCount = 1;
+                    var m = messages[0];
+                    var time = formatTime(m.created_at);
+                    var body = (m.body || '').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>');
+                    var read = readLabel(m);
+                    var html = '<div class="chat-bubble-in" data-chat-mid="' + m.id + '" style="display: flex; flex-direction: column; align-items: flex-start;">' +
+                        '<div style="max-width: 85%; align-self: flex-start; background: var(--ds-bg-tertiary); color: var(--ds-text-primary); border-radius: 12px 12px 12px 4px; padding: 0.5rem 0.85rem; word-wrap: break-word;">' +
+                        '<div style="font-size: 0.7rem; opacity: 0.85; margin-bottom: 0.15rem;">Admin</div>' +
+                        '<div style="font-size: 0.9rem;">' + body + '</div>' +
+                        '<div style="font-size: 0.65rem; margin-top: 0.2rem; opacity: 0.8;" class="chat-bubble-meta">' + time + read + '</div></div></div>';
+                    container.innerHTML = html;
+                    container.scrollTop = container.scrollHeight;
+                }, 1200);
+                return;
+            }
+            if (lastIsNewAdmin && _chatLastMessageCount > 0) {
+                var typingWrap = '<div class="chat-bubble-in" style="display: flex; flex-direction: column; align-items: flex-start;">' + typingBubbleHtml + '</div>';
+                container.innerHTML = container.innerHTML + typingWrap;
+                container.scrollTop = container.scrollHeight;
+                setTimeout(function() {
+                    _chatLastRenderedSignature = contentSignature;
+                    _chatLastMessageCount = messages.length;
+                    _chatLastSentBody = '';
+                    var fullHtml = messages.map(function(m) { return msgHtml(m); }).join('');
+                    container.innerHTML = fullHtml;
+                    container.scrollTop = container.scrollHeight;
+                }, 1200);
+                return;
+            }
+            var lastMsg = messages.length > 0 ? messages[messages.length - 1] : null;
+            if (_chatLastSentBody && messages.length === _chatLastMessageCount && lastMsg && lastMsg.sender_type === 'user' && (lastMsg.body || '') === _chatLastSentBody) {
+                var lastBubble = container.querySelector('.chat-bubble-in:last-of-type');
+                if (lastBubble) {
+                    lastBubble.setAttribute('data-chat-mid', String(lastMsg.id || ''));
+                    var meta = lastBubble.querySelector('.chat-bubble-meta');
+                    if (meta) meta.innerHTML = formatTime(lastMsg.created_at) + readLabel(lastMsg);
+                }
+                _chatLastRenderedSignature = contentSignature;
+                _chatLastSentBody = '';
+                return;
+            }
+            _chatLastRenderedSignature = contentSignature;
+            _chatLastMessageCount = messages.length;
+            _chatLastSentBody = '';
+            function msgHtml(m) {
+                var isUser = m.sender_type === 'user';
+                var time = formatTime(m.created_at);
+                var read = readLabel(m);
+                var label = isUser ? 'Siz' : 'Admin';
+                var bubbleStyle = isUser
+                    ? 'max-width: 85%; align-self: flex-end; background: var(--ds-accent); color: #000; border-radius: 12px 12px 4px 12px;'
+                    : 'max-width: 85%; align-self: flex-start; background: var(--ds-bg-tertiary); color: var(--ds-text-primary); border-radius: 12px 12px 12px 4px;';
+                var body = (m.body || '').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>');
+                return '<div class="chat-bubble-in" data-chat-mid="' + m.id + '" style="display: flex; flex-direction: column; align-items: ' + (isUser ? 'flex-end' : 'flex-start') + ';">' +
+                    '<div style="' + bubbleStyle + ' padding: 0.5rem 0.85rem; word-wrap: break-word;">' +
+                    '<div style="font-size: 0.7rem; opacity: 0.85; margin-bottom: 0.15rem;">' + label + '</div>' +
+                    '<div style="font-size: 0.9rem;">' + body + '</div>' +
+                    '<div style="font-size: 0.65rem; margin-top: 0.2rem; opacity: 0.8;" class="chat-bubble-meta">' + time + read + '</div>' +
+                    '</div></div>';
+            }
+            var html = messages.map(function(m) { return msgHtml(m); }).join('');
+            if (data.admin_typing) html += '<div class="chat-bubble-in" data-chat-typing="1" style="display: flex; flex-direction: column; align-items: flex-start;">' + typingBubbleHtml + '</div>';
+            container.innerHTML = html;
+            container.scrollTop = container.scrollHeight;
+            requestAnimationFrame(function() {
+                container.scrollTop = container.scrollHeight;
+            });
+        }
+        async function loadChat(forceRefresh) {
+            var aid = _chatAccountId || getChatAccountId();
+            if (!aid) return;
+            if (!window.apiClient) return;
+            try {
+                var url = '/api/auth/chat?account_id=' + aid;
+                var chatModal = document.getElementById('chatScreen');
+                if (chatModal && chatModal.getAttribute('aria-hidden') === 'false') url += '&open=1';
+                if (forceRefresh) url += '&_t=' + Date.now();
+                var data = await window.apiClient.get(url);
+                var messages = data.messages || [];
+                // Mesajları doğrudan göster; tek admin mesajında "yazıyor" animasyonu her poll'da tekrarlanmasın
+                renderChatMessages(data);
+                var adminIds = (data.messages || []).filter(function(m) { return m.sender_type === 'admin' && !m.read_at; }).map(function(m) { return m.id; });
+                if (adminIds.length) {
+                    await window.apiClient.post('/api/auth/chat/read', { account_id: aid, message_ids: adminIds });
+                }
+                var adminMsgs = (data.messages || []).filter(function(m) { return m.sender_type === 'admin'; });
+                var maxId = Math.max(0, ...adminMsgs.map(function(m) { return m.id || 0; }));
+                if (maxId > _chatLastSeenAdminId) _chatLastSeenAdminId = maxId;
+            } catch (e) {
+                console.error('loadChat:', e);
+                var c = document.getElementById('chatMessages');
+                if (c) c.innerHTML = '<div class="empty-state" style="color: var(--ds-danger);">Mesajlar yüklenemedi.</div>';
+            }
+        }
+        function showChatRating() {
+            _chatShowingRating = true;
+            var endChatWrap = document.getElementById('chatEndChatWrap');
+            var ratingWrap = document.getElementById('chatRatingWrap');
+            var inputWrap = document.getElementById('chatInputWrap');
+            if (ratingWrap) {
+                ratingWrap.classList.remove('chat-rating-wrap--hiding');
+                var btns = ratingWrap.querySelectorAll('.chat-star-btn');
+                btns.forEach(function(btn) {
+                    btn.textContent = '\u2606';
+                    btn.style.pointerEvents = '';
+                    btn.style.color = '';
+                });
+            }
+            if (endChatWrap) endChatWrap.style.display = 'none';
+            if (ratingWrap) ratingWrap.style.display = 'block';
+            if (inputWrap) inputWrap.style.display = 'none';
+        }
+        async function submitChatRating(rating) {
+            _chatShowingRating = false;
+            var aid = _chatAccountId || getChatAccountId();
+            if (!aid || !window.apiClient) return;
+            var ratingWrap = document.getElementById('chatRatingWrap');
+            var btns = ratingWrap ? ratingWrap.querySelectorAll('.chat-star-btn') : [];
+            btns.forEach(function(btn, i) {
+                var r = parseInt(btn.getAttribute('data-rating'), 10);
+                btn.textContent = r <= rating ? '\u2605' : '\u2606';
+                btn.style.pointerEvents = 'none';
+                if (r <= rating) btn.style.color = 'var(--ds-accent, #f0b90b)';
+            });
+            if (ratingWrap) {
+                ratingWrap.classList.add('chat-rating-wrap--hiding');
+            }
+            setTimeout(async function() {
+                if (ratingWrap) {
+                    ratingWrap.style.display = 'none';
+                    ratingWrap.classList.remove('chat-rating-wrap--hiding');
+                }
+                try {
+                    await window.apiClient.post('/api/auth/chat/end', { account_id: aid, rating: rating });
+                    if (window.Toast) window.Toast.success('Puanlama tamamlandı.');
+                    await loadChat();
+                } catch (e) {
+                    if (window.Toast) window.Toast.error((e && e.message) || (e.detail && (e.detail.message || e.detail)) || 'İşlem başarısız');
+                    await loadChat();
+                }
+            }, 400);
+        }
+        async function reopenChat() {
+            var aid = _chatAccountId || getChatAccountId();
+            if (!aid) return;
+            if (!window.apiClient) return;
+            try {
+                await window.apiClient.post('/api/auth/chat-reopen', { account_id: aid });
+                if (window.Toast) window.Toast.success('Sohbet yeniden açıldı');
+                await loadChat(true);
+            } catch (e) {
+                if (window.Toast) window.Toast.error((e && e.message) || (e.detail && (e.detail.message || e.detail)) || 'Bağlantı hatası');
+            }
+        }
+        var CHAT_MAX_LEN = 500;
+        function updateChatSendState() {
+            var inp = document.getElementById('chatMessageInput');
+            var btn = document.querySelector('#chatForm .chat-send-btn');
+            var warn = document.getElementById('chatLengthWarning');
+            if (!inp) return;
+            var n = (inp.value || '').length;
+            var over = n > CHAT_MAX_LEN;
+            if (btn) {
+                btn.disabled = over;
+                btn.setAttribute('aria-disabled', over ? 'true' : 'false');
+            }
+            if (warn) {
+                if (over) {
+                    warn.textContent = 'Maksimum ' + CHAT_MAX_LEN + ' karakter g\u00f6nderebilirsiniz. Sizinki: ' + n + ' karakter.';
+                    warn.style.display = 'block';
+                } else {
+                    warn.style.display = 'none';
+                }
+            }
+        }
+        function appendOptimisticUserBubble(msg) {
+            var container = document.getElementById('chatMessages');
+            if (!container) return;
+            var isEmpty = container.querySelector('.empty-state') && !container.querySelector('.chat-bubble-in');
+            var now = new Date();
+            var timeStr = window.trTime && window.trTime.trFormatTime ? window.trTime.trFormatTime(now.toISOString()) : now.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Istanbul' });
+            var body = (msg || '').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>');
+            var html = '<div class="chat-bubble-in" data-chat-mid="opt" style="display: flex; flex-direction: column; align-items: flex-end;">' +
+                '<div style="max-width: 85%; align-self: flex-end; background: var(--ds-accent); color: #000; border-radius: 12px 12px 4px 12px; padding: 0.5rem 0.85rem; word-wrap: break-word;">' +
+                '<div style="font-size: 0.7rem; opacity: 0.85; margin-bottom: 0.15rem;">Siz</div>' +
+                '<div style="font-size: 0.9rem;">' + body + '</div>' +
+                '<div style="font-size: 0.65rem; margin-top: 0.2rem; opacity: 0.8;" class="chat-bubble-meta">' + timeStr + ' <span title="\u0130letildi">\u2713</span></div></div></div>';
+            if (isEmpty) container.innerHTML = html;
+            else container.insertAdjacentHTML('beforeend', html);
+            container.scrollTop = container.scrollHeight;
+        }
+        async function handleChatSend(e) {
+            e.preventDefault();
+            var input = document.getElementById('chatMessageInput');
+            var msg = (input && input.value) ? input.value.trim() : '';
+            if (!msg) return;
+            if (msg.length > CHAT_MAX_LEN) {
+                if (window.Toast) window.Toast.error('En fazla ' + CHAT_MAX_LEN + ' karakter g\u00f6nderebilirsiniz.');
+                return;
+            }
+            var aid = _chatAccountId || getChatAccountId();
+            if (!aid) return;
+            if (!window.apiClient) return;
+            try {
+                await window.apiClient.post('/api/auth/chat/send', { account_id: aid, message: msg });
+                input.value = '';
+                updateChatSendState();
+                appendOptimisticUserBubble(msg);
+                _chatLastMessageCount += 1;
+                _chatLastSentBody = msg;
+                setTimeout(function () { loadChat(); }, 600);
+            } catch (err) {
+                if (window.Toast) window.Toast.error('Bağlantı hatası');
+            }
+        }
+        function chatScreenLogout() {
+            if (typeof window.handleSecureLogout === 'function') {
+                window.handleSecureLogout();
+            } else {
+                try {
+                    if (window.apiClient && window.apiClient.clearAuthAndBroadcast) window.apiClient.clearAuthAndBroadcast();
+                    localStorage.removeItem('boot_id');
+                    localStorage.removeItem('last_route');
+                } catch (e) {}
+                window.location.replace('/ui/login.html?logout=1');
+            }
+        }
+        function switchToContactAndOpenChat() {
+            var tab = document.querySelector('[data-tab="contact"]');
+            if (tab) tab.click();
+            setTimeout(openChatScreen, 150);
+        }
+        document.addEventListener('DOMContentLoaded', function() {
+            var inp = document.getElementById('chatMessageInput');
+            if (inp) {
+                inp.addEventListener('input', updateChatSendState);
+                inp.addEventListener('paste', function() { setTimeout(updateChatSendState, 0); });
+                updateChatSendState();
+            }
+            var bd = document.getElementById('chatModalBackdrop');
+            if (bd) bd.addEventListener('click', function() { closeChatScreen(); });
+        });
+        window.openChatScreen = openChatScreen;
+        window.closeChatScreen = closeChatScreen;
+        window.reopenChat = reopenChat;
+        window.switchToContactAndOpenChat = switchToContactAndOpenChat;
+        window.startChatNotify = startChatNotify;
+        window.stopChatNotify = stopChatNotify;
+    </script>
+    <!-- Core infrastructure (must load first) -->
+    <script src="/ui/assets/utils/trTime.js?v=1"></script>
+    <script src="/ui/js/maintenanceOverlay.js?v=1"></script>
+    <script src="/ui/assets/core/apiClient.js?v=timeout20"></script>
+    <script src="/ui/assets/core/errorReporter.js?v=refactor1"></script>
+    <script src="/ui/assets/core/intervalRegistry.js?v=refactor1"></script>
+    <!-- Stores -->
+    <script src="/ui/assets/stores/marketStore.js?v=refactor1"></script>
+    <script src="/ui/assets/stores/financeStore.js?v=refactor1"></script>
+    <script src="/ui/assets/stores/botStore.js?v=refactor1"></script>
+    <script src="/ui/assets/stores/dashboardStore.js?v=boot1"></script>
+    <!-- Single boot path (desktop + mobile). No tab gating. -->
+    <script src="/ui/assets/appBoot.js?v=boot1"></script>
+    <!-- Services -->
+    <script src="/ui/assets/services/marketDataService.js?v=refactor1"></script>
+    <script src="/ui/assets/services/financeService.js?v=refactor1"></script>
+    <!-- Legacy API (kept for compatibility, will be phased out) -->
+    <script src="/ui/assets/api.js?v=clean1"></script>
+    <script src="/ui/assets/components.js?v=clean1"></script>
+    <!-- DEPRECATED: BinanceMarketData - will be disabled -->
+    <!-- <script src="/ui/assets/binanceMarketData.js?v=1.0&nocache=202601230000"></script> -->
+    <script src="/ui/assets/spot_engine.js?v=1.0&nocache=202601222350"></script>
+    <script src="/ui/assets/utils/coinLogo.js?v=1"></script>
+    <!-- Flash Home (Patch H). Deploy ui/assets/ so storageCache, renderHome, homeFlash exist (else 404). -->
+    <script src="/ui/assets/storageCache.js?v=flash1"></script>
+    <script src="/ui/assets/renderHome.js?v=flash1"></script>
+    <script src="/ui/assets/homeFlash.js?v=flash1"></script>
+    <!-- Main dashboard (refactored) -->
+    <script src="/ui/assets/dashboard.js?v=timeout60"></script>
+    <script src="/ui/assets/ticker.js?v=mobile1" defer></script>
+</body>
+</html>

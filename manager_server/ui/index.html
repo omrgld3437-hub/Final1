@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Yönetici Paneli v3.5 (127.0.0.1:7999)</title>
+  <link rel="stylesheet" href="/ui/assets/manager.css" />
+</head>
+<body class="theme-dark">
+  <header class="manager-header">
+    <h1>Server Admin Paneli</h1>
+    <div class="manager-header-actions">
+      <button type="button" id="btnGlobalStart" class="btn btn-primary">Tümünü Başlat</button>
+      <button type="button" id="btnGlobalStop" class="btn btn-danger">Tümünü Durdur</button>
+      <button type="button" id="btnGlobalRestart" class="btn btn-warning">Tümünü Yeniden Başlat</button>
+      <button type="button" id="btnResetAll" class="btn btn-reset">Sıfırla</button>
+      <span id="globalLastOp" class="global-last-op" aria-live="polite"></span>
+    </div>
+  </header>
+
+  <div class="layout">
+    <nav class="sidebar">
+      <a href="#" class="nav-item active" data-tab="overview">Özet</a>
+      <a href="#" class="nav-item" data-tab="web">TraderTrailing.com <span id="nav-err-web" class="nav-err-count hidden">0</span></a>
+      <a href="#" class="nav-item" data-tab="engine">TraderTrailing Bot Server <span id="nav-err-engine" class="nav-err-count hidden">0</span></a>
+      <a href="#" class="nav-item" data-tab="manager">Manager Server <span id="nav-err-manager" class="nav-err-count hidden">0</span></a>
+      <a href="#" class="nav-item" data-tab="html">omeraltin.com <span id="nav-err-html" class="nav-err-count hidden">0</span></a>
+      <a href="#" class="nav-item" data-tab="security">Güvenlik</a>
+      <a href="#" class="nav-item" data-tab="incidents">Olaylar</a>
+      <a href="#" class="nav-item" data-tab="audit">Denetim</a>
+      <a href="#" class="nav-item" data-tab="settings">Ayarlar</a>
+    </nav>
+
+    <main class="manager-main">
+      <!-- OVERVIEW -->
+      <section id="panel-overview" class="tab-panel active">
+        <div class="overview-toolbar">
+          <span id="overview-last-update" class="overview-meta">Son güncelleme: —</span>
+          <span id="overview-health-badge" class="overview-health-badge">—</span>
+          <button type="button" class="btn btn-sm btn-export" data-export="metrics">Metrik dışa aktar</button>
+        </div>
+        <div class="overview-grid">
+          <div class="overview-section overview-system">
+            <h2 class="overview-section-title">Sistem</h2>
+            <div class="progress-row">
+              <div class="progress-item">
+                <span class="metric-label">CPU</span>
+                <div class="progress-wrap"><div id="progress-cpu" class="progress-fill" style="width:0%"></div></div>
+                <span id="overview-cpu" class="metric-value">—</span>
+              </div>
+              <div class="progress-item">
+                <span class="metric-label">RAM</span>
+                <div class="progress-wrap"><div id="progress-ram" class="progress-fill" style="width:0%"></div></div>
+                <span id="overview-ram" class="metric-value">—</span>
+              </div>
+              <div class="progress-item">
+                <span class="metric-label">Disk</span>
+                <div class="progress-wrap"><div id="progress-disk" class="progress-fill" style="width:0%"></div></div>
+                <span id="overview-disk" class="metric-value">—</span>
+              </div>
+            </div>
+            <div class="overview-metric-row">
+              <span class="metric-label">Yük (load avg)</span>
+              <span id="overview-load" class="metric-value">—</span>
+            </div>
+          </div>
+          <div class="overview-section overview-services">
+            <h2 class="overview-section-title">Servisler</h2>
+            <div class="overview-service-cards">
+              <div class="overview-service-card" data-service="manager">
+                <div class="service-card-head">
+                  <span class="service-name">Yönetici</span>
+                  <span class="status-chip" id="overview-manager-status">—</span>
+                  <a href="#" class="link-tab" data-tab="manager">Log →</a>
+                </div>
+                <dl class="service-metrics">
+                  <dt>Port</dt><dd id="overview-manager-port">7999</dd>
+                  <dt>PID</dt><dd id="overview-manager-pid">—</dd>
+                  <dt>Çalışma süresi</dt><dd id="overview-manager-uptime">—</dd>
+                  <dt>Kaynak</dt><dd id="overview-manager-resource">—</dd>
+                </dl>
+                <p id="overview-manager-diagnosis" class="overview-diagnosis">—</p>
+              </div>
+              <div class="overview-service-card" data-service="web">
+                <div class="service-card-head">
+                  <span class="service-name">Web</span>
+                  <span class="status-chip" id="overview-web-status">—</span>
+                  <a href="#" class="link-tab" data-tab="web">Log →</a>
+                </div>
+                <dl class="service-metrics">
+                  <dt>Port</dt><dd id="overview-web-port">8000</dd>
+                  <dt>İstek/dk</dt><dd id="overview-web-reqmin">—</dd>
+                  <dt>Hata oranı</dt><dd id="overview-web-error-rate">—</dd>
+                  <dt>P95 gecikme</dt><dd id="overview-web-p95">—</dd>
+                  <dt>Hata / Uyarı</dt><dd id="overview-web-err-wrn">—</dd>
+                </dl>
+                <p id="overview-web-diagnosis" class="overview-diagnosis">—</p>
+              </div>
+              <div class="overview-service-card" data-service="engine">
+                <div class="service-card-head">
+                  <span class="service-name">Motor</span>
+                  <span class="status-chip" id="overview-engine-status">—</span>
+                  <a href="#" class="link-tab" data-tab="engine">Log →</a>
+                </div>
+                <dl class="service-metrics">
+                  <dt>Port</dt><dd id="overview-engine-port">—</dd>
+                  <dt>Aktif bot</dt><dd id="overview-engine-bots">—</dd>
+                  <dt>Tick/10 sn</dt><dd id="overview-engine-tick">—</dd>
+                  <dt>Tick yaşı</dt><dd id="overview-engine-tick-age">—</dd>
+                  <dt>Hata / Uyarı</dt><dd id="overview-engine-err-wrn">—</dd>
+                </dl>
+                <p id="overview-engine-diagnosis" class="overview-diagnosis">—</p>
+              </div>
+              <div class="overview-service-card" data-service="html">
+                <div class="service-card-head">
+                  <span class="service-name">omeraltin.com</span>
+                  <span class="status-chip" id="overview-html-status">—</span>
+                  <a href="#" class="link-tab" data-tab="html">Yönet →</a>
+                  <a href="http://127.0.0.1:8080" target="_blank" rel="noopener" class="link-tab" style="margin-left:6px">Aç ↗</a>
+                </div>
+                <dl class="service-metrics">
+                  <dt>Port</dt><dd id="overview-html-port">8080</dd>
+                  <dt>PID</dt><dd id="overview-html-pid">—</dd>
+                  <dt>Çalışma süresi</dt><dd id="overview-html-uptime">—</dd>
+                </dl>
+                <div class="service-card-actions">
+                  <button type="button" class="btn btn-sm btn-start" id="btn-html-start" title="HTML sunucuyu başlat">Başlat</button>
+                  <button type="button" class="btn btn-sm btn-stop" id="btn-html-stop" title="HTML sunucuyu durdur">Durdur</button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="overview-section overview-slo">
+            <h2 class="overview-section-title">Erişilebilirlik (SLO)</h2>
+            <div class="slo-bar-wrap"><div id="slo-bar" class="slo-bar" style="width:100%"></div></div>
+            <p id="slo-text" class="slo-text">—</p>
+          </div>
+          <div class="overview-section overview-quick-stats">
+            <h2 class="overview-section-title">Hızlı özet</h2>
+            <table class="overview-stats-table">
+              <tbody>
+                <tr><td>Hatalar (son 50)</td><td id="overview-errors-summary">—</td></tr>
+                <tr><td>Başarısız giriş</td><td id="overview-login-fail">—</td></tr>
+                <tr><td>Yeniden başlatma (son 10)</td><td id="overview-restarts-10">—</td></tr>
+                <tr><td>Açık olay</td><td><span id="overview-issue-count" class="issue-count">0</span></td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="overview-section overview-alerts">
+            <h2 class="overview-section-title">Son hata ve uyarılar</h2>
+            <pre id="overview-alerts" class="log-content alerts-pre"></pre>
+          </div>
+        </div>
+      </section>
+
+      <!-- WEB -->
+      <section id="panel-web" class="tab-panel">
+        <div class="panel-head">
+          <span class="status-chip" id="status-web">—</span>
+          <span id="stat-web" class="stat-bar"></span>
+          <label class="lock-toggle"><input type="checkbox" id="lock-web" /> Kilitle</label>
+          <button type="button" id="btnWebStart" class="btn btn-sm">Başlat</button>
+          <button type="button" id="btnWebStop" class="btn btn-sm btn-danger">Durdur</button>
+          <button type="button" id="btnWebRestart" class="btn btn-sm btn-warning">Yeniden başlat</button>
+          <button type="button" id="btnWebReset" class="btn btn-sm btn-reset">Sıfırla</button>
+          <button type="button" class="btn btn-sm btn-export" data-export="logs-web">Dışa aktar</button>
+        </div>
+        <div id="diagnosis-web" class="diagnosis-box hidden"></div>
+        <div class="panel-grid">
+          <div class="log-panel">
+            <div class="log-panel-head">
+              <span>Canlı log</span>
+              <select id="filter-level-web"><option value="">Tümü</option><option value="WARN+" selected>WARN ve üzeri</option><option value="INFO">INFO</option><option value="WARN">WARN</option><option value="ERROR">ERROR</option></select>
+              <input type="text" id="search-web" class="log-search" placeholder="Ara..." />
+              <label><input type="checkbox" id="pause-web" /> Duraklat</label>
+              <label><input type="checkbox" id="autoscroll-web" checked /> Otomatik kaydır</label>
+              <button type="button" class="btn-copy" data-copy="log-web">Kopyala</button>
+            </div>
+            <pre id="log-web" class="log-content"></pre>
+          </div>
+          <div class="log-panel errors-panel">
+            <div class="log-panel-head"><span>Hatalar (son 50)</span><span id="err-web-count" class="log-count">0</span><button type="button" class="btn-copy" data-copy="err-web">Kopyala</button></div>
+            <pre id="err-web" class="log-content log-content-detail"></pre>
+          </div>
+          <div class="log-panel warns-panel">
+            <div class="log-panel-head"><span>Uyarılar (son 50)</span><span id="wrn-web-count" class="log-count">0</span><button type="button" class="btn-copy" data-copy="wrn-web">Kopyala</button></div>
+            <pre id="wrn-web" class="log-content log-content-detail"></pre>
+          </div>
+        </div>
+      </section>
+
+      <!-- ENGINE -->
+      <section id="panel-engine" class="tab-panel">
+        <div class="panel-head">
+          <span class="status-chip" id="status-engine">—</span>
+          <span id="stat-engine" class="stat-bar"></span>
+          <label class="lock-toggle"><input type="checkbox" id="lock-engine" /> Kilitle</label>
+          <button type="button" id="btnEngineStart" class="btn btn-sm">Başlat</button>
+          <button type="button" id="btnEngineStop" class="btn btn-sm btn-danger">Durdur</button>
+          <button type="button" id="btnEngineRestart" class="btn btn-sm btn-warning">Yeniden başlat</button>
+          <button type="button" id="btnEngineReset" class="btn btn-sm btn-reset">Sıfırla</button>
+          <button type="button" class="btn btn-sm btn-export" data-export="logs-engine">Dışa aktar</button>
+        </div>
+        <div id="diagnosis-engine" class="diagnosis-box hidden"></div>
+        <div class="panel-grid">
+          <div class="log-panel">
+            <div class="log-panel-head">
+              <span>Canlı log</span>
+              <select id="filter-level-engine"><option value="">Tümü</option><option value="WARN+" selected>WARN ve üzeri</option><option value="INFO">INFO</option><option value="WARN">WARN</option><option value="ERROR">ERROR</option></select>
+              <input type="text" id="search-engine" class="log-search" placeholder="Ara..." />
+              <label><input type="checkbox" id="pause-engine" /> Duraklat</label>
+              <label><input type="checkbox" id="autoscroll-engine" checked /> Otomatik kaydır</label>
+              <button type="button" class="btn-copy" data-copy="log-engine">Kopyala</button>
+            </div>
+            <pre id="log-engine" class="log-content"></pre>
+          </div>
+          <div class="log-panel errors-panel">
+            <div class="log-panel-head"><span>Hatalar (son 50) — sadece ERROR</span><span id="err-engine-count" class="log-count">0</span><button type="button" class="btn-copy" data-copy="err-engine">Kopyala</button></div>
+            <pre id="err-engine" class="log-content log-content-detail"></pre>
+          </div>
+          <div class="log-panel warns-panel">
+            <div class="log-panel-head"><span>Uyarılar (son 50) — WARNING (401/Binance 10 dk’da 1)</span><span id="wrn-engine-count" class="log-count">0</span><button type="button" class="btn-copy" data-copy="wrn-engine">Kopyala</button></div>
+            <pre id="wrn-engine" class="log-content log-content-detail"></pre>
+          </div>
+        </div>
+      </section>
+
+      <!-- MANAGER -->
+      <section id="panel-manager" class="tab-panel">
+        <div class="panel-head">
+          <span class="status-chip" id="status-manager">—</span>
+          <span id="stat-manager" class="stat-bar"></span>
+          <button type="button" id="btnManagerReset" class="btn btn-sm btn-reset">Logları sıfırla</button>
+          <button type="button" class="btn btn-sm btn-export" data-export="logs-manager">Dışa aktar</button>
+        </div>
+        <div id="diagnosis-manager" class="diagnosis-box hidden"></div>
+        <div class="panel-grid">
+          <div class="log-panel">
+            <div class="log-panel-head">
+              <span>Canlı log</span>
+              <select id="filter-level-manager"><option value="">Tümü</option><option value="WARN+" selected>WARN ve üzeri</option><option value="INFO">INFO</option><option value="WARN">WARN</option><option value="ERROR">ERROR</option></select>
+              <input type="text" id="search-manager" class="log-search" placeholder="Ara..." />
+              <label><input type="checkbox" id="pause-manager" /> Duraklat</label>
+              <label><input type="checkbox" id="autoscroll-manager" checked /> Otomatik kaydır</label>
+              <button type="button" class="btn-copy" data-copy="log-manager">Kopyala</button>
+            </div>
+            <pre id="log-manager" class="log-content"></pre>
+          </div>
+          <div class="log-panel errors-panel">
+            <div class="log-panel-head"><span>Hatalar (son 50)</span><span id="err-manager-count" class="log-count">0</span><button type="button" class="btn-copy" data-copy="err-manager">Kopyala</button></div>
+            <pre id="err-manager" class="log-content log-content-detail"></pre>
+          </div>
+          <div class="log-panel warns-panel">
+            <div class="log-panel-head"><span>Uyarılar (son 50)</span><span id="wrn-manager-count" class="log-count">0</span><button type="button" class="btn-copy" data-copy="wrn-manager">Kopyala</button></div>
+            <pre id="wrn-manager" class="log-content log-content-detail"></pre>
+          </div>
+        </div>
+      </section>
+
+      <!-- HTML (omeraltin.com) -->
+      <section id="panel-html" class="tab-panel">
+        <div class="panel-head">
+          <span class="status-chip" id="status-html">—</span>
+          <span id="stat-html" class="stat-bar"></span>
+          <a href="http://127.0.0.1:8080" target="_blank" rel="noopener" class="btn btn-sm btn-primary">Siteyi aç (8080)</a>
+          <button type="button" id="btnHtmlStart" class="btn btn-sm btn-start">Başlat</button>
+          <button type="button" id="btnHtmlStop" class="btn btn-sm btn-stop">Durdur</button>
+          <button type="button" id="btnHtmlReset" class="btn btn-sm btn-reset">Logları sıfırla</button>
+          <button type="button" class="btn btn-sm btn-export" data-export="logs-html">Dışa aktar</button>
+        </div>
+        <div class="panel-html-info panel-html-info-top">
+          <p><code>proje/omeraltinhtml</code> klasöründeki <code>start.py</code> (port 8080) veya <code>calistir.bat</code> / <code>calistir.command</code> ile başlatılır. Klasör: <code>proje/omeraltinhtml</code> (tercih) veya <code>OMERALTINHTML_PATH</code> env. Çalışıyor = port 8080 açık.</p>
+        </div>
+        <div class="panel-grid">
+          <div class="log-panel">
+            <div class="log-panel-head">
+              <span>Canlı log</span>
+              <select id="filter-level-html"><option value="">Tümü</option><option value="WARN+" selected>WARN ve üzeri</option><option value="INFO">INFO</option><option value="WARN">WARN</option><option value="ERROR">ERROR</option></select>
+              <input type="text" id="search-html" class="log-search" placeholder="Ara..." />
+              <label><input type="checkbox" id="pause-html" /> Duraklat</label>
+              <label><input type="checkbox" id="autoscroll-html" checked /> Otomatik kaydır</label>
+              <button type="button" class="btn-copy" data-copy="log-html">Kopyala</button>
+            </div>
+            <pre id="log-html" class="log-content"></pre>
+          </div>
+          <div class="log-panel errors-panel">
+            <div class="log-panel-head"><span>Hatalar (son 50)</span><span id="err-html-count" class="log-count">0</span><button type="button" class="btn-copy" data-copy="err-html">Kopyala</button></div>
+            <pre id="err-html" class="log-content log-content-detail"></pre>
+          </div>
+          <div class="log-panel warns-panel">
+            <div class="log-panel-head"><span>Uyarılar (son 50)</span><span id="wrn-html-count" class="log-count">0</span><button type="button" class="btn-copy" data-copy="wrn-html">Kopyala</button></div>
+            <pre id="wrn-html" class="log-content log-content-detail"></pre>
+          </div>
+        </div>
+      </section>
+
+      <!-- SECURITY -->
+      <section id="panel-security" class="tab-panel">
+        <div class="panel-toolbar"><button type="button" class="btn btn-sm btn-export" data-export="security">Dışa aktar</button></div>
+        <div class="security-grid">
+          <div class="security-card">
+            <h3>Başarısız girişler (son 50)</h3>
+            <pre id="security-login-fails" class="log-content"></pre>
+          </div>
+          <div class="security-card">
+            <h3>En çok istek yapan IP (max 50)</h3>
+            <pre id="security-top-ips" class="log-content"></pre>
+          </div>
+          <div class="security-card security-alert">
+            <h3>5xx / Hata oranı</h3>
+            <p id="security-5xx-msg" class="security-5xx"></p>
+          </div>
+        </div>
+      </section>
+
+      <!-- INCIDENTS -->
+      <section id="panel-incidents" class="tab-panel">
+        <div class="incidents-page">
+          <div class="incidents-toolbar">
+            <h2 class="incidents-title">Olaylar</h2>
+            <label class="incidents-filter">
+              <input type="checkbox" id="incidents-filter-open" checked />
+              <span>Sadece açık</span>
+            </label>
+            <button type="button" class="btn btn-sm btn-export" data-export="issues">Dışa aktar</button>
+          </div>
+          <div class="incidents-table-wrap">
+            <table class="incidents-table">
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Önem</th>
+                  <th>Servis</th>
+                  <th>Adet</th>
+                  <th>Son görülme</th>
+                  <th>Durum</th>
+                </tr>
+              </thead>
+              <tbody id="incidents-list"></tbody>
+            </table>
+          </div>
+          <p id="incidents-empty" class="incidents-empty hidden">Kayıtlı olay yok. Sadece açık filtresini kapatarak tümünü görebilirsiniz.</p>
+        </div>
+        <div id="incident-drawer" class="drawer hidden">
+          <div class="drawer-head">
+            <h3 id="drawer-title">Olay</h3>
+            <button type="button" id="drawer-close" class="btn btn-sm">Kapat</button>
+          </div>
+          <div class="drawer-body">
+            <p id="drawer-meta"></p>
+            <p id="drawer-status"></p>
+            <div class="drawer-row">
+              <label>Atanan</label>
+              <input type="text" id="drawer-assignee" class="drawer-input" placeholder="Atanan kişi" />
+              <button type="button" id="drawer-assign-btn" class="btn btn-sm">Kaydet</button>
+            </div>
+            <div class="drawer-row">
+              <label>Etiketler (virgülle, max 10)</label>
+              <input type="text" id="drawer-labels" class="drawer-input" placeholder="bug, acil" />
+              <button type="button" id="drawer-labels-btn" class="btn btn-sm">Kaydet</button>
+            </div>
+            <div class="drawer-row">
+              <label>SLA notu</label>
+              <input type="text" id="drawer-sla" class="drawer-input" placeholder="SLA notu" />
+              <button type="button" id="drawer-sla-btn" class="btn btn-sm">Kaydet</button>
+            </div>
+            <div class="drawer-actions">
+              <button type="button" id="drawer-ack" class="btn btn-sm btn-warning">Onayla</button>
+              <button type="button" id="drawer-resolve" class="btn btn-sm btn-primary">Çözüldü</button>
+            </div>
+            <h4>Durum geçmişi</h4>
+            <pre id="drawer-status-history" class="log-content small"></pre>
+            <h4>Yorumlar</h4>
+            <div id="drawer-comments" class="drawer-comments"></div>
+            <div class="drawer-row">
+              <input type="text" id="drawer-comment-text" class="drawer-input" placeholder="Yorum ekle..." />
+              <button type="button" id="drawer-comment-btn" class="btn btn-sm">Ekle</button>
+            </div>
+            <h4>Örnek kayıtlar</h4>
+            <pre id="drawer-samples" class="log-content"></pre>
+          </div>
+        </div>
+      </section>
+
+      <!-- AUDIT -->
+      <section id="panel-audit" class="tab-panel">
+        <div class="audit-toolbar">
+          <h3>Denetim (son 200 işlem)</h3>
+          <button type="button" class="btn btn-sm btn-export" data-export="audit">Dışa aktar</button>
+        </div>
+        <div class="audit-list" id="audit-list"></div>
+      </section>
+
+      <!-- SETTINGS -->
+      <section id="panel-settings" class="tab-panel">
+        <div class="settings-page">
+          <div class="settings-toolbar">
+            <h2 class="settings-title">Ayarlar</h2>
+            <button type="button" id="setting-reset-defaults" class="btn btn-sm btn-reset">Varsayılanları yükle</button>
+          </div>
+          <div class="settings-grid">
+            <section class="settings-section">
+              <h3 class="settings-section-title">Bildirimler</h3>
+              <p class="settings-desc">Kritik olaylar ve teşhis bildirimleri.</p>
+              <div class="settings-row">
+                <label class="settings-label">
+                  <input type="checkbox" id="setting-toast" checked />
+                  <span>Toast bildirimleri</span>
+                </label>
+                <span class="settings-hint">Ekranda kısa süreli uyarı göster</span>
+              </div>
+              <div class="settings-row">
+                <label class="settings-label">
+                  <input type="checkbox" id="setting-sound" />
+                  <span>Ses uyarıları</span>
+                </label>
+                <span class="settings-hint">Kritik durumda ses çal (varsayılan kapalı)</span>
+              </div>
+            </section>
+            <section class="settings-section">
+              <h3 class="settings-section-title">Uyarı eşikleri</h3>
+              <p class="settings-desc">Bu değerler aşıldığında uyarı üretilebilir.</p>
+              <div class="settings-row">
+                <label class="settings-label" for="setting-thresh-5xx">Web 5xx oranı (%)</label>
+                <input type="number" id="setting-thresh-5xx" min="0" max="100" value="5" step="0.1" class="settings-input" />
+              </div>
+              <div class="settings-row">
+                <label class="settings-label" for="setting-thresh-tick">Motor tick gecikmesi (sn)</label>
+                <input type="number" id="setting-thresh-tick" min="0" value="60" class="settings-input" />
+              </div>
+              <div class="settings-row">
+                <label class="settings-label" for="setting-thresh-login">Başarısız giriş uyarı eşiği</label>
+                <input type="number" id="setting-thresh-login" min="0" value="10" class="settings-input" />
+              </div>
+            </section>
+            <section class="settings-section">
+              <h3 class="settings-section-title">Yenileme</h3>
+              <p class="settings-desc">Özet ve metriklerin ne sıklıkla güncelleneceği.</p>
+              <div class="settings-row">
+                <label class="settings-label" for="setting-poll-interval">Metrik aralığı</label>
+                <select id="setting-poll-interval" class="settings-select">
+                  <option value="1000">1 saniye</option>
+                  <option value="2000" selected>2 saniye</option>
+                  <option value="5000">5 saniye</option>
+                  <option value="10000">10 saniye</option>
+                </select>
+              </div>
+            </section>
+            <section class="settings-section">
+              <h3 class="settings-section-title">Görünüm</h3>
+              <p class="settings-desc">Tema ve arayüz yoğunluğu.</p>
+              <div class="settings-row settings-row-radio">
+                <span class="settings-label">Tema</span>
+                <label class="settings-radio"><input type="radio" name="theme" value="dark" checked /> Koyu</label>
+                <label class="settings-radio"><input type="radio" name="theme" value="light" /> Açık</label>
+              </div>
+              <div class="settings-row">
+                <label class="settings-label">
+                  <input type="checkbox" id="setting-compact" />
+                  <span>Kompakt mod</span>
+                </label>
+                <span class="settings-hint">Daha az boşluk, daha çok içerik</span>
+              </div>
+            </section>
+            <section class="settings-section">
+              <h3 class="settings-section-title">Log</h3>
+              <p class="settings-desc">Canlı log ve hata panelleri.</p>
+              <div class="settings-row">
+                <label class="settings-label" for="setting-log-max-lines">Maks. satır (servis başına)</label>
+                <input type="number" id="setting-log-max-lines" min="100" max="2000" value="1000" class="settings-input" />
+              </div>
+              <div class="settings-row">
+                <label class="settings-label">
+                  <input type="checkbox" id="setting-autoscroll" checked />
+                  <span>Varsayılan otomatik kaydır</span>
+                </label>
+                <span class="settings-hint">Yeni log geldiğinde aşağı kaydır (Web/Motor/Yönetici)</span>
+              </div>
+            </section>
+            <section class="settings-section">
+              <h3 class="settings-section-title">Bağlantı</h3>
+              <p class="settings-desc">Canlı güncellemeler için WebSocket.</p>
+              <div class="settings-row">
+                <label class="settings-label">
+                  <input type="checkbox" id="setting-ws-events" checked />
+                  <span>Tek kanal (/ws/events)</span>
+                </label>
+                <span class="settings-hint">Açıksa tüm servisler tek WebSocket üzerinden gelir</span>
+              </div>
+            </section>
+          </div>
+          <p class="settings-footer">Ayarlar tarayıcıda (localStorage) saklanır. Sekme değişince otomatik kaydedilir.</p>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div id="toast-container" class="toast-container" aria-live="polite"></div>
+  <script src="/ui/assets/manager.js"></script>
+</body>
+</html>

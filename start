@@ -1,0 +1,4 @@
+#!/bin/bash
+# Linux: "start" ile ayni isi yapar (start.command'i cagirir)
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+exec "$ROOT/start.command"

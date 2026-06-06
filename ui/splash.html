@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta name="robots" content="noindex, follow">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TraderTrailing</title>
+    <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0e27; }
+        body {
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        }
+        .flag-wrap {
+            width: min(90vw, 340px);
+        }
+        .flag-wrap svg {
+            display: block;
+            width: 100%;
+            height: auto;
+            border-radius: 8px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+        }
+        .brand {
+            position: absolute;
+            bottom: 2rem;
+            left: 0;
+            right: 0;
+            text-align: center;
+            font-size: 1rem;
+            font-weight: 600;
+            color: #f0b90b;
+            letter-spacing: 0.05em;
+        }
+    </style>
+</head>
+<body>
+    <div class="flag-wrap">
+        <svg viewBox="0 0 360 240" xmlns="http://www.w3.org/2000/svg">
+            <rect width="360" height="240" fill="#E30A17"/>
+            <g transform="translate(120, 120)">
+                <circle r="60" cx="0" cy="0" fill="#fff"/>
+                <circle r="48" cx="26" cy="-6" fill="#E30A17"/>
+                <path fill="#fff" d="M65 -15 L52 14 L72 22 L48 28 L44 58 L22 36 L-2 46 L-6 20 L-34 10 L-16 -14 L-20 -36 L12 -30 L28 -46 Z"/>
+            </g>
+        </svg>
+    </div>
+    <span class="brand">TraderTrailing</span>
+    <script>
+        setTimeout(function() { window.location.replace('/ui/login.html'); }, 5000);
+    </script>
+</body>
+</html>

@@ -1,0 +1,1162 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="robots" content="noindex, follow">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#020203">
+    <meta name="referrer" content="strict-origin-when-cross-origin">
+    <title>Giriş - TraderTrailing</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/ui/assets/theme.css?v=login2">
+    <link rel="stylesheet" href="/ui/assets/design.css?v=login2">
+    <link rel="stylesheet" href="/ui/assets/login.css?v=2">
+</head>
+<body class="login-page">
+    <script>window.__APP_PAGE__ = 'login';</script>
+
+    <!-- Ticker şeridi (Omeraltinhtml ile aynı) -->
+    <div class="login-ticker" aria-hidden="true">
+        <div class="login-ticker__track">
+            <span class="login-ticker__item">BTC</span>
+            <span class="login-ticker__item">ETH</span>
+            <span class="login-ticker__item">7/24</span>
+            <span class="login-ticker__item">API</span>
+            <span class="login-ticker__item">DCA</span>
+            <span class="login-ticker__item">Grid</span>
+            <span class="login-ticker__item">Trailing</span>
+            <span class="login-ticker__item">Portföy</span>
+            <span class="login-ticker__item">Algoritmik</span>
+            <span class="login-ticker__item">TraderTrailing</span>
+            <span class="login-ticker__item">BTC</span>
+            <span class="login-ticker__item">ETH</span>
+            <span class="login-ticker__item">7/24</span>
+            <span class="login-ticker__item">API</span>
+            <span class="login-ticker__item">DCA</span>
+            <span class="login-ticker__item">Grid</span>
+            <span class="login-ticker__item">Trailing</span>
+            <span class="login-ticker__item">Portföy</span>
+            <span class="login-ticker__item">Algoritmik</span>
+            <span class="login-ticker__item">TraderTrailing</span>
+        </div>
+    </div>
+
+    <!-- Arka plan: uzay, nebula, ışık, grid, vignette -->
+    <div class="login-page-bg" aria-hidden="true">
+        <div class="login-bg-base"></div>
+        <div class="login-bg-mesh"></div>
+        <div class="login-bg-glow login-bg-glow-1"></div>
+        <div class="login-bg-glow login-bg-glow-2"></div>
+        <div class="login-bg-nebula" id="loginNebula"></div>
+        <div class="login-bg-milkyway" aria-hidden="true"></div>
+        <canvas class="login-bg-stars" id="loginStarsCanvas" aria-hidden="true"></canvas>
+        <div class="login-shooting-stars" id="loginShootingStars" aria-hidden="true"></div>
+        <div class="login-bg-levels" aria-hidden="true"></div>
+        <div class="login-bg-grid"></div>
+        <div class="login-bg-vignette"></div>
+    </div>
+
+    <!-- Bakım ekranı -->
+    <div id="lockdown-screen" aria-hidden="true">
+        <div class="lockdown-card">
+            <div class="lockdown-icon" aria-hidden="true">&#9881;</div>
+            <h1 class="lockdown-title">Sistem geçici olarak bakımda</h1>
+            <p class="lockdown-subtitle">Altyapı güncelleniyor. Otomatik olarak tekrar deniyoruz.</p>
+        </div>
+    </div>
+
+    <!-- Cihaz onayı popup -->
+    <div id="device-approval-popup">
+        <div class="popup-card">
+            <div class="popup-title"></div>
+            <div class="popup-body"></div>
+        </div>
+    </div>
+
+    <!-- Sağ üst: modern menü butonu + Giriş Yap + bayrak -->
+    <header class="login-topbar">
+        <div class="login-menu-wrap">
+            <button type="button" class="login-menu-btn" id="loginMenuBtn" aria-expanded="false" aria-haspopup="true" onclick="toggleLoginMenu()">
+                <span class="login-menu-btn__icon" aria-hidden="true"></span>
+                <span class="login-menu-btn__label">Sekmeler</span>
+                <span class="login-menu-btn__chevron" aria-hidden="true"></span>
+            </button>
+            <div class="login-menu-dropdown" id="loginMenuDropdown" role="menu" aria-hidden="true">
+                <div class="login-menu-dropdown__group">
+                    <button type="button" role="menuitem" onclick="openAuthModal(1); closeLoginMenu();">Kayıt Ol</button>
+                </div>
+                <div class="login-menu-dropdown__divider"></div>
+                <div class="login-menu-dropdown__group">
+                    <button type="button" role="menuitem" onclick="openAuthModal(2); closeLoginMenu();">Biz Kimiz</button>
+                    <button type="button" role="menuitem" onclick="openAuthModal(3); closeLoginMenu();">Vizyon ve Misyon</button>
+                    <button type="button" role="menuitem" onclick="openAuthModal(4); closeLoginMenu();">Hakkımızda</button>
+                    <button type="button" role="menuitem" onclick="openAuthModal(5); closeLoginMenu();">Yasal Uyarı</button>
+                </div>
+            </div>
+        </div>
+        <button type="button" class="login-cta-btn" onclick="openAuthModal(0); showLogin();">Giriş Yap</button>
+        <a href="https://ttk.gov.tr/turk-bayragi-kanunu/" class="login-flag" target="_blank" rel="noopener noreferrer" title="Türk Bayrağı" aria-label="Türk Bayrağı">
+            <img class="login-flag__img" src="https://flagcdn.com/w80/tr.png" srcset="https://flagcdn.com/w160/tr.png 2x" alt="Türk Bayrağı" width="48" height="32">
+        </a>
+    </header>
+
+    <!-- Çıkış sonrası uyarı (login sayfasında görünür) -->
+    <div class="login-logout-toast" id="loginLogoutToast" role="alert" aria-live="polite" aria-hidden="true">Güvenli çıkış yapıldı.</div>
+
+    <!-- Ana sayfa: saatler + kripto -->
+    <main class="login-landing">
+        <h1 class="login-landing-brand"><a href="#" class="login-brand">TraderTrailing</a></h1>
+        <section class="login-clocks" id="loginClocks">
+            <div class="login-clock" data-tz="Europe/Istanbul" data-city="İstanbul" data-exchange="BIST" data-open="10:00">
+                <div class="login-clock__face"><div class="login-clock__ticks" aria-hidden="true"></div><div class="login-clock__hand login-clock__hand--h"></div><div class="login-clock__hand login-clock__hand--m"></div><div class="login-clock__hand login-clock__hand--s"></div><span class="login-clock__ampm"></span></div>
+                <p class="login-clock__city">İstanbul</p>
+                <p class="login-clock__exchange">BIST 10:00</p>
+            </div>
+            <div class="login-clock" data-tz="Europe/London" data-city="Londra" data-exchange="LSE" data-open="08:00">
+                <div class="login-clock__face"><div class="login-clock__ticks" aria-hidden="true"></div><div class="login-clock__hand login-clock__hand--h"></div><div class="login-clock__hand login-clock__hand--m"></div><div class="login-clock__hand login-clock__hand--s"></div><span class="login-clock__ampm"></span></div>
+                <p class="login-clock__city">Londra</p>
+                <p class="login-clock__exchange">LSE 08:00</p>
+            </div>
+            <div class="login-clock" data-tz="America/New_York" data-city="New York" data-exchange="NYSE" data-open="09:30">
+                <div class="login-clock__face"><div class="login-clock__ticks" aria-hidden="true"></div><div class="login-clock__hand login-clock__hand--h"></div><div class="login-clock__hand login-clock__hand--m"></div><div class="login-clock__hand login-clock__hand--s"></div><span class="login-clock__ampm"></span></div>
+                <p class="login-clock__city">New York</p>
+                <p class="login-clock__exchange">NYSE 09:30</p>
+            </div>
+            <div class="login-clock" data-tz="Asia/Tokyo" data-city="Tokyo" data-exchange="TSE" data-open="09:00">
+                <div class="login-clock__face"><div class="login-clock__ticks" aria-hidden="true"></div><div class="login-clock__hand login-clock__hand--h"></div><div class="login-clock__hand login-clock__hand--m"></div><div class="login-clock__hand login-clock__hand--s"></div><span class="login-clock__ampm"></span></div>
+                <p class="login-clock__city">Tokyo</p>
+                <p class="login-clock__exchange">TSE 09:00</p>
+            </div>
+            <div class="login-clock" data-tz="Asia/Dubai" data-city="Dubai" data-exchange="DFM" data-open="10:00">
+                <div class="login-clock__face"><div class="login-clock__ticks" aria-hidden="true"></div><div class="login-clock__hand login-clock__hand--h"></div><div class="login-clock__hand login-clock__hand--m"></div><div class="login-clock__hand login-clock__hand--s"></div><span class="login-clock__ampm"></span></div>
+                <p class="login-clock__city">Dubai</p>
+                <p class="login-clock__exchange">DFM 10:00</p>
+            </div>
+            <div class="login-clock" data-tz="Asia/Shanghai" data-city="Şangay" data-exchange="SSE" data-open="09:30">
+                <div class="login-clock__face"><div class="login-clock__ticks" aria-hidden="true"></div><div class="login-clock__hand login-clock__hand--h"></div><div class="login-clock__hand login-clock__hand--m"></div><div class="login-clock__hand login-clock__hand--s"></div><span class="login-clock__ampm"></span></div>
+                <p class="login-clock__city">Şangay</p>
+                <p class="login-clock__exchange">SSE 09:30</p>
+            </div>
+        </section>
+        <section class="login-crypto" id="loginCrypto">
+            <div class="login-crypto__list" id="loginCryptoList"></div>
+        </section>
+        <section class="login-forex" id="loginForex">
+            <div class="login-forex__grid">
+                <div class="login-forex__item">
+                    <span class="login-forex__label">USD/TRY</span>
+                    <span class="login-forex__value" id="loginForexUsd">—</span>
+                </div>
+                <div class="login-forex__item">
+                    <span class="login-forex__label">EUR/TRY</span>
+                    <span class="login-forex__value" id="loginForexEur">—</span>
+                </div>
+                <div class="login-forex__item">
+                    <span class="login-forex__label">Gram Altın</span>
+                    <span class="login-forex__value" id="loginForexGold">—</span>
+                </div>
+            </div>
+        </section>
+        <footer class="login-footer login-landing-footer">
+            <p><strong>TraderTrailing</strong> — Kurumsal portföy yönetimi ve algoritmik işlem altyapısı.</p>
+            <p>© <span id="loginYear"></span> Tüm hakları saklıdır.</p>
+        </footer>
+    </main>
+
+    <!-- Giriş / Kayıt / Bilgi modalı -->
+    <div class="login-modal" id="loginAuthModal" aria-hidden="true">
+        <div class="login-modal__backdrop" onclick="closeAuthModal()"></div>
+        <div class="login-modal__content">
+            <button type="button" class="login-modal__close" aria-label="Kapat" onclick="closeAuthModal()">&times;</button>
+            <div class="login-card">
+                <p class="login-card-title" id="loginSubtitle">Hesabınıza giriş yapın</p>
+                <div class="login-message" id="errorMessage"></div>
+                <nav class="login-tabs" role="tablist">
+                    <button type="button" class="login-tab active" role="tab" aria-selected="true" data-tab="0" onclick="setActiveTab(0); showLogin();">Giriş Yap</button>
+                    <button type="button" class="login-tab" role="tab" aria-selected="false" data-tab="1" onclick="setActiveTab(1); showRegister();">Kayıt Ol</button>
+                </nav>
+                <!-- Sekme 0: Giriş / Şifre sıfırlama -->
+            <div class="login-tab-content active" id="loginTab0" role="tabpanel">
+                <div id="loginFormWrap">
+                    <form id="loginForm" class="login-form" onsubmit="handleLogin(event)">
+                        <div class="form-group">
+                            <label for="loginPhone">Telefon numarası</label>
+                            <input type="text" id="loginPhone" class="form-input" required autofocus placeholder="0XXX XXX XX XX" autocomplete="username">
+                        </div>
+                        <div class="form-group">
+                            <label for="loginPassword">Şifre</label>
+                            <div class="password-input-wrap">
+                                <input type="password" id="loginPassword" class="form-input" required autocomplete="current-password">
+                                <button type="button" class="password-toggle-btn" id="loginPasswordToggle" aria-label="Şifreyi göster" title="Şifreyi göster" onclick="togglePasswordVisibility('loginPassword', 'loginPasswordToggle')">
+                                    <span class="password-toggle-icon" aria-hidden="true"><svg class="icon-eye" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><svg class="icon-eye-off" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="display:none"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></span>
+                                </button>
+                            </div>
+                        </div>
+                        <p id="loginTestHint" class="form-hint" style="display:none;">Yerel test: kullanıcı adı <strong>test</strong>, şifre <strong>123</strong></p>
+                        <button type="submit" class="login-btn login-btn-primary">Giriş Yap</button>
+                        <div class="login-form-footer">
+                            <a href="#" onclick="showPasswordReset(event)">Şifremi Unuttum</a>
+                        </div>
+                    </form>
+                </div>
+                <div id="passwordResetFormWrap" style="display: none;">
+                    <form id="passwordResetForm" class="login-form" onsubmit="handlePasswordReset(event)">
+                        <div class="form-group">
+                            <label for="resetPhone">Telefon Numarası <span style="color: var(--login-red);">*</span></label>
+                            <input type="tel" id="resetPhone" class="form-input" required placeholder="05XX XXX XX XX">
+                            <small class="form-hint">Tek kullanımlık şifreniz güvenlik sebebiyle yönetici onayından sonra telefonunuza SMS olarak gönderilecektir. Yeni şifreniz tek kullanımlık olup hesaba giriş yapıldıktan sonra değiştirilmesi zorunludur.</small>
+                        </div>
+                        <button type="submit" class="login-btn login-btn-primary">Gönder</button>
+                        <button type="button" class="login-btn login-btn-secondary" onclick="showLogin()">İptal</button>
+                    </form>
+                </div>
+            </div>
+
+            <!-- Sekme 1: Kayıt -->
+            <div class="login-tab-content" id="loginTab1" role="tabpanel">
+                <form id="registerForm" class="login-form" onsubmit="handleRegister(event)">
+                    <div class="form-group">
+                        <label>Ad <span style="color: var(--login-red);">*</span></label>
+                        <input type="text" id="registerName" class="form-input" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Soyad <span style="color: var(--login-red);">*</span></label>
+                        <input type="text" id="registerSurname" class="form-input" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Telefon Numarası <span style="color: var(--login-red);">*</span></label>
+                        <input type="tel" id="registerPhone" class="form-input" required placeholder="05XX XXX XX XX">
+                    </div>
+                    <div class="form-group">
+                        <label>Şifre <span style="color: var(--login-red);">*</span></label>
+                        <div class="password-input-wrap">
+                            <input type="password" id="registerPassword" class="form-input" required placeholder="En az 10 karakter, büyük/küçük harf, rakam, noktalama">
+                            <button type="button" class="password-toggle-btn" id="registerPasswordToggle" aria-label="Şifreyi göster" title="Şifreyi göster" onclick="togglePasswordVisibility('registerPassword', 'registerPasswordToggle')">
+                                <span class="password-toggle-icon" aria-hidden="true"><svg class="icon-eye" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><svg class="icon-eye-off" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="display:none"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></span>
+                            </button>
+                        </div>
+                        <small class="form-hint">Şifre: En az 10 karakter, 1 büyük harf, 1 küçük harf, 1 rakam, 1 noktalama işareti (.,!?;:) içermeli. İsim/soyisim içeremez.</small>
+                        <div id="passwordStrength" style="font-size: 12px; margin-top: 0.25rem; min-height: 1.2em;"></div>
+                    </div>
+                    <div class="form-group">
+                        <label>Şifre Tekrar <span style="color: var(--login-red);">*</span></label>
+                        <div class="password-input-wrap">
+                            <input type="password" id="registerPasswordConfirm" class="form-input" required placeholder="Şifreyi tekrar girin">
+                            <button type="button" class="password-toggle-btn" id="registerPasswordConfirmToggle" aria-label="Şifreyi göster" title="Şifreyi göster" onclick="togglePasswordVisibility('registerPasswordConfirm', 'registerPasswordConfirmToggle')">
+                                <span class="password-toggle-icon" aria-hidden="true"><svg class="icon-eye" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><svg class="icon-eye-off" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="display:none"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></span>
+                            </button>
+                        </div>
+                        <div id="passwordMatch" style="font-size: 12px; margin-top: 0.25rem; min-height: 1.2em;"></div>
+                    </div>
+                    <div class="login-register-consents">
+                        <label class="login-consent-row" onclick="openContractTab(6); return false;">
+                            <input type="checkbox" id="consentTerms" name="consentTerms" required class="login-consent-checkbox" onclick="event.preventDefault(); event.stopPropagation(); openContractTab(6);" tabindex="-1">
+                            <span>Üyelik ve Kullanım Koşulları Sözleşmesi'ni okudum ve kabul ediyorum. <a href="#" class="login-consent-link" onclick="event.stopPropagation(); openContractTab(6); return false;">Metni oku</a></span>
+                        </label>
+                        <label class="login-consent-row" onclick="openContractTab(7); return false;">
+                            <input type="checkbox" id="consentRisk" name="consentRisk" required class="login-consent-checkbox" onclick="event.preventDefault(); event.stopPropagation(); openContractTab(7);" tabindex="-1">
+                            <span>Risk Bildirimi, Yasal Uyarı ve Sorumluluk Reddi'ni okudum ve kabul ediyorum. <a href="#" class="login-consent-link" onclick="event.stopPropagation(); openContractTab(7); return false;">Metni oku</a></span>
+                        </label>
+                        <label class="login-consent-row" onclick="openContractTab(8); return false;">
+                            <input type="checkbox" id="consentKvkk" name="consentKvkk" required class="login-consent-checkbox" onclick="event.preventDefault(); event.stopPropagation(); openContractTab(8);" tabindex="-1">
+                            <span>KVKK Aydınlatma Metni'ni okudum ve anladım. <a href="#" class="login-consent-link" onclick="event.stopPropagation(); openContractTab(8); return false;">Metni oku</a></span>
+                        </label>
+                    </div>
+                    <button type="submit" class="login-btn login-btn-primary">Kayıt Ol</button>
+                </form>
+            </div>
+
+            <!-- Sekme 2: Biz Kimiz -->
+            <div class="login-tab-content" id="loginTab2" role="tabpanel">
+                <div class="login-info-block">
+                    <h3>Biz Kimiz</h3>
+                    <p><strong>TraderTrailing</strong>, kurumsal portföyler için tasarlanmış dijital finansal altyapı ve işlem otomasyonu çözümleri sunan bir platformdur.</p>
+                    <p>Platform; algoritmik işlem, portföy izleme, raporlama ve yürütme süreçlerini gelişmiş bot sistemleri aracılığıyla tek bir merkezden yönetmeyi mümkün kılar. Amaç, büyük ölçekli portföylerin operasyonel süreçlerini otomasyon ile standartlaştırmak, insan hatasını minimize etmek ve süreç disiplinini artırmaktır.</p>
+                    <p>TraderTrailing, yatırım kararı alan veya yöneten bir yapı değildir. Platformun rolü; kullanıcı veya kurumlar tarafından belirlenen stratejilerin teknik olarak uygulanmasını ve otomatikleştirilmesini sağlamaktan ibarettir.</p>
+                    <p>Hizmet modelimiz gereği yalnızca önceden onaylanmış, seçili kurumsal portföyler ve profesyonel yapılarla çalışılmaktadır. Bireysel veya perakende kullanıcılara hizmet sunulmamaktadır.</p>
+                </div>
+            </div>
+
+            <!-- Sekme 3: Vizyon ve Misyon -->
+            <div class="login-tab-content" id="loginTab3" role="tabpanel">
+                <div class="login-info-block">
+                    <h3>Vizyon</h3>
+                    <p>Kurumsal portföy yönetimini gelişmiş dijital altyapı ve otomasyon sistemleriyle bir araya getirerek, sektörde güvenilirlik ve verimlilik standardını yükseltmek.</p>
+                    <h3>Misyon</h3>
+                    <p>Tüm alım–satım ve portföy dengeleme süreçlerini gelişmiş otomasyon ve bot sistemleriyle destekleyerek insan hatasından arındırmak; stratejileri tutarlı uygulayarak operasyonel verimliliği en üst düzeye çıkarmak. Portföy sahiplerine tam şeffaflık ve veriye dayalı karar imkânı sunmak.</p>
+                </div>
+            </div>
+
+            <!-- Sekme 4: Hakkımızda -->
+            <div class="login-tab-content" id="loginTab4" role="tabpanel">
+                <div class="login-info-block">
+                    <h3>Hakkımızda</h3>
+                    <p>TraderTrailing, kurumsal portföy yönetiminde ihtiyaç duyulan <strong>şeffaflık, kontrol ve operasyonel verimlilik</strong> ilkeleri esas alınarak yapılandırılmış bir otomasyon platformudur.</p>
+                    <p>Tüm sistem altyapısı; izleme, raporlama ve işlem yürütme süreçlerinin merkezi ve izlenebilir şekilde yönetilmesini sağlayacak biçimde tasarlanmıştır. Bot sistemleri, kullanıcı veya kurum tarafından tanımlanan parametreler doğrultusunda çalışır ve önceden belirlenen kurallar dışında karar üretmez.</p>
+                    <p>Platform, finansal karar alma süreçlerine müdahil olmaz; yatırım tercihlerinin doğruluğu, risk seviyesi veya sonuçları hakkında değerlendirme yapmaz. Bu yaklaşım, TraderTrailing'i bir yatırım hizmeti sağlayıcısı değil, <strong>teknik bir otomasyon ve altyapı platformu</strong> olarak konumlandırır.</p>
+                    <p>Yapımız gereği, tüm kullanım senaryoları kurumsal iç denetim, risk yönetimi ve yetkilendirme süreçleriyle uyumlu olacak şekilde sınırlandırılmıştır.</p>
+                </div>
+            </div>
+
+            <!-- Sekme 5: Yasal Uyarı ve Sorumluluk Reddi -->
+            <div class="login-tab-content" id="loginTab5" role="tabpanel">
+                <div class="login-info-block">
+                    <h3>Yasal Uyarı ve Sorumluluk Reddi</h3>
+                    <p>TraderTrailing tarafından sunulan hizmetler; <strong>yatırım danışmanlığı, portföy yönetimi veya finansal yönlendirme</strong> niteliği taşımaz.</p>
+                    <p>Platform:</p>
+                    <ul>
+                        <li>Bir yatırım şirketi, fon, aracı kurum veya portföy yönetim kuruluşu <strong>değildir</strong></li>
+                        <li>Yatırım tavsiyesi <strong>vermez</strong></li>
+                        <li>Getiri, kazanç veya performans garantisi <strong>sunmaz</strong></li>
+                        <li>Kullanıcı veya kurum adına finansal karar <strong>almaz</strong></li>
+                    </ul>
+                    <p>TraderTrailing üzerinde kullanılan tüm botlar ve otomasyon sistemleri; kullanıcı veya hizmet alan kurum tarafından belirlenen strateji, parametre ve talimatlara göre çalışır. Alım–satım kararları, portföy dağılımları ve risk tercihleri tamamen kullanıcıya veya ilgili kuruma aittir.</p>
+                    <p>Platform yalnızca <strong>teknik altyapı ve otomasyon hizmeti</strong> sağlar. Piyasa koşulları, fiyat hareketleri, likidite sorunları, teknik aksaklıklar veya bunların sonucunda oluşabilecek doğrudan ya da dolaylı zararlardan TraderTrailing sorumlu tutulamaz.</p>
+                    <p>Kullanıcılar ve kurumlar; kendi iç risk yönetimi, denetim, yasal uyum ve onay süreçlerini yürütmekten münhasıran kendileri sorumludur. TraderTrailing, bu süreçlerin yerine geçmez ve bu alanlarda sorumluluk üstlenmez.</p>
+                </div>
+            </div>
+
+            <!-- Sekme 6: Üyelik ve Kullanım Koşulları (kayıt onay metni) -->
+            <div class="login-tab-content login-legal-doc" id="loginTab6" role="tabpanel">
+                <div class="login-info-block">
+                    <h3>Üyelik ve Kullanım Koşulları Sözleşmesi</h3>
+                    <p>Bu Üyelik ve Kullanım Koşulları Sözleşmesi (“Sözleşme”), <strong>TraderTrailing</strong> markası altında sunulan dijital otomasyon platformunu kullanan kullanıcılar ile TraderTrailing Platformu arasında elektronik ortamda akdedilmiştir.</p>
+                    <p>Platforma kayıt olan her kullanıcı, işbu Sözleşme'yi okuduğunu, anladığını ve tüm hükümlerini kabul ettiğini beyan eder.</p>
+                    <h4>1. Platformun Niteliği</h4>
+                    <p>TraderTrailing;</p>
+                    <ul>
+                        <li>Bir yatırım şirketi, fon, aracı kurum veya portföy yönetim kuruluşu <strong>değildir</strong></li>
+                        <li>Yatırım danışmanlığı <strong>sunmaz</strong></li>
+                        <li>Alım–satım veya portföy yönetim kararı <strong>almaz</strong></li>
+                        <li>Getiri, kazanç veya performans garantisi <strong>vermez</strong></li>
+                    </ul>
+                    <p>TraderTrailing'in sunduğu hizmet, <strong>kullanıcıların kendi belirledikleri stratejilerin</strong> bot sistemleri aracılığıyla <strong>otomatik olarak uygulanmasını sağlayan teknik bir altyapı ve otomasyon hizmetidir</strong>.</p>
+                    <h4>2. Hizmet Kapsamı</h4>
+                    <p>Platform kapsamında sunulan hizmetler:</p>
+                    <ul>
+                        <li>Algoritmik işlem botları</li>
+                        <li>Strateji otomasyonu</li>
+                        <li>İzleme ve raporlama araçları</li>
+                        <li>Operasyonel süreçlerin merkezi yönetimi</li>
+                    </ul>
+                    <p>Sunulan tüm hizmetler <strong>teknik altyapı</strong> niteliğindedir. Finansal karar alma veya yönlendirme fonksiyonu bulunmaz.</p>
+                    <h4>3. Kullanıcı Sorumluluğu</h4>
+                    <p>Kullanıcı;</p>
+                    <ul>
+                        <li>Tüm strateji seçimlerinden,</li>
+                        <li>Parametre tanımlarından,</li>
+                        <li>Risk seviyesinden,</li>
+                        <li>Kullanılan borsa, cüzdan ve üçüncü taraf servislerden,</li>
+                        <li>İşlem sonuçlarından</li>
+                    </ul>
+                    <p><strong>münhasıran kendisi sorumludur</strong>. TraderTrailing, kullanıcı adına karar almaz, strateji belirlemez veya risk değerlendirmesi yapmaz.</p>
+                    <h4>4. Üçüncü Taraf Hizmetler</h4>
+                    <p>Platform, üçüncü taraf borsa, saklama, cüzdan, veri sağlayıcı ve altyapı servisleriyle entegre çalışabilir. Bu servislerden kaynaklanan: fiyat farklılıkları, likidite sorunları, API kesintileri, gecikmeler, teknik arızalar TraderTrailing'in kontrolü dışındadır ve bu durumlardan doğabilecek sonuçlardan sorumluluk kabul edilmez.</p>
+                    <h4>5. Hizmetin Sınırlandırılması</h4>
+                    <p>TraderTrailing, hizmet modelinin gereği olarak yalnızca önceden onaylanmış, seçili ve kurumsal kullanıcılarla çalışma hakkını saklı tutar. Bireysel veya perakende kullanıcılara hizmet verilmez.</p>
+                    <h4>6. Sorumluluğun Sınırlandırılması</h4>
+                    <p>TraderTrailing; piyasa hareketlerinden, fiyat dalgalanmalarından, otomasyonun doğası gereği oluşabilecek sonuçlardan, dolaylı veya doğrudan zararlardan, kâr kaybı veya fırsat maliyetlerinden <strong>hiçbir koşulda sorumlu tutulamaz</strong>.</p>
+                    <h4>7. Yürürlük</h4>
+                    <p>Kullanıcı, kayıt esnasında bu sözleşmeyi elektronik ortamda onaylayarak yürürlüğe sokar.</p>
+                </div>
+                <div class="login-legal-doc-footer">
+                    <button type="button" class="login-btn login-btn-secondary" onclick="backToRegister()">Geri</button>
+                    <button type="button" class="login-btn login-btn-primary" onclick="confirmConsent(6)">Okudum, anladım</button>
+                </div>
+            </div>
+
+            <!-- Sekme 7: Risk Bildirimi, Yasal Uyarı ve Sorumluluk Reddi (kayıt onay metni) -->
+            <div class="login-tab-content login-legal-doc" id="loginTab7" role="tabpanel">
+                <div class="login-info-block">
+                    <h3>Risk Bildirimi, Yasal Uyarı ve Sorumluluk Reddi</h3>
+                    <p>Bu metin, TraderTrailing platformunu kullanan tüm kullanıcılar için bağlayıcıdır.</p>
+                    <h4>1. Yatırım Tavsiyesi Yoktur</h4>
+                    <p>TraderTrailing üzerinde sunulan hiçbir içerik, rapor, metrik, bot, strateji veya otomasyon çıktısı <strong>yatırım tavsiyesi</strong> niteliği taşımaz.</p>
+                    <h4>2. Karar Yetkisi Kullanıcıdadır</h4>
+                    <p>Tüm alım–satım kararları, portföy dağılımları, risk tercihleri ve sonuçlar tamamen kullanıcıya aittir. Platform yalnızca teknik uygulama sağlar.</p>
+                    <h4>3. Otomasyon Kaynaklı Riskler</h4>
+                    <p>Kullanıcı, otomatik sistemlerin; ani piyasa hareketlerinde beklenmeyen sonuçlar doğurabileceğini, fiyat ve veri gecikmeleri yaşanabileceğini, emirlerin farklı fiyatlardan gerçekleşebileceğini kabul eder.</p>
+                    <h4>4. Sorumluluk Reddi</h4>
+                    <p>TraderTrailing; finansal sonuçlardan, üçüncü taraf kaynaklı sorunlardan, teknik altyapı arızalarından, kullanıcı parametrelerinden doğan sonuçlardan <strong>sorumlu değildir</strong>.</p>
+                    <h4>5. Kabul</h4>
+                    <p>Kullanıcı, platformu tüm bu riskleri bilerek kullandığını kabul eder.</p>
+                </div>
+                <div class="login-legal-doc-footer">
+                    <button type="button" class="login-btn login-btn-secondary" onclick="backToRegister()">Geri</button>
+                    <button type="button" class="login-btn login-btn-primary" onclick="confirmConsent(7)">Okudum, anladım</button>
+                </div>
+            </div>
+
+            <!-- Sekme 8: KVKK Aydınlatma Metni (kayıt onay metni) -->
+            <div class="login-tab-content login-legal-doc" id="loginTab8" role="tabpanel">
+                <div class="login-info-block">
+                    <h3>Kişisel Verilerin Korunması ve Aydınlatma Metni (KVKK)</h3>
+                    <p>TraderTrailing, 6698 sayılı <strong>Kişisel Verilerin Korunması Kanunu (KVKK)</strong> kapsamında kişisel verilerin korunmasına önem verir.</p>
+                    <h4>1. İşlenen Kişisel Veriler</h4>
+                    <p>Platform kullanımı kapsamında aşağıdaki veriler işlenebilir: e-posta adresi, kullanıcı adı, yetki ve erişim bilgileri, IP adresi ve oturum kayıtları, sistem ve güvenlik logları. Finansal varlık, bakiye veya cüzdan bilgileri TraderTrailing tarafından saklanmaz.</p>
+                    <h4>2. Veri İşleme Amaçları</h4>
+                    <p>Kişisel veriler; platform erişiminin sağlanması, güvenlik ve yetkilendirme süreçleri, operasyonel süreklilik, loglama ve denetim kayıtları amacıyla işlenir.</p>
+                    <h4>3. Veri Aktarımı</h4>
+                    <p>Kişisel veriler; yasal yükümlülükler kapsamında yetkili kamu kurumlarına aktarılabilir. Ticari amaçla paylaşılmaz.</p>
+                    <h4>4. Hukuki Sebep</h4>
+                    <p>Veri işleme faaliyetleri, KVKK'nın ilgili maddeleri uyarınca sözleşmenin ifası ve meşru menfaat kapsamında yürütülür.</p>
+                    <h4>5. Veri Sahibi Hakları</h4>
+                    <p>Kullanıcılar; verilerinin işlenip işlenmediğini öğrenme, düzeltme, silme veya yok etme talep etme, işlemeye itiraz etme haklarına sahiptir.</p>
+                    <h4>6. Bildirim</h4>
+                    <p>Kullanıcı, bu aydınlatma metnini okuduğunu ve anladığını beyan eder.</p>
+                </div>
+                <div class="login-legal-doc-footer">
+                    <button type="button" class="login-btn login-btn-secondary" onclick="backToRegister()">Geri</button>
+                    <button type="button" class="login-btn login-btn-primary" onclick="confirmConsent(8)">Okudum, anladım</button>
+                </div>
+            </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/ui/assets/utils/trTime.js?v=1"></script>
+    <script src="/ui/js/maintenanceOverlay.js?v=1"></script>
+    <script src="/ui/assets/core/intervalRegistry.js?v=1"></script>
+    <script>
+(function () {
+    'use strict';
+
+    var isMobile = (navigator.maxTouchPoints > 0 || 'ontouchstart' in window) && window.matchMedia && window.matchMedia('(max-width: 768px)').matches;
+    if (document.body) {
+        if (isMobile) document.body.classList.add('login-mobile');
+    }
+
+    function setActiveTab(index) {
+        document.querySelectorAll('.login-tab').forEach(function (t, i) {
+            t.classList.toggle('active', i === index);
+            t.setAttribute('aria-selected', i === index ? 'true' : 'false');
+        });
+        document.querySelectorAll('.login-tab-content').forEach(function (c, i) {
+            c.classList.toggle('active', i === index);
+        });
+        var card = document.querySelector('#loginAuthModal .login-card');
+        if (card) {
+            card.classList.toggle('login-card--info-only', index >= 2);
+            card.classList.toggle('login-card--register', index === 1);
+        }
+    }
+
+    window.setActiveTab = setActiveTab;
+
+    function togglePasswordVisibility(inputId, buttonId) {
+        var input = document.getElementById(inputId);
+        var btn = document.getElementById(buttonId);
+        if (!input || !btn) return;
+        var eye = btn.querySelector('.icon-eye');
+        var eyeOff = btn.querySelector('.icon-eye-off');
+        var isPassword = input.type === 'password';
+        input.type = isPassword ? 'text' : 'password';
+        if (eye) eye.style.display = isPassword ? 'none' : '';
+        if (eyeOff) eyeOff.style.display = isPassword ? '' : 'none';
+        btn.setAttribute('aria-label', isPassword ? 'Şifreyi gizle' : 'Şifreyi göster');
+        btn.setAttribute('title', isPassword ? 'Şifreyi gizle' : 'Şifreyi göster');
+    }
+    window.togglePasswordVisibility = togglePasswordVisibility;
+
+    function openAuthModal(tabIndex) {
+        var modal = document.getElementById('loginAuthModal');
+        if (!modal) return;
+        var isAlreadyOpen = modal.classList.contains('show');
+        if (!isAlreadyOpen && (tabIndex === 6 || tabIndex === 7 || tabIndex === 8))
+            tabIndex = 1;
+        modal.classList.add('show');
+        modal.setAttribute('aria-hidden', 'false');
+        document.body.style.overflow = 'hidden';
+        setActiveTab(tabIndex);
+        if (tabIndex === 0) showLogin();
+        else if (tabIndex === 1) showRegister();
+    }
+    function backToRegister() {
+        setActiveTab(1);
+        showRegister();
+    }
+    window.backToRegister = backToRegister;
+
+    function openContractTab(tabIndex) {
+        if (tabIndex !== 6 && tabIndex !== 7 && tabIndex !== 8) return;
+        setActiveTab(tabIndex);
+    }
+    window.openContractTab = openContractTab;
+    function closeAuthModal() {
+        var modal = document.getElementById('loginAuthModal');
+        if (!modal) return;
+        modal.classList.remove('show');
+        modal.setAttribute('aria-hidden', 'true');
+        document.body.style.overflow = '';
+    }
+    window.openAuthModal = openAuthModal;
+    window.closeAuthModal = closeAuthModal;
+
+    function confirmConsent(tabIndex) {
+        var cb = null;
+        if (tabIndex === 6) cb = document.getElementById('consentTerms');
+        else if (tabIndex === 7) cb = document.getElementById('consentRisk');
+        else if (tabIndex === 8) cb = document.getElementById('consentKvkk');
+        if (cb) {
+            cb.checked = true;
+            cb.disabled = false;
+        }
+        setActiveTab(1);
+        showRegister();
+    }
+    window.confirmConsent = confirmConsent;
+
+    function toggleLoginMenu() {
+        var btn = document.getElementById('loginMenuBtn');
+        var drop = document.getElementById('loginMenuDropdown');
+        if (!btn || !drop) return;
+        var open = drop.getAttribute('aria-hidden') !== 'true';
+        drop.setAttribute('aria-hidden', open ? 'true' : 'false');
+        btn.setAttribute('aria-expanded', !open);
+        btn.classList.toggle('is-open', !open);
+    }
+    function closeLoginMenu() {
+        var btn = document.getElementById('loginMenuBtn');
+        var drop = document.getElementById('loginMenuDropdown');
+        if (btn) { btn.setAttribute('aria-expanded', 'false'); btn.classList.remove('is-open'); }
+        if (drop) drop.setAttribute('aria-hidden', 'true');
+    }
+    window.toggleLoginMenu = toggleLoginMenu;
+    window.closeLoginMenu = closeLoginMenu;
+    document.addEventListener('click', function (e) {
+        if (!document.getElementById('loginMenuDropdown') || document.getElementById('loginMenuDropdown').getAttribute('aria-hidden') === 'true') return;
+        if (!e.target.closest('.login-topbar')) closeLoginMenu();
+    });
+    document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape') {
+            closeLoginMenu();
+            if (document.getElementById('loginAuthModal') && document.getElementById('loginAuthModal').classList.contains('show')) closeAuthModal();
+        }
+    });
+
+    function showError(message, type) {
+        var errorEl = document.getElementById('errorMessage');
+        if (!errorEl) return;
+        errorEl.textContent = message;
+        errorEl.className = 'login-message show';
+        errorEl.classList.remove('success', 'info', 'error');
+        if (type === 'success') errorEl.classList.add('success');
+        else if (type === 'info') errorEl.classList.add('info');
+        else errorEl.classList.add('error');
+        setTimeout(function () {
+            errorEl.classList.remove('show');
+        }, 8000);
+    }
+
+    function showLogoutNotification() {
+        var params = new URLSearchParams(window.location.search);
+        if (params.get('logout') !== '1') return;
+        if (history.replaceState) history.replaceState(null, '', window.location.pathname + (window.location.hash || ''));
+        var toast = document.getElementById('loginLogoutToast');
+        if (toast) {
+            toast.setAttribute('aria-hidden', 'false');
+            toast.classList.add('show');
+            setTimeout(function () {
+                toast.classList.remove('show');
+                toast.setAttribute('aria-hidden', 'true');
+            }, 2800);
+        }
+        showError('Güvenli çıkış yapıldı.', 'success');
+    }
+
+    function clearStaleSessionIfExpired() {
+        var params = new URLSearchParams(window.location.search);
+        if (params.get('session_expired') !== '1') return;
+        try {
+            sessionStorage.removeItem('user');
+            sessionStorage.removeItem('token');
+            localStorage.removeItem('user');
+            localStorage.removeItem('token');
+            localStorage.removeItem('boot_id');
+        } catch (_) {}
+        if (history.replaceState) history.replaceState(null, '', window.location.pathname + (window.location.hash || ''));
+        var errEl = document.getElementById('errorMessage');
+        if (errEl) { errEl.textContent = 'Oturumunuz sona erdi (sunucu yeniden başladı veya oturum geçersiz). Lütfen tekrar giriş yapın.'; errEl.className = 'login-message show info'; }
+        openAuthModal(0);
+        showLogin();
+    }
+
+    function restoreLastLoginPhone() {
+        var el = document.getElementById('loginPhone');
+        if (!el) return;
+        try {
+            var last = localStorage.getItem('last_login_phone');
+            el.value = (last && String(last).trim()) ? String(last).trim() : '';
+        } catch (_) {}
+    }
+
+    function showLogin() {
+        setActiveTab(0);
+        document.getElementById('loginFormWrap').style.display = 'block';
+        document.getElementById('passwordResetFormWrap').style.display = 'none';
+        var sub = document.getElementById('loginSubtitle');
+        if (sub) sub.textContent = 'Hesabınıza giriş yapın';
+        restoreLastLoginPhone();
+        var hint = document.getElementById('loginTestHint');
+        if (hint) hint.style.display = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') ? 'block' : 'none';
+    }
+
+    function showRegister() {
+        setActiveTab(1);
+        var sub = document.getElementById('loginSubtitle');
+        if (sub) sub.textContent = 'Yeni hesap oluşturun';
+    }
+
+    function showPasswordReset(e) {
+        if (e) e.preventDefault();
+        setActiveTab(0);
+        document.getElementById('loginFormWrap').style.display = 'none';
+        document.getElementById('passwordResetFormWrap').style.display = 'block';
+        var sub = document.getElementById('loginSubtitle');
+        if (sub) sub.textContent = 'Şifre sıfırlama talebi gönderin';
+    }
+
+    window.showError = showError;
+    window.showLogin = showLogin;
+    window.showRegister = showRegister;
+    window.showPasswordReset = showPasswordReset;
+
+    function ensureDeviceId() {
+        try {
+            var did = localStorage.getItem('device_id');
+            if (!did && typeof crypto !== 'undefined' && crypto.randomUUID) {
+                did = crypto.randomUUID();
+                localStorage.setItem('device_id', did);
+            }
+            return did || '';
+        } catch (_) { return ''; }
+    }
+
+    async function handleLogin(e) {
+        e.preventDefault();
+        var phone = document.getElementById('loginPhone').value.trim();
+        var password = (document.getElementById('loginPassword').value || '').trim();
+        if (!phone) {
+            showError('Kullanıcı adı girin.');
+            return;
+        }
+        var isAdminLogin = (phone.toLowerCase() === 'admin');
+        var isTestLogin = (phone.toLowerCase() === 'test');
+        if (!isAdminLogin && !isTestLogin) {
+            var digits = phone.replace(/\s/g,'').replace(/-/g,'').replace(/\(/g,'').replace(/\)/g,'');
+            if (digits.length < 10) {
+                showError('Geçerli bir telefon numarası veya kullanıcı adı (örn. test) girin');
+                return;
+            }
+        }
+        try { localStorage.setItem('last_login_phone', phone); } catch (_) {}
+        try {
+            var headers = { 'Content-Type': 'application/json' };
+            if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+                headers['X-Debug-Login'] = '1';
+            }
+            var res = await fetch('/api/auth/login', {
+                method: 'POST',
+                headers: headers,
+                credentials: 'include',
+                body: JSON.stringify({ phone: phone, password: password })
+            });
+            var raw = await res.text();
+            var data;
+            try { data = raw ? JSON.parse(raw) : {}; } catch (err) {
+                showError(raw && raw.length < 200 ? raw : 'Giriş yanıtı işlenemedi.');
+                return;
+            }
+            if (!res.ok) {
+                var detail = data && data.detail;
+                var msg = (detail && typeof detail === 'object' ? detail.message : (data && (data.message || (typeof detail === 'string' ? detail : null)))) || 'Giriş başarısız';
+                if (res.status === 401) {
+                    msg = (typeof detail === 'string' ? detail : (detail && detail.message)) || 'Telefon numarası veya şifre hatalı';
+                    if (detail && typeof detail === 'object' && detail.debug_hint) {
+                        if (detail.debug_hint === 'user_not_found') msg += ' (Bu kullanıcı adı/telefon kayıtlı değil.)';
+                        if (detail.debug_hint === 'invalid_password') msg += ' (Şifre yanlış; kullanıcı bulundu.)';
+                    }
+                    showError(msg);
+                    return;
+                }
+                if (res.status === 403 && detail && typeof detail === 'object' && detail.error_code === 'PENDING_APPROVAL') {
+                    msg = detail.message || 'Hesabınız admin onayı bekliyor. Onaylandıktan sonra tekrar giriş yapın.';
+                    showError(msg, 'info');
+                    return;
+                }
+                if (res.status === 422 && detail) {
+                    msg = Array.isArray(detail) ? detail.map(function(err) { return err.msg || err.message; }).join(', ') : (typeof detail === 'object' ? detail.message : detail);
+                }
+                showError(typeof msg === 'string' ? msg : (msg && msg.message) || 'Giriş başarısız');
+                return;
+            }
+            applyLoginSuccess(data);
+        } catch (err) {
+            showError('Bağlantı hatası: ' + err.message);
+        }
+    }
+
+    function applyLoginSuccess(data) {
+        var userStr = JSON.stringify(data.user);
+        var token = data.token;
+        var bootId = (data.boot_id != null && data.boot_id !== '') ? String(data.boot_id) : null;
+        sessionStorage.setItem('user', userStr);
+        if (token) sessionStorage.setItem('token', token);
+        try {
+            localStorage.setItem('user', userStr);
+            if (token) localStorage.setItem('token', token);
+            if (bootId) localStorage.setItem('boot_id', bootId);
+        } catch (_) {}
+        function doRedirect() {
+            if (data.user.is_admin) {
+                window.location.href = '/ui/admin.html';
+            } else {
+                var code = data.user.account_code || '';
+                var q = code ? 'account_code=' + encodeURIComponent(code) : 'account_id=' + (data.user.account_id || '');
+                var params = ['tab=binance'];
+                if (data.user.is_first_login) params.push('first_login=true');
+                if (data.user.must_change_password) params.push('must_change_password=1');
+                var base = '/ui/dashboard.html?' + params.join('&') + '&' + q;
+                window.location.href = base;
+            }
+        }
+        if (bootId) {
+            doRedirect();
+            return;
+        }
+        fetch(window.location.origin + '/api/boot-id', { cache: 'no-store' })
+            .then(function(r) { return r.ok ? r.json() : null; })
+            .then(function(b) {
+                try { if (b && b.boot_id) localStorage.setItem('boot_id', String(b.boot_id)); } catch (_) {}
+                doRedirect();
+            })
+            .catch(function() { doRedirect(); });
+    }
+
+    function validatePassword(password, name, surname) {
+        if (password.length < 10) return { valid: false, msg: 'Şifre en az 10 karakter olmalıdır' };
+        if (!/[A-Z]/.test(password)) return { valid: false, msg: 'Şifre en az 1 büyük harf içermelidir' };
+        if (!/[a-z]/.test(password)) return { valid: false, msg: 'Şifre en az 1 küçük harf içermelidir' };
+        if (!/[0-9]/.test(password)) return { valid: false, msg: 'Şifre en az 1 rakam içermelidir' };
+        if (!/[.,!?;:]/.test(password)) return { valid: false, msg: 'Şifre en az 1 noktalama işareti (.,!?;:) içermelidir' };
+        var passLower = password.toLowerCase();
+        if (name && name.toLowerCase().length >= 3 && passLower.includes(name.toLowerCase())) return { valid: false, msg: 'Şifre isminizi içeremez' };
+        if (surname && surname.toLowerCase().length >= 3 && passLower.includes(surname.toLowerCase())) return { valid: false, msg: 'Şifre soyadınızı içeremez' };
+        var weak = ['password', '123456', 'qwerty', 'abc123', 'password123', 'admin', 'welcome'];
+        if (weak.indexOf(passLower) !== -1) return { valid: false, msg: 'Bu şifre çok zayıf, lütfen daha güçlü bir şifre seçin' };
+        var sequences = ['12345', '23456', '34567', '45678', '56789', '67890', 'abcdef', 'qwerty', 'asdfgh', 'zxcvbn'];
+        if (sequences.some(function(seq) { return passLower.indexOf(seq) !== -1; })) return { valid: false, msg: 'Şifre çok belirgin sıralı karakterler içeremez' };
+        return { valid: true, msg: '✓ Şifre güçlü görünüyor' };
+    }
+
+    document.addEventListener('DOMContentLoaded', function () {
+        var passwordInput = document.getElementById('registerPassword');
+        var passwordConfirm = document.getElementById('registerPasswordConfirm');
+        var strengthDiv = document.getElementById('passwordStrength');
+        var matchDiv = document.getElementById('passwordMatch');
+        if (passwordInput && strengthDiv) {
+            passwordInput.addEventListener('input', function () {
+                var name = (document.getElementById('registerName') && document.getElementById('registerName').value.trim()) || '';
+                var surname = (document.getElementById('registerSurname') && document.getElementById('registerSurname').value.trim()) || '';
+                var result = validatePassword(passwordInput.value, name, surname);
+                strengthDiv.textContent = result.msg;
+                strengthDiv.style.color = result.valid ? '#0ecb81' : '#f6465d';
+            });
+        }
+        if (passwordConfirm && passwordInput && matchDiv) {
+            passwordConfirm.addEventListener('input', function () {
+                var match = passwordInput.value === passwordConfirm.value;
+                matchDiv.textContent = match ? '✓ Şifreler eşleşiyor' : '✗ Şifreler eşleşmiyor';
+                matchDiv.style.color = match ? '#0ecb81' : '#f6465d';
+            });
+        }
+    });
+
+    async function handleRegister(e) {
+        e.preventDefault();
+        var consentTerms = document.getElementById('consentTerms');
+        var consentRisk = document.getElementById('consentRisk');
+        var consentKvkk = document.getElementById('consentKvkk');
+        if (!consentTerms || !consentTerms.checked) { showError('Üyelik ve Kullanım Koşulları Sözleşmesi\'ni kabul etmeniz gerekmektedir.'); return; }
+        if (!consentRisk || !consentRisk.checked) { showError('Risk Bildirimi, Yasal Uyarı ve Sorumluluk Reddi\'ni kabul etmeniz gerekmektedir.'); return; }
+        if (!consentKvkk || !consentKvkk.checked) { showError('KVKK Aydınlatma Metni\'ni kabul etmeniz gerekmektedir.'); return; }
+        var name = document.getElementById('registerName').value.trim();
+        var surname = document.getElementById('registerSurname').value.trim();
+        var phone = document.getElementById('registerPhone').value.trim();
+        var password = document.getElementById('registerPassword').value;
+        var passwordConfirm = document.getElementById('registerPasswordConfirm').value;
+        if (!name || name.length < 2) { showError('Ad en az 2 karakter olmalıdır'); return; }
+        if (!surname || surname.length < 2) { showError('Soyad en az 2 karakter olmalıdır'); return; }
+        if (password !== passwordConfirm) { showError('Şifreler eşleşmiyor'); return; }
+        var passwordCheck = validatePassword(password, name, surname);
+        if (!passwordCheck.valid) { showError(passwordCheck.msg); return; }
+        if (!phone) { showError('Telefon numarası zorunludur'); return; }
+        var phoneClean = phone.replace(/\s/g, '').replace(/-/g, '').replace(/\(/g, '').replace(/\)/g, '');
+        if (phoneClean.length < 10) { showError('Geçerli bir telefon numarası girin (en az 10 haneli)'); return; }
+        try {
+            var res = await fetch('/api/auth/register', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: name, surname: surname, phone: phoneClean, password: password, password_confirm: passwordConfirm })
+            });
+            var data;
+            try { data = await res.json(); } catch (_) { showError('Kayıt başarısız'); return; }
+            if (!res.ok) {
+                showError(data.detail || data.message || 'Kayıt başarısız');
+                return;
+            }
+            showError('Kayıt başvurunuz alındı. Admin onayından sonra hesabınız aktif olacaktır.', 'success');
+            setTimeout(showLogin, 2000);
+        } catch (err) {
+            showError('Bağlantı hatası: ' + err.message);
+        }
+    }
+
+    async function handlePasswordReset(e) {
+        e.preventDefault();
+        var phone = document.getElementById('resetPhone').value.trim();
+        if (!phone || phone.length < 10) {
+            showError('Geçerli bir telefon numarası girin (en az 10 haneli)');
+            return;
+        }
+        try {
+            var res = await fetch('/api/auth/password-reset-request', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ phone: phone })
+            });
+            var data;
+            try { data = await res.json(); } catch (_) { showError('İstek başarısız'); return; }
+            if (!res.ok) {
+                showError(data.detail || data.message || 'İstek başarısız');
+                return;
+            }
+            showError('Şifre sıfırlama talebiniz admin paneline iletildi. Admin iletişime geçecektir.', 'success');
+            setTimeout(showLogin, 2000);
+        } catch (err) {
+            showError('Bağlantı hatası: ' + err.message);
+        }
+    }
+
+    window.handleLogin = handleLogin;
+    window.handleRegister = handleRegister;
+    window.handlePasswordReset = handlePasswordReset;
+
+    /* Lockdown & health */
+    document.addEventListener('DOMContentLoaded', function () {
+        var loginYear = document.getElementById('loginYear');
+        if (loginYear) loginYear.textContent = new Date().getFullYear();
+
+        var hint = document.getElementById('loginTestHint');
+        if (hint) hint.style.display = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') ? 'block' : 'none';
+
+        var lockdownScreen = document.getElementById('lockdown-screen');
+        var loginWrap = document.querySelector('.login-wrap');
+        var adminBuffer = '';
+        var ADMIN_SECRET = 'admin';
+        var lockdownKeydownHandler;
+        var userUnlockedWithAdmin = false;
+
+        function hideLockdownScreen(fromAdminKey) {
+            if (fromAdminKey) userUnlockedWithAdmin = true;
+            if (lockdownKeydownHandler) {
+                document.removeEventListener('keydown', lockdownKeydownHandler);
+                lockdownKeydownHandler = null;
+            }
+            if (lockdownScreen) lockdownScreen.classList.remove('show');
+            var input = document.getElementById('loginPhone');
+            if (input) { input.focus(); if (input.select) input.select(); }
+        }
+
+        function showLockdownScreen() {
+            if (lockdownScreen) lockdownScreen.classList.add('show');
+            adminBuffer = '';
+            lockdownKeydownHandler = function (e) {
+                if (e.key && e.key.length === 1) adminBuffer = (adminBuffer + e.key.toLowerCase()).slice(-ADMIN_SECRET.length);
+                if (e.key === 'Enter' && adminBuffer === ADMIN_SECRET) hideLockdownScreen(true);
+            };
+            document.addEventListener('keydown', lockdownKeydownHandler);
+        }
+
+        function applyLockdownState(locked) {
+            if (!locked) userUnlockedWithAdmin = false;
+            var isLockdownVisible = lockdownScreen && lockdownScreen.classList.contains('show');
+            if (locked && !isLockdownVisible) {
+                if (userUnlockedWithAdmin) return;
+                showLockdownScreen();
+            } else if (!locked && isLockdownVisible) {
+                hideLockdownScreen(false);
+            }
+        }
+
+        function doHealthCheck() {
+            fetch((window.location.origin || '') + '/api/health', { method: 'GET', cache: 'no-store' })
+                .then(function (r) { return r.ok ? r.json() : null; })
+                .then(function (data) {
+                    if (data && typeof data.lockdown === 'boolean') applyLockdownState(data.lockdown === true);
+                })
+                .catch(function () {
+                    if (window.showMaintenanceScreen) window.showMaintenanceScreen();
+                });
+        }
+        doHealthCheck();
+        if (window.intervalRegistry) window.intervalRegistry.start('auth.health', doHealthCheck, 20000, 'login');
+        else setInterval(doHealthCheck, 20000);
+
+        clearStaleSessionIfExpired();
+        showLogoutNotification();
+        restoreLastLoginPhone();
+    });
+
+    /* Nebula sabit (parallax yok), sadece CSS ile hafif ışıltı */
+
+    /* Yıldız canvas */
+    function initLoginStars() {
+        var canvas = document.getElementById('loginStarsCanvas');
+        if (!canvas) return;
+        var ctx = canvas.getContext('2d');
+        if (!ctx) return;
+        var DPR = Math.min(window.devicePixelRatio || 1, 2);
+        var w = 0, h = 0;
+        var stars = [];
+        var timeStart = Date.now();
+
+        function rand() {
+            return typeof crypto !== 'undefined' && crypto.getRandomValues
+                ? (crypto.getRandomValues(new Uint32Array(1))[0] / (0xFFFFFFFF + 1))
+                : Math.random();
+        }
+        function buildStars() {
+            stars = [];
+            var total = document.body.classList.contains('login-mobile') ? 32 : 120;
+            for (var i = 0; i < total; i++) {
+                stars.push({
+                    x: rand() * w,
+                    y: rand() * h,
+                    r: 0.4 + rand() * 1.2,
+                    baseA: 0.2 + rand() * 0.5,
+                    a: 0.3,
+                    phase: rand() * Math.PI * 2,
+                    freq: 0.4 + rand() * 1
+                });
+            }
+        }
+        function draw() {
+            if (w <= 0 || h <= 0) return;
+            ctx.clearRect(0, 0, w, h);
+            var t = (Date.now() - timeStart) * 0.001;
+            for (var i = 0; i < stars.length; i++) {
+                var s = stars[i];
+                s.a = s.baseA + Math.sin(t * s.freq + s.phase) * 0.2;
+                s.a = Math.max(0.1, Math.min(1, s.a));
+                ctx.fillStyle = 'rgba(255,255,255,' + s.a + ')';
+                ctx.beginPath();
+                ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+        function resize() {
+            w = Math.max(window.innerWidth || 300, 1);
+            h = Math.max(window.innerHeight || 200, 1);
+            canvas.width = w * DPR;
+            canvas.height = h * DPR;
+            ctx.setTransform(1, 0, 0, 1, 0, 0);
+            ctx.scale(DPR, DPR);
+            buildStars();
+            timeStart = Date.now();
+        }
+        var rafId;
+        function loop() {
+            draw();
+            rafId = requestAnimationFrame(loop);
+        }
+        resize();
+        rafId = requestAnimationFrame(loop);
+        window.addEventListener('resize', function () {
+            resize();
+            if (!rafId) rafId = requestAnimationFrame(loop);
+        }, { passive: true });
+    }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initLoginStars);
+    else initLoginStars();
+
+    /* Kayan yıldız — sadece masaüstü, her yöne rastgele, ok gibi düz gider; sıklık az */
+    function initShootingStars() {
+        var container = document.getElementById('loginShootingStars');
+        if (!container) return;
+        function spawnOne() {
+            var el = document.createElement('div');
+            el.className = 'login-shooting-star';
+            var angleDeg = Math.random() * 360;
+            var dur = 0.9 + Math.random() * 0.5;
+            var dist = 700 + Math.random() * 450;
+            var startX = Math.random() * 100;
+            var startY = Math.random() * 100;
+            el.style.setProperty('--sx', startX + '%');
+            el.style.setProperty('--sy', startY + '%');
+            el.style.setProperty('--angle', angleDeg + 'deg');
+            el.style.setProperty('--dist', dist + 'px');
+            el.style.setProperty('--dur', dur + 's');
+            container.appendChild(el);
+            el.addEventListener('animationend', function () { el.remove(); });
+        }
+        function scheduleNext() {
+            setTimeout(function () {
+                spawnOne();
+                scheduleNext();
+            }, 8000 + Math.random() * 18000);
+        }
+        scheduleNext();
+    }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initShootingStars);
+    else initShootingStars();
+
+    /* Analog saatler — İstanbul ve başkentler */
+    var loginClockSymbols = ['loginClock__hand--h', 'loginClock__hand--m', 'loginClock__hand--s'];
+    function updateClocks() {
+        document.querySelectorAll('.login-clock').forEach(function (box) {
+            var tz = box.getAttribute('data-tz');
+            if (!tz) return;
+            var now = new Date();
+            var formatter = new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+            var parts = formatter.formatToParts(now);
+            var h = 0, m = 0, s = 0;
+            parts.forEach(function (p) {
+                if (p.type === 'hour') h = parseInt(p.value, 10);
+                if (p.type === 'minute') m = parseInt(p.value, 10);
+                if (p.type === 'second') s = parseInt(p.value, 10);
+            });
+            var hourDeg = (h % 12) * 30 + m * 0.5;
+            var minDeg = m * 6 + s * 0.1;
+            var secDeg = s * 6;
+            box.querySelector('.login-clock__hand--h').style.transform = 'rotate(' + hourDeg + 'deg)';
+            box.querySelector('.login-clock__hand--m').style.transform = 'rotate(' + minDeg + 'deg)';
+            var handS = box.querySelector('.login-clock__hand--s');
+            if (handS) handS.style.transform = 'rotate(' + secDeg + 'deg)';
+            var ampmEl = box.querySelector('.login-clock__ampm');
+            if (ampmEl) ampmEl.textContent = (h >= 6 && h < 18) ? '\u2600' : '\u263E'; /* gündüz: ☀, gece: ☾ (ay aynalı) */
+        });
+    }
+    function initClocks() {
+        updateClocks();
+        setInterval(updateClocks, 1000);
+    }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initClocks);
+    else initClocks();
+
+    /* Kripto canlı fiyat — 2 saniyede bir, blink efekti. Logo flicker onleme: liste sadece ilk kez DOM'a yazilir, sonra sadece fiyat/chg guncellenir. */
+    var loginCryptoCoins = ['BTC', 'ETH', 'SOL', 'AVAX', 'LTC', 'XRP'];
+    var loginCryptoPrev = {};
+    var loginCryptoListRendered = false;
+    function renderCryptoList(data) {
+        var el = document.getElementById('loginCryptoList');
+        if (!el) return;
+        var isMobile = window.matchMedia && window.matchMedia('(max-width: 768px)').matches;
+        if (!loginCryptoListRendered) {
+            var html = '';
+            loginCryptoCoins.forEach(function (sym) {
+                html += '<div class="login-crypto__item" data-sym="' + sym + '"><img src="/ui/assets/coins/' + sym + '.png" alt=""><span class="login-crypto__sym">' + sym + '</span><span class="login-crypto__price">—</span><span class="login-crypto__chg">—</span></div>';
+            });
+            el.innerHTML = html;
+            loginCryptoListRendered = true;
+        }
+        loginCryptoCoins.forEach(function (sym) {
+            var d = data[sym];
+            var prev = loginCryptoPrev[sym];
+            var item = el.querySelector('.login-crypto__item[data-sym="' + sym + '"]');
+            if (!item) return;
+            var priceEl = item.querySelector('.login-crypto__price');
+            var chgEl = item.querySelector('.login-crypto__chg');
+            var priceStr = '—';
+            var chgStr = '—';
+            var chgClass = '';
+            if (d) {
+                var p = Number(d.price);
+                if (isMobile && (sym === 'BTC' || sym === 'ETH')) {
+                    priceStr = p >= 1 ? Math.round(p).toLocaleString('en-US') : p.toPrecision(5);
+                } else if (p >= 1) {
+                    priceStr = p.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                } else {
+                    priceStr = p.toPrecision(6);
+                }
+                var chg = (d.priceChangePercent || 0);
+                chgClass = chg >= 0 ? 'up' : 'down';
+                chgStr = (chg >= 0 ? '+' : '') + chg.toFixed(2) + '%';
+            }
+            if (priceEl) {
+                var priceChanged = prev && d && String(prev.price) !== String(d.price);
+                var priceUp = priceChanged && Number(d.price) > Number(prev.price);
+                var priceDown = priceChanged && Number(d.price) < Number(prev.price);
+                priceEl.textContent = priceStr;
+                priceEl.classList.remove('login-crypto__price--blink-up', 'login-crypto__price--blink-down');
+                if (priceUp) priceEl.classList.add('login-crypto__price--blink-up');
+                else if (priceDown) priceEl.classList.add('login-crypto__price--blink-down');
+                if (priceUp || priceDown) {
+                    priceEl.addEventListener('animationend', function () { priceEl.classList.remove('login-crypto__price--blink-up', 'login-crypto__price--blink-down'); }, { once: true });
+                }
+            }
+            if (chgEl) {
+                chgEl.textContent = chgStr;
+                chgEl.className = 'login-crypto__chg ' + chgClass;
+            }
+            if (d) loginCryptoPrev[sym] = { price: d.price, priceChangePercent: d.priceChangePercent };
+        });
+    }
+    var cryptoFailCount = 0;
+    var cryptoIntervalId = null;
+    function fetchCrypto() {
+        fetch('/api/login-crypto', { credentials: 'same-origin' })
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                cryptoFailCount = 0;
+                if (data && typeof data === 'object') {
+                    renderCryptoList(data);
+                } else {
+                    renderCryptoList({});
+                }
+            })
+            .catch(function () {
+                renderCryptoList({});
+                cryptoFailCount += 1;
+                if (cryptoFailCount >= 3 && cryptoIntervalId !== null) {
+                    clearInterval(cryptoIntervalId);
+                    cryptoIntervalId = null;
+                }
+            });
+    }
+    function initCrypto() {
+        fetchCrypto();
+        cryptoIntervalId = setInterval(fetchCrypto, 2000);
+    }
+
+    /* Döviz ve altın – backend proxy (CORS yok) */
+    function fetchForex() {
+        fetch('/api/login-forex', { credentials: 'same-origin' })
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                var usdEl = document.getElementById('loginForexUsd');
+                var eurEl = document.getElementById('loginForexEur');
+                var goldEl = document.getElementById('loginForexGold');
+                var usd = data && data.usd_try;
+                var eur = data && data.eur_try;
+                var goldGram = data && data.gold_gram_try;
+                if (usdEl && usd != null) usdEl.textContent = Number(usd).toLocaleString('tr-TR', { minimumFractionDigits: 4, maximumFractionDigits: 4 });
+                if (eurEl && eur != null) eurEl.textContent = Number(eur).toLocaleString('tr-TR', { minimumFractionDigits: 4, maximumFractionDigits: 4 });
+                if (goldEl && goldGram != null) goldEl.textContent = Number(goldGram).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' ₺';
+            })
+            .catch(function () {});
+    }
+    function initForex() {
+        fetchForex();
+        setInterval(fetchForex, 60000);
+    }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initCrypto);
+    else initCrypto();
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initForex);
+    else initForex();
+})();
+    </script>
+</body>
+</html>

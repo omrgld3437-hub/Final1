@@ -1,0 +1,946 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta name="robots" content="noindex, follow">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>TraderTrailing — Server Yönetici Paneli</title>
+    <style>
+        /* Proje tasarım sistemi: Binance Dark + Gold (design.css / dashboard.css) */
+        :root {
+            --ds-bg-primary: #0b0e11;
+            --ds-bg-secondary: #181a20;
+            --ds-bg-tertiary: #1e2026;
+            --ds-text-primary: #eaecef;
+            --ds-text-secondary: #848e9c;
+            --ds-text-muted: #5e6673;
+            --ds-accent: #f0b90b;
+            --ds-accent-hover: #f8c622;
+            --ds-success: #0ecb81;
+            --ds-danger: #f6465d;
+            --ds-warning: #f0b90b;
+            --ds-border: #2b3139;
+            --ds-border-light: #3a3f4a;
+            --ds-radius-sm: 8px;
+            --ds-radius-md: 12px;
+            --ds-shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.15);
+            --ds-shadow-md: 0 4px 16px rgba(0, 0, 0, 0.2);
+            --ds-font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+        }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: var(--ds-font);
+            background: var(--ds-bg-primary);
+            color: var(--ds-text-primary);
+            min-height: 100vh;
+            font-size: 14px;
+            line-height: 1.5;
+            -webkit-font-smoothing: antialiased;
+        }
+        .wrap { max-width: 900px; margin: 0 auto; padding: 1.5rem; }
+        .page-header {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: space-between;
+            align-items: center;
+            gap: 1.25rem;
+            background: linear-gradient(135deg, var(--ds-bg-secondary) 0%, var(--ds-bg-tertiary) 100%);
+            border: 1px solid var(--ds-border);
+            border-left: 4px solid var(--ds-accent);
+            border-radius: var(--ds-radius-md);
+            padding: 1.5rem 1.75rem;
+            margin-bottom: 1.25rem;
+            box-shadow: var(--ds-shadow-md);
+        }
+        .page-header-left { flex: 1; min-width: 0; }
+        .page-header .page-title-main { margin: 0; padding: 0; font: inherit; }
+        .page-header .brand {
+            display: block;
+            font-size: 1.6rem;
+            font-weight: 700;
+            color: var(--ds-accent);
+            letter-spacing: 0.02em;
+            line-height: 1.2;
+            margin-bottom: 0.15rem;
+        }
+        .page-header .subtitle {
+            display: block;
+            font-size: 0.95rem;
+            font-weight: 500;
+            color: var(--ds-text-primary);
+            letter-spacing: 0.01em;
+        }
+        .page-header .desc {
+            margin: 0.5rem 0 0;
+            font-size: 0.8rem;
+            color: var(--ds-text-secondary);
+            line-height: 1.4;
+            max-width: 32rem;
+        }
+        .page-header .power-row { border-left: 1px solid var(--ds-border); padding-left: 1.25rem; }
+        .power-row {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            flex-shrink: 0;
+        }
+        .power-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.4rem;
+            padding: 0.5rem 0.9rem;
+            border-radius: 9999px;
+            font-size: 0.8125rem;
+            font-weight: 600;
+            border: none;
+            cursor: pointer;
+            transition: transform 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease;
+            -webkit-font-smoothing: antialiased;
+        }
+        .power-btn:hover { transform: translateY(-1px); }
+        .power-btn:active { transform: translateY(0); opacity: 0.92; }
+        .power-btn .power-btn-icon {
+            width: 1rem;
+            height: 1rem;
+            flex-shrink: 0;
+        }
+        .power-btn.restart {
+            background: var(--ds-warning);
+            color: #0b0e11;
+            box-shadow: 0 2px 10px rgba(240, 185, 11, 0.35);
+        }
+        .power-btn.restart:hover {
+            box-shadow: 0 4px 16px rgba(240, 185, 11, 0.45);
+        }
+        .power-btn.off {
+            background: var(--ds-danger);
+            color: #fff;
+            box-shadow: 0 2px 10px rgba(246, 70, 93, 0.35);
+        }
+        .power-btn.off:hover {
+            box-shadow: 0 4px 16px rgba(246, 70, 93, 0.45);
+        }
+        .tabs {
+            display: flex;
+            gap: 0;
+            margin-bottom: 0;
+            border-bottom: 1px solid var(--ds-border);
+            background: var(--ds-bg-secondary);
+            border: 1px solid var(--ds-border);
+            border-bottom: none;
+            border-radius: var(--ds-radius-sm) var(--ds-radius-sm) 0 0;
+            padding: 0.5rem 0.5rem 0 0.5rem;
+        }
+        .tabs button {
+            padding: 0.6rem 1.1rem;
+            background: transparent;
+            border: none;
+            border-bottom: 2px solid transparent;
+            margin-bottom: -1px;
+            border-radius: var(--ds-radius-sm) var(--ds-radius-sm) 0 0;
+            color: var(--ds-text-secondary);
+            cursor: pointer;
+            font-size: 0.875rem;
+            font-weight: 500;
+            transition: color 0.15s, border-color 0.15s;
+        }
+        .tabs button:hover { color: var(--ds-text-primary); }
+        .tabs button.active {
+            color: var(--ds-accent);
+            border-bottom-color: var(--ds-accent);
+        }
+        .tab-panel {
+            display: none;
+            background: var(--ds-bg-secondary);
+            border: 1px solid var(--ds-border);
+            border-top: none;
+            border-radius: 0 0 var(--ds-radius-sm) var(--ds-radius-sm);
+            padding: 1.5rem;
+            margin-bottom: 1.25rem;
+            box-shadow: var(--ds-shadow-sm);
+        }
+        .tab-panel.active { display: block; }
+        .card {
+            background: var(--ds-bg-tertiary);
+            border: 1px solid var(--ds-border);
+            border-radius: var(--ds-radius-sm);
+            padding: 1.25rem;
+            margin-bottom: 1rem;
+        }
+        .card h3 {
+            font-size: 0.9375rem;
+            font-weight: 600;
+            margin: 0 0 1rem 0;
+            color: var(--ds-text-primary);
+            padding-bottom: 0.5rem;
+            border-bottom: 1px solid var(--ds-border);
+        }
+        .section-label {
+            font-size: 0.7rem;
+            font-weight: 600;
+            color: var(--ds-text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 0.5rem;
+        }
+        .section-label-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+            margin-bottom: 0.5rem;
+        }
+        .section-label-row .section-label { margin-bottom: 0; }
+        .btn-copy {
+            padding: 0.25rem 0.5rem;
+            font-size: 0.7rem;
+            font-weight: 500;
+            border-radius: var(--ds-radius-sm);
+            border: 1px solid var(--ds-border);
+            background: var(--ds-bg-tertiary);
+            color: var(--ds-text-secondary);
+            cursor: pointer;
+            transition: color 0.15s, border-color 0.15s;
+        }
+        .btn-copy:hover { color: var(--ds-accent); border-color: var(--ds-accent); }
+        .btn-copy.copied { color: var(--ds-success); border-color: var(--ds-success); }
+        .system-boxes {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.75rem;
+            margin-bottom: 0.75rem;
+        }
+        .system-box {
+            background: var(--ds-bg-primary);
+            border: 1px solid var(--ds-border);
+            border-radius: var(--ds-radius-sm);
+            padding: 0.5rem 0.85rem;
+            font-size: 0.8125rem;
+            min-width: 0;
+        }
+        .system-box .label { color: var(--ds-text-secondary); margin-right: 0.35rem; }
+        .system-box .value { color: var(--ds-text-primary); font-weight: 500; }
+        .row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; margin-bottom: 0.75rem; }
+        .row:last-child { margin-bottom: 0; }
+        .badge {
+            display: inline-block;
+            padding: 0.25rem 0.5rem;
+            border-radius: 6px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+        .badge.run { background: rgba(14, 203, 129, 0.15); color: var(--ds-success); border: 1px solid rgba(14, 203, 129, 0.35); }
+        .badge.stop { background: rgba(246, 70, 93, 0.15); color: var(--ds-danger); border: 1px solid rgba(246, 70, 93, 0.35); }
+        .badge.err { background: rgba(246, 70, 93, 0.12); color: var(--ds-danger); border: 1px solid rgba(246, 70, 93, 0.3); }
+        .badge.wrn { background: rgba(240, 185, 11, 0.12); color: var(--ds-warning); border: 1px solid rgba(240, 185, 11, 0.3); }
+        .btn {
+            padding: 0.45rem 0.85rem;
+            border-radius: var(--ds-radius-sm);
+            cursor: pointer;
+            font-size: 0.8125rem;
+            font-weight: 500;
+            border: 1px solid var(--ds-border);
+            background: var(--ds-bg-tertiary);
+            color: var(--ds-text-primary);
+            transition: color 0.15s, border-color 0.15s, background 0.15s;
+        }
+        .btn:hover { background: var(--ds-bg-secondary); border-color: var(--ds-border-light); }
+        .btn:active { opacity: 0.9; }
+        .btn-start { background: rgba(14, 203, 129, 0.1); color: var(--ds-success); border-color: rgba(14, 203, 129, 0.4); }
+        .btn-start:hover { background: rgba(14, 203, 129, 0.18); border-color: var(--ds-success); }
+        .btn-stop { background: rgba(246, 70, 93, 0.1); color: var(--ds-danger); border-color: rgba(246, 70, 93, 0.4); }
+        .btn-stop:hover { background: rgba(246, 70, 93, 0.18); border-color: var(--ds-danger); }
+        .btn-restart { background: rgba(240, 185, 11, 0.08); color: var(--ds-warning); border-color: rgba(240, 185, 11, 0.4); }
+        .btn-restart:hover { background: rgba(240, 185, 11, 0.15); border-color: var(--ds-warning); }
+        .btn-reset { color: var(--ds-text-secondary); }
+        .btn-reset:hover { color: var(--ds-text-primary); border-color: var(--ds-border-light); }
+        .btn-lock { color: var(--ds-text-secondary); }
+        .btn-lock.locked { background: rgba(240, 185, 11, 0.08); color: var(--ds-accent); border-color: var(--ds-accent); }
+        .btn-lock:hover { color: var(--ds-accent); }
+        .log-box {
+            background: var(--ds-bg-primary);
+            border: 1px solid var(--ds-border);
+            border-radius: var(--ds-radius-sm);
+            padding: 0.75rem 1rem;
+            max-height: 320px;
+            overflow: auto;
+            font-size: 0.75rem;
+            line-height: 1.5;
+            color: var(--ds-text-secondary);
+            white-space: pre-wrap;
+            word-break: break-all;
+            font-family: "SF Mono", Monaco, "Cascadia Code", "Roboto Mono", monospace;
+        }
+        .errors-list, .warnings-list {
+            background: var(--ds-bg-primary);
+            border: 1px solid var(--ds-border);
+            border-radius: var(--ds-radius-sm);
+            padding: 0.5rem 0.75rem;
+            max-height: 160px;
+            overflow: auto;
+            font-size: 0.75rem;
+            line-height: 1.4;
+            white-space: pre-wrap;
+            word-break: break-all;
+            margin-bottom: 0.75rem;
+            font-family: "SF Mono", Monaco, "Cascadia Code", "Roboto Mono", monospace;
+        }
+        .errors-list { border-left: 3px solid var(--ds-danger); }
+        .warnings-list { border-left: 3px solid var(--ds-warning); }
+        .errors-list .head { font-weight: 500; margin-bottom: 0.25rem; }
+        .warnings-list .head { font-weight: 500; margin-bottom: 0.25rem; }
+        /* Hata satırları tam kırmızı, uyarı satırları tam sarı (log-box ve listelerde) */
+        .log-box .log-ts, .log-box .log-ok, .errors-list .log-ts, .errors-list .log-ok, .warnings-list .log-ts, .warnings-list .log-ok { color: var(--ds-success); }
+        .log-box .err-line {
+            display: block;
+            color: #fff;
+            background: var(--ds-danger);
+            padding: 2px 8px;
+            margin: 1px 0;
+            border-radius: 2px;
+        }
+        .log-box .wrn-line {
+            display: block;
+            color: #0b0e11;
+            background: var(--ds-warning);
+            padding: 2px 8px;
+            margin: 1px 0;
+            border-radius: 2px;
+        }
+        .errors-list .err-line {
+            display: block;
+            color: #fff;
+            background: var(--ds-danger);
+            padding: 2px 8px;
+            margin: 1px 0;
+            border-radius: 2px;
+        }
+        .warnings-list .wrn-line {
+            display: block;
+            color: #0b0e11;
+            background: var(--ds-warning);
+            padding: 2px 8px;
+            margin: 1px 0;
+            border-radius: 2px;
+        }
+        .overview-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 1rem; margin-bottom: 0; }
+        .overview-card {
+            background: var(--ds-bg-tertiary);
+            border: 1px solid var(--ds-border);
+            border-radius: var(--ds-radius-sm);
+            padding: 1rem;
+        }
+        .overview-card h4 { margin: 0 0 0.5rem 0; font-size: 0.8125rem; font-weight: 600; color: var(--ds-text-secondary); }
+        .overview-card .val { font-size: 0.875rem; margin-bottom: 0.25rem; }
+        .overview-card .meta { font-size: 0.75rem; color: var(--ds-text-secondary); }
+        .overview-card .overview-alerts { margin-top: 0.5rem; display: flex; flex-wrap: wrap; gap: 0.35rem; }
+        .overview-card .overview-alerts .badge { font-size: 0.6875rem; padding: 0.2rem 0.45rem; }
+        .manager-section { margin-top: 1.5rem; padding-top: 1.25rem; border-top: 1px solid var(--ds-border); }
+        .manager-section h3 { color: var(--ds-text-primary); }
+        .warn-msg {
+            background: rgba(240, 185, 11, 0.08);
+            border: 1px solid rgba(240, 185, 11, 0.35);
+            color: var(--ds-warning);
+            padding: 0.75rem 1rem;
+            border-radius: var(--ds-radius-sm);
+            font-size: 0.8125rem;
+            margin-bottom: 1rem;
+            line-height: 1.45;
+        }
+        .foot-note { font-size: 0.75rem; color: var(--ds-text-secondary); margin-top: 1rem; text-align: center; }
+        .critical-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.6);
+            z-index: 10000;
+            align-items: center;
+            justify-content: center;
+            padding: 1rem;
+        }
+        .critical-overlay.show { display: flex; }
+        .critical-modal {
+            background: var(--ds-bg-secondary);
+            border: 2px solid var(--ds-border);
+            border-radius: var(--ds-radius-md);
+            max-width: 420px;
+            width: 100%;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+        }
+        .critical-modal.critical-poweroff { border-color: var(--ds-danger); }
+        .critical-modal.critical-restart { border-color: var(--ds-warning); }
+        .critical-modal .critical-title {
+            padding: 1rem 1.25rem;
+            font-size: 1rem;
+            font-weight: 700;
+            color: var(--ds-text-primary);
+            border-bottom: 1px solid var(--ds-border);
+        }
+        .critical-modal.critical-poweroff .critical-title { color: var(--ds-danger); }
+        .critical-modal.critical-restart .critical-title { color: var(--ds-warning); }
+        .critical-modal .critical-body {
+            padding: 1.25rem;
+            font-size: 0.875rem;
+            line-height: 1.5;
+            color: var(--ds-text-secondary);
+        }
+        .critical-modal .critical-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 0.75rem;
+            padding: 1rem 1.25rem;
+            border-top: 1px solid var(--ds-border);
+        }
+        .critical-modal .btn-cancel {
+            padding: 0.5rem 1rem;
+            border-radius: var(--ds-radius-sm);
+            border: 1px solid var(--ds-border);
+            background: var(--ds-bg-tertiary);
+            color: var(--ds-text-primary);
+            cursor: pointer;
+            font-size: 0.875rem;
+            font-weight: 500;
+        }
+        .critical-modal .btn-cancel:hover { background: var(--ds-bg-primary); }
+        .critical-modal .btn-confirm {
+            padding: 0.5rem 1rem;
+            border-radius: var(--ds-radius-sm);
+            border: none;
+            cursor: pointer;
+            font-size: 0.875rem;
+            font-weight: 600;
+        }
+        .critical-modal.critical-poweroff .btn-confirm { background: var(--ds-danger); color: #fff; }
+        .critical-modal.critical-restart .btn-confirm { background: var(--ds-warning); color: #0b0e11; }
+    </style>
+</head>
+<body>
+    <div class="wrap">
+        <div class="page-header">
+            <div class="page-header-left">
+                <h1 class="page-title-main">
+                    <span class="brand">TraderTrailing</span>
+                    <span class="subtitle">Server Yönetici Paneli</span>
+                </h1>
+                <p class="desc">Web, Bot Engine ve Manager sunucularını bu panelden izleyip yönetebilirsiniz. Sadece bu bilgisayardan erişilebilir.</p>
+            </div>
+            <div class="power-row">
+                <button type="button" class="power-btn restart" id="btn-all-restart" title="Tüm sunucuları yeniden başlat">
+                    <svg class="power-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 4v6h6"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
+                    <span>Yeniden başlat</span>
+                </button>
+                <button type="button" class="power-btn off" id="btn-power-off" title="Tüm sunucuları kapat (Power OFF)">
+                    <svg class="power-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg>
+                    <span>Kapat</span>
+                </button>
+            </div>
+        </div>
+        <div class="warn-msg">
+            <strong>Dikkat:</strong> Sağ üstteki Power OFF veya Yeniden Başlat kullanırsanız sunucular kapanır veya yeniden başlar; bu panel (Manager) da kapanabilir. Yeniden açmak için &quot;Manager Start&quot; ile sunucuyu manuel başlatmanız gerekir.
+        </div>
+        <div class="tabs" role="tablist">
+            <button type="button" class="tab-btn active" data-tab="home" role="tab">ANASAYFA</button>
+            <button type="button" class="tab-btn" data-tab="web" role="tab">WEB ENGINE</button>
+            <button type="button" class="tab-btn" data-tab="worker" role="tab">BOT ENGINE</button>
+        </div>
+
+        <div id="panel-home" class="tab-panel active" role="tabpanel">
+            <div class="card">
+                <h3>Sistem özeti</h3>
+                <p class="section-label">Sunucu bilgisi</p>
+                <div id="home-system" class="system-boxes"></div>
+                <p class="section-label">Sunucu durumları</p>
+                <div id="home-overview" class="overview-grid"></div>
+            </div>
+            <div class="manager-section card">
+                <h3>Manager Sunucusu (Bu Panel — Port 7999)</h3>
+                <p class="section-label">Durum</p>
+                <div id="home-manager-status" class="row"></div>
+                <p class="section-label">Hata ve uyarı sayacı</p>
+                <div class="row">
+                    <span class="badge err" id="manager-err-count">0 hata</span>
+                    <span class="badge wrn" id="manager-wrn-count">0 uyarı</span>
+                    <button type="button" class="btn btn-reset" data-reset="manager">Sayacı ve listeyi sıfırla</button>
+                </div>
+                <div class="section-label-row">
+                    <span class="section-label">Hatalar (sadece hata satırı, sıfırlayana kadar)</span>
+                    <button type="button" class="btn-copy" data-copy="home-manager-errors" title="Hataları kopyala">Kopyala</button>
+                </div>
+                <div id="home-manager-errors" class="errors-list"></div>
+                <div class="section-label-row">
+                    <span class="section-label">Uyarılar (sıfırlayana kadar listelenir)</span>
+                    <button type="button" class="btn-copy" data-copy="home-manager-warnings" title="Uyarıları kopyala">Kopyala</button>
+                </div>
+                <div id="home-manager-warnings" class="warnings-list"></div>
+                <div class="section-label-row">
+                    <span class="section-label">Son 100 log satırı</span>
+                    <button type="button" class="btn-copy" data-copy="home-manager-logs" title="Logları kopyala">Kopyala</button>
+                </div>
+                <div id="home-manager-logs" class="log-box">Yükleniyor…</div>
+            </div>
+        </div>
+
+        <div id="panel-web" class="tab-panel" role="tabpanel">
+            <div class="card">
+                <h3>Web Engine (port 8000)</h3>
+                <p class="section-label">Durum</p>
+                <div id="web-status" class="row"></div>
+                <p class="section-label">İşlemler</p>
+                <div class="row">
+                    <button type="button" class="btn btn-start" data-action="start" data-server="web">Başlat</button>
+                    <button type="button" class="btn btn-stop" data-action="stop" data-server="web">Kapat</button>
+                    <button type="button" class="btn btn-restart" data-action="restart" data-server="web">Yeniden başlat</button>
+                    <button type="button" class="btn btn-lock" id="lock-web" data-server="web">Kilit (anasayfadan koruma)</button>
+                </div>
+                <p class="section-label">Hata ve uyarı sayacı</p>
+                <div class="row">
+                    <span class="badge err" id="web-err-count">0 hata</span>
+                    <span class="badge wrn" id="web-wrn-count">0 uyarı</span>
+                    <button type="button" class="btn btn-reset" data-reset="web">Sayacı ve listeyi sıfırla</button>
+                </div>
+                <div class="section-label-row">
+                    <span class="section-label">Hatalar (sadece hata satırı, sıfırlayana kadar)</span>
+                    <button type="button" class="btn-copy" data-copy="web-errors" title="Hataları kopyala">Kopyala</button>
+                </div>
+                <div id="web-errors" class="errors-list"></div>
+                <div class="section-label-row">
+                    <span class="section-label">Uyarılar (sıfırlayana kadar listelenir)</span>
+                    <button type="button" class="btn-copy" data-copy="web-warnings" title="Uyarıları kopyala">Kopyala</button>
+                </div>
+                <div id="web-warnings" class="warnings-list"></div>
+                <div class="section-label-row">
+                    <span class="section-label">Son 100 log satırı</span>
+                    <button type="button" class="btn-copy" data-copy="web-logs" title="Logları kopyala">Kopyala</button>
+                </div>
+                <div id="web-logs" class="log-box">Yükleniyor…</div>
+            </div>
+        </div>
+
+        <div id="panel-worker" class="tab-panel" role="tabpanel">
+            <div class="card">
+                <h3>Bot Engine (Worker)</h3>
+                <p class="section-label">Durum</p>
+                <div id="worker-status" class="row"></div>
+                <p class="section-label">İşlemler</p>
+                <div class="row">
+                    <button type="button" class="btn btn-start" data-action="start" data-server="worker">Başlat</button>
+                    <button type="button" class="btn btn-stop" data-action="stop" data-server="worker">Kapat</button>
+                    <button type="button" class="btn btn-restart" data-action="restart" data-server="worker">Yeniden başlat</button>
+                    <button type="button" class="btn btn-lock" id="lock-worker" data-server="worker">Kilit (anasayfadan koruma)</button>
+                </div>
+                <p class="section-label">Hata ve uyarı sayacı</p>
+                <div class="row">
+                    <span class="badge err" id="worker-err-count">0 hata</span>
+                    <span class="badge wrn" id="worker-wrn-count">0 uyarı</span>
+                    <button type="button" class="btn btn-reset" data-reset="worker">Sayacı ve listeyi sıfırla</button>
+                </div>
+                <div class="section-label-row">
+                    <span class="section-label">Hatalar (sadece hata satırı, sıfırlayana kadar)</span>
+                    <button type="button" class="btn-copy" data-copy="worker-errors" title="Hataları kopyala">Kopyala</button>
+                </div>
+                <div id="worker-errors" class="errors-list"></div>
+                <div class="section-label-row">
+                    <span class="section-label">Uyarılar (sıfırlayana kadar listelenir)</span>
+                    <button type="button" class="btn-copy" data-copy="worker-warnings" title="Uyarıları kopyala">Kopyala</button>
+                </div>
+                <div id="worker-warnings" class="warnings-list"></div>
+                <div class="section-label-row">
+                    <span class="section-label">Son 100 log satırı</span>
+                    <button type="button" class="btn-copy" data-copy="worker-logs" title="Logları kopyala">Kopyala</button>
+                </div>
+                <div id="worker-logs" class="log-box">Yükleniyor…</div>
+            </div>
+        </div>
+
+        <p class="foot-note">Yerel erişim (127.0.0.1). Manager sunucusu kapansa bile Web ve Bot Engine bağımsız çalışmaya devam eder.</p>
+
+        <div id="critical-overlay" class="critical-overlay" aria-hidden="true">
+            <div id="critical-modal" class="critical-modal" role="alertdialog" aria-labelledby="critical-title" aria-describedby="critical-body">
+                <div id="critical-title" class="critical-title">KRİTİK UYARI</div>
+                <div id="critical-body" class="critical-body"></div>
+                <div class="critical-actions">
+                    <button type="button" class="btn-cancel" id="critical-cancel">İptal</button>
+                    <button type="button" class="btn-confirm" id="critical-confirm">Onayla</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+(function () {
+    var BASE = window.location.origin;
+    var STATUS_POLL_MS = 5000;
+    var FULL_STATUS_POLL_MS = 15000;
+    var LOG_POLL_MS = 8000;
+    var LOG_LINES = 30;
+    var data = { web: {}, worker: {}, manager: {}, server_locks: { web: false, worker: false }, system: {} };
+    var statusTimer = null;
+    var fullStatusTimer = null;
+    var logTimer = null;
+
+    function api(path, opts) {
+        opts = opts || {};
+        return fetch(BASE + path, { credentials: 'same-origin', headers: opts.headers || {}, method: opts.method || 'GET', body: opts.body || undefined })
+            .then(function (r) { return r.json ? r.json() : r.text(); })
+            .catch(function () { return null; });
+    }
+
+    function showTab(name) {
+        document.querySelectorAll('.tab-panel').forEach(function (p) { p.classList.remove('active'); });
+        document.querySelectorAll('.tab-btn').forEach(function (b) { b.classList.remove('active'); });
+        var panel = document.getElementById('panel-' + name);
+        var btn = document.querySelector('.tab-btn[data-tab="' + name + '"]');
+        if (panel) panel.classList.add('active');
+        if (btn) btn.classList.add('active');
+        if (name === 'home') fetchManagerLogs();
+        else fetchTail(name);
+    }
+
+    function renderBadge(running) {
+        return running ? '<span class="badge run">Çalışıyor</span>' : '<span class="badge stop">Durduruldu</span>';
+    }
+    function formatCount(n, label) {
+        var v = n || 0;
+        return v >= 9999 ? '9999+ ' + label : v + ' ' + label;
+    }
+
+    function uptimeStr(sec) {
+        if (sec == null) return '-';
+        var m = Math.floor(sec / 60), h = Math.floor(m / 60);
+        m = m % 60;
+        if (h > 0) return h + 's ' + m + 'dk';
+        return m + 'dk';
+    }
+
+    function renderHome() {
+        var sys = data.system || {};
+        var boxes = [];
+        if (sys.cpu_percent != null) boxes.push('<div class="system-box"><span class="label">CPU</span><span class="value">' + sys.cpu_percent + '%</span></div>');
+        if (sys.ram_percent != null) boxes.push('<div class="system-box"><span class="label">RAM</span><span class="value">' + sys.ram_percent + '% (' + (sys.ram_used_mb | 0) + '/' + (sys.ram_total_mb | 0) + ' MB)</span></div>');
+        if (sys.local_ip) boxes.push('<div class="system-box"><span class="label">IP</span><span class="value">' + escapeHtml(sys.local_ip) + '</span></div>');
+        if (sys.total_requests != null) boxes.push('<div class="system-box"><span class="label">Toplam istek</span><span class="value">' + escapeHtml(String(sys.total_requests)) + '</span></div>');
+        document.getElementById('home-system').innerHTML = boxes.length ? boxes.join('') : '<div class="system-box"><span class="value">Sistem bilgisi yok</span></div>';
+
+        var cards = [];
+        cards.push({ title: 'Web Engine', run: data.web && data.web.running, pid: data.web && data.web.pid, uptime: data.web && data.web.uptime_sec, extra: data.web && data.web.total_requests != null ? 'İstek: ' + data.web.total_requests : '', err: (data.web && data.web.error_count) || 0, wrn: (data.web && data.web.warning_count) || 0 });
+        cards.push({ title: 'Bot Engine', run: data.worker && data.worker.running, pid: data.worker && data.worker.pid, uptime: data.worker && data.worker.uptime_sec, extra: data.worker && data.worker.active_bots != null ? 'Aktif bot: ' + data.worker.active_bots : (data.worker && data.worker.total_requests != null ? 'Döngü: ' + data.worker.total_requests : ''), err: (data.worker && data.worker.error_count) || 0, wrn: (data.worker && data.worker.warning_count) || 0 });
+        cards.push({ title: 'Manager', run: data.manager && data.manager.running, pid: data.manager && data.manager.pid, extra: data.manager && data.manager.port ? 'Port: ' + data.manager.port : '', err: (data.manager && data.manager.error_count) || 0, wrn: (data.manager && data.manager.warning_count) || 0 });
+        var grid = document.getElementById('home-overview');
+        grid.innerHTML = cards.map(function (c) {
+            var meta = [];
+            if (c.pid) meta.push('PID: ' + c.pid);
+            if (c.uptime) meta.push('Süre: ' + uptimeStr(c.uptime));
+            if (c.extra) meta.push(c.extra);
+            var alerts = '';
+            if ((c.err || 0) > 0 || (c.wrn || 0) > 0) {
+                var parts = [];
+                if ((c.err || 0) > 0) parts.push('<span class="badge err">' + formatCount(c.err, 'hata') + '</span>');
+                if ((c.wrn || 0) > 0) parts.push('<span class="badge wrn">' + formatCount(c.wrn, 'uyarı') + '</span>');
+                alerts = '<div class="overview-alerts">' + parts.join('') + '</div>';
+            }
+            return '<div class="overview-card"><h4>' + c.title + '</h4><div class="val">' + renderBadge(c.run) + '</div>' +
+                (meta.length ? '<div class="meta">' + meta.join(' · ') + '</div>' : '') + alerts + '</div>';
+        }).join('');
+
+        var mgr = data.manager || {};
+        var pidVal = mgr.pid != null ? String(mgr.pid) : '-';
+        var portVal = mgr.port != null ? String(mgr.port) : '7999';
+        document.getElementById('home-manager-status').innerHTML =
+            renderBadge(mgr.running) +
+            ' <div class="system-box"><span class="label">PID</span><span class="value">' + escapeHtml(pidVal) + '</span></div>' +
+            ' <div class="system-box"><span class="label">Port</span><span class="value">' + escapeHtml(portVal) + '</span></div>';
+        var mgrErrEl = document.getElementById('manager-err-count');
+        var mgrWrnEl = document.getElementById('manager-wrn-count');
+        if (mgrErrEl) mgrErrEl.textContent = formatCount(mgr.error_count, 'hata');
+        if (mgrWrnEl) mgrWrnEl.textContent = formatCount(mgr.warning_count, 'uyarı');
+        var mgrErrList = document.getElementById('home-manager-errors');
+        var mgrWrnList = document.getElementById('home-manager-warnings');
+        if (mgrErrList) {
+            var errEntries = mgr.error_entries || [];
+            mgrErrList.innerHTML = errEntries.length ? errEntries.map(function (block) { return '<div class="head">' + block.map(formatLogLine).join('\n') + '</div>'; }).join('') : 'Yok';
+        }
+        if (mgrWrnList) {
+            var wrnEntries = mgr.warning_entries || [];
+            mgrWrnList.innerHTML = wrnEntries.length ? wrnEntries.map(function (block) { return '<div class="head">' + block.map(formatLogLine).join('\n') + '</div>'; }).join('') : 'Yok';
+        }
+    }
+
+    function renderServer(server, id) {
+        var s = data[server];
+        if (!s) return;
+        var el = document.getElementById(id);
+        if (!el) return;
+        var parts = [renderBadge(s.running)];
+        if (s.pid != null) parts.push('<div class="system-box"><span class="label">PID</span><span class="value">' + escapeHtml(String(s.pid)) + '</span></div>');
+        if (s.uptime_sec != null) parts.push('<div class="system-box"><span class="label">Süre</span><span class="value">' + escapeHtml(uptimeStr(s.uptime_sec)) + '</span></div>');
+        if (server === 'web' && s.total_requests != null) parts.push('<div class="system-box"><span class="label">İstek</span><span class="value">' + escapeHtml(String(s.total_requests)) + '</span></div>');
+        if (server === 'worker' && s.active_bots != null) parts.push('<div class="system-box"><span class="label">Aktif bot</span><span class="value">' + escapeHtml(String(s.active_bots)) + '</span></div>');
+        if (server === 'worker' && s.total_requests != null) parts.push('<div class="system-box"><span class="label">İstek</span><span class="value">' + escapeHtml(String(s.total_requests)) + '</span></div>');
+        el.innerHTML = parts.join(' ');
+
+        document.getElementById(server + '-err-count').textContent = formatCount(s.error_count, 'hata');
+        document.getElementById(server + '-wrn-count').textContent = formatCount(s.warning_count, 'uyarı');
+
+        var errEl = document.getElementById(server + '-errors');
+        var wrnEl = document.getElementById(server + '-warnings');
+        var errEntries = s.error_entries || [];
+        var wrnEntries = s.warning_entries || [];
+        errEl.innerHTML = errEntries.length ? errEntries.map(function (block) { return '<div class="head">' + block.map(formatLogLine).join('\n') + '</div>'; }).join('') : 'Yok';
+        wrnEl.innerHTML = wrnEntries.length ? wrnEntries.map(function (block) { return '<div class="head">' + block.map(formatLogLine).join('\n') + '</div>'; }).join('') : 'Yok';
+
+        var lockBtn = document.getElementById('lock-' + server);
+        if (lockBtn) {
+            var locked = (data.server_locks || {})[server];
+            lockBtn.textContent = locked ? 'Kilitli (anasayfadan korunuyor)' : 'Kilit (anasayfadan koruma)';
+            lockBtn.classList.toggle('locked', !!locked);
+        }
+    }
+
+    var LOG_TS_RE = /^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}(?:[.,]\d+)?)\s*(.*)$/;
+    var LOG_TS_ANYWHERE = /(^|[\s(])(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}(?:[.,]\d+)?)(?=[\s)\].,]|$)/g;
+    function formatLogRest(text) {
+        if (!text) return '';
+        var s = escapeHtml(text);
+        s = s.replace(/\bINFO:?\b/g, '<span class="log-ts">$&</span>');
+        s = s.replace(LOG_TS_ANYWHERE, '$1<span class="log-ts">$2</span>');
+        s = s.replace(/\b(2\d{2}\s+[A-Za-z]+)\b/g, '<span class="log-ok">$1</span>');
+        return s;
+    }
+    function formatLogLine(line) {
+        var isErr = /ERROR|Traceback|Exception|\b[45]\d{2}\b/.test(line);
+        var isWrn = /\bWARNING\b/.test(line);
+        if (isErr) return '<span class="err-line">' + escapeHtml(line) + '</span>';
+        if (isWrn) return '<span class="wrn-line">' + escapeHtml(line) + '</span>';
+        var m = line.match(LOG_TS_RE);
+        if (m) return '<span class="log-ts">' + escapeHtml(m[1]) + '</span>' + (m[2] ? ' ' + formatLogRest(m[2]) : '');
+        return formatLogRest(line);
+    }
+    function renderLogBox(id, lines, errWrn) {
+        var box = document.getElementById(id);
+        if (!box) return;
+        if (!lines || !lines.length) { box.textContent = '(log yok)'; return; }
+        box.innerHTML = lines.map(formatLogLine).join('\n');
+    }
+
+    function escapeHtml(s) {
+        var d = document.createElement('div');
+        d.textContent = s;
+        return d.innerHTML;
+    }
+
+    function applyStatus(r) {
+        if (r && typeof r === 'object') {
+            /* Light status (polling) error_count/error_entries icermez; onceki degerleri koru */
+            if (r.web) data.web = Object.assign({}, data.web || {}, r.web);
+            if (r.worker) data.worker = Object.assign({}, data.worker || {}, r.worker);
+            if (r.manager) data.manager = Object.assign({}, data.manager || {}, r.manager);
+            if (r.system) data.system = r.system;
+            if (r.server_locks) data.server_locks = r.server_locks;
+            renderHome();
+            renderServer('web', 'web-status');
+            renderServer('worker', 'worker-status');
+        }
+    }
+    function fetchLightStatus() {
+        return api('/api/local/logs/status?light=1').then(function (r) {
+            applyStatus(r);
+            return r;
+        });
+    }
+    function fetchFullStatus() {
+        return api('/api/local/logs/status').then(function (r) {
+            applyStatus(r);
+            return r;
+        });
+    }
+    function fetchStatus() {
+        return fetchFullStatus();
+    }
+
+    function fetchTail(source) {
+        api('/api/local/logs/tail?source=' + source + '&lines=' + LOG_LINES).then(function (r) {
+            if (r && r.lines) {
+                var id = source === 'manager' ? 'home-manager-logs' : source + '-logs';
+                renderLogBox(id, r.lines);
+            }
+        });
+    }
+
+    function fetchManagerLogs() {
+        fetchTail('manager');
+    }
+
+    function doAction(server, action) {
+        var path = '/api/local/logs/' + server + '/' + action;
+        api(path, { method: 'POST' }).then(function () {
+            setTimeout(fetchStatus, 600);
+            if (server === 'web' || server === 'worker') setTimeout(function () { fetchTail(server); }, 800);
+        });
+    }
+
+    function toggleLock(server) {
+        var locks = data.server_locks || {};
+        var next = !locks[server];
+        var prev = locks[server];
+        data.server_locks = data.server_locks || {};
+        data.server_locks[server] = next;
+        renderServer('web', 'web-status');
+        renderServer('worker', 'worker-status');
+        var payload = server === 'web' ? { web: next, worker: !!locks.worker } : { web: !!locks.web, worker: next };
+        api('/api/local/logs/lock', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }).then(function () { }).catch(function () {
+            data.server_locks[server] = prev;
+            renderServer('web', 'web-status');
+            renderServer('worker', 'worker-status');
+        });
+    }
+
+    function resetErrors(source) {
+        api('/api/local/logs/reset?source=' + source + '&type=both', { method: 'POST' }).then(function () {
+            setTimeout(fetchStatus, 400);
+        });
+    }
+
+    function copyToClipboard(targetId) {
+        var el = document.getElementById(targetId);
+        if (!el) return;
+        var text = el.textContent || el.innerText || '';
+        if (!text || text.trim() === 'Yok' || text.trim() === '(log yok)') text = '';
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text).then(function () {
+                var btn = document.querySelector('.btn-copy[data-copy="' + targetId + '"]');
+                if (btn) {
+                    var orig = btn.textContent;
+                    btn.textContent = 'Kopyalandı';
+                    btn.classList.add('copied');
+                    setTimeout(function () { btn.textContent = orig; btn.classList.remove('copied'); }, 1500);
+                }
+            }).catch(function () {});
+        }
+    }
+
+    function showCriticalConfirm(type, message, onConfirm) {
+        var overlay = document.getElementById('critical-overlay');
+        var modal = document.getElementById('critical-modal');
+        var body = document.getElementById('critical-body');
+        var cancelBtn = document.getElementById('critical-cancel');
+        var confirmBtn = document.getElementById('critical-confirm');
+        if (!overlay || !modal || !body) return;
+        modal.className = 'critical-modal critical-' + type;
+        body.textContent = message;
+        overlay.classList.add('show');
+        overlay.setAttribute('aria-hidden', 'false');
+        function close() {
+            overlay.classList.remove('show');
+            overlay.setAttribute('aria-hidden', 'true');
+            cancelBtn.removeEventListener('click', onCancel);
+            confirmBtn.removeEventListener('click', onConfirmClick);
+            overlay.removeEventListener('click', onOverlayClick);
+        }
+        function onCancel() { close(); }
+        function onConfirmClick() {
+            close();
+            onConfirm();
+        }
+        function onOverlayClick(e) {
+            if (e.target === overlay) close();
+        }
+        cancelBtn.addEventListener('click', onCancel);
+        confirmBtn.addEventListener('click', onConfirmClick);
+        overlay.addEventListener('click', onOverlayClick);
+    }
+
+    function powerOff() {
+        showCriticalConfirm('poweroff',
+            'Tüm sunucular kapatılacak. Bu panel (Manager) da kapanacak. Yeniden açmak için "Manager Start" ile sunucuyu manuel başlatmanız gerekir. Onaylıyor musunuz?',
+            function () {
+                api('/api/local/logs/power-off', { method: 'POST' }).then(function () {
+                    document.body.innerHTML = '<div class="wrap"><h1>Kapatılıyor…</h1><p>Bu sayfa kapanacak. Sunucuyu tekrar başlatmak için Manager Start kullanın.</p></div>';
+                });
+            }
+        );
+    }
+
+    var PANEL_BASE = (typeof location !== 'undefined' && location.origin) ? location.origin : 'http://127.0.0.1:7999';
+    var STATUS_URL = PANEL_BASE + '/api/local/logs/status?light=1';
+    var pollInterval = null;
+    function stopPolling() { if (pollInterval) { clearInterval(pollInterval); pollInterval = null; } }
+    function allRestart() {
+        var locks = data.server_locks || {};
+        showCriticalConfirm('restart',
+            'Tüm sunucular (kilitli olanlar hariç) yeniden başlatılacak. Manager (bu panel) kapanacak; sayfa hazır olunca otomatik yenilenecek. Onaylıyor musunuz?',
+            function () {
+                api('/api/local/logs/all/restart', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ server_locks: locks })
+                }).then(function () {
+                    document.body.innerHTML = '<div class="wrap"><h1>Yeniden başlatılıyor…</h1><p>Manager hazır olunca <strong>yeni sekmede panel açılacak</strong> veya bu sayfa otomatik yenilenecek.</p><p id="poll-msg">Bekleniyor…</p><p class="meta">Gelmezse: <a href="' + PANEL_BASE + '/ui/logs.html" target="_blank">Panel sayfasını aç</a></p></div>';
+                    var msgEl = document.getElementById('poll-msg');
+                    var attempts = 0;
+                    var maxAttempts = 80;
+                    stopPolling();
+                    pollInterval = setInterval(function () {
+                        attempts++;
+                        if (msgEl) msgEl.textContent = 'Bekleniyor… (' + attempts + '/' + maxAttempts + ')';
+                        if (attempts >= maxAttempts) {
+                            stopPolling();
+                            if (msgEl) msgEl.innerHTML = 'Zaman aşımı. <a href="' + PANEL_BASE + '/ui/logs.html" target="_blank">Panel sayfasını buradan açın</a>.';
+                            return;
+                        }
+                        fetch(STATUS_URL, { method: 'GET', cache: 'no-store' }).then(function (r) {
+                            if (r && r.ok) {
+                                stopPolling();
+                                window.location.href = PANEL_BASE + '/ui/logs.html';
+                            }
+                        }).catch(function () {});
+                    }, 1500);
+                });
+            }
+        );
+    }
+
+    document.querySelectorAll('.tab-btn').forEach(function (b) {
+        b.addEventListener('click', function () { showTab(this.getAttribute('data-tab')); });
+    });
+    document.querySelectorAll('[data-action][data-server]').forEach(function (b) {
+        b.addEventListener('click', function () {
+            var s = this.getAttribute('data-server');
+            var a = this.getAttribute('data-action');
+            if (s && a) doAction(s, a);
+        });
+    });
+    document.querySelectorAll('[data-reset]').forEach(function (b) {
+        b.addEventListener('click', function () { resetErrors(this.getAttribute('data-reset')); });
+    });
+    document.querySelectorAll('.btn-copy[data-copy]').forEach(function (b) {
+        b.addEventListener('click', function () { copyToClipboard(this.getAttribute('data-copy')); });
+    });
+    document.getElementById('lock-web').addEventListener('click', function () { toggleLock('web'); });
+    document.getElementById('lock-worker').addEventListener('click', function () { toggleLock('worker'); });
+    document.getElementById('btn-power-off').addEventListener('click', powerOff);
+    document.getElementById('btn-all-restart').addEventListener('click', allRestart);
+
+    function statusPoll() { fetchLightStatus(); }
+    function fullStatusPoll() { fetchFullStatus(); }
+    function logPoll() {
+        var active = document.querySelector('.tab-panel.active');
+        if (active && active.id === 'panel-home') fetchManagerLogs();
+        else if (active && active.id === 'panel-web') fetchTail('web');
+        else if (active && active.id === 'panel-worker') fetchTail('worker');
+    }
+
+    fetchLightStatus().then(function () {
+        logPoll();
+        setTimeout(fullStatusPoll, 100);
+    });
+    statusTimer = setInterval(statusPoll, STATUS_POLL_MS);
+    fullStatusTimer = setInterval(fullStatusPoll, FULL_STATUS_POLL_MS);
+    logTimer = setInterval(logPoll, LOG_POLL_MS);
+})();
+    </script>
+</body>
+</html>

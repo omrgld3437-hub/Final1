@@ -1,0 +1,211 @@
+/*
+ * Dashboard — Login sayfası tarzında tema
+ * Arka plan yumuşak koyu gri (göz yormaz), accent #c9a227
+ */
+
+/* Login-style renk token'ları — dashboard için override */
+.page-dashboard.binance-theme,
+body.binance-theme.page-dashboard {
+    --ds-bg-primary: #060709;
+    --ds-bg-secondary: #0a0b0d;
+    --ds-bg-tertiary: #0e0f12;
+    --ds-bg-panel: rgba(10, 11, 14, 0.92);
+    --ds-bg-glass: rgba(10, 11, 14, 0.95);
+    --ds-text-primary: #f8f7f5;
+    --ds-text-secondary: #a8a6a1;
+    --ds-text-muted: #6b6966;
+    --ds-accent: #c9a227;
+    --ds-accent-hover: #e4c04a;
+    --ds-accent-dark: #a6851f;
+    --ds-border: rgba(255, 255, 255, 0.06);
+    --ds-border-light: rgba(255, 255, 255, 0.1);
+    --bn-bg: #060709;
+    --bn-panel: rgba(10, 11, 14, 0.92);
+    --bn-border: rgba(255, 255, 255, 0.06);
+    --bn-text: rgba(255, 255, 255, 0.92);
+    --bn-muted: rgba(255, 255, 255, 0.55);
+    --bn-yellow: #c9a227;
+    background-color: #060709;
+}
+
+/* Performans: contain ile izolasyon */
+.page-dashboard #dashboardMainContainer {
+    contain: layout style;
+}
+
+/* Mobil: ana container padding minimize */
+@media (max-width: 768px) {
+    .page-dashboard #dashboardMainContainer.container {
+        padding: 0.5rem 0.6rem !important;
+    }
+}
+
+@media (max-width: 480px) {
+    .page-dashboard #dashboardMainContainer.container {
+        padding: 0.4rem 0.5rem !important;
+    }
+    /* Tab wrap negatif margin — container dar olduğunda azalt */
+    .page-dashboard .dm-tabs {
+        margin-left: -0.5rem !important;
+        margin-right: -0.5rem !important;
+        padding-left: 0.5rem !important;
+        padding-right: 0.5rem !important;
+    }
+    .page-dashboard .binance-assets-table-wrapper,
+    .page-dashboard .varliklar-table-wrap {
+        margin-left: -0.5rem !important;
+        margin-right: -0.5rem !important;
+        padding-left: 0.5rem !important;
+        padding-right: 0.5rem !important;
+    }
+}
+
+/* Mobil: panellerin padding ve border'larını minimale indir */
+@media (max-width: 768px) {
+    .page-dashboard .panel {
+        padding: 0.6rem 0.7rem !important;
+        border-width: 1px !important;
+        margin-bottom: 0.75rem !important;
+    }
+    .page-dashboard .kpi-strip,
+    .page-dashboard .kpi-strip-row {
+        padding: 0.5rem 0.6rem !important;
+        margin-bottom: 0.75rem !important;
+        gap: 0.5rem !important;
+    }
+    .page-dashboard .kpi-block {
+        padding: 0.5rem 0.6rem !important;
+        border-radius: 8px !important;
+        border-width: 1px !important;
+    }
+    .page-dashboard .binance-connection-notice {
+        padding: 0.75rem 0.85rem !important;
+        margin-bottom: 0.75rem !important;
+    }
+    .page-dashboard .binance-varliklar-panel,
+    .page-dashboard .binance-coin-list-panel {
+        padding: 0.5rem 0.6rem !important;
+        margin-top: 0.5rem !important;
+    }
+    .page-dashboard .trades-panel,
+    .page-dashboard .finance-panel {
+        padding: 0.5rem 0.6rem !important;
+        margin-bottom: 0.75rem !important;
+    }
+    .page-dashboard .mevcut-botlar-panel {
+        padding: 0.5rem 0.6rem !important;
+    }
+    .page-dashboard .binance-active-orders-panel {
+        padding: 0.5rem 0.6rem !important;
+        margin-top: 0.5rem !important;
+    }
+    .page-dashboard .binance-assets-strip {
+        padding: 0.5rem 0.6rem !important;
+        border-radius: 8px !important;
+    }
+    .page-dashboard .error-banner {
+        padding: 0.5rem 0.75rem !important;
+    }
+}
+
+@media (max-width: 480px) {
+    .page-dashboard .panel {
+        padding: 0.45rem 0.55rem !important;
+    }
+    .page-dashboard .kpi-strip,
+    .page-dashboard .kpi-strip-row {
+        padding: 0.4rem 0.5rem !important;
+        margin-bottom: 0.5rem !important;
+    }
+    .page-dashboard .kpi-block {
+        padding: 0.4rem 0.5rem !important;
+    }
+    .page-dashboard .binance-varliklar-panel,
+    .page-dashboard .binance-coin-list-panel,
+    .page-dashboard .trades-panel,
+    .page-dashboard .finance-panel,
+    .page-dashboard .mevcut-botlar-panel,
+    .page-dashboard .binance-active-orders-panel {
+        padding: 0.4rem 0.5rem !important;
+    }
+}
+
+/* Tab içerik bölmeleri — mobilde dar boşluk */
+@media (max-width: 768px) {
+    .page-dashboard .dm-tab-content {
+        padding-top: 0.5rem !important;
+    }
+    .page-dashboard [id^="tabBinance"],
+    .page-dashboard [id^="tabBots"],
+    .page-dashboard [id^="tabFinance"],
+    .page-dashboard [id^="tabContact"],
+    .page-dashboard [id^="tabSettings"] {
+        padding: 0 !important;
+    }
+}
+
+/* Ticker ve appbar — login tonlarına uyum */
+.page-dashboard .top-ticker {
+    background: rgba(10, 11, 14, 0.97);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.page-dashboard .dashboard-appbar {
+    background: rgba(10, 11, 14, 0.97);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.page-dashboard .tt-logo-text {
+    display: inline-block;
+    font-weight: 700;
+    background: linear-gradient(135deg, var(--ds-text-primary) 0%, var(--ds-text-secondary) 35%, var(--ds-accent) 50%, var(--ds-text-secondary) 65%, var(--ds-text-primary) 100%);
+    background-size: 200% auto;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    animation: ttLogoShine 6s ease-in-out infinite;
+}
+
+@keyframes ttLogoShine {
+    0%, 100% { background-position: 0% center; }
+    50% { background-position: 100% center; }
+}
+
+/* Retro tema override — login tonlarında başlıklar */
+.page-dashboard .page-title,
+.page-dashboard .ds-section-title,
+.page-dashboard .ds-title-hero,
+.page-dashboard h1,
+.page-dashboard h2 {
+    color: var(--ds-text-primary, #f8f7f5) !important;
+}
+
+.page-dashboard .ds-panel-header,
+.page-dashboard .panel h2,
+.page-dashboard .panel h3,
+.page-dashboard .section-title,
+.page-dashboard .binance-coin-list-panel__title,
+.page-dashboard .binance-varliklar-panel__title {
+    color: var(--ds-accent, #c9a227) !important;
+}
+
+.page-dashboard .dm-tab.is-active,
+.page-dashboard .tabs-header button.active {
+    color: var(--ds-accent, #c9a227) !important;
+    border-bottom-color: var(--ds-accent, #c9a227) !important;
+}
+
+.page-dashboard .dm-tab:hover,
+.page-dashboard .tabs-header button:hover {
+    color: var(--ds-text-primary) !important;
+}
+
+/* Mobil alt çubuk — login tonları */
+.page-dashboard .mobile-bottom-nav {
+    background: rgba(10, 11, 14, 0.98) !important;
+    border-top-color: rgba(255, 255, 255, 0.06) !important;
+}
+
+.page-dashboard .mobile-nav-item.is-active {
+    color: var(--ds-accent, #c9a227) !important;
+}

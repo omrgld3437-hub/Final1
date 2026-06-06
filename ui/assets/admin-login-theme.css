@@ -1,0 +1,1105 @@
+/*
+ * Admin — Login sayfası tasarım mantığı (koyu arka plan, altın vurgu, kartlar)
+ * .page-admin için login ile uyumlu renk ve bileşen stilleri
+ */
+
+/* Login tasarım token'ları — admin sayfasında geçerli */
+.page-admin {
+    --admin-bg: #010102;
+    --admin-bg-card: rgba(16, 16, 20, 0.95);
+    --admin-border: rgba(255, 255, 255, 0.09);
+    --admin-text: #f8f7f5;
+    --admin-text-secondary: #a8a6a1;
+    --admin-accent: #c9a227;
+    --admin-accent-bright: #e4c04a;
+    --admin-success: #0ecb81;
+    --admin-danger: #f6465d;
+    --admin-radius: 10px;
+    --admin-ease: cubic-bezier(0.32, 0.72, 0, 1);
+    --admin-font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+
+    background: var(--admin-bg) !important;
+    color: var(--admin-text);
+    font-family: var(--admin-font);
+}
+
+/* Appbar — koyu, ince border, altın marka */
+.page-admin .admin-appbar {
+    background: rgba(4, 4, 6, 0.98) !important;
+    border-bottom: 1px solid var(--admin-border) !important;
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+}
+
+.page-admin .admin-appbar-brand {
+    background: linear-gradient(110deg, var(--admin-accent) 0%, var(--admin-accent-bright) 40%, #fff8e0 50%, var(--admin-accent-bright) 60%, var(--admin-accent) 100%) !important;
+    background-size: 200% auto !important;
+    -webkit-background-clip: text !important;
+    background-clip: text !important;
+    color: transparent !important;
+    font-family: var(--admin-font) !important;
+}
+
+.page-admin .admin-appbar-row {
+    border-top-color: var(--admin-border) !important;
+}
+
+.page-admin .admin-appbar-user-name {
+    color: var(--admin-text) !important;
+}
+
+.page-admin .admin-appbar .btn-create-account,
+.page-admin .admin-appbar .btn.primary {
+    background: var(--admin-accent) !important;
+    color: #0a0a0c !important;
+    border: none !important;
+    border-radius: 10px !important;
+    font-weight: 600 !important;
+    box-shadow: 0 2px 8px rgba(201, 162, 39, 0.25);
+}
+
+.page-admin .admin-appbar .btn-create-account:hover,
+.page-admin .admin-appbar .btn.primary:hover {
+    background: var(--admin-accent-bright) !important;
+    box-shadow: 0 4px 16px rgba(201, 162, 39, 0.35);
+}
+
+.page-admin .btn-logout {
+    color: var(--admin-text-secondary) !important;
+    background: rgba(255, 255, 255, 0.06) !important;
+    border: 1px solid var(--admin-border) !important;
+    border-radius: 10px !important;
+}
+
+.page-admin .btn-logout:hover {
+    color: var(--admin-accent-bright) !important;
+    background: rgba(255, 255, 255, 0.08) !important;
+    border-color: rgba(201, 162, 39, 0.25) !important;
+}
+
+/* KPI strip — ince çerçeve, az boşluk */
+.page-admin .kpi-strip {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
+}
+
+.page-admin .kpi-card-compact {
+    background: var(--admin-bg-card) !important;
+    border: 1px solid var(--admin-border) !important;
+    border-radius: var(--admin-radius) !important;
+    padding: 0.5rem 0.75rem !important;
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
+}
+
+.page-admin .kpi-label-small {
+    color: var(--admin-text-secondary) !important;
+    font-size: 0.7rem !important;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.page-admin .kpi-value-small {
+    color: var(--admin-text) !important;
+    font-weight: 700 !important;
+}
+
+/* Admin sayfa gövdesi: flex ile aşağıya kadar dolsun */
+.page-admin {
+    min-height: 100dvh;
+    display: flex;
+    flex-direction: column;
+}
+/* Masaüstü: sayfa normal kayar, sekmeler kendi içinde kaymaz; sağ-sol tam genişlik */
+@media (min-width: 769px) {
+    .page-admin {
+        min-height: 100dvh;
+        height: auto;
+        overflow: visible;
+    }
+    .page-admin .admin-container,
+    .page-admin .container {
+        overflow: visible;
+        width: 100% !important;
+        max-width: 100% !important;
+        padding: 0.4rem 0.6rem !important;
+        flex: none;
+        min-height: 0;
+    }
+    .page-admin .tabs-container {
+        flex: none;
+        min-height: 0;
+        overflow: visible;
+    }
+    .page-admin .tab-content.active {
+        flex: none;
+        min-height: 0;
+        overflow: visible;
+    }
+    .page-admin .tile-grid {
+        max-width: 100%;
+        margin: 0;
+        gap: 0.5rem;
+    }
+    .page-admin .tab-content {
+        padding: 0.4rem 0.5rem !important;
+    }
+}
+.page-admin .admin-container,
+.page-admin .container {
+    padding: 0.5rem 0.6rem !important;
+    max-width: 100%;
+    box-sizing: border-box;
+}
+@media (max-width: 768px) {
+    .page-admin .admin-container,
+    .page-admin .container {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+    }
+}
+@media (min-width: 769px) {
+    .page-admin .admin-container,
+    .page-admin .container {
+        display: block;
+    }
+}
+.page-admin .kpi-strip {
+    flex-shrink: 0;
+}
+
+/* Tabs container — ince çerçeve; masaüstünde sayfa kayar, mobilde alan doldurur */
+.page-admin .tabs-container {
+    background: var(--admin-bg-card) !important;
+    border: 1px solid var(--admin-border) !important;
+    border-radius: var(--admin-radius) !important;
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+    margin-top: 0.4rem !important;
+}
+@media (max-width: 768px) {
+    .page-admin .tabs-container {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+        overflow: hidden;
+    }
+}
+@media (min-width: 769px) {
+    .page-admin .tabs-container {
+        display: block;
+        overflow: visible;
+    }
+}
+
+/* Sekmeler: kendi içinde kaydırma, hepsi sayfada tam görünsün */
+.page-admin .tabs-header {
+    background: rgba(255, 255, 255, 0.03) !important;
+    border-bottom: 1px solid var(--admin-border) !important;
+    padding: 0.35rem 0.75rem !important;
+    overflow: visible !important;
+    flex-wrap: wrap !important;
+}
+.page-admin .admin-tabs-list {
+    flex-wrap: wrap !important;
+    flex: 1 1 100% !important;
+    min-width: 0 !important;
+}
+.page-admin .admin-tabs-list .tab-btn {
+    flex-shrink: 0 !important;
+    white-space: nowrap !important;
+    padding: 0.5rem 0.75rem !important;
+    font-size: 0.8125rem !important;
+}
+
+/* Tab butonları — slider sarı; kayma: yavaş başla, hızlı kaysın, yavaş dursun */
+.page-admin .admin-tabs-list {
+    position: relative !important;
+    background: rgba(0, 0, 0, 0.35) !important;
+    padding: 0.35rem !important;
+    border-radius: 12px !important;
+    gap: 0.35rem !important;
+    overflow: hidden !important;
+}
+.page-admin .admin-tabs-list .tab-indicator {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    height: 34px;
+    border-radius: 10px;
+    background: var(--admin-accent);
+    box-shadow: 0 0 14px rgba(201, 162, 39, 0.35);
+    transition: transform 320ms cubic-bezier(0.35, 0, 0.25, 1), width 320ms cubic-bezier(0.35, 0, 0.25, 1);
+    will-change: transform, width;
+    z-index: 0;
+    opacity: 1;
+    pointer-events: none;
+}
+.page-admin .admin-tabs-list .tab-btn {
+    position: relative !important;
+    z-index: 1 !important;
+}
+/* Açık dropdown (mobilde body'de olsa bile) opak ve okunaklı */
+/* Açık sekme listesi (mobil dropdown): tam opak, şeffaflık yok */
+.page-admin .admin-tabs-list.admin-tabs-list--open,
+.admin-tabs-list.admin-tabs-list--open {
+    background: #0a0a0c !important;
+    border: 1px solid rgba(255, 255, 255, 0.12) !important;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+
+.page-admin .admin-tabs-list .tab-btn {
+    color: var(--admin-text-secondary) !important;
+    background: transparent !important;
+    border: none !important;
+    border-radius: 8px !important;
+    padding: 0.6rem 1rem !important;
+    font-weight: 500 !important;
+    border-bottom: none !important;
+    transition: color 0.2s var(--admin-ease), background 0.2s var(--admin-ease);
+}
+
+.page-admin .admin-tabs-list .tab-btn:hover {
+    color: var(--admin-text) !important;
+    background: rgba(255, 255, 255, 0.06) !important;
+}
+
+.page-admin .admin-tabs-list .tab-btn.active {
+    color: #0a0a0c !important;
+    background: transparent !important;
+}
+/* Açık dropdown'da seçili sekme okunaklı: accent arka plan, koyu metin */
+.page-admin .admin-tabs-list.admin-tabs-list--open .tab-btn.active,
+.admin-tabs-list.admin-tabs-list--open .tab-btn.active {
+    color: #0a0a0c !important;
+    background: var(--admin-accent) !important;
+    font-weight: 600 !important;
+}
+
+/* İçerik alanı: kayarak geçiş animasyonu için */
+.page-admin #tabsContainer {
+    position: relative;
+    overflow: hidden;
+}
+.page-admin .tab-content.admin-tab-panel {
+    width: 100%;
+    will-change: transform, opacity;
+}
+.page-admin .tab-content.admin-tab-panel.is-hidden {
+    display: none !important;
+}
+
+.page-admin .admin-tabs-toggle {
+    color: var(--admin-text) !important;
+    background: rgba(255, 255, 255, 0.06) !important;
+    border: 1px solid var(--admin-border) !important;
+    border-radius: 10px !important;
+}
+
+/* Sekme içerikleri — ince boşluk; aktif sekme doldursun, kaydırılabilir */
+.page-admin .tab-content {
+    display: none !important;
+    contain: layout style paint;
+    padding: 0.45rem 0.6rem !important;
+}
+.page-admin .tab-content.active {
+    display: block !important;
+    animation-duration: 0.12s;
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+}
+.page-admin .tab-content.tab-contact-content.active {
+    display: flex !important;
+    flex-direction: column;
+    overflow: hidden;
+}
+.page-admin #tabsContainer {
+    contain: layout style;
+}
+/* Hız: uzun listelerde sadece görünür alanı boya */
+.page-admin .tile-grid,
+.page-admin .pending-list {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 200px;
+}
+
+.page-admin h1,
+.page-admin h2,
+.page-admin h3 {
+    color: var(--admin-text) !important;
+    font-family: var(--admin-font) !important;
+}
+
+.page-admin .tab-content h3 {
+    margin-bottom: 0.6rem !important;
+}
+
+/* Hesap kartları — koyu arka plan, belirgin çerçeve (renklendirme açık, kartlar net) */
+.page-admin .acct-tile,
+.page-admin .tile-grid > div:not(.empty-state) {
+    background: var(--admin-bg-card) !important;
+    border: 2px solid rgba(201, 162, 39, 0.4) !important;
+    border-radius: var(--admin-radius) !important;
+    padding: 0.5rem 0.65rem !important;
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
+    transition: border-color 0.2s var(--admin-ease), box-shadow 0.2s var(--admin-ease);
+}
+/* Hesaplar sekmesi kartları — koyu arka plan, sarı çerçeve; metin okunaklı */
+.page-admin #tabAccounts .acct-tile {
+    background: #121318 !important;
+    border: 2px solid rgba(201, 162, 39, 0.45) !important;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(201, 162, 39, 0.08) !important;
+}
+.page-admin .tile-grid {
+    gap: 0.65rem;
+}
+/* Hover’da kabarma yok: üst kartın çizgisi sayfada kaybolmasın (transform kaldırıldı) */
+.page-admin .acct-tile:hover {
+    transform: none !important;
+    border-color: rgba(201, 162, 39, 0.55) !important;
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5), 0 0 0 2px rgba(201, 162, 39, 0.2) !important;
+}
+
+/* Masaüstü: hover’da çerçeve seçili gibi parlayan sarı yansı (animasyonlu) */
+@keyframes acct-tile-glow {
+    0%, 100% {
+        box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5), 0 0 0 2px rgba(201, 162, 39, 0.25), 0 0 16px rgba(201, 162, 39, 0.15);
+    }
+    50% {
+        box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5), 0 0 0 2px rgba(201, 162, 39, 0.5), 0 0 24px rgba(201, 162, 39, 0.35), 0 0 40px rgba(201, 162, 39, 0.12);
+    }
+}
+@media (min-width: 769px) {
+    .page-admin .acct-tile:hover {
+        animation: acct-tile-glow 2s ease-in-out infinite;
+    }
+}
+
+.page-admin .acct-name {
+    color: #f8f7f5 !important;
+    font-size: 0.95rem !important;
+    font-weight: 700 !important;
+}
+.page-admin .acct-head {
+    gap: 0.5rem !important;
+}
+.page-admin .acct-section {
+    margin-top: 0.4rem !important;
+    padding-top: 0.4rem !important;
+    border-top: 1px solid rgba(255, 255, 255, 0.12) !important;
+}
+.page-admin #tabAccounts .acct-tile .bal-strip {
+    background: rgba(255, 255, 255, 0.06) !important;
+    border-radius: 8px !important;
+    padding: 0.5rem 0.6rem !important;
+    gap: 0.5rem !important;
+    border: 1px solid rgba(255, 255, 255, 0.08) !important;
+}
+.page-admin .bal-item {
+    gap: 2px !important;
+}
+.page-admin #tabAccounts .acct-tile .bal-label {
+    font-size: 0.65rem !important;
+    color: #b0aea8 !important;
+}
+.page-admin #tabAccounts .acct-tile .bal-value {
+    font-size: 0.9rem !important;
+    font-weight: 700 !important;
+    color: var(--admin-accent) !important;
+}
+.page-admin #tabAccounts .acct-tile .acct-foot {
+    margin-top: 0.4rem !important;
+    padding-top: 0.35rem !important;
+    font-size: 0.7rem !important;
+    color: #a8a6a1 !important;
+    border-top: 1px solid rgba(255, 255, 255, 0.1) !important;
+}
+.page-admin .acct-foot > div {
+    gap: 0.35rem !important;
+}
+
+.page-admin .acct-head-right .btn,
+.page-admin .acct-tile .icon-btn {
+    color: var(--admin-text-secondary) !important;
+    border-radius: 8px !important;
+}
+
+.page-admin .acct-head-right .btn:hover,
+.page-admin .acct-tile .icon-btn:hover {
+    color: var(--admin-accent-bright) !important;
+    background: rgba(201, 162, 39, 0.1) !important;
+}
+
+.page-admin .bal-label,
+.page-admin .acct-section .label {
+    color: var(--admin-text-secondary) !important;
+}
+
+.page-admin .bal-value {
+    color: var(--admin-accent) !important;
+}
+
+.page-admin .pnl.pos { color: var(--admin-success) !important; }
+.page-admin .pnl.neg { color: var(--admin-danger) !important; }
+
+/* Pending list, settings panel — ince çerçeve, az boşluk */
+.page-admin .pending-item,
+.page-admin .settings-panel,
+.page-admin .server-panel {
+    background: var(--admin-bg-card) !important;
+    border: 1px solid var(--admin-border) !important;
+    border-radius: var(--admin-radius) !important;
+    padding: 0.75rem 1rem !important;
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+}
+.page-admin #serverStartedAt {
+    display: none !important;
+}
+
+/* Masaüstünde anlık indirme/yükleme kartlarını gösterme */
+.page-admin .server-stat-hide-on-desktop {
+    display: none !important;
+}
+
+/* Sunucu paneli – masaüstü: kompakt, veriler tam sığar */
+@media (min-width: 769px) {
+    .page-admin .server-panel {
+        max-width: 720px;
+        margin: 0 auto;
+        padding: 1rem 1.25rem !important;
+    }
+    .page-admin .server-panel-title {
+        font-size: 1.1rem;
+        font-weight: 600;
+        margin: 0 0 0.75rem 0;
+        letter-spacing: 0.02em;
+    }
+    .page-admin .server-stats-panel .kpi-strip.server-stats-grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 0.5rem 0.75rem;
+    }
+    .page-admin .server-stats-panel .kpi-card-compact {
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.5rem;
+        text-align: left;
+        min-width: 0;
+        padding: 0.5rem 0.65rem;
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid var(--admin-border);
+    }
+    .page-admin .server-stats-panel .kpi-card-compact > .kpi-label-small:first-of-type {
+        flex: 0 0 auto;
+        min-width: 0;
+        max-width: 8rem;
+        margin-bottom: 0;
+        font-size: 0.68rem;
+        line-height: 1.2;
+    }
+    .page-admin .server-stats-panel .kpi-card-compact > .kpi-value-small {
+        flex: 1 1 auto;
+        text-align: right;
+        font-size: 0.9rem;
+        min-width: 3rem;
+        overflow: visible;
+        white-space: nowrap;
+    }
+}
+.page-admin .server-panel-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    align-items: center;
+    justify-content: center;
+    margin-top: 1rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid var(--admin-border);
+}
+.page-admin .server-panel-actions .btn-warning {
+    background: var(--admin-accent) !important;
+    color: #0a0a0c !important;
+    border: none !important;
+    font-weight: 600;
+}
+.page-admin .server-panel-actions .btn-warning:hover {
+    background: var(--admin-accent-bright) !important;
+    color: #0a0a0c !important;
+}
+.page-admin .server-panel-actions .btn-danger {
+    background: var(--admin-danger) !important;
+    color: #fff !important;
+    border: none !important;
+    font-weight: 600;
+}
+.page-admin .server-panel-actions .btn-danger:hover {
+    background: #ff5c6d !important;
+    color: #fff !important;
+}
+
+/* Sunucu Durumu: değer ve etiketlerin her zaman görünür olması */
+.page-admin .server-panel .kpi-label-small,
+.page-admin .server-stats-panel .kpi-label-small {
+    color: var(--admin-text-secondary) !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+}
+.page-admin .server-panel .kpi-value-small,
+.page-admin .server-stats-panel .kpi-value-small {
+    color: var(--admin-text) !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    font-weight: 700 !important;
+}
+.page-admin .server-panel-title {
+    color: var(--admin-text) !important;
+    visibility: visible !important;
+}
+
+@media (max-width: 768px) {
+    .page-admin .server-panel {
+        padding: 0.5rem 0.75rem !important;
+    }
+    /* Mobilde anlık indirme/yükleme kartlarını göster */
+    .page-admin .server-stat-hide-on-desktop {
+        display: flex !important;
+    }
+    /* Sunucu Durumu: tek sütun, her satır yatay (etiket solda değer sağda) */
+    .page-admin #serverStatsPanel .kpi-strip.server-stats-grid,
+    .page-admin .server-stats-panel .kpi-strip.server-stats-grid {
+        display: grid !important;
+        grid-template-columns: 1fr !important;
+        gap: 0.4rem !important;
+        width: 100% !important;
+        max-width: 100% !important;
+    }
+    .page-admin #serverStatsPanel .kpi-card-compact,
+    .page-admin .server-stats-panel .kpi-card-compact {
+        display: flex !important;
+        flex-direction: row !important;
+        flex-wrap: wrap !important;
+        align-items: center !important;
+        justify-content: space-between !important;
+        gap: 0.5rem !important;
+        width: 100% !important;
+        max-width: 100% !important;
+        min-width: 0 !important;
+        padding: 0.5rem 0.75rem !important;
+        text-align: left !important;
+        box-sizing: border-box !important;
+    }
+    .page-admin #serverStatsPanel .kpi-card-compact > .kpi-label-small:first-of-type,
+    .page-admin .server-stats-panel .kpi-card-compact > .kpi-label-small:first-of-type {
+        flex: 0 1 auto !important;
+        margin: 0 !important;
+        font-size: 0.75rem !important;
+        min-width: 8rem;
+    }
+    .page-admin #serverStatsPanel .kpi-card-compact > .kpi-value-small,
+    .page-admin .server-stats-panel .kpi-card-compact > .kpi-value-small {
+        flex: 1 1 auto !important;
+        text-align: right !important;
+        font-size: 0.95rem !important;
+        min-width: 0 !important;
+    }
+    .page-admin #serverStatsPanel .kpi-card-compact > .kpi-label-small:last-of-type,
+    .page-admin .server-stats-panel .kpi-card-compact > .kpi-label-small:last-of-type {
+        flex: 1 1 100% !important;
+        font-size: 0.65rem !important;
+        margin: 0 !important;
+    }
+
+    /* İletişim sekmesi – mobil: çok kullanışlı sohbet deneyimi */
+    .page-admin #tabContact.tab-contact-content.active {
+        min-height: 0;
+        padding-bottom: env(safe-area-inset-bottom, 0);
+    }
+    .page-admin .admin-chat-layout {
+        padding: 0 0.5rem;
+        gap: 0;
+    }
+    .page-admin .admin-chat-list {
+        flex-shrink: 0;
+        max-height: min(38vh, 280px);
+        min-height: 120px;
+        padding: 0.5rem 0 0.75rem 0;
+        margin-bottom: 0.5rem;
+        border-radius: var(--admin-radius);
+        -webkit-overflow-scrolling: touch;
+    }
+    .page-admin .admin-chat-list-title {
+        position: sticky;
+        top: 0;
+        z-index: 1;
+        background: var(--admin-bg-card);
+        padding: 0.35rem 0 0.5rem 0;
+        margin: 0 0 0.4rem 0;
+        font-size: 1rem;
+        font-weight: 700;
+    }
+    .page-admin .admin-chat-list-inner {
+        gap: 0.35rem;
+    }
+    .page-admin .admin-chat-user {
+        min-height: 56px !important;
+        padding: 0.85rem 1rem !important;
+        font-size: 0.95rem;
+        border-radius: 10px;
+        -webkit-tap-highlight-color: transparent;
+        touch-action: manipulation;
+        border: 1px solid transparent;
+    }
+    .page-admin .admin-chat-user:active {
+        background: var(--ds-bg-tertiary) !important;
+    }
+    .page-admin .admin-chat-user .badge {
+        flex-shrink: 0;
+    }
+    .page-admin .admin-chat-back-list {
+        display: inline-flex !important;
+        align-items: center;
+        justify-content: center;
+        min-height: 44px;
+        padding: 0.5rem 0.75rem;
+        font-size: 0.9rem;
+        color: var(--admin-accent);
+        background: transparent;
+        border: 1px solid var(--admin-border);
+        border-radius: var(--admin-radius);
+        -webkit-tap-highlight-color: transparent;
+        touch-action: manipulation;
+        flex-shrink: 0;
+    }
+    .page-admin .admin-chat-header-row {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        min-width: 0;
+    }
+    .page-admin .admin-chat-header-row strong {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .page-admin .admin-chat-panel {
+        flex: 1;
+        min-height: 180px;
+    }
+    .page-admin .admin-chat-active .admin-chat-messages {
+        padding-bottom: 1rem;
+    }
+    .page-admin .admin-chat-input-wrap {
+        padding-bottom: calc(0.5rem + env(safe-area-inset-bottom, 0));
+    }
+    .page-admin #adminChatInputWrap .admin-chat-form-row .form-input,
+    .page-admin #adminChatInputWrap #adminChatInput {
+        min-height: 48px;
+        font-size: 16px;
+    }
+    .page-admin #adminChatInputWrap .btn.primary {
+        min-height: 48px;
+        min-width: 96px;
+    }
+}
+
+.page-admin .pending-item strong,
+.page-admin .settings-panel h3 {
+    color: var(--admin-text) !important;
+}
+
+.page-admin .empty-state {
+    color: var(--admin-text-secondary) !important;
+}
+
+/* Modal — login modal mantığı */
+.page-admin .modal {
+    background: rgba(0, 0, 0, 0.6) !important;
+    backdrop-filter: blur(4px);
+}
+
+.page-admin .modal-content {
+    background: var(--admin-bg-card) !important;
+    border: 1px solid var(--admin-border) !important;
+    border-radius: var(--admin-radius) !important;
+    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.4) !important;
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+}
+
+.page-admin .modal-content h2,
+.page-admin .modal-content .close {
+    color: var(--admin-text) !important;
+}
+
+.page-admin .modal-content .form-group label {
+    color: var(--admin-text-secondary) !important;
+}
+
+.page-admin .modal-content .form-input,
+.page-admin .modal-content input[type="text"],
+.page-admin .modal-content input[type="password"] {
+    background: rgba(255, 255, 255, 0.05) !important;
+    border: 1px solid var(--admin-border) !important;
+    color: var(--admin-text) !important;
+    border-radius: 10px !important;
+}
+
+.page-admin .modal-content .btn.primary {
+    background: var(--admin-accent) !important;
+    color: #0a0a0c !important;
+    border: none !important;
+    border-radius: 10px !important;
+    font-weight: 600 !important;
+}
+
+.page-admin .modal-content .btn.primary:hover {
+    background: var(--admin-accent-bright) !important;
+}
+
+/* Admin İşlem Geçmişi modal — masaüstü tablo, mobil kart */
+.page-admin .admin-audit-modal__content {
+    max-width: 900px;
+    width: 100%;
+    max-height: 85vh;
+    display: flex;
+    flex-direction: column;
+}
+
+.page-admin .admin-audit-modal__head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1rem 1.25rem;
+    border-bottom: 1px solid var(--admin-border);
+    flex-shrink: 0;
+}
+
+.page-admin .admin-audit-modal__title {
+    margin: 0;
+    font-size: 1.2rem;
+    font-weight: 600;
+    color: var(--admin-text) !important;
+}
+
+.page-admin .admin-audit-modal__close {
+    font-size: 1.25rem;
+    padding: 0.25rem;
+    color: var(--admin-text-secondary) !important;
+}
+
+.page-admin .admin-audit-modal__toolbar {
+    flex-shrink: 0;
+    padding: 0.75rem 1.25rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.page-admin .admin-audit-modal__toolbar .admin-audit-range {
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid var(--admin-border);
+    color: var(--admin-text);
+    border-radius: 8px;
+}
+
+.page-admin .admin-audit-modal__toolbar .admin-audit-range:hover,
+.page-admin .admin-audit-modal__toolbar .admin-audit-range.active {
+    background: var(--admin-accent);
+    border-color: var(--admin-accent);
+    color: #0a0a0c;
+}
+
+.page-admin .admin-audit-modal__body {
+    flex: 1;
+    overflow: auto;
+    padding: 1rem 1.25rem;
+    font-size: 0.85rem;
+    min-height: 0;
+}
+
+.page-admin .admin-audit-loading {
+    color: var(--admin-text-secondary);
+}
+
+.page-admin .admin-audit-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+    color: var(--admin-text);
+}
+
+.page-admin .admin-audit-table thead th {
+    text-align: left;
+    padding: 0.6rem 0.5rem;
+    font-weight: 600;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--admin-text-secondary);
+    border-bottom: 1px solid var(--admin-border);
+}
+
+.page-admin .admin-audit-table tbody tr {
+    border-bottom: 1px solid var(--admin-border);
+}
+
+.page-admin .admin-audit-table tbody tr:hover {
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.page-admin .admin-audit-table td {
+    padding: 0.6rem 0.5rem;
+    vertical-align: top;
+}
+
+.page-admin .admin-audit-table td.audit-time { white-space: nowrap; color: var(--admin-text-secondary); }
+.page-admin .admin-audit-table td.audit-actor { font-weight: 500; }
+.page-admin .admin-audit-table td.audit-type { color: var(--admin-accent); }
+.page-admin .admin-audit-table td.audit-detail { max-width: 280px; word-break: break-word; }
+.page-admin .admin-audit-table td.audit-target { font-weight: 500; }
+
+@media (max-width: 768px) {
+    .page-admin .admin-audit-modal__content { max-height: 90vh; }
+    .page-admin .admin-audit-modal__head,
+    .page-admin .admin-audit-modal__toolbar,
+    .page-admin .admin-audit-modal__body { padding: 0.75rem 1rem; }
+    .page-admin .admin-audit-table thead { display: none; }
+    .page-admin .admin-audit-table tbody tr {
+        display: block;
+        padding: 0.75rem;
+        margin-bottom: 0.75rem;
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid var(--admin-border);
+        border-radius: var(--admin-radius);
+    }
+    .page-admin .admin-audit-table tbody td {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 0.5rem;
+        padding: 0.35rem 0;
+        border: none;
+    }
+    .page-admin .admin-audit-table tbody td::before {
+        content: attr(data-label);
+        font-size: 0.7rem;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: var(--admin-text-secondary);
+        flex-shrink: 0;
+    }
+    .page-admin .admin-audit-table td.audit-time { white-space: normal; }
+    .page-admin .admin-audit-table td.audit-detail { max-width: none; }
+}
+
+/* Chat panel, server panel — tutarlı kart */
+.page-admin .admin-chat-list,
+.page-admin .admin-chat-panel,
+.page-admin .admin-chat-placeholder {
+    background: var(--admin-bg-card) !important;
+    border: 1px solid var(--admin-border) !important;
+    border-radius: var(--admin-radius) !important;
+}
+
+.page-admin .admin-chat-list-title {
+    color: var(--admin-text) !important;
+}
+
+.page-admin .admin-chat-user {
+    color: var(--admin-text-secondary) !important;
+}
+
+.page-admin .admin-chat-user:hover,
+.page-admin .admin-chat-active .admin-chat-user {
+    color: var(--admin-text) !important;
+}
+
+/* Masaüstü: liste geri butonu gizli; header row hizalı */
+.page-admin .admin-chat-back-list {
+    display: none !important;
+}
+.page-admin .admin-chat-header-row {
+    display: flex;
+    align-items: center;
+    flex: 1;
+    min-width: 0;
+}
+.page-admin .admin-chat-header-row strong {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Footer */
+.page-admin .page-footer {
+    background: rgba(8, 8, 10, 0.95) !important;
+    border-top: 1px solid var(--admin-border) !important;
+    color: var(--admin-text-secondary) !important;
+}
+
+.page-admin .page-footer-legal strong {
+    color: var(--admin-accent) !important;
+}
+
+/* Top ticker (admin’de varsa) */
+.page-admin #topTicker,
+.page-admin .top-ticker {
+    display: none !important;
+}
+
+/* Breach overlay — login kart stili */
+.page-admin .breach-overlay {
+    background: rgba(0, 0, 0, 0.7) !important;
+}
+
+.page-admin .breach-modal {
+    background: var(--admin-bg-card) !important;
+    border: 1px solid var(--admin-border) !important;
+    border-radius: var(--admin-radius) !important;
+    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.4) !important;
+}
+
+/* Pop-Up sekmesi ve oluşturma modalı */
+.page-admin .popup-admin-panel {
+    padding: 1rem 0;
+}
+.page-admin .popup-admin-title {
+    margin: 0 0 0.5rem 0;
+    color: var(--admin-text) !important;
+    font-size: 1.25rem;
+}
+.page-admin .popup-admin-desc {
+    color: var(--admin-text-secondary) !important;
+    font-size: 0.9rem;
+    margin-bottom: 1.25rem;
+    max-width: 56ch;
+}
+.page-admin .popup-admin-cards {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+}
+.page-admin .popup-admin-card {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    text-align: left;
+    padding: 1.25rem;
+    background: var(--admin-bg-card) !important;
+    border: 1px solid var(--admin-border) !important;
+    border-radius: var(--admin-radius) !important;
+    color: var(--admin-text) !important;
+    cursor: pointer;
+    transition: border-color 0.2s, box-shadow 0.2s;
+    min-width: 200px;
+    flex: 1;
+    max-width: 320px;
+}
+.page-admin .popup-admin-card:hover {
+    border-color: var(--admin-accent) !important;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+.page-admin .popup-admin-card-icon {
+    font-size: 1.5rem;
+    margin-bottom: 0.5rem;
+}
+.page-admin .popup-admin-card-label {
+    font-weight: 600;
+    margin-bottom: 0.25rem;
+}
+.page-admin .popup-admin-card-hint {
+    font-size: 0.8rem;
+    color: var(--admin-text-secondary) !important;
+}
+.page-admin .popup-admin-list-wrap {
+    margin-top: 1rem;
+}
+.page-admin .popup-admin-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+.page-admin .popup-admin-item {
+    padding: 0.75rem 1rem;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--admin-border);
+    border-radius: 10px;
+}
+.page-admin .popup-admin-item-clickable {
+    cursor: pointer;
+}
+.page-admin .popup-admin-item-clickable:hover {
+    background: rgba(255, 255, 255, 0.06);
+}
+.page-admin .popup-admin-item-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+}
+.page-admin .popup-admin-item-content {
+    flex: 1;
+    min-width: 0;
+}
+.page-admin .popup-admin-item-meta {
+    font-size: 0.85rem;
+    color: var(--admin-text-secondary);
+    margin-bottom: 0.35rem;
+}
+.page-admin .popup-admin-item-meta .badge {
+    margin-right: 0.5rem;
+}
+.page-admin .popup-admin-item-msg {
+    font-size: 0.9rem;
+    color: var(--admin-text);
+}
+.page-admin .popup-admin-item-remove {
+    flex-shrink: 0;
+    background: var(--ds-danger, #f6465d) !important;
+    color: #fff !important;
+    border: none;
+    padding: 0.4rem 0.75rem;
+    border-radius: 8px;
+    font-size: 0.85rem;
+    cursor: pointer;
+}
+.page-admin .popup-admin-item-remove:hover {
+    opacity: 0.9;
+}
+.page-admin .popup-modal .modal-content {
+    max-width: 520px;
+}
+.page-admin .popup-modal .form-status {
+    font-size: 0.9rem;
+}
+@media (max-width: 768px) {
+    .page-admin .popup-admin-cards {
+        flex-direction: column;
+    }
+    .page-admin .popup-admin-card {
+        max-width: 100%;
+    }
+    .page-admin .popup-admin-item-row {
+        flex-direction: column;
+    }
+    .page-admin .popup-admin-item-remove {
+        align-self: flex-end;
+    }
+}

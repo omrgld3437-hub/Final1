@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta name="robots" content="noindex, follow">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bakım - TraderTrailing</title>
+    <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <style>
+        :root {
+            --bg: #0a0e27;
+            --bg-card: #1e2026;
+            --text: #eaecef;
+            --text-secondary: #848e9c;
+            --accent: #f0b90b;
+            --border: #2b3139;
+        }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: linear-gradient(135deg, #0a0e27 0%, #1a1f3a 100%);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            color: var(--text);
+        }
+        .card {
+            text-align: center;
+            max-width: 420px;
+            padding: 2.5rem;
+            margin: 2rem;
+            background: var(--bg-card);
+            border-radius: 16px;
+            border: 1px solid var(--border);
+            box-shadow: 0 20px 60px rgba(0,0,0,0.4), 0 0 0 1px rgba(240,185,11,0.08);
+            position: relative;
+        }
+        .icon { font-size: 3rem; line-height: 1; color: var(--accent); margin-bottom: 1rem; opacity: 0.95; }
+        .title { margin: 0 0 0.5rem 0; font-size: 1.35rem; font-weight: 700; color: var(--text); }
+        .subtitle { margin: 0 0 0.75rem 0; font-size: 0.95rem; color: var(--text-secondary); }
+        .retry { margin: 0 0 1rem 0; font-size: 0.9rem; color: #5e6673; }
+        .code { margin: 0 0 1.5rem 0; font-size: 0.8rem; color: #5e6673; }
+        .pulse {
+            display: inline-block;
+            width: 8px; height: 8px;
+            border-radius: 50%;
+            background: var(--accent);
+            box-shadow: 0 0 12px var(--accent);
+            animation: pulse 1.5s ease-in-out infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.4; transform: scale(0.85); }
+        }
+        .btn {
+            display: inline-block;
+            padding: 0.6rem 1.25rem;
+            background: var(--accent);
+            color: #0a0e27;
+            border: none;
+            border-radius: 8px;
+            font-size: 0.95rem;
+            font-weight: 600;
+            cursor: pointer;
+            text-decoration: none;
+            transition: background 0.2s;
+            margin: 0 0.35rem 0.35rem 0;
+        }
+        .btn:hover { background: #f8c622; }
+        .btn-secondary {
+            background: transparent;
+            color: var(--text-secondary);
+            border: 1px solid var(--border);
+        }
+        .btn-secondary:hover { background: var(--bg-card); color: var(--text); }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <div class="icon" aria-hidden="true">&#9881;</div>
+        <h1 class="title">Sistem geçici olarak bakımda</h1>
+        <p class="subtitle">Altyapı güncelleniyor. Otomatik olarak tekrar deniyoruz.</p>
+        <p class="code">Hata Kodu: 502/503/504</p>
+        <div class="pulse" aria-hidden="true"></div>
+        <p style="margin-top: 1.5rem;">
+            <a href="#" class="btn" id="btnRetry">Yeniden Dene</a>
+            <a href="/" class="btn btn-secondary">Ana Sayfa</a>
+        </p>
+    </div>
+    <script>
+        (function() {
+            document.getElementById('btnRetry').addEventListener('click', function(e) { e.preventDefault(); window.location.reload(); });
+            var delays = [5000, 10000, 20000, 30000];
+            var idx = 0;
+            function check() {
+                fetch((window.location.origin || '') + '/api/health', { method: 'GET', cache: 'no-store' })
+                    .then(function(r) { if (r.ok) window.location.reload(); })
+                    .catch(function() {});
+                var d = delays[idx] !== undefined ? delays[idx] : 30000;
+                if (idx < delays.length - 1) idx++;
+                setTimeout(check, d);
+            }
+            setTimeout(check, 5000);
+        })();
+    </script>
+</body>
+</html>

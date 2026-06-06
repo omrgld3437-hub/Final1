@@ -1,0 +1,16 @@
+User-agent: *
+Allow: /
+
+Disallow: /ui/
+Disallow: /ui/login.html
+Disallow: /ui/dashboard.html
+Disallow: /ui/admin.html
+Disallow: /ui/bot.html
+Disallow: /ui/bot_multi.html
+Disallow: /ui/chart.html
+Disallow: /ui/logs.html
+Disallow: /ui/maintenance.html
+Disallow: /ui/splash.html
+Disallow: /ui/server_manager.html
+
+Sitemap: https://tradertrailing.com/sitemap.xml

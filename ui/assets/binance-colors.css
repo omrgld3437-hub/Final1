@@ -1,0 +1,344 @@
+/*
+FILE: binance-colors.css
+VERSION: v2
+DATE: 2026-01-22
+CHANGE: Binance Futures style - ticker % green/red, trade buy/sell, main price, KPI typography, panels
+*/
+
+/* Binance-like color layer (scoped) */
+:root {
+  --bn-bg: #0b0f14;
+  --bn-panel: #0f1620;
+  --bn-panel-2: #0c121b;
+  --bn-border: rgba(255,255,255,.08);
+
+  --bn-text: rgba(255,255,255,.88);
+  --bn-muted: rgba(255,255,255,.55);
+
+  /* Binance Futures tones */
+  --bn-green: #0ecb81;    /* up */
+  --bn-red:   #f6465d;    /* down */
+  --bn-yellow:#f0b90b;    /* accent (binance) */
+  --bn-cyan:  #2ebdff;
+
+  --bn-chip: rgba(255,255,255,.04);
+  --bn-chip-border: rgba(255,255,255,.10);
+  --bn-glow: 0 0 16px rgba(240,185,11,.10);
+}
+
+/* ---- Scope: dashboard & bot only ---- */
+.page-dashboard,
+.page-bot {
+  color: var(--bn-text);
+}
+
+/* Binance Futures panel/card look */
+.page-dashboard .kpi-card-compact,
+.page-bot .kpi-card-compact,
+.page-dashboard .bot-panel,
+.page-bot .bot-panel {
+  background: var(--bn-panel) !important;
+  border: 1px solid var(--bn-border) !important;
+}
+.page-dashboard .bot-tile,
+.page-bot .bot-tile {
+  background: var(--bn-panel) !important;
+  border: 1px solid var(--bn-border) !important;
+}
+
+/* ========== Numeric color helpers ========== */
+.page-dashboard .num,
+.page-bot .num {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .02em;
+}
+
+/* PnL positive - GREEN */
+.page-dashboard .num.pos,
+.page-bot .num.pos,
+.page-dashboard .kpi-value-small.num.pos,
+.page-bot .kpi-value-small.num.pos,
+.page-dashboard .val.num.pos,
+.page-bot .val.num.pos,
+.page-dashboard .kpi-value-small.value.num.pnl.pos,
+.page-bot .kpi-value-small.value.num.pnl.pos,
+.page-dashboard .pnl.pos,
+.page-bot .pnl.pos { color: var(--bn-green) !important; }
+
+/* PnL negative - RED */
+.page-dashboard .num.neg,
+.page-bot .num.neg,
+.page-dashboard .kpi-value-small.num.neg,
+.page-bot .kpi-value-small.num.neg,
+.page-dashboard .val.num.neg,
+.page-bot .val.num.neg,
+.page-dashboard .kpi-value-small.value.num.pnl.neg,
+.page-bot .kpi-value-small.value.num.pnl.neg,
+.page-dashboard .pnl.neg,
+.page-bot .pnl.neg { color: var(--bn-red) !important; }
+
+/* Neutral - WHITE */
+.page-dashboard .num.neu,
+.page-bot .num.neu,
+.page-dashboard .kpi-value-small.num.neu,
+.page-bot .kpi-value-small.num.neu,
+.page-dashboard .val.num.neu,
+.page-bot .val.num.neu,
+.page-dashboard .kpi-value-small.value.num.neu,
+.page-bot .kpi-value-small.value.num.neu { color: rgba(255,255,255,.85) !important; }
+
+.page-dashboard .muted,
+.page-bot .muted { color: var(--bn-muted) !important; }
+
+/* +/- prefix style */
+.page-dashboard .pnl,
+.page-bot .pnl {
+  font-weight: 700;
+}
+
+/* ========== Status badge ========== */
+.page-dashboard .badge,
+.page-bot .badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--bn-border);
+  background: rgba(255,255,255,.03);
+  font-size: 12px;
+  letter-spacing: .03em;
+  text-transform: lowercase;
+}
+
+.page-dashboard .badge.running,
+.page-bot .badge.running {
+  color: var(--bn-green);
+  border-color: rgba(14,203,129,.35);
+  background: rgba(14,203,129,.07);
+}
+
+.page-dashboard .badge.stopped,
+.page-bot .badge.stopped {
+  color: rgba(255,255,255,.65);
+  border-color: rgba(255,255,255,.12);
+  background: rgba(255,255,255,.03);
+}
+
+.page-dashboard .badge.error,
+.page-bot .badge.error {
+  color: var(--bn-red);
+  border-color: rgba(246,70,93,.35);
+  background: rgba(246,70,93,.07);
+}
+
+.page-dashboard .badge.paused,
+.page-bot .badge.paused {
+  color: var(--ds-accent, #f0b90b);
+  border-color: rgba(240,185,11,.35);
+  background: rgba(240,185,11,.07);
+}
+
+/* ========== Binance-like ticker chips ========== */
+.page-dashboard .top-ticker .tick,
+.page-bot .top-ticker .tick {
+  background: var(--bn-chip);
+  border: 1px solid var(--bn-chip-border);
+  border-radius: 999px;
+  padding: 8px 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.page-dashboard .top-ticker .tick .k,
+.page-bot .top-ticker .tick .k,
+.page-dashboard .top-ticker .tick .tick-label,
+.page-bot .top-ticker .tick .tick-label {
+  color: rgba(255,255,255,.55);
+  font-size: 12px;
+  letter-spacing: .03em;
+}
+
+.page-dashboard .top-ticker .tick .v,
+.page-bot .top-ticker .tick .v,
+.page-dashboard .top-ticker .tick .tick-val,
+.page-bot .top-ticker .tick .tick-val {
+  color: rgba(255,255,255,.92);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+}
+
+.page-dashboard .top-ticker .tick .tick-pct,
+.page-bot .top-ticker .tick .tick-pct {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  margin-left: 2px;
+}
+
+/* Up/Down coloring inside ticker - Binance Futures market strip style */
+.page-dashboard .top-ticker .tick.up .v,
+.page-bot .top-ticker .tick.up .v,
+.page-dashboard .top-ticker .tick.up .tick-val,
+.page-bot .top-ticker .tick.up .tick-val,
+.page-dashboard .top-ticker .tick.up .tick-pct,
+.page-bot .top-ticker .tick.up .tick-pct { color: var(--bn-green) !important; }
+
+.page-dashboard .top-ticker .tick.down .v,
+.page-bot .top-ticker .tick.down .v,
+.page-dashboard .top-ticker .tick.down .tick-val,
+.page-bot .top-ticker .tick.down .tick-val,
+.page-dashboard .top-ticker .tick.down .tick-pct,
+.page-bot .top-ticker .tick.down .tick-pct { color: var(--bn-red) !important; }
+
+/* Highlight active focus (e.g. BTC/USD) */
+.page-dashboard .top-ticker .tick.active,
+.page-bot .top-ticker .tick.active {
+  border-color: rgba(240,185,11,.45);
+  box-shadow: var(--bn-glow);
+}
+
+/* ========== Cards: headings + accent numbers ========== */
+.page-dashboard .kpi-label-small,
+.page-bot .kpi-label-small {
+  color: var(--bn-muted);
+}
+
+/* KPI values - Binance Futures number style */
+.page-dashboard .kpi-card .value,
+.page-bot .kpi-card .value,
+.page-dashboard .kpi-card-compact .kpi-value-small,
+.page-bot .kpi-card-compact .kpi-value-small {
+  font-variant-numeric: tabular-nums !important;
+  font-weight: 700 !important;
+  font-size: 1rem;
+  letter-spacing: .02em;
+}
+
+.page-dashboard .bot-card .symbol,
+.page-bot .bot-card .symbol,
+.page-dashboard .bot-tile .bot-symbol,
+.page-bot .bot-tile .bot-symbol,
+.page-bot .bot-panel .symbol,
+.page-dashboard .bot-tile .symbol,
+.page-bot .bot-tile .symbol {
+  color: var(--bn-yellow) !important;
+  font-weight: 900;
+  letter-spacing: .06em;
+}
+
+.page-dashboard .bot-card .row .label,
+.page-bot .bot-card .row .label,
+.page-dashboard .bot-tile .kpi-label,
+.page-bot .bot-tile .kpi-label,
+.page-bot .bot-panel .label {
+  color: var(--bn-muted);
+}
+
+.page-dashboard .bot-card .row .val,
+.page-bot .bot-card .row .val,
+.page-dashboard .bot-tile .kpi-value,
+.page-bot .bot-tile .kpi-value {
+  color: rgba(255,255,255,.9) !important;
+  font-variant-numeric: tabular-nums !important;
+}
+
+/* Bot tile PnL values - force colors */
+.page-dashboard .bot-tile .kpi-value.num.pos,
+.page-bot .bot-tile .kpi-value.num.pos { color: var(--bn-green) !important; }
+.page-dashboard .bot-tile .kpi-value.num.neg,
+.page-bot .bot-tile .kpi-value.num.neg { color: var(--bn-red) !important; }
+.page-dashboard .bot-tile .kpi-value.num.neu,
+.page-bot .bot-tile .kpi-value.num.neu { color: rgba(255,255,255,.9) !important; }
+
+/* Make card hover feel like Binance */
+.page-dashboard .bot-card:hover,
+.page-bot .bot-card:hover,
+.page-dashboard .bot-tile:hover,
+.page-bot .bot-tile:hover {
+  border-color: rgba(240,185,11,.22);
+  box-shadow: 0 0 0 1px rgba(240,185,11,.10), 0 10px 30px rgba(0,0,0,.45);
+}
+
+/* Button styles - Binance accent */
+.page-dashboard .btn.primary-gold,
+.page-bot .btn.primary-gold {
+  background: var(--bn-yellow);
+  color: #000;
+  border: none;
+  font-weight: 700;
+  padding: 10px 20px;
+  border-radius: 8px;
+  transition: all 0.2s;
+}
+
+.page-dashboard .btn.primary-gold:hover,
+.page-bot .btn.primary-gold:hover {
+  background: var(--bn-accent-hover, #f8c622);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(240,185,11,.3);
+}
+
+.page-dashboard .btn.danger,
+.page-bot .btn.danger {
+  background: var(--bn-red);
+  color: #fff;
+  border: none;
+  font-weight: 700;
+  padding: 10px 20px;
+  border-radius: 8px;
+  transition: all 0.2s;
+}
+
+.page-dashboard .btn.danger:hover,
+.page-bot .btn.danger:hover {
+  background: rgba(246,70,93,.85);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(246,70,93,.3);
+}
+
+/* ========== Binance Futures: Order book / Trades style ========== */
+.page-dashboard .trade-buy,
+.page-bot .trade-buy,
+.page-dashboard .trade-buy .kpi-value,
+.page-bot .trade-buy .kpi-value {
+  color: var(--bn-green) !important;
+}
+.page-dashboard .trade-sell,
+.page-bot .trade-sell,
+.page-dashboard .trade-sell .kpi-value,
+.page-bot .trade-sell .kpi-value {
+  color: var(--bn-red) !important;
+}
+
+/* Main price (canlı fiyat) - Binance Futures 34755.01 style */
+.page-bot .kpi-value-small.price-live,
+.page-bot #kpiPrice {
+  font-size: 1.35rem !important;
+  font-weight: 700 !important;
+  font-variant-numeric: tabular-nums !important;
+  letter-spacing: .02em;
+}
+.page-bot .kpi-value-small.price-live.price-up,
+.page-bot #kpiPrice.price-up { color: var(--bn-green) !important; }
+.page-bot .kpi-value-small.price-live.price-down,
+.page-bot #kpiPrice.price-down { color: var(--bn-red) !important; }
+.page-bot .kpi-value-small.price-live.price-same,
+.page-bot #kpiPrice.price-same { color: rgba(255,255,255,.92) !important; }
+
+/* PnL format: always + / - with green/red like "24h Change -156.07 -0.45%" */
+.page-dashboard .kpi-value-small.value.num.pnl,
+.page-bot .kpi-value-small.value.num.pnl {
+  font-weight: 700 !important;
+  font-variant-numeric: tabular-nums !important;
+}
+
+/* Grid / table numbers - tabular, Binance style */
+.page-dashboard .grid-table td,
+.page-bot .grid-table td {
+  font-variant-numeric: tabular-nums !important;
+  font-weight: 500;
+}
+
