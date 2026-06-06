@@ -52,7 +52,23 @@ jobs:
           ALLOWED_ORIGINS: http://localhost:8000,http://127.0.0.1:8000
           BINANCE_MASTER_KEY: ci-placeholder-master-key-32-characters
           DATABASE_URL: sqlite:///./ci-test.db
-        run: python -m pytest tests -q --tb=short
+        shell: bash
+        run: |
+          set +e
+          python -m pytest tests -q --tb=short 2>&1 | tee /tmp/pytest.log
+          code=${PIPESTATUS[0]}
+          if [ "$code" -ne 0 ]; then
+            python - <<'PY'
+          from pathlib import Path
+
+          text = Path("/tmp/pytest.log").read_text(encoding="utf-8", errors="replace")
+          lines = text.splitlines()
+          detail = "\n".join(lines[-80:]) or "pytest failed without captured output"
+          detail = detail.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+          print(f"::error file=tests,title=Pytest failure details::{detail}")
+          PY
+            exit "$code"
+          fi
 
   deploy:
     name: deploy-placeholder
