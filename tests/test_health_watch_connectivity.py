@@ -1,15 +1,22 @@
 """Binance connectivity alert must surface even when bot is not running."""
+
 from __future__ import annotations
 
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from app.botengine.health_watch import emit_health_alerts, evaluate_bot_health, evaluate_bot_health_lite
+from app.botengine.health_watch import (
+    emit_health_alerts,
+    evaluate_bot_health,
+    evaluate_bot_health_lite,
+)
 
 
 def test_binance_unreachable_when_bot_paused():
-    bot = SimpleNamespace(id=1, account_id=42, status="paused_error", symbol="ETHUSDT", config_json="{}")
+    bot = SimpleNamespace(
+        id=1, account_id=42, status="paused_error", symbol="ETHUSDT", config_json="{}"
+    )
     state = {}
     db = None
     fail = {
@@ -64,7 +71,10 @@ def test_wallet_snapshot_stale_surfaces_as_running_bot_warning():
         account_wallet_alert=wallet_alert,
     )
 
-    assert any(a.get("code") == "WALLET_SNAPSHOT_STALE" and a.get("level") == "warn" for a in alerts)
+    assert any(
+        a.get("code") == "WALLET_SNAPSHOT_STALE" and a.get("level") == "warn"
+        for a in alerts
+    )
 
 
 def test_connectivity_state_error_not_duplicated_when_error_log_exists():
@@ -75,13 +85,15 @@ def test_connectivity_state_error_not_duplicated_when_error_log_exists():
         "ts": datetime.now(timezone.utc).isoformat(),
         "meta": {"error_code": "BINANCE_UNREACHABLE"},
     }
-    alerts = [{
-        "code": "STATE_ERROR",
-        "level": "critical",
-        "title": "Bot hata durumunda",
-        "message": "Kritik hata: BINANCE_UNREACHABLE",
-        "meta": {"error_code": "BINANCE_UNREACHABLE"},
-    }]
+    alerts = [
+        {
+            "code": "STATE_ERROR",
+            "level": "critical",
+            "title": "Bot hata durumunda",
+            "message": "Kritik hata: BINANCE_UNREACHABLE",
+            "meta": {"error_code": "BINANCE_UNREACHABLE"},
+        }
+    ]
     with (
         patch("app.botengine.state_store.list_events", return_value=[recent_error]),
         patch("app.botengine.state_store.append_event") as append_event,
@@ -96,13 +108,15 @@ def test_connectivity_state_error_not_duplicated_when_error_log_exists():
 def test_connectivity_state_error_emits_without_recent_error_log():
     bot = SimpleNamespace(id=4, account_id=45)
     state = {}
-    alerts = [{
-        "code": "STATE_ERROR",
-        "level": "critical",
-        "title": "Bot hata durumunda",
-        "message": "Kritik hata: BINANCE_UNREACHABLE",
-        "meta": {"error_code": "BINANCE_UNREACHABLE"},
-    }]
+    alerts = [
+        {
+            "code": "STATE_ERROR",
+            "level": "critical",
+            "title": "Bot hata durumunda",
+            "message": "Kritik hata: BINANCE_UNREACHABLE",
+            "meta": {"error_code": "BINANCE_UNREACHABLE"},
+        }
+    ]
     with (
         patch("app.botengine.state_store.list_events", return_value=[]),
         patch("app.botengine.state_store.append_event") as append_event,

@@ -4,9 +4,10 @@ VERSION: v1
 DATE: 2026-01-21
 CHANGE: Bot V2 Worker/Scheduler - Background task runner for running bots
 """
+
 import asyncio
 import logging
-from typing import Dict, Set, Optional
+from typing import Dict, Optional
 from datetime import datetime
 from sqlalchemy.orm import Session
 from app.db.session import SessionLocal
@@ -224,4 +225,3 @@ async def shutdown_worker():
     """Shutdown worker (called on app shutdown)"""
     worker = get_worker()
     await worker.stop()
-

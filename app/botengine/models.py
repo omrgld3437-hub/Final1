@@ -2,10 +2,10 @@
 Bot Engine – config, state, enums.
 DCA + two-way Grid + Trailing; maps to UI form fields.
 """
+
 from __future__ import annotations
 from enum import Enum
-from typing import Any, Dict, List, Optional
-import json
+from typing import Any, Dict, List
 
 from app.botengine.dca_manager import normalize_max_buy_levels_payload
 
@@ -49,24 +49,42 @@ class DcaGridTrailingConfig:
         r = raw or {}
         self.symbol = (r.get("symbol") or "").upper().strip() or "BTCUSDT"
         self.initial_capital_usdt = _float_or(
-            r.get("initial_capital_usdt") or r.get("budget_usd") or r.get("bot_budget_usdt"), 1000.0
+            r.get("initial_capital_usdt")
+            or r.get("budget_usd")
+            or r.get("bot_budget_usdt"),
+            1000.0,
         )
-        self.bot_budget_usdt = self.initial_capital_usdt  # alias for virtual wallet / multibot
-        self.base_alloc_pct = _float_or(r.get("base_alloc_pct") or (r.get("allocation") or {}).get("base_pct"), 50.0)
-        self.quote_alloc_pct = _float_or(r.get("quote_alloc_pct") or (r.get("allocation") or {}).get("quote_pct"), 50.0)
+        self.bot_budget_usdt = (
+            self.initial_capital_usdt
+        )  # alias for virtual wallet / multibot
+        self.base_alloc_pct = _float_or(
+            r.get("base_alloc_pct") or (r.get("allocation") or {}).get("base_pct"), 50.0
+        )
+        self.quote_alloc_pct = _float_or(
+            r.get("quote_alloc_pct") or (r.get("allocation") or {}).get("quote_pct"),
+            50.0,
+        )
         self.fee_rate = _float_or(r.get("fee_rate"), 0.001)
         self.buy_fee_rate = _float_or(r.get("buy_fee_rate") or r.get("fee_rate"), 0.001)
-        self.sell_fee_rate = _float_or(r.get("sell_fee_rate") or r.get("fee_rate"), 0.001)
+        self.sell_fee_rate = _float_or(
+            r.get("sell_fee_rate") or r.get("fee_rate"), 0.001
+        )
         self.min_net_profit_rate = _float_or(r.get("min_net_profit_rate"), 0.001)
         self.pnl_mode = (r.get("pnl_mode") or "cycle_only_fee_aware_v1").strip().lower()
         if self.pnl_mode not in ("legacy", "cycle_only_fee_aware_v1"):
             self.pnl_mode = "cycle_only_fee_aware_v1"
         # Bot her zaman canlı modda çalışır; paper mod kullanılmaz.
-        self.paper_mode = bool(r.get("paper_mode") if "paper_mode" in r else (r.get("mode", "live") == "paper"))
+        self.paper_mode = bool(
+            r.get("paper_mode")
+            if "paper_mode" in r
+            else (r.get("mode", "live") == "paper")
+        )
 
         # Sell grids (up)
         up = r.get("up") or {}
-        self.sell_grids_count = _int_or(r.get("sell_grids_count") or len(up.get("grids") or []), 0)
+        self.sell_grids_count = _int_or(
+            r.get("sell_grids_count") or len(up.get("grids") or []), 0
+        )
         self.sell_grids: List[Dict[str, Any]] = _list_or_default(
             r.get("sell_grids") or up.get("grids"), []
         )
@@ -76,7 +94,9 @@ class DcaGridTrailingConfig:
 
         # Buy grids (down)
         down = r.get("down") or {}
-        self.buy_grids_count = _int_or(r.get("buy_grids_count") or len(down.get("grids") or []), 0)
+        self.buy_grids_count = _int_or(
+            r.get("buy_grids_count") or len(down.get("grids") or []), 0
+        )
         self.buy_grids: List[Dict[str, Any]] = _list_or_default(
             r.get("buy_grids") or down.get("grids"), []
         )
@@ -98,7 +118,11 @@ class DcaGridTrailingConfig:
         self.profit_exit_drop_pct = _float_or(
             r.get("profit_exit_drop_pct") or profit.get("resell_trail_pct"), 0.3
         )
-        self.basis_mode = (r.get("basis_mode") or profit.get("basis_mode") or "grid_only").strip().lower()
+        self.basis_mode = (
+            (r.get("basis_mode") or profit.get("basis_mode") or "grid_only")
+            .strip()
+            .lower()
+        )
         if self.basis_mode not in ("total", "grid_only"):
             self.basis_mode = "grid_only"
 
@@ -108,12 +132,18 @@ class DcaGridTrailingConfig:
         self.max_slippage_pct = _float_or(r.get("max_slippage_pct"), 0.5)
         self.min_notional_guard = _float_or(r.get("min_notional_guard"), 5.0)
         # Fee/rounding buffer for initial allocation: usable = virtual_quote * (1 - initial_fee_buffer_pct)
-        self.initial_fee_buffer_pct = _float_or(r.get("initial_fee_buffer_pct") or r.get("fee_buffer_pct"), 0.002)
+        self.initial_fee_buffer_pct = _float_or(
+            r.get("initial_fee_buffer_pct") or r.get("fee_buffer_pct"), 0.002
+        )
         # Virtual/real drift buffer: available_quote_for_orders = free_quote * (1 - available_quote_buffer_pct)
-        self.available_quote_buffer_pct = _float_or(r.get("available_quote_buffer_pct") or r.get("quote_buffer_pct"), 0.005)
+        self.available_quote_buffer_pct = _float_or(
+            r.get("available_quote_buffer_pct") or r.get("quote_buffer_pct"), 0.005
+        )
         # Günlük kayıp limiti (USDT). 0 veya None = limit yok.
         _dll = r.get("daily_loss_limit_usd")
-        self.daily_loss_limit_usd: float = _float_or(_dll, 0.0) if _dll not in (None, "", 0) else 0.0
+        self.daily_loss_limit_usd: float = (
+            _float_or(_dll, 0.0) if _dll not in (None, "", 0) else 0.0
+        )
         # Max buy grid seviyesi hard limiti. Production'da zorunlu ve pozitif.
         _mbl = r.get("max_buy_levels")
         _mbl_val = _int_or(_mbl, 0) if _mbl not in (None, "") else 0
@@ -166,7 +196,12 @@ class MultiAssetRebalanceConfig:
             if not sym:
                 continue
             pct = _float_or(a.get("target_pct"), 0)
-            self.assets.append({"symbol": sym if sym.endswith("USDT") else sym + "USDT", "target_pct": pct})
+            self.assets.append(
+                {
+                    "symbol": sym if sym.endswith("USDT") else sym + "USDT",
+                    "target_pct": pct,
+                }
+            )
         rebal = r.get("rebalance") or {}
         self.rebalance_mode = (rebal.get("mode") or "threshold").strip().lower()
         if self.rebalance_mode not in ("threshold", "interval", "hybrid"):
@@ -177,7 +212,12 @@ class MultiAssetRebalanceConfig:
         self.fees_buffer_bps = _int_or(rebal.get("fees_buffer_bps"), 20)
         self.max_trades_per_cycle = _int_or(rebal.get("max_trades_per_cycle"), 3)
         self.cooldown_sec = _int_or(rebal.get("cooldown_sec"), 300)
-        self.budget_usdt = _float_or(r.get("budget_usdt") or r.get("budget_usd") or r.get("initial_capital_usdt"), 1000.0)
+        self.budget_usdt = _float_or(
+            r.get("budget_usdt")
+            or r.get("budget_usd")
+            or r.get("initial_capital_usdt"),
+            1000.0,
+        )
         self.tick_interval_ms = _int_or(r.get("tick_interval_ms"), 5000)
         self.min_notional_guard = _float_or(rebal.get("min_trade_usdt"), 10.0)
         self.symbol = "MULTI"
@@ -211,7 +251,10 @@ class TrdcaProConfig:
         self.symbol = "MULTI"
         # Bot bakiye: UI'da "kullanılabilir" gösterimi; paper'da üst sınır. 0 = tam cüzdan.
         self.initial_capital_usdt = _float_or(
-            r.get("initial_capital_usdt") or r.get("bot_budget_usdt") or r.get("bot_bakiye_usdt"), 0.0
+            r.get("initial_capital_usdt")
+            or r.get("bot_budget_usdt")
+            or r.get("bot_bakiye_usdt"),
+            0.0,
         )
         self.bot_budget_usdt = self.initial_capital_usdt
 
@@ -230,23 +273,45 @@ class TrdcaProConfig:
                 self.dca_coin_weights[(k.strip().upper())] = _float_or(v, 0)
         if not self.dca_coin_weights:
             self.dca_coin_weights = {"BTC": 0.3, "ETH": 0.3, "SOL": 0.2, "AVAX": 0.2}
-        self.dca_grid_up_levels_pct = _list_or_default(dca.get("grid_up_levels_pct"), [1.0, 2.0, 3.0])
-        self.dca_grid_down_levels_pct = _list_or_default(dca.get("grid_down_levels_pct"), [1.0, 2.0, 3.0])
-        self.dca_grid_up_notional_usdt = _list_or_default(dca.get("grid_up_notional_usdt"), [200, 200, 200])
-        self.dca_grid_down_notional_usdt = _list_or_default(dca.get("grid_down_notional_usdt"), [200, 200, 200])
-        self.dca_grid_up_notional_pct = dca.get("grid_up_notional_pct")  # Opsiyonel: önceden belirlenen yüzde
+        self.dca_grid_up_levels_pct = _list_or_default(
+            dca.get("grid_up_levels_pct"), [1.0, 2.0, 3.0]
+        )
+        self.dca_grid_down_levels_pct = _list_or_default(
+            dca.get("grid_down_levels_pct"), [1.0, 2.0, 3.0]
+        )
+        self.dca_grid_up_notional_usdt = _list_or_default(
+            dca.get("grid_up_notional_usdt"), [200, 200, 200]
+        )
+        self.dca_grid_down_notional_usdt = _list_or_default(
+            dca.get("grid_down_notional_usdt"), [200, 200, 200]
+        )
+        self.dca_grid_up_notional_pct = dca.get(
+            "grid_up_notional_pct"
+        )  # Opsiyonel: önceden belirlenen yüzde
         self.dca_grid_down_notional_pct = dca.get("grid_down_notional_pct")
         self.dca_sell_trail_back_pct = _float_or(dca.get("sell_trail_back_pct"), 0.8)
         self.dca_buy_trail_up_pct = _float_or(dca.get("buy_trail_up_pct"), 0.8)
         self.dca_buy_buffer_pct = _float_or(dca.get("buy_buffer_pct"), 0.2)
         post_sell = dca.get("post_sell") or {}
-        self.dca_post_sell_dip_trigger_pct = _float_or(post_sell.get("dip_trigger_pct"), 2.0)
-        self.dca_post_sell_dip_trail_up_pct = _float_or(post_sell.get("dip_trail_up_pct"), 0.8)
-        self.dca_post_sell_dip_buy_notional_usdt = _float_or(post_sell.get("dip_buy_notional_usdt"), 200)
+        self.dca_post_sell_dip_trigger_pct = _float_or(
+            post_sell.get("dip_trigger_pct"), 2.0
+        )
+        self.dca_post_sell_dip_trail_up_pct = _float_or(
+            post_sell.get("dip_trail_up_pct"), 0.8
+        )
+        self.dca_post_sell_dip_buy_notional_usdt = _float_or(
+            post_sell.get("dip_buy_notional_usdt"), 200
+        )
         post_buy = dca.get("post_buy") or {}
-        self.dca_post_buy_profit_trigger_pct = _float_or(post_buy.get("profit_trigger_pct"), 2.0)
-        self.dca_post_buy_profit_sell_trail_back_pct = _float_or(post_buy.get("profit_sell_trail_back_pct"), 0.8)
-        self.dca_post_buy_profit_sell_notional_usdt = _float_or(post_buy.get("profit_sell_notional_usdt"), 200)
+        self.dca_post_buy_profit_trigger_pct = _float_or(
+            post_buy.get("profit_trigger_pct"), 2.0
+        )
+        self.dca_post_buy_profit_sell_trail_back_pct = _float_or(
+            post_buy.get("profit_sell_trail_back_pct"), 0.8
+        )
+        self.dca_post_buy_profit_sell_notional_usdt = _float_or(
+            post_buy.get("profit_sell_notional_usdt"), 200
+        )
 
         # TRB
         trb = r.get("trb") or {}
@@ -257,20 +322,31 @@ class TrdcaProConfig:
             if k and str(k).strip():
                 self.trb_target_weights_all[str(k).strip().upper()] = _float_or(v, 0)
         if not self.trb_target_weights_all:
-            self.trb_target_weights_all = {"BTC": 0.3, "ETH": 0.3, "SOL": 0.2, "USDT": 0.2}
+            self.trb_target_weights_all = {
+                "BTC": 0.3,
+                "ETH": 0.3,
+                "SOL": 0.2,
+                "USDT": 0.2,
+            }
         self.trb_small_eps_pct = _float_or(trb.get("small_eps_pct"), 0.8)
-        self.trb_min_leg_notional_usdt = _float_or(trb.get("min_leg_notional_usdt"), 10.0)
+        self.trb_min_leg_notional_usdt = _float_or(
+            trb.get("min_leg_notional_usdt"), 10.0
+        )
         self.trb_gap_arm_pct = _float_or(trb.get("gap_arm_pct"), 3.0)
         self.trb_trail_back_pct = _float_or(trb.get("trail_back_pct"), 0.6)
         self.trb_max_batch_legs = _int_or(trb.get("max_batch_legs"), 8)
         self.trb_sell_first = bool(trb.get("sell_first", True))
         self.trb_step_mode = (trb.get("step_mode") or "SELL_ONLY_THEN_BUY").strip()
         self.trb_batch_atomicity = (trb.get("batch_atomicity") or "SOFT").strip()
-        self.trb_partial_fill_behavior = (trb.get("partial_fill_behavior") or "SAFE_STOP").strip()
+        self.trb_partial_fill_behavior = (
+            trb.get("partial_fill_behavior") or "SAFE_STOP"
+        ).strip()
         self.trb_max_exec_delay_sec = _int_or(trb.get("max_exec_delay_sec"), 15)
         self.trb_ts_bucket_sec = _int_or(trb.get("ts_bucket_sec"), 5)
         self.trb_gap_peak_bucket_dp = _int_or(trb.get("gap_peak_bucket_dp"), 2)
-        self.min_notional_guard = _float_or(trb.get("min_leg_notional_usdt") or r.get("min_notional_guard"), 10.0)
+        self.min_notional_guard = _float_or(
+            trb.get("min_leg_notional_usdt") or r.get("min_notional_guard"), 10.0
+        )
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -327,7 +403,9 @@ def config_trdca_pro_from_payload(payload: Dict[str, Any]) -> TrdcaProConfig:
     return TrdcaProConfig(payload)
 
 
-def config_multi_asset_from_payload(payload: Dict[str, Any]) -> MultiAssetRebalanceConfig:
+def config_multi_asset_from_payload(
+    payload: Dict[str, Any],
+) -> MultiAssetRebalanceConfig:
     """Map UI wizard payload to MultiAssetRebalanceConfig."""
     return MultiAssetRebalanceConfig(payload)
 
@@ -338,26 +416,38 @@ def config_from_ui_payload(payload: Dict[str, Any]) -> DcaGridTrailingConfig:
     # UI: up.grids[].trigger_pct, qty_pct; down same.
     sell_grids = []
     for g in (payload.get("up") or {}).get("grids") or []:
-        sell_grids.append({
-            "sell_grid_pct": _float_or(g.get("trigger_pct"), 0),
-            "sell_qty_pct_of_base": _float_or(g.get("qty_pct"), 0),
-        })
+        sell_grids.append(
+            {
+                "sell_grid_pct": _float_or(g.get("trigger_pct"), 0),
+                "sell_qty_pct_of_base": _float_or(g.get("qty_pct"), 0),
+            }
+        )
     buy_grids = []
     for g in (payload.get("down") or {}).get("grids") or []:
-        buy_grids.append({
-            "buy_grid_pct": _float_or(g.get("trigger_pct"), 0),
-            "buy_qty_pct_of_quote": _float_or(g.get("qty_pct"), 0),
-        })
+        buy_grids.append(
+            {
+                "buy_grid_pct": _float_or(g.get("trigger_pct"), 0),
+                "buy_qty_pct_of_quote": _float_or(g.get("qty_pct"), 0),
+            }
+        )
     profit = payload.get("profit") or {}
     raw = {
         "symbol": payload.get("symbol"),
         "budget_usd": payload.get("budget_usd"),
         "allocation": payload.get("allocation"),
         "mode": payload.get("mode", "live"),
-        "up": {"trail_pct": (payload.get("up") or {}).get("trail_pct"), "grids": sell_grids},
-        "down": {"trail_pct": (payload.get("down") or {}).get("trail_pct"), "grids": buy_grids},
+        "up": {
+            "trail_pct": (payload.get("up") or {}).get("trail_pct"),
+            "grids": sell_grids,
+        },
+        "down": {
+            "trail_pct": (payload.get("down") or {}).get("trail_pct"),
+            "grids": buy_grids,
+        },
         "profit": profit,
-        "basis_mode": profit.get("basis_mode") or payload.get("basis_mode") or "grid_only",
+        "basis_mode": profit.get("basis_mode")
+        or payload.get("basis_mode")
+        or "grid_only",
         "tick_interval_ms": payload.get("tick_interval_ms", 2000),
         "max_orders_per_minute": payload.get("max_orders_per_minute", 12),
         "max_slippage_pct": payload.get("max_slippage_pct", 0.5),
@@ -401,7 +491,9 @@ def build_state_skeleton(bot_id: int, account_id: int, symbol: str) -> Dict[str,
     }
 
 
-def build_trdca_pro_state_skeleton(bot_id: int, account_id: int, quote_asset: str = "USDT") -> Dict[str, Any]:
+def build_trdca_pro_state_skeleton(
+    bot_id: int, account_id: int, quote_asset: str = "USDT"
+) -> Dict[str, Any]:
     """State skeleton for TRDCA PRO+ (Trailing Rebalancing DCA). Single source of truth for initial state."""
     return {
         "bot_id": bot_id,

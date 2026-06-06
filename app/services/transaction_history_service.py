@@ -2,8 +2,9 @@
 İşlem Geçmişi Servisi – şifreli dosya deposu (hesap başına .enc).
 TradeNormalized yedek/backfill; okuma dosyadan, RAM'de havuz tutulmaz.
 """
-from typing import Dict, List, Optional, Any, Tuple
-from datetime import datetime, timezone
+
+from typing import Dict, Optional, Any, Tuple
+from datetime import datetime
 from sqlalchemy.orm import Session
 
 from app.utils.tz_utils import turkey_today_start_utc
@@ -23,9 +24,11 @@ class TransactionHistoryService:
         days = TransactionHistoryService.PERIOD_DAYS.get(period, 1)
         if days is None:
             from datetime import timedelta
+
             start = end - timedelta(days=365)
         else:
             from datetime import timedelta
+
             start = today_start - timedelta(days=days - 1)
         return (start, end)
 
@@ -89,7 +92,9 @@ class TransactionHistoryService:
         )
 
     @staticmethod
-    def get_transaction_detail(db: Session, account_id: int, trade_id: str, symbol: str) -> Optional[Dict[str, Any]]:
+    def get_transaction_detail(
+        db: Session, account_id: int, trade_id: str, symbol: str
+    ) -> Optional[Dict[str, Any]]:
         """Tek işlem detayı — önce dosya, yoksa DB."""
         from app.services.transaction_history_file_store import get_order_detail
 

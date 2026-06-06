@@ -9,6 +9,7 @@ Kullanım:
   A/B/C/D adımlarını sırayla uygulayın; her adımda ram_snapshots.log’a yazılır.
   En son: logs/ram_snapshots.log’u parse edip docs/ram_root_cause_report.md’yi doldurun.
 """
+
 import json
 import os
 import sys
@@ -25,17 +26,25 @@ def print_instructions():
     print("RAM ROOT CAUSE — Stres senaryoları")
     print("=" * 60)
     print("1. RAM_PROBE_ENABLED=1 ile uygulamayı başlatın (web veya worker).")
-    print("2. logs/ram_snapshots.log her 30 saniyede dolar + stratejik probe’lar yazar.")
+    print(
+        "2. logs/ram_snapshots.log her 30 saniyede dolar + stratejik probe’lar yazar."
+    )
     print("")
     print("Senaryo A — Idle: 0 bot, 10 dk bekle. RAM artıyor mu?")
     print("Senaryo B — 1 Bot: 1 bot start, 30 dk çalışsın. RAM sabit mi?")
-    print("Senaryo C — 10 Bot: 10 bot start, 30 dk, sonra hepsini stop. RAM geri düşüyor mu?")
+    print(
+        "Senaryo C — 10 Bot: 10 bot start, 30 dk, sonra hepsini stop. RAM geri düşüyor mu?"
+    )
     print("Senaryo D — Web Down: Worker açık, web server kapat. RAM değişimi?")
     print("")
     print("3. Ölçüm sonrası docs/ram_root_cause_report.md’yi doldurun:")
     print("   - logs/ram_snapshots.log satırlarını parse edin (her satır bir JSON).")
-    print("   - RSS/heap_mb zaman çizelgesi, top_allocations, top_types, asyncio_task_count.")
-    print("   - Leak: stop sonrası task sayısı azalıyor mu? gc.collect() sonrası obje sayısı düşüyor mu?")
+    print(
+        "   - RSS/heap_mb zaman çizelgesi, top_allocations, top_types, asyncio_task_count."
+    )
+    print(
+        "   - Leak: stop sonrası task sayısı azalıyor mu? gc.collect() sonrası obje sayısı düşüyor mu?"
+    )
     print("")
     print("Snapshot log:", _RAM_LOG)
     print("Rapor şablonu:", _REPORT)

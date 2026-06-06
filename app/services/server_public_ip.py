@@ -2,6 +2,7 @@
 Sunucu dış (egress) IP keşfi — startup'ta bir kez + periyodik yenileme.
 Binance API whitelist için GET /settings ve connectivity-check'te kullanılır.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -45,7 +46,9 @@ def _parse_public_ip_response(text: str, is_json: bool = False) -> Optional[str]
 async def _fetch_fresh_ip() -> Optional[str]:
     timeout = 5.0
 
-    async def _get(client: httpx.AsyncClient, url: str, as_json: bool = False) -> Optional[str]:
+    async def _get(
+        client: httpx.AsyncClient, url: str, as_json: bool = False
+    ) -> Optional[str]:
         try:
             r = await client.get(url)
             if r.status_code == 200:

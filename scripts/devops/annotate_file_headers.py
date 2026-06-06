@@ -5,6 +5,7 @@ Mevcut docstring veya ust yorum varsa dokunmaz.
 
 Usage: python3 scripts/annotate_file_headers.py [--dry-run]
 """
+
 from __future__ import annotations
 
 import argparse
@@ -12,8 +13,31 @@ import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-SKIP = {".venv", ".git", "__pycache__", "_meta", ".pytest_cache", "node_modules", "vendor"}
-SKIP_SUFFIX = {".pyc", ".db", ".db-shm", ".db-wal", ".png", ".jpg", ".svg", ".ico", ".woff", ".woff2", ".json", ".xml", ".css", ".map"}
+SKIP = {
+    ".venv",
+    ".git",
+    "__pycache__",
+    "_meta",
+    ".pytest_cache",
+    "node_modules",
+    "vendor",
+}
+SKIP_SUFFIX = {
+    ".pyc",
+    ".db",
+    ".db-shm",
+    ".db-wal",
+    ".png",
+    ".jpg",
+    ".svg",
+    ".ico",
+    ".woff",
+    ".woff2",
+    ".json",
+    ".xml",
+    ".css",
+    ".map",
+}
 
 HINTS: dict[str, str] = {
     "main.py": "FastAPI giris; UI mount, startup, route kaydi.",
@@ -88,7 +112,11 @@ def annotate(path: Path, dry_run: bool) -> bool:
         new_text = f"REM {hint}\n" + text
     elif path.suffix == ".html" and not _has_top_comment(text, "<!--"):
         new_text = f"<!-- {hint} -->\n" + text
-    elif path.suffix == ".js" and not _has_top_comment(text, "//") and not _has_top_comment(text, "/*"):
+    elif (
+        path.suffix == ".js"
+        and not _has_top_comment(text, "//")
+        and not _has_top_comment(text, "/*")
+    ):
         new_text = f"// {hint}\n" + text
 
     if new_text and new_text != text:
@@ -114,7 +142,10 @@ def main() -> None:
             continue
         if annotate(path, args.dry_run):
             changed += 1
-            print(("would " if args.dry_run else "") + f"annotate {path.relative_to(ROOT)}")
+            print(
+                ("would " if args.dry_run else "")
+                + f"annotate {path.relative_to(ROOT)}"
+            )
     print(f"{'would change' if args.dry_run else 'changed'}: {changed} files")
 
 

@@ -10,6 +10,7 @@ Usage:
 Example:
   python scripts/binance_verify_order.py 1 LTCUSDT b1r0c0iabc1234567890
 """
+
 from __future__ import annotations
 import asyncio
 import json
@@ -28,7 +29,10 @@ from app.services.binance_spot import get_order_by_client_order_id, get_my_trade
 
 async def main():
     if len(sys.argv) < 4:
-        print("Usage: binance_verify_order.py <account_id> <symbol> <origClientOrderId>", file=sys.stderr)
+        print(
+            "Usage: binance_verify_order.py <account_id> <symbol> <origClientOrderId>",
+            file=sys.stderr,
+        )
         sys.exit(1)
     account_id = int(sys.argv[1])
     symbol = (sys.argv[2] or "").upper() or "BTCUSDT"
@@ -41,23 +45,37 @@ async def main():
     try:
         keys = await get_account_keys(account_id, db)
         if not keys:
-            print(json.dumps({"decision": "ERROR", "error": "No API keys for account_id"}, indent=2))
+            print(
+                json.dumps(
+                    {"decision": "ERROR", "error": "No API keys for account_id"},
+                    indent=2,
+                )
+            )
             sys.exit(1)
         order = await get_order_by_client_order_id(keys, symbol, orig_client_order_id)
         if order is None:
-            print(json.dumps({
-                "decision": "NOT_FOUND",
-                "order": None,
-                "myTrades_count": 0,
-                "message": "GET /order returned NOT_FOUND (-2013 or invalid); safe to place.",
-            }, indent=2))
+            print(
+                json.dumps(
+                    {
+                        "decision": "NOT_FOUND",
+                        "order": None,
+                        "myTrades_count": 0,
+                        "message": "GET /order returned NOT_FOUND (-2013 or invalid); safe to place.",
+                    },
+                    indent=2,
+                )
+            )
             return
         order_id = order.get("orderId")
         try:
             order_id_int = int(order_id) if order_id is not None else 0
         except (TypeError, ValueError):
             order_id_int = 0
-        trades = await get_my_trades(keys, symbol, limit=50, order_id=order_id_int) if order_id_int else []
+        trades = (
+            await get_my_trades(keys, symbol, limit=50, order_id=order_id_int)
+            if order_id_int
+            else []
+        )
         trades_count = len(trades)
         decision = "FOUND" if trades_count > 0 else "NOT_FOUND"
         if decision == "NOT_FOUND" and (order.get("status") or "").upper() == "FILLED":
@@ -67,7 +85,9 @@ async def main():
             "order": {k: v for k, v in order.items() if k not in ("",)},
             "orderId": order_id,
             "myTrades_count": trades_count,
-            "message": "FOUND and verified in myTrades" if trades_count > 0 else "Order exists but no myTrades for this orderId (do not repair).",
+            "message": "FOUND and verified in myTrades"
+            if trades_count > 0
+            else "Order exists but no myTrades for this orderId (do not repair).",
         }
         print(json.dumps(out, indent=2, default=str))
     finally:

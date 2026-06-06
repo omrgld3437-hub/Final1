@@ -2,6 +2,7 @@
 Bot Engine v5 – Event-driven scheduler. 300-bot capable.
 Min-heap by next_run_at; wake by events (price threshold, fill, risk). Concurrency limits + backpressure.
 """
+
 from __future__ import annotations
 import asyncio
 import heapq
@@ -60,7 +61,9 @@ class BotScheduler:
     ) -> None:
         self._heap: List[ScheduledBot] = []
         self._heap_lock = asyncio.Lock()
-        self._wake_queue: asyncio.Queue[Tuple[int, WakeReason, Dict[str, Any]]] = asyncio.Queue()
+        self._wake_queue: asyncio.Queue[Tuple[int, WakeReason, Dict[str, Any]]] = (
+            asyncio.Queue()
+        )
         self._registered: Set[int] = set()
         self._db_sem = asyncio.Semaphore(db_sem_limit)
         self._compute_sem = asyncio.Semaphore(compute_sem_limit)
@@ -68,9 +71,13 @@ class BotScheduler:
         self._weight_check = weight_check  # () -> (used_ratio, limit)
         self._bot_run_durations: List[float] = bot_run_durations or []
         self._max_duration_samples = 100
-        self._run_callback: Optional[Callable[[int, str], Any]] = None  # async (bot_id, tick_id) -> next_run_at (float)
+        self._run_callback: Optional[Callable[[int, str], Any]] = (
+            None  # async (bot_id, tick_id) -> next_run_at (float)
+        )
         self._stopped = False
-        self._latest_next_run: Dict[int, float] = {}  # bot_id -> monotonic; skip stale heap entries
+        self._latest_next_run: Dict[
+            int, float
+        ] = {}  # bot_id -> monotonic; skip stale heap entries
 
     def register_run_callback(self, cb: Callable[[int, str], Any]) -> None:
         """Set callback(bot_id, tick_id) -> next_run_at (monotonic time). Callback is async."""
@@ -88,7 +95,9 @@ class BotScheduler:
         self._registered.discard(bot_id)
         self._latest_next_run.pop(bot_id, None)
 
-    def wake_bot(self, bot_id: int, reason: WakeReason, context: Optional[Dict[str, Any]] = None) -> None:
+    def wake_bot(
+        self, bot_id: int, reason: WakeReason, context: Optional[Dict[str, Any]] = None
+    ) -> None:
         """Queue bot for immediate wake (event-driven)."""
         if bot_id not in self._registered:
             return
@@ -176,7 +185,12 @@ class BotScheduler:
     async def run_loop(self) -> None:
         """Main loop: pop next bot, run via callback, re-schedule. Runs until stopped."""
         self._stopped = False
-        logger.info("BOT_SCHEDULER_START db_sem=%s compute_sem=%s binance_sem=%s", self._db_sem._value, self._compute_sem._value, self._binance_sem._value)
+        logger.info(
+            "BOT_SCHEDULER_START db_sem=%s compute_sem=%s binance_sem=%s",
+            self._db_sem._value,
+            self._compute_sem._value,
+            self._binance_sem._value,
+        )
         while not self._stopped:
             try:
                 item = await self.next_bot_to_run()
@@ -186,7 +200,7 @@ class BotScheduler:
                 bot_id, reason, context = item
                 if self._run_callback is None:
                     continue
-                tick_id = f"{bot_id}_{int(time.time()*1000)}"
+                tick_id = f"{bot_id}_{int(time.time() * 1000)}"
                 t0 = time.perf_counter()
                 now_mono = time.monotonic()
                 next_run_at = now_mono + 60.0  # default 60s if callback fails
@@ -195,11 +209,18 @@ class BotScheduler:
                     if isinstance(result, (int, float)):
                         next_run_at = float(result)
                     elif result is not None:
-                        next_run_at = float(getattr(result, "next_run_at", now_mono + 60.0))
+                        next_run_at = float(
+                            getattr(result, "next_run_at", now_mono + 60.0)
+                        )
                 except asyncio.CancelledError:
                     raise
                 except Exception as e:
-                    logger.exception("BOT_SCHEDULER_RUN_ERROR bot_id=%s reason=%s: %s", bot_id, reason.value, e)
+                    logger.exception(
+                        "BOT_SCHEDULER_RUN_ERROR bot_id=%s reason=%s: %s",
+                        bot_id,
+                        reason.value,
+                        e,
+                    )
                 else:
                     elapsed_ms = (time.perf_counter() - t0) * 1000
                     self.record_bot_run_duration_ms(elapsed_ms)

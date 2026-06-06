@@ -7,6 +7,7 @@ Usage:
   python3 scripts/migrations/restore_user_omer.py
   python3 scripts/migrations/restore_user_omer.py --phone 5524516137 --username "omer.altin6"
 """
+
 from __future__ import annotations
 
 import argparse
@@ -18,6 +19,7 @@ sys.path.insert(0, str(ROOT))
 
 try:
     from dotenv import load_dotenv
+
     load_dotenv(ROOT / ".env")
 except Exception:
     pass
@@ -38,13 +40,21 @@ TEMP_PASSWORD = "OmerRestore2026!"
 def run(phone: str, username: str, password: str) -> None:
     db = SessionLocal()
     try:
-        phone_clean = phone.lstrip("0") if phone.startswith("0") and len(phone) > 10 else phone
+        phone_clean = (
+            phone.lstrip("0") if phone.startswith("0") and len(phone) > 10 else phone
+        )
         if phone.startswith("0") and len(phone) >= 11:
             phone_clean = phone[1:] if phone.startswith("0") else phone
 
-        existing = db.query(User).filter(
-            (User.phone == phone_clean) | (User.phone == phone) | (User.username == username)
-        ).first()
+        existing = (
+            db.query(User)
+            .filter(
+                (User.phone == phone_clean)
+                | (User.phone == phone)
+                | (User.username == username)
+            )
+            .first()
+        )
         if existing:
             existing.username = username
             existing.phone = phone_clean
@@ -86,11 +96,13 @@ def run(phone: str, username: str, password: str) -> None:
             db.flush()
             acc.user_id = user.id
             db.commit()
-            print(f"Kullanici olusturuldu: {username} tel={phone_clean} account_id={acc.id}")
+            print(
+                f"Kullanici olusturuldu: {username} tel={phone_clean} account_id={acc.id}"
+            )
 
         ok = verify_password(password, hash_password(password))
         print(f"Giris: telefon {phone} veya {phone_clean} / sifre: {password}")
-        print(f"Ilk giriste sifre degistirmeniz istenebilir.")
+        print("Ilk giriste sifre degistirmeniz istenebilir.")
     finally:
         db.close()
 

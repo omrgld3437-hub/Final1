@@ -6,6 +6,7 @@ Prints: avg latency, p95, error rate.
 Targets: avg < 800ms local, p95 < 1200ms.
 Usage: TOKEN=xxx python scripts/perf_snapshot_test.py [--base http://127.0.0.1:8000] [--account 1]
 """
+
 from __future__ import annotations
 import argparse
 import asyncio
@@ -28,7 +29,9 @@ TARGET_AVG_MS = 800
 TARGET_P95_MS = 1200
 
 
-async def fetch_one(client: httpx.AsyncClient, url: str, headers: dict) -> tuple[float, bool]:
+async def fetch_one(
+    client: httpx.AsyncClient, url: str, headers: dict
+) -> tuple[float, bool]:
     """Single request; returns (latency_ms, success)."""
     t0 = time.perf_counter()
     try:
@@ -40,7 +43,9 @@ async def fetch_one(client: httpx.AsyncClient, url: str, headers: dict) -> tuple
         return elapsed, False
 
 
-async def run_iteration(client: httpx.AsyncClient, url: str, headers: dict) -> list[tuple[float, bool]]:
+async def run_iteration(
+    client: httpx.AsyncClient, url: str, headers: dict
+) -> list[tuple[float, bool]]:
     """20 concurrent requests in one iteration."""
     tasks = [fetch_one(client, url, headers) for _ in range(CONCURRENCY)]
     return await asyncio.gather(*tasks)
@@ -49,7 +54,9 @@ async def run_iteration(client: httpx.AsyncClient, url: str, headers: dict) -> l
 async def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--base", default=os.getenv("BASE_URL", DEFAULT_BASE))
-    parser.add_argument("--account", type=int, default=int(os.getenv("ACCOUNT_ID", DEFAULT_ACCOUNT)))
+    parser.add_argument(
+        "--account", type=int, default=int(os.getenv("ACCOUNT_ID", DEFAULT_ACCOUNT))
+    )
     parser.add_argument("--iterations", type=int, default=ITERATIONS)
     parser.add_argument("--n", type=int, help="Alias for --iterations")
     parser.add_argument("--concurrency", type=int, default=CONCURRENCY)
@@ -81,7 +88,11 @@ async def main() -> None:
     error_rate = errors / total * 100 if total else 0
     avg_ms = statistics.mean(latencies) if latencies else 0
     sorted_lat = sorted(latencies)
-    p95_ms = sorted_lat[int(0.95 * len(sorted_lat)) - 1] if len(sorted_lat) >= 20 else (sorted_lat[-1] if sorted_lat else 0)
+    p95_ms = (
+        sorted_lat[int(0.95 * len(sorted_lat)) - 1]
+        if len(sorted_lat) >= 20
+        else (sorted_lat[-1] if sorted_lat else 0)
+    )
 
     print("SNAPSHOT_STRESS_RESULTS")
     print(f"  requests: {total}")

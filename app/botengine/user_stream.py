@@ -9,6 +9,7 @@ reconcile becomes a fallback instead of the primary source.
 Bu durumda mevcut listen key temizlenir ve WebSocket yeniden bağlanır
 (yeni POST → yeni listenKey). Reconnect otomatik, state kaybı yok.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -39,7 +40,7 @@ class UserStreamClient:
     keys: Any
     market: str
     on_order_update: OrderUpdateCallback
-    account_label: str = ""          # "HesapAdı #KOD" — log'larda hesap ID yerine
+    account_label: str = ""  # "HesapAdı #KOD" — log'larda hesap ID yerine
     listen_key: Optional[str] = None
     task: Optional[asyncio.Task] = None
     keepalive_task: Optional[asyncio.Task] = None
@@ -58,18 +59,38 @@ class UserStreamClient:
 
     def _http_base(self) -> str:
         if self.market == "futures":
-            return "https://testnet.binancefuture.com" if self.testnet else "https://fapi.binance.com"
-        return "https://testnet.binance.vision" if self.testnet else "https://api.binance.com"
+            return (
+                "https://testnet.binancefuture.com"
+                if self.testnet
+                else "https://fapi.binance.com"
+            )
+        return (
+            "https://testnet.binance.vision"
+            if self.testnet
+            else "https://api.binance.com"
+        )
 
     def _ws_url(self) -> str:
         if self.market == "futures":
-            base = "wss://stream.binancefuture.com/ws" if self.testnet else "wss://fstream.binance.com/ws"
+            base = (
+                "wss://stream.binancefuture.com/ws"
+                if self.testnet
+                else "wss://fstream.binance.com/ws"
+            )
         else:
-            base = "wss://testnet.binance.vision/ws" if self.testnet else "wss://stream.binance.com:9443/ws"
+            base = (
+                "wss://testnet.binance.vision/ws"
+                if self.testnet
+                else "wss://stream.binance.com:9443/ws"
+            )
         return f"{base}/{self.listen_key}"
 
     def _listen_key_path(self) -> str:
-        return "/fapi/v1/listenKey" if self.market == "futures" else "/api/v3/userDataStream"
+        return (
+            "/fapi/v1/listenKey"
+            if self.market == "futures"
+            else "/api/v3/userDataStream"
+        )
 
     async def _create_listen_key(self) -> str:
         url = self._http_base() + self._listen_key_path()
@@ -93,14 +114,20 @@ class UserStreamClient:
                         "USER_STREAM_NETWORK_BLOCK %s market=%s status=%s — "
                         "Binance API'ye ulaşılamıyor: yanıt HTML (proxy/güvenlik duvarı/ISP engeli). "
                         "VPN, DNS veya ağ ayarları kontrol edilmeli.",
-                        self._log_id(), self.market, res.status_code,
+                        self._log_id(),
+                        self.market,
+                        res.status_code,
                     )
                 else:
                     logger.warning(
                         "USER_STREAM_CREATE_410 %s market=%s status=%s — "
                         "Binance listenKey oluşturma reddedildi. "
                         "Binance code=%s msg=%s. API key izni veya IP kısıtlaması kontrol edin.",
-                        self._log_id(), self.market, res.status_code, binance_code, binance_msg,
+                        self._log_id(),
+                        self.market,
+                        res.status_code,
+                        binance_code,
+                        binance_msg,
                     )
             res.raise_for_status()
             data = res.json()
@@ -117,7 +144,9 @@ class UserStreamClient:
             url = self._http_base() + self._listen_key_path()
             headers = {"X-MBX-APIKEY": getattr(self.keys, "api_key", "")}
             async with httpx.AsyncClient(timeout=5.0) as client:
-                await client.delete(url, headers=headers, params={"listenKey": self.listen_key})
+                await client.delete(
+                    url, headers=headers, params={"listenKey": self.listen_key}
+                )
         except Exception:
             pass  # Kapanışta hata olsa da devam et
         self.listen_key = None
@@ -133,7 +162,9 @@ class UserStreamClient:
         assert self.stop_event is not None
         while not self.stop_event.is_set() and not self._force_reconnect:
             try:
-                await asyncio.wait_for(self.stop_event.wait(), timeout=_KEEPALIVE_INTERVAL_SEC)
+                await asyncio.wait_for(
+                    self.stop_event.wait(), timeout=_KEEPALIVE_INTERVAL_SEC
+                )
                 break  # stop_event tetiklendi
             except asyncio.TimeoutError:
                 pass  # Normal — aralık doldu, keepalive zamanı
@@ -145,11 +176,14 @@ class UserStreamClient:
                 url = self._http_base() + self._listen_key_path()
                 headers = {"X-MBX-APIKEY": getattr(self.keys, "api_key", "")}
                 async with httpx.AsyncClient(timeout=10.0) as client:
-                    res = await client.put(url, headers=headers, params={"listenKey": self.listen_key})
+                    res = await client.put(
+                        url, headers=headers, params={"listenKey": self.listen_key}
+                    )
                     res.raise_for_status()
                 logger.debug(
                     "USER_STREAM_KEEPALIVE %s market=%s",
-                    self._log_id(), self.market,
+                    self._log_id(),
+                    self.market,
                 )
             except httpx.HTTPStatusError as exc:
                 status = exc.response.status_code if exc.response is not None else 0
@@ -157,7 +191,8 @@ class UserStreamClient:
                     # 410: listenKey süresi doldu → yeni key ile yeniden bağlan
                     logger.info(
                         "USER_STREAM_KEY_EXPIRED %s market=%s — listenKey geçersiz, yeniden bağlanılıyor",
-                        self._log_id(), self.market,
+                        self._log_id(),
+                        self.market,
                     )
                     self.listen_key = None
                     self._force_reconnect = True
@@ -166,12 +201,17 @@ class UserStreamClient:
                 else:
                     logger.warning(
                         "USER_STREAM_KEEPALIVE_FAILED %s market=%s status=%s err=%s",
-                        self._log_id(), self.market, status, exc,
+                        self._log_id(),
+                        self.market,
+                        status,
+                        exc,
                     )
             except Exception as exc:
                 logger.warning(
                     "USER_STREAM_KEEPALIVE_FAILED %s market=%s err=%s",
-                    self._log_id(), self.market, exc,
+                    self._log_id(),
+                    self.market,
+                    exc,
                 )
 
     async def run(self) -> None:
@@ -216,14 +256,18 @@ class UserStreamClient:
                     mark_stream_connected(self.account_id)
                     logger.info(
                         "USER_STREAM_CONNECTED %s market=%s",
-                        self._log_id(), self.market,
+                        self._log_id(),
+                        self.market,
                     )
-                    await self.on_order_update(self.account_id, {
-                        "event_type": "USER_STREAM_CONNECTED",
-                        "market": self.market,
-                        "account_label": self.account_label,
-                        "ts": int(time.time() * 1000),
-                    })
+                    await self.on_order_update(
+                        self.account_id,
+                        {
+                            "event_type": "USER_STREAM_CONNECTED",
+                            "market": self.market,
+                            "account_label": self.account_label,
+                            "ts": int(time.time() * 1000),
+                        },
+                    )
                     # recv döngüsü — _force_reconnect bayrağını 5s'te bir kontrol et
                     while not self.stop_event.is_set() and not self._force_reconnect:
                         try:
@@ -238,7 +282,8 @@ class UserStreamClient:
                     if self._force_reconnect and not self.stop_event.is_set():
                         logger.info(
                             "USER_STREAM_RECONNECTING %s market=%s — listenKey yenilendi",
-                            self._log_id(), self.market,
+                            self._log_id(),
+                            self.market,
                         )
                         continue  # Hemen yeniden bağlan, backoff yok
 
@@ -253,15 +298,21 @@ class UserStreamClient:
                 if _consecutive_create_failures == 1:
                     logger.warning(
                         "USER_STREAM_DISCONNECTED %s market=%s status=%s err=%s",
-                        self._log_id(), self.market, status, exc,
+                        self._log_id(),
+                        self.market,
+                        status,
+                        exc,
                     )
-                    await self.on_order_update(self.account_id, {
-                        "event_type": "USER_STREAM_DISCONNECTED",
-                        "market": self.market,
-                        "account_label": self.account_label,
-                        "error": str(exc)[:300],
-                        "ts": int(time.time() * 1000),
-                    })
+                    await self.on_order_update(
+                        self.account_id,
+                        {
+                            "event_type": "USER_STREAM_DISCONNECTED",
+                            "market": self.market,
+                            "account_label": self.account_label,
+                            "error": str(exc)[:300],
+                            "ts": int(time.time() * 1000),
+                        },
+                    )
                 elif _consecutive_create_failures == 3:
                     _in_startup = (time.time() - _start_time) < _STARTUP_GRACE_SEC
                     if _in_startup:
@@ -269,18 +320,27 @@ class UserStreamClient:
                         logger.warning(
                             "USER_STREAM_PERSISTENT_FAILURE %s market=%s status=%s consecutive=%s — "
                             "başlangıç dönemi, daha seyrek yeniden denenecek.",
-                            self._log_id(), self.market, status, _consecutive_create_failures,
+                            self._log_id(),
+                            self.market,
+                            status,
+                            _consecutive_create_failures,
                         )
                     else:
                         logger.error(
                             "USER_STREAM_PERSISTENT_FAILURE %s market=%s status=%s consecutive=%s — "
                             "API anahtarı izni veya Binance sorunu; daha seyrek yeniden denenecek.",
-                            self._log_id(), self.market, status, _consecutive_create_failures,
+                            self._log_id(),
+                            self.market,
+                            status,
+                            _consecutive_create_failures,
                         )
                 else:
                     logger.debug(
                         "USER_STREAM_CREATE_RETRY %s market=%s status=%s consecutive=%s",
-                        self._log_id(), self.market, status, _consecutive_create_failures,
+                        self._log_id(),
+                        self.market,
+                        status,
+                        _consecutive_create_failures,
                     )
             except Exception as exc:
                 _consecutive_create_failures += 1
@@ -288,19 +348,27 @@ class UserStreamClient:
                 if _consecutive_create_failures <= 2:
                     logger.warning(
                         "USER_STREAM_DISCONNECTED %s market=%s err=%s",
-                        self._log_id(), self.market, exc,
+                        self._log_id(),
+                        self.market,
+                        exc,
                     )
-                    await self.on_order_update(self.account_id, {
-                        "event_type": "USER_STREAM_DISCONNECTED",
-                        "market": self.market,
-                        "account_label": self.account_label,
-                        "error": str(exc)[:300],
-                        "ts": int(time.time() * 1000),
-                    })
+                    await self.on_order_update(
+                        self.account_id,
+                        {
+                            "event_type": "USER_STREAM_DISCONNECTED",
+                            "market": self.market,
+                            "account_label": self.account_label,
+                            "error": str(exc)[:300],
+                            "ts": int(time.time() * 1000),
+                        },
+                    )
                 else:
                     logger.debug(
                         "USER_STREAM_RETRY %s market=%s consecutive=%s err=%s",
-                        self._log_id(), self.market, _consecutive_create_failures, exc,
+                        self._log_id(),
+                        self.market,
+                        _consecutive_create_failures,
+                        exc,
                     )
 
             if self.stop_event.is_set():
@@ -349,7 +417,9 @@ def stream_down_since(account_id: int) -> Optional[float]:
     return _stream_down_since.get(account_id)
 
 
-def normalize_order_update(event: Dict[str, Any], *, market: str) -> Optional[Dict[str, Any]]:
+def normalize_order_update(
+    event: Dict[str, Any], *, market: str
+) -> Optional[Dict[str, Any]]:
     event_type = event.get("e")
     if event_type == "ORDER_TRADE_UPDATE":
         order = event.get("o") or {}
@@ -369,7 +439,8 @@ def normalize_order_update(event: Dict[str, Any], *, market: str) -> Optional[Di
             "last_price": _float(order.get("L")),
             "avg_price": _float(order.get("ap")) or _float(order.get("L")),
             "reduce_only": bool(order.get("R")),
-            "is_liquidation": execution_type == "CALCULATED" or str(order.get("c") or "").startswith("autoclose-"),
+            "is_liquidation": execution_type == "CALCULATED"
+            or str(order.get("c") or "").startswith("autoclose-"),
             "is_close": bool(order.get("cp")) or bool(order.get("R")),
             "ts": int(event.get("E") or time.time() * 1000),
             "raw": event,
@@ -423,6 +494,7 @@ def _build_account_label(account_id: int, db: Optional[Session] = None) -> str:
         return f"account_id={account_id}"
     try:
         from app.db.models import Account
+
         acc = db.query(Account).filter(Account.id == int(account_id)).first()
         if acc:
             name = (getattr(acc, "name", "") or "").strip()
@@ -466,7 +538,9 @@ async def start_user_stream_for_account(
     if not keys:
         return False
 
-    selected_market = (market or os.getenv("BINANCE_USER_STREAM_MARKET", "spot")).strip().lower()
+    selected_market = (
+        (market or os.getenv("BINANCE_USER_STREAM_MARKET", "spot")).strip().lower()
+    )
     callback = on_order_update or _legacy_callback(on_execution_report)
     key = (int(account_id), selected_market)
     client = _clients.get(key)
@@ -484,7 +558,9 @@ async def start_user_stream_for_account(
     return True
 
 
-def _legacy_callback(cb: Optional[Callable[[Dict[str, Any]], None]]) -> OrderUpdateCallback:
+def _legacy_callback(
+    cb: Optional[Callable[[Dict[str, Any]], None]],
+) -> OrderUpdateCallback:
     async def _inner(_account_id: int, event: Dict[str, Any]) -> None:
         if cb:
             cb(event)
@@ -492,7 +568,9 @@ def _legacy_callback(cb: Optional[Callable[[Dict[str, Any]], None]]) -> OrderUpd
     return _inner
 
 
-async def stop_user_stream_for_account(account_id: int, market: Optional[str] = None) -> None:
+async def stop_user_stream_for_account(
+    account_id: int, market: Optional[str] = None
+) -> None:
     markets = [market] if market else ["spot", "futures"]
     for m in markets:
         client = _clients.pop((int(account_id), str(m)), None)
@@ -500,10 +578,16 @@ async def stop_user_stream_for_account(account_id: int, market: Optional[str] = 
             await client.stop()
 
 
-def apply_user_stream_event_to_db(db: Session, account_id: int, event: Dict[str, Any]) -> None:
+def apply_user_stream_event_to_db(
+    db: Session, account_id: int, event: Dict[str, Any]
+) -> None:
     """Persist normalized user stream event and update matching order_intent status."""
     event_type = event.get("event_type")
-    if event_type in ("USER_STREAM_CONNECTED", "USER_STREAM_DISCONNECTED", "USER_STREAM_RECONNECTING"):
+    if event_type in (
+        "USER_STREAM_CONNECTED",
+        "USER_STREAM_DISCONNECTED",
+        "USER_STREAM_RECONNECTING",
+    ):
         return
     client_order_id = (event.get("client_order_id") or "").strip()
     if not client_order_id:
@@ -572,9 +656,14 @@ def apply_user_stream_event_to_db(db: Session, account_id: int, event: Dict[str,
             price = float(event.get("avg_price") or event.get("last_price") or 0)
             if qty > 0 and price > 0:
                 from datetime import datetime, timezone as _tz
-                from app.services.transaction_history_file_store import upsert_trade_fill
+                from app.services.transaction_history_file_store import (
+                    upsert_trade_fill,
+                )
+
                 ts_ms = int(event.get("ts") or (time.time() * 1000))
-                ts_dt = datetime.fromtimestamp(ts_ms / 1000, tz=_tz.utc).replace(tzinfo=None)
+                ts_dt = datetime.fromtimestamp(ts_ms / 1000, tz=_tz.utc).replace(
+                    tzinfo=None
+                )
                 order_id_str = str(event.get("order_id") or client_order_id or "")
                 upsert_trade_fill(
                     int(account_id),
@@ -592,4 +681,6 @@ def apply_user_stream_event_to_db(db: Session, account_id: int, event: Dict[str,
                     bot_id=int(intent.get("bot_id") or 0) or None,
                 )
         except Exception as _ue:
-            logger.debug("user_stream tx_history upsert account_id=%s: %s", account_id, _ue)
+            logger.debug(
+                "user_stream tx_history upsert account_id=%s: %s", account_id, _ue
+            )

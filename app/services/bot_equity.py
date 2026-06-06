@@ -2,6 +2,7 @@
 Bot equity (USD): single source for dashboard list + bot detail live snapshot.
 DCA: base_balance * last_price + quote_balance from engine state.
 """
+
 from typing import Any, Dict, Optional
 
 from sqlalchemy.orm import Session

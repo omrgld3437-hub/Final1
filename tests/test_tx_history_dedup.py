@@ -1,4 +1,5 @@
 """İşlem geçmişi fill dedup — sync_from_db tekrarı çift sayım yapmamalı."""
+
 from datetime import datetime, timezone
 
 import pytest

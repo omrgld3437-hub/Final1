@@ -7,6 +7,7 @@ Giriş (sadece bu bilgisayarda http://127.0.0.1 veya http://localhost):
   Kullanıcı adı: test
   Şifre: 123
 """
+
 from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Optional
@@ -31,6 +32,7 @@ def is_test_account(account_id: Optional[int], db: "Session") -> bool:
     if not account_id:
         return False
     from app.db.models import Account, User
+
     acc = db.query(Account).filter(Account.id == int(account_id)).first()
     if not acc or not acc.user_id:
         return False
@@ -81,17 +83,21 @@ def is_localhost(client_host: Optional[str]) -> bool:
 # Eski test kullanıcı adı (migrasyon: test_local -> test)
 _LEGACY_TEST_USERNAME = "test_local"
 
+
 def ensure_test_account(db: "Session") -> bool:
     """Test kullanıcı ve hesabı yoksa oluştur. Sadece local kurulumda kullanılır."""
     from app.db.models import User, Account
     from app.api.auth import hash_password
     from app.services.encryption import encrypt_text
-    from app.utils.account_code import generate_account_code
 
     user = db.query(User).filter(User.username == TEST_USERNAME).first()
     if user:
         if not user.account_id:
-            account = db.query(Account).filter(Account.account_code == TEST_ACCOUNT_CODE).first()
+            account = (
+                db.query(Account)
+                .filter(Account.account_code == TEST_ACCOUNT_CODE)
+                .first()
+            )
             if not account:
                 account = Account(
                     account_code=TEST_ACCOUNT_CODE,
@@ -151,5 +157,7 @@ def ensure_test_account(db: "Session") -> bool:
     db.refresh(user)
     account.user_id = user.id
     db.commit()
-    logger.info("test_account: created test user and TEST01 account (paper, local only)")
+    logger.info(
+        "test_account: created test user and TEST01 account (paper, local only)"
+    )
     return True

@@ -15,6 +15,7 @@ Kullanım:
   python scripts/local_web_worker_helper.py all-restart
   python scripts/local_web_worker_helper.py all-start
 """
+
 import os
 import sys
 import time
@@ -65,8 +66,15 @@ def _log_spawn(role: str, pid: int, cwd: str) -> None:
     try:
         _RUN_DIR.mkdir(parents=True, exist_ok=True)
         env = _spawn_env()
-        line = "[helper] spawned %s pid=%s RAM_PROBE=%s RAM_PROBE_INTERVAL=%s cwd=%s\n" % (
-            role, pid, env.get("RAM_PROBE", ""), env.get("RAM_PROBE_INTERVAL", ""), cwd
+        line = (
+            "[helper] spawned %s pid=%s RAM_PROBE=%s RAM_PROBE_INTERVAL=%s cwd=%s\n"
+            % (
+                role,
+                pid,
+                env.get("RAM_PROBE", ""),
+                env.get("RAM_PROBE_INTERVAL", ""),
+                cwd,
+            )
         )
         with open(_HELPER_SPAWN_LOG, "a", encoding="utf-8", errors="replace") as f:
             f.write(line)
@@ -93,7 +101,9 @@ def _process_alive(pid):
                 capture_output=True,
                 text=True,
                 timeout=5,
-                creationflags=subprocess.CREATE_NO_WINDOW if getattr(subprocess, "CREATE_NO_WINDOW", None) is not None else 0,
+                creationflags=subprocess.CREATE_NO_WINDOW
+                if getattr(subprocess, "CREATE_NO_WINDOW", None) is not None
+                else 0,
             )
             return str(pid) in (r.stdout or "")
         except Exception:
@@ -111,7 +121,9 @@ def _kill_pid(pid: int) -> bool:
             ["taskkill", "/PID", str(pid), "/F"],
             capture_output=True,
             timeout=5,
-            creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
+            creationflags=subprocess.CREATE_NO_WINDOW
+            if hasattr(subprocess, "CREATE_NO_WINDOW")
+            else 0,
         )
         return r.returncode == 0
     try:
@@ -137,7 +149,9 @@ def _kill_process_on_port(port: int) -> None:
                 capture_output=True,
                 text=True,
                 timeout=3,
-                creationflags=subprocess.CREATE_NO_WINDOW if getattr(subprocess, "CREATE_NO_WINDOW", None) is not None else 0,
+                creationflags=subprocess.CREATE_NO_WINDOW
+                if getattr(subprocess, "CREATE_NO_WINDOW", None) is not None
+                else 0,
             )
             for line in (r.stdout or "").splitlines():
                 if "LISTENING" not in line or ":%s" % port not in line:
@@ -184,9 +198,26 @@ def _start_web() -> bool:
     # .venv varsa her zaman .venv Python kullan (fastapi/uvicorn orada kurulu olsun)
     use_py = str(py_exe) if py_exe.exists() else sys.executable
     uvicorn_extra = [] if _IS_WINDOWS else ["--loop", "uvloop", "--http", "httptools"]
-    access_log_args = ["--log-level", os.environ.get("WEB_LOG_LEVEL", "warning"), "--no-access-log"]
+    access_log_args = [
+        "--log-level",
+        os.environ.get("WEB_LOG_LEVEL", "warning"),
+        "--no-access-log",
+    ]
     if uvicorn_exe.exists():
-        cmd = [str(uvicorn_exe), "app.main:app", "--host", host, "--port", "8000", "--workers", "2"] + access_log_args + uvicorn_extra
+        cmd = (
+            [
+                str(uvicorn_exe),
+                "app.main:app",
+                "--host",
+                host,
+                "--port",
+                "8000",
+                "--workers",
+                "2",
+            ]
+            + access_log_args
+            + uvicorn_extra
+        )
     else:
         try:
             import uvicorn as _u
@@ -196,7 +227,22 @@ def _start_web() -> bool:
                 "HATA: uvicorn yok. Proje kokunde: .venv\\Scripts\\pip install -r requirements.txt  veya  pip install -r requirements.txt",
             )
             return False
-        cmd = [use_py, "-m", "uvicorn", "app.main:app", "--host", host, "--port", "8000", "--workers", "2"] + access_log_args + uvicorn_extra
+        cmd = (
+            [
+                use_py,
+                "-m",
+                "uvicorn",
+                "app.main:app",
+                "--host",
+                host,
+                "--port",
+                "8000",
+                "--workers",
+                "2",
+            ]
+            + access_log_args
+            + uvicorn_extra
+        )
     cwd = str(_PROJECT_ROOT)
     env = _spawn_env()
     try:
@@ -229,7 +275,9 @@ def _start_worker() -> bool:
     cwd = str(_PROJECT_ROOT)
     env = _spawn_env()
     try:
-        with open(_WORKER_LOG, "a", encoding="utf-8", errors="replace", buffering=1) as logf:
+        with open(
+            _WORKER_LOG, "a", encoding="utf-8", errors="replace", buffering=1
+        ) as logf:
             p = subprocess.Popen(
                 cmd,
                 cwd=cwd,
@@ -251,11 +299,20 @@ def _kill_worker_by_cmdline() -> None:
     if _IS_WINDOWS:
         try:
             r = subprocess.run(
-                ["wmic", "process", "where", "commandline like '%worker_main%'", "get", "processid"],
+                [
+                    "wmic",
+                    "process",
+                    "where",
+                    "commandline like '%worker_main%'",
+                    "get",
+                    "processid",
+                ],
                 capture_output=True,
                 text=True,
                 timeout=4,
-                creationflags=subprocess.CREATE_NO_WINDOW if getattr(subprocess, "CREATE_NO_WINDOW", None) is not None else 0,
+                creationflags=subprocess.CREATE_NO_WINDOW
+                if getattr(subprocess, "CREATE_NO_WINDOW", None) is not None
+                else 0,
             )
             for line in (r.stdout or "").splitlines():
                 line = line.strip()
@@ -322,6 +379,7 @@ def _read_server_locks():
         return {"web": False, "worker": False}
     try:
         import json as _json
+
         d = _json.loads(_SERVER_LOCKS_FILE.read_text(encoding="utf-8"))
         return {"web": bool(d.get("web")), "worker": bool(d.get("worker"))}
     except Exception:
@@ -405,7 +463,10 @@ def do_all_start():
 
 def main():
     if len(sys.argv) < 2:
-        print("Kullanım: python local_web_worker_helper.py <web-stop|web-restart|web-start|worker-stop|worker-restart|worker-start|all-stop|all-restart|all-start>", file=sys.stderr)
+        print(
+            "Kullanım: python local_web_worker_helper.py <web-stop|web-restart|web-start|worker-stop|worker-restart|worker-start|all-stop|all-restart|all-start>",
+            file=sys.stderr,
+        )
         sys.exit(1)
     action = (sys.argv[1] or "").strip().lower()
     if action == "web-stop":

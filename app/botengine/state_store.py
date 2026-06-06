@@ -1,6 +1,7 @@
 """
 Bot engine state persistence: bot_engine_state (snapshot), bot_engine_events (append-only).
 """
+
 from __future__ import annotations
 import hashlib
 import json
@@ -19,7 +20,11 @@ def normalize_event_ts_iso_z(ts: Any) -> str:
     if ts is None:
         return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     if isinstance(ts, datetime):
-        dt = ts.replace(tzinfo=timezone.utc) if ts.tzinfo is None else ts.astimezone(timezone.utc)
+        dt = (
+            ts.replace(tzinfo=timezone.utc)
+            if ts.tzinfo is None
+            else ts.astimezone(timezone.utc)
+        )
         return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
     s = str(ts).strip().replace(" ", "T")
     if s.endswith("Z"):
@@ -71,7 +76,9 @@ def load_state_json_extract(db: Session, bot_id: int, json_path: str) -> Any:
 def load_state(db: Session, bot_id: int) -> Optional[Dict[str, Any]]:
     """Load state snapshot for bot. Returns None if not found."""
     row = db.execute(
-        text("SELECT state_json, cycle_id, mode, last_tick_at, last_error_code, retry_at, updated_at FROM bot_engine_state WHERE bot_id = :bid"),
+        text(
+            "SELECT state_json, cycle_id, mode, last_tick_at, last_error_code, retry_at, updated_at FROM bot_engine_state WHERE bot_id = :bid"
+        ),
         {"bid": bot_id},
     ).fetchone()
     if not row:
@@ -104,12 +111,20 @@ def load_state(db: Session, bot_id: int) -> Optional[Dict[str, Any]]:
     state_hash = hashlib.sha1((raw or "").encode()).hexdigest()[:8] if raw else "empty"
     logger.debug(
         "BOT_STATE_LOADED bot_id=%s ver=%s ia_done=%s base_qty=%s price=%s updated_at=%s hash=%s",
-        bot_id, state_ver, ia_done, base_qty, base_price, updated_at, state_hash
+        bot_id,
+        state_ver,
+        ia_done,
+        base_qty,
+        base_price,
+        updated_at,
+        state_hash,
     )
     return state
 
 
-def save_state(db: Session, bot_id: int, account_id: int, state: Dict[str, Any]) -> None:
+def save_state(
+    db: Session, bot_id: int, account_id: int, state: Dict[str, Any]
+) -> None:
     """Upsert state snapshot."""
     from app.botengine.state_trim import trim_bot_state_for_persist
 
@@ -133,7 +148,13 @@ def save_state(db: Session, bot_id: int, account_id: int, state: Dict[str, Any])
         state_hash = "error"
     logger.debug(
         "BOT_STATE_SAVING bot_id=%s ver=%s->%s ia_done=%s base_qty=%s price=%s hash=%s",
-        bot_id, old_ver, state_ver, ia_done, base_qty, base_price, state_hash
+        bot_id,
+        old_ver,
+        state_ver,
+        ia_done,
+        base_qty,
+        base_price,
+        state_hash,
     )
 
     now = datetime.utcnow()
@@ -166,13 +187,25 @@ def save_state(db: Session, bot_id: int, account_id: int, state: Dict[str, Any])
     ).fetchone()
     if verify_row:
         verify_raw = verify_row[0]
-        verify_hash = hashlib.sha1((verify_raw or "").encode()).hexdigest()[:8] if verify_raw else "empty"
+        verify_hash = (
+            hashlib.sha1((verify_raw or "").encode()).hexdigest()[:8]
+            if verify_raw
+            else "empty"
+        )
         verify_updated = verify_row[1]
-        verify_state = json.loads(verify_raw) if isinstance(verify_raw, str) and verify_raw else {}
+        verify_state = (
+            json.loads(verify_raw) if isinstance(verify_raw, str) and verify_raw else {}
+        )
         verify_ia_done = verify_state.get("initial_allocation_done", False)
         logger.debug(
             "BOT_STATE_SAVED bot_id=%s ver=%s ia_done=%s hash=%s updated_at=%s verify_ia_done=%s verify_hash=%s",
-            bot_id, state_ver, ia_done, state_hash, verify_updated, verify_ia_done, verify_hash
+            bot_id,
+            state_ver,
+            ia_done,
+            state_hash,
+            verify_updated,
+            verify_ia_done,
+            verify_hash,
         )
     else:
         logger.warning("BOT_STATE_SAVED bot_id=%s verify_failed=row_not_found", bot_id)
@@ -253,16 +286,30 @@ def load_states_bulk(db: Session, bot_ids: List[int]) -> Dict[int, Dict[str, Any
 
 
 # Event types we log to DB (skip noisy routine events)
-_LOGGED_EVENT_TYPES = frozenset({
-    "ERROR", "SKIP_REASON", "ORDER_FILLED", "ORDER_ATTEMPT", "SLIPPAGE_WARN", "LOCK_BUSY",
-    "INFO", "BOT_ACTION", "CYCLE_END", "CYCLE_START", "HEALTH_WARN", "HEALTH_CRITICAL",
-})
+_LOGGED_EVENT_TYPES = frozenset(
+    {
+        "ERROR",
+        "SKIP_REASON",
+        "ORDER_FILLED",
+        "ORDER_ATTEMPT",
+        "SLIPPAGE_WARN",
+        "LOCK_BUSY",
+        "INFO",
+        "BOT_ACTION",
+        "CYCLE_END",
+        "CYCLE_START",
+        "HEALTH_WARN",
+        "HEALTH_CRITICAL",
+    }
+)
 
 # SKIP_REASON values that are routine/expected — log file only, not bot UI event stream
-_SILENT_SKIP_REASONS = frozenset({
-    "PRICE_STALE_OR_MISSING",
-    "IDEMPOTENT_LOCK",
-})
+_SILENT_SKIP_REASONS = frozenset(
+    {
+        "PRICE_STALE_OR_MISSING",
+        "IDEMPOTENT_LOCK",
+    }
+)
 
 
 def queue_engine_event(
@@ -275,7 +322,13 @@ def queue_engine_event(
     q = state.setdefault("_pending_engine_events", [])
     if len(q) >= 24:
         return
-    q.append({"type": (event_type or "").strip(), "message": message or "", "meta": meta or {}})
+    q.append(
+        {
+            "type": (event_type or "").strip(),
+            "message": message or "",
+            "meta": meta or {},
+        }
+    )
 
 
 def flush_queued_events(
@@ -286,7 +339,14 @@ def flush_queued_events(
 ) -> None:
     pending = state.pop("_pending_engine_events", None) or []
     for ev in pending:
-        append_event(db, bot_id, account_id, ev.get("type") or "INFO", ev.get("message") or "", ev.get("meta"))
+        append_event(
+            db,
+            bot_id,
+            account_id,
+            ev.get("type") or "INFO",
+            ev.get("message") or "",
+            ev.get("meta"),
+        )
 
 
 def append_event(
@@ -300,6 +360,7 @@ def append_event(
 ) -> None:
     """Append one event to bot_engine_events. Only important types are stored (no TICK, no IDEMPOTENT_LOCK noise)."""
     import os
+
     ty = (event_type or "").strip()
     if ty == "TICK" or ty not in _LOGGED_EVENT_TYPES:
         return
@@ -310,6 +371,7 @@ def append_event(
     if os.getenv("RAM_PROBE_ENABLED") == "1" and ty == "ORDER_FILLED":
         try:
             from app.observability.ram_probe import probe_event_store
+
             probe_event_store(before_write=True, write_to_log=True)
         except Exception:
             pass
@@ -335,6 +397,7 @@ def append_event(
     if os.getenv("RAM_PROBE_ENABLED") == "1" and ty == "ORDER_FILLED":
         try:
             from app.observability.ram_probe import probe_event_store
+
             probe_event_store(before_write=False, write_to_log=True)
         except Exception:
             pass
@@ -367,13 +430,15 @@ def list_events(
                 meta = json.loads(r[4])
             except Exception:
                 pass
-        out.append({
-            "id": r[0],
-            "ts": normalize_event_ts_iso_z(r[1]),
-            "type": r[2],
-            "message": r[3] or "",
-            "meta": meta,
-        })
+        out.append(
+            {
+                "id": r[0],
+                "ts": normalize_event_ts_iso_z(r[1]),
+                "type": r[2],
+                "message": r[3] or "",
+                "meta": meta,
+            }
+        )
     return out
 
 
@@ -403,11 +468,13 @@ def get_events_diagnostic_summary(
                 reason = msg.split()[0] if msg else "unknown"
             skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
     for e in events[:15]:
-        last_lines.append({
-            "id": e.get("id"),
-            "type": e.get("type"),
-            "message": (e.get("message") or "")[:120],
-        })
+        last_lines.append(
+            {
+                "id": e.get("id"),
+                "type": e.get("type"),
+                "message": (e.get("message") or "")[:120],
+            }
+        )
     return {
         "total": len(events),
         "by_type": by_type,
@@ -419,7 +486,10 @@ def get_events_diagnostic_summary(
 def ensure_state_row(db: Session, bot_id: int, account_id: int, symbol: str) -> None:
     """Ensure bot_engine_state has a row for bot; init from skeleton if missing."""
     from app.botengine.models import build_state_skeleton
-    row = db.execute(text("SELECT 1 FROM bot_engine_state WHERE bot_id = :bid"), {"bid": bot_id}).fetchone()
+
+    row = db.execute(
+        text("SELECT 1 FROM bot_engine_state WHERE bot_id = :bid"), {"bid": bot_id}
+    ).fetchone()
     if row:
         return
     sk = build_state_skeleton(bot_id, account_id, symbol)

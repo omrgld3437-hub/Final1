@@ -2,6 +2,7 @@
 Request metrics middleware: per-route count, latency (avg, p95), status summary.
 In-memory only (debug); resets on app restart.
 """
+
 from __future__ import annotations
 import re
 import time
@@ -10,7 +11,9 @@ from typing import Dict, List, Any
 import threading
 
 # Route template: /api/bots/123 -> /api/bots/{id}, /api/accounts/1/wallet -> /api/accounts/{id}/wallet
-_PATH_NORMALIZE_RE = re.compile(r"/\d+|\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b")
+_PATH_NORMALIZE_RE = re.compile(
+    r"/\d+|\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"
+)
 
 
 def _normalize_path(path: str) -> str:
@@ -28,6 +31,7 @@ def _normalize_path(path: str) -> str:
 
 class RingBuffer:
     """Fixed-size buffer for last N latencies (for p95)."""
+
     __slots__ = ("buf", "n", "i", "full")
 
     def __init__(self, size: int = 200):
@@ -74,15 +78,18 @@ _LOGIN_FAILS_MAX = 50
 
 class RequestMetrics:
     """In-memory request metrics: count, avg_ms, p95, status_counts, client_ips, user_agents, recent requests. Capped for RAM stability."""
+
     _lock = threading.Lock()
     _start_time: float = time.perf_counter()
-    _by_route: Dict[str, Dict[str, Any]] = defaultdict(lambda: {
-        "count": 0,
-        "total_ms": 0.0,
-        "latencies": RingBuffer(_RING_SIZE),
-        "status_counts": defaultdict(int),
-        "methods": defaultdict(int),
-    })
+    _by_route: Dict[str, Dict[str, Any]] = defaultdict(
+        lambda: {
+            "count": 0,
+            "total_ms": 0.0,
+            "latencies": RingBuffer(_RING_SIZE),
+            "status_counts": defaultdict(int),
+            "methods": defaultdict(int),
+        }
+    )
     _status_global: Dict[int, int] = defaultdict(int)
     _ips: set = set()
     _ip_counts: Dict[str, int] = defaultdict(int)
@@ -127,7 +134,12 @@ class RequestMetrics:
         """Record a login failure for Manager SECURITY panel. Bounded to last _LOGIN_FAILS_MAX."""
         with cls._lock:
             cls._login_fail_total += 1
-            entry = {"ts": round(time.time(), 2), "ip": (ip or "")[:64], "user": (user or "")[:128], "reason": (reason or "")[:64]}
+            entry = {
+                "ts": round(time.time(), 2),
+                "ip": (ip or "")[:64],
+                "user": (user or "")[:128],
+                "reason": (reason or "")[:64],
+            }
             cls._last_login_fails.append(entry)
             if len(cls._last_login_fails) > _LOGIN_FAILS_MAX:
                 cls._last_login_fails = cls._last_login_fails[-_LOGIN_FAILS_MAX:]
@@ -156,7 +168,9 @@ class RequestMetrics:
                 cls._ips.add(client_ip)
                 cls._ip_counts[client_ip] = cls._ip_counts.get(client_ip, 0) + 1
             if user_agent:
-                ua_short = (user_agent[:80] + "..") if len(user_agent) > 80 else user_agent
+                ua_short = (
+                    (user_agent[:80] + "..") if len(user_agent) > 80 else user_agent
+                )
                 cls._user_agents[ua_short] += 1
             cls._trim_routes()
             cls._trim_user_agents()
@@ -205,14 +219,25 @@ class RequestMetrics:
             status_4xx = sum(s.get(c, 0) for c in (400, 401, 403, 404, 429))
             status_5xx = sum(s.get(c, 0) for c in (500, 502, 503))
             total_req = sum(r["count"] for r in cls._by_route.values())
-            latencies_p50 = [r["latencies"].p50() for r in cls._by_route.values() if r["count"]]
-            latencies_p95 = [r["latencies"].p95() for r in cls._by_route.values() if r["count"]]
-            latency_p50_ms = round(sum(latencies_p50) / len(latencies_p50), 2) if latencies_p50 else 0
+            latencies_p50 = [
+                r["latencies"].p50() for r in cls._by_route.values() if r["count"]
+            ]
+            latencies_p95 = [
+                r["latencies"].p95() for r in cls._by_route.values() if r["count"]
+            ]
+            latency_p50_ms = (
+                round(sum(latencies_p50) / len(latencies_p50), 2)
+                if latencies_p50
+                else 0
+            )
             latency_p95_ms = round(max(latencies_p95), 2) if latencies_p95 else 0
             routes = sorted(
-                [{"path": route, "count": r["count"]} for route, r in cls._by_route.items()],
+                [
+                    {"path": route, "count": r["count"]}
+                    for route, r in cls._by_route.items()
+                ],
                 key=lambda x: -x["count"],
-            )[: _TOP_PATHS_MAX]
+            )[:_TOP_PATHS_MAX]
             top_paths = [{"path": x["path"], "count": x["count"]} for x in routes]
             ip_list = sorted(cls._ip_counts.items(), key=lambda x: -x[1])[:_TOP_IPS_MAX]
             top_ips = [{"ip": ip, "count": c} for ip, c in ip_list]
@@ -255,10 +280,7 @@ class RequestMetrics:
                     "status": dict(r["status_counts"]),
                 }
 
-            routes = [
-                route_summary(route, r)
-                for route, r in cls._by_route.items()
-            ]
+            routes = [route_summary(route, r) for route, r in cls._by_route.items()]
             routes.sort(key=lambda x: -x["count"])
 
             by_count = routes[:20]

@@ -3,6 +3,7 @@ Bot engine state RAM sınırları — persist öncesi zorunlu trim.
 
 Tur/işlem detayı dosya ve DB arşivinde; state yalnızca motor için gerekli son kayıtları tutar.
 """
+
 from __future__ import annotations
 
 from typing import Any, Dict, List

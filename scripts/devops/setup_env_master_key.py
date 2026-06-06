@@ -6,6 +6,7 @@ Kullanım: proje kökünden  python scripts/setup_env_master_key.py
   - .env varsa ve BINANCE_MASTER_KEY yok/placeholder ise günceller.
   - Zaten geçerli bir anahtar varsa dokunmaz.
 """
+
 import os
 import secrets
 import sys
@@ -25,9 +26,8 @@ def main():
     if not ENV.is_file():
         content = EXAMPLE.read_text(encoding="utf-8", errors="replace")
         content = content.replace(
-            "BINANCE_MASTER_KEY=" + PLACEHOLDER,
-            "BINANCE_MASTER_KEY=" + key,
-        1)
+            "BINANCE_MASTER_KEY=" + PLACEHOLDER, "BINANCE_MASTER_KEY=" + key, 1
+        )
         if "BINANCE_MASTER_KEY=" + PLACEHOLDER in content:
             content = content.replace(
                 "BINANCE_MASTER_KEY=your-32-character-encryption-key-here",

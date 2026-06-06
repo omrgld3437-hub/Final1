@@ -3,6 +3,7 @@
 Regenerate grouped file inventory in _meta/MODULE.md.
 Usage: python scripts/sync_module_meta.py
 """
+
 from __future__ import annotations
 import re
 from collections import defaultdict
@@ -15,13 +16,31 @@ SKIP_PARTS = {"__pycache__", "_meta", ".pytest_cache", ".git", ".venv"}
 
 MODULES: list[tuple[str, list[str], list[str]]] = [
     ("ops", ["*"], []),
-    ("app", ["*.py"], ["botengine", "api", "services", "bot", "db", "core", "middleware", "observability", "utils"]),
+    (
+        "app",
+        ["*.py"],
+        [
+            "botengine",
+            "api",
+            "services",
+            "bot",
+            "db",
+            "core",
+            "middleware",
+            "observability",
+            "utils",
+        ],
+    ),
     ("app/botengine", ["*.py"], ["strategies", "adapters"]),
     ("app/api", ["*.py"], ["routes", "utils"]),
     ("app/services", ["*.py"], []),
     ("manager_server", ["*.py"], ["ui"]),
     ("ui", ["*.html"], ["assets", "vendor"]),
-    ("scripts", ["*.py", "*.sh", "*.bat", "*.ps1"], ["runtime", "devops", "audit", "perf", "maintenance", "migrations"]),
+    (
+        "scripts",
+        ["*.py", "*.sh", "*.bat", "*.ps1"],
+        ["runtime", "devops", "audit", "perf", "maintenance", "migrations"],
+    ),
     ("tests", ["*.py"], []),
     ("deploy", ["*"], []),
 ]
@@ -66,14 +85,18 @@ def _render_inventory(base: Path, files: list[Path]) -> str:
         lines.append("```")
         lines.extend(names)
         lines.append("```\n")
-    lines.append(f"*Envanter: {date.today().isoformat()} — `python scripts/sync_module_meta.py`*\n")
+    lines.append(
+        f"*Envanter: {date.today().isoformat()} — `python scripts/sync_module_meta.py`*\n"
+    )
     return "\n".join(lines)
 
 
 def _replace_inventory(meta_path: Path, block: str) -> None:
     text = meta_path.read_text(encoding="utf-8")
     if "## Dosya envanteri" in text:
-        text = re.sub(r"## Dosya envanteri\n.*", block.rstrip() + "\n", text, flags=re.DOTALL)
+        text = re.sub(
+            r"## Dosya envanteri\n.*", block.rstrip() + "\n", text, flags=re.DOTALL
+        )
     else:
         text = text.rstrip() + "\n\n" + block
     meta_path.write_text(text, encoding="utf-8")

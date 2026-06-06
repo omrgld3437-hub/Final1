@@ -5,6 +5,7 @@ dca.db yedekleme — ~/.trader/backups/ altına zaman damgalı kopya.
 Usage:
   python3 scripts/maintenance/backup_dca_db.py
 """
+
 from __future__ import annotations
 
 import shutil
@@ -17,10 +18,12 @@ ROOT = Path(__file__).resolve().parents[2]
 def _active_db() -> Path:
     try:
         from dotenv import load_dotenv
+
         load_dotenv(ROOT / ".env")
     except Exception:
         pass
     import os
+
     url = os.getenv("DATABASE_URL", "")
     if url.startswith("sqlite:///"):
         p = url.replace("sqlite:///", "", 1).split("?")[0]

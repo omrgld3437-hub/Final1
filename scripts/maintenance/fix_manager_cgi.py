@@ -3,6 +3,7 @@
 Eski manager_backend.py (import cgi) dosyasini Python 3.13 uyumlu hale getirir.
 StartManager.bat bu scripti Manager'dan once calistirir.
 """
+
 import re
 import sys
 from pathlib import Path
@@ -97,7 +98,7 @@ def main():
             re.DOTALL,
         )
         new_block = (
-            "content_length = int(self.headers.get(\"Content-Length\", \"0\") or \"0\")\n"
+            'content_length = int(self.headers.get("Content-Length", "0") or "0")\n'
             "            form = _parse_multipart_form(self.rfile, content_type, content_length)"
         )
         text = old_pat.sub(new_block, text, count=1)

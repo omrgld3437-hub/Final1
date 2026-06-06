@@ -1,0 +1,15 @@
+[lint]
+# ruff varsayılanı: E4, E7, E9, F — sadece kasıtlı kalıpları muaf tut
+select = ["E4", "E7", "E9", "F"]
+
+ignore = [
+    "E402",  # module-level import not at top — kasıtlı lazy import var
+    "E712",  # == True/False — mevcut stil
+    "E741",  # ambiguous variable name
+    "E722",  # bare except
+    "F821",  # undefined name — TYPE_CHECKING / dinamik
+]
+
+[lint.per-file-ignores]
+"tests/*" = ["F401", "F841"]
+"scripts/*" = ["F401", "F841", "F821"]

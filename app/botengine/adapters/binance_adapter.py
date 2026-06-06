@@ -3,6 +3,7 @@ Binance Spot adapter for bot engine.
 Uses app.services.binance_spot (get_wallet, place_order, get_open_orders, cancel_order, fetch_exchange_info).
 Single market-data source: app.services.data_hub for price.
 """
+
 from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional
@@ -10,7 +11,9 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 
-def _fmt_qty(x: float, step_size: float, *, floor: bool = False, step_str: Optional[str] = None) -> str:
+def _fmt_qty(
+    x: float, step_size: float, *, floor: bool = False, step_str: Optional[str] = None
+) -> str:
     """LOT_SIZE string for Binance API (sells: floor to step)."""
     from app.botengine.order_qty import quantize_qty_down
 
@@ -49,11 +52,13 @@ class BinanceAdapter:
         """Asset -> { free, locked }. Paper modda 10.000 USDT sanal bakiye döner."""
         if self.paper_mode:
             from app.services.test_account import TEST_PAPER_BALANCE_USDT
+
             return {"USDT": {"free": TEST_PAPER_BALANCE_USDT, "locked": 0.0}}
         from app.services.binance_spot import get_wallet
+
         data = await get_wallet(self.keys, tag="bot_engine")
         out: Dict[str, Dict[str, float]] = {}
-        for b in (data.get("balances") or []):
+        for b in data.get("balances") or []:
             asset = (b.get("asset") or "").strip()
             if not asset:
                 continue
@@ -71,6 +76,7 @@ class BinanceAdapter:
             return self._filters_cache[symbol]
         try:
             from app.services.market_data import get_symbol_filters
+
             cached = get_symbol_filters(symbol)
             if cached:
                 out = normalize_symbol_filters(cached)
@@ -115,6 +121,7 @@ class BinanceAdapter:
         """
         import time as _time
         from app.services.data_hub import data_hub
+
         d = data_hub.get_price_with_meta(symbol)
         if not d or not isinstance(d, dict):
             return None
@@ -126,35 +133,48 @@ class BinanceAdapter:
             return None
         return float(p)
 
-    async def get_open_orders(self, symbol: Optional[str] = None) -> List[Dict[str, Any]]:
+    async def get_open_orders(
+        self, symbol: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
         if self.paper_mode or not self.keys:
             return []
         from app.services.binance_spot import get_open_orders as _go
+
         return await _go(self.keys, symbol)
 
-    async def get_order_by_client_order_id(self, symbol: str, orig_client_order_id: str) -> Optional[Dict[str, Any]]:
+    async def get_order_by_client_order_id(
+        self, symbol: str, orig_client_order_id: str
+    ) -> Optional[Dict[str, Any]]:
         """Idempotency: Check if order already placed (timeout/crash retry)."""
         if self.paper_mode or not self.keys:
             return None
         from app.services.binance_spot import get_order_by_client_order_id as _goc
+
         return await _goc(self.keys, symbol, orig_client_order_id)
 
-    async def get_my_trades_for_order(self, symbol: str, order_id: int) -> List[Dict[str, Any]]:
+    async def get_my_trades_for_order(
+        self, symbol: str, order_id: int
+    ) -> List[Dict[str, Any]]:
         """Verify fill: return trades with this orderId. Paper mode returns [] (no Binance data)."""
         if self.paper_mode or not self.keys:
             return []
         from app.services.binance_spot import get_my_trades as _gmt
+
         return await _gmt(self.keys, symbol, limit=50, order_id=order_id)
 
-    async def get_all_orders(self, symbol: str, limit: int = 20) -> List[Dict[str, Any]]:
+    async def get_all_orders(
+        self, symbol: str, limit: int = 20
+    ) -> List[Dict[str, Any]]:
         """Recent orders for reconciliation (bounded)."""
         if self.paper_mode or not self.keys:
             return []
         from app.services.binance_spot import get_all_orders as _gao
+
         return await _gao(self.keys, symbol, limit)
 
     async def cancel_order(self, symbol: str, order_id: int) -> Dict[str, Any]:
         from app.services.binance_spot import cancel_order as _co
+
         return await _co(self.keys, symbol, order_id)
 
     async def place_market_buy(
@@ -167,13 +187,19 @@ class BinanceAdapter:
         symbol = symbol.upper()
         if self.paper_mode:
             return await self._simulate_fill_async(
-                symbol, "BUY", quote_qty=quote_amount_usdt, client_order_id=client_order_id
+                symbol,
+                "BUY",
+                quote_qty=quote_amount_usdt,
+                client_order_id=client_order_id,
             )
         filters = await self.get_symbol_filters(symbol)
         min_notional = filters.get("min_notional") or 5.0
         if quote_amount_usdt < min_notional:
-            raise ValueError(f"quote_amount {quote_amount_usdt} < min_notional {min_notional}")
+            raise ValueError(
+                f"quote_amount {quote_amount_usdt} < min_notional {min_notional}"
+            )
         from app.services.binance_spot import place_order
+
         payload = {
             "symbol": symbol,
             "side": "BUY",
@@ -199,7 +225,9 @@ class BinanceAdapter:
 
         filters = await self.get_symbol_filters(symbol)
         price = self.get_price(symbol) or 0.0
-        skip_reason, qty_floored, qty_str = validate_market_sell_qty(quantity, filters, price)
+        skip_reason, qty_floored, qty_str = validate_market_sell_qty(
+            quantity, filters, price
+        )
         if skip_reason == "LOT_SIZE":
             raise ValueError(
                 f"quantity {quantity} below LOT_SIZE min_qty={filters.get('min_qty')} step={filters.get('step_size_str')}"
@@ -210,6 +238,7 @@ class BinanceAdapter:
                 f"notional {notional} < min_notional {filters.get('min_notional')}"
             )
         from app.services.binance_spot import place_order
+
         payload = {
             "symbol": symbol,
             "side": "SELL",
@@ -229,11 +258,16 @@ class BinanceAdapter:
         client_order_id: str = "",
     ) -> Dict[str, Any]:
         """Paper: taker komisyon, kayma, emir gecikmesi; fiyat bayat/yoksa fill yok."""
-        from app.services.test_simulation import await_paper_order_latency, build_paper_market_fill
+        from app.services.test_simulation import (
+            await_paper_order_latency,
+            build_paper_market_fill,
+        )
 
         price = self.get_price(symbol) or 0.0
         if not price or price <= 0:
-            raise ValueError(f"Price stale or missing for {symbol}; paper mode refuses fill")
+            raise ValueError(
+                f"Price stale or missing for {symbol}; paper mode refuses fill"
+            )
         await await_paper_order_latency()
         filters = await self.get_symbol_filters(symbol)
         step = str(filters.get("step_size_str") or "0.00000001")

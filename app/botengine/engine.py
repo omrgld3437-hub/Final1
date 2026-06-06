@@ -1,4 +1,5 @@
 """Unified bot engine entrypoints."""
+
 from __future__ import annotations
 
 from app.botengine.bot_run import run_one_bot_tick

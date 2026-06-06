@@ -3,6 +3,7 @@ Multi-asset rebalance strategy.
 Rebalance portfolio to target % per asset (USDT pairs). Trigger: threshold / interval / hybrid.
 Strategy does not hold API/DB; worker passes state, config, prices; returns (actions, next_wake_sec).
 """
+
 from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Tuple

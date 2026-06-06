@@ -1,6 +1,7 @@
 """
 Leaderboard: top bots by profit % (structure or global). DB + PnlService only, no Binance.
 """
+
 import json
 import logging
 import time
@@ -23,7 +24,9 @@ def _strategy_to_structure_id(strategy_id: str) -> str:
     return STRUCTURE_ID_MAP.get(s) or "trailing_dca"
 
 
-def get_top_by_structure(db: Session, structure_id: str, limit: int = 5) -> List[Dict[str, Any]]:
+def get_top_by_structure(
+    db: Session, structure_id: str, limit: int = 5
+) -> List[Dict[str, Any]]:
     """Top bots by profit_pct_all for a structure. Returns list of { profit_pct, params } (no bot_id/account_id)."""
     limit = max(1, min(20, limit))
     try:
@@ -53,7 +56,9 @@ def get_top_by_structure(db: Session, structure_id: str, limit: int = 5) -> List
             params = _resolve_leaderboard_params(
                 db, params, config_json_raw, bot_id, account_id, symbol, ref_price
             )
-            out.append({"profit_pct": round(pct, 2), "params": params, "symbol": symbol})
+            out.append(
+                {"profit_pct": round(pct, 2), "params": params, "symbol": symbol}
+            )
         return out
     except Exception as e:
         logger.warning("leaderboard get_top_by_structure failed: %s", e)
@@ -97,7 +102,12 @@ def _running_since_iso_for_bot(db: Session, bot: Any) -> Optional[str]:
 def _initial_capital_from_config(config_json_raw: Optional[str]) -> float:
     try:
         cfg = json.loads(config_json_raw or "{}")
-        return float(cfg.get("initial_capital_usdt") or cfg.get("budget_usd") or cfg.get("bot_budget_quote") or 0)
+        return float(
+            cfg.get("initial_capital_usdt")
+            or cfg.get("budget_usd")
+            or cfg.get("bot_budget_quote")
+            or 0
+        )
     except Exception:
         return 0.0
 
@@ -139,7 +149,11 @@ def _resolve_leaderboard_params(
 
     out = dict(params or {})
     if _params_missing_strategy_detail(out) and config_json_raw:
-        bot = db.query(Bot).filter(Bot.id == bot_id).first() if bot_id is not None else None
+        bot = (
+            db.query(Bot).filter(Bot.id == bot_id).first()
+            if bot_id is not None
+            else None
+        )
         out = sanitize_bot_params(bot, None, config_json_raw)
     ref = reference_price
     if ref is None and bot_id is not None:
@@ -151,7 +165,9 @@ def _resolve_leaderboard_params(
     return _strip_budget_from_public_params(out)
 
 
-def _reference_price_from_state(db: Session, bot_id: Optional[int], account_id: Optional[int]) -> Optional[float]:
+def _reference_price_from_state(
+    db: Session, bot_id: Optional[int], account_id: Optional[int]
+) -> Optional[float]:
     if bot_id is None:
         return None
     try:
@@ -175,7 +191,11 @@ def _bot_profit_metrics(db: Session, bot: Any) -> Dict[str, Any]:
     from app.services.pnl_service import PnlService
 
     initial = _initial_capital_from_config(getattr(bot, "config_json", None))
-    out: Dict[str, Any] = {"total_pnl_usd": None, "profit_pct": None, "equity_usd": None}
+    out: Dict[str, Any] = {
+        "total_pnl_usd": None,
+        "profit_pct": None,
+        "equity_usd": None,
+    }
     if initial <= 0:
         return out
     try:
@@ -206,7 +226,9 @@ def _live_pnl_fields(
     profit_pct = stored_profit_pct
     total_pnl_usd = None
     if bot_id is not None and account_id is not None:
-        bot = db.query(Bot).filter(Bot.id == bot_id, Bot.account_id == account_id).first()
+        bot = (
+            db.query(Bot).filter(Bot.id == bot_id, Bot.account_id == account_id).first()
+        )
         if bot:
             m = _bot_profit_metrics(db, bot)
             if m.get("profit_pct") is not None:
@@ -246,12 +268,22 @@ def _leaderboard_item_extras(
         except Exception:
             pass
         try:
-            daily_pnl_usd = round(float(PnlService._daily_realized_for_bot_trades(db, bot_id, account_id)), 2)
+            daily_pnl_usd = round(
+                float(
+                    PnlService._daily_realized_for_bot_trades(db, bot_id, account_id)
+                ),
+                2,
+            )
             initial = 0.0
             if config_json_raw:
                 try:
                     cfg = json.loads(config_json_raw or "{}")
-                    initial = float(cfg.get("initial_capital_usdt") or cfg.get("budget_usd") or cfg.get("bot_budget_quote") or 0)
+                    initial = float(
+                        cfg.get("initial_capital_usdt")
+                        or cfg.get("budget_usd")
+                        or cfg.get("bot_budget_quote")
+                        or 0
+                    )
                 except Exception:
                     pass
             if initial > 0 and daily_pnl_usd is not None:
@@ -275,7 +307,12 @@ def _global_top_from_running_bots(db: Session, limit: int) -> List[Dict[str, Any
     for bot in bots:
         try:
             cfg = json.loads(bot.config_json or "{}")
-            initial = float(cfg.get("initial_capital_usdt") or cfg.get("budget_usd") or cfg.get("bot_budget_quote") or 0)
+            initial = float(
+                cfg.get("initial_capital_usdt")
+                or cfg.get("budget_usd")
+                or cfg.get("bot_budget_quote")
+                or 0
+            )
             if initial <= 0:
                 continue
             metrics = _bot_profit_metrics(db, bot)
@@ -283,7 +320,9 @@ def _global_top_from_running_bots(db: Session, limit: int) -> List[Dict[str, Any
             if profit_pct is None or float(profit_pct) < 0:
                 continue
             profit_pct = float(profit_pct)
-            strategy_id = (cfg.get("strategy_id") or "").strip().lower() or "dca_grid_trailing"
+            strategy_id = (
+                cfg.get("strategy_id") or ""
+            ).strip().lower() or "dca_grid_trailing"
             structure_id = _strategy_to_structure_id(strategy_id)
             params = sanitize_bot_params(bot, None, bot.config_json or "{}")
             symbol = (bot.symbol or "").strip() or None
@@ -302,18 +341,22 @@ def _global_top_from_running_bots(db: Session, limit: int) -> List[Dict[str, Any
         params = _resolve_leaderboard_params(
             db, params, bot.config_json, bot.id, bot.account_id, symbol, ref_price
         )
-        out.append({
-            "structure_id": structure_id,
-            "profit_pct": live["profit_pct"] if live["profit_pct"] is not None else round(profit_pct, 2),
-            "total_pnl_usd": live["total_pnl_usd"],
-            "profit_pct_daily": extras["profit_pct_daily"],
-            "daily_pnl_usd": extras["daily_pnl_usd"],
-            "cycles_count": extras["cycles_count"],
-            "params": params,
-            "running_since_iso": _running_since_iso_for_bot(db, bot),
-            "symbol": symbol,
-            "reference_price": ref_price,
-        })
+        out.append(
+            {
+                "structure_id": structure_id,
+                "profit_pct": live["profit_pct"]
+                if live["profit_pct"] is not None
+                else round(profit_pct, 2),
+                "total_pnl_usd": live["total_pnl_usd"],
+                "profit_pct_daily": extras["profit_pct_daily"],
+                "daily_pnl_usd": extras["daily_pnl_usd"],
+                "cycles_count": extras["cycles_count"],
+                "params": params,
+                "running_since_iso": _running_since_iso_for_bot(db, bot),
+                "symbol": symbol,
+                "reference_price": ref_price,
+            }
+        )
     return out
 
 
@@ -352,35 +395,45 @@ def get_global_top(db: Session, limit: int = 1) -> List[Dict[str, Any]]:
             account_id = int(row[6]) if row[6] is not None else None
             config_json_raw = row[7] if len(row) > 7 else None
             bot = (
-                db.query(Bot).filter(Bot.id == bot_id, Bot.account_id == account_id).first()
+                db.query(Bot)
+                .filter(Bot.id == bot_id, Bot.account_id == account_id)
+                .first()
                 if bot_id is not None and account_id is not None
                 else None
             )
-            running_since_iso = _running_since_iso_for_bot(db, bot) if bot else _running_since_iso(started_at)
+            running_since_iso = (
+                _running_since_iso_for_bot(db, bot)
+                if bot
+                else _running_since_iso(started_at)
+            )
             ref_price = _reference_price_from_state(db, bot_id, account_id)
             params = _resolve_leaderboard_params(
                 db, params, config_json_raw, bot_id, account_id, symbol, ref_price
             )
             extras = _leaderboard_item_extras(db, bot_id, account_id, config_json_raw)
             live = _live_pnl_fields(db, bot_id, account_id, config_json_raw, pct)
-            live_pct = live["profit_pct"] if live["profit_pct"] is not None else round(pct, 2)
+            live_pct = (
+                live["profit_pct"] if live["profit_pct"] is not None else round(pct, 2)
+            )
             live_pnl = live["total_pnl_usd"]
             if live_pnl is not None and float(live_pnl) < 0:
                 continue
             if live_pct is not None and float(live_pct) < 0:
                 continue
-            out.append({
-                "structure_id": sid,
-                "profit_pct": live_pct,
-                "total_pnl_usd": live_pnl,
-                "profit_pct_daily": extras["profit_pct_daily"],
-                "daily_pnl_usd": extras["daily_pnl_usd"],
-                "cycles_count": extras["cycles_count"],
-                "params": params,
-                "running_since_iso": running_since_iso,
-                "symbol": symbol,
-                "reference_price": ref_price,
-            })
+            out.append(
+                {
+                    "structure_id": sid,
+                    "profit_pct": live_pct,
+                    "total_pnl_usd": live_pnl,
+                    "profit_pct_daily": extras["profit_pct_daily"],
+                    "daily_pnl_usd": extras["daily_pnl_usd"],
+                    "cycles_count": extras["cycles_count"],
+                    "params": params,
+                    "running_since_iso": running_since_iso,
+                    "symbol": symbol,
+                    "reference_price": ref_price,
+                }
+            )
             if len(out) >= limit:
                 break
         if not out:
@@ -400,7 +453,6 @@ def refresh_bot_public_metrics(db: Session, batch_size: int = 200) -> int:
     Returns count of rows upserted.
     """
     from app.db.models import Bot
-    from app.services.pnl_service import PnlService
     from app.services.copytrading_sanitize import sanitize_bot_params
 
     start = time.perf_counter()
@@ -413,7 +465,12 @@ def refresh_bot_public_metrics(db: Session, batch_size: int = 200) -> int:
         for bot in bots:
             try:
                 cfg = json.loads(bot.config_json or "{}")
-                initial = float(cfg.get("initial_capital_usdt") or cfg.get("budget_usd") or cfg.get("bot_budget_quote") or 0)
+                initial = float(
+                    cfg.get("initial_capital_usdt")
+                    or cfg.get("budget_usd")
+                    or cfg.get("bot_budget_quote")
+                    or 0
+                )
                 if initial <= 0:
                     continue
                 metrics = _bot_profit_metrics(db, bot)
@@ -421,9 +478,14 @@ def refresh_bot_public_metrics(db: Session, batch_size: int = 200) -> int:
                 if profit_pct_all is None:
                     continue
                 profit_pct_all = float(profit_pct_all)
-                strategy_id = (cfg.get("strategy_id") or "").strip().lower() or "dca_grid_trailing"
+                strategy_id = (
+                    cfg.get("strategy_id") or ""
+                ).strip().lower() or "dca_grid_trailing"
                 structure_id = _strategy_to_structure_id(strategy_id)
-                params_json = json.dumps(sanitize_bot_params(bot, None, bot.config_json or "{}"), ensure_ascii=False)
+                params_json = json.dumps(
+                    sanitize_bot_params(bot, None, bot.config_json or "{}"),
+                    ensure_ascii=False,
+                )
                 db.execute(
                     text("""
                         INSERT INTO bot_public_metrics (bot_id, account_id, structure_id, profit_pct_all, profit_pct_7d, profit_pct_30d, params_sanitized_json, updated_at)
@@ -451,10 +513,14 @@ def refresh_bot_public_metrics(db: Session, batch_size: int = 200) -> int:
                 )
                 updated += 1
             except Exception as e:
-                logger.debug("leaderboard refresh bot %s skip: %s", getattr(bot, "id", ""), e)
+                logger.debug(
+                    "leaderboard refresh bot %s skip: %s", getattr(bot, "id", ""), e
+                )
         db.commit()
         duration_ms = (time.perf_counter() - start) * 1000
-        logger.debug("LEADERBOARD_REFRESH_OK count=%s duration_ms=%.0f", updated, duration_ms)
+        logger.debug(
+            "LEADERBOARD_REFRESH_OK count=%s duration_ms=%.0f", updated, duration_ms
+        )
         return updated
     except Exception as e:
         db.rollback()

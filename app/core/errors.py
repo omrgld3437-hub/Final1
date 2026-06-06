@@ -1,6 +1,7 @@
 """
 Standardized API errors: error_code, error_id, request_id, message_safe (no raw stacktraces to client).
 """
+
 from __future__ import annotations
 import uuid
 from typing import Any, Dict, Optional

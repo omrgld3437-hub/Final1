@@ -1,6 +1,7 @@
 """
 Bot çalışma oturumu süresi (started_at) — bağlantı/worker yeniden başlatmada sıfırlanmaz.
 """
+
 from __future__ import annotations
 
 import json
@@ -32,7 +33,9 @@ def is_connectivity_resume_start(
     return False
 
 
-def should_refresh_bot_started_at(bot: Any, *, connectivity_resume: bool = False) -> bool:
+def should_refresh_bot_started_at(
+    bot: Any, *, connectivity_resume: bool = False
+) -> bool:
     """Yalnızca durdurulmuş bot yeniden başlatılınca DB started_at yenilenir."""
     if connectivity_resume:
         return False
@@ -50,7 +53,9 @@ def touch_bot_started_at(bot: Any, *, connectivity_resume: bool = False) -> None
         bot.started_at = datetime.now(timezone.utc)
 
 
-def mark_bot_run_started(state: Dict[str, Any], *, connectivity_resume: bool = False) -> None:
+def mark_bot_run_started(
+    state: Dict[str, Any], *, connectivity_resume: bool = False
+) -> None:
     """State'te oturum başlangıcı — UI süre sayacı tek kaynak."""
     if connectivity_resume:
         return
@@ -142,7 +147,9 @@ def infer_bot_run_started_at_from_events(db: "Session", bot_id: int) -> Optional
     return None
 
 
-def heal_bot_run_started_at(db: "Session", bot_id: int, account_id: int, state: Dict[str, Any]) -> Dict[str, Any]:
+def heal_bot_run_started_at(
+    db: "Session", bot_id: int, account_id: int, state: Dict[str, Any]
+) -> Dict[str, Any]:
     if (state.get(_STATE_KEY) or "").strip():
         return state
     inferred = infer_bot_run_started_at_from_events(db, bot_id)
@@ -157,7 +164,9 @@ def heal_bot_run_started_at(db: "Session", bot_id: int, account_id: int, state: 
     return state
 
 
-def bot_run_started_at_iso(bot: Any, state: Optional[Dict[str, Any]], db: Optional["Session"] = None) -> Optional[str]:
+def bot_run_started_at_iso(
+    bot: Any, state: Optional[Dict[str, Any]], db: Optional["Session"] = None
+) -> Optional[str]:
     """
     UI/API süre alanı: state oturum başlangıcı; yoksa DB; running ise event'ten heal.
     """

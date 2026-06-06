@@ -1,4 +1,5 @@
 """Tests for Binance connectivity tracker."""
+
 from __future__ import annotations
 
 import time
@@ -42,7 +43,9 @@ def test_classify_unauthorized():
 
 
 def test_queue_and_flush_skips_recent_stable(monkeypatch):
-    monkeypatch.setattr(bc, "_recent_connectivity_recovered", lambda db, bot_id, within_sec=45.0: True)
+    monkeypatch.setattr(
+        bc, "_recent_connectivity_recovered", lambda db, bot_id, within_sec=45.0: True
+    )
     called = {"mark": 0}
 
     def fake_mark(*a, **k):

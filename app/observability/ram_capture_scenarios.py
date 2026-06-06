@@ -4,14 +4,14 @@ RAM capture senaryo tanımları — 6 saatlik yük testi (harici koşucu).
 Her senaryo HTTP adımları üretir; sonuçlar logs/ram_scenario_{session}.jsonl dosyasına yazılır.
 Bot tick'lerine dokunmaz; yalnızca API/cache yükü simüle eder.
 """
+
 from __future__ import annotations
 
 import json
-import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _LOGS_DIR = _PROJECT_ROOT / "logs"
@@ -37,9 +37,8 @@ class ScenarioDef:
 
 
 def _p(path: str, account_id: int, bot_id: int) -> str:
-    return (
-        path.replace("{account_id}", str(account_id))
-        .replace("{bot_id}", str(bot_id))
+    return path.replace("{account_id}", str(account_id)).replace(
+        "{bot_id}", str(bot_id)
     )
 
 
@@ -62,10 +61,21 @@ def build_scenario_catalog(account_id: int, bot_id: int) -> List[ScenarioDef]:
             "Market (public)",
             "DataHub okuma — slim + hub + coin-list",
             [
-                ScenarioStep("GET", "/api/data/prices", params={"slim": 1}, repeat=3, label="prices_slim"),
+                ScenarioStep(
+                    "GET",
+                    "/api/data/prices",
+                    params={"slim": 1},
+                    repeat=3,
+                    label="prices_slim",
+                ),
                 ScenarioStep("GET", "/api/data/prices", repeat=1, label="prices_full"),
                 ScenarioStep("GET", "/api/data/hub", label="data_hub"),
-                ScenarioStep("GET", "/api/data/coin-list", params={"scope": "usdt"}, label="coin_list"),
+                ScenarioStep(
+                    "GET",
+                    "/api/data/coin-list",
+                    params={"scope": "usdt"},
+                    label="coin_list",
+                ),
                 ScenarioStep("GET", "/api/datahub/status", label="datahub_status"),
             ],
         ),
@@ -74,7 +84,13 @@ def build_scenario_catalog(account_id: int, bot_id: int) -> List[ScenarioDef]:
             "Market stress",
             "Ardışık fiyat/hub istekleri (dashboard poll simülasyonu)",
             [
-                ScenarioStep("GET", "/api/data/prices", params={"slim": 1}, repeat=8, label="prices_burst"),
+                ScenarioStep(
+                    "GET",
+                    "/api/data/prices",
+                    params={"slim": 1},
+                    repeat=8,
+                    label="prices_burst",
+                ),
                 ScenarioStep("GET", "/api/data/hub", repeat=4, label="hub_burst"),
             ],
             pause_after_sec=3.0,
@@ -86,13 +102,21 @@ def build_scenario_catalog(account_id: int, bot_id: int) -> List[ScenarioDef]:
             [
                 ScenarioStep(
                     "GET",
-                    _p("/api/dashboard/snapshot?account_id={account_id}&fields=prices,kpis", aid, bid),
+                    _p(
+                        "/api/dashboard/snapshot?account_id={account_id}&fields=prices,kpis",
+                        aid,
+                        bid,
+                    ),
                     repeat=5,
                     label="snapshot_kpis_prices",
                 ),
                 ScenarioStep(
                     "GET",
-                    _p("/api/dashboard/snapshot?account_id={account_id}&fields=prices,wallet,bots,kpis", aid, bid),
+                    _p(
+                        "/api/dashboard/snapshot?account_id={account_id}&fields=prices,wallet,bots,kpis",
+                        aid,
+                        bid,
+                    ),
                     repeat=3,
                     label="snapshot_full",
                 ),
@@ -105,7 +129,11 @@ def build_scenario_catalog(account_id: int, bot_id: int) -> List[ScenarioDef]:
             [
                 ScenarioStep(
                     "GET",
-                    _p("/api/accounts/{account_id}/transaction-history/revision", aid, bid),
+                    _p(
+                        "/api/accounts/{account_id}/transaction-history/revision",
+                        aid,
+                        bid,
+                    ),
                     repeat=6,
                     label="tx_revision",
                 ),
@@ -135,8 +163,17 @@ def build_scenario_catalog(account_id: int, bot_id: int) -> List[ScenarioDef]:
             "Bot engine API",
             "Health, live, perf, events — çalışan bota okuma",
             [
-                ScenarioStep("GET", _p("/api/bots-engine/{bot_id}/health", aid, bid), label="bot_health"),
-                ScenarioStep("GET", _p("/api/bots-engine/{bot_id}/live", aid, bid), repeat=4, label="bot_live"),
+                ScenarioStep(
+                    "GET",
+                    _p("/api/bots-engine/{bot_id}/health", aid, bid),
+                    label="bot_health",
+                ),
+                ScenarioStep(
+                    "GET",
+                    _p("/api/bots-engine/{bot_id}/live", aid, bid),
+                    repeat=4,
+                    label="bot_live",
+                ),
                 ScenarioStep(
                     "GET",
                     _p("/api/bots-engine/{bot_id}/performance?period=daily", aid, bid),
@@ -154,7 +191,13 @@ def build_scenario_catalog(account_id: int, bot_id: int) -> List[ScenarioDef]:
             "Spot aux",
             "Fiyat/commission — bot sayfası yan istekleri",
             [
-                ScenarioStep("GET", "/api/spot/price", params={"symbol": "BTCUSDT"}, repeat=4, label="spot_price"),
+                ScenarioStep(
+                    "GET",
+                    "/api/spot/price",
+                    params={"symbol": "BTCUSDT"},
+                    repeat=4,
+                    label="spot_price",
+                ),
                 ScenarioStep("GET", "/api/spot/commission", label="spot_commission"),
             ],
         ),
@@ -187,17 +230,35 @@ def build_scenario_catalog(account_id: int, bot_id: int) -> List[ScenarioDef]:
                 ScenarioStep("GET", "/api/health", label="health"),
                 ScenarioStep(
                     "GET",
-                    _p("/api/dashboard/snapshot?account_id={account_id}&fields=prices,kpis", aid, bid),
+                    _p(
+                        "/api/dashboard/snapshot?account_id={account_id}&fields=prices,kpis",
+                        aid,
+                        bid,
+                    ),
                     repeat=2,
                     label="snapshot",
                 ),
-                ScenarioStep("GET", "/api/data/prices", params={"slim": 1}, repeat=2, label="prices"),
                 ScenarioStep(
                     "GET",
-                    _p("/api/accounts/{account_id}/transaction-history/revision", aid, bid),
+                    "/api/data/prices",
+                    params={"slim": 1},
+                    repeat=2,
+                    label="prices",
+                ),
+                ScenarioStep(
+                    "GET",
+                    _p(
+                        "/api/accounts/{account_id}/transaction-history/revision",
+                        aid,
+                        bid,
+                    ),
                     label="tx_rev",
                 ),
-                ScenarioStep("GET", _p("/api/bots-engine/{bot_id}/live", aid, bid), label="bot_live"),
+                ScenarioStep(
+                    "GET",
+                    _p("/api/bots-engine/{bot_id}/live", aid, bid),
+                    label="bot_live",
+                ),
             ],
             pause_after_sec=8.0,
         ),
@@ -225,7 +286,9 @@ def scenario_schedule_6h() -> List[str]:
     return phases
 
 
-def get_scenario_by_id(scenario_id: str, account_id: int, bot_id: int) -> Optional[ScenarioDef]:
+def get_scenario_by_id(
+    scenario_id: str, account_id: int, bot_id: int
+) -> Optional[ScenarioDef]:
     for s in build_scenario_catalog(account_id, bot_id):
         if s.id == scenario_id:
             return s

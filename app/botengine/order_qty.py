@@ -2,6 +2,7 @@
 Binance LOT_SIZE-safe base quantity formatting (bot engine).
 Uses step_size_str from exchangeInfo — float log10 precision is not reliable.
 """
+
 from __future__ import annotations
 
 from decimal import ROUND_DOWN, Decimal
@@ -53,9 +54,13 @@ def normalize_symbol_filters(raw: Dict[str, Any]) -> Dict[str, Any]:
     step_str = str(raw.get("step_size_str") or raw.get("stepSize") or "").strip()
     if not step_str:
         step_f = float(raw.get("step_size") or 0.00001)
-        step_str = format(Decimal(str(step_f)), "f").rstrip("0").rstrip(".") or "0.00001"
+        step_str = (
+            format(Decimal(str(step_f)), "f").rstrip("0").rstrip(".") or "0.00001"
+        )
     min_str = str(raw.get("min_qty_str") or raw.get("minQty") or "").strip() or step_str
-    tick_str = str(raw.get("tick_size_str") or raw.get("tickSize") or "0.01").strip() or "0.01"
+    tick_str = (
+        str(raw.get("tick_size_str") or raw.get("tickSize") or "0.01").strip() or "0.01"
+    )
     return {
         "step_size_str": step_str,
         "min_qty_str": min_str,

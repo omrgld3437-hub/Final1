@@ -2,6 +2,7 @@
 Single source of truth for lock and snapshot constants (TRADE_TRAILING_MASTER_SPEC v5).
 All TTL/lease values must be imported from here; no duplicated literals (e.g. 60s) elsewhere.
 """
+
 import os
 
 # Lock lease: 10s align with heartbeat 3s + quick failover (spec: DEFAULT_LEASE_TTL = 10)
@@ -17,5 +18,9 @@ ACCOUNT_TRADE_LOCK_SYMBOL = "__ACCOUNT__"
 # Snapshot payload cap (500KB default; env override)
 MAX_SNAPSHOT_BYTES = int(os.environ.get("MAX_SNAPSHOT_BYTES", "500000"))
 # Snapshot fields feature flag
-SNAPSHOT_FIELDS_ENABLED = os.environ.get("SNAPSHOT_FIELDS_ENABLED", "1").strip().lower() in ("1", "true", "yes")
-SNAPSHOT_TRIM_ENABLED = os.environ.get("SNAPSHOT_TRIM_ENABLED", "1").strip().lower() in ("1", "true", "yes")
+SNAPSHOT_FIELDS_ENABLED = os.environ.get(
+    "SNAPSHOT_FIELDS_ENABLED", "1"
+).strip().lower() in ("1", "true", "yes")
+SNAPSHOT_TRIM_ENABLED = os.environ.get(
+    "SNAPSHOT_TRIM_ENABLED", "1"
+).strip().lower() in ("1", "true", "yes")

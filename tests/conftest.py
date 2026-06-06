@@ -4,7 +4,9 @@ import os
 from pathlib import Path
 
 
-TEST_DB = Path(os.environ.get("TRADERTRAILING_TEST_DB", "/private/tmp/tradertrailing_pytest.db"))
+TEST_DB = Path(
+    os.environ.get("TRADERTRAILING_TEST_DB", "/private/tmp/tradertrailing_pytest.db")
+)
 os.environ.setdefault("DATABASE_URL", f"sqlite:///{TEST_DB.as_posix()}")
 os.environ.setdefault("BREACH_SHUTDOWN", "0")
 

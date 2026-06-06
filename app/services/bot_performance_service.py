@@ -2,6 +2,7 @@
 Bot performans: dosya tabanlı saatlik (bugün) + kalıcı günlük K/Z defteri.
 DB bot_daily_pnl yedek/backfill; okuma .run/bot_perf/ dosyalarından.
 """
+
 from __future__ import annotations
 
 import json
@@ -82,7 +83,9 @@ def ts_to_date_tr(ts: Any) -> Optional[str]:
 def _completed_cycle_side(entry: Dict[str, Any]) -> Optional[str]:
     if not entry or not isinstance(entry, dict):
         return None
-    reason = str(entry.get("completed_reason") or entry.get("close_reason") or "").strip()
+    reason = str(
+        entry.get("completed_reason") or entry.get("close_reason") or ""
+    ).strip()
     ct = str(entry.get("cycle_type") or "").upper()
     if reason == "trail_profit_sell" or ct in ("CASH", "LONG_SCALP"):
         return "BUY"
@@ -97,7 +100,9 @@ def _completed_cycle_side(entry: Dict[str, Any]) -> Optional[str]:
     return None
 
 
-def _completed_cycle_in_period(entry: Dict[str, Any], start_ts: Optional[datetime]) -> bool:
+def _completed_cycle_in_period(
+    entry: Dict[str, Any], start_ts: Optional[datetime]
+) -> bool:
     if start_ts is None:
         return True
     ts = _parse_ts_utc(entry.get("completed_at"))
@@ -136,7 +141,10 @@ def resolve_perf_date_range(
             pass
     if account_id is not None:
         try:
-            from app.services.bot_perf_file_store import load_account_rounds, load_daily_ledger
+            from app.services.bot_perf_file_store import (
+                load_account_rounds,
+                load_daily_ledger,
+            )
 
             round_days = [
                 str(r.get("d"))
@@ -154,7 +162,9 @@ def resolve_perf_date_range(
     return fallback, date_to, label
 
 
-def _cycle_close_price_usdt(entry: Dict[str, Any], symbol: Optional[str] = None) -> float:
+def _cycle_close_price_usdt(
+    entry: Dict[str, Any], symbol: Optional[str] = None
+) -> float:
     """Tur kapanış fiyatı (quote/base); yoksa sembol anlık fiyatı."""
     for key in ("close_price_quote_per_base", "close_px", "px"):
         try:
@@ -263,7 +273,11 @@ def base_from_symbol(symbol: str) -> str:
 
 def _bot_config_initial(bot: Bot) -> float:
     try:
-        cfg = json.loads(bot.config_json or "{}") if getattr(bot, "config_json", None) else {}
+        cfg = (
+            json.loads(bot.config_json or "{}")
+            if getattr(bot, "config_json", None)
+            else {}
+        )
     except Exception:
         cfg = {}
     return float(
@@ -277,7 +291,11 @@ def _bot_config_initial(bot: Bot) -> float:
 
 def _bot_strategy_id(bot: Bot) -> str:
     try:
-        cfg = json.loads(bot.config_json or "{}") if getattr(bot, "config_json", None) else {}
+        cfg = (
+            json.loads(bot.config_json or "{}")
+            if getattr(bot, "config_json", None)
+            else {}
+        )
     except Exception:
         cfg = {}
     return (cfg.get("strategy_id") or "").strip().lower()
@@ -330,7 +348,9 @@ def invalidate_account_performance_cache(db: Session, account_id: int) -> None:
         )
         db.commit()
     except Exception as e:
-        logger.debug("invalidate_account_performance_cache account_id=%s: %s", account_id, e)
+        logger.debug(
+            "invalidate_account_performance_cache account_id=%s: %s", account_id, e
+        )
         try:
             db.rollback()
         except Exception:
@@ -350,7 +370,10 @@ def _upsert_bot_perf_store(
 ) -> None:
     sym = (symbol or "").strip().upper()
     now_iso = datetime.now(timezone.utc).isoformat()
-    payload = json.dumps(completed_cycles if isinstance(completed_cycles, list) else [], ensure_ascii=False)
+    payload = json.dumps(
+        completed_cycles if isinstance(completed_cycles, list) else [],
+        ensure_ascii=False,
+    )
     try:
         db.execute(
             text("""
@@ -412,7 +435,9 @@ def rebuild_bot_daily_from_cycles(
             continue
         sym_row = (symbol or entry.get("symbol") or "").strip().upper()
         pnl, fees = _cycle_ledger_amounts(entry, symbol=sym_row)
-        bucket = by_date.setdefault(date_tr, {"pnl_usd": 0.0, "fees_usd": 0.0, "cycle_count": 0.0})
+        bucket = by_date.setdefault(
+            date_tr, {"pnl_usd": 0.0, "fees_usd": 0.0, "cycle_count": 0.0}
+        )
         bucket["pnl_usd"] += pnl
         bucket["fees_usd"] += fees
         bucket["cycle_count"] += 1
@@ -420,7 +445,9 @@ def rebuild_bot_daily_from_cycles(
     sym = (symbol or "").strip().upper()
     now_iso = datetime.now(timezone.utc).isoformat()
     try:
-        db.execute(text("DELETE FROM bot_daily_pnl WHERE bot_id = :bid"), {"bid": bot_id})
+        db.execute(
+            text("DELETE FROM bot_daily_pnl WHERE bot_id = :bid"), {"bid": bot_id}
+        )
         for date_tr, agg in by_date.items():
             db.execute(
                 text("""
@@ -458,7 +485,9 @@ def rebuild_bot_daily_from_cycles(
             d: (agg["pnl_usd"], agg["fees_usd"], int(agg["cycle_count"]))
             for d, agg in by_date.items()
         }
-        rebuild_bot_daily_in_file(account_id, bot_id, sym, file_by_date, deleted=deleted)
+        rebuild_bot_daily_in_file(
+            account_id, bot_id, sym, file_by_date, deleted=deleted
+        )
         from app.services.bot_perf_file_store import rebuild_bot_cycles_file
 
         rebuild_bot_cycles_file(bot_id, account_id, sym, completed_cycles)
@@ -517,7 +546,9 @@ def load_bot_closed_cycles_for_period(
                 break
     reconcile_bot_cycles_file_with_state(bot_id, account_id, sym, completed)
 
-    date_from, date_to, _ = resolve_perf_date_range(period, bot_id=bot_id, account_id=account_id)
+    date_from, date_to, _ = resolve_perf_date_range(
+        period, bot_id=bot_id, account_id=account_id
+    )
 
     # Mevcut çalışma öncesindeki turları dışla: bot.started_at alt sınır olarak kullan.
     # Böylece bot yeniden başlatıldığında eski çalışmadan kalan döngüler performans bölümünde görünmez.
@@ -685,7 +716,9 @@ def _refresh_active_bot_stores(db: Session, account_id: int) -> None:
         if not _is_trailing_dual_dca(bot):
             continue
         try:
-            sync_bot_perf_store_from_state(db, bot.id, account_id, invalidate_cache=False)
+            sync_bot_perf_store_from_state(
+                db, bot.id, account_id, invalidate_cache=False
+            )
         except Exception as e:
             logger.debug("refresh store bot_id=%s: %s", bot.id, e)
 
@@ -698,7 +731,9 @@ def _bot_has_daily_rows(db: Session, bot_id: int) -> bool:
     return row is not None
 
 
-def ensure_account_rounds_ledger(db: Session, account_id: int, *, force_rebuild: bool = False) -> None:
+def ensure_account_rounds_ledger(
+    db: Session, account_id: int, *, force_rebuild: bool = False
+) -> None:
     """Hesap ham tur dosyası: tüm botların kapanan turları (tarih/saat)."""
     from app.services.bot_perf_file_store import (
         list_bot_completed_cycles,
@@ -743,7 +778,9 @@ def ensure_account_rounds_ledger(db: Session, account_id: int, *, force_rebuild:
         rebuild_account_rounds_file(account_id, bot_rounds)
 
 
-def ensure_account_daily_ledger(db: Session, account_id: int, *, force_rebuild: bool = False) -> None:
+def ensure_account_daily_ledger(
+    db: Session, account_id: int, *, force_rebuild: bool = False
+) -> None:
     """Eksik bot günlük kayıtlarını arşivden doldur; force_rebuild tüm botları yeniden üretir."""
     if force_rebuild:
         _refresh_active_bot_stores(db, account_id)
@@ -757,9 +794,13 @@ def ensure_account_daily_ledger(db: Session, account_id: int, *, force_rebuild: 
             if _bot_has_daily_rows(db, bot.id):
                 continue
             try:
-                sync_bot_perf_store_from_state(db, bot.id, account_id, invalidate_cache=False)
+                sync_bot_perf_store_from_state(
+                    db, bot.id, account_id, invalidate_cache=False
+                )
             except Exception as e:
-                logger.debug("ensure_account_daily ledger sync bot_id=%s: %s", bot.id, e)
+                logger.debug(
+                    "ensure_account_daily ledger sync bot_id=%s: %s", bot.id, e
+                )
         stored = _load_stored_bots(db, account_id)
     for rec in stored:
         bid = rec["bot_id"]
@@ -863,7 +904,12 @@ def _rebuild_daily_file_from_db(db: Session, account_id: int) -> None:
         fees = float(row[4] or 0)
         deleted = bool(row[5])
         day = days.setdefault(date_tr, {"p": 0.0, "f": 0.0, "b": {}})
-        day["b"][str(bot_id)] = [round(pnl, 4), round(fees, 4), sym, 1 if deleted else 0]
+        day["b"][str(bot_id)] = [
+            round(pnl, 4),
+            round(fees, 4),
+            sym,
+            1 if deleted else 0,
+        ]
     for day in days.values():
         bots = day.get("b") or {}
         day["p"] = round(sum(float(r[0] or 0) for r in bots.values()), 4)
@@ -997,7 +1043,9 @@ def _collect_rounds_for_period(
             continue
         sym = bot.symbol or ""
         state = load_state(db, bot.id)
-        _append_cycles(int(bot.id), sym, (state or {}).get("completed_cycle_dual_pnls") or [])
+        _append_cycles(
+            int(bot.id), sym, (state or {}).get("completed_cycle_dual_pnls") or []
+        )
 
     for rec in _load_stored_bots(db, account_id):
         bid = int(rec["bot_id"])
@@ -1016,7 +1064,9 @@ def _build_breakdown(
     from app.services.bot_perf_file_store import sum_rounds_totals
 
     norm = normalize_perf_period(period)
-    date_from_opt, date_to, label = resolve_perf_date_range(period, account_id=account_id)
+    date_from_opt, date_to, label = resolve_perf_date_range(
+        period, account_id=account_id
+    )
     date_from = date_from_opt or _resolve_date_from_file(account_id, None)
 
     rounds = _collect_rounds_for_period(
@@ -1061,7 +1111,9 @@ def _ensure_date_range_on_result(
         result["date_from"] = df
         result["date_to"] = dt
         return result
-    date_from_opt, date_to, _label = resolve_perf_date_range(period, account_id=account_id)
+    date_from_opt, date_to, _label = resolve_perf_date_range(
+        period, account_id=account_id
+    )
     norm = normalize_perf_period(period)
     if norm == "day":
         result["date_from"] = date_to
@@ -1072,7 +1124,9 @@ def _ensure_date_range_on_result(
     return result
 
 
-def _load_perf_cache(db: Session, account_id: int, period_norm: str) -> Optional[Dict[str, Any]]:
+def _load_perf_cache(
+    db: Session, account_id: int, period_norm: str
+) -> Optional[Dict[str, Any]]:
     try:
         row = db.execute(
             text("""
@@ -1108,7 +1162,9 @@ def _load_perf_cache(db: Session, account_id: int, period_norm: str) -> Optional
     return None
 
 
-def _save_perf_cache(db: Session, account_id: int, period_norm: str, payload: Dict[str, Any]) -> None:
+def _save_perf_cache(
+    db: Session, account_id: int, period_norm: str, payload: Dict[str, Any]
+) -> None:
     try:
         now_iso = datetime.now(timezone.utc).isoformat()
         body = dict(payload)

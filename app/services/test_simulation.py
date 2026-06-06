@@ -2,6 +2,7 @@
 Test hesabı paper simülasyonu: gerçek hesaba yakın komisyon, kayma, emir/tick gecikmesi.
 Yalnızca test hesabı / paper_mode bot yürütmesi için kullanılır.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -29,7 +30,9 @@ def taker_fee_rate(config_fee: Optional[float] = None) -> float:
     return TEST_TAKER_FEE_RATE
 
 
-def slippage_fill_price(side: str, mid_price: float, slippage_bps: int = TEST_SLIPPAGE_BPS) -> float:
+def slippage_fill_price(
+    side: str, mid_price: float, slippage_bps: int = TEST_SLIPPAGE_BPS
+) -> float:
     """Market emir: alış biraz yukarı, satış biraz aşağı."""
     mid = float(mid_price or 0)
     if mid <= 0:
@@ -45,7 +48,9 @@ def slippage_fill_price(side: str, mid_price: float, slippage_bps: int = TEST_SL
 
 def _quantize(qty: float, step: str = "0.00000001") -> float:
     try:
-        return float(Decimal(str(qty)).quantize(Decimal(str(step)), rounding=ROUND_DOWN))
+        return float(
+            Decimal(str(qty)).quantize(Decimal(str(step)), rounding=ROUND_DOWN)
+        )
     except Exception:
         return round(float(qty), 8)
 

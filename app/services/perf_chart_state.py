@@ -3,6 +3,7 @@ Bot performans grafiği state: bot başladığında sıfırlama (seed).
 API ve orchestrator tarafından kullanılır; döngüsel import önlenir.
 TRDCA: Rebalance portföyündeki coinlerin ilk fiyatları referans; ağırlıklı ortalama % değişim = parite.
 """
+
 from __future__ import annotations
 import json
 import logging
@@ -22,6 +23,7 @@ def _fetch_prices_for_assets(assets: list, quote_asset: str = "USDT") -> dict:
     out = {}
     try:
         from app.services.data_hub import data_hub
+
         for a in assets:
             if a == quote_asset:
                 out[a] = 1.0
@@ -51,13 +53,25 @@ def seed_perf_chart_state_on_bot_start(db: Session, bot_id: int) -> None:
         baseline = {"bot0": 0.0, "parite0": 0.0, "ts0": now_sec}
 
         if is_trdca:
-            target_weights = (raw.get("trb") or {}).get("target_weights_all") or (raw.get("dca") or {}).get("coin_weights") or {}
+            target_weights = (
+                (raw.get("trb") or {}).get("target_weights_all")
+                or (raw.get("dca") or {}).get("coin_weights")
+                or {}
+            )
             if not target_weights and raw.get("assets"):
                 for a in raw["assets"]:
-                    sym = (a.get("symbol") or "").upper().replace("USDT", "").replace("FDUSD", "").strip()
+                    sym = (
+                        (a.get("symbol") or "")
+                        .upper()
+                        .replace("USDT", "")
+                        .replace("FDUSD", "")
+                        .strip()
+                    )
                     if sym:
                         target_weights[sym] = float(a.get("target_pct") or 0) / 100.0
-            base_assets = [a for a in target_weights if a and str(a).strip().upper() != quote_asset]
+            base_assets = [
+                a for a in target_weights if a and str(a).strip().upper() != quote_asset
+            ]
             if base_assets:
                 initial_prices = _fetch_prices_for_assets(base_assets, quote_asset)
                 weights = {}
@@ -81,10 +95,19 @@ def seed_perf_chart_state_on_bot_start(db: Session, bot_id: int) -> None:
                 VALUES (:bid, :payload, :upd)
                 ON CONFLICT(bot_id) DO UPDATE SET chart_payload = :payload, updated_at = :upd
             """),
-            {"bid": bot_id, "payload": json.dumps(payload, ensure_ascii=False), "upd": now},
+            {
+                "bid": bot_id,
+                "payload": json.dumps(payload, ensure_ascii=False),
+                "upd": now,
+            },
         )
         db.commit()
-        logger.info("BOT_PERF_CHART_SEEDED bot_id=%s baseline_ts0=%s trdca=%s", bot_id, now_sec, is_trdca)
+        logger.info(
+            "BOT_PERF_CHART_SEEDED bot_id=%s baseline_ts0=%s trdca=%s",
+            bot_id,
+            now_sec,
+            is_trdca,
+        )
     except Exception as e:
         logger.debug("seed_perf_chart_state_on_bot_start bot_id=%s: %s", bot_id, e)
         try:

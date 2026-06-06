@@ -1,4 +1,5 @@
 """Boot ID: sunucu her açılışta yeni ID. İstemci eşleşmezse oturum iptal (tüm hesaplardan çıkış)."""
+
 import uuid
 
 BOOT_ID: str = ""

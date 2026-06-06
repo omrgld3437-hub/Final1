@@ -3,6 +3,7 @@ Test hesabı dashboard KPI strip ile admin tile aynı kaynak:
 TOPLAM SPOT = USDT kullanılabilir + çalışan bot equity + kilitli (canlı fiyat).
 Günlük değişim = strip toplamı − TR günü açılış referansı (sunucu, dashboard localStorage ile uyumlu).
 """
+
 from __future__ import annotations
 
 import json
@@ -60,7 +61,12 @@ def set_test_daily_spot_ref_usd(
     today = (date or "").strip() or turkey_today_date_str()
     _save_test_daily_spot_ref(
         account_id,
-        {"date": today, "ref_usd": round(ref, 8), "set_at": time.time(), "source": source},
+        {
+            "date": today,
+            "ref_usd": round(ref, 8),
+            "set_at": time.time(),
+            "source": source,
+        },
     )
 
 
@@ -92,7 +98,12 @@ def get_or_set_test_daily_spot_ref_usd(account_id: int, current_total: float) ->
             return ref
     if total <= 0:
         return 0.0
-    stored = {"date": today, "ref_usd": round(total, 8), "set_at": time.time(), "source": "server_seed"}
+    stored = {
+        "date": today,
+        "ref_usd": round(total, 8),
+        "set_at": time.time(),
+        "source": "server_seed",
+    }
     _save_test_daily_spot_ref(account_id, stored)
     return float(stored["ref_usd"])
 
@@ -134,7 +145,11 @@ def compute_test_account_spot_strip_total_usd(
             if locked_qty > 0:
                 locked += locked_qty
         else:
-            av_usd, _ = resolve_asset_price_usd(asset, av_qty, prices) if av_qty > 0 else (0.0, None)
+            av_usd, _ = (
+                resolve_asset_price_usd(asset, av_qty, prices)
+                if av_qty > 0
+                else (0.0, None)
+            )
             if av_usd:
                 avail += float(av_usd)
             if locked_qty > 0:
@@ -174,12 +189,17 @@ def _running_bots_equity_from_snapshot_bots(bots: list) -> float:
     return round(total, 2)
 
 
-async def compute_test_account_dashboard_spot_kpi_async(account_id: int, db: Any) -> Dict[str, float]:
+async def compute_test_account_dashboard_spot_kpi_async(
+    account_id: int, db: Any
+) -> Dict[str, float]:
     """
     Dashboard KPI strip ile aynı:
     USDT kullanılabilir + çalışan bot current_usd (snapshot/live) + kilitli.
     """
-    from app.services.wallet_display import build_test_account_wallet, get_running_bots_equity_usd
+    from app.services.wallet_display import (
+        build_test_account_wallet,
+        get_running_bots_equity_usd,
+    )
 
     wallet = build_test_account_wallet(account_id, db) or {}
     _fallback_total, avail, _fb_bot, locked = compute_test_account_spot_strip_total_usd(
@@ -213,12 +233,19 @@ async def compute_test_account_dashboard_spot_kpi_async(account_id: int, db: Any
     }
 
 
-def compute_test_account_dashboard_spot_kpi(account_id: int, db: Any) -> Dict[str, float]:
+def compute_test_account_dashboard_spot_kpi(
+    account_id: int, db: Any
+) -> Dict[str, float]:
     """Sync fallback; admin için compute_test_account_dashboard_spot_kpi_async kullanın."""
-    from app.services.wallet_display import build_test_account_wallet, get_running_bots_equity_usd
+    from app.services.wallet_display import (
+        build_test_account_wallet,
+        get_running_bots_equity_usd,
+    )
 
     wallet = build_test_account_wallet(account_id, db) or {}
-    _fallback_total, avail, _, locked = compute_test_account_spot_strip_total_usd(wallet, db, account_id)
+    _fallback_total, avail, _, locked = compute_test_account_spot_strip_total_usd(
+        wallet, db, account_id
+    )
     bot_eq = get_running_bots_equity_usd(db, account_id)
     total = round(avail + bot_eq + locked, 2)
     if total <= 0:

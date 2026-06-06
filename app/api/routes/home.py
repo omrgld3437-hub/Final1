@@ -4,6 +4,7 @@ GET /api/home/fast: no Binance, cached prices + KPIs + last wallet snapshot.
 POST /api/home/wallet/refresh: Binance wallet refresh with TTL + inflight dedup + cooldown.
 GET /api/home/wallet/status: inflight, last_live_at, cooldown_until.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -20,7 +21,6 @@ from sqlalchemy import desc
 from app.api.auth import require_auth, require_account_access
 from app.core.config import get_config
 from app.core.logging_helpers import log_wallet_trace
-from app.core.errors import AppError
 from app.db.session import get_db
 from app.db.models import Account, AssetSnapshot
 
@@ -28,14 +28,18 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 # In-memory state (per account)
-_fast_cache: Dict[int, Dict[str, Any]] = {}  # account_id -> { payload, expires_at (monotonic) }
+_fast_cache: Dict[
+    int, Dict[str, Any]
+] = {}  # account_id -> { payload, expires_at (monotonic) }
 _wallet_refresh_inflight: Dict[int, asyncio.Task] = {}
 _wallet_last_live_at: Dict[int, float] = {}  # monotonic time of last successful fetch
 _wallet_last_live_at_iso: Dict[int, str] = {}  # ISO8601 for status endpoint
 _wallet_cooldown_until: Dict[int, float] = {}  # monotonic deadline
 _wallet_last_error_code: Dict[int, Optional[str]] = {}
 _wallet_refresh_locks: Dict[int, asyncio.Lock] = {}
-_in_memory_wallet: Dict[int, Tuple[Dict, float]] = {}  # account_id -> (minimal_wallet_dict, ts_monotonic)
+_in_memory_wallet: Dict[
+    int, Tuple[Dict, float]
+] = {}  # account_id -> (minimal_wallet_dict, ts_monotonic)
 
 
 def _get_lock(account_id: int) -> asyncio.Lock:
@@ -53,12 +57,14 @@ def invalidate_home_wallet_cache(account_id: int) -> None:
 
 def _sort_and_cap_assets(assets: List[Dict], max_n: int) -> List[Dict]:
     """Sort by value desc (usdt_value or total_usd or value_usd), cap to max_n. Put null at end."""
+
     def _val(a: Dict) -> float:
         v = a.get("usdt_value")
         if v is not None:
             return float(v)
         v = a.get("total_usd") or a.get("value_usd")
         return float(v) if v is not None else -1.0
+
     with_val = [(a, _val(a)) for a in assets]
     with_val.sort(key=lambda x: (x[1] < 0, -x[1]))
     return [x[0] for x in with_val[:max_n]]
@@ -86,16 +92,23 @@ def _minimal_wallet_from_breakdown(
             total = free + locked + bot_locked
         usd_val = data.get("usdValue")
         usdt_value = float(usd_val) if usd_val is not None else None
-        if total <= 0 and free <= 0 and locked <= 0 and (usdt_value is None or usdt_value <= 0):
+        if (
+            total <= 0
+            and free <= 0
+            and locked <= 0
+            and (usdt_value is None or usdt_value <= 0)
+        ):
             continue
-        assets.append({
-            "asset": asset,
-            "free": free,
-            "locked": locked,
-            "total": total if total > 0 else None,
-            "bot_locked": bot_locked if bot_locked > 0 else None,
-            "usdt_value": round(usdt_value, 2) if usdt_value is not None else None,
-        })
+        assets.append(
+            {
+                "asset": asset,
+                "free": free,
+                "locked": locked,
+                "total": total if total > 0 else None,
+                "bot_locked": bot_locked if bot_locked > 0 else None,
+                "usdt_value": round(usdt_value, 2) if usdt_value is not None else None,
+            }
+        )
     assets = _sort_and_cap_assets(assets, max_assets)
     return {
         "total_usd": round(total_usd_value, 2),
@@ -103,9 +116,12 @@ def _minimal_wallet_from_breakdown(
     }
 
 
-def _get_last_wallet_snapshot_with_new_session(account_id: int, max_assets: int) -> Tuple[Optional[Dict], Optional[str]]:
+def _get_last_wallet_snapshot_with_new_session(
+    account_id: int, max_assets: int
+) -> Tuple[Optional[Dict], Optional[str]]:
     """Thread-safe: create new session, read last snapshot, close. Used from run_in_executor."""
     from app.db.base import SessionLocal
+
     db = SessionLocal()
     try:
         return _get_last_wallet_snapshot_sync(db, account_id, max_assets)
@@ -113,7 +129,9 @@ def _get_last_wallet_snapshot_with_new_session(account_id: int, max_assets: int)
         db.close()
 
 
-def _get_wallet_cached_enriched_sync(db: Session, account_id: int, max_assets: int) -> Tuple[Optional[Dict], Optional[str]]:
+def _get_wallet_cached_enriched_sync(
+    db: Session, account_id: int, max_assets: int
+) -> Tuple[Optional[Dict], Optional[str]]:
     """Dashboard cüzdan cache: test hesapta build_test_account_wallet; diğerlerinde snapshot + bot_locked enrich."""
     from app.services.test_account import is_test_account
     from app.services.wallet_display import build_test_account_wallet
@@ -123,15 +141,20 @@ def _get_wallet_cached_enriched_sync(db: Session, account_id: int, max_assets: i
         if rebuilt:
             return (rebuilt, rebuilt.get("ts"))
         return (None, None)
-    wallet_cached, wallet_cached_at = _get_last_wallet_snapshot_sync(db, account_id, max_assets)
+    wallet_cached, wallet_cached_at = _get_last_wallet_snapshot_sync(
+        db, account_id, max_assets
+    )
     if wallet_cached:
         _enrich_minimal_wallet_with_bot_locked(wallet_cached, account_id, db)
     return (wallet_cached, wallet_cached_at)
 
 
-def _get_wallet_cached_enriched_with_new_session(account_id: int, max_assets: int) -> Tuple[Optional[Dict], Optional[str]]:
+def _get_wallet_cached_enriched_with_new_session(
+    account_id: int, max_assets: int
+) -> Tuple[Optional[Dict], Optional[str]]:
     """Thread-safe enriched wallet for bootstrap/home (test paper satırları dahil)."""
     from app.db.base import SessionLocal
+
     db = SessionLocal()
     try:
         return _get_wallet_cached_enriched_sync(db, account_id, max_assets)
@@ -139,7 +162,9 @@ def _get_wallet_cached_enriched_with_new_session(account_id: int, max_assets: in
         db.close()
 
 
-def _enrich_minimal_wallet_with_bot_locked(wallet: Dict[str, Any], account_id: int, db: Session) -> None:
+def _enrich_minimal_wallet_with_bot_locked(
+    wallet: Dict[str, Any], account_id: int, db: Session
+) -> None:
     """Add locked_usd, bot_locked_usd, available_usd and per-asset bot_locked so strip/table show correctly."""
     from app.services.test_account import is_test_account
     from app.services.wallet_display import build_test_account_wallet
@@ -151,6 +176,7 @@ def _enrich_minimal_wallet_with_bot_locked(wallet: Dict[str, Any], account_id: i
             wallet.update(rebuilt)
         return
     from app.botengine.virtual_wallet import get_bot_locked_balances_for_account
+
     if not wallet or not isinstance(wallet.get("assets"), list):
         return
     bot_locked = get_bot_locked_balances_for_account(db, account_id) or {}
@@ -189,6 +215,7 @@ def _enrich_minimal_wallet_with_bot_locked(wallet: Dict[str, Any], account_id: i
     # Snapshot'ta olmayan ama bot_locked olan varlıkları ekle (ör. cüzdan eski, bot yeni coin aldı)
     try:
         from app.services.data_hub import data_hub
+
         prices_map = data_hub.get_all_prices() or {}
     except Exception:
         prices_map = {}
@@ -212,21 +239,23 @@ def _enrich_minimal_wallet_with_bot_locked(wallet: Dict[str, Any], account_id: i
             continue
         bl_val = round(bl_qty * price, 2)
         total_bot_locked_usd += bl_val
-        wallet["assets"].append({
-            "asset": asset,
-            "free": 0.0,
-            "locked": 0.0,
-            "total": bl_qty,
-            "bot_locked": round(bl_qty, 8),
-            "available": 0.0,
-            "free_usd": 0.0,
-            "locked_usd": 0.0,
-            "total_usd": bl_val,
-            "usdt_value": bl_val,
-            "bot_locked_usd": bl_val,
-            "available_usd": 0.0,
-            "_synthetic": True,
-        })
+        wallet["assets"].append(
+            {
+                "asset": asset,
+                "free": 0.0,
+                "locked": 0.0,
+                "total": bl_qty,
+                "bot_locked": round(bl_qty, 8),
+                "available": 0.0,
+                "free_usd": 0.0,
+                "locked_usd": 0.0,
+                "total_usd": bl_val,
+                "usdt_value": bl_val,
+                "bot_locked_usd": bl_val,
+                "available_usd": 0.0,
+                "_synthetic": True,
+            }
+        )
         # Snapshot total_usd'e bu varlığın değerini ekle (snapshot alındıktan sonra satın alındı)
         wallet["total_usd"] = round((wallet.get("total_usd") or 0) + bl_val, 2)
 
@@ -236,7 +265,9 @@ def _enrich_minimal_wallet_with_bot_locked(wallet: Dict[str, Any], account_id: i
     wallet["available_usd"] = round(max(0.0, free_usd_tot - total_bot_locked_usd), 2)
 
 
-def _get_last_wallet_snapshot_sync(db: Session, account_id: int, max_assets: int) -> Tuple[Optional[Dict], Optional[str]]:
+def _get_last_wallet_snapshot_sync(
+    db: Session, account_id: int, max_assets: int
+) -> Tuple[Optional[Dict], Optional[str]]:
     """Sync DB read: last AssetSnapshot by account_id. Returns (minimal_wallet_dict, ts_iso) or (None, None)."""
     try:
         row = (
@@ -248,9 +279,15 @@ def _get_last_wallet_snapshot_sync(db: Session, account_id: int, max_assets: int
         )
         if not row:
             return (None, None)
-        ts_iso = row.timestamp.isoformat() if row.timestamp.tzinfo else row.timestamp.replace(tzinfo=timezone.utc).isoformat()
+        ts_iso = (
+            row.timestamp.isoformat()
+            if row.timestamp.tzinfo
+            else row.timestamp.replace(tzinfo=timezone.utc).isoformat()
+        )
         if not ts_iso.endswith("Z"):
-            ts_iso = ts_iso.replace("+00:00", "Z") if "+00:00" in ts_iso else ts_iso + "Z"
+            ts_iso = (
+                ts_iso.replace("+00:00", "Z") if "+00:00" in ts_iso else ts_iso + "Z"
+            )
         minimal = _minimal_wallet_from_breakdown(
             row.total_usd_value,
             row.breakdown_json,
@@ -258,7 +295,9 @@ def _get_last_wallet_snapshot_sync(db: Session, account_id: int, max_assets: int
         )
         return (minimal, ts_iso)
     except Exception as e:
-        logger.warning("[home] get_last_wallet_snapshot error account_id=%s: %s", account_id, e)
+        logger.warning(
+            "[home] get_last_wallet_snapshot error account_id=%s: %s", account_id, e
+        )
         return (None, None)
 
 
@@ -266,6 +305,7 @@ def _get_prices_minimal_sync() -> Dict[str, Any]:
     """Get cached prices from DataHub only (no network)."""
     try:
         from app.services.data_hub import data_hub
+
         return data_hub.get_all_prices() or {}
     except Exception as e:
         logger.debug("[home] get_all_prices error: %s", e)
@@ -276,12 +316,17 @@ async def _get_kpis_minimal(account_id: int, db: Session) -> Dict[str, Any]:
     """Async wrapper: run DB-heavy KPI fetch in a separate DB session/thread."""
     loop = asyncio.get_running_loop()
     try:
+
         def _sync_fetch() -> Tuple[Dict[str, Any], Dict[str, Any]]:
             from app.db.base import SessionLocal
-            from app.services.dashboard_snapshot import fetch_bots_and_account_kpis, fetch_finance_pnl
+            from app.services.dashboard_snapshot import (
+                fetch_bots_and_account_kpis,
+                fetch_finance_pnl,
+            )
 
             local_db = SessionLocal()
             try:
+
                 async def _run():
                     return await asyncio.gather(
                         fetch_bots_and_account_kpis(account_id, local_db),
@@ -303,7 +348,9 @@ async def _get_kpis_minimal(account_id: int, db: Session) -> Dict[str, Any]:
         "total_bots": account_kpis.get("total_bots", 0),
         "active_bots": account_kpis.get("active_bots", 0),
         "total_pnl_usd": round(float(account_kpis.get("total_pnl_usd") or 0), 2),
-        "daily_bot_pnl_usd": round(float(account_kpis.get("daily_bot_pnl_usd") or 0), 2),
+        "daily_bot_pnl_usd": round(
+            float(account_kpis.get("daily_bot_pnl_usd") or 0), 2
+        ),
         "realized_pnl": round(float(pnl.get("realized_pnl", 0) or 0), 2),
         "unrealized_pnl": round(float(pnl.get("unrealized_pnl", 0) or 0), 2),
     }
@@ -364,7 +411,11 @@ async def home_fast(
             if isinstance(payload_bytes, bytes):
                 payload_len = len(payload_bytes)
             else:
-                payload_bytes = (payload_bytes or b"").encode("utf-8") if isinstance(payload_bytes, str) else b""
+                payload_bytes = (
+                    (payload_bytes or b"").encode("utf-8")
+                    if isinstance(payload_bytes, str)
+                    else b""
+                )
                 payload_len = len(payload_bytes)
             data_out = dict(entry.get("data") or {})
             wc = data_out.get("wallet_cached")
@@ -372,13 +423,18 @@ async def home_fast(
                 wc = dict(wc)
                 wc_assets = wc.get("assets")
                 if isinstance(wc_assets, list):
-                    wc = dict(wc, assets=[dict(a) for a in wc_assets if isinstance(a, dict)])
+                    wc = dict(
+                        wc, assets=[dict(a) for a in wc_assets if isinstance(a, dict)]
+                    )
                 _enrich_minimal_wallet_with_bot_locked(wc, account_id, db)
                 data_out["wallet_cached"] = wc
             server_ms = (time.perf_counter() - t0) * 1000
             logger.debug(
                 "home_fast_served event=home_fast_served account_id=%s request_id=%s server_ms=%.2f payload_bytes=%s cache=memory",
-                account_id, request_id, server_ms, payload_len,
+                account_id,
+                request_id,
+                server_ms,
+                payload_len,
             )
             wc = data_out.get("wallet_cached")
             if wc and isinstance(wc, dict):
@@ -415,7 +471,9 @@ async def home_fast(
         lambda: _get_wallet_cached_enriched_with_new_session(account_id, max_assets),
     )
     kpis_task = asyncio.create_task(_get_kpis_minimal(account_id, db))
-    prices, wallet_result, kpis = await asyncio.gather(prices_task, wallet_task, kpis_task)
+    prices, wallet_result, kpis = await asyncio.gather(
+        prices_task, wallet_task, kpis_task
+    )
     prices_ready = bool(prices)
     wallet_cached, wallet_cached_at = wallet_result
     inflight = _is_wallet_refresh_inflight(account_id)
@@ -429,16 +487,25 @@ async def home_fast(
         "wallet_live_inflight": inflight,
     }
     generated_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-    payload_bytes = json.dumps({"ok": True, "data": data}, separators=(",", ":")).encode("utf-8")
+    payload_bytes = json.dumps(
+        {"ok": True, "data": data}, separators=(",", ":")
+    ).encode("utf-8")
     payload_len = len(payload_bytes)
     if payload_len > warn_bytes:
-        logger.warning("[home] home_fast payload_bytes=%s > warn=%s account_id=%s", payload_len, warn_bytes, account_id)
+        logger.warning(
+            "[home] home_fast payload_bytes=%s > warn=%s account_id=%s",
+            payload_len,
+            warn_bytes,
+            account_id,
+        )
 
     # Cap payload size: trim prices if needed (keep only top symbols)
     if payload_len > 250000:
         data["prices"] = dict(list(prices.items())[:200])
         data["wallet_cached"] = wallet_cached
-        payload_bytes = json.dumps({"ok": True, "data": data}, separators=(",", ":")).encode("utf-8")
+        payload_bytes = json.dumps(
+            {"ok": True, "data": data}, separators=(",", ":")
+        ).encode("utf-8")
         payload_len = len(payload_bytes)
 
     server_ms = (time.perf_counter() - t0) * 1000
@@ -451,7 +518,10 @@ async def home_fast(
 
     logger.debug(
         "home_fast_served event=home_fast_served account_id=%s request_id=%s server_ms=%.2f payload_bytes=%s cache=db",
-        account_id, request_id, server_ms, payload_len,
+        account_id,
+        request_id,
+        server_ms,
+        payload_len,
     )
     if wallet_cached and isinstance(wallet_cached, dict):
         log_wallet_trace(
@@ -501,7 +571,11 @@ def _binance_error_response_body(e: Exception) -> str:
 def _is_api_unauthorized_error(e: Exception) -> bool:
     """401 / -2015 / -2008 — not clock drift (signed URL contains recvWindow= and must not match)."""
     try:
-        from app.services.binance_spot import BinanceSignedError, _parse_binance_error_body
+        from app.services.binance_spot import (
+            BinanceSignedError,
+            _parse_binance_error_body,
+        )
+
         if isinstance(e, BinanceSignedError) and e.code in (-2015, -2008):
             return True
         resp = getattr(e, "response", None)
@@ -521,7 +595,11 @@ def _is_api_unauthorized_error(e: Exception) -> bool:
 
 def _is_clock_drift_error(e: Exception) -> bool:
     try:
-        from app.services.binance_spot import BinanceSignedError, _coerce_binance_code, _parse_binance_error_body
+        from app.services.binance_spot import (
+            BinanceSignedError,
+            _parse_binance_error_body,
+        )
+
         if isinstance(e, BinanceSignedError) and e.code == -1021:
             return True
         body = _binance_error_response_body(e)
@@ -529,7 +607,11 @@ def _is_clock_drift_error(e: Exception) -> bool:
         if code == -1021:
             return True
         body_l = body.lower()
-        if body_l and "timestamp" in body_l and ("recvwindow" in body_l or "outside" in body_l):
+        if (
+            body_l
+            and "timestamp" in body_l
+            and ("recvwindow" in body_l or "outside" in body_l)
+        ):
             return True
     except Exception:
         pass
@@ -542,16 +624,22 @@ def _cooldown_sec_for_rate_limit(e: Exception, default_sec: float = 30) -> float
     """418 IP banned: use parsed 'banned until' + buffer; else default (429 or unknown)."""
     try:
         from app.services.binance_spot import BinanceIPBannedError
+
         if isinstance(e, BinanceIPBannedError):
             now = time.time()
             sec = max(60, min(600, e.banned_until_ts - now + 10))
             return sec
     except Exception:
         pass
-    if hasattr(e, "response") and e.response is not None and getattr(e.response, "status_code", None) == 418:
+    if (
+        hasattr(e, "response")
+        and e.response is not None
+        and getattr(e.response, "status_code", None) == 418
+    ):
         try:
             body = (getattr(e.response, "text", "") or "")[:300]
             import re
+
             m = re.search(r"IP banned until (\d+)", body)
             if m:
                 banned_ms = int(m.group(1))
@@ -580,10 +668,19 @@ def _note_wallet_refresh_failure(account_id: int, code: str, err_str: str = "") 
             "ACCOUNT_KEYS_DECRYPT_FAIL": "API anahtarı çözülemedi.",
         }
         msg = hints.get(code) or (err_str[:500] if err_str else code)
-        ec = code if code in hints or code.startswith("ACCOUNT_KEYS") else "BINANCE_UNREACHABLE"
+        ec = (
+            code
+            if code in hints or code.startswith("ACCOUNT_KEYS")
+            else "BINANCE_UNREACHABLE"
+        )
         if code in ("BINANCE_TIMEOUT", "BINANCE_IP_BANNED", "BINANCE_RATE_LIMIT"):
             ec = code
-        elif "401" in err_str or "Unauthorized" in err_str or "-2015" in err_str or "Invalid API" in err_str:
+        elif (
+            "401" in err_str
+            or "Unauthorized" in err_str
+            or "-2015" in err_str
+            or "Invalid API" in err_str
+        ):
             ec = "API_UNAUTHORIZED"
             msg = hints["API_UNAUTHORIZED"]
         note_binance_failure(int(account_id), ec, msg, "wallet_refresh")
@@ -591,7 +688,9 @@ def _note_wallet_refresh_failure(account_id: int, code: str, err_str: str = "") 
         logger.debug("_note_wallet_refresh_failure account_id=%s: %s", account_id, ex)
 
 
-async def _do_wallet_refresh(account_id: int, db: Session, request_id: str, force: bool) -> Dict[str, Any]:
+async def _do_wallet_refresh(
+    account_id: int, db: Session, request_id: str, force: bool
+) -> Dict[str, Any]:
     """Call Binance wallet fetch, write AssetSnapshot, update in-memory state. Used inside lock."""
     from app.api.routes import _fetch_wallet_uncached
 
@@ -600,16 +699,22 @@ async def _do_wallet_refresh(account_id: int, db: Session, request_id: str, forc
     WALLET_REFRESH_TIMEOUT = 10.0
     t0 = time.perf_counter()
     try:
-        wallet_raw = await asyncio.wait_for(_fetch_wallet_uncached(account_id, db), timeout=WALLET_REFRESH_TIMEOUT)
+        wallet_raw = await asyncio.wait_for(
+            _fetch_wallet_uncached(account_id, db), timeout=WALLET_REFRESH_TIMEOUT
+        )
     except asyncio.TimeoutError:
         duration_ms = (time.perf_counter() - t0) * 1000
         logger.warning(
             "wallet_refresh_attempt error_code=BINANCE_TIMEOUT duration_ms=%.0f request_id=%s account_id=%s",
-            duration_ms, request_id, account_id,
+            duration_ms,
+            request_id,
+            account_id,
         )
         _wallet_last_error_code[account_id] = "BINANCE_TIMEOUT"
         # Geçici timeout: kısa cooldown (10s) — hızlı toparlanma için
-        _wallet_cooldown_until[account_id] = time.monotonic() + min(cfg.get("wallet_cooldown_sec", 30), 10)
+        _wallet_cooldown_until[account_id] = time.monotonic() + min(
+            cfg.get("wallet_cooldown_sec", 30), 10
+        )
         _note_wallet_refresh_failure(account_id, "BINANCE_TIMEOUT")
         return {"_error": "timeout", "code": "BINANCE_TIMEOUT"}
     except Exception as e:
@@ -617,6 +722,7 @@ async def _do_wallet_refresh(account_id: int, db: Session, request_id: str, forc
         err_str = str(e)
         try:
             from app.services.binance_spot import BinanceIPBannedError
+
             if isinstance(e, BinanceIPBannedError):
                 code = "BINANCE_IP_BANNED"
                 cooldown_sec = _cooldown_sec_for_rate_limit(e, 300)
@@ -624,7 +730,11 @@ async def _do_wallet_refresh(account_id: int, db: Session, request_id: str, forc
                 _wallet_cooldown_until[account_id] = time.monotonic() + cooldown_sec
                 logger.warning(
                     "wallet_refresh_attempt error_code=%s cooldown_sec=%.0f duration_ms=%.0f request_id=%s account_id=%s",
-                    code, cooldown_sec, duration_ms, request_id, account_id,
+                    code,
+                    cooldown_sec,
+                    duration_ms,
+                    request_id,
+                    account_id,
                 )
                 _note_wallet_refresh_failure(account_id, code, err_str)
                 return {"_error": err_str}
@@ -632,33 +742,50 @@ async def _do_wallet_refresh(account_id: int, db: Session, request_id: str, forc
             pass
         if _is_rate_limit_error(e):
             code = "BINANCE_RATE_LIMIT"
-            cooldown_sec = _cooldown_sec_for_rate_limit(e, cfg.get("wallet_cooldown_sec", 30))
+            cooldown_sec = _cooldown_sec_for_rate_limit(
+                e, cfg.get("wallet_cooldown_sec", 30)
+            )
             _wallet_last_error_code[account_id] = code
             _wallet_cooldown_until[account_id] = time.monotonic() + cooldown_sec
             logger.warning(
                 "wallet_refresh_attempt error_code=%s cooldown_sec=%.0f duration_ms=%.0f request_id=%s account_id=%s",
-                code, cooldown_sec, duration_ms, request_id, account_id,
+                code,
+                cooldown_sec,
+                duration_ms,
+                request_id,
+                account_id,
             )
             _note_wallet_refresh_failure(account_id, code, err_str)
             return {"_error": err_str}
         elif _is_api_unauthorized_error(e):
             code = "API_UNAUTHORIZED"
             _wallet_last_error_code[account_id] = code
-            _wallet_cooldown_until[account_id] = time.monotonic() + cfg.get("wallet_cooldown_sec", 30)
+            _wallet_cooldown_until[account_id] = time.monotonic() + cfg.get(
+                "wallet_cooldown_sec", 30
+            )
             logger.warning(
                 "wallet_refresh_attempt error_code=%s duration_ms=%.0f request_id=%s account_id=%s",
-                code, duration_ms, request_id, account_id,
+                code,
+                duration_ms,
+                request_id,
+                account_id,
             )
             _note_wallet_refresh_failure(account_id, code, err_str)
             return {"_error": err_str, "code": code}
         elif _is_clock_drift_error(e):
             from app.services.binance_spot import clock_sync_hint
+
             code = "CLOCK_DRIFT"
             _wallet_last_error_code[account_id] = code
-            _wallet_cooldown_until[account_id] = time.monotonic() + cfg.get("wallet_cooldown_sec", 30)
+            _wallet_cooldown_until[account_id] = time.monotonic() + cfg.get(
+                "wallet_cooldown_sec", 30
+            )
             logger.warning(
                 "wallet_refresh_attempt error_code=%s duration_ms=%.0f request_id=%s account_id=%s",
-                code, duration_ms, request_id, account_id,
+                code,
+                duration_ms,
+                request_id,
+                account_id,
             )
             _note_wallet_refresh_failure(account_id, code, err_str)
             return {
@@ -667,6 +794,7 @@ async def _do_wallet_refresh(account_id: int, db: Session, request_id: str, forc
             }
         else:
             from app.services.binance_assets import KEY_ERROR_CODES
+
             if isinstance(e, ImportError):
                 code = "WALLET_MODULE_MISSING"
             elif isinstance(e, ValueError):
@@ -676,11 +804,20 @@ async def _do_wallet_refresh(account_id: int, db: Session, request_id: str, forc
             _wallet_last_error_code[account_id] = code
             logger.warning(
                 "wallet_refresh_attempt error_code=%s duration_ms=%.0f request_id=%s account_id=%s err=%s",
-                code, duration_ms, request_id, account_id, err_str[:300],
+                code,
+                duration_ms,
+                request_id,
+                account_id,
+                err_str[:300],
             )
-            fail_code = code if isinstance(e, ValueError) and code in KEY_ERROR_CODES else type(e).__name__
+            fail_code = (
+                code
+                if isinstance(e, ValueError) and code in KEY_ERROR_CODES
+                else type(e).__name__
+            )
             if fail_code not in KEY_ERROR_CODES:
                 from app.services.binance_connectivity import _classify_binance_error
+
                 fail_code, fail_msg = _classify_binance_error(e)
                 _note_wallet_refresh_failure(account_id, fail_code, fail_msg)
             else:
@@ -693,15 +830,21 @@ async def _do_wallet_refresh(account_id: int, db: Session, request_id: str, forc
 
     if not isinstance(wallet_raw, dict) or wallet_raw.get("_error"):
         if isinstance(wallet_raw, dict):
-            wc = wallet_raw.get("code") or wallet_raw.get("_error_code") or "BINANCE_UNREACHABLE"
-            _note_wallet_refresh_failure(account_id, str(wc), str(wallet_raw.get("_error", "")))
+            wc = (
+                wallet_raw.get("code")
+                or wallet_raw.get("_error_code")
+                or "BINANCE_UNREACHABLE"
+            )
+            _note_wallet_refresh_failure(
+                account_id, str(wc), str(wallet_raw.get("_error", ""))
+            )
         return wallet_raw
 
     # Write AssetSnapshot
     try:
         total_usd = float(wallet_raw.get("total_usd") or 0)
         breakdown = {}
-        for a in (wallet_raw.get("assets") or []):
+        for a in wallet_raw.get("assets") or []:
             asset = (a.get("asset") or "").strip()
             if not asset:
                 continue
@@ -732,7 +875,11 @@ async def _do_wallet_refresh(account_id: int, db: Session, request_id: str, forc
         db.add(snap)
         db.commit()
     except Exception as e:
-        logger.warning("[home] wallet refresh write snapshot failed account_id=%s: %s", account_id, e)
+        logger.warning(
+            "[home] wallet refresh write snapshot failed account_id=%s: %s",
+            account_id,
+            e,
+        )
         try:
             db.rollback()
         except Exception:
@@ -753,7 +900,11 @@ async def _do_wallet_refresh(account_id: int, db: Session, request_id: str, forc
     asset_count = len(out.get("assets") or [])
     logger.debug(
         "wallet_refresh_success asset_count=%s total_usd=%s request_id=%s account_id=%s duration_ms=%.0f",
-        asset_count, out.get("total_usd"), request_id, account_id, duration_ms,
+        asset_count,
+        out.get("total_usd"),
+        request_id,
+        account_id,
+        duration_ms,
     )
     return out
 
@@ -762,7 +913,9 @@ async def _do_wallet_refresh(account_id: int, db: Session, request_id: str, forc
 async def home_wallet_refresh(
     request: Request,
     account_id: int = Query(..., description="Account ID"),
-    force: int = Query(0, description="1 to bypass TTL (still respects cooldown and inflight)"),
+    force: int = Query(
+        0, description="1 to bypass TTL (still respects cooldown and inflight)"
+    ),
     db: Session = Depends(get_db),
     current: dict = Depends(require_auth),
 ):
@@ -799,7 +952,9 @@ async def home_wallet_refresh(
         server_ms = (time.perf_counter() - t0) * 1000
         logger.debug(
             "home_wallet_refresh event=home_wallet_refresh account_id=%s request_id=%s skipped=true reason=cooldown server_ms=%.2f",
-            account_id, request_id, server_ms,
+            account_id,
+            request_id,
+            server_ms,
         )
         return {
             "ok": True,
@@ -819,7 +974,9 @@ async def home_wallet_refresh(
         server_ms = (time.perf_counter() - t0) * 1000
         logger.debug(
             "home_wallet_refresh event=home_wallet_refresh account_id=%s request_id=%s skipped=true reason=ttl server_ms=%.2f",
-            account_id, request_id, server_ms,
+            account_id,
+            request_id,
+            server_ms,
         )
         return {
             "ok": True,
@@ -838,7 +995,9 @@ async def home_wallet_refresh(
         server_ms = (time.perf_counter() - t0) * 1000
         logger.debug(
             "home_wallet_refresh event=home_wallet_refresh account_id=%s request_id=%s skipped=true reason=inflight server_ms=%.2f",
-            account_id, request_id, server_ms,
+            account_id,
+            request_id,
+            server_ms,
         )
         return {
             "ok": True,
@@ -863,11 +1022,16 @@ async def home_wallet_refresh(
                     "wallet_live_at": wallet_cached_at,
                     "skipped": True,
                     "inflight": True,
-                    "refresh_policy": {"ttl_sec": ttl_sec, "cooldown_sec": cooldown_sec},
+                    "refresh_policy": {
+                        "ttl_sec": ttl_sec,
+                        "cooldown_sec": cooldown_sec,
+                    },
                 },
                 "meta": {"request_id": request_id, "server_ms": round(server_ms, 2)},
             }
-        task = asyncio.create_task(_do_wallet_refresh(account_id, db, request_id, force))
+        task = asyncio.create_task(
+            _do_wallet_refresh(account_id, db, request_id, force)
+        )
         _wallet_refresh_inflight[account_id] = task
 
     try:
@@ -877,7 +1041,10 @@ async def home_wallet_refresh(
         _wallet_last_error_code[account_id] = "BINANCE_TIMEOUT"
         _note_wallet_refresh_failure(account_id, "BINANCE_TIMEOUT")
     finally:
-        if account_id in _wallet_refresh_inflight and _wallet_refresh_inflight[account_id] == task:
+        if (
+            account_id in _wallet_refresh_inflight
+            and _wallet_refresh_inflight[account_id] == task
+        ):
             _wallet_refresh_inflight.pop(account_id, None)
 
     server_ms = (time.perf_counter() - t0) * 1000
@@ -885,16 +1052,26 @@ async def home_wallet_refresh(
         last_code = _wallet_last_error_code.get(account_id)
         err_str = str(result.get("_error", ""))
         # API anahtarı yok/geçersiz: manager panelinde hata kalabalığı olmasın (DEBUG)
-        is_api_key_error = "401" in err_str or "Unauthorized" in err_str or "Invalid API-key" in err_str or "invalid_api_key" in err_str.lower()
+        is_api_key_error = (
+            "401" in err_str
+            or "Unauthorized" in err_str
+            or "Invalid API-key" in err_str
+            or "invalid_api_key" in err_str.lower()
+        )
         if is_api_key_error:
             logger.debug(
                 "home_wallet_refresh event=home_wallet_refresh account_id=%s request_id=%s error=api_key_invalid server_ms=%.2f",
-                account_id, request_id, server_ms,
+                account_id,
+                request_id,
+                server_ms,
             )
         else:
             logger.info(
                 "home_wallet_refresh event=home_wallet_refresh account_id=%s request_id=%s skipped=false inflight=false error=%s server_ms=%.2f",
-                account_id, request_id, err_str, server_ms,
+                account_id,
+                request_id,
+                err_str,
+                server_ms,
             )
         return {
             "ok": True,
@@ -912,7 +1089,9 @@ async def home_wallet_refresh(
 
     logger.debug(
         "home_wallet_refresh event=home_wallet_refresh account_id=%s request_id=%s skipped=false inflight=false server_ms=%.2f",
-        account_id, request_id, server_ms,
+        account_id,
+        request_id,
+        server_ms,
     )
     if result and isinstance(result, dict):
         log_wallet_trace(
@@ -953,7 +1132,7 @@ async def home_wallet_status(
     request_id = getattr(request.state, "request_id", None) or ""
     require_account_access(current, account_id)
     cfg = get_config()
-    cooldown_sec = cfg.get("wallet_cooldown_sec", 30)
+    cfg.get("wallet_cooldown_sec", 30)
     stale_threshold_sec = float(cfg.get("wallet_snapshot_warn_age_sec", 900))
     now_mono = time.monotonic()
     now_utc = datetime.now(timezone.utc)
@@ -962,7 +1141,12 @@ async def home_wallet_status(
     cooldown_iso = None
     if cooldown_until is not None and cooldown_until > now_mono:
         from datetime import timedelta
-        cooldown_iso = (datetime.now(timezone.utc) + timedelta(seconds=cooldown_until - now_mono)).isoformat().replace("+00:00", "Z")
+
+        cooldown_iso = (
+            (datetime.now(timezone.utc) + timedelta(seconds=cooldown_until - now_mono))
+            .isoformat()
+            .replace("+00:00", "Z")
+        )
 
     keys_configured = False
     last_snapshot_at = None
@@ -973,17 +1157,38 @@ async def home_wallet_status(
         if acc:
             ek = getattr(acc, "api_key_enc", None)
             es = getattr(acc, "api_secret_enc", None)
-            keys_configured = bool(ek and es and (not isinstance(ek, str) or ek.strip()) and (not isinstance(es, str) or es.strip()))
-        row = db.query(AssetSnapshot).filter(AssetSnapshot.account_id == account_id).order_by(desc(AssetSnapshot.timestamp)).limit(1).first()
+            keys_configured = bool(
+                ek
+                and es
+                and (not isinstance(ek, str) or ek.strip())
+                and (not isinstance(es, str) or es.strip())
+            )
+        row = (
+            db.query(AssetSnapshot)
+            .filter(AssetSnapshot.account_id == account_id)
+            .order_by(desc(AssetSnapshot.timestamp))
+            .limit(1)
+            .first()
+        )
         if row and row.timestamp:
-            ts = row.timestamp if row.timestamp.tzinfo else row.timestamp.replace(tzinfo=timezone.utc)
+            ts = (
+                row.timestamp
+                if row.timestamp.tzinfo
+                else row.timestamp.replace(tzinfo=timezone.utc)
+            )
             last_snapshot_at = ts.isoformat().replace("+00:00", "Z")
             last_snapshot_age_sec = max(0.0, (now_utc - ts).total_seconds())
             last_snapshot_total_usd = row.total_usd_value
     except Exception as e:
         logger.debug("[home] wallet/status keys/snapshot check error: %s", e)
 
-    snapshot_stale = bool(keys_configured and (last_snapshot_age_sec is None or last_snapshot_age_sec >= stale_threshold_sec))
+    snapshot_stale = bool(
+        keys_configured
+        and (
+            last_snapshot_age_sec is None
+            or last_snapshot_age_sec >= stale_threshold_sec
+        )
+    )
 
     return {
         "ok": True,
@@ -994,7 +1199,9 @@ async def home_wallet_status(
             "last_error_code": _wallet_last_error_code.get(account_id),
             "keys_configured": keys_configured,
             "last_snapshot_at": last_snapshot_at,
-            "last_snapshot_age_sec": round(last_snapshot_age_sec, 1) if last_snapshot_age_sec is not None else None,
+            "last_snapshot_age_sec": round(last_snapshot_age_sec, 1)
+            if last_snapshot_age_sec is not None
+            else None,
             "last_snapshot_total_usd": last_snapshot_total_usd,
             "snapshot_stale": snapshot_stale,
             "stale_threshold_sec": stale_threshold_sec,
@@ -1033,7 +1240,9 @@ async def home_connectivity_check(
         err_code = ""
         message = ""
     else:
-        note_binance_failure(account_id, code, msg, "connectivity_check", emit_async=False)
+        note_binance_failure(
+            account_id, code, msg, "connectivity_check", emit_async=False
+        )
         err_code = code
         message = msg
 
@@ -1050,7 +1259,9 @@ async def home_connectivity_check(
         "ok": True,
         "data": {
             "connectivity_ok": ok,
-            "error_code": err_code or (persisted or {}).get("error_code") or _wallet_last_error_code.get(account_id),
+            "error_code": err_code
+            or (persisted or {}).get("error_code")
+            or _wallet_last_error_code.get(account_id),
             "message": message or (persisted or {}).get("message"),
             "server_public_ip": server_ip or "—",
             "clock_sync_hint": hint,

@@ -2,6 +2,7 @@
 Metrics stubs for snapshot and future observability.
 Replace with real histogram implementation (e.g. Prometheus) when available.
 """
+
 from __future__ import annotations
 import threading
 from collections import deque
@@ -27,10 +28,21 @@ def get_snapshot_metrics() -> dict:
         bytes_list = list(_SNAPSHOT_PAYLOAD_BYTES)
     n = len(ms_list)
     if n == 0:
-        return {"snapshot_server_ms": {"count": 0, "p50": 0, "p95": 0}, "snapshot_payload_bytes": {"count": 0, "p50": 0, "p95": 0}}
+        return {
+            "snapshot_server_ms": {"count": 0, "p50": 0, "p95": 0},
+            "snapshot_payload_bytes": {"count": 0, "p50": 0, "p95": 0},
+        }
     ms_sorted = sorted(ms_list)
     bytes_sorted = sorted(bytes_list)
     return {
-        "snapshot_server_ms": {"count": n, "p50": ms_sorted[int(0.5 * n)] if n else 0, "p95": ms_sorted[int(0.95 * n)] if n else 0},
-        "snapshot_payload_bytes": {"count": n, "p50": bytes_sorted[int(0.5 * n)] if n else 0, "p95": bytes_sorted[int(0.95 * n)] if n else 0},
+        "snapshot_server_ms": {
+            "count": n,
+            "p50": ms_sorted[int(0.5 * n)] if n else 0,
+            "p95": ms_sorted[int(0.95 * n)] if n else 0,
+        },
+        "snapshot_payload_bytes": {
+            "count": n,
+            "p50": bytes_sorted[int(0.5 * n)] if n else 0,
+            "p95": bytes_sorted[int(0.95 * n)] if n else 0,
+        },
     }

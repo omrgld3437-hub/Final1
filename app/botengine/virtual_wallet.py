@@ -2,6 +2,7 @@
 Per-bot virtual sub-wallet (virtual_base, virtual_quote) for budget check and fill updates.
 Source of truth for "can this bot afford this order"; updated after each fill.
 """
+
 from __future__ import annotations
 import logging
 from datetime import datetime, timezone
@@ -31,7 +32,9 @@ def _symbol_to_base_quote(symbol: str) -> Tuple[str, str]:
     return (s, "USDT")
 
 
-def _purge_orphan_virtual_wallets(db: "Session", account_id: Optional[int] = None) -> None:
+def _purge_orphan_virtual_wallets(
+    db: "Session", account_id: Optional[int] = None
+) -> None:
     """Silinmiş botlara ait virtual_wallet satırlarını temizle (UI bot kilitli hayalet)."""
     try:
         if account_id is not None:
@@ -45,18 +48,24 @@ def _purge_orphan_virtual_wallets(db: "Session", account_id: Optional[int] = Non
             )
         else:
             db.execute(
-                text("DELETE FROM bot_virtual_wallet WHERE bot_id NOT IN (SELECT id FROM bots)"),
+                text(
+                    "DELETE FROM bot_virtual_wallet WHERE bot_id NOT IN (SELECT id FROM bots)"
+                ),
             )
         db.commit()
     except Exception as e:
-        logger.warning("purge_orphan_virtual_wallets failed account_id=%s: %s", account_id, e)
+        logger.warning(
+            "purge_orphan_virtual_wallets failed account_id=%s: %s", account_id, e
+        )
         try:
             db.rollback()
         except Exception:
             pass
 
 
-def get_bot_locked_balances_for_account(db: "Session", account_id: int) -> Dict[str, float]:
+def get_bot_locked_balances_for_account(
+    db: "Session", account_id: int
+) -> Dict[str, float]:
     """
     Return total bot-locked balance per asset for this account (bileşik dahil).
     virtual_wallet her tick sonunda state ile senkronize olduğu için güncel (bileşik) bakiye döner.
@@ -95,7 +104,12 @@ def get_bot_locked_balances_for_account(db: "Session", account_id: int) -> Dict[
         try:
             from app.db.models import Bot
             from app.botengine.state_store import load_state
-            bots = db.query(Bot).filter(Bot.account_id == account_id, Bot.status == "running").all()
+
+            bots = (
+                db.query(Bot)
+                .filter(Bot.account_id == account_id, Bot.status == "running")
+                .all()
+            )
             for bot in bots or []:
                 sym = (bot.symbol or "").strip().upper()
                 if not sym or sym == "MULTI":
@@ -186,7 +200,13 @@ def ensure_virtual_wallet(
             INSERT INTO bot_virtual_wallet (bot_id, account_id, symbol, virtual_base, virtual_quote, updated_at)
             VALUES (:bid, :aid, :sym, 0, :quote, :upd)
         """),
-        {"bid": bot_id, "aid": account_id, "sym": symbol, "quote": max(0.0, float(initial_quote_usdt)), "upd": now_s},
+        {
+            "bid": bot_id,
+            "aid": account_id,
+            "sym": symbol,
+            "quote": max(0.0, float(initial_quote_usdt)),
+            "upd": now_s,
+        },
     )
     db.commit()
 
@@ -220,7 +240,14 @@ def update_virtual_after_fill(
                     updated_at = :upd
                 WHERE bot_id = :bid AND symbol = :sym
             """),
-            {"bid": bot_id, "sym": symbol, "qty": fill_qty, "quote": quote_value, "fee": fee_usdt, "upd": now_s},
+            {
+                "bid": bot_id,
+                "sym": symbol,
+                "qty": fill_qty,
+                "quote": quote_value,
+                "fee": fee_usdt,
+                "upd": now_s,
+            },
         )
     else:
         db.execute(
@@ -231,7 +258,14 @@ def update_virtual_after_fill(
                     updated_at = :upd
                 WHERE bot_id = :bid AND symbol = :sym
             """),
-            {"bid": bot_id, "sym": symbol, "qty": fill_qty, "quote": quote_value, "fee": fee_usdt, "upd": now_s},
+            {
+                "bid": bot_id,
+                "sym": symbol,
+                "qty": fill_qty,
+                "quote": quote_value,
+                "fee": fee_usdt,
+                "upd": now_s,
+            },
         )
     db.commit()
 
@@ -258,7 +292,13 @@ def sync_virtual_wallet_from_state(
             SET virtual_base = :vb, virtual_quote = :vq, updated_at = :upd
             WHERE bot_id = :bid AND symbol = :sym
         """),
-        {"bid": bot_id, "sym": symbol, "vb": base_balance, "vq": quote_balance, "upd": now_s},
+        {
+            "bid": bot_id,
+            "sym": symbol,
+            "vb": base_balance,
+            "vq": quote_balance,
+            "upd": now_s,
+        },
     )
     db.commit()
 

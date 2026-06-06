@@ -12,6 +12,7 @@ Kullanım:
 Bu script sunucu (uvicorn) ile aynı process tree'de olmayacak şekilde
 admin API tarafından start_new_session=True ile çalıştırılır.
 """
+
 import os
 import sys
 import time
@@ -37,9 +38,33 @@ def _start_uvicorn_direct(project_root: str) -> bool:
     uvicorn_exe = os.path.join(venv_bin, "uvicorn.exe" if is_win else "uvicorn")
     extra = [] if is_win else ["--loop", "uvloop", "--http", "httptools"]
     if os.path.isfile(uvicorn_exe):
-        cmd = [uvicorn_exe, "app.main:app", "--host", host, "--port", "8000", "--workers", "2", "--log-level", "info"] + extra
+        cmd = [
+            uvicorn_exe,
+            "app.main:app",
+            "--host",
+            host,
+            "--port",
+            "8000",
+            "--workers",
+            "2",
+            "--log-level",
+            "info",
+        ] + extra
     else:
-        cmd = [sys.executable, "-m", "uvicorn", "app.main:app", "--host", host, "--port", "8000", "--workers", "2", "--log-level", "info"] + extra
+        cmd = [
+            sys.executable,
+            "-m",
+            "uvicorn",
+            "app.main:app",
+            "--host",
+            host,
+            "--port",
+            "8000",
+            "--workers",
+            "2",
+            "--log-level",
+            "info",
+        ] + extra
     run_dir = os.path.join(project_root, ".run")
     os.makedirs(run_dir, exist_ok=True)
     log_path = os.path.join(run_dir, "server.log")
@@ -83,7 +108,11 @@ def main():
         log.error("run.sh bulunamadı: %s", run_sh)
         sys.exit(1)
 
-    log.info("5 saniye bekleniyor, sonra PID %s kapatılıp %s ile yeniden başlatılacak.", pid, run_sh)
+    log.info(
+        "5 saniye bekleniyor, sonra PID %s kapatılıp %s ile yeniden başlatılacak.",
+        pid,
+        run_sh,
+    )
     time.sleep(5)
 
     # Sunucu prosesine SIGTERM gönder
@@ -104,7 +133,9 @@ def main():
             break
         time.sleep(0.5)
     else:
-        log.warning("Proses %s 15 sn içinde kapanmadı, yine de run.sh çalıştırılıyor.", pid)
+        log.warning(
+            "Proses %s 15 sn içinde kapanmadı, yine de run.sh çalıştırılıyor.", pid
+        )
 
     # Eski PID dosyasını temizle (run.sh "zaten çalışıyor" yanılgısını önler)
     pid_file = os.path.join(project_root, ".run", "server.pid")
@@ -135,7 +166,9 @@ def main():
         else:
             log.info("Restart tamamlandı.")
     except subprocess.TimeoutExpired:
-        log.warning("run.sh 60 sn içinde bitmedi (arka planda sunucu çalışıyor olabilir).")
+        log.warning(
+            "run.sh 60 sn içinde bitmedi (arka planda sunucu çalışıyor olabilir)."
+        )
     except FileNotFoundError as e:
         log.warning("bash bulunamadı, fallback deneniyor: %s", e)
         if _start_uvicorn_direct(project_root):

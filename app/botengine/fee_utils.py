@@ -1,7 +1,8 @@
 """Binance spot fill commission → USDT normalization."""
+
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 
 def symbol_base_asset(symbol: str) -> str:

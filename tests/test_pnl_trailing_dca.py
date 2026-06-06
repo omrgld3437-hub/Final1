@@ -1,10 +1,14 @@
 """
 PnL Trailing DCA spec compliance: total_usd priority, cycle_end consistency, stale price, Turkey day, FIFO fees.
 """
+
 import pytest
 from unittest.mock import MagicMock
 from app.services.pnl_service import PnlService, _fee_quote
-from app.utils.tz_utils import turkey_day_start_utc_for_date, turkey_day_end_utc_for_date
+from app.utils.tz_utils import (
+    turkey_day_start_utc_for_date,
+    turkey_day_end_utc_for_date,
+)
 from app.bot.ledger import Ledger
 
 
@@ -30,6 +34,7 @@ def db_session():
     try:
         from app.db.base import SessionLocal
         from sqlalchemy import text
+
         session = SessionLocal()
         session.execute(text("SELECT 1 FROM trades LIMIT 1"))
         yield session
@@ -43,6 +48,7 @@ def db_session():
 def test_record_trade_idempotency(db_session):
     """record_trade called twice with same (bot_id, order_id) must not duplicate; PnL unchanged."""
     from app.db.models import Bot, Account
+
     acc = db_session.query(Account).first()
     if not acc:
         pytest.skip("no account")
@@ -53,15 +59,31 @@ def test_record_trade_idempotency(db_session):
     account_id = bot.account_id
     order_id = "idem_pnl_ord_%s" % (hash("idem_test") % 10**8)
     trade1, inserted1 = Ledger.record_trade(
-        db_session, bot_id, account_id,
-        "BUY", 1.0, 100.0, fee=0.1, fee_asset="USDT",
-        order_id=order_id, symbol="BTCUSDT", cycle_id=1,
+        db_session,
+        bot_id,
+        account_id,
+        "BUY",
+        1.0,
+        100.0,
+        fee=0.1,
+        fee_asset="USDT",
+        order_id=order_id,
+        symbol="BTCUSDT",
+        cycle_id=1,
     )
     assert inserted1 is True
     trade2, inserted2 = Ledger.record_trade(
-        db_session, bot_id, account_id,
-        "BUY", 1.0, 100.0, fee=0.1, fee_asset="USDT",
-        order_id=order_id, symbol="BTCUSDT", cycle_id=1,
+        db_session,
+        bot_id,
+        account_id,
+        "BUY",
+        1.0,
+        100.0,
+        fee=0.1,
+        fee_asset="USDT",
+        order_id=order_id,
+        symbol="BTCUSDT",
+        cycle_id=1,
     )
     assert inserted2 is False
     assert trade2.id == trade1.id

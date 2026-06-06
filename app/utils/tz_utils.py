@@ -2,6 +2,7 @@
 Türkiye saati (Europe/Istanbul) – "Bugün" ve "şimdi" için ortak yardımcılar.
 Uygulama genelinde giriş/çıkış, işlemler, PnL bugün vb. tek saat (Türkiye) kullanılır.
 """
+
 import logging
 from datetime import datetime, timezone, timedelta
 from typing import Any, Optional
@@ -43,7 +44,9 @@ def parse_binance_ms_to_utc_naive(raw: Any) -> Optional[datetime]:
         return None
     if isinstance(raw, (int, float)):
         try:
-            return datetime.fromtimestamp(float(raw) / 1000.0, tz=timezone.utc).replace(tzinfo=None)
+            return datetime.fromtimestamp(float(raw) / 1000.0, tz=timezone.utc).replace(
+                tzinfo=None
+            )
         except (ValueError, OSError, OverflowError):
             return None
     if isinstance(raw, str):
@@ -51,11 +54,15 @@ def parse_binance_ms_to_utc_naive(raw: Any) -> Optional[datetime]:
         if not s:
             return None
         try:
-            return datetime.fromtimestamp(float(s) / 1000.0, tz=timezone.utc).replace(tzinfo=None)
+            return datetime.fromtimestamp(float(s) / 1000.0, tz=timezone.utc).replace(
+                tzinfo=None
+            )
         except (ValueError, OSError, OverflowError):
             pass
         try:
-            dt = datetime.fromisoformat(s.replace("Z", "+00:00").replace(" ", "T")[:26].rstrip("Z"))
+            dt = datetime.fromisoformat(
+                s.replace("Z", "+00:00").replace(" ", "T")[:26].rstrip("Z")
+            )
             if dt.tzinfo:
                 dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
             return dt
@@ -70,6 +77,7 @@ def turkey_day_start_utc_for_date(date_tr: str) -> datetime:
     Used for daily realized PnL: cycle completed on date_tr iff max(trade.ts) in [day_start, day_end).
     """
     from datetime import date as date_type
+
     try:
         d = date_type.fromisoformat(date_tr)
     except (ValueError, TypeError):

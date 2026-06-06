@@ -2,6 +2,7 @@
 Hassas / sık çağrılan API endpoint'leri için kayan pencere rate limit.
 Login limiter'dan ayrı; RAM sınırı: en fazla _MAX_KEYS anahtar.
 """
+
 from __future__ import annotations
 
 import logging
@@ -33,7 +34,9 @@ def _cleanup(cutoff: float) -> None:
         if not _store[k]:
             del _store[k]
     if len(_store) > _MAX_KEYS:
-        by_age = sorted(_store.keys(), key=lambda k: min(_store[k]) if _store[k] else 0.0)
+        by_age = sorted(
+            _store.keys(), key=lambda k: min(_store[k]) if _store[k] else 0.0
+        )
         for k in by_age[: len(_store) - _MAX_KEYS]:
             del _store[k]
 

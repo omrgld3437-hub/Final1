@@ -15,6 +15,7 @@
 Tek komut (env + talimat; sunucuyu siz başlatırsınız):
      python scripts/perf/ram_capture_5min.py --guide
 """
+
 from __future__ import annotations
 
 import argparse
@@ -42,7 +43,7 @@ def _session_id() -> str:
 def print_env(session_id: str | None = None) -> str:
     sid = session_id or _session_id()
     lines = [
-        f"export RAM_CAPTURE=1",
+        "export RAM_CAPTURE=1",
         f"export RAM_CAPTURE_SESSION={sid}",
         f"export RAM_CAPTURE_DURATION={_DURATION_DEFAULT}",
         f"export RAM_CAPTURE_INTERVAL={_INTERVAL_DEFAULT}",
@@ -55,7 +56,7 @@ def print_env(session_id: str | None = None) -> str:
     print(text)
     print()
     print(f"Oturum kimliği: {sid}")
-    print(f"Log dosyaları (5 dk sonra):")
+    print("Log dosyaları (5 dk sonra):")
     print(f"  {_LOGS}/ram_capture_{sid}_web.jsonl")
     print(f"  {_LOGS}/ram_capture_{sid}_worker.jsonl")
     print(f"  {_LOGS}/ram_snapshots.log  (probe mirror)")
@@ -74,7 +75,11 @@ def cmd_status() -> int:
         p = Path(path)
         n = 0
         if p.exists():
-            n = sum(1 for ln in p.read_text(encoding="utf-8", errors="replace").splitlines() if ln.strip())
+            n = sum(
+                1
+                for ln in p.read_text(encoding="utf-8", errors="replace").splitlines()
+                if ln.strip()
+            )
         print(f"  {comp}: {n} lines — {path}")
     return 0
 
@@ -120,7 +125,9 @@ def cmd_guide() -> int:
     sid = print_env()
     print("—" * 60)
     print("Adımlar:")
-    print("  1. Yukarıdaki export'ları shell'e alın ve Server Start / web+worker yeniden başlatın.")
+    print(
+        "  1. Yukarıdaki export'ları shell'e alın ve Server Start / web+worker yeniden başlatın."
+    )
     print("  2. Dashboard ve bot sayfalarında normal kullanım yapın (5 dk).")
     print("  3. python scripts/perf/ram_capture_5min.py --wait")
     print("  4. python scripts/perf/ram_capture_5min.py --analyze")
@@ -131,13 +138,23 @@ def cmd_guide() -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="RAM capture 5 dakika oturumu")
-    parser.add_argument("--print-env", action="store_true", help="export satırlarını yazdır")
+    parser.add_argument(
+        "--print-env", action="store_true", help="export satırlarını yazdır"
+    )
     parser.add_argument("--guide", action="store_true", help="env + adımlar")
-    parser.add_argument("--wait", action="store_true", help="manifest complete olana kadar bekle")
-    parser.add_argument("--status", action="store_true", help="manifest ve satır sayıları")
+    parser.add_argument(
+        "--wait", action="store_true", help="manifest complete olana kadar bekle"
+    )
+    parser.add_argument(
+        "--status", action="store_true", help="manifest ve satır sayıları"
+    )
     parser.add_argument("--analyze", action="store_true", help="Markdown analiz raporu")
-    parser.add_argument("--session", type=str, default=None, help="Oturum kimliği (analyze)")
-    parser.add_argument("--timeout", type=int, default=400, help="--wait üst sınır (sn)")
+    parser.add_argument(
+        "--session", type=str, default=None, help="Oturum kimliği (analyze)"
+    )
+    parser.add_argument(
+        "--timeout", type=int, default=400, help="--wait üst sınır (sn)"
+    )
     args = parser.parse_args()
 
     if args.print_env:

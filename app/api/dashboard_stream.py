@@ -2,6 +2,7 @@
 Dashboard Server-Sent Events — snapshot polling yerine tek kalıcı bağlantı.
 GET /api/dashboard/stream?account_id=&fields=prices,wallet,bots,kpis
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -24,7 +25,11 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["dashboard"])
 
 _SSE_INTERVAL_SEC = float(os.environ.get("DASHBOARD_SSE_INTERVAL_SEC", "3"))
-_SSE_ENABLED = os.environ.get("DASHBOARD_SSE_ENABLED", "1").strip().lower() in ("1", "true", "yes")
+_SSE_ENABLED = os.environ.get("DASHBOARD_SSE_ENABLED", "1").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+)
 _DEFAULT_FIELDS = ["prices", "wallet", "bots", "kpis"]
 _ALLOWED = frozenset(_DEFAULT_FIELDS)
 
@@ -51,10 +56,19 @@ def _parse_fields(fields_param: Optional[str]) -> List[str]:
     return parts or _DEFAULT_FIELDS.copy()
 
 
-async def _build_sse_payload(account_id: int, fields: List[str], db: Session, request_id: str) -> dict:
+async def _build_sse_payload(
+    account_id: int, fields: List[str], db: Session, request_id: str
+) -> dict:
     """Snapshot ile uyumlu { ok, data, meta }."""
-    from app.api.routes import _enrich_snapshot_wallet_with_bot_locked, _get_snapshot_wallet_cached
-    from app.services.dashboard_snapshot import fetch_prices, fetch_bots_and_account_kpis, fetch_finance_pnl
+    from app.api.routes import (
+        _enrich_snapshot_wallet_with_bot_locked,
+        _get_snapshot_wallet_cached,
+    )
+    from app.services.dashboard_snapshot import (
+        fetch_prices,
+        fetch_bots_and_account_kpis,
+        fetch_finance_pnl,
+    )
 
     t0 = time.perf_counter()
     data: dict = {"server_ts": time.time()}
@@ -101,7 +115,9 @@ async def _build_sse_payload(account_id: int, fields: List[str], db: Session, re
 
                 data["wallet"] = build_test_account_wallet(account_id, db)
             else:
-                wallet_cached, wallet_ts_iso, _src, _age = _get_snapshot_wallet_cached(account_id, db)
+                wallet_cached, wallet_ts_iso, _src, _age = _get_snapshot_wallet_cached(
+                    account_id, db
+                )
                 if wallet_cached:
                     wallet = dict(wallet_cached)
                     if wallet_ts_iso:
@@ -130,7 +146,9 @@ async def _build_sse_payload(account_id: int, fields: List[str], db: Session, re
 async def dashboard_stream(
     request: Request,
     account_id: int = Query(..., description="Account ID"),
-    fields: Optional[str] = Query(None, description="Comma-separated: prices,wallet,bots,kpis"),
+    fields: Optional[str] = Query(
+        None, description="Comma-separated: prices,wallet,bots,kpis"
+    ),
     db: Session = Depends(get_db),
     current: dict = Depends(require_auth),
 ):
@@ -153,7 +171,9 @@ async def dashboard_stream(
                     break
                 tick_db = SessionLocal()
                 try:
-                    payload = await _build_sse_payload(account_id, requested, tick_db, request_id)
+                    payload = await _build_sse_payload(
+                        account_id, requested, tick_db, request_id
+                    )
                     yield f"data: {json.dumps(payload, separators=(',', ':'), default=str)}\n\n"
                 except Exception as e:
                     logger.warning(

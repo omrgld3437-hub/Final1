@@ -3,6 +3,7 @@ Anomali (sıra dışı / olmaması gereken) durum kodları – tek referans.
 Admin panelde "Hatalar" listesinde event_kind=anomaly kayıtları bu kodlarla filtrelenir ve etiketlenir.
 Yeni kod eklerken: (Türkçe kısa açıklama, varsayılan level).
 """
+
 from typing import Tuple
 
 # anomaly_code -> (açıklama_tr, default_level)
@@ -12,7 +13,10 @@ ANOMALY_CODES: dict[str, Tuple[str, str]] = {
     "LOGIN_RATE_LIMIT": ("Giriş isteği limiti aşıldı (IP/telefon)", "warning"),
     "LOGIN_USER_NOT_FOUND": ("Bilinmeyen kullanıcı/telefon ile giriş denemesi", "info"),
     "REPEATED_LOGIN_FAILURE": ("Ardışık başarısız şifre denemesi", "warning"),
-    "ACCOUNT_SUSPENDED_AFTER_FAILURES": ("Hesap 3 başarısız deneme sonrası askıya alındı", "critical"),
+    "ACCOUNT_SUSPENDED_AFTER_FAILURES": (
+        "Hesap 3 başarısız deneme sonrası askıya alındı",
+        "critical",
+    ),
     "LOGIN_SUSPENDED_ATTEMPT": ("Askıya alınmış hesapla giriş denemesi", "warning"),
     "LOGIN_PENDING_APPROVAL": ("Onay bekleyen kayıt ile giriş denemesi", "info"),
     "SESSION_IP_MISMATCH": ("Oturum farklı IP adresinden kullanıldı", "info"),
@@ -29,8 +33,14 @@ ANOMALY_CODES: dict[str, Tuple[str, str]] = {
     "BINANCE_AUTH_FAILURE": ("Binance API kimlik doğrulama hatası", "warning"),
     "BINANCE_UNUSUAL_RESPONSE": ("Binance alışılmadık yanıt (veri/format)", "info"),
     # Hesap / kullanıcı
-    "ACCOUNT_ISOLATED_ACCESS_ATTEMPT": ("Adminden izole hesaba erişim denemesi", "info"),
-    "PASSWORD_CHANGE_AFTER_RESET": ("Şifre sıfırlama sonrası değişiklik (beklenen)", "info"),
+    "ACCOUNT_ISOLATED_ACCESS_ATTEMPT": (
+        "Adminden izole hesaba erişim denemesi",
+        "info",
+    ),
+    "PASSWORD_CHANGE_AFTER_RESET": (
+        "Şifre sıfırlama sonrası değişiklik (beklenen)",
+        "info",
+    ),
     "BULK_ACTION_UNUSUAL": ("Alışılmadık toplu işlem (çok sayıda hedef)", "info"),
     # Sistem
     "CONFIG_MISSING_OR_INVALID": ("Eksik veya geçersiz yapılandırma değeri", "warning"),

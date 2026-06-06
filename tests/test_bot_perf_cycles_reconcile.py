@@ -1,4 +1,5 @@
 """Stale bot perf cycles file is reconciled from state (account_id + cycle set)."""
+
 from __future__ import annotations
 
 import json

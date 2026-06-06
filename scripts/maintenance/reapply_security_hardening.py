@@ -5,6 +5,7 @@ Guvenlik sertlestirmesini yeniden uygular:
 - Admin/test hesap bayraklarini duzeltir
 Usage: python3 scripts/maintenance/reapply_security_hardening.py
 """
+
 from __future__ import annotations
 
 import sys
@@ -15,6 +16,7 @@ sys.path.insert(0, str(ROOT))
 
 try:
     from dotenv import load_dotenv
+
     load_dotenv(ROOT / ".env")
 except Exception:
     pass

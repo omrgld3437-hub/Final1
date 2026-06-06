@@ -2,6 +2,7 @@
 Binance REST load monitor — 1 dakikalık pencere, rest.log dosyasına detaylı özet.
 Tüm gateway çağrıları buradan geçer; budget aşımında istek engellenir (418 ban önleme).
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -22,7 +23,11 @@ _current_source: contextvars.ContextVar[str] = contextvars.ContextVar(
     "binance_rest_source", default="unknown"
 )
 
-REST_LOG_ENABLED = os.getenv("REST_LOG_ENABLED", "1").strip().lower() in ("1", "true", "yes")
+REST_LOG_ENABLED = os.getenv("REST_LOG_ENABLED", "1").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+)
 REST_LOG_INTERVAL_SEC = float(os.getenv("REST_LOG_INTERVAL_SEC", "60"))
 REST_LOG_PATH = Path(os.getenv("REST_LOG_PATH", "rest.log"))
 # rest.log maksimum boyut (bayt); aşılırsa rotate edilir. Varsayılan 20 MB.
@@ -30,12 +35,14 @@ REST_LOG_MAX_BYTES = int(os.getenv("REST_LOG_MAX_BYTES", str(20 * 1024 * 1024)))
 # Saklanacak yedek sayısı (rest.log.1, rest.log.2, ...)
 REST_LOG_BACKUP_COUNT = int(os.getenv("REST_LOG_BACKUP_COUNT", "3"))
 REST_WEIGHT_LIMIT = int(os.getenv("BINANCE_WEIGHT_LIMIT_PER_MIN", "1200"))
-REST_SOFT_LIMIT = int(os.getenv("REST_SOFT_WEIGHT_LIMIT", str(int(REST_WEIGHT_LIMIT * 0.85))))
+REST_SOFT_LIMIT = int(
+    os.getenv("REST_SOFT_WEIGHT_LIMIT", str(int(REST_WEIGHT_LIMIT * 0.85)))
+)
 
 # Endpoint başına minimum aralık (saniye) — bulk 24hr en ağır suçlu
 _PATH_MIN_INTERVAL: Dict[str, float] = {
-    "/api/v3/ticker/24hr": 45.0,   # bulk (symbol yok) — max ~1.3/dk, weight ~53/dk
-    "/api/v3/ticker/price": 8.0,    # bulk price — max ~7.5/dk, weight ~15/dk
+    "/api/v3/ticker/24hr": 45.0,  # bulk (symbol yok) — max ~1.3/dk, weight ~53/dk
+    "/api/v3/ticker/price": 8.0,  # bulk price — max ~7.5/dk, weight ~15/dk
     "/api/v3/exchangeInfo": 300.0,
     "/api/v3/time": 25.0,
     "/api/v3/klines": 2.0,
@@ -57,6 +64,8 @@ _events: Deque[Dict[str, Any]] = deque(maxlen=max(200, _REST_EVENTS_MAX))
 def get_rest_events_buffer_info() -> Dict[str, Any]:
     """RAM capture: deque boyutu (okuma güvenli)."""
     return {"deque_len": len(_events), "maxlen": _events.maxlen}
+
+
 _last_path_ts: Dict[str, float] = {}
 _flush_task: Optional[asyncio.Task] = None
 _denied_by_reason: Dict[str, int] = defaultdict(int)
@@ -64,6 +73,7 @@ _denied_by_reason: Dict[str, int] = defaultdict(int)
 
 def rest_source(name: str):
     """Context manager: çağrı kaynağını etiketle."""
+
     class _CM:
         def __enter__(self):
             self._token = _current_source.set(name)
@@ -79,7 +89,9 @@ def get_rest_source() -> str:
     return _current_source.get()
 
 
-def compute_weight(path: str, method: str = "GET", params: Optional[Dict[str, Any]] = None) -> int:
+def compute_weight(
+    path: str, method: str = "GET", params: Optional[Dict[str, Any]] = None
+) -> int:
     """Binance dokümantasyonuna göre endpoint weight."""
     p = params or {}
     m = method.upper()
@@ -131,7 +143,7 @@ def should_allow_rest(
     Returns: (allowed, reason, weight)
     """
     weight = compute_weight(path, method, params)
-    src = source or get_rest_source()
+    source or get_rest_source()
     now = time.time()
 
     # Signed-request timestamps depend on this (weight 1); never throttle or budget-block.
@@ -140,6 +152,7 @@ def should_allow_rest(
 
     try:
         from app.services.binance_spot import is_ip_banned
+
         if is_ip_banned():
             return False, "ip_banned", weight
     except Exception:
@@ -148,6 +161,7 @@ def should_allow_rest(
     # Global weight budget (sync-safe kayıt)
     try:
         from app.services.binance_weight import get_weight_used_last_60s
+
         used = get_weight_used_last_60s(None, None)
         if used + weight > REST_WEIGHT_LIMIT:
             return False, f"weight_budget({used}+{weight}>{REST_WEIGHT_LIMIT})", weight
@@ -214,7 +228,15 @@ def record_rest(
 
 def _aggregate_window(events: List[Dict[str, Any]]) -> Dict[str, Any]:
     by_path: Dict[str, Dict[str, Any]] = defaultdict(
-        lambda: {"count": 0, "weight": 0, "ok": 0, "denied": 0, "skipped": 0, "error": 0, "sources": defaultdict(int)}
+        lambda: {
+            "count": 0,
+            "weight": 0,
+            "ok": 0,
+            "denied": 0,
+            "skipped": 0,
+            "error": 0,
+            "sources": defaultdict(int),
+        }
     )
     by_source: Dict[str, Dict[str, Any]] = defaultdict(
         lambda: {"count": 0, "weight": 0, "ok": 0, "denied": 0}
@@ -228,7 +250,9 @@ def _aggregate_window(events: List[Dict[str, Any]]) -> Dict[str, Any]:
         oc = e["outcome"]
         by_path[path]["count"] += 1
         by_path[path]["weight"] += w if oc == "ok" else 0
-        by_path[path][oc if oc in ("ok", "denied", "skipped", "error") else "error"] += 1
+        by_path[path][
+            oc if oc in ("ok", "denied", "skipped", "error") else "error"
+        ] += 1
         by_path[path]["sources"][src] += 1
         by_source[src]["count"] += 1
         if oc == "ok":
@@ -254,8 +278,12 @@ def _aggregate_window(events: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 
 def _format_window_report(start_ts: float, end_ts: float, agg: Dict[str, Any]) -> str:
-    start_s = datetime.fromtimestamp(start_ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-    end_s = datetime.fromtimestamp(end_ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    start_s = datetime.fromtimestamp(start_ts, tz=timezone.utc).strftime(
+        "%Y-%m-%d %H:%M:%S UTC"
+    )
+    end_s = datetime.fromtimestamp(end_ts, tz=timezone.utc).strftime(
+        "%Y-%m-%d %H:%M:%S UTC"
+    )
     pid = os.getpid()
     lines = [
         "",
@@ -268,7 +296,10 @@ def _format_window_report(start_ts: float, end_ts: float, agg: Dict[str, Any]) -
     ]
     paths = sorted(agg["by_path"].items(), key=lambda x: -x[1]["weight"])
     for path, d in paths[:25]:
-        src_bits = ", ".join(f"{s}({c})" for s, c in sorted(d["sources"].items(), key=lambda x: -x[1])[:4])
+        src_bits = ", ".join(
+            f"{s}({c})"
+            for s, c in sorted(d["sources"].items(), key=lambda x: -x[1])[:4]
+        )
         lines.append(
             f"  {path:32} cnt={d['count']:4}  w={d['weight']:4}  "
             f"ok={d['ok']} skip={d['skipped']} deny={d['denied']} err={d['error']}  [{src_bits}]"
@@ -276,7 +307,9 @@ def _format_window_report(start_ts: float, end_ts: float, agg: Dict[str, Any]) -
     lines.append("-" * 72)
     lines.append("by_source:")
     for src, d in sorted(agg["by_source"].items(), key=lambda x: -x[1]["weight"])[:20]:
-        lines.append(f"  {src:40} cnt={d['count']:4}  w={d['weight']:4}  ok={d['ok']} deny={d['denied']}")
+        lines.append(
+            f"  {src:40} cnt={d['count']:4}  w={d['weight']:4}  ok={d['ok']} deny={d['denied']}"
+        )
     if _denied_by_reason:
         lines.append("-" * 72)
         lines.append("deny/skip reasons (kümülatif):")
@@ -286,13 +319,21 @@ def _format_window_report(start_ts: float, end_ts: float, agg: Dict[str, Any]) -
     hints: List[str] = []
     for path, d in agg["by_path"].items():
         if path == "/api/v3/ticker/24hr" and d["count"] >= 6:
-            hints.append(f"ticker/24hr bulk {d['count']}x/dk (~{d['weight']} weight) — interval artır veya DataHub cache kullan")
+            hints.append(
+                f"ticker/24hr bulk {d['count']}x/dk (~{d['weight']} weight) — interval artır veya DataHub cache kullan"
+            )
         if path == "/api/v3/ticker/price" and d["count"] >= 15:
-            hints.append(f"ticker/price bulk {d['count']}x/dk — WS aktifken REST price kapat")
+            hints.append(
+                f"ticker/price bulk {d['count']}x/dk — WS aktifken REST price kapat"
+            )
         if path == "/api/v3/openOrders" and d["count"] >= 8:
-            hints.append(f"openOrders {d['count']}x/dk — cache TTL artır veya ban sırasında atla")
+            hints.append(
+                f"openOrders {d['count']}x/dk — cache TTL artır veya ban sırasında atla"
+            )
     if agg["total_weight_ok"] > REST_SOFT_LIMIT:
-        hints.append(f"weight_ok={agg['total_weight_ok']} soft limit ({REST_SOFT_LIMIT}) üstünde — ban riski yüksek")
+        hints.append(
+            f"weight_ok={agg['total_weight_ok']} soft limit ({REST_SOFT_LIMIT}) üstünde — ban riski yüksek"
+        )
     if hints:
         lines.append("-" * 72)
         lines.append("warnings:")
@@ -310,7 +351,11 @@ def _rotate_rest_log_if_needed(log_path: Path) -> None:
         # rest.log.3 → drop, rest.log.2 → .3, ..., rest.log → .1
         for i in range(REST_LOG_BACKUP_COUNT, 0, -1):
             src = log_path.parent / f"{log_path.name}.{i}"
-            dst = log_path.parent / f"{log_path.name}.{i + 1}" if i < REST_LOG_BACKUP_COUNT else None
+            dst = (
+                log_path.parent / f"{log_path.name}.{i + 1}"
+                if i < REST_LOG_BACKUP_COUNT
+                else None
+            )
             if dst and src.exists():
                 src.replace(dst)
             elif not dst and src.exists():
@@ -371,7 +416,11 @@ def start_rest_log_flush_task() -> None:
     if _flush_task and not _flush_task.done():
         return
     _flush_task = loop.create_task(_flush_loop())
-    logger.info("REST log flush started path=%s interval=%ss", REST_LOG_PATH, REST_LOG_INTERVAL_SEC)
+    logger.info(
+        "REST log flush started path=%s interval=%ss",
+        REST_LOG_PATH,
+        REST_LOG_INTERVAL_SEC,
+    )
 
 
 def get_live_snapshot() -> Dict[str, Any]:

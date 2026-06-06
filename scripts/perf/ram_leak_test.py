@@ -6,6 +6,7 @@ Periyodik gc.collect() sonrası obje sayıları; stop sonrası task sayısı aza
   python scripts/ram_leak_test.py
 veya uygulama içinden GET /api/debug/ram-snapshot (RAM_PROBE_ENABLED=1).
 """
+
 import gc
 import json
 import os
@@ -25,6 +26,7 @@ def main():
         get_ram_snapshot_log_path,
         _get_asyncio_task_count,
     )
+
     gc.collect()
     leak_result = gc_collect_and_count()
     snapshot = take_snapshot(label="leak_test")

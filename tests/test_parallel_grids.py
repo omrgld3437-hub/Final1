@@ -1,4 +1,5 @@
 """Paralel çoklu grid tetik / yürütme."""
+
 import pytest
 
 from app.botengine.models import DcaGridTrailingConfig
@@ -9,16 +10,18 @@ from app.botengine.strategies.dca_grid_trailing import (
 
 
 def _cfg_two_buy():
-    return DcaGridTrailingConfig({
-        "symbol": "ETHUSDT",
-        "sell_grids": [],
-        "buy_grids": [
-            {"buy_grid_pct": 1.0, "buy_qty_pct_of_quote": 10.0},
-            {"buy_grid_pct": 2.0, "buy_qty_pct_of_quote": 20.0},
-        ],
-        "sell_trigger_trailing_pct": 0.3,
-        "buy_trigger_trailing_pct": 0.3,
-    })
+    return DcaGridTrailingConfig(
+        {
+            "symbol": "ETHUSDT",
+            "sell_grids": [],
+            "buy_grids": [
+                {"buy_grid_pct": 1.0, "buy_qty_pct_of_quote": 10.0},
+                {"buy_grid_pct": 2.0, "buy_qty_pct_of_quote": 20.0},
+            ],
+            "sell_trigger_trailing_pct": 0.3,
+            "buy_trigger_trailing_pct": 0.3,
+        }
+    )
 
 
 def _state_two_buy():

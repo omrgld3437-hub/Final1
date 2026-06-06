@@ -2,6 +2,7 @@
 Benzersiz, karmaşık 6 haneli hesap kodu üretimi.
 Tüm hesapların ID'leri karmaşık 6 haneli rakamlardan oluşur (100000–999999, en az 3 farklı rakam).
 """
+
 import random
 from sqlalchemy.orm import Session
 

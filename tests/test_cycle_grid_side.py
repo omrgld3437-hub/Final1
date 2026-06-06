@@ -1,4 +1,5 @@
 """Tur yön kilidi — ilk başarılı grid fill sonrası tek yön."""
+
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -12,17 +13,19 @@ from app.botengine.strategies.dca_grid_trailing import (
 
 
 def _cfg():
-    return DcaGridTrailingConfig({
-        "symbol": "ETHUSDT",
-        "sell_grids": [{"sell_grid_pct": 1.0, "sell_qty_pct_of_base": 10.0}],
-        "buy_grids": [{"buy_grid_pct": 1.0, "buy_qty_pct_of_quote": 10.0}],
-        "sell_trigger_trailing_pct": 0.3,
-        "buy_trigger_trailing_pct": 0.3,
-        "profit_reentry_drop_pct": 1.0,
-        "profit_reentry_rise_pct": 0.3,
-        "profit_exit_rise_pct": 1.0,
-        "profit_exit_drop_pct": 0.3,
-    })
+    return DcaGridTrailingConfig(
+        {
+            "symbol": "ETHUSDT",
+            "sell_grids": [{"sell_grid_pct": 1.0, "sell_qty_pct_of_base": 10.0}],
+            "buy_grids": [{"buy_grid_pct": 1.0, "buy_qty_pct_of_quote": 10.0}],
+            "sell_trigger_trailing_pct": 0.3,
+            "buy_trigger_trailing_pct": 0.3,
+            "profit_reentry_drop_pct": 1.0,
+            "profit_reentry_rise_pct": 0.3,
+            "profit_exit_rise_pct": 1.0,
+            "profit_exit_drop_pct": 0.3,
+        }
+    )
 
 
 def _base_state():
@@ -63,8 +66,14 @@ def test_lock_sell_clears_buy_triggers():
     state["buy_grid_trigger_price"] = [99.0]
     state["buy_grid_trough_price"] = [98.5]
     apply_fill_to_state(
-        state, "SELL", 0.1, 101.0, 0.0,
-        grid_index=0, reason="trail_sell_grid", execution_price=100.7,
+        state,
+        "SELL",
+        0.1,
+        101.0,
+        0.0,
+        grid_index=0,
+        reason="trail_sell_grid",
+        execution_price=100.7,
     )
     state["sell_grid_fired"] = [True]
     assert state["cycle_grid_side"] == "SELL"
@@ -91,8 +100,14 @@ def test_reentry_only_after_sell_grid_fill():
     assert state.get("mode") != "TRAIL_REENTRY_BUY"
     assert state.get("cycle_grid_side") is None
     apply_fill_to_state(
-        state, "SELL", 0.1, 101.0, 0.0,
-        grid_index=0, reason="trail_sell_grid", execution_price=100.7,
+        state,
+        "SELL",
+        0.1,
+        101.0,
+        0.0,
+        grid_index=0,
+        reason="trail_sell_grid",
+        execution_price=100.7,
     )
     state["sell_grid_fired"] = [True]
     tick_dca_grid_trailing(state, cfg, 99.0, 0.9, 60.0)

@@ -2,6 +2,7 @@
 Üst ticker şeridi: GET /api/pricing/summary
 Canlı FX, metals, crypto; cache TTL ve in-flight dedupe backend'de.
 """
+
 from __future__ import annotations
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse

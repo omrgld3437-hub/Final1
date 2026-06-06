@@ -4,42 +4,44 @@ VERSION: v1.0
 DATE: 2026-01-22
 CHANGE: YENİ - Bağımsız Spot Trading Engine - Flash Hızında
 """
+
 from __future__ import annotations
 from decimal import Decimal
 from typing import Dict, Any, Optional, Tuple
 import math
 import time
 import logging
-import asyncio
 from dataclasses import dataclass
-from datetime import datetime, timedelta
 
 import httpx
 
-from app.services.binance_assets import BinanceKeys, get_account_keys
-from app.services.binance_spot import BINANCE_API, BINANCE_TESTNET, _public_get, _signed_request
+from app.services.binance_assets import BinanceKeys
+from app.services.binance_spot import BINANCE_API, BINANCE_TESTNET, _signed_request
 
 logger = logging.getLogger(__name__)
+
 
 # ============================================================
 # FLASH HIZLI CACHE - In-Memory Cache Layer
 # ============================================================
 class SpotCache:
     """Ultra-fast in-memory cache for spot trading data"""
-    
+
     def __init__(self):
         self.prices: Dict[str, Tuple[float, float]] = {}  # symbol -> (price, timestamp)
-        self.balances: Dict[int, Tuple[Dict, float]] = {}  # account_id -> (data, timestamp)
-        self.filters: Dict[str, Tuple[Dict, float]] = {}   # symbol -> (data, timestamp)
-        
+        self.balances: Dict[
+            int, Tuple[Dict, float]
+        ] = {}  # account_id -> (data, timestamp)
+        self.filters: Dict[str, Tuple[Dict, float]] = {}  # symbol -> (data, timestamp)
+
         # TTL constants (seconds)
-        self.PRICE_TTL = 4.0      # UI poll — DataHub SSOT; REST yükünü azalt
-        self.BALANCE_TTL = 2.0    # 2 seconds
+        self.PRICE_TTL = 4.0  # UI poll — DataHub SSOT; REST yükünü azalt
+        self.BALANCE_TTL = 2.0  # 2 seconds
         self.FILTER_TTL = 3600.0  # 1 hour - rarely changes
         self._MAX_PRICES = 128
         self._MAX_BALANCES = 32
         self._MAX_FILTERS = 200
-        
+
     def get_price(self, symbol: str) -> Optional[float]:
         """Get cached price if fresh"""
         if symbol not in self.prices:
@@ -49,14 +51,14 @@ class SpotCache:
             del self.prices[symbol]
             return None
         return price
-    
+
     def set_price(self, symbol: str, price: float):
         """Cache price"""
         self.prices[symbol] = (price, time.time())
         if len(self.prices) > self._MAX_PRICES:
             oldest = min(self.prices.items(), key=lambda x: x[1][1])[0]
             self.prices.pop(oldest, None)
-    
+
     def get_balance(self, account_id: int) -> Optional[Dict]:
         """Get cached balance if fresh"""
         if account_id not in self.balances:
@@ -66,14 +68,14 @@ class SpotCache:
             del self.balances[account_id]
             return None
         return data
-    
+
     def set_balance(self, account_id: int, data: Dict):
         """Cache balance"""
         self.balances[account_id] = (data, time.time())
         if len(self.balances) > self._MAX_BALANCES:
             oldest = min(self.balances.items(), key=lambda x: x[1][1])[0]
             self.balances.pop(oldest, None)
-    
+
     def get_filters(self, symbol: str) -> Optional[Dict]:
         """Get cached filters if fresh"""
         if symbol not in self.filters:
@@ -83,7 +85,7 @@ class SpotCache:
             del self.filters[symbol]
             return None
         return data
-    
+
     def set_filters(self, symbol: str, data: Dict):
         """Cache filters"""
         self.filters[symbol] = (data, time.time())
@@ -98,6 +100,7 @@ class SpotCache:
     def invalidate_balance(self, account_id: int) -> None:
         """Emir/convert sonrası eski bakiye cache'ini temizle."""
         self.balances.pop(int(account_id), None)
+
 
 # Global cache instance
 spot_cache = SpotCache()
@@ -133,6 +136,7 @@ def _is_symbol_in_400_cooldown(symbol: str) -> bool:
 @dataclass
 class SpotData:
     """Spot trading data container"""
+
     symbol: str
     price: float
     price_change_24h: float
@@ -146,22 +150,23 @@ class SpotData:
     min_notional: str
     timestamp: float
 
+
 class SpotEngine:
     """Bağımsız Spot Trading Engine - Flash Hızında"""
-    
+
     def __init__(self, keys: BinanceKeys):
         self.keys = keys
         self.base_url = BINANCE_TESTNET if keys.testnet else BINANCE_API
         self.client = None
-    
+
     async def __aenter__(self):
         self.client = httpx.AsyncClient(timeout=10.0)
         return self
-    
+
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         if self.client:
             await self.client.aclose()
-    
+
     def _default_spot_data(self, symbol: str) -> SpotData:
         """Hata veya geçersiz sembol için sıfırlı SpotData."""
         sym = (symbol or "BTCUSDT").upper()
@@ -178,7 +183,7 @@ class SpotEngine:
             step_size="0.00001",
             min_qty="0.00001",
             min_notional="5",
-            timestamp=time.time()
+            timestamp=time.time(),
         )
 
     async def get_quick_data(self, symbol: str, account_id: int) -> SpotData:
@@ -198,8 +203,10 @@ class SpotEngine:
             logger.warning("get_quick_data error for %s: %s", symbol, e)
             return self._default_spot_data(symbol)
 
-    async def _get_quick_data_impl(self, symbol: str, account_id: int, start_time: float) -> SpotData:
-        
+    async def _get_quick_data_impl(
+        self, symbol: str, account_id: int, start_time: float
+    ) -> SpotData:
+
         # 1. Get price: cache -> DataHub -> price_hub -> public ticker (skip Binance if 400 cooldown)
         price = spot_cache.get_price(symbol)
         if price is None and _is_symbol_in_400_cooldown(symbol):
@@ -207,13 +214,14 @@ class SpotEngine:
         if price is None:
             try:
                 from app.services.data_hub import data_hub
+
                 price = data_hub.get_price(symbol)  # float | None, serve-stale for UI
                 if price and price > 0:
                     spot_cache.set_price(symbol, price)
             except Exception as e:
                 logger.warning(f"Price fetch error for {symbol}: {e}")
                 price = 0.0
-        
+
         # 2. Sembol filtreleri — exchangeInfo (Binance REST cache) öncelikli; varsayılan step cache'lenmez
         sym = symbol.upper()
         flt = await self._get_symbol_filters(sym)
@@ -226,21 +234,22 @@ class SpotEngine:
             "quoteAsset": flt.get("quote_asset") or "USDT",
         }
         spot_cache.set_filters(sym, filters)
-        
+
         # 3. Get balance (signed, cached)
         balance_data = spot_cache.get_balance(account_id)
         if balance_data is None:
             try:
                 from app.services.binance_spot import get_wallet
+
                 wallet_data = await get_wallet(self.keys, tag="spot_engine")
                 balances = wallet_data.get("balances", [])
-                
+
                 base_asset = filters.get("baseAsset", symbol.replace("USDT", ""))
                 quote_asset = filters.get("quoteAsset", "USDT")
-                
+
                 base_balance = 0.0
                 quote_balance = 0.0
-                
+
                 for b in balances:
                     asset = b.get("asset")
                     free = float(b.get("free", 0))
@@ -248,14 +257,12 @@ class SpotEngine:
                         base_balance = free
                     elif asset == quote_asset:
                         quote_balance = free
-                
-                balance_data = {
-                    "base": base_balance,
-                    "quote": quote_balance
-                }
+
+                balance_data = {"base": base_balance, "quote": quote_balance}
                 spot_cache.set_balance(account_id, balance_data)
                 try:
                     from app.services.binance_connectivity import note_binance_success
+
                     note_binance_success(account_id)
                 except Exception:
                     pass
@@ -263,6 +270,7 @@ class SpotEngine:
                 logger.warning(f"Balance fetch error for account {account_id}: {e}")
                 try:
                     from app.services.binance_connectivity import note_binance_failure
+
                     note_binance_failure(
                         account_id,
                         "BINANCE_UNREACHABLE",
@@ -272,19 +280,20 @@ class SpotEngine:
                 except Exception:
                     pass
                 balance_data = {"base": 0.0, "quote": 0.0}
-        
+
         # 4. 24h change: market_data cache only
         price_change_24h = 0.0
         try:
             from app.services.market_data import get_ticker_24h
+
             t = get_ticker_24h(symbol)
             price_change_24h = float(t.get("priceChangePercent") or 0)
         except Exception as e:
             logger.debug(f"24h ticker cache miss for {symbol}: {e}")
-        
+
         elapsed = (time.time() - start_time) * 1000
         logger.debug("[SPOT_ENGINE] quick_data: symbol=%s, t=%.1fms", symbol, elapsed)
-        
+
         return SpotData(
             symbol=symbol,
             price=price,
@@ -297,9 +306,9 @@ class SpotEngine:
             step_size=filters.get("stepSize", "0.00001"),
             min_qty=filters.get("minQty", filters.get("stepSize", "0.00001")),
             min_notional=filters.get("minNotional", "5"),
-            timestamp=time.time()
+            timestamp=time.time(),
         )
-    
+
     def _step_decimals(self, step_str: str) -> int:
         """stepSize string'tan Binance LOT_SIZE ondalık basamak sayısı."""
         if not step_str:
@@ -321,6 +330,7 @@ class SpotEngine:
             return "0"
         try:
             from decimal import ROUND_DOWN
+
             step_d = Decimal(str(step_str).strip() or "0.00001")
             if step_d <= 0:
                 step_d = Decimal("0.00001")
@@ -344,11 +354,14 @@ class SpotEngine:
             return "0"
         try:
             from decimal import ROUND_HALF_UP
+
             tick_d = Decimal(str(tick_str).strip() or "0.01")
             if tick_d <= 0:
                 tick_d = Decimal("0.01")
             value_d = Decimal(str(value))
-            p = (value_d / tick_d).quantize(Decimal("1"), rounding=ROUND_HALF_UP) * tick_d
+            p = (value_d / tick_d).quantize(
+                Decimal("1"), rounding=ROUND_HALF_UP
+            ) * tick_d
             decimals = self._step_decimals(tick_str or "0.01")
             s = f"{float(p):.{decimals}f}"
             return s.rstrip("0").rstrip(".") or "0"
@@ -360,7 +373,9 @@ class SpotEngine:
             p = round(round(value / tick) * tick, decimals)
             return (f"%.{decimals}f" % p).rstrip("0").rstrip(".") or "0"
 
-    async def _fetch_symbol_filters_from_binance(self, symbol: str) -> Optional[Dict[str, str]]:
+    async def _fetch_symbol_filters_from_binance(
+        self, symbol: str
+    ) -> Optional[Dict[str, str]]:
         """exchangeInfo — kompakt cache (binance_spot), tam JSON RAM'de tutulmaz."""
         try:
             from app.services.binance_spot import get_cached_symbol_filters
@@ -383,21 +398,32 @@ class SpotEngine:
                 "base_asset": cached_ex.get("baseAsset") or sym.replace("USDT", ""),
                 "quote_asset": cached_ex.get("quoteAsset") or "USDT",
             }
-            spot_cache.set_filters(sym, {
-                "stepSize": step,
-                "tickSize": tick,
-                "minQty": min_q,
-                "minNotional": min_notional,
-                "baseAsset": out["base_asset"],
-                "quoteAsset": out["quote_asset"],
-            })
+            spot_cache.set_filters(
+                sym,
+                {
+                    "stepSize": step,
+                    "tickSize": tick,
+                    "minQty": min_q,
+                    "minNotional": min_notional,
+                    "baseAsset": out["base_asset"],
+                    "quoteAsset": out["quote_asset"],
+                },
+            )
             return out
         except Exception as e:
             logger.warning("fetch_symbol_filters_from_binance %s: %s", symbol, e)
         return None
 
-    def _filters_dict_to_out(self, symbol: str, step: str, tick: str, min_q: str,
-                             min_notional: str = "5", base_asset: str = "", quote_asset: str = "USDT") -> Dict[str, str]:
+    def _filters_dict_to_out(
+        self,
+        symbol: str,
+        step: str,
+        tick: str,
+        min_q: str,
+        min_notional: str = "5",
+        base_asset: str = "",
+        quote_asset: str = "USDT",
+    ) -> Dict[str, str]:
         sym = symbol.upper()
         return {
             "step_size": step,
@@ -416,6 +442,7 @@ class SpotEngine:
             return fetched
         try:
             from app.services.market_data import get_symbol_filters
+
             cached = get_symbol_filters(symbol)
             if cached:
                 step = cached.get("step_size_str") or cached.get("stepSize")
@@ -438,14 +465,17 @@ class SpotEngine:
                     str(cached.get("baseAsset") or symbol.replace("USDT", "")),
                     str(cached.get("quoteAsset") or "USDT"),
                 )
-                spot_cache.set_filters(symbol, {
-                    "stepSize": out["step_size"],
-                    "tickSize": out["tick_size"],
-                    "minQty": out["min_qty"],
-                    "minNotional": out["min_notional"],
-                    "baseAsset": out["base_asset"],
-                    "quoteAsset": out["quote_asset"],
-                })
+                spot_cache.set_filters(
+                    symbol,
+                    {
+                        "stepSize": out["step_size"],
+                        "tickSize": out["tick_size"],
+                        "minQty": out["min_qty"],
+                        "minNotional": out["min_notional"],
+                        "baseAsset": out["base_asset"],
+                        "quoteAsset": out["quote_asset"],
+                    },
+                )
                 return out
         except Exception as e:
             logger.debug("Symbol filters data_hub for %s: %s", symbol, e)
@@ -481,6 +511,7 @@ class SpotEngine:
         """
         from app.core.config import is_worker_role
         from app.core.errors import AppError
+
         if not allow_web and not is_worker_role():
             raise AppError(
                 "WORKER_ONLY_OPERATION",
@@ -520,7 +551,7 @@ class SpotEngine:
             "type": order_type.upper(),
             "recvWindow": "5000",
         }
-        
+
         if order_type.upper() == "LIMIT":
             if not price or not quantity:
                 raise ValueError("LIMIT orders require price and quantity")
@@ -542,14 +573,20 @@ class SpotEngine:
         if allow_web:
             logger.info(
                 "SPOT_ORDER symbol=%s side=%s type=%s qty=%s step=%s",
-                symbol, side, order_type, params.get("quantity") or params.get("quoteOrderQty"), step_size,
+                symbol,
+                side,
+                order_type,
+                params.get("quantity") or params.get("quoteOrderQty"),
+                step_size,
             )
 
-        result = await _signed_request(self.client, "POST", "/api/v3/order", self.keys, params)
-        
+        result = await _signed_request(
+            self.client, "POST", "/api/v3/order", self.keys, params
+        )
+
         # Invalidate balance cache after order (clear all for safety)
         spot_cache.balances.clear()
-        
+
         return result
 
     async def get_commission_rates(self) -> Optional[Dict[str, Any]]:
@@ -558,7 +595,9 @@ class SpotEngine:
             return None
         try:
             # Returns list of { symbol, makerCommission, takerCommission }; use first or aggregate
-            data = await _signed_request(self.client, "GET", "/sapi/v1/asset/tradeFee", self.keys, {})
+            data = await _signed_request(
+                self.client, "GET", "/sapi/v1/asset/tradeFee", self.keys, {}
+            )
             if isinstance(data, list) and len(data) > 0:
                 first = data[0]
                 maker = float(first.get("makerCommission", 0.001))
@@ -567,7 +606,7 @@ class SpotEngine:
                     "maker": maker,
                     "taker": taker,
                     "maker_pct": round(maker * 100, 4),
-                    "taker_pct": round(taker * 100, 4)
+                    "taker_pct": round(taker * 100, 4),
                 }
         except Exception as e:
             logger.debug("get_commission_rates error: %s", e)

@@ -1,20 +1,37 @@
 """İlk bot START logu için kısa config özeti (bot_engine_events meta)."""
+
 from __future__ import annotations
 
 from typing import Any, Dict, List
 
 
 def _grid_sell_short(g: Dict[str, Any], idx: int) -> str:
-    pct = g.get("sell_grid_pct") if g.get("sell_grid_pct") is not None else g.get("trigger_pct")
-    qty = g.get("sell_qty_pct_of_base") if g.get("sell_qty_pct_of_base") is not None else g.get("qty_pct")
+    pct = (
+        g.get("sell_grid_pct")
+        if g.get("sell_grid_pct") is not None
+        else g.get("trigger_pct")
+    )
+    qty = (
+        g.get("sell_qty_pct_of_base")
+        if g.get("sell_qty_pct_of_base") is not None
+        else g.get("qty_pct")
+    )
     p = f"+{pct}" if pct is not None else "—"
     q = f"{qty}%B" if qty is not None else "—"
     return f"Y#{idx + 1} {p}% {q}"
 
 
 def _grid_buy_short(g: Dict[str, Any], idx: int) -> str:
-    pct = g.get("buy_grid_pct") if g.get("buy_grid_pct") is not None else g.get("trigger_pct")
-    qty = g.get("buy_qty_pct_of_quote") if g.get("buy_qty_pct_of_quote") is not None else g.get("qty_pct")
+    pct = (
+        g.get("buy_grid_pct")
+        if g.get("buy_grid_pct") is not None
+        else g.get("trigger_pct")
+    )
+    qty = (
+        g.get("buy_qty_pct_of_quote")
+        if g.get("buy_qty_pct_of_quote") is not None
+        else g.get("qty_pct")
+    )
     p = f"-{pct}" if pct is not None else "—"
     q = f"{qty}%Q" if qty is not None else "—"
     return f"A#{idx + 1} {p}% {q}"
@@ -40,8 +57,12 @@ def build_cold_start_brief_meta(raw_cfg: Dict[str, Any]) -> Dict[str, Any]:
         out["sell_trail_pct"] = round(float(st), 2)
     if bt is not None:
         out["buy_trail_pct"] = round(float(bt), 2)
-    pr = raw_cfg.get("profit_reentry_drop_pct") or (raw_cfg.get("profit") or {}).get("rebuy_trigger_pct")
-    pe = raw_cfg.get("profit_exit_rise_pct") or (raw_cfg.get("profit") or {}).get("resell_trigger_pct")
+    pr = raw_cfg.get("profit_reentry_drop_pct") or (raw_cfg.get("profit") or {}).get(
+        "rebuy_trigger_pct"
+    )
+    pe = raw_cfg.get("profit_exit_rise_pct") or (raw_cfg.get("profit") or {}).get(
+        "resell_trigger_pct"
+    )
     if pr is not None:
         out["profit_reentry_pct"] = round(float(pr), 2)
     if pe is not None:

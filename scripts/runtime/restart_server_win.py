@@ -10,6 +10,7 @@ Kullanım:
 
 Sadece Windows'ta calistirilir. Admin API restart isteginde kullanilir.
 """
+
 import os
 import sys
 import time
@@ -51,7 +52,11 @@ def main():
         log.error("Baslatma scripti bulunamadi: calistir.bat veya Server Start.bat")
         sys.exit(1)
 
-    log.info("5 saniye bekleniyor, sonra PID %s kapatilip %s ile yeniden baslatilacak.", pid, start_bat)
+    log.info(
+        "5 saniye bekleniyor, sonra PID %s kapatilip %s ile yeniden baslatilacak.",
+        pid,
+        start_bat,
+    )
     time.sleep(5)
 
     # Windows: taskkill ile sunucu prosesini kapat

@@ -1,6 +1,7 @@
 """
 Unit tests for Binance reconcile semantics: code!=0 => error; -2013 / order does not exist => NOT_FOUND; valid order => FOUND.
 """
+
 from app.services.binance_spot import (
     _is_order_not_found,
     _is_valid_order_response,
@@ -60,14 +61,40 @@ def test_is_valid_order_response_uses_orig_client_order_id():
 def test_is_valid_order_response_invalid_code_like_body():
     """Body with code!=0 is not passed to _is_valid_order_response (caller gets BinanceSignedError). We only validate successful JSON shape."""
     data = {"code": -2013, "msg": "Unknown order sent."}
-    assert _is_valid_order_response(data, "LTCUSDT", "any") is False  # no orderId/status
+    assert (
+        _is_valid_order_response(data, "LTCUSDT", "any") is False
+    )  # no orderId/status
 
 
 def test_is_valid_order_response_no_order_id():
     """Missing or zero orderId => invalid (NOT_FOUND)."""
     assert _is_valid_order_response({}, "LTCUSDT", "coid") is False
-    assert _is_valid_order_response({"orderId": 0, "status": "FILLED", "symbol": "LTCUSDT", "clientOrderId": "x"}, "LTCUSDT", "x") is False
-    assert _is_valid_order_response({"orderId": None, "status": "FILLED", "symbol": "LTCUSDT", "clientOrderId": "x"}, "LTCUSDT", "x") is False
+    assert (
+        _is_valid_order_response(
+            {
+                "orderId": 0,
+                "status": "FILLED",
+                "symbol": "LTCUSDT",
+                "clientOrderId": "x",
+            },
+            "LTCUSDT",
+            "x",
+        )
+        is False
+    )
+    assert (
+        _is_valid_order_response(
+            {
+                "orderId": None,
+                "status": "FILLED",
+                "symbol": "LTCUSDT",
+                "clientOrderId": "x",
+            },
+            "LTCUSDT",
+            "x",
+        )
+        is False
+    )
 
 
 def test_is_valid_order_response_wrong_symbol():
@@ -78,19 +105,31 @@ def test_is_valid_order_response_wrong_symbol():
 
 def test_is_valid_order_response_wrong_client_order_id():
     """clientOrderId mismatch => invalid."""
-    data = {"orderId": 1, "status": "FILLED", "symbol": "LTCUSDT", "clientOrderId": "other"}
+    data = {
+        "orderId": 1,
+        "status": "FILLED",
+        "symbol": "LTCUSDT",
+        "clientOrderId": "other",
+    }
     assert _is_valid_order_response(data, "LTCUSDT", "expected_coid") is False
 
 
 def test_is_valid_order_response_invalid_status():
     """Status not in allowed set => invalid."""
-    data = {"orderId": 1, "status": "PENDING", "symbol": "LTCUSDT", "clientOrderId": "c"}
+    data = {
+        "orderId": 1,
+        "status": "PENDING",
+        "symbol": "LTCUSDT",
+        "clientOrderId": "c",
+    }
     assert _is_valid_order_response(data, "LTCUSDT", "c") is False
 
 
 def test_binance_signed_error_attributes():
     """BinanceSignedError has code, msg, data for caller to handle -2013."""
-    e = BinanceSignedError(-2013, "Unknown order sent.", {"code": -2013, "msg": "Unknown order sent."})
+    e = BinanceSignedError(
+        -2013, "Unknown order sent.", {"code": -2013, "msg": "Unknown order sent."}
+    )
     assert e.code == -2013
     assert "Unknown" in e.msg
     assert e.data.get("code") == -2013

@@ -2,6 +2,7 @@
 Per-account Binance upstream failure tracker.
 Failures persist to .run/ (cross-process). Bot log events written synchronously on probe/view.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -38,22 +39,26 @@ _last_auto_resume_by_account: Dict[int, float] = {}
 _first_fail_ts_by_account: Dict[int, float] = {}
 
 _AUTO_RESUME_THROTTLE_SEC = 45.0
-_AUTO_RESUME_ERROR_CODES = frozenset({
-    "API_UNAUTHORIZED",
-    "BINANCE_UNREACHABLE",
-    "BINANCE_RATE_LIMIT",
-})
+_AUTO_RESUME_ERROR_CODES = frozenset(
+    {
+        "API_UNAUTHORIZED",
+        "BINANCE_UNREACHABLE",
+        "BINANCE_RATE_LIMIT",
+    }
+)
 
 _CONNECTIVITY_STABLE_MESSAGE = "Bağlantı kuruldu ve stabil · Bot sorunsuz çalışıyor"
 _CONNECTIVITY_STABLE_COOLDOWN_SEC = 45.0
-_CONNECTIVITY_OUTAGE_META_CODES = frozenset({
-    "API_UNAUTHORIZED",
-    "BINANCE_UNREACHABLE",
-    "BINANCE_RATE_LIMIT",
-    "CONNECTIVITY_LOST",
-    "CONNECTIVITY_PAUSED",
-    "ACCOUNT_KEYS_MISSING",
-})
+_CONNECTIVITY_OUTAGE_META_CODES = frozenset(
+    {
+        "API_UNAUTHORIZED",
+        "BINANCE_UNREACHABLE",
+        "BINANCE_RATE_LIMIT",
+        "CONNECTIVITY_LOST",
+        "CONNECTIVITY_PAUSED",
+        "ACCOUNT_KEYS_MISSING",
+    }
+)
 
 
 def _fail_path(account_id: int) -> Path:
@@ -63,7 +68,9 @@ def _fail_path(account_id: int) -> Path:
 def _persist_failure(account_id: int, rec: Dict[str, Any]) -> None:
     try:
         _RUN_DIR.mkdir(parents=True, exist_ok=True)
-        _fail_path(account_id).write_text(json.dumps(rec, ensure_ascii=False), encoding="utf-8")
+        _fail_path(account_id).write_text(
+            json.dumps(rec, ensure_ascii=False), encoding="utf-8"
+        )
     except Exception as e:
         logger.debug("binance_connectivity persist account_id=%s: %s", account_id, e)
 
@@ -74,7 +81,9 @@ def _clear_persisted_failure(account_id: int) -> None:
         if p.exists():
             p.unlink()
     except Exception as e:
-        logger.debug("binance_connectivity clear persist account_id=%s: %s", account_id, e)
+        logger.debug(
+            "binance_connectivity clear persist account_id=%s: %s", account_id, e
+        )
 
 
 def _load_persisted_failure(account_id: int) -> Optional[Dict[str, Any]]:
@@ -106,6 +115,7 @@ def _classify_binance_error(exc: Exception) -> Tuple[str, str]:
             body = ""
     try:
         from app.services.binance_spot import _parse_binance_error_body
+
         binance_code, _ = _parse_binance_error_body(body)
     except Exception:
         binance_code = None
@@ -126,19 +136,33 @@ def _classify_binance_error(exc: Exception) -> Tuple[str, str]:
         code_attr == -1021
         or binance_code == -1021
         or "-1021" in body
-        or (body_l and "timestamp" in body_l and ("recvwindow" in body_l or "outside" in body_l))
+        or (
+            body_l
+            and "timestamp" in body_l
+            and ("recvwindow" in body_l or "outside" in body_l)
+        )
     ):
         try:
             from app.services.binance_spot import clock_sync_hint
+
             hint = clock_sync_hint()
         except Exception:
             hint = "Sunucu saatini NTP ile senkronize edin."
         return ("CLOCK_DRIFT", f"Sunucu saati Binance ile uyuşmuyor (-1021). {hint}")
     if sc in (429, 418) or "rate limit" in s:
-        return ("BINANCE_RATE_LIMIT", "Binance istek limiti aşıldı; kısa süre sonra tekrar denenecek.")
+        return (
+            "BINANCE_RATE_LIMIT",
+            "Binance istek limiti aşıldı; kısa süre sonra tekrar denenecek.",
+        )
     if isinstance(exc, asyncio.TimeoutError) or "timeout" in s:
-        return ("BINANCE_UNREACHABLE", "Binance API zaman aşımı — sunucu IP veya ağ bağlantısını kontrol edin.")
-    return ("BINANCE_UNREACHABLE", f"Binance API isteği başarısız: {type(exc).__name__}")
+        return (
+            "BINANCE_UNREACHABLE",
+            "Binance API zaman aşımı — sunucu IP veya ağ bağlantısını kontrol edin.",
+        )
+    return (
+        "BINANCE_UNREACHABLE",
+        f"Binance API isteği başarısız: {type(exc).__name__}",
+    )
 
 
 def note_binance_failure(
@@ -194,7 +218,10 @@ def _schedule_auto_resume_after_success(account_id: int) -> None:
     """Bağlantı düzelince paused_error (API) botlarını worker START komutu ile devam ettir."""
     now = time.time()
     with _lock:
-        if now - _last_auto_resume_by_account.get(account_id, 0.0) < _AUTO_RESUME_THROTTLE_SEC:
+        if (
+            now - _last_auto_resume_by_account.get(account_id, 0.0)
+            < _AUTO_RESUME_THROTTLE_SEC
+        ):
             return
         _last_auto_resume_by_account[account_id] = now
 
@@ -223,7 +250,9 @@ def _schedule_auto_resume_after_success(account_id: int) -> None:
     ).start()
 
 
-def _connectivity_resume_reason(state: Dict[str, Any], previous_error: str) -> Tuple[str, Dict[str, Any]]:
+def _connectivity_resume_reason(
+    state: Dict[str, Any], previous_error: str
+) -> Tuple[str, Dict[str, Any]]:
     """API düzelince bot logunda gösterilecek kısa açıklama."""
     buy_triggers = state.get("buy_grid_trigger_price") or []
     sell_triggers = state.get("sell_grid_trigger_price") or []
@@ -262,12 +291,14 @@ def _connectivity_resume_reason(state: Dict[str, Any], previous_error: str) -> T
     return " ".join(parts), ctx
 
 
-_CONNECTIVITY_STALE_ERROR_CODES = frozenset({
-    "API_UNAUTHORIZED",
-    "BINANCE_UNREACHABLE",
-    "BINANCE_RATE_LIMIT",
-    "ACCOUNT_KEYS_MISSING",
-})
+_CONNECTIVITY_STALE_ERROR_CODES = frozenset(
+    {
+        "API_UNAUTHORIZED",
+        "BINANCE_UNREACHABLE",
+        "BINANCE_RATE_LIMIT",
+        "ACCOUNT_KEYS_MISSING",
+    }
+)
 
 
 def clear_stale_connectivity_errors_for_account(db: "Session", account_id: int) -> int:
@@ -316,15 +347,13 @@ def try_auto_resume_paused_bots(db: "Session", account_id: int) -> int:
     from datetime import datetime, timezone
 
     from app.db.models import Bot
-    from app.botengine.state_store import append_event, load_state, save_state
+    from app.botengine.state_store import load_state, save_state
 
     if not account_id:
         return 0
     aid = int(account_id)
     bots = (
-        db.query(Bot)
-        .filter(Bot.account_id == aid, Bot.status == "paused_error")
-        .all()
+        db.query(Bot).filter(Bot.account_id == aid, Bot.status == "paused_error").all()
     )
     if not bots:
         return 0
@@ -418,7 +447,9 @@ def _queue_connectivity_resume_start(
             },
             ensure_ascii=False,
         )
-        _insert_engine_command(db, int(bot.account_id), int(bot.id), "START", payload_json=start_payload)
+        _insert_engine_command(
+            db, int(bot.account_id), int(bot.id), "START", payload_json=start_payload
+        )
     except Exception as cmd_ex:
         logger.warning(
             "connectivity auto-resume START cmd bot_id=%s: %s",
@@ -427,7 +458,9 @@ def _queue_connectivity_resume_start(
         )
 
 
-def _bot_had_connectivity_outage(db: "Session", bot_id: int, within_sec: float = 21600.0) -> bool:
+def _bot_had_connectivity_outage(
+    db: "Session", bot_id: int, within_sec: float = 21600.0
+) -> bool:
     """Son kesinti kaydı (pause / connectivity ERROR·HEALTH)."""
     if _recent_connectivity_pause_info(db, bot_id, within_sec=within_sec):
         return True
@@ -440,7 +473,11 @@ def _bot_had_connectivity_outage(db: "Session", bot_id: int, within_sec: float =
             if ty not in ("ERROR", "HEALTH_WARN", "HEALTH_CRITICAL", "INFO"):
                 continue
             meta = ev.get("meta") or {}
-            code = (meta.get("error_code") or meta.get("health_code") or "").strip().upper()
+            code = (
+                (meta.get("error_code") or meta.get("health_code") or "")
+                .strip()
+                .upper()
+            )
             if code not in _CONNECTIVITY_OUTAGE_META_CODES:
                 continue
             if ty == "INFO" and code == "CONNECTIVITY_STABLE":
@@ -487,14 +524,18 @@ def queue_and_flush_connectivity_stable(
     from app.db.models import Bot
     from app.botengine.state_store import load_state
 
-    if _recent_connectivity_recovered(db, int(bot_id), within_sec=_CONNECTIVITY_STABLE_COOLDOWN_SEC):
+    if _recent_connectivity_recovered(
+        db, int(bot_id), within_sec=_CONNECTIVITY_STABLE_COOLDOWN_SEC
+    ):
         return False
     bot = db.query(Bot).filter(Bot.id == int(bot_id)).first()
     if not bot or (bot.status or "").lower() != "running":
         return False
     st = state if state is not None else (load_state(db, bot_id) or {})
     mark_pending_connectivity_stable(db, bot, st, previous_error=previous_error)
-    return flush_pending_connectivity_stable(db, bot_id, after_loop_restart=after_loop_restart)
+    return flush_pending_connectivity_stable(
+        db, bot_id, after_loop_restart=after_loop_restart
+    )
 
 
 def mark_pending_connectivity_stable(
@@ -584,7 +625,9 @@ def flush_pending_connectivity_stable(
     if not state.get("_pending_connectivity_stable"):
         return False
     pending_at = float(state.get("_pending_connectivity_stable_at") or 0)
-    if _connectivity_stable_flushed_for_pending(db, bot_id, pending_at) or _recent_connectivity_recovered(
+    if _connectivity_stable_flushed_for_pending(
+        db, bot_id, pending_at
+    ) or _recent_connectivity_recovered(
         db, bot_id, within_sec=_CONNECTIVITY_STABLE_COOLDOWN_SEC
     ):
         state.pop("_pending_connectivity_stable", None)
@@ -592,7 +635,9 @@ def flush_pending_connectivity_stable(
         state.pop("_pending_connectivity_stable_prev_err", None)
         save_state(db, bot_id, bot.account_id, state)
         return False
-    prev_err = (state.pop("_pending_connectivity_stable_prev_err", None) or "").strip() or None
+    prev_err = (
+        state.pop("_pending_connectivity_stable_prev_err", None) or ""
+    ).strip() or None
     state.pop("_pending_connectivity_stable", None)
     state.pop("_pending_connectivity_stable_at", None)
     resume_reason, _ = _connectivity_resume_reason(state, prev_err or "")
@@ -601,7 +646,11 @@ def flush_pending_connectivity_stable(
     meta["after_loop_restart"] = after_loop_restart
     _append_connectivity_stable_event(db, bot, meta)
     save_state(db, bot_id, bot.account_id, state)
-    logger.info("connectivity stable flushed bot_id=%s after_loop_restart=%s", bot_id, after_loop_restart)
+    logger.info(
+        "connectivity stable flushed bot_id=%s after_loop_restart=%s",
+        bot_id,
+        after_loop_restart,
+    )
     return True
 
 
@@ -618,18 +667,17 @@ def mark_pending_connectivity_stable_for_running_bots(
     if not account_id:
         return 0
     aid = int(account_id)
-    bots = (
-        db.query(Bot)
-        .filter(Bot.account_id == aid, Bot.status == "running")
-        .all()
-    )
+    bots = db.query(Bot).filter(Bot.account_id == aid, Bot.status == "running").all()
     marked = 0
     worker_started = _worker_started_ts()
     worker_recent = bool(worker_started and (time.time() - worker_started) < 600.0)
     for bot in bots:
         had_outage = account_had_failure or _bot_had_connectivity_outage(db, bot.id)
         if not had_outage:
-            if _recent_connectivity_recovered(db, bot.id, within_sec=300.0) and not worker_recent:
+            if (
+                _recent_connectivity_recovered(db, bot.id, within_sec=300.0)
+                and not worker_recent
+            ):
                 continue
         state = load_state(db, bot.id) or {}
         prev_err = (state.get("last_error_code") or "").strip() or None
@@ -670,7 +718,9 @@ def on_connectivity_restored(db: "Session", account_id: int) -> int:
         logger.debug("connectivity auto-resume paused account_id=%s: %s", aid, ar_ex)
     try:
         total += mark_pending_connectivity_stable_for_running_bots(
-            db, aid, account_had_failure=had_failure,
+            db,
+            aid,
+            account_had_failure=had_failure,
         )
     except Exception as st_ex:
         logger.debug("connectivity stable pending account_id=%s: %s", aid, st_ex)
@@ -682,10 +732,7 @@ async def run_connectivity_auto_resume_pass(db: "Session") -> int:
     from app.db.models import Bot
 
     rows = (
-        db.query(Bot.account_id)
-        .filter(Bot.status == "paused_error")
-        .distinct()
-        .all()
+        db.query(Bot.account_id).filter(Bot.status == "paused_error").distinct().all()
     )
     total = 0
     for (aid,) in rows:
@@ -717,7 +764,9 @@ def active_failure(account_id: int) -> Optional[Dict[str, Any]]:
     return dict(rec)
 
 
-def _recent_connectivity_pause_info(db: "Session", bot_id: int, within_sec: float = 300.0) -> bool:
+def _recent_connectivity_pause_info(
+    db: "Session", bot_id: int, within_sec: float = 300.0
+) -> bool:
     """True if Tur beklemeye alındı INFO was logged recently."""
     try:
         from app.botengine.state_store import list_events
@@ -747,7 +796,9 @@ def _recent_connectivity_pause_info(db: "Session", bot_id: int, within_sec: floa
         return False
 
 
-def _recent_connectivity_recovered(db: "Session", bot_id: int, within_sec: float = 120.0) -> bool:
+def _recent_connectivity_recovered(
+    db: "Session", bot_id: int, within_sec: float = 120.0
+) -> bool:
     try:
         from app.botengine.state_store import list_events
 
@@ -806,7 +857,9 @@ def emit_tur_connectivity_paused_info(
     return True
 
 
-def _recent_connectivity_event(db: "Session", bot_id: int, error_code: str, within_sec: float = 300.0) -> bool:
+def _recent_connectivity_event(
+    db: "Session", bot_id: int, error_code: str, within_sec: float = 300.0
+) -> bool:
     """True if same connectivity error was logged recently (avoid log spam)."""
     try:
         from app.botengine.state_store import list_events
@@ -814,7 +867,11 @@ def _recent_connectivity_event(db: "Session", bot_id: int, error_code: str, with
         code = (error_code or "BINANCE_UNREACHABLE").strip()
         cutoff = time.time() - within_sec
         for ev in list_events(db, bot_id, limit=30):
-            if (ev.get("type") or "") not in ("ERROR", "HEALTH_CRITICAL", "HEALTH_WARN"):
+            if (ev.get("type") or "") not in (
+                "ERROR",
+                "HEALTH_CRITICAL",
+                "HEALTH_WARN",
+            ):
                 continue
             meta = ev.get("meta") or {}
             ec = (meta.get("error_code") or meta.get("health_code") or "").strip()
@@ -918,7 +975,9 @@ def emit_connectivity_events_for_bot(
         return False
 
 
-async def probe_account_binance(account_id: int, db: "Session") -> Tuple[bool, str, str]:
+async def probe_account_binance(
+    account_id: int, db: "Session"
+) -> Tuple[bool, str, str]:
     """Live Binance /account probe. Returns (ok, error_code, message)."""
     from app.services.test_account import is_test_account
 
@@ -987,15 +1046,21 @@ async def sync_bot_connectivity_on_view(
             try:
                 on_connectivity_restored(db, account_id)
             except Exception as ar_ex:
-                logger.debug("connectivity restored account_id=%s: %s", account_id, ar_ex)
+                logger.debug(
+                    "connectivity restored account_id=%s: %s", account_id, ar_ex
+                )
         return None
 
     note_binance_failure(account_id, code, msg, source, emit_async=False)
-    emit_connectivity_events_for_bot(db, bot, code, msg, source, force=(source == "events_load"))
+    emit_connectivity_events_for_bot(
+        db, bot, code, msg, source, force=(source == "events_load")
+    )
     return {"error_code": code, "message": msg, "source": source}
 
 
-def _emit_bot_events_async(account_id: int, error_code: str, message: str, source: str) -> None:
+def _emit_bot_events_async(
+    account_id: int, error_code: str, message: str, source: str
+) -> None:
     def _run() -> None:
         try:
             from app.db.session import SessionLocal
@@ -1008,16 +1073,26 @@ def _emit_bot_events_async(account_id: int, error_code: str, message: str, sourc
                     .filter(
                         Bot.account_id == account_id,
                         Bot.status.in_(
-                            ("running", "paused_error", "paused_insufficient_balance", "stopped", "paused")
+                            (
+                                "running",
+                                "paused_error",
+                                "paused_insufficient_balance",
+                                "stopped",
+                                "paused",
+                            )
                         ),
                     )
                     .all()
                 )
                 for bot in bots:
-                    emit_connectivity_events_for_bot(db, bot, error_code, message, source)
+                    emit_connectivity_events_for_bot(
+                        db, bot, error_code, message, source
+                    )
             finally:
                 db.close()
         except Exception as e:
-            logger.warning("binance_connectivity emit async account_id=%s: %s", account_id, e)
+            logger.warning(
+                "binance_connectivity emit async account_id=%s: %s", account_id, e
+            )
 
     threading.Thread(target=_run, daemon=True, name="binance-bot-event").start()

@@ -4,6 +4,7 @@ DB-backed; dynamic lease (default 10s) + heartbeat renew every 3s.
 If renew fails => fail safe: stop submits, release if possible.
 Single source of truth: TTL from app.core.constants.
 """
+
 from __future__ import annotations
 import asyncio
 import logging
@@ -34,6 +35,7 @@ from app.core.constants import (
 def trade_lock_symbol(account_id: int, trading_symbol: Optional[str] = None) -> str:
     """Per-account order lock key. Same account_id => same lock (independent users use different accounts)."""
     return ACCOUNT_TRADE_LOCK_SYMBOL
+
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -73,13 +75,23 @@ def try_acquire_symbol_lock(
             WHERE account_id = :aid AND symbol = :sym
               AND (lease_until < :now OR owner_bot_id = :bid)
         """),
-        {"aid": account_id, "sym": symbol, "bid": bot_id, "lease": lease_s, "upd": now_s, "now": now_s},
+        {
+            "aid": account_id,
+            "sym": symbol,
+            "bid": bot_id,
+            "lease": lease_s,
+            "upd": now_s,
+            "now": now_s,
+        },
     )
     if r.rowcount and r.rowcount > 0:
         db.commit()
         logger.info(
             "lock_acquire_ok account_id=%s bot_id=%s symbol=%s lease_until=%s",
-            account_id, bot_id, symbol, lease_s,
+            account_id,
+            bot_id,
+            symbol,
+            lease_s,
         )
         return True
 
@@ -95,30 +107,49 @@ def try_acquire_symbol_lock(
                     INSERT INTO symbol_locks (account_id, symbol, owner_bot_id, lease_until, updated_at)
                     VALUES (:aid, :sym, :bid, :lease, :upd)
                 """),
-                {"aid": account_id, "sym": symbol, "bid": bot_id, "lease": lease_s, "upd": now_s},
+                {
+                    "aid": account_id,
+                    "sym": symbol,
+                    "bid": bot_id,
+                    "lease": lease_s,
+                    "upd": now_s,
+                },
             )
             db.commit()
             logger.info(
                 "lock_acquire_ok account_id=%s bot_id=%s symbol=%s lease_until=%s",
-                account_id, bot_id, symbol, lease_s,
+                account_id,
+                bot_id,
+                symbol,
+                lease_s,
             )
             return True
-        except Exception as e:
+        except Exception:
             db.rollback()
             logger.info(
                 "lock_acquire_busy account_id=%s bot_id=%s symbol=%s error_code=insert_conflict",
-                account_id, bot_id, symbol,
+                account_id,
+                bot_id,
+                symbol,
             )
             return False
 
     logger.info(
         "lock_acquire_busy account_id=%s bot_id=%s symbol=%s lease_until=held_by_other",
-        account_id, bot_id, symbol,
+        account_id,
+        bot_id,
+        symbol,
     )
     return False
 
 
-def renew_symbol_lock(db: "Session", account_id: int, symbol: str, bot_id: int, ttl_sec: int = DEFAULT_LEASE_TTL_SEC) -> bool:
+def renew_symbol_lock(
+    db: "Session",
+    account_id: int,
+    symbol: str,
+    bot_id: int,
+    ttl_sec: int = DEFAULT_LEASE_TTL_SEC,
+) -> bool:
     """Extend lease for held lock. Returns True if renewed."""
     symbol = (symbol or "").upper().strip() or "BTCUSDT"
     now = _utcnow()
@@ -131,11 +162,24 @@ def renew_symbol_lock(db: "Session", account_id: int, symbol: str, bot_id: int, 
             SET lease_until = :lease, updated_at = :upd
             WHERE account_id = :aid AND symbol = :sym AND owner_bot_id = :bid AND lease_until > :now
         """),
-        {"aid": account_id, "sym": symbol, "bid": bot_id, "lease": lease_s, "upd": now_s, "now": now_s},
+        {
+            "aid": account_id,
+            "sym": symbol,
+            "bid": bot_id,
+            "lease": lease_s,
+            "upd": now_s,
+            "now": now_s,
+        },
     )
     if r.rowcount and r.rowcount > 0:
         db.commit()
-        logger.debug("lock_heartbeat_ok account_id=%s bot_id=%s symbol=%s lease_until=%s", account_id, bot_id, symbol, lease_s)
+        logger.debug(
+            "lock_heartbeat_ok account_id=%s bot_id=%s symbol=%s lease_until=%s",
+            account_id,
+            bot_id,
+            symbol,
+            lease_s,
+        )
         return True
     return False
 
@@ -171,7 +215,9 @@ def lease_still_valid(db: "Session", account_id: int, symbol: str, bot_id: int) 
     return row is not None
 
 
-def release_symbol_lock(db: "Session", account_id: int, symbol: str, bot_id: int) -> None:
+def release_symbol_lock(
+    db: "Session", account_id: int, symbol: str, bot_id: int
+) -> None:
     """Release lock held by bot_id for (account_id, symbol). Idempotent."""
     symbol = (symbol or "").upper().strip() or "BTCUSDT"
     now_s = _utcnow().strftime("%Y-%m-%d %H:%M:%S")
@@ -189,6 +235,7 @@ def release_symbol_lock(db: "Session", account_id: int, symbol: str, bot_id: int
 def get_db_session() -> "Session":
     """Get a new DB session for lock ops (caller closes)."""
     from app.db.base import SessionLocal
+
     return SessionLocal()
 
 
@@ -229,7 +276,9 @@ async def symbol_lock_with_heartbeat(
                             renew_failed.set()
                             logger.warning(
                                 "lock_heartbeat_fail account_id=%s bot_id=%s symbol=%s error_code=renew_failed",
-                                account_id, bot_id, symbol,
+                                account_id,
+                                bot_id,
+                                symbol,
                             )
                             return
                     finally:
@@ -237,7 +286,10 @@ async def symbol_lock_with_heartbeat(
                 except Exception as e:
                     logger.warning(
                         "lock_heartbeat_fail account_id=%s bot_id=%s symbol=%s error_code=renew_error err=%s",
-                        account_id, bot_id, symbol, e,
+                        account_id,
+                        bot_id,
+                        symbol,
+                        e,
                     )
                     renew_failed.set()
                     return
@@ -256,7 +308,9 @@ async def symbol_lock_with_heartbeat(
             if renew_failed.is_set():
                 logger.warning(
                     "lock_release_ok account_id=%s bot_id=%s symbol=%s after_heartbeat_fail=true",
-                    account_id, bot_id, symbol,
+                    account_id,
+                    bot_id,
+                    symbol,
                 )
     finally:
         if acquired:
@@ -264,13 +318,21 @@ async def symbol_lock_with_heartbeat(
                 _db = db_factory()
                 try:
                     release_symbol_lock(_db, account_id, symbol, bot_id)
-                    logger.info("lock_release_ok account_id=%s bot_id=%s symbol=%s", account_id, bot_id, symbol)
+                    logger.info(
+                        "lock_release_ok account_id=%s bot_id=%s symbol=%s",
+                        account_id,
+                        bot_id,
+                        symbol,
+                    )
                 finally:
                     _db.close()
             except Exception as e:
                 logger.warning(
                     "lock_release_error account_id=%s bot_id=%s symbol=%s error_code=release_failed err=%s",
-                    account_id, bot_id, symbol, e,
+                    account_id,
+                    bot_id,
+                    symbol,
+                    e,
                 )
         try:
             db.close()

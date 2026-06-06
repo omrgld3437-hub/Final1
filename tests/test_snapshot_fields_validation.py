@@ -1,6 +1,11 @@
 """Patch C: Snapshot fields parameter validation."""
+
 import pytest
-from app.api.utils.fields import parse_snapshot_fields, ALLOWED_SNAPSHOT_FIELDS, DEFAULT_SNAPSHOT_FIELDS
+from app.api.utils.fields import (
+    parse_snapshot_fields,
+    ALLOWED_SNAPSHOT_FIELDS,
+    DEFAULT_SNAPSHOT_FIELDS,
+)
 
 
 def test_parse_empty_returns_default():

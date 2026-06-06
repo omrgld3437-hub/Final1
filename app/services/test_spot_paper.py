@@ -2,6 +2,7 @@
 Test hesabı manuel spot paper: kullanılabilir USDT havuzundan hayali al/sat.
 Durum: .run/test_spot_paper/{account_id}.json (yalnızca test hesabı).
 """
+
 from __future__ import annotations
 
 import json
@@ -10,7 +11,7 @@ import threading
 import time
 from decimal import Decimal, ROUND_DOWN
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +46,9 @@ def load_paper_state(account_id: int) -> Dict[str, Any]:
         raw = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(raw, dict):
             return _empty_state()
-        manual = raw.get("manual_base") if isinstance(raw.get("manual_base"), dict) else {}
+        manual = (
+            raw.get("manual_base") if isinstance(raw.get("manual_base"), dict) else {}
+        )
         manual_clean = {
             str(k).upper(): max(0.0, float(v or 0))
             for k, v in manual.items()
@@ -148,11 +151,18 @@ def apply_paper_to_test_wallet(wallet: Dict[str, Any], account_id: int) -> None:
             av_usd += float(a.get("available") or 0)
             bl_usd += float(a.get("bot_locked") or 0)
         else:
-            from app.services.wallet_display import wallet_prices_map_from_datahub, resolve_asset_price_usd
+            from app.services.wallet_display import (
+                wallet_prices_map_from_datahub,
+                resolve_asset_price_usd,
+            )
 
             prices = wallet_prices_map_from_datahub()
-            av_val, _ = resolve_asset_price_usd(asset_sym, float(a.get("available") or 0), prices)
-            bl_val, _ = resolve_asset_price_usd(asset_sym, float(a.get("bot_locked") or 0), prices)
+            av_val, _ = resolve_asset_price_usd(
+                asset_sym, float(a.get("available") or 0), prices
+            )
+            bl_val, _ = resolve_asset_price_usd(
+                asset_sym, float(a.get("bot_locked") or 0), prices
+            )
             if av_val:
                 av_usd += av_val
             if bl_val:
@@ -175,8 +185,16 @@ def spot_balances_from_wallet(
     quote_free = float(quote_row.get("free") or 0) if quote_row else 0.0
     base_bl = float(bot_locked.get(base, 0) or 0)
     quote_bl = float(bot_locked.get(quote, 0) or 0)
-    base_av = float(base_row.get("available") or 0) if base_row else max(0.0, base_free - base_bl)
-    quote_av = float(quote_row.get("available") or 0) if quote_row else max(0.0, quote_free - quote_bl)
+    base_av = (
+        float(base_row.get("available") or 0)
+        if base_row
+        else max(0.0, base_free - base_bl)
+    )
+    quote_av = (
+        float(quote_row.get("available") or 0)
+        if quote_row
+        else max(0.0, quote_free - quote_bl)
+    )
     return {
         "base_balance": base_free,
         "quote_balance": quote_free,
@@ -237,7 +255,10 @@ def execute_test_paper_order(
     if px <= 0:
         raise ValueError("Fiyat geçersiz")
 
-    from app.services.test_simulation import build_paper_market_fill, sync_paper_order_latency
+    from app.services.test_simulation import (
+        build_paper_market_fill,
+        sync_paper_order_latency,
+    )
 
     sync_paper_order_latency()
     fill_resp: Dict[str, Any] = {}
@@ -258,13 +279,19 @@ def execute_test_paper_order(
                 raise ValueError(
                     f"Yetersiz kullanılabilir USDT (mevcut: {quote_av:.2f}, gerekli: {quote_in:.2f})"
                 )
-            fill_resp = build_paper_market_fill(sym, "BUY", quote_qty=quote_in, mid_price=px)
+            fill_resp = build_paper_market_fill(
+                sym, "BUY", quote_qty=quote_in, mid_price=px
+            )
             executed_qty = float(fill_resp["executedQty"])
             executed_quote = float(fill_resp["cummulativeQuoteQty"])
             if executed_qty <= 0:
                 raise ValueError("Miktar çok küçük")
-            manual_base[base] = round(float(manual_base.get(base, 0) or 0) + executed_qty, 8)
-            state["usdt_delta"] = round(float(state.get("usdt_delta") or 0) - executed_quote, 8)
+            manual_base[base] = round(
+                float(manual_base.get(base, 0) or 0) + executed_qty, 8
+            )
+            state["usdt_delta"] = round(
+                float(state.get("usdt_delta") or 0) - executed_quote, 8
+            )
         elif side_u == "SELL":
             qty_in = float(quantity or 0)
             if qty_in <= 0:
@@ -275,7 +302,9 @@ def execute_test_paper_order(
                     f"Yetersiz satılabilir {base} (mevcut: {avail_base:.8f})"
                 )
             sell_qty = _quantize_step(min(qty_in, avail_base))
-            fill_resp = build_paper_market_fill(sym, "SELL", base_qty=sell_qty, mid_price=px)
+            fill_resp = build_paper_market_fill(
+                sym, "SELL", base_qty=sell_qty, mid_price=px
+            )
             executed_qty = float(fill_resp["executedQty"])
             executed_quote = float(fill_resp["cummulativeQuoteQty"])
             new_base = round(avail_base - executed_qty, 8)
@@ -283,7 +312,9 @@ def execute_test_paper_order(
                 manual_base.pop(base, None)
             else:
                 manual_base[base] = new_base
-            state["usdt_delta"] = round(float(state.get("usdt_delta") or 0) + executed_quote, 8)
+            state["usdt_delta"] = round(
+                float(state.get("usdt_delta") or 0) + executed_quote, 8
+            )
         else:
             raise ValueError("Geçersiz side")
 

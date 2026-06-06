@@ -3,6 +3,7 @@ Sunucu durumu: lockdown bayrağı ve istek sayacı.
 Lockdown açıkken sadece admin sayfası ve admin/auth/boot-id erişilebilir.
 Uptime = bu process'in başladığı andan itibaren geçen süre; restart edilirse sıfırlanır.
 """
+
 from __future__ import annotations
 import time
 import threading
@@ -106,17 +107,19 @@ def add_breach_event(
     """Yetkisiz erişim tespit edildiğinde çağrılır. Admin'e uyarı için kaydedilir."""
     with _lock:
         global _breach_events
-        _breach_events.append({
-            "type": breach_type,
-            "path": path,
-            "method": method,
-            "client_ip": client_ip,
-            "detail": detail,
-            "ts": datetime.now(timezone.utc).isoformat(),
-            "session_user_id": session_user_id,
-            "session_account_id": session_account_id,
-            "requested_account_id": requested_account_id,
-        })
+        _breach_events.append(
+            {
+                "type": breach_type,
+                "path": path,
+                "method": method,
+                "client_ip": client_ip,
+                "detail": detail,
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "session_user_id": session_user_id,
+                "session_account_id": session_account_id,
+                "requested_account_id": requested_account_id,
+            }
+        )
         if len(_breach_events) > _BREACH_MAX:
             _breach_events = _breach_events[-_BREACH_MAX:]
 

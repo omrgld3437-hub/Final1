@@ -4,6 +4,7 @@ Binance'de listeli (USDT pair) tüm coinlerin logolarını Trust Wallet assets
 repo'dan indirip ui/assets/coins/ altına kaydeder.
 Kaynak: https://github.com/trustwallet/assets (MIT)
 """
+
 from __future__ import annotations
 
 import json
@@ -16,7 +17,9 @@ import requests
 
 BINANCE_EXCHANGE_INFO = "https://api.binance.com/api/v3/exchangeInfo"
 GITHUB_RAW = "https://raw.githubusercontent.com/trustwallet/assets/master"
-GITHUB_API_BLOCKCHAINS = "https://api.github.com/repos/trustwallet/assets/contents/blockchains"
+GITHUB_API_BLOCKCHAINS = (
+    "https://api.github.com/repos/trustwallet/assets/contents/blockchains"
+)
 REQUEST_TIMEOUT = 60
 REQUEST_DELAY = 0.15  # GitHub rate limit
 
@@ -249,7 +252,17 @@ def main() -> int:
             fail += 1
 
     # Stabil coin logoları (uygulamada kullanılanlar) Binance'de olmasa bile indir
-    STABLECOINS = ("USDT", "USDC", "BUSD", "FDUSD", "TUSD", "USDP", "DAI", "FRAX", "PYUSD")
+    STABLECOINS = (
+        "USDT",
+        "USDC",
+        "BUSD",
+        "FDUSD",
+        "TUSD",
+        "USDP",
+        "DAI",
+        "FRAX",
+        "PYUSD",
+    )
     for key in STABLECOINS:
         path = symbol_to_path.get(key)
         out_file = coins_dir / f"{key}.png"

@@ -3,6 +3,7 @@
 Generate docs/ANA_BASLIKLAR.md — all project files grouped under main headings.
 Usage: python scripts/sync_ana_basliklar.py
 """
+
 from __future__ import annotations
 from collections import OrderedDict
 from datetime import date
@@ -20,7 +21,11 @@ def _match(path: str) -> str | None:
     p = path.replace("\\", "/")
     name = p.split("/")[-1]
 
-    if p.startswith("marketing/") or p.startswith("Omeraltinhtml/") or p.startswith("omeraltinhtml/"):
+    if (
+        p.startswith("marketing/")
+        or p.startswith("Omeraltinhtml/")
+        or p.startswith("omeraltinhtml/")
+    ):
         return "13 — Marketing sitesi (opsiyonel)"
     if p.startswith("ops/"):
         return "02 — Çalıştırma"
@@ -56,16 +61,34 @@ def _match(path: str) -> str | None:
     if p.startswith("app/api/"):
         return "03b — API"
     if p.startswith("app/"):
-        if p.startswith(("app/db/", "app/core/", "app/middleware/", "app/observability/",
-                         "app/constants/", "app/utils/")):
+        if p.startswith(
+            (
+                "app/db/",
+                "app/core/",
+                "app/middleware/",
+                "app/observability/",
+                "app/constants/",
+                "app/utils/",
+            )
+        ):
             return "03 — Backend (çekirdek)"
         return "03 — Backend (çekirdek)"
     if name in {
-        "README.md", "TRADE_TRAILING_MASTER_SPEC.md", "requirements.txt", ".env.example",
-        ".gitignore", ".gitattributes",
+        "README.md",
+        "TRADE_TRAILING_MASTER_SPEC.md",
+        "requirements.txt",
+        ".env.example",
+        ".gitignore",
+        ".gitattributes",
     } or p in {".env.example"}:
         return "01 — Spec ve yapılandırma"
-    if name.endswith((".command", ".bat", ".sh")) or name in {"deploy.sh", "run.sh", "start", "Kurulum.bat", "guncelle.bat"}:
+    if name.endswith((".command", ".bat", ".sh")) or name in {
+        "deploy.sh",
+        "run.sh",
+        "start",
+        "Kurulum.bat",
+        "guncelle.bat",
+    }:
         return "02 — Çalıştırma"
     if name.endswith(".db"):
         return "12 — Yerel veri (gitignore önerilir)"

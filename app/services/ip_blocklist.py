@@ -1,4 +1,5 @@
 """Web uygulaması IP engel listesi — .run/blocked_ips.json (Manager panel yazar)."""
+
 from __future__ import annotations
 
 import json

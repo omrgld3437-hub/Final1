@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Stack reboot: Manager + Web + Engine (+ HTML). Panel API'den ayrı süreç olarak çalışır."""
+
 from __future__ import annotations
 
 import argparse
@@ -68,7 +69,8 @@ def _kill_port(port: int) -> None:
                             ["taskkill", "/PID", str(p), "/F"],
                             capture_output=True,
                             timeout=5,
-                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) or 0,
+                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                            or 0,
                         )
                 except (ValueError, IndexError):
                     pass
@@ -76,10 +78,14 @@ def _kill_port(port: int) -> None:
             pass
     else:
         try:
-            r = subprocess.run(["lsof", "-ti", ":%s" % port], capture_output=True, text=True, timeout=5)
+            r = subprocess.run(
+                ["lsof", "-ti", ":%s" % port], capture_output=True, text=True, timeout=5
+            )
             for pid_str in (r.stdout or "").strip().split():
                 try:
-                    subprocess.run(["kill", "-9", pid_str], capture_output=True, timeout=3)
+                    subprocess.run(
+                        ["kill", "-9", pid_str], capture_output=True, timeout=3
+                    )
                 except (ValueError, OSError):
                     pass
         except Exception:
@@ -187,7 +193,11 @@ def _start_html(root: Path, py: str) -> None:
     try:
         if start_py.is_file():
             with open(log_path, "a", encoding="utf-8", errors="replace") as logf:
-                kw: dict = {"cwd": str(html), "stdout": logf, "stderr": subprocess.STDOUT}
+                kw: dict = {
+                    "cwd": str(html),
+                    "stdout": logf,
+                    "stderr": subprocess.STDOUT,
+                }
                 if sys.platform != "win32":
                     kw["start_new_session"] = True
                 p = subprocess.Popen([py, "-u", str(start_py)], **kw)
@@ -195,7 +205,9 @@ def _start_html(root: Path, py: str) -> None:
             for name in ("calistir.command", "calistir.sh", "calistir"):
                 script = html / name
                 if script.is_file():
-                    p = subprocess.Popen(["/bin/sh", str(script)], cwd=str(html), start_new_session=True)
+                    p = subprocess.Popen(
+                        ["/bin/sh", str(script)], cwd=str(html), start_new_session=True
+                    )
                     break
         if p is not None:
             (run_dir / "html.pid").write_text(str(p.pid), encoding="utf-8")
@@ -205,7 +217,9 @@ def _start_html(root: Path, py: str) -> None:
 
 def _manager_http_up() -> bool:
     try:
-        urllib.request.urlopen("http://127.0.0.1:%d/api/status" % _MANAGER_PORT, timeout=2)
+        urllib.request.urlopen(
+            "http://127.0.0.1:%d/api/status" % _MANAGER_PORT, timeout=2
+        )
         return True
     except Exception:
         return False
@@ -239,7 +253,9 @@ def _start_manager(root: Path, py: str, allow_remote: str) -> None:
             "env": env,
         }
         if sys.platform == "win32":
-            flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
+            flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(
+                subprocess, "DETACHED_PROCESS", 0x00000008
+            )
             kw["creationflags"] = flags
         else:
             kw["start_new_session"] = True
@@ -294,7 +310,10 @@ def _acquire_lock(root: Path) -> bool:
 def _release_lock(root: Path) -> None:
     lock = root / ".run" / "stack_reboot.lock"
     try:
-        if lock.is_file() and int(lock.read_text(encoding="utf-8").strip()) == os.getpid():
+        if (
+            lock.is_file()
+            and int(lock.read_text(encoding="utf-8").strip()) == os.getpid()
+        ):
             lock.unlink()
     except Exception:
         pass
@@ -306,7 +325,11 @@ def main() -> int:
     ap.add_argument("--root", required=True)
     ap.add_argument("--python", required=True)
     ap.add_argument("--allow-remote", default="")
-    ap.add_argument("--full-stack", action="store_true", help="Web+Engine+HTML+Manager yeniden başlat")
+    ap.add_argument(
+        "--full-stack",
+        action="store_true",
+        help="Web+Engine+HTML+Manager yeniden başlat",
+    )
     args = ap.parse_args()
     root = Path(args.root).resolve()
     py = args.python

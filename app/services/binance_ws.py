@@ -3,6 +3,7 @@ FILE: binance_ws.py
 Binance WebSocket combined stream (!miniTicker@arr) -> DataHub prices/mini.
 Reconnect + exponential backoff + jitter; ping/heartbeat; clean shutdown.
 """
+
 from __future__ import annotations
 import asyncio
 import json
@@ -24,7 +25,11 @@ _HANDSHAKE_TIMEOUT_LOG_INTERVAL: float = 300.0  # seconds
 def _is_dns_or_network_error(exc: BaseException) -> bool:
     """True if error is DNS resolution or network unreachable (e.g. offline)."""
     msg = str(exc).lower()
-    if "nodename nor servname" in msg or "errno 8" in msg or "name or service not known" in msg:
+    if (
+        "nodename nor servname" in msg
+        or "errno 8" in msg
+        or "name or service not known" in msg
+    ):
         return True
     errno = getattr(exc, "errno", None)
     if errno is not None and errno in (8, -2):  # EAI_NONAME, EAI_NODATA
@@ -35,6 +40,7 @@ def _is_dns_or_network_error(exc: BaseException) -> bool:
 def _is_handshake_timeout(exc: BaseException) -> bool:
     """True if error is WebSocket opening handshake timeout (transient; throttle WARNING)."""
     return "timed out during opening handshake" in str(exc).lower()
+
 
 # Combined stream: all symbols mini ticker (array)
 BINANCE_WS_LIVE = "wss://stream.binance.com:9443/stream?streams=!miniTicker@arr"
@@ -94,11 +100,17 @@ class BinanceWSClient:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                if "keepalive ping timeout" in str(e).lower() or "no close frame" in str(e).lower():
+                if (
+                    "keepalive ping timeout" in str(e).lower()
+                    or "no close frame" in str(e).lower()
+                ):
                     logger.debug("[BinanceWS] Run error (reconnecting): %s", e)
                 elif _is_handshake_timeout(e):
                     now = time.monotonic()
-                    if now - _LAST_HANDSHAKE_TIMEOUT_LOG >= _HANDSHAKE_TIMEOUT_LOG_INTERVAL:
+                    if (
+                        now - _LAST_HANDSHAKE_TIMEOUT_LOG
+                        >= _HANDSHAKE_TIMEOUT_LOG_INTERVAL
+                    ):
                         _LAST_HANDSHAKE_TIMEOUT_LOG = now
                         logger.warning(
                             "[BinanceWS] Açılış el sıkışması zaman aşımı (ağ/firewall yavaş olabilir). %.0f sn sonra tekrar denenecek.",
@@ -118,7 +130,9 @@ class BinanceWSClient:
                     logger.warning("[BinanceWS] Run error: %s", e)
             if self._stop.is_set():
                 break
-            delay = self._reconnect_delay + random.uniform(0, RECONNECT_JITTER * self._reconnect_delay)
+            delay = self._reconnect_delay + random.uniform(
+                0, RECONNECT_JITTER * self._reconnect_delay
+            )
             self._reconnect_delay = min(RECONNECT_MAX, self._reconnect_delay * 2)
             logger.info("[BinanceWS] Reconnecting in %.1fs", delay)
             try:
@@ -128,6 +142,7 @@ class BinanceWSClient:
 
     async def _connect_and_listen(self) -> None:
         import websockets
+
         url = _ws_url(self.testnet)
         self._reconnect_delay = RECONNECT_INITIAL
         async with websockets.connect(
@@ -147,12 +162,15 @@ class BinanceWSClient:
                     reason = str(e)
                     is_ping_timeout = "keepalive ping timeout" in reason.lower()
                     if is_ping_timeout:
-                        logger.debug("[BinanceWS] Connection closed (ping timeout): %s", e)
+                        logger.debug(
+                            "[BinanceWS] Connection closed (ping timeout): %s", e
+                        )
                     else:
                         logger.info("[BinanceWS] Connection closed: %s", e)
                     if not is_ping_timeout:
                         try:
                             from app.error_logging import log_error_fire_and_forget
+
                             msg = "Binance WebSocket bağlantı koptu"
                             if "no close frame" in reason.lower():
                                 msg = "Binance WebSocket beklenmedik kapanma (close frame yok); yeniden bağlanılıyor."
@@ -160,7 +178,11 @@ class BinanceWSClient:
                                 "binance_ws",
                                 msg,
                                 detail=reason,
-                                context={"reason": reason, "url": url, "stream": "!miniTicker@arr"},
+                                context={
+                                    "reason": reason,
+                                    "url": url,
+                                    "stream": "!miniTicker@arr",
+                                },
                             )
                         except Exception:
                             pass

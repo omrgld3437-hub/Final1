@@ -1,23 +1,28 @@
 """
 Bot engine log — Reset/ack sonrası eski uyarı satırlarını filtrele (UI + API).
 """
+
 from __future__ import annotations
 
 import re
 from typing import Any, Dict, List, Optional
 
-_RESILIENCE_CODES = frozenset({
-    "BOT_LOOP_AUTO_RESTART",
-    "LOOP_TASK_MISSING",
-    "BOT_CONTINUES_ON_ERROR",
-})
+_RESILIENCE_CODES = frozenset(
+    {
+        "BOT_LOOP_AUTO_RESTART",
+        "LOOP_TASK_MISSING",
+        "BOT_CONTINUES_ON_ERROR",
+    }
+)
 
-_RECOVERABLE_ACTION_ERRORS = frozenset({
-    "RUN_ACTION_EXCEPTION",
-    "BOT_LOOP_TOPLEVEL_EXCEPTION",
-    "BOT_LOOP_TRDCA_EXCEPTION",
-    "BOT_TICK_EXCEPTION",
-})
+_RECOVERABLE_ACTION_ERRORS = frozenset(
+    {
+        "RUN_ACTION_EXCEPTION",
+        "BOT_LOOP_TOPLEVEL_EXCEPTION",
+        "BOT_LOOP_TRDCA_EXCEPTION",
+        "BOT_TICK_EXCEPTION",
+    }
+)
 
 _OUTAGE_RECOVERY_RAW = re.compile(
     r"kopma sonrası|devam ediyor.*kopma|Bağlantı/tick boşluğu|grid değerlendirmesi",
@@ -97,7 +102,11 @@ def is_resettable_log_event(ev: Dict[str, Any]) -> bool:
         if hc == "OUTAGE_RECOVERY":
             return True
         code = str(meta.get("error_code") or "").upper()
-        if code in ("CONNECTIVITY_RECOVERED", "CONNECTIVITY_STABLE", "CONNECTIVITY_PAUSED"):
+        if code in (
+            "CONNECTIVITY_RECOVERED",
+            "CONNECTIVITY_STABLE",
+            "CONNECTIVITY_PAUSED",
+        ):
             return True
         if meta.get("connectivity_stable") is True:
             return True
@@ -136,4 +145,8 @@ def filter_events_for_dismiss(
 ) -> List[Dict[str, Any]]:
     if not dismiss_before_id or dismiss_before_id <= 0:
         return list(events or [])
-    return [e for e in (events or []) if not should_hide_engine_event(e, int(dismiss_before_id))]
+    return [
+        e
+        for e in (events or [])
+        if not should_hide_engine_event(e, int(dismiss_before_id))
+    ]

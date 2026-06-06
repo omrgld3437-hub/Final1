@@ -7,6 +7,7 @@ rotation can leave running processes writing to the old inode. For those live
 logs this script uses copy-truncate: compress the current content, then truncate
 the original path in place.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -81,7 +82,9 @@ def _compress_and_remove(path: Path, archive_dir: Path, dry_run: bool) -> str | 
     return f"compressed {path.name} -> {dst.name}"
 
 
-def _delete_old(paths: Iterable[Path], older_than_days: int, dry_run: bool) -> List[str]:
+def _delete_old(
+    paths: Iterable[Path], older_than_days: int, dry_run: bool
+) -> List[str]:
     out: List[str] = []
     if older_than_days <= 0:
         return out
@@ -105,7 +108,11 @@ def _cap_archives(archive_dir: Path, keep: int, dry_run: bool) -> List[str]:
         return out
     grouped = {}
     for path in archive_dir.glob("*.gz"):
-        key = path.name.split(".log.", 1)[0] if ".log." in path.name else path.name.split(".", 1)[0]
+        key = (
+            path.name.split(".log.", 1)[0]
+            if ".log." in path.name
+            else path.name.split(".", 1)[0]
+        )
         grouped.setdefault(key, []).append(path)
     for paths in grouped.values():
         paths.sort(key=lambda p: p.stat().st_mtime, reverse=True)
@@ -146,7 +153,11 @@ def maintain_logs(
 
     for pattern in COMPRESS_PATTERNS:
         for path in LOGS.glob(pattern):
-            if path.is_file() and path.suffix != ".gz" and _size_mb(path) >= compress_after_mb:
+            if (
+                path.is_file()
+                and path.suffix != ".gz"
+                and _size_mb(path) >= compress_after_mb
+            ):
                 action = _compress_and_remove(path, archive_dir, dry_run)
                 if action:
                     actions.append(action)
@@ -157,11 +168,21 @@ def maintain_logs(
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Compress/truncate large runtime logs safely.")
-    parser.add_argument("--max-active-mb", type=int, default=_env_int("LOG_ACTIVE_MAX_MB", 25))
-    parser.add_argument("--compress-after-mb", type=int, default=_env_int("LOG_COMPRESS_AFTER_MB", 5))
-    parser.add_argument("--delete-after-days", type=int, default=_env_int("LOG_ARCHIVE_DELETE_DAYS", 14))
-    parser.add_argument("--keep-archives", type=int, default=_env_int("LOG_ARCHIVE_KEEP", 12))
+    parser = argparse.ArgumentParser(
+        description="Compress/truncate large runtime logs safely."
+    )
+    parser.add_argument(
+        "--max-active-mb", type=int, default=_env_int("LOG_ACTIVE_MAX_MB", 25)
+    )
+    parser.add_argument(
+        "--compress-after-mb", type=int, default=_env_int("LOG_COMPRESS_AFTER_MB", 5)
+    )
+    parser.add_argument(
+        "--delete-after-days", type=int, default=_env_int("LOG_ARCHIVE_DELETE_DAYS", 14)
+    )
+    parser.add_argument(
+        "--keep-archives", type=int, default=_env_int("LOG_ARCHIVE_KEEP", 12)
+    )
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     actions = maintain_logs(

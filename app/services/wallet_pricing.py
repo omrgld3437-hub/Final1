@@ -1,6 +1,7 @@
 """
 Cüzdan USD değerlemesi — yalnızca market_data (DataHub cache). Binance REST yok.
 """
+
 from __future__ import annotations
 
 from typing import Any, Dict, List

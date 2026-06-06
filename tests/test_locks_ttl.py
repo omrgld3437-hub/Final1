@@ -1,6 +1,7 @@
 """
 Unit tests for lock TTL consistency and lease_still_valid (Phase 1 perf hardening).
 """
+
 import pytest
 
 from app.botengine.locks import (
@@ -36,6 +37,7 @@ def db_session():
     try:
         from sqlalchemy import text
         from app.db.base import SessionLocal
+
         session = SessionLocal()
         session.execute(text("SELECT 1 FROM symbol_locks LIMIT 1"))
         yield session
@@ -55,6 +57,7 @@ def test_lease_still_valid_returns_false_when_expired(db_session):
     """When lock row exists but lease_until is in the past, lease_still_valid returns False."""
     from sqlalchemy import text
     from datetime import datetime, timezone, timedelta
+
     now = datetime.now(timezone.utc)
     past = (now - timedelta(seconds=1)).strftime("%Y-%m-%d %H:%M:%S")
     db_session.execute(

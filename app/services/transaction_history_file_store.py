@@ -4,6 +4,7 @@
 Dosya: `.run/tx_history/{account_id}.enc` (AES-256-GCM v2 / legacy Fernet)
 Kompakt JSON + tarih indeksi; istekte decrypt → filtre → sayfala → bırak.
 """
+
 from __future__ import annotations
 
 import json
@@ -15,7 +16,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from app.services.encryption import decrypt_bytes, encrypt_bytes, tx_history_file_context
+from app.services.encryption import (
+    decrypt_bytes,
+    encrypt_bytes,
+    tx_history_file_context,
+)
 from app.utils.tz_utils import TR_TZ, turkey_today_start_utc
 
 logger = logging.getLogger(__name__)
@@ -154,7 +159,11 @@ async def bootstrap_tx_history_from_binance(
     with _bootstrap_guard:
         if account_id in _bootstrap_in_flight:
             return {"skipped": "in_flight"}
-        if not force and is_tx_history_bootstrapped(account_id) and ledger_has_buysell(account_id):
+        if (
+            not force
+            and is_tx_history_bootstrapped(account_id)
+            and ledger_has_buysell(account_id)
+        ):
             return {"skipped": "already_bootstrapped"}
         _bootstrap_in_flight.add(account_id)
     try:
@@ -198,7 +207,9 @@ def get_public_revision(account_id: int) -> Dict[str, Any]:
     }
 
 
-def ensure_tx_history_fresh_from_db(db: Any, account_id: int, *, force: bool = False) -> None:
+def ensure_tx_history_fresh_from_db(
+    db: Any, account_id: int, *, force: bool = False
+) -> None:
     """DB'de dosyadan yeni bot işlemi varsa son kayıtları dosyaya yansıt (Binance sync yok)."""
     import time as _time
 
@@ -227,7 +238,9 @@ def ensure_tx_history_fresh_from_db(db: Any, account_id: int, *, force: bool = F
     q = db.query(Trade).filter(Trade.account_id == account_id)
     if latest_file:
         try:
-            since = datetime.fromisoformat(latest_file.replace("Z", "+00:00")).replace(tzinfo=None)
+            since = datetime.fromisoformat(latest_file.replace("Z", "+00:00")).replace(
+                tzinfo=None
+            )
             q = q.filter(Trade.ts > since)
         except Exception:
             pass
@@ -345,10 +358,16 @@ def record_bot_trade_fill(
         bot_name = f"Bot #{bot_id}"
     qty = float(trade.qty or 0)
     price = float(trade.price or 0)
-    quote = float(quote_qty) if quote_qty is not None and quote_qty > 0 else (qty * price if qty and price else 0.0)
+    quote = (
+        float(quote_qty)
+        if quote_qty is not None and quote_qty > 0
+        else (qty * price if qty and price else 0.0)
+    )
     if quote > 0 and qty > 0:
         price = quote / qty
-    comm_raw = float(fee_raw) if fee_raw is not None else float(getattr(trade, "fee", 0) or 0)
+    comm_raw = (
+        float(fee_raw) if fee_raw is not None else float(getattr(trade, "fee", 0) or 0)
+    )
     upsert_trade_fill(
         account_id,
         trade_id=str(trade.order_id or trade.id),
@@ -368,7 +387,14 @@ def record_bot_trade_fill(
 
 
 def _empty_ledger(account_id: int) -> Dict[str, Any]:
-    return {"v": _STORE_VERSION, "aid": account_id, "orders": {}, "idx": [], "dates": {}, "seen_trades": {}}
+    return {
+        "v": _STORE_VERSION,
+        "aid": account_id,
+        "orders": {},
+        "idx": [],
+        "dates": {},
+        "seen_trades": {},
+    }
 
 
 def _ensure_seen_trades(data: Dict[str, Any]) -> Dict[str, str]:
@@ -424,7 +450,9 @@ def _save_ledger_unlocked(account_id: int, data: Dict[str, Any]) -> None:
     path = _file_path(account_id)
     data["v"] = _STORE_VERSION
     data["aid"] = account_id
-    payload = json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    payload = json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode(
+        "utf-8"
+    )
     enc = encrypt_bytes(payload, context=tx_history_file_context(account_id))
     fd, tmp = tempfile.mkstemp(dir=str(_TX_ROOT), suffix=".tmp")
     try:
@@ -471,7 +499,9 @@ def _type_char(side: str, *, dw: Optional[str] = None) -> str:
     return "b" if s == "BUY" else "s"
 
 
-def _trade_fill_amounts(qty: float, price: float, quote_qty: float) -> Tuple[float, float, float]:
+def _trade_fill_amounts(
+    qty: float, price: float, quote_qty: float
+) -> Tuple[float, float, float]:
     """Binance quote_qty öncelikli; fiyat = notional / miktar."""
     q = float(qty or 0)
     quote = float(quote_qty or 0)
@@ -518,12 +548,17 @@ def _expand_record(key: str, rec: List[Any]) -> Dict[str, Any]:
     is_bot = src == "b" or bot_id is not None
     oid = str(rec[C_OID] or "")
     is_paper = (not is_bot) and (
-        _is_test_paper_order_id(oid) or _is_test_paper_order_id(rec[C_TID] if len(rec) > C_TID else "")
+        _is_test_paper_order_id(oid)
+        or _is_test_paper_order_id(rec[C_TID] if len(rec) > C_TID else "")
     )
-    qty, price, quote = _normalize_buysell_amounts(rec) if tc in ("b", "s") else (
-        float(rec[C_QTY] or 0),
-        float(rec[C_PRICE] or 0),
-        float(rec[C_QUOTE] or 0),
+    qty, price, quote = (
+        _normalize_buysell_amounts(rec)
+        if tc in ("b", "s")
+        else (
+            float(rec[C_QTY] or 0),
+            float(rec[C_PRICE] or 0),
+            float(rec[C_QUOTE] or 0),
+        )
     )
     comm_raw = float(rec[C_COMM] or 0)
     comm_asset = rec[C_CASSET] or "USDT"
@@ -532,21 +567,32 @@ def _expand_record(key: str, rec: List[Any]) -> Dict[str, Any]:
     if comm_raw > 0:
         try:
             from app.botengine.fee_utils import commission_to_usdt
+
             comm_usdt = float(commission_to_usdt(comm_raw, comm_asset, sym, price) or 0)
             # Eski bot kayıtları: C_COMM bazen fee_usdt (USDT) iken commission_asset base coin
             if quote > 0 and comm_usdt > max(quote * 0.02, 0.5):
                 comm_usdt = comm_raw
         except Exception:
-            comm_usdt = comm_raw if (comm_asset or "").upper() in ("USDT", "BUSD", "FDUSD", "USDC") else 0.0
+            comm_usdt = (
+                comm_raw
+                if (comm_asset or "").upper() in ("USDT", "BUSD", "FDUSD", "USDC")
+                else 0.0
+            )
     return {
-        "id": key if key.startswith(("o_", "t_", "dw_")) else f"ord_{rec[C_OID] or rec[C_TID]}",
+        "id": key
+        if key.startswith(("o_", "t_", "dw_"))
+        else f"ord_{rec[C_OID] or rec[C_TID]}",
         "trade_id": rec[C_TID],
         "order_id": rec[C_OID],
         "time": rec[C_TIME],
         "type": tx_type,
         "type_label": label,
         "symbol": rec[C_SYM] or "",
-        "side": "BUY" if tc == "b" else "SELL" if tc == "s" else ("DEPOSIT" if tc == "d" else "WITHDRAW"),
+        "side": "BUY"
+        if tc == "b"
+        else "SELL"
+        if tc == "s"
+        else ("DEPOSIT" if tc == "d" else "WITHDRAW"),
         "qty": qty,
         "price": price,
         "quote_qty": quote,
@@ -619,8 +665,12 @@ def upsert_trade_fill(
                 _mark_trade_seen(data, tid)
                 return
             same_qty = abs(float(qty or 0) - float(existing[C_QTY] or 0)) < 1e-12
-            same_quote = abs(float(quote_qty or 0) - float(existing[C_QUOTE] or 0)) < 0.02
-            same_comm = abs(float(commission or 0) - float(existing[C_COMM] or 0)) < 1e-12
+            same_quote = (
+                abs(float(quote_qty or 0) - float(existing[C_QUOTE] or 0)) < 0.02
+            )
+            same_comm = (
+                abs(float(commission or 0) - float(existing[C_COMM] or 0)) < 1e-12
+            )
             same_asset = (commission_asset or "USDT") == (existing[C_CASSET] or "USDT")
             if same_qty and same_quote and same_comm and same_asset:
                 _mark_trade_seen(data, tid)
@@ -731,7 +781,9 @@ def ledger_has_deposit_withdraw(account_id: int) -> bool:
     return False
 
 
-def get_order_detail(account_id: int, trade_id: str, symbol: str) -> Optional[Dict[str, Any]]:
+def get_order_detail(
+    account_id: int, trade_id: str, symbol: str
+) -> Optional[Dict[str, Any]]:
     sym = (symbol or "").upper()
     tid = str(trade_id)
     with _account_lock(account_id):
@@ -770,7 +822,9 @@ def _repair_dates_index(data: Dict[str, Any]) -> bool:
     return True
 
 
-def _collect_keys_for_period(data: Dict[str, Any], start_date: str, end_date: str) -> List[str]:
+def _collect_keys_for_period(
+    data: Dict[str, Any], start_date: str, end_date: str
+) -> List[str]:
     """Tarih aralığındaki order key'leri — dates indeksi + idx fallback."""
     orders: Dict[str, List[Any]] = data.get("orders") or {}
     dates: Dict[str, List[str]] = data.get("dates") or {}
@@ -841,7 +895,9 @@ def sync_from_db_if_stale(db: Any, account_id: int, *, max_rows: int = 500) -> i
     )
     if latest_file:
         try:
-            since = datetime.fromisoformat(latest_file.replace("Z", "+00:00")).replace(tzinfo=None)
+            since = datetime.fromisoformat(latest_file.replace("Z", "+00:00")).replace(
+                tzinfo=None
+            )
             rows = [r for r in rows if r.time and r.time > since]
         except Exception:
             pass
@@ -966,9 +1022,11 @@ def query_transactions(
     total_pages = (total + per_page - 1) // per_page if total > 0 else 0
 
     today_start = turkey_today_start_utc()
-    start_dt = today_start - timedelta(days={"daily": 0, "weekly": 6, "monthly": 29}.get(period, 6))
+    today_start - timedelta(
+        days={"daily": 0, "weekly": 6, "monthly": 29}.get(period, 6)
+    )
     if period == "all":
-        start_dt = datetime.utcnow() - timedelta(days=365)
+        datetime.utcnow() - timedelta(days=365)
 
     result = {
         "items": items,
@@ -1080,9 +1138,13 @@ def ensure_buysell_dedup_v1(db: Any, account_id: int) -> None:
     if ledger_has_buysell(account_id):
         try:
             n = rebuild_buysell_from_db(db, account_id, days=365)
-            logger.info("tx_history buysell dedup repair account_id=%s rows=%s", account_id, n)
+            logger.info(
+                "tx_history buysell dedup repair account_id=%s rows=%s", account_id, n
+            )
         except Exception as e:
-            logger.warning("tx_history buysell dedup repair account_id=%s: %s", account_id, e)
+            logger.warning(
+                "tx_history buysell dedup repair account_id=%s: %s", account_id, e
+            )
     meta = _read_rev_meta(account_id)
     meta["buysell_dedup_v"] = _BUYSELL_DEDUP_V
     _write_rev_meta(account_id, meta)

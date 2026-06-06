@@ -5,6 +5,7 @@ DATE: 2026-01-26
 CHANGE: Audit log / işlem geçmişi - user + admin güvenlik logları.
         Sadece kritik aksiyonlar loglanır; market data poll vb. loglanmaz.
 """
+
 from __future__ import annotations
 
 import json
@@ -19,7 +20,9 @@ from app.db.models import AuditEvent
 logger = logging.getLogger(__name__)
 
 # meta_json içine ASLA yazılmayacak anahtarlar
-_FORBIDDEN_META_KEYS = frozenset({"api_secret", "password", "password_hash", "token", "secret"})
+_FORBIDDEN_META_KEYS = frozenset(
+    {"api_secret", "password", "password_hash", "token", "secret"}
+)
 
 
 def _sanitize_meta(meta: Optional[dict[str, Any]]) -> Optional[str]:
@@ -88,7 +91,9 @@ def log_event(
             device_id=device_id[:64] if device_id else None,
             user_agent_hash=user_agent_hash[:64] if user_agent_hash else None,
             request_id=request_id[:64] if request_id else None,
-            session_token_prefix=session_token_prefix[:16] if session_token_prefix else None,
+            session_token_prefix=session_token_prefix[:16]
+            if session_token_prefix
+            else None,
             meta_json=_sanitize_meta(meta),
             admin_reason=admin_reason[:255] if admin_reason else None,
         )

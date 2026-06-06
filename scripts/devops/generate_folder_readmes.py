@@ -3,12 +3,24 @@
 Her proje klasörüne README.md yazar — içerik, işlev, dosya listesi.
 Usage: python3 scripts/devops/generate_folder_readmes.py
 """
+
 from __future__ import annotations
 from datetime import date
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-SKIP = {".git", ".venv", "__pycache__", "_meta", ".pytest_cache", "node_modules", ".cursor", ".run", "logs", ".well-known"}
+SKIP = {
+    ".git",
+    ".venv",
+    "__pycache__",
+    "_meta",
+    ".pytest_cache",
+    "node_modules",
+    ".cursor",
+    ".run",
+    "logs",
+    ".well-known",
+}
 SKIP_PREFIX = ("ui/assets/coins/", "ui/assets/binance2/", "marketing/.git")
 
 DOCS: dict[str, dict[str, str]] = {
@@ -433,16 +445,22 @@ def _render(rel: str, meta: dict[str, str]) -> str:
         lines.append("```")
     else:
         lines.append("_Boş veya yalnızca alt klasörler._")
-    lines.extend([
-        "",
-        "## İlgili dokümanlar",
-        "",
-        meta.get("related", "docs/INDEX.md"),
-        "",
-        "---",
-        "",
-        "Üst rehber: [docs/STRUCTURE.md](../docs/STRUCTURE.md)" if rel != "." and not rel.startswith("docs/") else "Üst rehber: [docs/STRUCTURE.md](STRUCTURE.md)" if rel.startswith("docs/") else "Üst rehber: [docs/STRUCTURE.md](docs/STRUCTURE.md)",
-    ])
+    lines.extend(
+        [
+            "",
+            "## İlgili dokümanlar",
+            "",
+            meta.get("related", "docs/INDEX.md"),
+            "",
+            "---",
+            "",
+            "Üst rehber: [docs/STRUCTURE.md](../docs/STRUCTURE.md)"
+            if rel != "." and not rel.startswith("docs/")
+            else "Üst rehber: [docs/STRUCTURE.md](STRUCTURE.md)"
+            if rel.startswith("docs/")
+            else "Üst rehber: [docs/STRUCTURE.md](docs/STRUCTURE.md)",
+        ]
+    )
     return "\n".join(lines) + "\n"
 
 

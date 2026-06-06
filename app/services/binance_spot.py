@@ -3,6 +3,7 @@ FILE: binance_spot.py
 Binance Spot API - single gateway for all Binance HTTP (public + signed).
 Retry/backoff 429-418, logging (endpoint, latency, retry). No secrets in logs.
 """
+
 from __future__ import annotations
 import asyncio
 import hashlib
@@ -31,6 +32,7 @@ def _should_log_binance_error(key: Tuple[str, ...]) -> bool:
     _binance_error_log_throttle[key] = now
     return True
 
+
 BINANCE_API = "https://api.binance.com"
 BINANCE_TESTNET = "https://testnet.binance.vision"
 
@@ -38,7 +40,9 @@ BINANCE_TESTNET = "https://testnet.binance.vision"
 MAX_RETRIES = 2
 INITIAL_BACKOFF = 0.5
 BACKOFF_MULTIPLIER = 2.0
-BINANCE_REQUEST_TIMEOUT_SEC = 8.0  # 8s (openOrders/account can be slow under load; was 4s)
+BINANCE_REQUEST_TIMEOUT_SEC = (
+    8.0  # 8s (openOrders/account can be slow under load; was 4s)
+)
 
 # Per-request HTTP timeout
 BINANCE_HTTP_TIMEOUT = httpx.Timeout(3.0, connect=2.0)
@@ -50,6 +54,7 @@ class DependencyFailure(Exception):
 
 class BinanceSignedError(Exception):
     """Binance API returned HTTP 200 but body has code != 0 (e.g. -2013 order does not exist)."""
+
     def __init__(self, code: int, msg: str, data: Optional[Dict[str, Any]] = None):
         self.code = code
         self.msg = msg or ""
@@ -59,6 +64,7 @@ class BinanceSignedError(Exception):
 
 class BinanceIPBannedError(Exception):
     """Binance 418 IP banned; caller should serve stale/cache until banned_until_ts (time.time())."""
+
     def __init__(self, banned_until_ts: float):
         self.banned_until_ts = banned_until_ts
         super().__init__(f"Binance IP banned until {banned_until_ts}")
@@ -107,17 +113,29 @@ def _log_binance_request_failure(
 ) -> None:
     """Ara deneme + geçici/4xx final: DEBUG; yalnızca kalıcı upstream final: WARNING."""
     is_final = attempt >= max_retries
-    warn = is_final and not _is_non_retryable_http_error(exc) and not is_transient_upstream_error(exc)
+    warn = (
+        is_final
+        and not _is_non_retryable_http_error(exc)
+        and not is_transient_upstream_error(exc)
+    )
     log_fn = logger.warning if warn else logger.debug
     if kind == "signed":
         log_fn(
             "binance_spot signed method=%s path=%s attempt=%s status=%s request_id=%s",
-            method, path, attempt + 1, status, request_id or "-",
+            method,
+            path,
+            attempt + 1,
+            status,
+            request_id or "-",
         )
     else:
         log_fn(
             "binance_spot public_get path=%s attempt=%s status=%s request_id=%s error=%s",
-            path, attempt + 1, status, request_id or "-", type(exc).__name__,
+            path,
+            attempt + 1,
+            status,
+            request_id or "-",
+            type(exc).__name__,
         )
 
 
@@ -137,6 +155,7 @@ def ip_ban_remaining_sec() -> float:
 def _parse_418_banned_until(text: str) -> Optional[float]:
     """Parse 'IP banned until 1770997257749' from Binance 418 body. Returns time.time() when retry OK (+60s buffer)."""
     import re
+
     m = re.search(r"IP banned until (\d+)", text or "")
     if not m:
         return None
@@ -146,6 +165,7 @@ def _parse_418_banned_until(text: str) -> Optional[float]:
 
 class CircuitBreaker:
     """Circuit breaker: 3 consecutive failures -> open 30s -> half-open."""
+
     FAILURE_THRESHOLD = 3
     OPEN_SECONDS = 30.0
     _consecutive_failures = 0
@@ -178,21 +198,30 @@ class CircuitBreaker:
 
     @classmethod
     def get_state(cls) -> str:
-        if cls._state == "open" and time.monotonic() - cls._opened_at >= cls.OPEN_SECONDS:
+        if (
+            cls._state == "open"
+            and time.monotonic() - cls._opened_at >= cls.OPEN_SECONDS
+        ):
             cls._state = "half_open"
         return cls._state
 
 
 # Binance server time cache (avoid -1021 timestamp outside recvWindow)
-_binance_time_cache: Dict[bool, Tuple[int, float, float]] = {}  # testnet -> (server_ms, wall_ts, mono_ts)
-_binance_time_offset_ms: Dict[bool, float] = {}  # testnet -> (server_ms - local_ms) at last sync
+_binance_time_cache: Dict[
+    bool, Tuple[int, float, float]
+] = {}  # testnet -> (server_ms, wall_ts, mono_ts)
+_binance_time_offset_ms: Dict[
+    bool, float
+] = {}  # testnet -> (server_ms - local_ms) at last sync
 _BINANCE_TIME_CACHE_TTL = 30.0  # seconds
 _BINANCE_TIME_STALE_MAX_SEC = 120.0  # extrapolate stale cache before local-ms fallback
 _BINANCE_TIME_FETCH_TIMEOUT = httpx.Timeout(15.0, connect=5.0)
 _BINANCE_TIME_WARN_THROTTLE_SEC = 300.0
 _binance_time_warn_last = 0.0
 _MAX_CLOCK_RETRIES = 4
-_BINANCE_TS_SAFETY_MS = 300  # imza timestamp'i Binance sunucu saatinden biraz geride (ileri sapma -1021)
+_BINANCE_TS_SAFETY_MS = (
+    300  # imza timestamp'i Binance sunucu saatinden biraz geride (ileri sapma -1021)
+)
 
 
 def _coerce_binance_code(raw: Any) -> Optional[int]:
@@ -216,7 +245,9 @@ def _parse_binance_error_body(body: str) -> Tuple[Optional[int], str]:
     return None, ""
 
 
-def _read_binance_time_from_cache(testnet: bool, *, max_age_sec: float) -> Optional[int]:
+def _read_binance_time_from_cache(
+    testnet: bool, *, max_age_sec: float
+) -> Optional[int]:
     """Extrapolate cached server time; None if missing or older than max_age_sec.
     Age uses monotonic clock so NTP wall-clock jumps do not skew the timestamp."""
     cached = _binance_time_cache.get(testnet)
@@ -271,7 +302,9 @@ def invalidate_binance_time_cache(testnet: Optional[bool] = None) -> None:
 def clock_sync_hint() -> str:
     """OS-aware NTP resync hint for Binance -1021 (timestamp outside recvWindow)."""
     if sys.platform == "win32":
-        return "Windows: w32tm /resync veya Ayarlar > Saat ile NTP senkronizasyonu yapın."
+        return (
+            "Windows: w32tm /resync veya Ayarlar > Saat ile NTP senkronizasyonu yapın."
+        )
     if sys.platform == "darwin":
         return "macOS: sudo sntp -sS time.apple.com veya Sistem Ayarları > Tarih ve Saat > Otomatik ayarla."
     return "Linux: sudo timedatectl set-ntp true ile NTP senkronizasyonu yapın."
@@ -281,7 +314,9 @@ def _base_url(testnet: bool) -> str:
     return BINANCE_TESTNET if testnet else BINANCE_API
 
 
-def build_signed_params(keys: Any, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def build_signed_params(
+    keys: Any, params: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
     """Build params with timestamp + signature (testable pure function). Keys: .api_secret, .testnet."""
     params = dict(params or {})
     params["timestamp"] = int(time.time() * 1000)
@@ -315,12 +350,16 @@ async def _public_get_json_impl(
             elapsed_ms = (time.perf_counter() - t0) * 1000
             try:
                 from app.services.binance_metrics import BinanceMetrics
+
                 BinanceMetrics.record(path, elapsed_ms, retry_count)
             except Exception:
                 pass
             logger.debug(
                 "binance_spot public_get path=%s latency_ms=%.0f attempt=%s request_id=%s",
-                path, elapsed_ms, attempt + 1, request_id or "-"
+                path,
+                elapsed_ms,
+                attempt + 1,
+                request_id or "-",
             )
             return data
         except Exception as e:
@@ -328,8 +367,14 @@ async def _public_get_json_impl(
             retry_count = attempt
             status = getattr(getattr(e, "response", None), "status_code", None)
             _log_binance_request_failure(
-                kind="public_get", path=path, method=None, attempt=attempt,
-                max_retries=MAX_RETRIES, status=status, request_id=request_id, exc=e,
+                kind="public_get",
+                path=path,
+                method=None,
+                attempt=attempt,
+                max_retries=MAX_RETRIES,
+                status=status,
+                request_id=request_id,
+                exc=e,
             )
             if _is_non_retryable_http_error(e):
                 raise DependencyFailure(f"Binance client error: {e}") from e
@@ -341,7 +386,9 @@ async def _public_get_json_impl(
             raise DependencyFailure(f"Binance retry budget exceeded: {e}") from last_exc
     if last_exc:
         CircuitBreaker.record_failure()
-        raise DependencyFailure(f"Binance retry budget exceeded: {last_exc}") from last_exc
+        raise DependencyFailure(
+            f"Binance retry budget exceeded: {last_exc}"
+        ) from last_exc
     return None
 
 
@@ -386,12 +433,17 @@ async def _signed_json_impl(
             elapsed_ms = (time.perf_counter() - t0) * 1000
             try:
                 from app.services.binance_metrics import BinanceMetrics
+
                 BinanceMetrics.record(path, elapsed_ms, retry_count)
             except Exception:
                 pass
             logger.debug(
                 "binance_spot signed method=%s path=%s latency_ms=%.0f attempt=%s request_id=%s",
-                method, path, elapsed_ms, attempt + 1, request_id or "-"
+                method,
+                path,
+                elapsed_ms,
+                attempt + 1,
+                request_id or "-",
             )
             return data
         except Exception as e:
@@ -399,8 +451,14 @@ async def _signed_json_impl(
             retry_count = attempt
             status = getattr(getattr(e, "response", None), "status_code", None)
             _log_binance_request_failure(
-                kind="signed", path=path, method=method, attempt=attempt,
-                max_retries=MAX_RETRIES, status=status, request_id=request_id, exc=e,
+                kind="signed",
+                path=path,
+                method=method,
+                attempt=attempt,
+                max_retries=MAX_RETRIES,
+                status=status,
+                request_id=request_id,
+                exc=e,
             )
             if _is_non_retryable_http_error(e):
                 raise DependencyFailure(f"Binance client error: {e}") from e
@@ -412,7 +470,9 @@ async def _signed_json_impl(
             raise DependencyFailure(f"Binance retry budget exceeded: {e}") from last_exc
     if last_exc:
         CircuitBreaker.record_failure()
-        raise DependencyFailure(f"Binance retry budget exceeded: {last_exc}") from last_exc
+        raise DependencyFailure(
+            f"Binance retry budget exceeded: {last_exc}"
+        ) from last_exc
     return None
 
 
@@ -436,10 +496,14 @@ async def signed_json(
         ) from e
 
 
-def _guard_no_per_symbol_ticker_price(path: str, params: Optional[Dict[str, Any]]) -> None:
+def _guard_no_per_symbol_ticker_price(
+    path: str, params: Optional[Dict[str, Any]]
+) -> None:
     """v2: Per-symbol ticker/price forbidden; use ticker_price_all() bulk only."""
     if "ticker/price" in path and params and params.get("symbol"):
-        raise RuntimeError("Per-symbol ticker/price forbidden; use ticker_price_all() bulk only")
+        raise RuntimeError(
+            "Per-symbol ticker/price forbidden; use ticker_price_all() bulk only"
+        )
 
 
 async def _public_get(
@@ -480,8 +544,16 @@ async def _public_get(
             try:
                 from app.services.binance_rest_log import record_rest
                 from app.services.binance_weight import record_weight_used
-                record_rest("GET", path, params=params, weight=weight, status=r.status_code,
-                            latency_ms=elapsed_ms, outcome="ok")
+
+                record_rest(
+                    "GET",
+                    path,
+                    params=params,
+                    weight=weight,
+                    status=r.status_code,
+                    latency_ms=elapsed_ms,
+                    outcome="ok",
+                )
                 record_weight_used(None, None, weight, elapsed_ms)
             except Exception:
                 pass
@@ -491,10 +563,17 @@ async def _public_get(
             if e.response.status_code in (400, 401, 403, 404, 422):
                 try:
                     from app.services.binance_rest_log import record_rest
-                    record_rest("GET", path, params=params, weight=weight,
-                                status=e.response.status_code,
-                                latency_ms=(time.perf_counter() - t0) * 1000,
-                                outcome="error", detail=str(e)[:120])
+
+                    record_rest(
+                        "GET",
+                        path,
+                        params=params,
+                        weight=weight,
+                        status=e.response.status_code,
+                        latency_ms=(time.perf_counter() - t0) * 1000,
+                        outcome="error",
+                        detail=str(e)[:120],
+                    )
                 except Exception:
                     pass
                 raise
@@ -504,10 +583,17 @@ async def _public_get(
                 continue
             try:
                 from app.services.binance_rest_log import record_rest
-                record_rest("GET", path, params=params, weight=weight,
-                            status=getattr(e.response, "status_code", None),
-                            latency_ms=(time.perf_counter() - t0) * 1000,
-                            outcome="error", detail=str(e)[:120])
+
+                record_rest(
+                    "GET",
+                    path,
+                    params=params,
+                    weight=weight,
+                    status=getattr(e.response, "status_code", None),
+                    latency_ms=(time.perf_counter() - t0) * 1000,
+                    outcome="error",
+                    detail=str(e)[:120],
+                )
             except Exception:
                 pass
             raise
@@ -519,9 +605,16 @@ async def _public_get(
                 continue
             try:
                 from app.services.binance_rest_log import record_rest
-                record_rest("GET", path, params=params, weight=weight,
-                            latency_ms=(time.perf_counter() - t0) * 1000,
-                            outcome="error", detail=str(e)[:120])
+
+                record_rest(
+                    "GET",
+                    path,
+                    params=params,
+                    weight=weight,
+                    latency_ms=(time.perf_counter() - t0) * 1000,
+                    outcome="error",
+                    detail=str(e)[:120],
+                )
             except Exception:
                 pass
             raise
@@ -535,7 +628,9 @@ async def _asyncio_sleep(seconds: float):
 
 
 def _sign(secret: str, query: str) -> str:
-    return hmac.new(secret.encode("utf-8"), query.encode("utf-8"), hashlib.sha256).hexdigest()
+    return hmac.new(
+        secret.encode("utf-8"), query.encode("utf-8"), hashlib.sha256
+    ).hexdigest()
 
 
 async def _get_binance_timestamp(
@@ -547,11 +642,15 @@ async def _get_binance_timestamp(
     if force_refresh:
         invalidate_binance_time_cache(testnet)
     if not force_refresh:
-        fresh = _read_binance_time_from_cache(testnet, max_age_sec=_BINANCE_TIME_CACHE_TTL)
+        fresh = _read_binance_time_from_cache(
+            testnet, max_age_sec=_BINANCE_TIME_CACHE_TTL
+        )
         if fresh is not None:
             return fresh
     if is_ip_banned():
-        stale = _read_binance_time_from_cache(testnet, max_age_sec=_BINANCE_TIME_STALE_MAX_SEC)
+        stale = _read_binance_time_from_cache(
+            testnet, max_age_sec=_BINANCE_TIME_STALE_MAX_SEC
+        )
         if stale is not None:
             return stale
         return _fallback_timestamp_ms(testnet)
@@ -572,7 +671,10 @@ async def _get_binance_timestamp(
             try:
                 from app.services.binance_rest_log import record_rest
                 from app.services.binance_weight import record_weight_used
-                record_rest("GET", "/api/v3/time", weight=1, status=r.status_code, outcome="ok")
+
+                record_rest(
+                    "GET", "/api/v3/time", weight=1, status=r.status_code, outcome="ok"
+                )
                 record_weight_used(None, None, 1)
             except Exception:
                 pass
@@ -581,17 +683,22 @@ async def _get_binance_timestamp(
             last_exc = exc
             if attempt < 2:
                 await _asyncio_sleep(0.5 * (attempt + 1))
-    stale = _read_binance_time_from_cache(testnet, max_age_sec=_BINANCE_TIME_STALE_MAX_SEC)
+    stale = _read_binance_time_from_cache(
+        testnet, max_age_sec=_BINANCE_TIME_STALE_MAX_SEC
+    )
     if stale is not None:
         return stale
     _log_binance_time_unavailable(last_exc)
     return _fallback_timestamp_ms(testnet)
 
 
-def _path_weight(path: str, method: str, params: Optional[Dict[str, Any]] = None) -> int:
+def _path_weight(
+    path: str, method: str, params: Optional[Dict[str, Any]] = None
+) -> int:
     """Binance endpoint weight (bulk ticker/24hr = 40)."""
     try:
         from app.services.binance_rest_log import compute_weight
+
         return compute_weight(path, method, params)
     except Exception:
         pass
@@ -612,20 +719,33 @@ def _path_weight(path: str, method: str, params: Optional[Dict[str, Any]] = None
     return 5
 
 
-async def _rest_precheck(method: str, path: str, params: Optional[Dict[str, Any]] = None) -> int:
+async def _rest_precheck(
+    method: str, path: str, params: Optional[Dict[str, Any]] = None
+) -> int:
     """REST guard: ban/throttle/budget. Returns weight or raises."""
     from app.services.binance_rest_log import should_allow_rest, record_rest
+
     allowed, reason, weight = should_allow_rest(method, path, params)
     if not allowed:
-        record_rest(method, path, params=params, weight=weight, outcome="skipped", detail=reason)
+        record_rest(
+            method, path, params=params, weight=weight, outcome="skipped", detail=reason
+        )
         if reason == "ip_banned":
             raise BinanceIPBannedError(_binance_ip_ban_state["until_ts"])
         raise DependencyFailure(f"REST blocked: {reason}")
     try:
         from app.services.binance_weight import request_weight_tokens
+
         ok = await request_weight_tokens(None, None, weight)
         if not ok:
-            record_rest(method, path, params=params, weight=weight, outcome="denied", detail="weight_budget")
+            record_rest(
+                method,
+                path,
+                params=params,
+                weight=weight,
+                outcome="denied",
+                detail="weight_budget",
+            )
             raise DependencyFailure("Binance weight limit exceeded - call denied")
     except DependencyFailure:
         raise
@@ -657,7 +777,9 @@ async def _build_signed_request(
     headers = {"X-MBX-APIKEY": keys.api_key}
     logger.debug(
         "BINANCE_SIGN_DEBUG %s %s QUERY=%s",
-        method.upper(), path, final_query.replace(signature, "***"),
+        method.upper(),
+        path,
+        final_query.replace(signature, "***"),
     )
     if method.upper() == "POST":
         headers["Content-Type"] = "application/x-www-form-urlencoded"
@@ -695,7 +817,12 @@ async def _signed_request_impl(
     for attempt in range(MAX_RETRIES + 1):
         force_refresh_time = clock_retries > 0
         req_url, url, headers, request_kw, params = await _build_signed_request(
-            client, method, path, keys, base_params, force_refresh_time=force_refresh_time,
+            client,
+            method,
+            path,
+            keys,
+            base_params,
+            force_refresh_time=force_refresh_time,
         )
         try:
             if client is None:
@@ -733,10 +860,16 @@ async def _signed_request_impl(
                 if err_code == -1021 and clock_retries < _MAX_CLOCK_RETRIES:
                     clock_retries += 1
                     invalidate_binance_time_cache(testnet)
-                    fresh = await _get_binance_timestamp(client, testnet, force_refresh=True)
+                    fresh = await _get_binance_timestamp(
+                        client, testnet, force_refresh=True
+                    )
                     logger.info(
                         "BINANCE_CLOCK_RETRY path=%s attempt=%s/%s status=%s fresh_server_ms=%s local_skew_ms=%s",
-                        path, clock_retries, _MAX_CLOCK_RETRIES, r.status_code, fresh,
+                        path,
+                        clock_retries,
+                        _MAX_CLOCK_RETRIES,
+                        r.status_code,
+                        fresh,
                         fresh - int(time.time() * 1000),
                     )
                     continue
@@ -748,38 +881,74 @@ async def _signed_request_impl(
             try:
                 from app.services.binance_rest_log import record_rest
                 from app.services.binance_weight import record_weight_used
-                record_rest(method, path, params={k: v for k, v in params.items() if k != "signature"},
-                            weight=weight, status=r.status_code, latency_ms=elapsed_ms, outcome="ok")
-                record_weight_used(None, getattr(keys, "api_key", None), weight, elapsed_ms)
+
+                record_rest(
+                    method,
+                    path,
+                    params={k: v for k, v in params.items() if k != "signature"},
+                    weight=weight,
+                    status=r.status_code,
+                    latency_ms=elapsed_ms,
+                    outcome="ok",
+                )
+                record_weight_used(
+                    None, getattr(keys, "api_key", None), weight, elapsed_ms
+                )
             except Exception:
                 pass
             code = data.get("code", 0) if isinstance(data, dict) else 0
             if code not in (0, None):
-                msg = data.get("msg", "Unknown error") if isinstance(data, dict) else "Unknown error"
+                msg = (
+                    data.get("msg", "Unknown error")
+                    if isinstance(data, dict)
+                    else "Unknown error"
+                )
                 if code == -1021 and clock_retries < _MAX_CLOCK_RETRIES:
                     clock_retries += 1
                     invalidate_binance_time_cache(testnet)
-                    skew = await _get_binance_timestamp(client, testnet, force_refresh=True)
+                    skew = await _get_binance_timestamp(
+                        client, testnet, force_refresh=True
+                    )
                     logger.info(
                         "BINANCE_CLOCK_RETRY path=%s attempt=%s/%s fresh_server_ms=%s local_skew_ms=%s",
-                        path, clock_retries, _MAX_CLOCK_RETRIES, skew,
+                        path,
+                        clock_retries,
+                        _MAX_CLOCK_RETRIES,
+                        skew,
                         skew - int(time.time() * 1000),
                     )
                     continue
                 if code in (-2015, -2008):
-                    logger.debug("BINANCE_SIGNED_ERROR path=%s status=200 code=%s msg=%s", path, code, msg)
+                    logger.debug(
+                        "BINANCE_SIGNED_ERROR path=%s status=200 code=%s msg=%s",
+                        path,
+                        code,
+                        msg,
+                    )
                 else:
-                    logger.warning("BINANCE_SIGNED_ERROR path=%s status=200 code=%s msg=%s", path, code, msg)
+                    logger.warning(
+                        "BINANCE_SIGNED_ERROR path=%s status=200 code=%s msg=%s",
+                        path,
+                        code,
+                        msg,
+                    )
                 try:
                     if _should_log_binance_error((path, "200", code)):
                         from app.error_logging import log_error_fire_and_forget
+
                         ctx = {"path": path, "method": method, "code": code}
                         if code == -1021:
-                            ctx["hint"] = f"Sunucu saati ile Binance saati uyumsuz. {clock_sync_hint()}"
-                        log_error_fire_and_forget("binance", msg, detail=None, context=ctx)
+                            ctx["hint"] = (
+                                f"Sunucu saati ile Binance saati uyumsuz. {clock_sync_hint()}"
+                            )
+                        log_error_fire_and_forget(
+                            "binance", msg, detail=None, context=ctx
+                        )
                 except Exception:
                     pass
-                raise BinanceSignedError(code, msg, data if isinstance(data, dict) else {})
+                raise BinanceSignedError(
+                    code, msg, data if isinstance(data, dict) else {}
+                )
             return data
         except httpx.HTTPStatusError as e:
             last_exc = e
@@ -792,19 +961,21 @@ async def _signed_request_impl(
                 err_code, err_msg = _parse_binance_error_body(body)
                 code = err_code
                 msg = err_msg
-                is_invalid_key = (
-                    sc == 401
-                    or (sc == 400 and code in (-2015, -2008))
-                )
+                is_invalid_key = sc == 401 or (sc == 400 and code in (-2015, -2008))
                 if sc == 400 and code == -2013:
                     raise BinanceSignedError(int(code), str(msg), {})
                 if sc == 400 and code == -1021 and clock_retries < _MAX_CLOCK_RETRIES:
                     clock_retries += 1
                     invalidate_binance_time_cache(testnet)
-                    fresh = await _get_binance_timestamp(client, testnet, force_refresh=True)
+                    fresh = await _get_binance_timestamp(
+                        client, testnet, force_refresh=True
+                    )
                     logger.info(
                         "BINANCE_CLOCK_RETRY path=%s attempt=%s/%s status=400 fresh_server_ms=%s local_skew_ms=%s",
-                        path, clock_retries, _MAX_CLOCK_RETRIES, fresh,
+                        path,
+                        clock_retries,
+                        _MAX_CLOCK_RETRIES,
+                        fresh,
                         fresh - int(time.time() * 1000),
                     )
                     continue
@@ -823,7 +994,10 @@ async def _signed_request_impl(
                 hint = f"API anahtari, IP beyaz listesi veya sunucu saati. {clock_sync_hint()}"
                 logger.warning(
                     "BINANCE_SIGNED_ERROR path=%s status=%s body=%s hint=%s",
-                    path, sc, body[:200] if body else "", hint,
+                    path,
+                    sc,
+                    body[:200] if body else "",
+                    hint,
                 )
             if e.response.status_code == 418:
                 until = _parse_418_banned_until(getattr(e.response, "text", "") or "")
@@ -838,16 +1012,24 @@ async def _signed_request_impl(
                     sk = (path, str(getattr(e.response, "status_code", None)))
                     if _should_log_binance_error(sk):
                         from app.error_logging import log_error_fire_and_forget
+
                         ctx = {"path": path, "method": method}
                         try:
                             b = json.loads(body) if body else {}
                             if isinstance(b, dict) and b.get("code") == -2015:
-                                ctx["hint"] = "IP değişmiş veya API anahtarı/izin hatası olabilir; Binance'te güncel IP ve izinleri kontrol edin."
+                                ctx["hint"] = (
+                                    "IP değişmiş veya API anahtarı/izin hatası olabilir; Binance'te güncel IP ve izinleri kontrol edin."
+                                )
                             if isinstance(b, dict) and b.get("code") == -1021:
                                 ctx["hint"] = clock_sync_hint()
                         except Exception:
                             pass
-                        log_error_fire_and_forget("binance", str(e), detail=traceback.format_exc(), context=ctx)
+                        log_error_fire_and_forget(
+                            "binance",
+                            str(e),
+                            detail=traceback.format_exc(),
+                            context=ctx,
+                        )
                 except Exception:
                     pass
             raise
@@ -857,7 +1039,9 @@ async def _signed_request_impl(
                 invalidate_binance_time_cache(testnet)
                 logger.info(
                     "BINANCE_CLOCK_RETRY path=%s attempt=%s/%s signed_error",
-                    path, clock_retries, _MAX_CLOCK_RETRIES,
+                    path,
+                    clock_retries,
+                    _MAX_CLOCK_RETRIES,
                 )
                 continue
             raise
@@ -870,7 +1054,13 @@ async def _signed_request_impl(
             try:
                 if _should_log_binance_error((path, "error", type(e).__name__)):
                     from app.error_logging import log_error_fire_and_forget
-                    log_error_fire_and_forget("binance", str(e), detail=traceback.format_exc(), context={"path": path, "method": method})
+
+                    log_error_fire_and_forget(
+                        "binance",
+                        str(e),
+                        detail=traceback.format_exc(),
+                        context={"path": path, "method": method},
+                    )
             except Exception:
                 pass
             raise
@@ -912,6 +1102,7 @@ _account_lock = asyncio.Lock()
 async def _fetch_account_upstream(keys: Any, tag: str = "wallet") -> Dict[str, Any]:
     """Tek upstream çağrı – sadece cache miss veya TTL dolunca."""
     from app.services.binance_rest_log import rest_source
+
     client = getattr(keys, "_client", None)
     with rest_source(f"wallet.{tag}"):
         return await _signed_request(client, "GET", "/api/v3/account", keys, {})
@@ -940,7 +1131,11 @@ async def get_wallet(keys: Any, tag: str = "wallet") -> Dict[str, Any]:
         if cache_key in _account_cache:
             data, ts = _account_cache[cache_key]
             if now - ts < _ACCOUNT_CACHE_TTL:
-                logger.debug("ACCOUNT_CALL tag=%s cache_hit=true upstream_call=false age_sec=%.2f", tag, now - ts)
+                logger.debug(
+                    "ACCOUNT_CALL tag=%s cache_hit=true upstream_call=false age_sec=%.2f",
+                    tag,
+                    now - ts,
+                )
                 return data
         if cache_key in _account_inflight:
             task = _account_inflight[cache_key]
@@ -955,13 +1150,19 @@ async def get_wallet(keys: Any, tag: str = "wallet") -> Dict[str, Any]:
     except asyncio.TimeoutError as e:
         if is_creator:
             async with _account_lock:
-                if cache_key in _account_inflight and _account_inflight[cache_key] == task:
+                if (
+                    cache_key in _account_inflight
+                    and _account_inflight[cache_key] == task
+                ):
                     del _account_inflight[cache_key]
         raise DependencyFailure("Binance account request timeout (4s)") from e
     except Exception:
         if is_creator:
             async with _account_lock:
-                if cache_key in _account_inflight and _account_inflight[cache_key] == task:
+                if (
+                    cache_key in _account_inflight
+                    and _account_inflight[cache_key] == task
+                ):
                     del _account_inflight[cache_key]
         raise
     if is_creator:
@@ -975,23 +1176,33 @@ async def get_wallet(keys: Any, tag: str = "wallet") -> Dict[str, Any]:
 async def get_open_orders(keys: Any, symbol: Optional[str] = None) -> List[Dict]:
     """GET /api/v3/openOrders. If symbol given, pass it."""
     from app.services.binance_rest_log import rest_source
+
     params = {}
     if symbol:
         params["symbol"] = symbol.upper()
     client = getattr(keys, "_client", None)
     with rest_source("bot.open_orders"):
         data = await _signed_request(client, "GET", "/api/v3/openOrders", keys, params)
-    return data if isinstance(data, list) else (data.get("orders") or data.get("data") or [])
+    return (
+        data
+        if isinstance(data, list)
+        else (data.get("orders") or data.get("data") or [])
+    )
 
 
 async def get_all_orders(keys: Any, symbol: str, limit: int = 20) -> List[Dict]:
     """GET /api/v3/allOrders. Recent orders for reconciliation (bounded)."""
     from app.services.binance_rest_log import rest_source
+
     params = {"symbol": symbol.upper(), "limit": min(limit, 100)}
     client = getattr(keys, "_client", None)
     with rest_source("bot.all_orders"):
         data = await _signed_request(client, "GET", "/api/v3/allOrders", keys, params)
-    return data if isinstance(data, list) else (data.get("orders") or data.get("data") or [])
+    return (
+        data
+        if isinstance(data, list)
+        else (data.get("orders") or data.get("data") or [])
+    )
 
 
 def _is_order_not_found(code: int, msg: str) -> bool:
@@ -1019,7 +1230,14 @@ def _is_valid_order_response(data: Any, symbol: str, orig_client_order_id: str) 
     except (ValueError, TypeError):
         return False
     status = (data.get("status") or "").upper()
-    if status not in ("NEW", "PARTIALLY_FILLED", "FILLED", "CANCELED", "EXPIRED", "REJECTED"):
+    if status not in (
+        "NEW",
+        "PARTIALLY_FILLED",
+        "FILLED",
+        "CANCELED",
+        "EXPIRED",
+        "REJECTED",
+    ):
         return False
     if (data.get("symbol") or "").upper() != (symbol or "").upper():
         return False
@@ -1029,7 +1247,9 @@ def _is_valid_order_response(data: Any, symbol: str, orig_client_order_id: str) 
     return True
 
 
-async def get_order_by_client_order_id(keys: Any, symbol: str, orig_client_order_id: str) -> Optional[Dict[str, Any]]:
+async def get_order_by_client_order_id(
+    keys: Any, symbol: str, orig_client_order_id: str
+) -> Optional[Dict[str, Any]]:
     """GET /api/v3/order?symbol=X&origClientOrderId=Y. Returns order if exists (open or filled), None if not found (e.g. -2013).
     Never treat HTTP 200 + code!=0 as success. -2013 / 'Order does not exist' => NOT_FOUND => caller may place order.
     """
@@ -1037,30 +1257,56 @@ async def get_order_by_client_order_id(keys: Any, symbol: str, orig_client_order
     client = getattr(keys, "_client", None)
     logger.info(
         "RECONCILE_QUERY path=/api/v3/order symbol=%s origClientOrderId=%s",
-        symbol, orig_client_order_id[:36] if orig_client_order_id else "",
+        symbol,
+        orig_client_order_id[:36] if orig_client_order_id else "",
     )
     try:
         data = await _signed_request(client, "GET", "/api/v3/order", keys, params)
         raw_trunc = (json.dumps(data) if isinstance(data, dict) else str(data))[:2000]
         logger.info("RECONCILE_RESPONSE_BODY decision=FOUND body_trunc=%s", raw_trunc)
         if not _is_valid_order_response(data, symbol, orig_client_order_id):
-            logger.warning("RECONCILE_RESPONSE_BODY decision=INVALID_ORDER (missing orderId/status/symbol/coid) treating as NOT_FOUND")
+            logger.warning(
+                "RECONCILE_RESPONSE_BODY decision=INVALID_ORDER (missing orderId/status/symbol/coid) treating as NOT_FOUND"
+            )
             return None
         return data
     except BinanceSignedError as e:
         if _is_order_not_found(e.code, e.msg):
-            logger.debug("RECONCILE_RESPONSE_BODY decision=NOT_FOUND code=%s msg=%s => proceed to place", e.code, e.msg)
+            logger.debug(
+                "RECONCILE_RESPONSE_BODY decision=NOT_FOUND code=%s msg=%s => proceed to place",
+                e.code,
+                e.msg,
+            )
             return None
         raw_trunc = (json.dumps(e.data) if e.data else e.msg)[:2000]
-        logger.info("RECONCILE_RESPONSE_BODY decision=ERROR code=%s msg=%s body_trunc=%s", e.code, e.msg, raw_trunc)
+        logger.info(
+            "RECONCILE_RESPONSE_BODY decision=ERROR code=%s msg=%s body_trunc=%s",
+            e.code,
+            e.msg,
+            raw_trunc,
+        )
         raise
     except httpx.HTTPStatusError as e:
         body = (getattr(e.response, "text", None) or "")[:500]
-        logger.debug("RECONCILE_RESPONSE_BODY decision=HTTP_ERROR status=%s body_trunc=%s", getattr(e.response, "status_code", None), body[:500])
+        logger.debug(
+            "RECONCILE_RESPONSE_BODY decision=HTTP_ERROR status=%s body_trunc=%s",
+            getattr(e.response, "status_code", None),
+            body[:500],
+        )
         try:
-            b = e.response.json() if hasattr(e.response, "json") and callable(getattr(e.response, "json")) else {}
-            if isinstance(b, dict) and _is_order_not_found(b.get("code", 0), b.get("msg", "")):
-                logger.debug("RECONCILE_DECISION NOT_FOUND (HTTP %s code=%s) => proceed to place", getattr(e.response, "status_code", None), b.get("code"))
+            b = (
+                e.response.json()
+                if hasattr(e.response, "json") and callable(getattr(e.response, "json"))
+                else {}
+            )
+            if isinstance(b, dict) and _is_order_not_found(
+                b.get("code", 0), b.get("msg", "")
+            ):
+                logger.debug(
+                    "RECONCILE_DECISION NOT_FOUND (HTTP %s code=%s) => proceed to place",
+                    getattr(e.response, "status_code", None),
+                    b.get("code"),
+                )
                 return None
         except Exception:
             pass
@@ -1070,23 +1316,34 @@ async def get_order_by_client_order_id(keys: Any, symbol: str, orig_client_order
         try:
             if hasattr(e, "response") and getattr(e.response, "text", None):
                 body = str(e.response.text or "")[:500]
-            logger.debug("RECONCILE_RESPONSE_BODY decision=EXCEPTION body_trunc=%s", body[:2000])
+            logger.debug(
+                "RECONCILE_RESPONSE_BODY decision=EXCEPTION body_trunc=%s", body[:2000]
+            )
             if hasattr(e, "response") and hasattr(e.response, "json"):
                 try:
                     b = e.response.json()
-                    if isinstance(b, dict) and _is_order_not_found(b.get("code", 0), b.get("msg", "")):
+                    if isinstance(b, dict) and _is_order_not_found(
+                        b.get("code", 0), b.get("msg", "")
+                    ):
                         return None
                 except Exception:
                     pass
         except Exception:
             pass
-        if "-2013" in str(e) or "-2013" in body or "Unknown order" in str(e).lower() or "order does not exist" in str(e).lower():
+        if (
+            "-2013" in str(e)
+            or "-2013" in body
+            or "Unknown order" in str(e).lower()
+            or "order does not exist" in str(e).lower()
+        ):
             logger.debug("RECONCILE_DECISION NOT_FOUND (exception) => proceed to place")
             return None
         raise
 
 
-async def get_my_trades(keys: Any, symbol: str, limit: int = 50, order_id: Optional[int] = None) -> List[Dict[str, Any]]:
+async def get_my_trades(
+    keys: Any, symbol: str, limit: int = 50, order_id: Optional[int] = None
+) -> List[Dict[str, Any]]:
     """GET /api/v3/myTrades. If order_id given, filter to trades with that orderId (verify fill)."""
     params = {"symbol": symbol.upper(), "limit": min(limit, 100)}
     client = getattr(keys, "_client", None)
@@ -1109,7 +1366,9 @@ _exchange_info_inflight: Dict[str, asyncio.Task] = {}
 _exchange_info_lock = asyncio.Lock()
 EXCHANGE_INFO_TTL = 3600.0
 # Kompakt cache: tam exchangeInfo JSON RAM'de tutulmaz
-_exchange_compact_cache: Dict[str, Tuple[List[str], Dict[str, Dict[str, Any]], float]] = {}
+_exchange_compact_cache: Dict[
+    str, Tuple[List[str], Dict[str, Dict[str, Any]], float]
+] = {}
 
 
 def _exchange_cache_key(testnet: bool) -> str:
@@ -1117,7 +1376,7 @@ def _exchange_cache_key(testnet: bool) -> str:
 
 
 def _filters_from_exchange_symbol_entry(s: Dict[str, Any]) -> Dict[str, Any]:
-    sym = (s.get("symbol") or "").upper().strip()
+    (s.get("symbol") or "").upper().strip()
     out: Dict[str, Any] = {
         "step_size": 0.00001,
         "step_size_str": "0.00001",
@@ -1167,7 +1426,9 @@ def _exchange_info_lightweight(symbols_list: List[str]) -> Dict[str, Any]:
     return {"symbols": [{"symbol": s, "status": "TRADING"} for s in symbols_list]}
 
 
-async def _ensure_exchange_compact(testnet: bool = False, force_refresh: bool = False) -> None:
+async def _ensure_exchange_compact(
+    testnet: bool = False, force_refresh: bool = False
+) -> None:
     from app.services.binance_rest_log import rest_source
 
     key = _exchange_cache_key(testnet)
@@ -1190,7 +1451,9 @@ async def _ensure_exchange_compact(testnet: bool = False, force_refresh: bool = 
             async def _fetch():
                 async with httpx.AsyncClient(timeout=BINANCE_HTTP_TIMEOUT) as c:
                     with rest_source("binance.exchange_info"):
-                        return await _public_get(c, "/api/v3/exchangeInfo", None, testnet)
+                        return await _public_get(
+                            c, "/api/v3/exchangeInfo", None, testnet
+                        )
 
             task = asyncio.create_task(_fetch())
             _exchange_info_inflight[key] = task
@@ -1206,7 +1469,9 @@ async def _ensure_exchange_compact(testnet: bool = False, force_refresh: bool = 
                     del _exchange_info_inflight[key]
 
 
-def get_symbol_filters_sync(symbol: str, testnet: bool = False) -> Optional[Dict[str, Any]]:
+def get_symbol_filters_sync(
+    symbol: str, testnet: bool = False
+) -> Optional[Dict[str, Any]]:
     """Senkron okuma — cache zaten yüklüyse (DataHub tick dışı)."""
     sym = (symbol or "").upper().strip()
     if not sym:
@@ -1244,7 +1509,9 @@ async def get_cached_trading_symbols(
     return list(entry[0])
 
 
-async def fetch_exchange_info(testnet: bool = False, force_refresh: bool = False) -> Dict[str, Any]:
+async def fetch_exchange_info(
+    testnet: bool = False, force_refresh: bool = False
+) -> Dict[str, Any]:
     """GET /api/v3/exchangeInfo — RAM'de yalnızca kompakt filtre indeksi tutulur."""
     await _ensure_exchange_compact(testnet, force_refresh)
     key = _exchange_cache_key(testnet)
@@ -1258,6 +1525,7 @@ async def ticker_price_all(testnet: bool = False) -> List[Dict]:
     """GET /api/v3/ticker/price (no symbol = all). Yalnızca data_hub ingest."""
     _assert_market_ingest_caller()
     from app.services.binance_rest_log import rest_source
+
     async with httpx.AsyncClient(timeout=BINANCE_HTTP_TIMEOUT) as c:
         with rest_source("binance.ticker_price_all"):
             data = await _public_get(c, "/api/v3/ticker/price", None, testnet)
@@ -1268,6 +1536,7 @@ async def ticker_24h_all(testnet: bool = False, symbol: Optional[str] = None) ->
     """GET /api/v3/ticker/24hr. Yalnızca data_hub ingest (+ tek sembol acil durum)."""
     _assert_market_ingest_caller(allow_single=bool(symbol))
     from app.services.binance_rest_log import rest_source
+
     params = {}
     src = "binance.ticker_24h_single" if symbol else "binance.ticker_24h_bulk"
     if symbol:
@@ -1281,6 +1550,7 @@ async def ticker_24h_all(testnet: bool = False, symbol: Optional[str] = None) ->
 def _assert_market_ingest_caller(allow_single: bool = False) -> None:
     """Public ticker REST yalnızca data_hub (ingest) veya acil tek sembol."""
     import inspect
+
     for frame in inspect.stack()[2:8]:
         fn = (frame.filename or "").replace("\\", "/")
         if "/services/data_hub.py" in fn:
@@ -1301,7 +1571,7 @@ def build_price_map_from_24h(ticker_24h_list: List[Dict]) -> Dict[str, float]:
     Döner: symbol -> price (float).
     """
     out: Dict[str, float] = {}
-    for r in (ticker_24h_list or []):
+    for r in ticker_24h_list or []:
         sym = r.get("symbol")
         if not sym:
             continue
@@ -1326,6 +1596,7 @@ async def place_order(keys: Any, payload: Dict[str, Any]) -> Dict[str, Any]:
     """
     from app.core.config import is_worker_role
     from app.core.errors import AppError
+
     if not is_worker_role():
         raise AppError(
             "WORKER_ONLY_OPERATION",
@@ -1333,10 +1604,15 @@ async def place_order(keys: Any, payload: Dict[str, Any]) -> Dict[str, Any]:
             status_code=403,
         )
     from app.core.config import is_worker_role
+
     logger.info(
         "BINANCE_PLACE_ORDER symbol=%s side=%s type=%s coid=%s worker_role=%s testnet=%s",
-        payload.get("symbol"), payload.get("side"), payload.get("type"),
-        payload.get("newClientOrderId", "")[:36] if payload.get("newClientOrderId") else "",
+        payload.get("symbol"),
+        payload.get("side"),
+        payload.get("type"),
+        payload.get("newClientOrderId", "")[:36]
+        if payload.get("newClientOrderId")
+        else "",
         is_worker_role(),
         getattr(keys, "testnet", None),
     )
@@ -1355,10 +1631,14 @@ async def get_trade_fee(keys: Any) -> List[Dict]:
 # Sync gateway (for bot engines that run in sync context)
 # ---------------------------------------------------------------------------
 
-def _sync_public_get(path: str, params: Optional[Dict[str, Any]] = None, testnet: bool = False) -> Any:
+
+def _sync_public_get(
+    path: str, params: Optional[Dict[str, Any]] = None, testnet: bool = False
+) -> Any:
     """Sync public GET - single gateway, uses requests. Timeout 3s, max 4s total."""
     _guard_no_per_symbol_ticker_price(path, params)
     import requests
+
     base = _base_url(testnet)
     url = f"{base}{path}"
     params = params or {}
@@ -1368,30 +1648,40 @@ def _sync_public_get(path: str, params: Optional[Dict[str, Any]] = None, testnet
             r = requests.get(url, params=params, timeout=3)
             if r.status_code in (429, 418):
                 if attempt < MAX_RETRIES:
-                    time.sleep(INITIAL_BACKOFF * (BACKOFF_MULTIPLIER ** attempt))
+                    time.sleep(INITIAL_BACKOFF * (BACKOFF_MULTIPLIER**attempt))
                     continue
             r.raise_for_status()
             elapsed_ms = (time.perf_counter() - t0) * 1000
-            logger.debug("binance_spot sync_public path=%s latency_ms=%.0f attempt=%s", path, elapsed_ms, attempt + 1)
+            logger.debug(
+                "binance_spot sync_public path=%s latency_ms=%.0f attempt=%s",
+                path,
+                elapsed_ms,
+                attempt + 1,
+            )
             return r.json()
-        except Exception as e:
+        except Exception:
             if attempt >= MAX_RETRIES:
                 raise
-            time.sleep(INITIAL_BACKOFF * (BACKOFF_MULTIPLIER ** attempt))
+            time.sleep(INITIAL_BACKOFF * (BACKOFF_MULTIPLIER**attempt))
     return None
 
 
 def _get_binance_timestamp_sync(testnet: bool, force_refresh: bool = False) -> int:
     """Binance server time (ms) for sync calls. Same cache/TTL as async path."""
     import requests
+
     if force_refresh:
         invalidate_binance_time_cache(testnet)
     if not force_refresh:
-        fresh = _read_binance_time_from_cache(testnet, max_age_sec=_BINANCE_TIME_CACHE_TTL)
+        fresh = _read_binance_time_from_cache(
+            testnet, max_age_sec=_BINANCE_TIME_CACHE_TTL
+        )
         if fresh is not None:
             return fresh
     if is_ip_banned():
-        stale = _read_binance_time_from_cache(testnet, max_age_sec=_BINANCE_TIME_STALE_MAX_SEC)
+        stale = _read_binance_time_from_cache(
+            testnet, max_age_sec=_BINANCE_TIME_STALE_MAX_SEC
+        )
         if stale is not None:
             return stale
         return _fallback_timestamp_ms(testnet)
@@ -1407,7 +1697,10 @@ def _get_binance_timestamp_sync(testnet: bool, force_refresh: bool = False) -> i
             try:
                 from app.services.binance_rest_log import record_rest
                 from app.services.binance_weight import record_weight_used
-                record_rest("GET", "/api/v3/time", weight=1, status=r.status_code, outcome="ok")
+
+                record_rest(
+                    "GET", "/api/v3/time", weight=1, status=r.status_code, outcome="ok"
+                )
                 record_weight_used(None, None, 1)
             except Exception:
                 pass
@@ -1416,16 +1709,21 @@ def _get_binance_timestamp_sync(testnet: bool, force_refresh: bool = False) -> i
             last_exc = exc
             if attempt < 2:
                 time.sleep(0.5 * (attempt + 1))
-    stale = _read_binance_time_from_cache(testnet, max_age_sec=_BINANCE_TIME_STALE_MAX_SEC)
+    stale = _read_binance_time_from_cache(
+        testnet, max_age_sec=_BINANCE_TIME_STALE_MAX_SEC
+    )
     if stale is not None:
         return stale
     _log_binance_time_unavailable(last_exc)
     return _fallback_timestamp_ms(testnet)
 
 
-def _sync_signed_request(method: str, path: str, keys: Any, params: Optional[Dict[str, Any]] = None) -> Any:
+def _sync_signed_request(
+    method: str, path: str, keys: Any, params: Optional[Dict[str, Any]] = None
+) -> Any:
     """Sync signed request. GET/DELETE: query string imza ile aynı sırada URL'e eklenir (params= yok)."""
     import requests
+
     base_params = dict(params or {})
     testnet = getattr(keys, "testnet", False)
     base = _base_url(testnet)
@@ -1458,7 +1756,7 @@ def _sync_signed_request(method: str, path: str, keys: Any, params: Optional[Dic
                 r = requests.post(req_url, headers=headers, data=body, timeout=3)
             if r.status_code in (429, 418):
                 if attempt < MAX_RETRIES:
-                    time.sleep(INITIAL_BACKOFF * (BACKOFF_MULTIPLIER ** attempt))
+                    time.sleep(INITIAL_BACKOFF * (BACKOFF_MULTIPLIER**attempt))
                     continue
             if r.status_code >= 400:
                 err_code, err_msg = _parse_binance_error_body((r.text or "")[:500])
@@ -1467,23 +1765,36 @@ def _sync_signed_request(method: str, path: str, keys: Any, params: Optional[Dic
                     invalidate_binance_time_cache(testnet)
                     logger.info(
                         "BINANCE_CLOCK_RETRY sync path=%s attempt=%s/%s status=%s",
-                        path, clock_retries, _MAX_CLOCK_RETRIES, r.status_code,
+                        path,
+                        clock_retries,
+                        _MAX_CLOCK_RETRIES,
+                        r.status_code,
                     )
                     continue
                 if err_code == -2013:
                     raise BinanceSignedError(-2013, err_msg, {})
             r.raise_for_status()
             data = r.json()
-            code = _coerce_binance_code(data.get("code", 0) if isinstance(data, dict) else 0) or 0
+            code = (
+                _coerce_binance_code(
+                    data.get("code", 0) if isinstance(data, dict) else 0
+                )
+                or 0
+            )
             if code == -1021 and clock_retries < _MAX_CLOCK_RETRIES:
                 clock_retries += 1
                 invalidate_binance_time_cache(testnet)
                 continue
             elapsed_ms = (time.perf_counter() - t0) * 1000
-            logger.debug("binance_spot sync_signed method=%s path=%s latency_ms=%.0f", method, path, elapsed_ms)
+            logger.debug(
+                "binance_spot sync_signed method=%s path=%s latency_ms=%.0f",
+                method,
+                path,
+                elapsed_ms,
+            )
             return data
-        except Exception as e:
+        except Exception:
             if attempt >= MAX_RETRIES:
                 raise
-            time.sleep(INITIAL_BACKOFF * (BACKOFF_MULTIPLIER ** attempt))
+            time.sleep(INITIAL_BACKOFF * (BACKOFF_MULTIPLIER**attempt))
     return None

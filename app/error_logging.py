@@ -2,6 +2,7 @@
 Merkezi hata kaydı – backend, frontend, Binance, arayüz hatalarını error_logs tablosuna yazar.
 Admin panelde listelenir ve yeni hata popup ile bildirilir.
 """
+
 import json
 import logging
 from typing import Optional, Any, Dict
@@ -23,11 +24,16 @@ def log_error_fire_and_forget(
     """
     try:
         from app.db.session import SessionLocal
+
         db = SessionLocal()
         try:
             persist_error(
-                db, source, message,
-                detail=detail, context=context, level="error",
+                db,
+                source,
+                message,
+                detail=detail,
+                context=context,
+                level="error",
             )
         finally:
             db.close()

@@ -5,6 +5,7 @@ Kopma sırasında tick çalışmadığı için tepe/dip/gerçekleşme güncellen
 mevcut fiyata göre grid ve kar alım durumu yeniden değerlendirilir. Emir üretimi tick içinde
 normal akış + _outage_* bayrakları ile yapılır.
 """
+
 from __future__ import annotations
 
 import logging
@@ -131,7 +132,11 @@ def _recover_sell_grid(
         )
         logger.info(
             "BOT_OUTAGE_RECOVERY bot_id=%s grid=sell idx=%s action=EXEC_FAVORABLE price=%.4f exec=%.4f peak=%.4f",
-            state.get("bot_id"), idx, P, exec_thr, peak,
+            state.get("bot_id"),
+            idx,
+            P,
+            exec_thr,
+            peak,
         )
         return
 
@@ -140,7 +145,11 @@ def _recover_sell_grid(
         state["sell_grid_peak_price"] = peaks
         logger.info(
             "BOT_OUTAGE_RECOVERY bot_id=%s grid=sell idx=%s action=CONTINUE_TRAIL price=%.4f exec=%.4f trigger=%.4f",
-            state.get("bot_id"), idx, P, exec_thr, trigger,
+            state.get("bot_id"),
+            idx,
+            P,
+            exec_thr,
+            trigger,
         )
         return
 
@@ -153,7 +162,10 @@ def _recover_sell_grid(
         )
         logger.info(
             "BOT_OUTAGE_RECOVERY bot_id=%s grid=sell idx=%s action=RESET reason=price_below_trigger price=%.4f trigger=%.4f",
-            state.get("bot_id"), idx, P, trigger,
+            state.get("bot_id"),
+            idx,
+            P,
+            trigger,
         )
         return
 
@@ -163,7 +175,10 @@ def _recover_sell_grid(
         state["sell_grid_peak_price"] = peaks
         logger.info(
             "BOT_OUTAGE_RECOVERY bot_id=%s grid=sell idx=%s action=REANCHOR_PEAK price=%.4f exec=%.4f",
-            state.get("bot_id"), idx, P, peak * (1.0 - sell_trail_pct / 100.0),
+            state.get("bot_id"),
+            idx,
+            P,
+            peak * (1.0 - sell_trail_pct / 100.0),
         )
         return
 
@@ -171,7 +186,10 @@ def _recover_sell_grid(
     state["sell_grid_peak_price"] = peaks
     logger.info(
         "BOT_OUTAGE_RECOVERY bot_id=%s grid=sell idx=%s action=REANCHOR_PEAK price=%.4f exec=%.4f",
-        state.get("bot_id"), idx, P, peak * (1.0 - sell_trail_pct / 100.0),
+        state.get("bot_id"),
+        idx,
+        P,
+        peak * (1.0 - sell_trail_pct / 100.0),
     )
 
 
@@ -197,7 +215,11 @@ def _recover_buy_grid(
             state["buy_grid_trough_price"] = troughs
             logger.info(
                 "BOT_OUTAGE_RECOVERY bot_id=%s grid=buy idx=%s action=CONTINUE_TRAIL price=%.4f exec=%.4f trigger=%.4f",
-                state.get("bot_id"), idx, P, exec_thr, trigger,
+                state.get("bot_id"),
+                idx,
+                P,
+                exec_thr,
+                trigger,
             )
             return
         troughs[idx] = trough
@@ -209,7 +231,11 @@ def _recover_buy_grid(
         )
         logger.info(
             "BOT_OUTAGE_RECOVERY bot_id=%s grid=buy idx=%s action=EXEC_FAVORABLE price=%.4f exec=%.4f trough=%.4f",
-            state.get("bot_id"), idx, P, exec_thr, trough,
+            state.get("bot_id"),
+            idx,
+            P,
+            exec_thr,
+            trough,
         )
         return
 
@@ -222,7 +248,10 @@ def _recover_buy_grid(
             state["buy_grid_trough_price"] = troughs
             logger.info(
                 "BOT_OUTAGE_RECOVERY bot_id=%s grid=buy idx=%s action=REANCHOR_TROUGH price=%.4f exec=%.4f",
-                state.get("bot_id"), idx, P, exec_thr,
+                state.get("bot_id"),
+                idx,
+                P,
+                exec_thr,
             )
             return
         favorable.append(idx)
@@ -232,7 +261,11 @@ def _recover_buy_grid(
         )
         logger.info(
             "BOT_OUTAGE_RECOVERY bot_id=%s grid=buy idx=%s action=EXEC_FAVORABLE price=%.4f exec=%.4f trough=%.4f",
-            state.get("bot_id"), idx, P, exec_thr, trough,
+            state.get("bot_id"),
+            idx,
+            P,
+            exec_thr,
+            trough,
         )
         return
 
@@ -241,7 +274,10 @@ def _recover_buy_grid(
     state["buy_grid_trough_price"] = troughs
     logger.info(
         "BOT_OUTAGE_RECOVERY bot_id=%s grid=buy idx=%s action=REANCHOR_TROUGH price=%.4f exec=%.4f",
-        state.get("bot_id"), idx, P, trough * (1.0 + buy_trail_pct / 100.0),
+        state.get("bot_id"),
+        idx,
+        P,
+        trough * (1.0 + buy_trail_pct / 100.0),
     )
 
 
@@ -256,6 +292,7 @@ def _recover_waiting_sell_grid(
     base_balance: float = 0.0,
 ) -> None:
     from app.botengine.strategies.dca_grid_trailing import _try_trigger_sell_grid
+
     if not _try_trigger_sell_grid(state, idx, P, trigger, base_balance=base_balance):
         return
     exec_thr = P * (1.0 - sell_trail_pct / 100.0)
@@ -263,7 +300,10 @@ def _recover_waiting_sell_grid(
         favorable.append(idx)
     logger.info(
         "BOT_OUTAGE_RECOVERY bot_id=%s grid=sell idx=%s action=TRIGGER_WHILE_OFFLINE price=%.4f trigger=%.4f",
-        state.get("bot_id"), idx, P, trigger,
+        state.get("bot_id"),
+        idx,
+        P,
+        trigger,
     )
 
 
@@ -276,6 +316,7 @@ def _recover_waiting_buy_grid(
     favorable: List[int],
 ) -> None:
     from app.botengine.strategies.dca_grid_trailing import _try_trigger_buy_grid
+
     if not _try_trigger_buy_grid(state, idx, P, trigger):
         return
     exec_thr = P * (1.0 + buy_trail_pct / 100.0)
@@ -283,11 +324,16 @@ def _recover_waiting_buy_grid(
         favorable.append(idx)
     logger.info(
         "BOT_OUTAGE_RECOVERY bot_id=%s grid=buy idx=%s action=TRIGGER_WHILE_OFFLINE price=%.4f trigger=%.4f",
-        state.get("bot_id"), idx, P, trigger,
+        state.get("bot_id"),
+        idx,
+        P,
+        trigger,
     )
 
 
-def _recover_profit_exit(state: Dict[str, Any], config: DcaGridTrailingConfig, P: float) -> None:
+def _recover_profit_exit(
+    state: Dict[str, Any], config: DcaGridTrailingConfig, P: float
+) -> None:
     old_anchor = _f(state.get("trail_anchor_price"))
     anchor = max(old_anchor or P, P)
     state["trail_anchor_price"] = anchor
@@ -300,17 +346,24 @@ def _recover_profit_exit(state: Dict[str, Any], config: DcaGridTrailingConfig, P
         state["_outage_force_profit_sell"] = True
         logger.info(
             "BOT_OUTAGE_RECOVERY bot_id=%s mode=TRAIL_PROFIT_SELL action=EXEC_MISSED_DROP price=%.4f thr=%.4f",
-            state.get("bot_id"), P, thr,
+            state.get("bot_id"),
+            P,
+            thr,
         )
     elif old_anchor is not None and anchor > old_anchor and P >= thr:
         state["_outage_force_profit_sell"] = True
         logger.info(
             "BOT_OUTAGE_RECOVERY bot_id=%s mode=TRAIL_PROFIT_SELL action=EXEC_NEW_HIGH price=%.4f thr=%.4f anchor=%.4f",
-            state.get("bot_id"), P, thr, anchor,
+            state.get("bot_id"),
+            P,
+            thr,
+            anchor,
         )
 
 
-def _recover_reentry_buy(state: Dict[str, Any], config: DcaGridTrailingConfig, P: float) -> None:
+def _recover_reentry_buy(
+    state: Dict[str, Any], config: DcaGridTrailingConfig, P: float
+) -> None:
     old_anchor = _f(state.get("trail_anchor_price"))
     anchor = min(old_anchor or P, P)
     state["trail_anchor_price"] = anchor
@@ -323,18 +376,27 @@ def _recover_reentry_buy(state: Dict[str, Any], config: DcaGridTrailingConfig, P
         state["_outage_force_reentry_buy"] = True
         logger.info(
             "BOT_OUTAGE_RECOVERY bot_id=%s mode=TRAIL_REENTRY_BUY action=EXEC_MISSED_RISE price=%.4f thr=%.4f",
-            state.get("bot_id"), P, thr,
+            state.get("bot_id"),
+            P,
+            thr,
         )
     elif old_anchor is not None and anchor < old_anchor and P <= thr:
         state["_outage_force_reentry_buy"] = True
         logger.info(
             "BOT_OUTAGE_RECOVERY bot_id=%s mode=TRAIL_REENTRY_BUY action=EXEC_NEW_LOW price=%.4f thr=%.4f anchor=%.4f",
-            state.get("bot_id"), P, thr, anchor,
+            state.get("bot_id"),
+            P,
+            thr,
+            anchor,
         )
 
 
 def _flush_connectivity_stable_after_outage(
-    db: Any, bot_id: int, state: Dict[str, Any], *, previous_error: str = "OUTAGE_RECOVERY",
+    db: Any,
+    bot_id: int,
+    state: Dict[str, Any],
+    *,
+    previous_error: str = "OUTAGE_RECOVERY",
 ) -> None:
     """Kopma değerlendirme logundan sonra yeşil stabil satır (CONNECTIVITY_STABLE)."""
     try:
@@ -348,7 +410,9 @@ def _flush_connectivity_stable_after_outage(
         if not bot or (bot.status or "").lower() != "running":
             return
         if not state.get("_pending_connectivity_stable"):
-            mark_pending_connectivity_stable(db, bot, state, previous_error=previous_error)
+            mark_pending_connectivity_stable(
+                db, bot, state, previous_error=previous_error
+            )
         flush_pending_connectivity_stable(db, bot_id, after_loop_restart=False)
     except Exception as e:
         logger.debug("outage_recovery stable bot_id=%s: %s", bot_id, e)
@@ -358,7 +422,9 @@ def _flush_connectivity_stable_after_outage(
         state.pop("_pending_connectivity_stable_prev_err", None)
 
 
-def flush_outage_recovery_log_to_events(db: Any, bot_id: int, account_id: int, state: Dict[str, Any]) -> None:
+def flush_outage_recovery_log_to_events(
+    db: Any, bot_id: int, account_id: int, state: Dict[str, Any]
+) -> None:
     """tick sonrası kopma değerlendirme notunu bot_engine_events'e yaz."""
     log = state.pop("_outage_recovery_log", None)
     if not log or db is None:
@@ -375,8 +441,12 @@ def flush_outage_recovery_log_to_events(db: Any, bot_id: int, account_id: int, s
             log.get("meta") or {},
         )
         meta = log.get("meta") or {}
-        prev_err = (meta.get("health_code") or meta.get("error_code") or "OUTAGE_RECOVERY").strip()
-        _flush_connectivity_stable_after_outage(db, bot_id, state, previous_error=prev_err or "OUTAGE_RECOVERY")
+        prev_err = (
+            meta.get("health_code") or meta.get("error_code") or "OUTAGE_RECOVERY"
+        ).strip()
+        _flush_connectivity_stable_after_outage(
+            db, bot_id, state, previous_error=prev_err or "OUTAGE_RECOVERY"
+        )
     except Exception as e:
         logger.debug("flush_outage_recovery_log bot_id=%s: %s", bot_id, e)
 
@@ -441,15 +511,23 @@ def apply_grid_outage_recovery(
         trig = sell_triggers[i] if i < len(sell_triggers) else None
         trig_f = _f(trig)
         if trig_f is not None:
-            _recover_sell_grid(state, i, P, trig_f, sell_trail, favorable_sell, log_notes)
+            _recover_sell_grid(
+                state, i, P, trig_f, sell_trail, favorable_sell, log_notes
+            )
         else:
             g = config.sell_grids[i] if i < len(config.sell_grids) else {}
             pct = _float(g.get("sell_grid_pct") or g.get("trigger_pct"), 0)
             s_i = ref * (1.0 + pct / 100.0)
             if P >= s_i:
                 before = sell_triggers[i] if i < len(sell_triggers) else None
-                _recover_waiting_sell_grid(state, i, P, s_i, sell_trail, favorable_sell, base_balance=base_bal)
-                if before is None and i < len(state.get("sell_grid_trigger_price") or []) and state["sell_grid_trigger_price"][i] is not None:
+                _recover_waiting_sell_grid(
+                    state, i, P, s_i, sell_trail, favorable_sell, base_balance=base_bal
+                )
+                if (
+                    before is None
+                    and i < len(state.get("sell_grid_trigger_price") or [])
+                    and state["sell_grid_trigger_price"][i] is not None
+                ):
                     parallel_sell += 1
 
     for j in range(m):
@@ -468,13 +546,20 @@ def apply_grid_outage_recovery(
             if P <= b_j:
                 before = buy_triggers[j] if j < len(buy_triggers) else None
                 _recover_waiting_buy_grid(state, j, P, b_j, buy_trail, favorable_buy)
-                if before is None and j < len(state.get("buy_grid_trigger_price") or []) and state["buy_grid_trigger_price"][j] is not None:
+                if (
+                    before is None
+                    and j < len(state.get("buy_grid_trigger_price") or [])
+                    and state["buy_grid_trigger_price"][j] is not None
+                ):
                     parallel_buy += 1
 
     if parallel_sell > 1 or parallel_buy > 1:
         logger.info(
             "BOT_OUTAGE_PARALLEL_TRIGGER bot_id=%s sell=%s buy=%s price=%.4f",
-            state.get("bot_id"), parallel_sell, parallel_buy, P,
+            state.get("bot_id"),
+            parallel_sell,
+            parallel_buy,
+            P,
         )
 
     state["_outage_favorable_buy"] = favorable_buy
@@ -508,5 +593,10 @@ def apply_grid_outage_recovery(
     if gap_sec is not None:
         logger.info(
             "BOT_OUTAGE_RECOVERY bot_id=%s gap_sec=%.1f price=%.4f favorable_buy=%s favorable_sell=%s notes=%s",
-            state.get("bot_id"), gap_sec, P, favorable_buy, favorable_sell, len(log_notes),
+            state.get("bot_id"),
+            gap_sec,
+            P,
+            favorable_buy,
+            favorable_sell,
+            len(log_notes),
         )

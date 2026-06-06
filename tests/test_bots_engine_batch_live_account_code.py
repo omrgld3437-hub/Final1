@@ -29,10 +29,15 @@ def test_batch_live_accepts_account_code_without_account_id():
     db.commit()
     bot_id = bot.id
 
-    app.dependency_overrides[bots_engine.require_auth] = lambda: {"is_admin": True, "user_id": 1}
+    app.dependency_overrides[bots_engine.require_auth] = lambda: {
+        "is_admin": True,
+        "user_id": 1,
+    }
     try:
         client = TestClient(app)
-        resp = client.get(f"/api/bots-engine/batch/live?account_code={code}&bot_ids={bot_id}")
+        resp = client.get(
+            f"/api/bots-engine/batch/live?account_code={code}&bot_ids={bot_id}"
+        )
         assert resp.status_code == 200, resp.text
         data = resp.json()
         assert str(bot_id) in data["live"]

@@ -2,6 +2,7 @@
 Engine Worker: ayrı proses. Bot loop'larını çalıştırır; web'den bağımsız.
 Komut kaynağı: bot_engine_commands tablosu (START/STOP). Running botlar DB status ile ensure edilir.
 """
+
 from __future__ import annotations
 import asyncio
 import json
@@ -14,7 +15,11 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 # Terminalde sadece hata/uyarı; stdout log dosyasına yönlendirildiğinde (worker.log) tam log — Türkiye saati
-_console_level = logging.WARNING if (getattr(sys.stdout, "isatty", lambda: False)()) else logging.INFO
+_console_level = (
+    logging.WARNING
+    if (getattr(sys.stdout, "isatty", lambda: False)())
+    else logging.INFO
+)
 logging.basicConfig(
     level=_console_level,
     format="[%(asctime)s] %(levelname)s %(name)s %(message)s",
@@ -24,8 +29,14 @@ logging.basicConfig(
 # Log zamanları Türkiye saati (Europe/Istanbul)
 try:
     from app.utils.tz_utils import TurkeyTimeFormatter
+
     for _h in logging.root.handlers:
-        _h.setFormatter(TurkeyTimeFormatter("[%(asctime)s] %(levelname)s %(name)s %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
+        _h.setFormatter(
+            TurkeyTimeFormatter(
+                "[%(asctime)s] %(levelname)s %(name)s %(message)s",
+                datefmt="%Y-%m-%d %H:%M:%S",
+            )
+        )
 except Exception:
     pass
 logger = logging.getLogger("app.botengine.worker")
@@ -37,9 +48,11 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 for _h in logging.root.handlers:
     if getattr(_h, "stream", None) is sys.stdout:
         _orig_emit = _h.emit
+
         def _emit_flush(record):
             _orig_emit(record)
             _h.flush()
+
         _h.emit = _emit_flush
         break
 
@@ -52,6 +65,7 @@ if _root not in sys.path:
 # Load .env so DATABASE_URL matches web server (worker must use same DB)
 try:
     from dotenv import load_dotenv
+
     load_dotenv(str(_root / ".env"))
     os.chdir(_root)  # sqlite:///./dca.db is relative to cwd
 except Exception:
@@ -62,6 +76,7 @@ os.environ.setdefault("DATABASE_ROLE", "worker")
 
 # Ensure logs/ and .run/ exist (web + worker)
 from pathlib import Path
+
 _PROJECT_ROOT = Path(_root)
 _LOGS_DIR = _PROJECT_ROOT / "logs"
 _RUN_DIR = _PROJECT_ROOT / ".run"
@@ -69,7 +84,9 @@ _LOGS_DIR.mkdir(parents=True, exist_ok=True)
 _RUN_DIR.mkdir(parents=True, exist_ok=True)
 
 # Engine metrics for Manager v3: bounded, written every 2s
-_ENGINE_METRICS_TICK_TIMES: deque = deque(maxlen=5000)  # worker ticks; 60m window for manager Saatlik tick
+_ENGINE_METRICS_TICK_TIMES: deque = deque(
+    maxlen=5000
+)  # worker ticks; 60m window for manager Saatlik tick
 _ENGINE_LAST_ERROR_TS: Optional[float] = None
 _ENGINE_LAST_TICK_TS: Optional[float] = None
 _ENGINE_LAST_PENDING_LEN: int = 0
@@ -78,30 +95,40 @@ _ENGINE_METRICS_LOOP_COUNT: int = 0
 
 def _get_db():
     from app.db.base import SessionLocal
+
     return SessionLocal()
 
 
 def _run_schema_guard():
     from app.db.base import engine
     from app.db.schema_guard import run_schema_guard
+
     run_schema_guard(engine)
 
 
-def assert_bot_belongs_to_account(db, bot_id: int, account_id: int) -> Tuple[bool, Optional[Any]]:
+def assert_bot_belongs_to_account(
+    db, bot_id: int, account_id: int
+) -> Tuple[bool, Optional[Any]]:
     """Worker multi-tenant guard: bot.account_id == command.account_id. Returns (ok, bot_row)."""
     from app.db.models import Bot
+
     bot = db.query(Bot).filter(Bot.id == bot_id).first()
     if not bot:
         return False, None
     if int(bot.account_id) != int(account_id):
-        logger.warning("WORKER_SECURITY bot_id=%s command_account_id=%s bot_account_id=%s MISMATCH",
-                      bot_id, account_id, bot.account_id)
+        logger.warning(
+            "WORKER_SECURITY bot_id=%s command_account_id=%s bot_account_id=%s MISMATCH",
+            bot_id,
+            account_id,
+            bot.account_id,
+        )
         return False, bot
     return True, bot
 
 
 def fetch_pending_commands(db, limit: int = 50) -> List[Dict[str, Any]]:
     from sqlalchemy import text
+
     rows = db.execute(
         text("""
             SELECT id, created_at, account_id, bot_id, command, payload_json, status, request_id
@@ -130,6 +157,7 @@ def fetch_pending_commands(db, limit: int = 50) -> List[Dict[str, Any]]:
 def mark_command_processing(db, cmd_id: int) -> bool:
     """Claim command: set PROCESSING. Returns True if we claimed it."""
     from sqlalchemy import text
+
     now = datetime.now(timezone.utc).isoformat()
     r = db.execute(
         text("""
@@ -146,8 +174,11 @@ def mark_command_processing(db, cmd_id: int) -> bool:
 def reset_stale_processing_commands(db, max_age_sec: int = 120) -> int:
     """Worker crash recovery: reclaim commands stuck in PROCESSING."""
     from sqlalchemy import text
+
     try:
-        cutoff = datetime.fromtimestamp(time.time() - int(max_age_sec), tz=timezone.utc).isoformat()
+        cutoff = datetime.fromtimestamp(
+            time.time() - int(max_age_sec), tz=timezone.utc
+        ).isoformat()
         r = db.execute(
             text("""
                 UPDATE bot_engine_commands
@@ -161,7 +192,9 @@ def reset_stale_processing_commands(db, max_age_sec: int = 120) -> int:
         db.commit()
         n = r.rowcount or 0
         if n:
-            logger.warning("WORKER_RECLAIM_STALE_COMMANDS count=%s max_age_sec=%s", n, max_age_sec)
+            logger.warning(
+                "WORKER_RECLAIM_STALE_COMMANDS count=%s max_age_sec=%s", n, max_age_sec
+            )
         return n
     except Exception as e:
         db.rollback()
@@ -169,8 +202,11 @@ def reset_stale_processing_commands(db, max_age_sec: int = 120) -> int:
         return 0
 
 
-def mark_command_done(db, cmd_id: int, error_code: Optional[str] = None, error_id: Optional[str] = None):
+def mark_command_done(
+    db, cmd_id: int, error_code: Optional[str] = None, error_id: Optional[str] = None
+):
     from sqlalchemy import text
+
     now = datetime.now(timezone.utc).isoformat()
     status = "ERROR" if error_code else "DONE"
     db.execute(
@@ -179,7 +215,13 @@ def mark_command_done(db, cmd_id: int, error_code: Optional[str] = None, error_i
             SET status = :status, processed_at = :now, error_code = :err_code, error_id = :err_id
             WHERE id = :id
         """),
-        {"id": cmd_id, "status": status, "now": now, "err_code": error_code or None, "err_id": error_id or None},
+        {
+            "id": cmd_id,
+            "status": status,
+            "now": now,
+            "err_code": error_code or None,
+            "err_id": error_id or None,
+        },
     )
     db.commit()
 
@@ -196,7 +238,9 @@ async def process_command(cmd: Dict[str, Any], db, v5_scheduler=None) -> None:
     try:
         raw_pl = cmd.get("payload_json")
         if raw_pl:
-            cmd_payload = _json.loads(raw_pl) if isinstance(raw_pl, str) else dict(raw_pl)
+            cmd_payload = (
+                _json.loads(raw_pl) if isinstance(raw_pl, str) else dict(raw_pl)
+            )
     except Exception:
         cmd_payload = {}
 
@@ -233,13 +277,18 @@ async def process_command(cmd: Dict[str, Any], db, v5_scheduler=None) -> None:
             if ic > 0:
                 meta["initial_capital_usdt"] = round(ic, 2)
             if command == "START" and not cmd_payload.get("connectivity_resume"):
-                from app.botengine.start_log_brief import merge_cold_start_brief_into_meta
+                from app.botengine.start_log_brief import (
+                    merge_cold_start_brief_into_meta,
+                )
 
                 merge_cold_start_brief_into_meta(meta, raw_cfg)
         except Exception:
             pass
         try:
-            from app.services.bot_equity import compute_bot_equity_usd, get_bot_last_price
+            from app.services.bot_equity import (
+                compute_bot_equity_usd,
+                get_bot_last_price,
+            )
 
             eq = compute_bot_equity_usd(db, bot, state)
             meta["equity_usd"] = round(float(eq), 2)
@@ -283,9 +332,18 @@ async def process_command(cmd: Dict[str, Any], db, v5_scheduler=None) -> None:
         else:
             mark_command_done(db, cmd_id, error_code="ACCOUNT_MISMATCH")
             try:
-                append_event(db, bot_id, int(bot_row.account_id), "ERROR",
-                            f"COMMAND_REJECTED command_id={cmd_id} account_mismatch",
-                            {"command_id": cmd_id, "command": command, "error_code": "ACCOUNT_MISMATCH"})
+                append_event(
+                    db,
+                    bot_id,
+                    int(bot_row.account_id),
+                    "ERROR",
+                    f"COMMAND_REJECTED command_id={cmd_id} account_mismatch",
+                    {
+                        "command_id": cmd_id,
+                        "command": command,
+                        "error_code": "ACCOUNT_MISMATCH",
+                    },
+                )
             except Exception:
                 pass
         return
@@ -299,6 +357,7 @@ async def process_command(cmd: Dict[str, Any], db, v5_scheduler=None) -> None:
                     mark_bot_run_started,
                     touch_bot_started_at,
                 )
+
                 st_pre = load_state(db, bot_id) or {}
                 conn_resume = is_connectivity_resume_start(cmd_payload, st_pre)
                 if not conn_resume:
@@ -312,29 +371,44 @@ async def process_command(cmd: Dict[str, Any], db, v5_scheduler=None) -> None:
                     db.commit()
                 v5_scheduler.register_bot(bot_id, time.monotonic())
                 mark_command_done(db, cmd_id)
-                logger.info("WORKER_COMMAND_EXECUTED command_id=%s bot_id=%s command=START (v5 registered)", cmd_id, bot_id)
+                logger.info(
+                    "WORKER_COMMAND_EXECUTED command_id=%s bot_id=%s command=START (v5 registered)",
+                    cmd_id,
+                    bot_id,
+                )
                 start_meta = _command_event_meta(bot_id)
                 is_conn_resume = bool(start_meta.get("connectivity_resume"))
                 if not is_conn_resume:
                     try:
                         append_event(
-                            db, bot_id, account_id, "INFO",
-                            f"COMMAND_EXECUTED command_id={cmd_id} START", start_meta,
+                            db,
+                            bot_id,
+                            account_id,
+                            "INFO",
+                            f"COMMAND_EXECUTED command_id={cmd_id} START",
+                            start_meta,
                         )
                     except Exception:
                         pass
                 # İlk alımı hemen yap: soğuk başlatmada anında tick; bağlantı devamında atla (tur/grid korunur)
                 st = load_state(db, bot_id) or {}
-                skip_immediate = is_conn_resume and bool(st.get("initial_allocation_done"))
+                skip_immediate = is_conn_resume and bool(
+                    st.get("initial_allocation_done")
+                )
                 if not skip_immediate:
                     try:
                         from app.botengine.bot_run import run_one_bot_tick
+
                         await run_one_bot_tick(bot_id, f"cmd{cmd_id}_immediate")
-                        logger.info("WORKER_FIRST_TICK_EXECUTED bot_id=%s (initial allocation submitted)", bot_id)
+                        logger.info(
+                            "WORKER_FIRST_TICK_EXECUTED bot_id=%s (initial allocation submitted)",
+                            bot_id,
+                        )
                     except Exception as tick_err:
                         logger.info(
                             "WORKER_FIRST_TICK_FAILED bot_id=%s err=%s (scheduler will retry)",
-                            bot_id, tick_err,
+                            bot_id,
+                            tick_err,
                         )
             else:
                 st_pre = load_state(db, bot_id) or {}
@@ -347,66 +421,109 @@ async def process_command(cmd: Dict[str, Any], db, v5_scheduler=None) -> None:
                     pass
                 await start_bot(bot_id, db, connectivity_resume=conn_resume)
                 mark_command_done(db, cmd_id)
-                logger.info("WORKER_COMMAND_EXECUTED command_id=%s bot_id=%s command=START", cmd_id, bot_id)
+                logger.info(
+                    "WORKER_COMMAND_EXECUTED command_id=%s bot_id=%s command=START",
+                    cmd_id,
+                    bot_id,
+                )
                 start_meta = _command_event_meta(bot_id)
                 is_conn_resume = bool(start_meta.get("connectivity_resume"))
                 if not is_conn_resume:
                     try:
                         append_event(
-                            db, bot_id, account_id, "INFO",
-                            f"COMMAND_EXECUTED command_id={cmd_id} START", start_meta,
+                            db,
+                            bot_id,
+                            account_id,
+                            "INFO",
+                            f"COMMAND_EXECUTED command_id={cmd_id} START",
+                            start_meta,
                         )
                     except Exception:
                         pass
                 st = load_state(db, bot_id) or {}
-                skip_immediate = is_conn_resume and bool(st.get("initial_allocation_done"))
+                skip_immediate = is_conn_resume and bool(
+                    st.get("initial_allocation_done")
+                )
                 if not skip_immediate:
                     try:
                         from app.botengine.bot_run import run_one_bot_tick
+
                         await run_one_bot_tick(bot_id, f"cmd{cmd_id}_immediate")
-                        logger.info("WORKER_FIRST_TICK_EXECUTED bot_id=%s (initial allocation submitted)", bot_id)
+                        logger.info(
+                            "WORKER_FIRST_TICK_EXECUTED bot_id=%s (initial allocation submitted)",
+                            bot_id,
+                        )
                     except Exception as tick_err:
                         logger.info(
                             "WORKER_FIRST_TICK_FAILED bot_id=%s err=%s (loop will retry)",
-                            bot_id, tick_err,
+                            bot_id,
+                            tick_err,
                         )
         elif command == "STOP":
             if v5_scheduler:
                 v5_scheduler.unregister_bot(bot_id)
             await stop_bot(bot_id, db)
             mark_command_done(db, cmd_id)
-            logger.info("WORKER_COMMAND_EXECUTED command_id=%s bot_id=%s command=STOP", cmd_id, bot_id)
+            logger.info(
+                "WORKER_COMMAND_EXECUTED command_id=%s bot_id=%s command=STOP",
+                cmd_id,
+                bot_id,
+            )
             try:
-                append_event(db, bot_id, account_id, "INFO", f"COMMAND_EXECUTED command_id={cmd_id} STOP", _command_event_meta(bot_id))
+                append_event(
+                    db,
+                    bot_id,
+                    account_id,
+                    "INFO",
+                    f"COMMAND_EXECUTED command_id={cmd_id} STOP",
+                    _command_event_meta(bot_id),
+                )
             except Exception:
                 pass
         else:
             mark_command_done(db, cmd_id, error_code="UNKNOWN_COMMAND")
-            logger.warning("WORKER_COMMAND_UNKNOWN command_id=%s command=%s", cmd_id, command)
+            logger.warning(
+                "WORKER_COMMAND_UNKNOWN command_id=%s command=%s", cmd_id, command
+            )
     except Exception as e:
         import uuid
+
         error_id = str(uuid.uuid4())
-        logger.exception("WORKER_COMMAND_FAILED command_id=%s bot_id=%s err=%s", cmd_id, bot_id, e)
+        logger.exception(
+            "WORKER_COMMAND_FAILED command_id=%s bot_id=%s err=%s", cmd_id, bot_id, e
+        )
         mark_command_done(db, cmd_id, error_code="COMMAND_FAILED", error_id=error_id)
         try:
-            append_event(db, bot_id, account_id, "ERROR", f"COMMAND_FAILED {error_id} {e}",
-                        {"command_id": cmd_id, "command": command, "error_code": "COMMAND_FAILED", "error_id": error_id})
+            append_event(
+                db,
+                bot_id,
+                account_id,
+                "ERROR",
+                f"COMMAND_FAILED {error_id} {e}",
+                {
+                    "command_id": cmd_id,
+                    "command": command,
+                    "error_code": "COMMAND_FAILED",
+                    "error_id": error_id,
+                },
+            )
         except Exception:
             pass
 
 
 def _get_running_bot_ids(db) -> List[int]:
     from app.db.models import Bot
+
     return [b.id for b in db.query(Bot).filter(Bot.status == "running").all()]
 
 
 async def _reconciler_background_task():
     """Periodic reconcile every 45s per account with non-final intents."""
     from app.botengine.reconcile import reconcile_account
-    from app.botengine.intent_ledger import get_non_final_intents_for_account
     from app.services.binance_assets import get_account_keys
     from app.botengine.adapters.binance_adapter import BinanceAdapter
     from app.services.binance_spot import is_ip_banned
+
     interval = 45
     while True:
         await asyncio.sleep(interval)
@@ -416,15 +533,19 @@ async def _reconciler_background_task():
             db = _get_db()
             try:
                 from sqlalchemy import text
-                rows = db.execute(text(
-                    "SELECT DISTINCT account_id FROM order_intents WHERE status NOT IN ('FILLED','CANCELED','REJECTED','FINAL')"
-                )).fetchall()
+
+                rows = db.execute(
+                    text(
+                        "SELECT DISTINCT account_id FROM order_intents WHERE status NOT IN ('FILLED','CANCELED','REJECTED','FINAL')"
+                    )
+                ).fetchall()
                 for (aid,) in rows:
                     try:
                         keys = await get_account_keys(aid, db)
                         if not keys:
                             continue
                         adapter = BinanceAdapter(aid, keys, paper_mode=False)
+
                         async def _get_all_orders(sym=None, limit=20, _adapter=adapter):
                             s = (sym or "").strip().upper()
                             if not s:
@@ -435,7 +556,9 @@ async def _reconciler_background_task():
                             aid,
                             lambda sym=None: adapter.get_open_orders(sym),
                             _get_all_orders,
-                            lambda sym, coid: adapter.get_order_by_client_order_id(sym, coid),
+                            lambda sym, coid: adapter.get_order_by_client_order_id(
+                                sym, coid
+                            ),
                             db,
                         )
                     except Exception as e:
@@ -448,19 +571,31 @@ async def _reconciler_background_task():
 
 async def _user_stream_background_task():
     """Start Binance user streams for accounts with running live bots."""
-    if os.getenv("BINANCE_USER_STREAM_ENABLED", "1").strip().lower() not in ("1", "true", "yes"):
+    if os.getenv("BINANCE_USER_STREAM_ENABLED", "1").strip().lower() not in (
+        "1",
+        "true",
+        "yes",
+    ):
         logger.info("USER_STREAM_DISABLED")
         return
     from app.db.models import Bot
     from app.services.binance_assets import get_account_keys
-    from app.botengine.user_stream import apply_user_stream_event_to_db, start_user_stream_for_account
+    from app.botengine.user_stream import (
+        apply_user_stream_event_to_db,
+        start_user_stream_for_account,
+    )
 
     async def _on_order_update(account_id: int, event: Dict[str, Any]) -> None:
         db = _get_db()
         try:
             apply_user_stream_event_to_db(db, account_id, event)
         except Exception as exc:
-            logger.debug("USER_STREAM_EVENT_APPLY_FAILED account_id=%s event=%s err=%s", account_id, event.get("event_type"), exc)
+            logger.debug(
+                "USER_STREAM_EVENT_APPLY_FAILED account_id=%s event=%s err=%s",
+                account_id,
+                event.get("event_type"),
+                exc,
+            )
             try:
                 db.rollback()
             except Exception:
@@ -473,7 +608,12 @@ async def _user_stream_background_task():
         try:
             db = _get_db()
             try:
-                rows = db.query(Bot.account_id).filter(Bot.status == "running", Bot.mode == "live").distinct().all()
+                rows = (
+                    db.query(Bot.account_id)
+                    .filter(Bot.status == "running", Bot.mode == "live")
+                    .distinct()
+                    .all()
+                )
                 market = os.getenv("BINANCE_USER_STREAM_MARKET", "spot").strip().lower()
                 for (account_id,) in rows:
                     if not account_id:
@@ -496,6 +636,7 @@ async def _user_stream_background_task():
                         # Hesap adı/kodu al — log mesajı için
                         try:
                             from app.botengine.user_stream import _build_account_label
+
                             _label = _build_account_label(account_id, db)
                         except Exception:
                             _label = f"account_id={account_id}"
@@ -515,7 +656,13 @@ def _running_bot_symbols() -> list:
     db = SessionLocal()
     try:
         rows = db.query(Bot.symbol).filter(Bot.status == "running").all()
-        return sorted({(r[0] or "").strip().upper() for r in rows if r and r[0] and (r[0] or "").upper() != "MULTI"})
+        return sorted(
+            {
+                (r[0] or "").strip().upper()
+                for r in rows
+                if r and r[0] and (r[0] or "").upper() != "MULTI"
+            }
+        )
     except Exception:
         return []
     finally:
@@ -527,6 +674,7 @@ async def _market_sync_from_web_loop():
     import httpx
     from app.services.market_data import import_from_peer_snapshot
     from app.services.data_hub import data_hub
+
     base = os.getenv("WEB_INTERNAL_URL", "http://127.0.0.1:8000").rstrip("/")
     interval = float(os.getenv("MARKET_SYNC_INTERVAL_SEC", "2"))
     failures = 0
@@ -550,7 +698,9 @@ async def _market_sync_from_web_loop():
         if failures >= 12 and os.getenv("WORKER_WS_FALLBACK", "0").strip() == "1":
             if not getattr(data_hub, "_ws_started", False):
                 data_hub.start_ws(testnet=False)
-                logger.warning("WORKER_MARKET_SYNC web unreachable — WS fallback (opt-in)")
+                logger.warning(
+                    "WORKER_MARKET_SYNC web unreachable — WS fallback (opt-in)"
+                )
         await asyncio.sleep(interval)
 
 
@@ -566,6 +716,7 @@ async def worker_loop():
     try:
         from app.services.data_hub import data_hub
         from app.services.binance_rest_log import start_rest_log_flush_task
+
         sync_from_web = os.getenv("MARKET_SYNC_FROM_WEB", "1").strip() == "1"
         if sync_from_web:
             asyncio.create_task(_market_sync_from_web_loop())
@@ -592,14 +743,22 @@ async def worker_loop():
     if use_v5_scheduler:
         from app.botengine.scheduler import BotScheduler
         from app.botengine.bot_run import run_one_bot_tick
-        from app.services.binance_weight import get_weight_used_last_60s, BINANCE_WEIGHT_LIMIT_PER_MIN
+        from app.services.binance_weight import (
+            get_weight_used_last_60s,
+            BINANCE_WEIGHT_LIMIT_PER_MIN,
+        )
+
         v5_scheduler = BotScheduler()
+
         def _weight_check():
             used = get_weight_used_last_60s(None, None)
             return (used / BINANCE_WEIGHT_LIMIT_PER_MIN, BINANCE_WEIGHT_LIMIT_PER_MIN)
+
         v5_scheduler._weight_check = _weight_check
+
         async def _run_cb(bot_id: int, tick_id: str):
             return await run_one_bot_tick(bot_id, tick_id)
+
         v5_scheduler.register_run_callback(_run_cb)
         db2 = _get_db()
         try:
@@ -623,7 +782,6 @@ async def worker_loop():
 
     heartbeat_interval = 60  # log WORKER_HEARTBEAT every 60s to avoid log spam
     command_poll_interval = 1.0
-    last_heartbeat = 0
     loop_count = 0
     _worker_main_loop_count_file = _RUN_DIR / "worker_main_loop_count"
 
@@ -644,8 +802,11 @@ async def worker_loop():
                 pending = fetch_pending_commands(db, limit=50)
                 _ENGINE_LAST_PENDING_LEN = len(pending) if pending else 0
                 if pending:
-                    logger.info("WORKER_POLL fetched %s command(s) bot_ids=%s",
-                                len(pending), [c.get("bot_id") for c in pending])
+                    logger.info(
+                        "WORKER_POLL fetched %s command(s) bot_ids=%s",
+                        len(pending),
+                        [c.get("bot_id") for c in pending],
+                    )
                 for cmd in pending:
                     if not mark_command_processing(db, cmd["id"]):
                         continue
@@ -655,18 +816,34 @@ async def worker_loop():
                         logger.exception("process_command cmd_id=%s: %s", cmd["id"], e)
                         mark_command_done(db, cmd["id"], error_code="PROCESS_EXCEPTION")
 
-                if loop_count % (heartbeat_interval * int(1 / command_poll_interval)) == 0:
+                if (
+                    loop_count % (heartbeat_interval * int(1 / command_poll_interval))
+                    == 0
+                ):
                     from app.botengine.orchestrator import _tasks
-                    n_bots = len(_tasks) if not v5_scheduler else len(v5_scheduler._registered)
+
+                    n_bots = (
+                        len(_tasks)
+                        if not v5_scheduler
+                        else len(v5_scheduler._registered)
+                    )
                     n_pending = len(pending) if pending else 0
-                    logger.debug("WORKER_HEARTBEAT active_bots=%s pending_commands=%s", n_bots, n_pending)
+                    logger.debug(
+                        "WORKER_HEARTBEAT active_bots=%s pending_commands=%s",
+                        n_bots,
+                        n_pending,
+                    )
                     try:
-                        (_RUN_DIR / "worker_active_bots").write_text(str(n_bots), encoding="utf-8")
+                        (_RUN_DIR / "worker_active_bots").write_text(
+                            str(n_bots), encoding="utf-8"
+                        )
                     except OSError:
                         pass
-                    last_heartbeat = loop_count
 
-                if loop_count % (10 * int(1 / command_poll_interval)) == 0 and loop_count > 0:
+                if (
+                    loop_count % (10 * int(1 / command_poll_interval)) == 0
+                    and loop_count > 0
+                ):
                     if v5_scheduler:
                         db2 = _get_db()
                         try:
@@ -683,6 +860,7 @@ async def worker_loop():
                 try:
                     from app.services.binance_connectivity import active_failure as _af
                     from app.db.models import Bot as _BotM
+
                     _any_fail = any(
                         _af(int(aid))
                         for (aid,) in db.query(_BotM.account_id).distinct().all()
@@ -691,14 +869,20 @@ async def worker_loop():
                 except Exception:
                     _any_fail = False
                 _resume_target_sec = 15 if _any_fail else 60
-                auto_resume_interval = max(5, int(_resume_target_sec / command_poll_interval))
+                auto_resume_interval = max(
+                    5, int(_resume_target_sec / command_poll_interval)
+                )
                 if loop_count % auto_resume_interval == 0 and loop_count > 0:
                     try:
-                        from app.services.binance_connectivity import run_connectivity_auto_resume_pass
+                        from app.services.binance_connectivity import (
+                            run_connectivity_auto_resume_pass,
+                        )
 
                         n_ar = await run_connectivity_auto_resume_pass(db)
                         if n_ar:
-                            logger.info("WORKER_CONNECTIVITY_AUTO_RESUME resumed=%s", n_ar)
+                            logger.info(
+                                "WORKER_CONNECTIVITY_AUTO_RESUME resumed=%s", n_ar
+                            )
                     except Exception as ar_err:
                         logger.debug("WORKER_CONNECTIVITY_AUTO_RESUME: %s", ar_err)
 
@@ -708,9 +892,12 @@ async def worker_loop():
                     try:
                         from app.db.models import Bot
                         from app.api.bots_engine import append_perf_chart_sample
+
                         _db = _get_db()
                         try:
-                            running = _db.query(Bot).filter(Bot.status == "running").all()
+                            running = (
+                                _db.query(Bot).filter(Bot.status == "running").all()
+                            )
                             for b in running:
                                 try:
                                     append_perf_chart_sample(_db, b.id)
@@ -722,6 +909,7 @@ async def worker_loop():
                         logger.debug("worker perf_chart_sample: %s", e)
                     try:
                         from app.botengine.health_watch import run_all_bot_health_checks
+
                         _db_h = _get_db()
                         try:
                             run_all_bot_health_checks(_db_h)
@@ -747,17 +935,26 @@ async def worker_loop():
                         n_bots = len(v5_scheduler._registered)
                     else:
                         from app.botengine.orchestrator import _tasks
+
                         n_bots = len(_tasks)
                 except Exception:
                     pass
-                tick_rate_10s = sum(1 for t in _ENGINE_METRICS_TICK_TIMES if t >= now - 10)
-                ticks_last_60m = sum(1 for t in _ENGINE_METRICS_TICK_TIMES if t >= now - 3600)
-                last_tick_age = (now - _ENGINE_LAST_TICK_TS) if _ENGINE_LAST_TICK_TS else None
+                tick_rate_10s = sum(
+                    1 for t in _ENGINE_METRICS_TICK_TIMES if t >= now - 10
+                )
+                ticks_last_60m = sum(
+                    1 for t in _ENGINE_METRICS_TICK_TIMES if t >= now - 3600
+                )
+                last_tick_age = (
+                    (now - _ENGINE_LAST_TICK_TS) if _ENGINE_LAST_TICK_TS else None
+                )
                 snap = {
                     "pid": os.getpid(),
                     "active_bots": n_bots,
                     "last_tick_ts": _ENGINE_LAST_TICK_TS,
-                    "last_tick_age_s": round(last_tick_age, 1) if last_tick_age is not None else None,
+                    "last_tick_age_s": round(last_tick_age, 1)
+                    if last_tick_age is not None
+                    else None,
                     "tick_rate_10s": tick_rate_10s,
                     "ticks_last_60m": ticks_last_60m,
                     "pending_jobs": _ENGINE_LAST_PENDING_LEN,
@@ -779,7 +976,9 @@ async def worker_loop():
 
 def main():
     try:
-        _RUN_DIR.joinpath("worker.started_at").write_text(str(time.time()), encoding="utf-8")
+        _RUN_DIR.joinpath("worker.started_at").write_text(
+            str(time.time()), encoding="utf-8"
+        )
     except Exception:
         pass
     # RAM capture (5 dk) veya RAM_PROBE
@@ -797,17 +996,25 @@ def main():
             logger.debug("RAM capture start skipped: %s", e)
     elif os.getenv("RAM_PROBE") == "1":
         try:
-            from app.observability.ram_probe import start_ram_probe, register_probe_hook, write_snapshot_now
+            from app.observability.ram_probe import (
+                start_ram_probe,
+                register_probe_hook,
+                write_snapshot_now,
+            )
+
             interval = int(os.getenv("RAM_PROBE_INTERVAL", "30"))
             start_ram_probe(component="worker", interval_sec=interval)
             write_snapshot_now("worker", reason="startup")
+
             # Hooks for snapshot (run in probe thread)
             def hook_active_bots():
                 try:
                     from app.botengine.orchestrator import _tasks
+
                     return {"active_bots": len(_tasks)}
                 except Exception:
                     return {"active_bots": "NOT_FOUND"}
+
             def hook_active_tasks():
                 try:
                     loop = asyncio.get_running_loop()
@@ -816,18 +1023,26 @@ def main():
                     return {"active_tasks": "NA"}
                 except Exception:
                     return {"active_tasks": "NOT_FOUND"}
+
             def hook_ws_connections():
                 try:
                     from app.services.binance_ws import _ws_connections
+
                     return {"ws_connections": len(_ws_connections)}
                 except Exception:
                     return {"ws_connections": "NOT_FOUND"}
+
             def hook_cache_sizes():
                 try:
                     from app.services.data_hub import data_hub
-                    return {"prices_len": len(getattr(data_hub, "prices", [])), "all_symbols_len": len(getattr(data_hub, "all_symbols", []))}
+
+                    return {
+                        "prices_len": len(getattr(data_hub, "prices", [])),
+                        "all_symbols_len": len(getattr(data_hub, "all_symbols", [])),
+                    }
                 except Exception:
                     return {"cache_sizes": "NOT_FOUND"}
+
             register_probe_hook("active_bots", hook_active_bots)
             register_probe_hook("active_tasks", hook_active_tasks)
             register_probe_hook("ws_connections", hook_ws_connections)

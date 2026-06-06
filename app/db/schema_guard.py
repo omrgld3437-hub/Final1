@@ -6,6 +6,7 @@ CHANGE: Startup schema guard for SQLite - add missing device columns without mig
         Fixes "no such column devices.approved_at" on existing DBs.
         scripts/migrations/init_db.py create_all is unchanged; new installs get full schema from models.
 """
+
 import logging
 from sqlalchemy import text
 
@@ -48,9 +49,9 @@ def ensure_devices_columns(engine):
     Safe to call multiple times; only adds missing columns.
     """
     with engine.connect() as conn:
-        result = conn.execute(text(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='devices'"
-        ))
+        result = conn.execute(
+            text("SELECT name FROM sqlite_master WHERE type='table' AND name='devices'")
+        )
         if not result.fetchone():
             conn.commit()
             return
@@ -66,18 +67,24 @@ def ensure_devices_columns(engine):
                     sql_type = "INTEGER"
                 else:
                     sql_type = col_type
-                conn.execute(text(f"ALTER TABLE devices ADD COLUMN {col_name} {sql_type}"))
+                conn.execute(
+                    text(f"ALTER TABLE devices ADD COLUMN {col_name} {sql_type}")
+                )
                 conn.commit()
                 logger.info("schema_guard: added column devices.%s", col_name)
             except Exception as e:
-                logger.warning("schema_guard: could not add devices.%s: %s", col_name, e)
+                logger.warning(
+                    "schema_guard: could not add devices.%s: %s", col_name, e
+                )
                 conn.rollback()
         for col_name, col_type in DEVICES_OPTIONAL_COLUMNS:
             if col_name in existing:
                 continue
             try:
                 sql_type = "INTEGER" if col_type == "BOOLEAN" else col_type
-                conn.execute(text(f"ALTER TABLE devices ADD COLUMN {col_name} {sql_type}"))
+                conn.execute(
+                    text(f"ALTER TABLE devices ADD COLUMN {col_name} {sql_type}")
+                )
                 conn.commit()
                 logger.info("schema_guard: added optional column devices.%s", col_name)
             except Exception as e:
@@ -88,14 +95,17 @@ def ensure_devices_columns(engine):
 def ensure_audit_events_table(engine):
     """Create audit_events table if it does not exist (mevcut DB'ler için)."""
     with engine.connect() as conn:
-        result = conn.execute(text(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='audit_events'"
-        ))
+        result = conn.execute(
+            text(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='audit_events'"
+            )
+        )
         if result.fetchone():
             conn.commit()
             return
         try:
-            conn.execute(text("""
+            conn.execute(
+                text("""
                 CREATE TABLE audit_events (
                     id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
                     created_at DATETIME,
@@ -117,15 +127,48 @@ def ensure_audit_events_table(engine):
                     FOREIGN KEY(target_user_id) REFERENCES users (id),
                     FOREIGN KEY(target_account_id) REFERENCES accounts (id)
                 )
-            """))
-            conn.execute(text("CREATE INDEX ix_audit_events_created_at ON audit_events (created_at)"))
-            conn.execute(text("CREATE INDEX ix_audit_events_actor_type ON audit_events (actor_type)"))
-            conn.execute(text("CREATE INDEX ix_audit_events_event_type ON audit_events (event_type)"))
-            conn.execute(text("CREATE INDEX ix_audit_events_target_account_id ON audit_events (target_account_id)"))
-            conn.execute(text("CREATE INDEX ix_audit_events_target_user_id ON audit_events (target_user_id)"))
-            conn.execute(text("CREATE INDEX ix_audit_events_account_created ON audit_events (target_account_id, created_at)"))
-            conn.execute(text("CREATE INDEX ix_audit_events_user_created ON audit_events (target_user_id, created_at)"))
-            conn.execute(text("CREATE INDEX ix_audit_events_type_created ON audit_events (event_type, created_at)"))
+            """)
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX ix_audit_events_created_at ON audit_events (created_at)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX ix_audit_events_actor_type ON audit_events (actor_type)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX ix_audit_events_event_type ON audit_events (event_type)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX ix_audit_events_target_account_id ON audit_events (target_account_id)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX ix_audit_events_target_user_id ON audit_events (target_user_id)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX ix_audit_events_account_created ON audit_events (target_account_id, created_at)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX ix_audit_events_user_created ON audit_events (target_user_id, created_at)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX ix_audit_events_type_created ON audit_events (event_type, created_at)"
+                )
+            )
             conn.commit()
             logger.info("schema_guard: created table audit_events")
         except Exception as e:
@@ -136,9 +179,11 @@ def ensure_audit_events_table(engine):
 def ensure_chat_threads_rating(engine):
     """Add rating and reopened_at columns to chat_threads if missing."""
     with engine.connect() as conn:
-        result = conn.execute(text(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='chat_threads'"
-        ))
+        result = conn.execute(
+            text(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='chat_threads'"
+            )
+        )
         if not result.fetchone():
             conn.commit()
             return
@@ -154,11 +199,15 @@ def ensure_chat_threads_rating(engine):
         existing = _get_existing_columns(conn, "chat_threads")
         if "reopened_at" not in existing:
             try:
-                conn.execute(text("ALTER TABLE chat_threads ADD COLUMN reopened_at DATETIME"))
+                conn.execute(
+                    text("ALTER TABLE chat_threads ADD COLUMN reopened_at DATETIME")
+                )
                 conn.commit()
                 logger.info("schema_guard: added column chat_threads.reopened_at")
             except Exception as e:
-                logger.warning("schema_guard: could not add chat_threads.reopened_at: %s", e)
+                logger.warning(
+                    "schema_guard: could not add chat_threads.reopened_at: %s", e
+                )
                 conn.rollback()
         conn.commit()
 
@@ -166,14 +215,17 @@ def ensure_chat_threads_rating(engine):
 def ensure_chat_ratings_table(engine):
     """Create chat_ratings table if missing (kullanıcının her sohbet sonundaki puanları, ortalama için)."""
     with engine.connect() as conn:
-        result = conn.execute(text(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='chat_ratings'"
-        ))
+        result = conn.execute(
+            text(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='chat_ratings'"
+            )
+        )
         if result.fetchone():
             conn.commit()
             return
         try:
-            conn.execute(text("""
+            conn.execute(
+                text("""
                 CREATE TABLE chat_ratings (
                     id INTEGER NOT NULL PRIMARY KEY,
                     thread_id INTEGER NOT NULL,
@@ -181,8 +233,13 @@ def ensure_chat_ratings_table(engine):
                     created_at DATETIME,
                     FOREIGN KEY(thread_id) REFERENCES chat_threads (id)
                 )
-            """))
-            conn.execute(text("CREATE INDEX ix_chat_ratings_thread_id ON chat_ratings (thread_id)"))
+            """)
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX ix_chat_ratings_thread_id ON chat_ratings (thread_id)"
+                )
+            )
             conn.commit()
             logger.info("schema_guard: created table chat_ratings")
         except Exception as e:
@@ -193,9 +250,11 @@ def ensure_chat_ratings_table(engine):
 def ensure_accounts_isolate_from_admin(engine):
     """Add isolate_from_admin to accounts if missing (kullanıcı 'Adminden İzole Ol' seçeneği)."""
     with engine.connect() as conn:
-        result = conn.execute(text(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='accounts'"
-        ))
+        result = conn.execute(
+            text(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='accounts'"
+            )
+        )
         if not result.fetchone():
             conn.commit()
             return
@@ -204,11 +263,17 @@ def ensure_accounts_isolate_from_admin(engine):
             conn.commit()
             return
         try:
-            conn.execute(text("ALTER TABLE accounts ADD COLUMN isolate_from_admin INTEGER DEFAULT 0"))
+            conn.execute(
+                text(
+                    "ALTER TABLE accounts ADD COLUMN isolate_from_admin INTEGER DEFAULT 0"
+                )
+            )
             conn.commit()
             logger.info("schema_guard: added column accounts.isolate_from_admin")
         except Exception as e:
-            logger.warning("schema_guard: could not add accounts.isolate_from_admin: %s", e)
+            logger.warning(
+                "schema_guard: could not add accounts.isolate_from_admin: %s", e
+            )
             conn.rollback()
         conn.commit()
 
@@ -216,9 +281,11 @@ def ensure_accounts_isolate_from_admin(engine):
 def ensure_pending_registrations_password_hash(engine):
     """Add password_hash to pending_registrations if missing (kayıt şifresini onayda kullanmak için)."""
     with engine.connect() as conn:
-        result = conn.execute(text(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='pending_registrations'"
-        ))
+        result = conn.execute(
+            text(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='pending_registrations'"
+            )
+        )
         if not result.fetchone():
             conn.commit()
             return
@@ -227,11 +294,19 @@ def ensure_pending_registrations_password_hash(engine):
             conn.commit()
             return
         try:
-            conn.execute(text("ALTER TABLE pending_registrations ADD COLUMN password_hash VARCHAR(255)"))
+            conn.execute(
+                text(
+                    "ALTER TABLE pending_registrations ADD COLUMN password_hash VARCHAR(255)"
+                )
+            )
             conn.commit()
-            logger.info("schema_guard: added column pending_registrations.password_hash")
+            logger.info(
+                "schema_guard: added column pending_registrations.password_hash"
+            )
         except Exception as e:
-            logger.warning("schema_guard: could not add pending_registrations.password_hash: %s", e)
+            logger.warning(
+                "schema_guard: could not add pending_registrations.password_hash: %s", e
+            )
             conn.rollback()
         conn.commit()
 
@@ -239,12 +314,15 @@ def ensure_pending_registrations_password_hash(engine):
 def ensure_error_logs_table(engine):
     """Create error_logs table if it does not exist; add event_kind, anomaly_code if missing."""
     with engine.connect() as conn:
-        result = conn.execute(text(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='error_logs'"
-        ))
+        result = conn.execute(
+            text(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='error_logs'"
+            )
+        )
         if not result.fetchone():
             try:
-                conn.execute(text("""
+                conn.execute(
+                    text("""
                     CREATE TABLE error_logs (
                         id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
                         created_at DATETIME NOT NULL,
@@ -266,14 +344,39 @@ def ensure_error_logs_table(engine):
                         FOREIGN KEY(user_id) REFERENCES users (id),
                         FOREIGN KEY(account_id) REFERENCES accounts (id)
                     )
-                """))
-                conn.execute(text("CREATE INDEX ix_error_logs_created_at ON error_logs (created_at)"))
-                conn.execute(text("CREATE INDEX ix_error_logs_event_kind ON error_logs (event_kind)"))
-                conn.execute(text("CREATE INDEX ix_error_logs_anomaly_code ON error_logs (anomaly_code)"))
-                conn.execute(text("CREATE INDEX ix_error_logs_source ON error_logs (source)"))
-                conn.execute(text("CREATE INDEX ix_error_logs_request_id ON error_logs (request_id)"))
-                conn.execute(text("CREATE INDEX ix_error_logs_user_id ON error_logs (user_id)"))
-                conn.execute(text("CREATE INDEX ix_error_logs_account_id ON error_logs (account_id)"))
+                """)
+                )
+                conn.execute(
+                    text(
+                        "CREATE INDEX ix_error_logs_created_at ON error_logs (created_at)"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "CREATE INDEX ix_error_logs_event_kind ON error_logs (event_kind)"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "CREATE INDEX ix_error_logs_anomaly_code ON error_logs (anomaly_code)"
+                    )
+                )
+                conn.execute(
+                    text("CREATE INDEX ix_error_logs_source ON error_logs (source)")
+                )
+                conn.execute(
+                    text(
+                        "CREATE INDEX ix_error_logs_request_id ON error_logs (request_id)"
+                    )
+                )
+                conn.execute(
+                    text("CREATE INDEX ix_error_logs_user_id ON error_logs (user_id)")
+                )
+                conn.execute(
+                    text(
+                        "CREATE INDEX ix_error_logs_account_id ON error_logs (account_id)"
+                    )
+                )
                 conn.commit()
                 logger.info("schema_guard: created table error_logs")
             except Exception as e:
@@ -286,21 +389,35 @@ def ensure_error_logs_table(engine):
             r = conn.execute(text("PRAGMA table_info(error_logs)"))
             cols = [row[1] for row in r.fetchall()]
             if "event_kind" not in cols:
-                conn.execute(text("ALTER TABLE error_logs ADD COLUMN event_kind VARCHAR(16) NOT NULL DEFAULT 'error'"))
+                conn.execute(
+                    text(
+                        "ALTER TABLE error_logs ADD COLUMN event_kind VARCHAR(16) NOT NULL DEFAULT 'error'"
+                    )
+                )
                 conn.commit()
                 logger.info("schema_guard: added error_logs.event_kind")
             if "anomaly_code" not in cols:
-                conn.execute(text("ALTER TABLE error_logs ADD COLUMN anomaly_code VARCHAR(64)"))
+                conn.execute(
+                    text("ALTER TABLE error_logs ADD COLUMN anomaly_code VARCHAR(64)")
+                )
                 conn.commit()
                 logger.info("schema_guard: added error_logs.anomaly_code")
             # Indexes for new columns (ignore if exist)
             try:
-                conn.execute(text("CREATE INDEX ix_error_logs_event_kind ON error_logs (event_kind)"))
+                conn.execute(
+                    text(
+                        "CREATE INDEX ix_error_logs_event_kind ON error_logs (event_kind)"
+                    )
+                )
                 conn.commit()
             except Exception:
                 pass
             try:
-                conn.execute(text("CREATE INDEX ix_error_logs_anomaly_code ON error_logs (anomaly_code)"))
+                conn.execute(
+                    text(
+                        "CREATE INDEX ix_error_logs_anomaly_code ON error_logs (anomaly_code)"
+                    )
+                )
                 conn.commit()
             except Exception:
                 pass
@@ -314,15 +431,17 @@ def ensure_bot_engine_tables(engine):
     """Create bot_engine_state and bot_engine_events tables for DCA+Grid+Trailing engine."""
     with engine.connect() as conn:
         for name in ("bot_engine_state", "bot_engine_events"):
-            r = conn.execute(text(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name=:n"
-            ), {"n": name})
+            r = conn.execute(
+                text("SELECT name FROM sqlite_master WHERE type='table' AND name=:n"),
+                {"n": name},
+            )
             if r.fetchone():
                 conn.commit()
                 continue
             try:
                 if name == "bot_engine_state":
-                    conn.execute(text("""
+                    conn.execute(
+                        text("""
                         CREATE TABLE bot_engine_state (
                             id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
                             bot_id INTEGER NOT NULL,
@@ -336,11 +455,21 @@ def ensure_bot_engine_tables(engine):
                             updated_at DATETIME,
                             UNIQUE(bot_id)
                         )
-                    """))
-                    conn.execute(text("CREATE INDEX ix_bot_engine_state_bot_id ON bot_engine_state (bot_id)"))
-                    conn.execute(text("CREATE INDEX ix_bot_engine_state_account_id ON bot_engine_state (account_id)"))
+                    """)
+                    )
+                    conn.execute(
+                        text(
+                            "CREATE INDEX ix_bot_engine_state_bot_id ON bot_engine_state (bot_id)"
+                        )
+                    )
+                    conn.execute(
+                        text(
+                            "CREATE INDEX ix_bot_engine_state_account_id ON bot_engine_state (account_id)"
+                        )
+                    )
                 else:
-                    conn.execute(text("""
+                    conn.execute(
+                        text("""
                         CREATE TABLE bot_engine_events (
                             id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
                             bot_id INTEGER NOT NULL,
@@ -350,9 +479,18 @@ def ensure_bot_engine_tables(engine):
                             message TEXT,
                             meta_json TEXT
                         )
-                    """))
-                    conn.execute(text("CREATE INDEX ix_bot_engine_events_bot_id ON bot_engine_events (bot_id)"))
-                    conn.execute(text("CREATE INDEX ix_bot_engine_events_ts ON bot_engine_events (ts)"))
+                    """)
+                    )
+                    conn.execute(
+                        text(
+                            "CREATE INDEX ix_bot_engine_events_bot_id ON bot_engine_events (bot_id)"
+                        )
+                    )
+                    conn.execute(
+                        text(
+                            "CREATE INDEX ix_bot_engine_events_ts ON bot_engine_events (ts)"
+                        )
+                    )
                 conn.commit()
                 logger.info("schema_guard: created table %s", name)
             except Exception as e:
@@ -364,14 +502,17 @@ def ensure_bot_engine_tables(engine):
 def ensure_bot_engine_commands_table(engine):
     """Web/Worker ayrımı: start/stop komutları worker tarafından işlenir."""
     with engine.connect() as conn:
-        r = conn.execute(text(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='bot_engine_commands'"
-        ))
+        r = conn.execute(
+            text(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='bot_engine_commands'"
+            )
+        )
         if r.fetchone():
             conn.commit()
             return
         try:
-            conn.execute(text("""
+            conn.execute(
+                text("""
                 CREATE TABLE bot_engine_commands (
                     id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
                     created_at TEXT NOT NULL,
@@ -385,13 +526,18 @@ def ensure_bot_engine_commands_table(engine):
                     error_id TEXT,
                     request_id TEXT
                 )
-            """))
-            conn.execute(text(
-                "CREATE INDEX ix_bot_engine_commands_status ON bot_engine_commands (status)"
-            ))
-            conn.execute(text(
-                "CREATE INDEX ix_bot_engine_commands_bot_id ON bot_engine_commands (bot_id)"
-            ))
+            """)
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX ix_bot_engine_commands_status ON bot_engine_commands (status)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX ix_bot_engine_commands_bot_id ON bot_engine_commands (bot_id)"
+                )
+            )
             conn.commit()
             logger.info("schema_guard: created table bot_engine_commands")
         except Exception as e:
@@ -403,21 +549,29 @@ def ensure_bot_engine_commands_table(engine):
 def ensure_bot_perf_chart_state_table(engine):
     """Bot performans grafiği state (baseline, samples, range) – yeni tarayıcıda yüklenebilsin."""
     with engine.connect() as conn:
-        r = conn.execute(text(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='bot_perf_chart_state'"
-        ))
+        r = conn.execute(
+            text(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='bot_perf_chart_state'"
+            )
+        )
         if r.fetchone():
             conn.commit()
             return
         try:
-            conn.execute(text("""
+            conn.execute(
+                text("""
                 CREATE TABLE bot_perf_chart_state (
                     bot_id INTEGER NOT NULL PRIMARY KEY,
                     chart_payload TEXT,
                     updated_at DATETIME
                 )
-            """))
-            conn.execute(text("CREATE INDEX ix_bot_perf_chart_state_bot_id ON bot_perf_chart_state (bot_id)"))
+            """)
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX ix_bot_perf_chart_state_bot_id ON bot_perf_chart_state (bot_id)"
+                )
+            )
             conn.commit()
             logger.info("schema_guard: created table bot_perf_chart_state")
         except Exception as e:
@@ -429,9 +583,9 @@ def ensure_bot_perf_chart_state_table(engine):
 def ensure_trades_engine_columns(engine):
     """Add order_id, client_order_id, symbol to trades for engine ledger (Patch-1)."""
     with engine.connect() as conn:
-        r = conn.execute(text(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='trades'"
-        ))
+        r = conn.execute(
+            text("SELECT name FROM sqlite_master WHERE type='table' AND name='trades'")
+        )
         if not r.fetchone():
             conn.commit()
             return
@@ -446,7 +600,9 @@ def ensure_trades_engine_columns(engine):
             if col_name in existing:
                 continue
             try:
-                conn.execute(text(f"ALTER TABLE trades ADD COLUMN {col_name} {sql_type}"))
+                conn.execute(
+                    text(f"ALTER TABLE trades ADD COLUMN {col_name} {sql_type}")
+                )
                 conn.commit()
                 logger.info("schema_guard: added column trades.%s", col_name)
             except Exception as e:
@@ -458,14 +614,17 @@ def ensure_trades_engine_columns(engine):
 def ensure_symbol_locks_table(engine):
     """Multi-bot: (account_id, symbol) lease lock. One bot per (account, symbol) can send orders at a time."""
     with engine.connect() as conn:
-        r = conn.execute(text(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='symbol_locks'"
-        ))
+        r = conn.execute(
+            text(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='symbol_locks'"
+            )
+        )
         if r.fetchone():
             conn.commit()
             return
         try:
-            conn.execute(text("""
+            conn.execute(
+                text("""
                 CREATE TABLE symbol_locks (
                     id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
                     account_id INTEGER NOT NULL,
@@ -475,10 +634,13 @@ def ensure_symbol_locks_table(engine):
                     updated_at TEXT NOT NULL,
                     UNIQUE(account_id, symbol)
                 )
-            """))
-            conn.execute(text(
-                "CREATE INDEX ix_symbol_locks_account_symbol ON symbol_locks (account_id, symbol)"
-            ))
+            """)
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX ix_symbol_locks_account_symbol ON symbol_locks (account_id, symbol)"
+                )
+            )
             conn.commit()
             logger.info("schema_guard: created table symbol_locks")
         except Exception as e:
@@ -490,14 +652,17 @@ def ensure_symbol_locks_table(engine):
 def ensure_account_daily_realized_pnl_table(engine):
     """Günlük KPI: Bot silindiğinde o günkü gerçekleşen PnL kaybolmasın diye hesap bazlı cache."""
     with engine.connect() as conn:
-        r = conn.execute(text(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='account_daily_realized_pnl'"
-        ))
+        r = conn.execute(
+            text(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='account_daily_realized_pnl'"
+            )
+        )
         if r.fetchone():
             conn.commit()
             return
         try:
-            conn.execute(text("""
+            conn.execute(
+                text("""
                 CREATE TABLE account_daily_realized_pnl (
                     account_id INTEGER NOT NULL,
                     date_tr TEXT NOT NULL,
@@ -505,14 +670,19 @@ def ensure_account_daily_realized_pnl_table(engine):
                     updated_at TEXT NOT NULL,
                     PRIMARY KEY (account_id, date_tr)
                 )
-            """))
-            conn.execute(text(
-                "CREATE INDEX ix_account_daily_realized_pnl_account_date ON account_daily_realized_pnl (account_id, date_tr)"
-            ))
+            """)
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX ix_account_daily_realized_pnl_account_date ON account_daily_realized_pnl (account_id, date_tr)"
+                )
+            )
             conn.commit()
             logger.info("schema_guard: created table account_daily_realized_pnl")
         except Exception as e:
-            logger.warning("schema_guard: could not create account_daily_realized_pnl: %s", e)
+            logger.warning(
+                "schema_guard: could not create account_daily_realized_pnl: %s", e
+            )
             conn.rollback()
         conn.commit()
 
@@ -520,14 +690,17 @@ def ensure_account_daily_realized_pnl_table(engine):
 def ensure_bot_perf_archive_table(engine):
     """Bot silindiğinde completed_cycle_dual_pnls arşivi — dashboard performans toplamı."""
     with engine.connect() as conn:
-        r = conn.execute(text(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='bot_perf_archive'"
-        ))
+        r = conn.execute(
+            text(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='bot_perf_archive'"
+            )
+        )
         if r.fetchone():
             conn.commit()
             return
         try:
-            conn.execute(text("""
+            conn.execute(
+                text("""
                 CREATE TABLE bot_perf_archive (
                     id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
                     account_id INTEGER NOT NULL,
@@ -541,10 +714,13 @@ def ensure_bot_perf_archive_table(engine):
                     archived_at TEXT NOT NULL,
                     deleted INTEGER NOT NULL DEFAULT 1
                 )
-            """))
-            conn.execute(text(
-                "CREATE INDEX ix_bot_perf_archive_account ON bot_perf_archive (account_id)"
-            ))
+            """)
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX ix_bot_perf_archive_account ON bot_perf_archive (account_id)"
+                )
+            )
             conn.commit()
             logger.info("schema_guard: created table bot_perf_archive")
         except Exception as e:
@@ -556,14 +732,17 @@ def ensure_bot_perf_archive_table(engine):
 def ensure_bot_daily_pnl_table(engine):
     """Bot başına TR takvim günü K/Z kaydı (mevcut + silinen botlar)."""
     with engine.connect() as conn:
-        r = conn.execute(text(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='bot_daily_pnl'"
-        ))
+        r = conn.execute(
+            text(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='bot_daily_pnl'"
+            )
+        )
         if r.fetchone():
             conn.commit()
             return
         try:
-            conn.execute(text("""
+            conn.execute(
+                text("""
                 CREATE TABLE bot_daily_pnl (
                     bot_id INTEGER NOT NULL,
                     date_tr TEXT NOT NULL,
@@ -576,10 +755,13 @@ def ensure_bot_daily_pnl_table(engine):
                     updated_at TEXT NOT NULL,
                     PRIMARY KEY (bot_id, date_tr)
                 )
-            """))
-            conn.execute(text(
-                "CREATE INDEX ix_bot_daily_pnl_account_date ON bot_daily_pnl (account_id, date_tr)"
-            ))
+            """)
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX ix_bot_daily_pnl_account_date ON bot_daily_pnl (account_id, date_tr)"
+                )
+            )
             conn.commit()
             logger.info("schema_guard: created table bot_daily_pnl")
         except Exception as e:
@@ -591,14 +773,17 @@ def ensure_bot_daily_pnl_table(engine):
 def ensure_account_performance_cache_table(engine):
     """Hesap + dönem bazlı bot performans özeti (hızlı okuma)."""
     with engine.connect() as conn:
-        r = conn.execute(text(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='account_performance_cache'"
-        ))
+        r = conn.execute(
+            text(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='account_performance_cache'"
+            )
+        )
         if r.fetchone():
             conn.commit()
             return
         try:
-            conn.execute(text("""
+            conn.execute(
+                text("""
                 CREATE TABLE account_performance_cache (
                     account_id INTEGER NOT NULL,
                     period TEXT NOT NULL,
@@ -606,14 +791,19 @@ def ensure_account_performance_cache_table(engine):
                     updated_at TEXT NOT NULL,
                     PRIMARY KEY (account_id, period)
                 )
-            """))
-            conn.execute(text(
-                "CREATE INDEX ix_account_performance_cache_account ON account_performance_cache (account_id)"
-            ))
+            """)
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX ix_account_performance_cache_account ON account_performance_cache (account_id)"
+                )
+            )
             conn.commit()
             logger.info("schema_guard: created table account_performance_cache")
         except Exception as e:
-            logger.warning("schema_guard: could not create account_performance_cache: %s", e)
+            logger.warning(
+                "schema_guard: could not create account_performance_cache: %s", e
+            )
             conn.rollback()
         conn.commit()
 
@@ -621,14 +811,17 @@ def ensure_account_performance_cache_table(engine):
 def ensure_bot_virtual_wallet_table(engine):
     """Multi-bot: per-bot virtual base/quote sub-wallet for budget check and fill updates."""
     with engine.connect() as conn:
-        r = conn.execute(text(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='bot_virtual_wallet'"
-        ))
+        r = conn.execute(
+            text(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='bot_virtual_wallet'"
+            )
+        )
         if r.fetchone():
             conn.commit()
             return
         try:
-            conn.execute(text("""
+            conn.execute(
+                text("""
                 CREATE TABLE bot_virtual_wallet (
                     id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
                     bot_id INTEGER NOT NULL,
@@ -639,10 +832,13 @@ def ensure_bot_virtual_wallet_table(engine):
                     updated_at TEXT NOT NULL,
                     UNIQUE(bot_id, symbol)
                 )
-            """))
-            conn.execute(text(
-                "CREATE INDEX ix_bot_virtual_wallet_bot_id ON bot_virtual_wallet (bot_id)"
-            ))
+            """)
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX ix_bot_virtual_wallet_bot_id ON bot_virtual_wallet (bot_id)"
+                )
+            )
             conn.commit()
             logger.info("schema_guard: created table bot_virtual_wallet")
         except Exception as e:
@@ -654,9 +850,9 @@ def ensure_bot_virtual_wallet_table(engine):
 def ensure_bots_bot_code(engine):
     """Add bot_code column to bots if missing. 6-digit random display id."""
     with engine.connect() as conn:
-        r = conn.execute(text(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='bots'"
-        ))
+        r = conn.execute(
+            text("SELECT name FROM sqlite_master WHERE type='table' AND name='bots'")
+        )
         if not r.fetchone():
             conn.commit()
             return
@@ -665,9 +861,7 @@ def ensure_bots_bot_code(engine):
             conn.commit()
             return
         try:
-            conn.execute(text(
-                "ALTER TABLE bots ADD COLUMN bot_code VARCHAR(16)"
-            ))
+            conn.execute(text("ALTER TABLE bots ADD COLUMN bot_code VARCHAR(16)"))
             conn.commit()
             logger.info("schema_guard: added column bots.bot_code")
         except Exception as e:
@@ -683,23 +877,29 @@ def ensure_bots_max_buy_levels(engine):
     from app.botengine.dca_manager import derive_max_buy_levels_for_existing_config
 
     with engine.connect() as conn:
-        r = conn.execute(text(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='bots'"
-        ))
+        r = conn.execute(
+            text("SELECT name FROM sqlite_master WHERE type='table' AND name='bots'")
+        )
         if not r.fetchone():
             conn.commit()
             return
         existing = _get_existing_columns(conn, "bots")
         if "max_buy_levels" not in existing:
             try:
-                conn.execute(text("ALTER TABLE bots ADD COLUMN max_buy_levels INTEGER NOT NULL DEFAULT 1"))
+                conn.execute(
+                    text(
+                        "ALTER TABLE bots ADD COLUMN max_buy_levels INTEGER NOT NULL DEFAULT 1"
+                    )
+                )
                 conn.commit()
                 logger.info("schema_guard: added column bots.max_buy_levels")
             except Exception as e:
                 logger.warning("schema_guard: could not add bots.max_buy_levels: %s", e)
                 conn.rollback()
         try:
-            rows = conn.execute(text("SELECT id, config_json, max_buy_levels FROM bots")).fetchall()
+            rows = conn.execute(
+                text("SELECT id, config_json, max_buy_levels FROM bots")
+            ).fetchall()
             for bot_id, config_json, current_limit in rows:
                 limit = int(current_limit or 0)
                 desired = derive_max_buy_levels_for_existing_config(config_json)
@@ -710,21 +910,24 @@ def ensure_bots_max_buy_levels(engine):
                     )
             conn.commit()
         except Exception as e:
-            logger.warning("schema_guard: could not backfill bots.max_buy_levels: %s", e)
+            logger.warning(
+                "schema_guard: could not backfill bots.max_buy_levels: %s", e
+            )
             conn.rollback()
 
 
 def ensure_core_tables(engine):
     """Create core tables (accounts, bots, etc.) from models if they don't exist. init_db.py ayrıca çalıştırılabilir; yoksa ilk açılışta otomatik oluşturulur."""
     with engine.connect() as conn:
-        r = conn.execute(text(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='bots'"
-        ))
+        r = conn.execute(
+            text("SELECT name FROM sqlite_master WHERE type='table' AND name='bots'")
+        )
         if r.fetchone():
             conn.commit()
             return
     from app.db.base import Base
     from app.db import models  # noqa: F401 - register all models
+
     Base.metadata.create_all(bind=engine)
     logger.info("schema_guard: created core tables (accounts, bots, etc.)")
 
@@ -733,15 +936,20 @@ def ensure_error_logs_composite_indexes(engine):
     """error_logs için (account_id, created_at) ve (level, created_at) composite indexleri yoksa oluştur."""
     with engine.connect() as conn:
         existing_idx = {
-            row[1] for row in conn.execute(
+            row[1]
+            for row in conn.execute(
                 text("SELECT type, name FROM sqlite_master WHERE type='index'")
             ).fetchall()
         }
         to_create = [
-            ("ix_error_logs_account_created",
-             "CREATE INDEX ix_error_logs_account_created ON error_logs (account_id, created_at)"),
-            ("ix_error_logs_level_created",
-             "CREATE INDEX ix_error_logs_level_created ON error_logs (level, created_at)"),
+            (
+                "ix_error_logs_account_created",
+                "CREATE INDEX ix_error_logs_account_created ON error_logs (account_id, created_at)",
+            ),
+            (
+                "ix_error_logs_level_created",
+                "CREATE INDEX ix_error_logs_level_created ON error_logs (level, created_at)",
+            ),
         ]
         for idx_name, ddl in to_create:
             if idx_name in existing_idx:
@@ -768,7 +976,11 @@ def cleanup_old_error_logs(engine, retain_days: int = 30) -> int:
             conn.commit()
             deleted = result.rowcount or 0
             if deleted:
-                logger.info("schema_guard: cleanup_old_error_logs deleted=%d rows (>%d days)", deleted, retain_days)
+                logger.info(
+                    "schema_guard: cleanup_old_error_logs deleted=%d rows (>%d days)",
+                    deleted,
+                    retain_days,
+                )
             return deleted
     except Exception as e:
         logger.warning("schema_guard: cleanup_old_error_logs failed: %s", e)
@@ -783,7 +995,10 @@ def run_schema_guard(engine):
             from app.db import models  # noqa: F401 - register all models
 
             Base.metadata.create_all(bind=engine)
-            logger.info("schema_guard: non-sqlite dialect=%s; legacy SQLite guards skipped (use Alembic migrations)", engine.dialect.name)
+            logger.info(
+                "schema_guard: non-sqlite dialect=%s; legacy SQLite guards skipped (use Alembic migrations)",
+                engine.dialect.name,
+            )
             return
         ensure_core_tables(engine)
         ensure_devices_columns(engine)
@@ -817,12 +1032,15 @@ def run_schema_guard(engine):
 def ensure_bot_public_metrics_table(engine):
     """Leaderboard: bot_public_metrics – profit_pct + sanitized params only (no username/balance)."""
     with engine.connect() as conn:
-        r = conn.execute(text(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='bot_public_metrics'"
-        ))
+        r = conn.execute(
+            text(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='bot_public_metrics'"
+            )
+        )
         if not r.fetchone():
             try:
-                conn.execute(text("""
+                conn.execute(
+                    text("""
                     CREATE TABLE bot_public_metrics (
                         id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
                         bot_id INTEGER NOT NULL UNIQUE,
@@ -834,17 +1052,24 @@ def ensure_bot_public_metrics_table(engine):
                         params_sanitized_json TEXT NOT NULL,
                         updated_at TEXT NOT NULL
                     )
-                """))
-                conn.execute(text(
-                    "CREATE INDEX ix_bpm_structure_profit_all ON bot_public_metrics (structure_id, profit_pct_all DESC)"
-                ))
-                conn.execute(text(
-                    "CREATE INDEX ix_bpm_profit_all ON bot_public_metrics (profit_pct_all DESC)"
-                ))
+                """)
+                )
+                conn.execute(
+                    text(
+                        "CREATE INDEX ix_bpm_structure_profit_all ON bot_public_metrics (structure_id, profit_pct_all DESC)"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "CREATE INDEX ix_bpm_profit_all ON bot_public_metrics (profit_pct_all DESC)"
+                    )
+                )
                 conn.commit()
                 logger.info("schema_guard: created table bot_public_metrics")
             except Exception as e:
-                logger.warning("schema_guard: could not create bot_public_metrics: %s", e)
+                logger.warning(
+                    "schema_guard: could not create bot_public_metrics: %s", e
+                )
                 conn.rollback()
         conn.commit()
 
@@ -852,12 +1077,15 @@ def ensure_bot_public_metrics_table(engine):
 def ensure_admin_popups_table(engine):
     """Admin pop-up mesajlari ve kullanici kapatma kayitlari."""
     with engine.connect() as conn:
-        r = conn.execute(text(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='admin_popups'"
-        ))
+        r = conn.execute(
+            text(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='admin_popups'"
+            )
+        )
         if not r.fetchone():
             try:
-                conn.execute(text("""
+                conn.execute(
+                    text("""
                     CREATE TABLE admin_popups (
                         id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
                         target VARCHAR(32) NOT NULL,
@@ -868,9 +1096,16 @@ def ensure_admin_popups_table(engine):
                         created_by INTEGER REFERENCES users(id),
                         max_shows_per_user INTEGER DEFAULT 1
                     )
-                """))
-                conn.execute(text("CREATE INDEX ix_admin_popups_target ON admin_popups (target)"))
-                conn.execute(text("CREATE INDEX ix_admin_popups_valid_until ON admin_popups (valid_until)"))
+                """)
+                )
+                conn.execute(
+                    text("CREATE INDEX ix_admin_popups_target ON admin_popups (target)")
+                )
+                conn.execute(
+                    text(
+                        "CREATE INDEX ix_admin_popups_valid_until ON admin_popups (valid_until)"
+                    )
+                )
                 conn.commit()
                 logger.info("schema_guard: created table admin_popups")
             except Exception as e:
@@ -881,31 +1116,53 @@ def ensure_admin_popups_table(engine):
             rcol = conn.execute(text("PRAGMA table_info(admin_popups)"))
             cols = [row[1] for row in rcol.fetchall()]
             if "max_shows_per_user" not in cols:
-                conn.execute(text("ALTER TABLE admin_popups ADD COLUMN max_shows_per_user INTEGER DEFAULT 1"))
+                conn.execute(
+                    text(
+                        "ALTER TABLE admin_popups ADD COLUMN max_shows_per_user INTEGER DEFAULT 1"
+                    )
+                )
                 conn.commit()
-                logger.info("schema_guard: added column admin_popups.max_shows_per_user")
+                logger.info(
+                    "schema_guard: added column admin_popups.max_shows_per_user"
+                )
         except Exception as e:
-            logger.warning("schema_guard: admin_popups max_shows_per_user add column: %s", e)
+            logger.warning(
+                "schema_guard: admin_popups max_shows_per_user add column: %s", e
+            )
             conn.rollback()
-        r2 = conn.execute(text(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='admin_popup_dismissals'"
-        ))
+        r2 = conn.execute(
+            text(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='admin_popup_dismissals'"
+            )
+        )
         if not r2.fetchone():
             try:
-                conn.execute(text("""
+                conn.execute(
+                    text("""
                     CREATE TABLE admin_popup_dismissals (
                         id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
                         user_id INTEGER NOT NULL REFERENCES users(id),
                         popup_id INTEGER NOT NULL REFERENCES admin_popups(id),
                         dismissed_at DATETIME
                     )
-                """))
-                conn.execute(text("CREATE INDEX ix_admin_popup_dismissals_user_id ON admin_popup_dismissals (user_id)"))
-                conn.execute(text("CREATE INDEX ix_admin_popup_dismissals_popup_id ON admin_popup_dismissals (popup_id)"))
+                """)
+                )
+                conn.execute(
+                    text(
+                        "CREATE INDEX ix_admin_popup_dismissals_user_id ON admin_popup_dismissals (user_id)"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "CREATE INDEX ix_admin_popup_dismissals_popup_id ON admin_popup_dismissals (popup_id)"
+                    )
+                )
                 conn.commit()
                 logger.info("schema_guard: created table admin_popup_dismissals")
             except Exception as e:
-                logger.warning("schema_guard: could not create admin_popup_dismissals: %s", e)
+                logger.warning(
+                    "schema_guard: could not create admin_popup_dismissals: %s", e
+                )
                 conn.rollback()
         conn.commit()
 
@@ -913,15 +1170,18 @@ def ensure_admin_popups_table(engine):
 def ensure_order_intents_table(engine):
     """Bot Engine v5: intent_id, client_order_id UNIQUE, full state machine. Intent persist BEFORE place_order."""
     with engine.connect() as conn:
-        r = conn.execute(text(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='order_intents'"
-        ))
+        r = conn.execute(
+            text(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='order_intents'"
+            )
+        )
         if r.fetchone():
             ensure_order_intents_v5_columns(engine)
             conn.commit()
             return
         try:
-            conn.execute(text("""
+            conn.execute(
+                text("""
                 CREATE TABLE order_intents (
                     id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
                     intent_id TEXT NOT NULL,
@@ -948,14 +1208,43 @@ def ensure_order_intents_table(engine):
                     UNIQUE(intent_id),
                     UNIQUE(client_order_id)
                 )
-            """))
-            conn.execute(text("CREATE INDEX ix_order_intents_intent_id ON order_intents (intent_id)"))
-            conn.execute(text("CREATE UNIQUE INDEX ix_order_intents_client_order_id ON order_intents (client_order_id)"))
-            conn.execute(text("CREATE INDEX ix_order_intents_bot_account ON order_intents (bot_id, account_id)"))
-            conn.execute(text("CREATE INDEX ix_order_intents_account_status ON order_intents (account_id, status)"))
-            conn.execute(text("CREATE INDEX ix_order_intents_bot_status ON order_intents (bot_id, status)"))
-            conn.execute(text("CREATE INDEX ix_order_intents_symbol_status ON order_intents (symbol, status)"))
-            conn.execute(text("CREATE INDEX ix_order_intents_binance_order_id ON order_intents (binance_order_id)"))
+            """)
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX ix_order_intents_intent_id ON order_intents (intent_id)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE UNIQUE INDEX ix_order_intents_client_order_id ON order_intents (client_order_id)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX ix_order_intents_bot_account ON order_intents (bot_id, account_id)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX ix_order_intents_account_status ON order_intents (account_id, status)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX ix_order_intents_bot_status ON order_intents (bot_id, status)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX ix_order_intents_symbol_status ON order_intents (symbol, status)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX ix_order_intents_binance_order_id ON order_intents (binance_order_id)"
+                )
+            )
             conn.commit()
             logger.info("schema_guard: created table order_intents (v5)")
         except Exception as e:
@@ -967,9 +1256,11 @@ def ensure_order_intents_table(engine):
 def ensure_order_intents_v5_columns(engine):
     """Add v5 columns to existing order_intents table."""
     with engine.connect() as conn:
-        r = conn.execute(text(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='order_intents'"
-        ))
+        r = conn.execute(
+            text(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='order_intents'"
+            )
+        )
         if not r.fetchone():
             conn.commit()
             return
@@ -989,28 +1280,54 @@ def ensure_order_intents_v5_columns(engine):
             if col_name in existing:
                 continue
             try:
-                default = "0" if col_name in ("submit_attempts", "filled_qty") else "NULL"
+                default = (
+                    "0" if col_name in ("submit_attempts", "filled_qty") else "NULL"
+                )
                 if col_name == "order_type":
                     default = "'MARKET'"
-                conn.execute(text(f"ALTER TABLE order_intents ADD COLUMN {col_name} {sql_type} DEFAULT {default}"))
+                conn.execute(
+                    text(
+                        f"ALTER TABLE order_intents ADD COLUMN {col_name} {sql_type} DEFAULT {default}"
+                    )
+                )
                 conn.commit()
                 logger.info("schema_guard: added column order_intents.%s", col_name)
             except Exception as e:
-                logger.warning("schema_guard: could not add order_intents.%s: %s", col_name, e)
+                logger.warning(
+                    "schema_guard: could not add order_intents.%s: %s", col_name, e
+                )
                 conn.rollback()
         # Ensure status can hold v5 values (NEW, PERSISTED, SUBMITTING, SUBMITTED, etc.) - no change needed
         # Create v5 indices if missing
         for idx_name, idx_sql in [
-            ("ix_order_intents_account_status", "CREATE INDEX ix_order_intents_account_status ON order_intents (account_id, status)"),
-            ("ix_order_intents_bot_status", "CREATE INDEX ix_order_intents_bot_status ON order_intents (bot_id, status)"),
-            ("ix_order_intents_symbol_status", "CREATE INDEX ix_order_intents_symbol_status ON order_intents (symbol, status)"),
-            ("ix_order_intents_binance_order_id", "CREATE INDEX ix_order_intents_binance_order_id ON order_intents (binance_order_id)"),
-            ("ix_trades_normalized_account_time", "CREATE INDEX ix_trades_normalized_account_time ON trades_normalized (account_id, time)"),
+            (
+                "ix_order_intents_account_status",
+                "CREATE INDEX ix_order_intents_account_status ON order_intents (account_id, status)",
+            ),
+            (
+                "ix_order_intents_bot_status",
+                "CREATE INDEX ix_order_intents_bot_status ON order_intents (bot_id, status)",
+            ),
+            (
+                "ix_order_intents_symbol_status",
+                "CREATE INDEX ix_order_intents_symbol_status ON order_intents (symbol, status)",
+            ),
+            (
+                "ix_order_intents_binance_order_id",
+                "CREATE INDEX ix_order_intents_binance_order_id ON order_intents (binance_order_id)",
+            ),
+            (
+                "ix_trades_normalized_account_time",
+                "CREATE INDEX ix_trades_normalized_account_time ON trades_normalized (account_id, time)",
+            ),
         ]:
             try:
-                r = conn.execute(text(
-                    "SELECT name FROM sqlite_master WHERE type='index' AND name=:n"
-                ), {"n": idx_name})
+                r = conn.execute(
+                    text(
+                        "SELECT name FROM sqlite_master WHERE type='index' AND name=:n"
+                    ),
+                    {"n": idx_name},
+                )
                 if r.fetchone():
                     continue
                 conn.execute(text(idx_sql))
@@ -1025,12 +1342,15 @@ def ensure_order_intents_v5_columns(engine):
 def ensure_sessions_table(engine):
     """Shared session store for multi-worker auth. token -> {user_id, account_id, is_admin, boot_id}. Sliding TTL via last_seen_at."""
     with engine.connect() as conn:
-        r = conn.execute(text(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='auth_sessions'"
-        ))
+        r = conn.execute(
+            text(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='auth_sessions'"
+            )
+        )
         if not r.fetchone():
             try:
-                conn.execute(text("""
+                conn.execute(
+                    text("""
                     CREATE TABLE auth_sessions (
                         id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
                         token_hash VARCHAR(64) NOT NULL UNIQUE,
@@ -1044,13 +1364,18 @@ def ensure_sessions_table(engine):
                         last_seen_at TEXT,
                         revoked INTEGER NOT NULL DEFAULT 0
                     )
-                """))
-                conn.execute(text(
-                    "CREATE INDEX ix_auth_sessions_token_hash ON auth_sessions (token_hash)"
-                ))
-                conn.execute(text(
-                    "CREATE INDEX ix_auth_sessions_expires ON auth_sessions (expires_at)"
-                ))
+                """)
+                )
+                conn.execute(
+                    text(
+                        "CREATE INDEX ix_auth_sessions_token_hash ON auth_sessions (token_hash)"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "CREATE INDEX ix_auth_sessions_expires ON auth_sessions (expires_at)"
+                    )
+                )
                 conn.commit()
                 logger.info("schema_guard: created table auth_sessions")
             except Exception as e:
@@ -1062,18 +1387,28 @@ def ensure_sessions_table(engine):
         existing = _get_existing_columns(conn, "auth_sessions")
         if "last_seen_at" not in existing:
             try:
-                conn.execute(text("ALTER TABLE auth_sessions ADD COLUMN last_seen_at TEXT"))
+                conn.execute(
+                    text("ALTER TABLE auth_sessions ADD COLUMN last_seen_at TEXT")
+                )
                 conn.commit()
                 logger.info("schema_guard: added column auth_sessions.last_seen_at")
             except Exception as e:
-                logger.warning("schema_guard: could not add auth_sessions.last_seen_at: %s", e)
+                logger.warning(
+                    "schema_guard: could not add auth_sessions.last_seen_at: %s", e
+                )
                 conn.rollback()
         if "revoked" not in existing:
             try:
-                conn.execute(text("ALTER TABLE auth_sessions ADD COLUMN revoked INTEGER NOT NULL DEFAULT 0"))
+                conn.execute(
+                    text(
+                        "ALTER TABLE auth_sessions ADD COLUMN revoked INTEGER NOT NULL DEFAULT 0"
+                    )
+                )
                 conn.commit()
                 logger.info("schema_guard: added column auth_sessions.revoked")
             except Exception as e:
-                logger.warning("schema_guard: could not add auth_sessions.revoked: %s", e)
+                logger.warning(
+                    "schema_guard: could not add auth_sessions.revoked: %s", e
+                )
                 conn.rollback()
         conn.commit()

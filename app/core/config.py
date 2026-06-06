@@ -1,6 +1,7 @@
 """
 Central env config parsing. All config constants overridable by env.
 """
+
 import os
 import re
 from pathlib import Path
@@ -10,6 +11,7 @@ from urllib.parse import urlparse
 
 def get_security_config() -> dict:
     """Security/auth hardening flags and limits. Safe defaults; no breaking changes."""
+
     def _bool(key: str, default: str = "1") -> bool:
         return os.environ.get(key, default).strip().lower() in ("1", "true", "yes")
 
@@ -34,8 +36,12 @@ def get_security_config() -> dict:
         "auth_cookie_samesite": _str("AUTH_COOKIE_SAMESITE", "Lax"),
         "auth_cookie_max_age_sec": _int("AUTH_COOKIE_MAX_AGE_SEC", 604800),
         "auth_rate_limit_enabled": _bool("AUTH_RATE_LIMIT_ENABLED", "1"),
-        "auth_rate_limit_login_per_ip_5min": _int("AUTH_RATE_LIMIT_LOGIN_PER_IP_5MIN", 20),
-        "auth_rate_limit_login_per_user_5min": _int("AUTH_RATE_LIMIT_LOGIN_PER_USER_5MIN", 10),
+        "auth_rate_limit_login_per_ip_5min": _int(
+            "AUTH_RATE_LIMIT_LOGIN_PER_IP_5MIN", 20
+        ),
+        "auth_rate_limit_login_per_user_5min": _int(
+            "AUTH_RATE_LIMIT_LOGIN_PER_USER_5MIN", 10
+        ),
         "auth_rate_limit_global_burst": _int("AUTH_RATE_LIMIT_GLOBAL_BURST", 60),
         "security_headers_enabled": _bool("SECURITY_HEADERS_ENABLED", "1"),
         "csp_enabled": _bool("CSP_ENABLED", "1"),
@@ -54,16 +60,31 @@ def get_config() -> dict:
         "default_lease_ttl_sec": int(os.environ.get("DEFAULT_LEASE_TTL_SEC", "10")),
         "lock_heartbeat_sec": int(os.environ.get("LOCK_HEARTBEAT_SEC", "3")),
         "max_snapshot_bytes": int(os.environ.get("MAX_SNAPSHOT_BYTES", "500000")),
-        "database_role": (os.environ.get("DATABASE_ROLE") or os.environ.get("ROLE") or "web").strip().lower(),
+        "database_role": (
+            os.environ.get("DATABASE_ROLE") or os.environ.get("ROLE") or "web"
+        )
+        .strip()
+        .lower(),
         "process_role": (os.environ.get("PROCESS_ROLE") or "api").strip().lower(),
-        "snapshot_fields_enabled": os.environ.get("SNAPSHOT_FIELDS_ENABLED", "1").strip().lower() in ("1", "true", "yes"),
-        "snapshot_trim_enabled": os.environ.get("SNAPSHOT_TRIM_ENABLED", "1").strip().lower() in ("1", "true", "yes"),
+        "snapshot_fields_enabled": os.environ.get("SNAPSHOT_FIELDS_ENABLED", "1")
+        .strip()
+        .lower()
+        in ("1", "true", "yes"),
+        "snapshot_trim_enabled": os.environ.get("SNAPSHOT_TRIM_ENABLED", "1")
+        .strip()
+        .lower()
+        in ("1", "true", "yes"),
         # Flash Home (mobile-first) – Patch H
-        "flash_home_enabled": os.environ.get("FLASH_HOME_ENABLED", "true").strip().lower() in ("1", "true", "yes"),
+        "flash_home_enabled": os.environ.get("FLASH_HOME_ENABLED", "true")
+        .strip()
+        .lower()
+        in ("1", "true", "yes"),
         "home_fast_cache_ttl_sec": int(os.environ.get("HOME_FAST_CACHE_TTL_SEC", "2")),
         "wallet_live_ttl_sec": int(os.environ.get("WALLET_LIVE_TTL_SEC", "5")),
         "wallet_cooldown_sec": int(os.environ.get("WALLET_COOLDOWN_SEC", "30")),
-        "wallet_snapshot_warn_age_sec": float(os.environ.get("WALLET_SNAPSHOT_WARN_AGE_SEC", "900")),
+        "wallet_snapshot_warn_age_sec": float(
+            os.environ.get("WALLET_SNAPSHOT_WARN_AGE_SEC", "900")
+        ),
         "home_fast_max_assets": int(os.environ.get("HOME_FAST_MAX_ASSETS", "20")),
         "home_fast_warn_bytes": int(os.environ.get("HOME_FAST_WARN_BYTES", "200000")),
     }
@@ -119,7 +140,9 @@ def discover_frontend_origins(project_root: Optional[Path] = None) -> List[str]:
             text = path.read_text(encoding="utf-8", errors="ignore")
         except OSError:
             continue
-        candidates.extend(re.findall(r"https?://[A-Za-z0-9._~:/?#\[\]@!$&'()*+,=%-]+", text))
+        candidates.extend(
+            re.findall(r"https?://[A-Za-z0-9._~:/?#\[\]@!$&'()*+,=%-]+", text)
+        )
         for server_name_line in re.findall(r"server_name\s+([^;]+);", text):
             for host in server_name_line.split():
                 host = host.strip()
@@ -134,7 +157,15 @@ def discover_frontend_origins(project_root: Optional[Path] = None) -> List[str]:
         host = urlparse(normalized).hostname or ""
         if "." not in host:
             continue
-        if host.endswith(("googleapis.com", "gstatic.com", "binance.com", "registry.npmjs.org", "github.com")):
+        if host.endswith(
+            (
+                "googleapis.com",
+                "gstatic.com",
+                "binance.com",
+                "registry.npmjs.org",
+                "github.com",
+            )
+        ):
             continue
         if host in ("localhost", "127.0.0.1", "0.0.0.0"):
             continue
@@ -146,7 +177,11 @@ def discover_frontend_origins(project_root: Optional[Path] = None) -> List[str]:
 
 def get_cors_config() -> dict:
     """Production CORS: explicit origins only; development falls back to localhost."""
-    app_env = (os.environ.get("APP_ENV") or os.environ.get("ENV") or "development").strip().lower()
+    app_env = (
+        (os.environ.get("APP_ENV") or os.environ.get("ENV") or "development")
+        .strip()
+        .lower()
+    )
     is_prod = app_env in ("prod", "production", "staging")
     raw_origins = _split_csv(os.environ.get("ALLOWED_ORIGINS", ""))
     origins: List[str] = []

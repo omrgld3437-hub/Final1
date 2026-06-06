@@ -2,6 +2,7 @@
 Auth shared-session tests: login then protected endpoint returns 200 (fixes login redirect loop).
 Session store is DB-backed so multi-worker and restarts work; no boot_id in acceptance criteria.
 """
+
 import os
 import pytest
 import secrets
@@ -12,6 +13,7 @@ from fastapi.testclient import TestClient
 @pytest.fixture
 def client():
     from app.main import app
+
     return TestClient(app)
 
 
@@ -153,7 +155,9 @@ def test_require_auth_returns_401_when_token_missing(client: TestClient):
     assert resp.status_code == 401
     data = resp.json()
     detail = data.get("detail", {})
-    code = detail.get("error_code") if isinstance(detail, dict) else data.get("error_code")
+    code = (
+        detail.get("error_code") if isinstance(detail, dict) else data.get("error_code")
+    )
     assert code == "UNAUTHORIZED"
 
 
@@ -174,7 +178,9 @@ def test_logout_invalidates_session(client: TestClient):
     token = data.get("token")
     account_id = data.get("user", {}).get("account_id") or 1
 
-    whoami_resp = client.get("/api/auth/whoami", headers={"Authorization": f"Bearer {token}"})
+    whoami_resp = client.get(
+        "/api/auth/whoami", headers={"Authorization": f"Bearer {token}"}
+    )
     assert whoami_resp.status_code == 200
 
     logout_resp = client.post(
@@ -185,5 +191,7 @@ def test_logout_invalidates_session(client: TestClient):
     )
     assert logout_resp.status_code == 200
 
-    whoami_after = client.get("/api/auth/whoami", headers={"Authorization": f"Bearer {token}"})
+    whoami_after = client.get(
+        "/api/auth/whoami", headers={"Authorization": f"Bearer {token}"}
+    )
     assert whoami_after.status_code == 401

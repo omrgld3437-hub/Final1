@@ -3,6 +3,7 @@
 Windows: Proje kokunden tum sunuculari aciksa restart, kapaliysa start eder.
 Tek giris: python scripts/win_launcher.py
 """
+
 import os
 import sys
 import time
@@ -31,11 +32,17 @@ def _get_python_version(exe):
     """Verilen python exe'nin major.minor versiyonunu dondurur (ornek: '3.12')."""
     try:
         r = subprocess.run(
-            [exe, "-c", "import sys; print('%s.%s' % (sys.version_info.major, sys.version_info.minor))"],
+            [
+                exe,
+                "-c",
+                "import sys; print('%s.%s' % (sys.version_info.major, sys.version_info.minor))",
+            ],
             capture_output=True,
             text=True,
             timeout=5,
-            creationflags=subprocess.CREATE_NO_WINDOW if getattr(subprocess, "CREATE_NO_WINDOW", None) else 0,
+            creationflags=subprocess.CREATE_NO_WINDOW
+            if getattr(subprocess, "CREATE_NO_WINDOW", None)
+            else 0,
         )
         if r.returncode == 0 and r.stdout:
             return r.stdout.strip()
@@ -54,7 +61,9 @@ def _preferred_system_python():
                 text=True,
                 timeout=5,
                 cwd=str(_ROOT),
-                creationflags=subprocess.CREATE_NO_WINDOW if getattr(subprocess, "CREATE_NO_WINDOW", None) else 0,
+                creationflags=subprocess.CREATE_NO_WINDOW
+                if getattr(subprocess, "CREATE_NO_WINDOW", None)
+                else 0,
             )
             if r.returncode == 0 and r.stdout and r.stdout.strip():
                 exe = r.stdout.strip()
@@ -68,8 +77,13 @@ def _preferred_system_python():
         try:
             minor = int(ver.split(".")[1])
             if minor >= 14:
-                print("     UYARI: Python %s kullaniyorsunuz; bazi paketler (pydantic) icin wheel yok." % ver)
-                print("     Cozum: Python 3.12 veya 3.13 kurun, .venv silin, tekrar calistirin.")
+                print(
+                    "     UYARI: Python %s kullaniyorsunuz; bazi paketler (pydantic) icin wheel yok."
+                    % ver
+                )
+                print(
+                    "     Cozum: Python 3.12 veya 3.13 kurun, .venv silin, tekrar calistirin."
+                )
                 print("     Indir: https://www.python.org/downloads/")
         except (ValueError, IndexError):
             pass
@@ -83,7 +97,11 @@ def _python():
 
 def _run(cmd, timeout=15, quiet=False):
     try:
-        flags = subprocess.CREATE_NO_WINDOW if getattr(subprocess, "CREATE_NO_WINDOW", None) else 0
+        flags = (
+            subprocess.CREATE_NO_WINDOW
+            if getattr(subprocess, "CREATE_NO_WINDOW", None)
+            else 0
+        )
         r = subprocess.run(
             cmd,
             cwd=str(_ROOT),
@@ -152,7 +170,9 @@ def _check_web_deps():
             capture_output=True,
             text=True,
             timeout=5,
-            creationflags=subprocess.CREATE_NO_WINDOW if getattr(subprocess, "CREATE_NO_WINDOW", None) else 0,
+            creationflags=subprocess.CREATE_NO_WINDOW
+            if getattr(subprocess, "CREATE_NO_WINDOW", None)
+            else 0,
         )
         return r.returncode == 0
     except Exception:
@@ -160,7 +180,7 @@ def _check_web_deps():
 
 
 def _ensure_venv():
-    """ .venv yoksa olustur; Python 3.12/3.13 tercih edilir (3.14 uyumsuz). """
+    """.venv yoksa olustur; Python 3.12/3.13 tercih edilir (3.14 uyumsuz)."""
     venv_dir = _ROOT / ".venv"
     if venv_dir.exists():
         return True
@@ -173,7 +193,7 @@ def _ensure_venv():
 
 
 def _venv_python_version():
-    """ .venv icindeki Python versiyonunu dondurur (ornek: '3.14'). Yoksa None. """
+    """.venv icindeki Python versiyonunu dondurur (ornek: '3.14'). Yoksa None."""
     venv_py = _ROOT / ".venv" / "Scripts" / "python.exe"
     if not venv_py.exists():
         return None
@@ -181,7 +201,7 @@ def _venv_python_version():
 
 
 def _ensure_venv_deps():
-    """ .venv yoksa olustur; fastapi/uvicorn yoksa pip install -r requirements.txt calistir. """
+    """.venv yoksa olustur; fastapi/uvicorn yoksa pip install -r requirements.txt calistir."""
     req_file = _ROOT / "requirements.txt"
     if not req_file.exists():
         return False
@@ -197,11 +217,16 @@ def _ensure_venv_deps():
         try:
             minor = int(venv_ver.split(".")[1])
             if minor >= 14:
-                print("     HATA: .venv Python %s ile olusturulmus; bu surum uyumlu degil." % venv_ver)
+                print(
+                    "     HATA: .venv Python %s ile olusturulmus; bu surum uyumlu degil."
+                    % venv_ver
+                )
                 print("")
                 print("     YAPMANIZ GEREKENLER:")
                 print("     1. Bu klasorde .venv klasorunu SILIN (sag tik -> Sil)")
-                print("     2. Python 3.12 veya 3.13 kurun: https://www.python.org/downloads/")
+                print(
+                    "     2. Python 3.12 veya 3.13 kurun: https://www.python.org/downloads/"
+                )
                 print("     3. calistir.bat veya Server Start.bat'i tekrar calistirin.")
                 print("")
                 return False
@@ -219,8 +244,12 @@ def _ensure_venv_deps():
     if ok and _check_web_deps():
         return True
     if not _check_web_deps():
-        print("     UYARI: Kurulum basarisiz veya eksik. Python 3.14 cok yeni; bazi paketler wheel sunmuyor.")
-        print("     Cozum: Python 3.12 veya 3.13 kurun, .venv silin, tekrar calistirin.")
+        print(
+            "     UYARI: Kurulum basarisiz veya eksik. Python 3.14 cok yeni; bazi paketler wheel sunmuyor."
+        )
+        print(
+            "     Cozum: Python 3.12 veya 3.13 kurun, .venv silin, tekrar calistirin."
+        )
         print("     Indir: https://www.python.org/downloads/")
     return False
 
@@ -238,7 +267,9 @@ def _start_web_worker():
                 print("       %s -m pip install -r requirements.txt" % venv_py)
             else:
                 print("       python -m venv .venv")
-                print("       .venv\\Scripts\\python.exe -m pip install -r requirements.txt")
+                print(
+                    "       .venv\\Scripts\\python.exe -m pip install -r requirements.txt"
+                )
             print("     Tamamlandi (Web baslamadi).")
             return
     print("[2] Web (8000) ve Worker baslatiliyor...")

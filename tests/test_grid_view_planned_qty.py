@@ -1,4 +1,5 @@
 """Grid panel planned qty stays fixed after sells (grid_reference_base, not live balance)."""
+
 from app.botengine.grid_view import compute_grid_profit_view
 
 
@@ -60,7 +61,12 @@ def test_profit_points_avg_cost_grid_only_uses_execution_price():
         "sell_grid_fired": [True],
         "buy_grid_fired": [],
         "sell_history": [
-            {"grid_index": 0, "qty": 0.01, "price": 2121.7136, "execution_price": 2123.4407},
+            {
+                "grid_index": 0,
+                "qty": 0.01,
+                "price": 2121.7136,
+                "execution_price": 2123.4407,
+            },
         ],
         "buy_history": [],
     }

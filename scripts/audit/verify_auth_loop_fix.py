@@ -4,6 +4,7 @@ Verify auth login loop fix: login -> whoami 200 -> protected endpoint 200 -> log
 Run against a running server (e.g. BASE_URL=http://127.0.0.1:8000).
 Requires TEST_LOGIN_USERNAME and TEST_LOGIN_PASSWORD, or pass --username/--password.
 """
+
 import os
 import sys
 import argparse
@@ -23,7 +24,9 @@ def main():
     p.add_argument("--password", default=os.environ.get("TEST_LOGIN_PASSWORD", ""))
     args = p.parse_args()
     if not args.username or not args.password:
-        print("Set TEST_LOGIN_USERNAME and TEST_LOGIN_PASSWORD or pass --username and --password")
+        print(
+            "Set TEST_LOGIN_USERNAME and TEST_LOGIN_PASSWORD or pass --username and --password"
+        )
         sys.exit(2)
 
     session = requests.Session()

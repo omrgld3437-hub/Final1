@@ -1,4 +1,5 @@
 """bot_status_utils — admin/dashboard aktif bot sayımı."""
+
 from types import SimpleNamespace
 
 from app.services.bot_status_utils import (

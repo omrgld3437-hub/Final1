@@ -4,6 +4,7 @@ VERSION: v2.0
 DATE: 2026-01-23
 CHANGE: Rate-limit safe with cache + TTL + in-flight dedupe + degrade mode
 """
+
 from fastapi import APIRouter, Depends, Query, Request
 from typing import Literal
 from fastapi.responses import JSONResponse
@@ -18,11 +19,14 @@ from app.services.data_hub import data_hub
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+
 @router.get("/data/hub")
 async def get_data_hub(
-    account_id: Optional[int] = Query(None, description="Unused; balance from /api/binance/wallet only"),
+    account_id: Optional[int] = Query(
+        None, description="Unused; balance from /api/binance/wallet only"
+    ),
     db: Session = Depends(get_db),
-    request: Request = None
+    request: Request = None,
 ):
     """
     1s hub snapshot: prices, mini, coin_list, ts, data_status, stale_age_ms.
@@ -54,19 +58,23 @@ async def get_data_hub(
                 "data_status": "empty",
                 "stale_reason": "error",
                 "stale_age_ms": 0,
-                "request_id": request_id
-            }
+                "request_id": request_id,
+            },
         )
+
 
 @router.get("/datahub/status")
 async def get_datahub_status():
     """WS state and stale counts for operators / UI indicator."""
     return data_hub.get_status()
 
+
 @router.get("/data/prices")
 async def get_prices(
     slim: int = Query(0, description="1 = UI/ worker slim snapshot (~200 symbols)"),
-    symbols: Optional[str] = Query(None, description="Virgülle ayrılmış; slim=1 iken her zaman dahil (ör. ETHUSDT)"),
+    symbols: Optional[str] = Query(
+        None, description="Virgülle ayrılmış; slim=1 iken her zaman dahil (ör. ETHUSDT)"
+    ),
 ):
     """Cached prices. Worker sync should use slim=1 to limit RAM."""
     if slim:
@@ -74,9 +82,12 @@ async def get_prices(
         return data_hub.get_prices_for_ui(ensure_symbols=extra or None)
     return data_hub.get_all_prices()
 
+
 @router.get("/data/coin-list")
 async def get_coin_list(
-    scope: Literal["usdt", "all"] = Query("usdt", description="usdt = *USDT only, all = all TRADING pairs"),
+    scope: Literal["usdt", "all"] = Query(
+        "usdt", description="usdt = *USDT only, all = all TRADING pairs"
+    ),
 ):
     """Get cached coin list (top 100) + symbols from Binance exchangeInfo. scope=usdt (default) or all."""
     symbols = data_hub.get_symbols_for_scope(scope)

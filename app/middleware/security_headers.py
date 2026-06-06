@@ -1,8 +1,8 @@
 """
 Security headers and CSP middleware. Feature-flagged; report-only CSP by default.
 """
+
 import logging
-from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 def _get_security_config():
     try:
         from app.core.config import get_security_config
+
         return get_security_config()
     except Exception:
         return {}
@@ -61,7 +62,9 @@ async def security_headers_middleware(request: Request, call_next) -> Response:
     # HSTS only when HTTPS (middleware sees request.url.scheme)
     if cfg.get("hsts_enabled") and getattr(request.url, "scheme", "") == "https":
         max_age = cfg.get("hsts_max_age", 31536000)
-        response.headers["Strict-Transport-Security"] = f"max-age={max_age}; includeSubDomains"
+        response.headers["Strict-Transport-Security"] = (
+            f"max-age={max_age}; includeSubDomains"
+        )
 
     # CSP
     if cfg.get("csp_enabled"):

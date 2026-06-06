@@ -1,5 +1,10 @@
 """Binance commission normalization."""
-from app.botengine.fee_utils import commission_to_usdt, parse_fill_commission, symbol_base_asset
+
+from app.botengine.fee_utils import (
+    commission_to_usdt,
+    parse_fill_commission,
+    symbol_base_asset,
+)
 
 
 def test_symbol_base_asset_ethusdt():

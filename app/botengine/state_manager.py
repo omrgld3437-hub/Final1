@@ -1,4 +1,5 @@
 """State persistence facade for bot engine modules."""
+
 from __future__ import annotations
 
 from app.botengine.state_store import (

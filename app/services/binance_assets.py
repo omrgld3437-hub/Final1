@@ -2,9 +2,9 @@
 FILE: binance_assets.py
 Account keys resolution: decrypt api_key/api_secret, return BinanceKeys (testnet from mode).
 """
+
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Optional
 
 from app.services.encryption import (
     decrypt_account_api_key,
@@ -39,6 +39,7 @@ async def get_account_keys(account_id: int, db) -> BinanceKeys:
       ACCOUNT_KEYS_DECRYPT_FAIL - len>0 but decrypt raises or result empty
     """
     from app.db.models import Account
+
     account = db.query(Account).filter(Account.id == account_id).first()
     if not account:
         raise ValueError(ACCOUNT_NOT_FOUND)
@@ -48,11 +49,15 @@ async def get_account_keys(account_id: int, db) -> BinanceKeys:
     secret_len = len(enc_secret or "")
     if key_len == 0 or secret_len == 0:
         raise ValueError(ACCOUNT_KEYS_EMPTY)
-    if (isinstance(enc_key, str) and not enc_key.strip()) or (isinstance(enc_secret, str) and not enc_secret.strip()):
+    if (isinstance(enc_key, str) and not enc_key.strip()) or (
+        isinstance(enc_secret, str) and not enc_secret.strip()
+    ):
         raise ValueError(ACCOUNT_KEYS_EMPTY)
     try:
         api_key = decrypt_account_api_key(account_id, account.api_key_enc).strip()
-        api_secret = decrypt_account_api_secret(account_id, account.api_secret_enc).strip()
+        api_secret = decrypt_account_api_secret(
+            account_id, account.api_secret_enc
+        ).strip()
     except Exception:
         raise ValueError(ACCOUNT_KEYS_DECRYPT_FAIL)
     if not api_key or not api_secret:
@@ -65,6 +70,7 @@ async def get_account_keys(account_id: int, db) -> BinanceKeys:
     testnet = mode == "testnet"
     # Gerçek hesaplar (test kullanıcı değil) her zaman mainnet kullanır; yanlışlıkla testnet seçilse bile
     from app.services.test_account import is_test_account
+
     if not is_test_account(account_id, db):
         testnet = False
     return BinanceKeys(api_key=api_key, api_secret=api_secret, testnet=testnet)
@@ -74,6 +80,7 @@ async def fetch_prices_map(testnet: bool = False):
     """finance_snapshot: DataHub cache (REST yok)."""
     _ = testnet
     from app.services.market_data import get_price_map_flat
+
     return get_price_map_flat()
 
 

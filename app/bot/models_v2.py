@@ -4,7 +4,17 @@ VERSION: v1
 DATE: 2026-01-21
 CHANGE: DCA Bot V2 models - bidirectional grid + trailing + profit cycle + compound
 """
-from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, Text, Boolean, JSON
+
+from sqlalchemy import (
+    Column,
+    Integer,
+    String,
+    Float,
+    DateTime,
+    ForeignKey,
+    Boolean,
+    JSON,
+)
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from app.db.base import Base
@@ -12,6 +22,7 @@ from app.db.base import Base
 
 class BotV2(Base):
     """Bot V2 main table"""
+
     __tablename__ = "bots_v2"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -52,19 +63,38 @@ class BotV2(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     # Relationships
-    balances = relationship("BotBalanceV2", back_populates="bot", uselist=False, cascade="all, delete-orphan")
-    grids = relationship("BotGridV2", back_populates="bot", cascade="all, delete-orphan", order_by="BotGridV2.idx")
-    cycles = relationship("BotCycleV2", back_populates="bot", cascade="all, delete-orphan")
-    trades = relationship("BotTradeV2", back_populates="bot", cascade="all, delete-orphan")
-    state = relationship("BotStateV2", back_populates="bot", uselist=False, cascade="all, delete-orphan")
+    balances = relationship(
+        "BotBalanceV2",
+        back_populates="bot",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
+    grids = relationship(
+        "BotGridV2",
+        back_populates="bot",
+        cascade="all, delete-orphan",
+        order_by="BotGridV2.idx",
+    )
+    cycles = relationship(
+        "BotCycleV2", back_populates="bot", cascade="all, delete-orphan"
+    )
+    trades = relationship(
+        "BotTradeV2", back_populates="bot", cascade="all, delete-orphan"
+    )
+    state = relationship(
+        "BotStateV2", back_populates="bot", uselist=False, cascade="all, delete-orphan"
+    )
 
 
 class BotBalanceV2(Base):
     """Bot balance snapshot"""
+
     __tablename__ = "bot_balances_v2"
 
     id = Column(Integer, primary_key=True, index=True)
-    bot_id = Column(Integer, ForeignKey("bots_v2.id"), nullable=False, index=True, unique=True)
+    bot_id = Column(
+        Integer, ForeignKey("bots_v2.id"), nullable=False, index=True, unique=True
+    )
     base_asset = Column(String(20), nullable=False)  # BTC
     quote_asset = Column(String(20), nullable=False)  # USDT
     base_free = Column(Float, default=0.0)
@@ -78,6 +108,7 @@ class BotBalanceV2(Base):
 
 class BotGridV2(Base):
     """Grid level configuration and state"""
+
     __tablename__ = "bot_grids_v2"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -110,6 +141,7 @@ class BotGridV2(Base):
 
 class BotCycleV2(Base):
     """Profit cycle tracking"""
+
     __tablename__ = "bot_cycles_v2"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -143,11 +175,14 @@ class BotCycleV2(Base):
 
 class BotTradeV2(Base):
     """Trade execution records"""
+
     __tablename__ = "bot_trades_v2"
 
     id = Column(Integer, primary_key=True, index=True)
     bot_id = Column(Integer, ForeignKey("bots_v2.id"), nullable=False, index=True)
-    cycle_id = Column(Integer, ForeignKey("bot_cycles_v2.id"), nullable=True, index=True)
+    cycle_id = Column(
+        Integer, ForeignKey("bot_cycles_v2.id"), nullable=True, index=True
+    )
     ts = Column(DateTime, nullable=False, index=True)
     symbol = Column(String(50), nullable=False)
     side = Column(String(10), nullable=False)  # BUY / SELL
@@ -161,7 +196,9 @@ class BotTradeV2(Base):
     fee_usdt = Column(Float, default=0.0)
 
     # Metadata
-    reason = Column(String(50), nullable=False)  # GRID_UP_i, GRID_DOWN_i, PROFIT_REBUY, PROFIT_RESELL, INITIAL_ALLOC
+    reason = Column(
+        String(50), nullable=False
+    )  # GRID_UP_i, GRID_DOWN_i, PROFIT_REBUY, PROFIT_RESELL, INITIAL_ALLOC
     order_id = Column(String(100), nullable=True)  # Binance order ID (live)
     mode = Column(String(20), default="paper")  # paper/live
 
@@ -170,13 +207,14 @@ class BotTradeV2(Base):
 
 class BotStateV2(Base):
     """Engine runtime state (persisted)"""
+
     __tablename__ = "bot_state_v2"
 
     id = Column(Integer, primary_key=True, index=True)
-    bot_id = Column(Integer, ForeignKey("bots_v2.id"), nullable=False, index=True, unique=True)
+    bot_id = Column(
+        Integer, ForeignKey("bots_v2.id"), nullable=False, index=True, unique=True
+    )
     state_json = Column(JSON, nullable=False)  # serialized state machine
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     bot = relationship("BotV2", back_populates="state")
-
-

@@ -7,6 +7,7 @@ Usage: python scripts/ram_analyze.py
 
 Requires: matplotlib (optional; install for PNG graphs: pip install matplotlib).
 """
+
 from __future__ import annotations
 
 import json
@@ -70,6 +71,7 @@ def _rss_series(entries: List[Dict[str, Any]]) -> List[Tuple[float, Optional[flo
             continue
         try:
             from datetime import datetime
+
             dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
             t_epoch = dt.timestamp()
         except Exception:
@@ -101,7 +103,9 @@ def _object_count(entry: Dict[str, Any]) -> Optional[int]:
     return None
 
 
-def analyze_rss_trend(timeseries: List[Tuple[float, Optional[float]]]) -> Dict[str, Any]:
+def analyze_rss_trend(
+    timeseries: List[Tuple[float, Optional[float]]],
+) -> Dict[str, Any]:
     """
     Analyze RSS time series. Return metrics: start, end, max, mean, growth_mb_per_min,
     correlation (if enough points), is_monotonic.
@@ -135,6 +139,7 @@ def analyze_rss_trend(timeseries: List[Tuple[float, Optional[float]]]) -> Dict[s
     if n >= 10:
         try:
             import statistics
+
             mean_t = sum(times) / n
             mean_v = sum(values) / n
             num = sum((t - mean_t) * (v - mean_v) for t, v in zip(times, values))
@@ -175,7 +180,14 @@ def classify_leak(trend_metrics: Dict[str, Any]) -> str:
     corr = trend_metrics.get("correlation")
     is_mono = trend_metrics.get("is_monotonic", False)
 
-    if n >= 10 and is_mono and corr is not None and corr > 0.8 and growth is not None and growth > 0:
+    if (
+        n >= 10
+        and is_mono
+        and corr is not None
+        and corr > 0.8
+        and growth is not None
+        and growth > 0
+    ):
         return "linear"
 
     if rss_start is not None and rss_end is not None and rss_max is not None:
@@ -189,7 +201,7 @@ def classify_leak(trend_metrics: Dict[str, Any]) -> str:
         v_max = max(values)
         v_min = min(values)
         if v_min > 0 and (v_max - v_min) / v_min > 0.20:
-            last_quarter = values[-max(1, len(values) // 4):]
+            last_quarter = values[-max(1, len(values) // 4) :]
             if max(last_quarter) < v_max * 0.95:
                 return "spike"
 
@@ -272,6 +284,7 @@ def render_plots(component_data: Dict[str, Dict[str, Any]]) -> None:
     """
     try:
         import matplotlib
+
         matplotlib.use("Agg")
         import matplotlib.dates as mdates
         import matplotlib.pyplot as plt
@@ -302,7 +315,9 @@ def render_plots(component_data: Dict[str, Dict[str, Any]]) -> None:
             except Exception:
                 continue
             rss.append(r.get("rss_mb") if r.get("rss_mb") is not None else float("nan"))
-            objs.append(_object_count(r) if _object_count(r) is not None else float("nan"))
+            objs.append(
+                _object_count(r) if _object_count(r) is not None else float("nan")
+            )
 
         if not ts_epoch:
             continue
@@ -357,8 +372,12 @@ def write_markdown_report(
     lines.append("")
     lines.append("## Summary by component")
     lines.append("")
-    lines.append("| Component | RSS start (MB) | RSS end (MB) | RSS max (MB) | RSS mean (MB) | Growth (MB/min) | Leak type |")
-    lines.append("|-----------|----------------|--------------|--------------|---------------|-----------------|------------|")
+    lines.append(
+        "| Component | RSS start (MB) | RSS end (MB) | RSS max (MB) | RSS mean (MB) | Growth (MB/min) | Leak type |"
+    )
+    lines.append(
+        "|-----------|----------------|--------------|--------------|---------------|-----------------|------------|"
+    )
     for comp in ("web", "worker"):
         if comp not in component_data:
             continue
@@ -373,7 +392,9 @@ def write_markdown_report(
                 t.get("rss_end_mb") if t.get("rss_end_mb") is not None else "—",
                 t.get("rss_max_mb") if t.get("rss_max_mb") is not None else "—",
                 t.get("rss_mean_mb") if t.get("rss_mean_mb") is not None else "—",
-                t.get("growth_mb_per_min") if t.get("growth_mb_per_min") is not None else "—",
+                t.get("growth_mb_per_min")
+                if t.get("growth_mb_per_min") is not None
+                else "—",
                 lt.upper() if lt != "none" else "NONE",
             )
         )
@@ -427,10 +448,16 @@ def write_markdown_report(
         lines.append(rc)
     else:
         if primary and primary != "—":
-            lines.append(f"Evidence points to **{primary}** as the main contributor to RAM growth. ")
-            lines.append("Review the top offenders above and the corresponding source files.")
+            lines.append(
+                f"Evidence points to **{primary}** as the main contributor to RAM growth. "
+            )
+            lines.append(
+                "Review the top offenders above and the corresponding source files."
+            )
         else:
-            lines.append("No clear linear leak in this sample. Check plateau/spike behavior and tracemalloc offenders.")
+            lines.append(
+                "No clear linear leak in this sample. Check plateau/spike behavior and tracemalloc offenders."
+            )
     lines.append("")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text("\n".join(lines), encoding="utf-8")
@@ -526,7 +553,9 @@ def main() -> None:
     }
 
     render_plots(component_data)
-    write_markdown_report(component_data, global_assessment, _LOGS_DIR / "ram_report.md")
+    write_markdown_report(
+        component_data, global_assessment, _LOGS_DIR / "ram_report.md"
+    )
     write_json_report(component_data, global_assessment, _LOGS_DIR / "ram_report.json")
     logger.info("RAM analysis complete.")
 

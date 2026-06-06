@@ -2,6 +2,7 @@
 Bot Engine API: create, list, detail, start, stop, update-config, events, trades.
 Auth: require_auth + get_account_or_403(bot.account_id) for bot-specific routes.
 """
+
 from __future__ import annotations
 import asyncio
 import json
@@ -18,7 +19,9 @@ from typing import Any, Dict, List, Optional, Tuple
 logger = logging.getLogger(__name__)
 
 
-def _bot_run_started_at_for_api(bot: Any, state: Optional[Dict[str, Any]], db: Session) -> Optional[str]:
+def _bot_run_started_at_for_api(
+    bot: Any, state: Optional[Dict[str, Any]], db: Session
+) -> Optional[str]:
     """UI süre sayacı — oturum başlangıcı (connectivity/worker yeniden başlatmada sıfırlanmaz)."""
     from app.botengine.bot_session import bot_run_started_at_iso
 
@@ -75,12 +78,19 @@ def _live_snapshot_set_cached(bot_id: int, data: dict) -> None:
 # Perf chart data: deterministic bucket engine + LRU cache. O(n). Max 500 points.
 # ---------------------------------------------------------------------------
 BUCKET_SECONDS = {"1m": 60, "5m": 300, "1h": 3600, "4h": 14400, "1d": 86400}
-WINDOW_SECONDS = {"1h": 86400, "4h": 259200, "1d": 2592000, "7d": 7776000, "30d": 31536000}
+WINDOW_SECONDS = {
+    "1h": 86400,
+    "4h": 259200,
+    "1d": 2592000,
+    "7d": 7776000,
+    "30d": 31536000,
+}
 PERF_SERIES_MAX_POINTS = 500
 
 
 class PerfLRUCache:
     """Thread-safe LRU + TTL cache for perf chart responses. Key = (bot_id, range, bucket)."""
+
     max_entries = 100
     ttl_seconds = 5
     _storage: OrderedDict = OrderedDict()
@@ -115,24 +125,33 @@ class PerfLRUCache:
             while len(cls._storage) > cls.max_entries:
                 cls._storage.popitem(last=False)
 
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
-from sqlalchemy import func, text
+from sqlalchemy import text
 
 from app.api.auth import get_account_or_403, require_auth, get_client_ip
 from app.api.bots_engine_services import detail_err as _detail_err
 from app.botengine.models import DcaGridTrailingConfig, config_from_ui_payload
-from app.botengine.dca_manager import MaxBuyLevelsError, normalize_max_buy_levels_payload
+from app.botengine.dca_manager import (
+    MaxBuyLevelsError,
+    normalize_max_buy_levels_payload,
+)
 from app.services import audit as audit_svc
 from app.botengine.orchestrator import delete_bot_fully, invalidate_config_cache
-from app.botengine.state_store import append_event, ensure_state_row, list_events, load_state, normalize_event_ts_iso_z, save_state
+from app.botengine.state_store import (
+    ensure_state_row,
+    list_events,
+    load_state,
+    normalize_event_ts_iso_z,
+    save_state,
+)
 from app.botengine.grid_view import compute_grid_profit_view, compute_trdca_grid_view
 from app.db.session import get_db
 from app.db.models import Bot, Account, Trade, PnlSnapshot
 from app.services.pnl_service import PnlService, ensure_daily_ref_and_compute
 from app.services.price_hub import price_hub
-from app.utils.tz_utils import turkey_today_start_utc
 from app.services.perf_chart_state import (
     seed_perf_chart_state_on_bot_start,
     compute_trdca_parite_pct,
@@ -147,6 +166,7 @@ def _get_price_from_datahub(sym_pair: str) -> Optional[float]:
     """DataHub cache only. No per-symbol Binance REST."""
     try:
         from app.services.data_hub import data_hub
+
         p = data_hub.get_price(sym_pair.upper())
         if p is not None and float(p) > 0:
             return float(p)
@@ -193,7 +213,9 @@ def _resolve_bot_live_price(
     return live
 
 
-async def _fetch_prices_parallel(assets: List[str], quote_asset: str) -> Dict[str, float]:
+async def _fetch_prices_parallel(
+    assets: List[str], quote_asset: str
+) -> Dict[str, float]:
     """Asset listesi için fiyatları DataHub'dan al (bulk-only, no per-symbol REST)."""
     out: Dict[str, float] = {}
     for a in assets:
@@ -249,10 +271,15 @@ def _is_first_tur_cycle_start(ev: Dict[str, Any]) -> bool:
     if (ev.get("type") or "") != "CYCLE_START":
         return False
     meta = ev.get("meta") or {}
-    return bool(meta.get("first_tur") or (meta.get("reason") or "").strip() == "initial_allocation")
+    return bool(
+        meta.get("first_tur")
+        or (meta.get("reason") or "").strip() == "initial_allocation"
+    )
 
 
-def _find_initial_alloc_fill(events: List[Dict[str, Any]], cycle_id: int) -> Optional[Dict[str, Any]]:
+def _find_initial_alloc_fill(
+    events: List[Dict[str, Any]], cycle_id: int
+) -> Optional[Dict[str, Any]]:
     found: Optional[Dict[str, Any]] = None
     for ev in events:
         if (ev.get("type") or "") != "ORDER_FILLED":
@@ -289,7 +316,9 @@ def _event_sort_timestamp(ev: Dict[str, Any], events: List[Dict[str, Any]]) -> i
 def _event_ui_sort_rank(ev: Dict[str, Any]) -> int:
     """Aynı kümede: ilk base üstte, Tur başlatıldı hemen altında (yeniden→eskiye okununca)."""
     meta = ev.get("meta") or {}
-    if (ev.get("type") or "") == "ORDER_FILLED" and (meta.get("reason") or "").strip() == "initial_allocation":
+    if (ev.get("type") or "") == "ORDER_FILLED" and (
+        meta.get("reason") or ""
+    ).strip() == "initial_allocation":
         return 2
     if _is_first_tur_cycle_start(ev):
         return 1
@@ -465,7 +494,9 @@ def _infer_base_before_first_grid_fill_in_tur(
     return round(cur_b + earliest_qty, 10)
 
 
-def _find_cycle_close_fill(events: List[Dict[str, Any]], cycle_id: int) -> Optional[Dict[str, Any]]:
+def _find_cycle_close_fill(
+    events: List[Dict[str, Any]], cycle_id: int
+) -> Optional[Dict[str, Any]]:
     """Tur kapanış emri (kar satışı / re-entry) — sonraki tur açılış zamanı için."""
     found: Optional[Dict[str, Any]] = None
     for ev in events:
@@ -474,7 +505,10 @@ def _find_cycle_close_fill(events: List[Dict[str, Any]], cycle_id: int) -> Optio
         meta = ev.get("meta") or {}
         if int(meta.get("cycle_id") or 0) != int(cycle_id):
             continue
-        if (meta.get("reason") or "").strip() not in ("trail_profit_sell", "trail_reentry_buy"):
+        if (meta.get("reason") or "").strip() not in (
+            "trail_profit_sell",
+            "trail_reentry_buy",
+        ):
             continue
         eid = int(ev.get("id") or 0)
         if found is None or eid > int(found.get("id") or 0):
@@ -482,7 +516,9 @@ def _find_cycle_close_fill(events: List[Dict[str, Any]], cycle_id: int) -> Optio
     return found
 
 
-def _find_cycle_end_event(events: List[Dict[str, Any]], cycle_id: int) -> Optional[Dict[str, Any]]:
+def _find_cycle_end_event(
+    events: List[Dict[str, Any]], cycle_id: int
+) -> Optional[Dict[str, Any]]:
     found: Optional[Dict[str, Any]] = None
     for ev in events:
         if (ev.get("type") or "") != "CYCLE_END":
@@ -495,7 +531,9 @@ def _find_cycle_end_event(events: List[Dict[str, Any]], cycle_id: int) -> Option
     return found
 
 
-def _cycle_open_trade_row(state: Dict[str, Any], cycle_id: int) -> Optional[Dict[str, Any]]:
+def _cycle_open_trade_row(
+    state: Dict[str, Any], cycle_id: int
+) -> Optional[Dict[str, Any]]:
     for row in reversed(state.get("cycle_open_trades") or []):
         if not isinstance(row, dict):
             continue
@@ -547,7 +585,9 @@ def _tur1_wallet_snapshot(
     fm = fill_ev.get("meta") or {}
     try:
         fill_qty = float(fm.get("fill_qty") or state.get("initial_alloc_base_qty") or 0)
-        fill_price = float(fm.get("fill_price") or state.get("initial_alloc_price") or 0)
+        fill_price = float(
+            fm.get("fill_price") or state.get("initial_alloc_price") or 0
+        )
         fee = float(fm.get("fee") or 0)
         cum_quote = float(fm.get("cum_quote") or 0)
     except (TypeError, ValueError):
@@ -606,7 +646,9 @@ def _cycle_start_meta_stale_for_past_tur(
         meta_b = meta.get("base_balance") or meta.get("base_qty")
         if meta_q is None or meta_b is None:
             return False
-        return round(float(meta_q), 2) != round(float(rq), 2) or round(float(meta_b), 10) != round(float(rb), 10)
+        return round(float(meta_q), 2) != round(float(rq), 2) or round(
+            float(meta_b), 10
+        ) != round(float(rb), 10)
     except (TypeError, ValueError):
         return False
 
@@ -644,7 +686,12 @@ def _sanitize_cycle_start_wallet(out: Dict[str, Any]) -> Dict[str, Any]:
     if eq_raw is None:
         eq_raw = out.get("equity_usd")
     quote_raw = out.get("quote_balance")
-    if eq_raw is not None and base_f > 0 and ref_f > 0 and _equity_looks_base_only_usd(eq_raw, base_f, ref_f):
+    if (
+        eq_raw is not None
+        and base_f > 0
+        and ref_f > 0
+        and _equity_looks_base_only_usd(eq_raw, base_f, ref_f)
+    ):
         out.pop("equity_usdt", None)
         out.pop("equity_usd", None)
         try:
@@ -653,7 +700,11 @@ def _sanitize_cycle_start_wallet(out: Dict[str, Any]) -> Dict[str, Any]:
         except (TypeError, ValueError):
             out.pop("quote_balance", None)
     try:
-        quote_f = float(out.get("quote_balance")) if out.get("quote_balance") is not None else None
+        quote_f = (
+            float(out.get("quote_balance"))
+            if out.get("quote_balance") is not None
+            else None
+        )
     except (TypeError, ValueError):
         quote_f = None
     if quote_f is not None and quote_f >= 0.01 and base_f > 0 and ref_f > 0:
@@ -661,7 +712,9 @@ def _sanitize_cycle_start_wallet(out: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
-def _snapshot_from_cycle_open_row(state: Dict[str, Any], cycle_id: int) -> Dict[str, Any]:
+def _snapshot_from_cycle_open_row(
+    state: Dict[str, Any], cycle_id: int
+) -> Dict[str, Any]:
     """Tur açılış anı — cycle_open_trades (tur içi fill ile değişmez)."""
     row = _cycle_open_trade_row(state, int(cycle_id))
     if not row:
@@ -680,13 +733,23 @@ def _snapshot_from_cycle_open_row(state: Dict[str, Any], cycle_id: int) -> Dict[
         out["base_qty"] = out["base_balance"]
     if ref_f > 0:
         out["reference_price"] = round(ref_f, 10)
-    for key in ("quote_balance", "equity_usdt", "target_quote_usdt", "target_base_usdt"):
+    for key in (
+        "quote_balance",
+        "equity_usdt",
+        "target_quote_usdt",
+        "target_base_usdt",
+    ):
         if row.get(key) is not None:
             try:
                 out[key] = round(float(row[key]), 2)
             except (TypeError, ValueError):
                 pass
-    if out.get("equity_usdt") is None and out.get("quote_balance") is not None and base_f > 0 and ref_f > 0:
+    if (
+        out.get("equity_usdt") is None
+        and out.get("quote_balance") is not None
+        and base_f > 0
+        and ref_f > 0
+    ):
         out["equity_usdt"] = round(float(out["quote_balance"]) + base_f * ref_f, 2)
     elif (
         out.get("quote_balance") is None
@@ -767,7 +830,9 @@ def _cycle_start_wallet_snapshot(
     """Tur açılış cüzdanı — cycle_open_trades / CYCLE_START meta / frozen; asla canlı quote/base."""
     cid = int(cycle_id)
     merged_em = _merged_cycle_start_meta_from_events(events, cid)
-    open_row_snap = _sanitize_cycle_start_wallet(_snapshot_from_cycle_open_row(state, cid))
+    open_row_snap = _sanitize_cycle_start_wallet(
+        _snapshot_from_cycle_open_row(state, cid)
+    )
     db_ev = _find_cycle_start_event(events, cid)
     db_meta = (db_ev.get("meta") or {}) if db_ev else {}
 
@@ -794,9 +859,15 @@ def _cycle_start_wallet_snapshot(
 
     # CYCLE_START event meta (en zengin DB kaydı) quote/equity için öncelikli
     for key in (
-        "quote_balance", "equity_usdt", "equity_usd",
-        "base_balance", "base_qty", "reference_price", "symbol",
-        "target_quote_usdt", "target_base_usdt",
+        "quote_balance",
+        "equity_usdt",
+        "equity_usd",
+        "base_balance",
+        "base_qty",
+        "reference_price",
+        "symbol",
+        "target_quote_usdt",
+        "target_base_usdt",
     ):
         val = merged_em.get(key)
         if val is None:
@@ -823,8 +894,14 @@ def _apply_cycle_start_wallet_snapshot(
     if not snap:
         return
     for key in (
-        "base_balance", "base_qty", "quote_balance", "equity_usdt",
-        "reference_price", "symbol", "target_quote_usdt", "target_base_usdt",
+        "base_balance",
+        "base_qty",
+        "quote_balance",
+        "equity_usdt",
+        "reference_price",
+        "symbol",
+        "target_quote_usdt",
+        "target_base_usdt",
     ):
         val = snap.get(key)
         if val is None:
@@ -847,7 +924,9 @@ def _build_synthetic_cycle_start(
     cur_cid = int(state.get("cycle_id") or 0)
     row = _cycle_open_trade_row(state, cycle_id)
     if row:
-        reference_price = reference_price or row.get("reference_price") or row.get("price")
+        reference_price = (
+            reference_price or row.get("reference_price") or row.get("price")
+        )
         base_qty = base_qty or row.get("qty")
         if not ts:
             ts = normalize_event_ts_iso_z(row.get("ts") or state.get("cycle_opened_at"))
@@ -884,7 +963,9 @@ def _build_synthetic_cycle_start(
     }
 
 
-def _completed_dual_pnl_entry(state: Dict[str, Any], cycle_id: int) -> Optional[Dict[str, Any]]:
+def _completed_dual_pnl_entry(
+    state: Dict[str, Any], cycle_id: int
+) -> Optional[Dict[str, Any]]:
     for row in state.get("completed_cycle_dual_pnls") or []:
         if not isinstance(row, dict):
             continue
@@ -893,9 +974,11 @@ def _completed_dual_pnl_entry(state: Dict[str, Any], cycle_id: int) -> Optional[
     return None
 
 
-def _find_cycle_start_event(events: List[Dict[str, Any]], cycle_id: int) -> Optional[Dict[str, Any]]:
+def _find_cycle_start_event(
+    events: List[Dict[str, Any]], cycle_id: int
+) -> Optional[Dict[str, Any]]:
     found: Optional[Dict[str, Any]] = None
-    best_score = -10**9
+    best_score = -(10**9)
     for ev in events:
         if (ev.get("type") or "") != "CYCLE_START":
             continue
@@ -903,13 +986,19 @@ def _find_cycle_start_event(events: List[Dict[str, Any]], cycle_id: int) -> Opti
             continue
         score = _cycle_start_richness_score(ev)
         eid = int(ev.get("id") or 0)
-        if found is None or score > best_score or (score == best_score and eid > int(found.get("id") or 0)):
+        if (
+            found is None
+            or score > best_score
+            or (score == best_score and eid > int(found.get("id") or 0))
+        ):
             found = ev
             best_score = score
     return found
 
 
-def _meta_from_cycle_pnl_entry(entry: Dict[str, Any], symbol: Optional[str]) -> Dict[str, Any]:
+def _meta_from_cycle_pnl_entry(
+    entry: Dict[str, Any], symbol: Optional[str]
+) -> Dict[str, Any]:
     meta: Dict[str, Any] = {
         "cycle_id": int(entry.get("cycle_id") or 0),
         "symbol": symbol,
@@ -937,11 +1026,15 @@ def _meta_from_cycle_pnl_entry(entry: Dict[str, Any], symbol: Optional[str]) -> 
     return meta
 
 
-def _meta_from_dual_pnl_entry(dual: Dict[str, Any], symbol: Optional[str]) -> Dict[str, Any]:
+def _meta_from_dual_pnl_entry(
+    dual: Dict[str, Any], symbol: Optional[str]
+) -> Dict[str, Any]:
     cycle_type = (dual.get("cycle_type") or "CASH").strip().upper()
     completed_reason = (dual.get("completed_reason") or "").strip()
     if not completed_reason:
-        completed_reason = "trail_profit_sell" if cycle_type == "CASH" else "trail_reentry_buy"
+        completed_reason = (
+            "trail_profit_sell" if cycle_type == "CASH" else "trail_reentry_buy"
+        )
     pnl_primary_mode = "INVENTORY" if cycle_type == "INVENTORY" else "CASH"
     meta: Dict[str, Any] = {
         "cycle_id": int(dual.get("cycle_id") or 0),
@@ -1097,7 +1190,9 @@ def _merge_synthetic_cycle_end_events(
 
         dual = _completed_dual_pnl_entry(state, cid)
         if dual and dual.get("completed_at"):
-            ts = ts or _ts_plus_ms(normalize_event_ts_iso_z(dual.get("completed_at")), 100)
+            ts = ts or _ts_plus_ms(
+                normalize_event_ts_iso_z(dual.get("completed_at")), 100
+            )
 
         next_start = _find_cycle_start_event(events, cid + 1)
         if next_start and next_start.get("ts"):
@@ -1207,7 +1302,10 @@ def _merge_synthetic_cycle_start_events(
             if earliest:
                 ts = _ts_plus_ms(earliest.get("ts"), -200)
                 try:
-                    ref_price = float((earliest.get("meta") or {}).get("fill_price") or 0) or ref_price
+                    ref_price = (
+                        float((earliest.get("meta") or {}).get("fill_price") or 0)
+                        or ref_price
+                    )
                 except (TypeError, ValueError):
                     pass
 
@@ -1247,7 +1345,11 @@ def _merge_synthetic_cycle_start_events(
 
 
 def _cycle_start_is_complete(meta: Dict[str, Any]) -> bool:
-    return meta.get("quote_balance") is not None or meta.get("equity_usdt") is not None or meta.get("equity_usd") is not None
+    return (
+        meta.get("quote_balance") is not None
+        or meta.get("equity_usdt") is not None
+        or meta.get("equity_usd") is not None
+    )
 
 
 def _merged_cycle_start_meta_from_events(
@@ -1275,8 +1377,15 @@ def _merged_cycle_start_meta_from_events(
     for ev in candidates:
         meta = ev.get("meta") or {}
         for key in (
-            "base_balance", "base_qty", "quote_balance", "equity_usdt", "equity_usd",
-            "reference_price", "symbol", "target_quote_usdt", "target_base_usdt",
+            "base_balance",
+            "base_qty",
+            "quote_balance",
+            "equity_usdt",
+            "equity_usd",
+            "reference_price",
+            "symbol",
+            "target_quote_usdt",
+            "target_base_usdt",
         ):
             if merged.get(key) is None and meta.get(key) is not None:
                 merged[key] = meta[key]
@@ -1330,7 +1439,10 @@ def _enrich_cycle_start_events_meta(
         if cid < 1:
             continue
         snap = _cycle_start_wallet_snapshot(state, cid, events)
-        is_first = bool(meta.get("first_tur") or (meta.get("reason") or "").strip() == "initial_allocation")
+        is_first = bool(
+            meta.get("first_tur")
+            or (meta.get("reason") or "").strip() == "initial_allocation"
+        )
         stale = _cycle_start_meta_stale_for_past_tur(state, cid, meta)
         overwrite = is_first or stale or bool(meta.get("synthetic"))
         if snap.get("quote_balance") is not None:
@@ -1386,7 +1498,9 @@ def _dedupe_cycle_start_events(events: List[Dict[str, Any]]) -> List[Dict[str, A
         if cid < 1:
             continue
         prev = best.get(cid)
-        if prev is None or _cycle_start_richness_score(ev) > _cycle_start_richness_score(prev):
+        if prev is None or _cycle_start_richness_score(
+            ev
+        ) > _cycle_start_richness_score(prev):
             best[cid] = ev
     if not best:
         return list(events or [])
@@ -1424,9 +1538,15 @@ def _cycle_end_richness_score(ev: Dict[str, Any]) -> int:
     meta = ev.get("meta") or {}
     if not meta.get("synthetic"):
         score += 300
-    if meta.get("pnl_usdt_net") is not None or meta.get("inventory_coin_adv_qty") is not None:
+    if (
+        meta.get("pnl_usdt_net") is not None
+        or meta.get("inventory_coin_adv_qty") is not None
+    ):
         score += 120
-    if meta.get("realized_pnl_cycle_net") is not None or meta.get("fees_usdt") is not None:
+    if (
+        meta.get("realized_pnl_cycle_net") is not None
+        or meta.get("fees_usdt") is not None
+    ):
         score += 60
     return score
 
@@ -1444,7 +1564,9 @@ def _dedupe_cycle_end_events(events: List[Dict[str, Any]]) -> List[Dict[str, Any
         if cid < 1:
             continue
         prev = best.get(cid)
-        if prev is None or _cycle_end_richness_score(ev) > _cycle_end_richness_score(prev):
+        if prev is None or _cycle_end_richness_score(ev) > _cycle_end_richness_score(
+            prev
+        ):
             best[cid] = ev
     if not best:
         return list(events or [])
@@ -1482,7 +1604,9 @@ def _has_tur1_cycle_start(events: List[Dict[str, Any]]) -> bool:
     return False
 
 
-def _find_initial_allocation_fill(events: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+def _find_initial_allocation_fill(
+    events: List[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
     found: Optional[Dict[str, Any]] = None
     for ev in events:
         if (ev.get("type") or "") != "ORDER_FILLED":
@@ -1512,16 +1636,26 @@ def _merge_synthetic_tur_after_initial_fill(
         return events
     cid = 1
     st = state or {}
-    fill_price = float(fm.get("fill_price") or st.get("reference_price") or st.get("initial_alloc_price") or 0)
-    fill_qty = float(fm.get("fill_qty") or st.get("initial_alloc_base_qty") or st.get("base_balance") or 0)
+    fill_price = float(
+        fm.get("fill_price")
+        or st.get("reference_price")
+        or st.get("initial_alloc_price")
+        or 0
+    )
+    fill_qty = float(
+        fm.get("fill_qty")
+        or st.get("initial_alloc_base_qty")
+        or st.get("base_balance")
+        or 0
+    )
     fill_ts = fill_ev.get("ts")
     tur_ts = fill_ts
     try:
-        from datetime import timedelta
-
         base_ms = _parse_event_ts_ms(fill_ts)
         if base_ms > 0:
-            tur_ts = datetime.fromtimestamp((base_ms + 1000) / 1000.0, tz=timezone.utc).isoformat()
+            tur_ts = datetime.fromtimestamp(
+                (base_ms + 1000) / 1000.0, tz=timezone.utc
+            ).isoformat()
     except Exception:
         pass
     snap = _tur1_wallet_snapshot(st, events) or {}
@@ -1535,9 +1669,12 @@ def _merge_synthetic_tur_after_initial_fill(
             "reason": "initial_allocation",
             "first_tur": True,
             "synthetic": True,
-            "reference_price": snap.get("reference_price") or (round(fill_price, 10) if fill_price > 0 else None),
-            "base_qty": snap.get("base_qty") or (round(fill_qty, 10) if fill_qty > 0 else None),
-            "base_balance": snap.get("base_balance") or (round(fill_qty, 10) if fill_qty > 0 else None),
+            "reference_price": snap.get("reference_price")
+            or (round(fill_price, 10) if fill_price > 0 else None),
+            "base_qty": snap.get("base_qty")
+            or (round(fill_qty, 10) if fill_qty > 0 else None),
+            "base_balance": snap.get("base_balance")
+            or (round(fill_qty, 10) if fill_qty > 0 else None),
             "quote_balance": snap.get("quote_balance"),
             "equity_usdt": snap.get("equity_usdt"),
             "symbol": snap.get("symbol") or fm.get("symbol") or st.get("symbol"),
@@ -1682,7 +1819,9 @@ def _enrich_command_start_events(
             meta["initial_allocation_done"] = bool(state.get("initial_allocation_done"))
         if pre_alloc or not meta.get("initial_allocation_done"):
             try:
-                from app.botengine.start_log_brief import merge_cold_start_brief_into_meta
+                from app.botengine.start_log_brief import (
+                    merge_cold_start_brief_into_meta,
+                )
 
                 merge_cold_start_brief_into_meta(meta, raw_cfg)
             except Exception:
@@ -1705,7 +1844,9 @@ async def bots_list(
     """List bots for account. require_auth + get_account_or_403(account_id)."""
     rid = _request_id(request)
     get_account_or_403(current, account_id, db)
-    rows = db.query(Bot).filter(Bot.account_id == account_id).order_by(Bot.id.desc()).all()
+    rows = (
+        db.query(Bot).filter(Bot.account_id == account_id).order_by(Bot.id.desc()).all()
+    )
     from app.botengine.health_watch import (
         _account_wallet_stale_alert,
         _expected_tick_interval_sec,
@@ -1719,10 +1860,13 @@ async def bots_list(
     # Account-level connectivity bir kez çözülür; bot başına tekrar sorgulanmaz.
     try:
         from app.services.binance_connectivity import active_failure
+
         account_failure = active_failure(account_id)
     except Exception:
         account_failure = None
-    account_wallet_alert = None if account_failure else _account_wallet_stale_alert(db, account_id)
+    account_wallet_alert = (
+        None if account_failure else _account_wallet_stale_alert(db, account_id)
+    )
     out = []
     for r in rows:
         raw = json.loads(r.config_json or "{}")
@@ -1741,31 +1885,42 @@ async def bots_list(
             crit_thresh = max(60.0, _expected_tick_interval_sec(r) * 5.0)
             if tick_age < crit_thresh:
                 health_alerts = [
-                    a for a in health_alerts
+                    a
+                    for a in health_alerts
                     if str((a or {}).get("code") or "").upper() != "LOOP_TASK_MISSING"
                 ]
-        has_crit = any((a.get("level") or "").lower() == "critical" for a in health_alerts)
+        has_crit = any(
+            (a.get("level") or "").lower() == "critical" for a in health_alerts
+        )
         has_warn = any((a.get("level") or "").lower() == "warn" for a in health_alerts)
-        health_level = "both" if (has_crit and has_warn) else ("critical" if has_crit else ("warn" if has_warn else None))
+        health_level = (
+            "both"
+            if (has_crit and has_warn)
+            else ("critical" if has_crit else ("warn" if has_warn else None))
+        )
         ia_done = bool(meta.get("initial_allocation_done"))
         st = (r.status or "stopped").lower()
         display_status = st
         if st == "running" and not ia_done:
             display_status = "starting"
-        out.append({
-            "bot_id": r.id,
-            "bot_code": getattr(r, "bot_code", None) or str(r.id),
-            "account_id": r.account_id,
-            "symbol": r.symbol,
-            "status": st,
-            "display_status": display_status,
-            "initial_allocation_done": ia_done,
-            "health_alert_level": health_level,
-            "health_alerts": health_alerts,
-            "config": raw,
-            "last_tick_at": meta.get("last_tick_at"),
-            "created_at": r.started_at.isoformat() + "Z" if getattr(r, "started_at", None) else None,
-        })
+        out.append(
+            {
+                "bot_id": r.id,
+                "bot_code": getattr(r, "bot_code", None) or str(r.id),
+                "account_id": r.account_id,
+                "symbol": r.symbol,
+                "status": st,
+                "display_status": display_status,
+                "initial_allocation_done": ia_done,
+                "health_alert_level": health_level,
+                "health_alerts": health_alerts,
+                "config": raw,
+                "last_tick_at": meta.get("last_tick_at"),
+                "created_at": r.started_at.isoformat() + "Z"
+                if getattr(r, "started_at", None)
+                else None,
+            }
+        )
     return {"bots": out, "request_id": rid}
 
 
@@ -1774,7 +1929,9 @@ class BotCreateBody(BaseModel):
     config_json: Optional[Any] = None
 
 
-def create_bot_engine_core(account_id: int, config_dict: Dict[str, Any], db: Session) -> Dict[str, Any]:
+def create_bot_engine_core(
+    account_id: int, config_dict: Dict[str, Any], db: Session
+) -> Dict[str, Any]:
     """Shared create logic. config_dict = UI payload. Returns bot_id, bot_code, account_id, symbol, status."""
     raw = normalize_max_buy_levels_payload(config_dict or {})
     cfg = config_from_ui_payload(raw)
@@ -1825,11 +1982,18 @@ async def bots_create(
         try:
             raw = json.loads(raw)
         except Exception:
-            raise HTTPException(status_code=400, detail=_detail_err("INVALID_CONFIG_JSON", "config_json geçerli JSON olmalı", rid))
+            raise HTTPException(
+                status_code=400,
+                detail=_detail_err(
+                    "INVALID_CONFIG_JSON", "config_json geçerli JSON olmalı", rid
+                ),
+            )
     try:
         result = create_bot_engine_core(body.account_id, raw, db)
     except MaxBuyLevelsError as e:
-        raise HTTPException(status_code=400, detail=_detail_err("MAX_BUY_LEVELS_INVALID", str(e), rid))
+        raise HTTPException(
+            status_code=400, detail=_detail_err("MAX_BUY_LEVELS_INVALID", str(e), rid)
+        )
     return {**result, "request_id": rid}
 
 
@@ -1869,7 +2033,9 @@ async def bots_detail(
     resolved_account_id = _resolve_account_id(account_id, account_code, db)
     bot = _resolve_bot(bot_id, resolved_account_id, current, db)
     if not bot:
-        raise HTTPException(status_code=404, detail=_detail_err("NOT_FOUND", "Bot not found", rid))
+        raise HTTPException(
+            status_code=404, detail=_detail_err("NOT_FOUND", "Bot not found", rid)
+        )
     state = load_state(db, bot.id)
     _heal_cycle_opened_at_state(db, bot, state)
     raw = json.loads(bot.config_json or "{}")
@@ -1888,6 +2054,7 @@ async def bots_detail(
 
     # 24h ticker: paralel başlat, MULTI/TRDCA işlemleriyle birlikte çalışsın
     price_24h_change_pct = None
+
     async def _fetch_24h_ticker():
         out = {}
         if not sym or sym == "MULTI":
@@ -1895,6 +2062,7 @@ async def bots_detail(
         try:
             from app.services.data_hub import data_hub
             from app.services.market_data import get_ticker_24h
+
             data_hub.pin_symbols([sym])
             t = get_ticker_24h(sym)
             if not t.get("available"):
@@ -1909,6 +2077,7 @@ async def bots_detail(
         except Exception as e:
             logger.debug("bots_detail 24h ticker failed symbol=%s: %s", sym, e)
         return out
+
     t24 = asyncio.create_task(_fetch_24h_ticker()) if sym else None
 
     price = float((state or {}).get("reference_price") or 0)
@@ -1920,7 +2089,11 @@ async def bots_detail(
     daily_usd = float(pnl_data.get("daily") or 0)
     daily_pnl_pct = pnl_data.get("daily_pnl_pct")
     if daily_pnl_pct is None:
-        daily_pnl_pct = (daily_usd / current_usd * 100.0) if current_usd and current_usd > 0 else 0.0
+        daily_pnl_pct = (
+            (daily_usd / current_usd * 100.0)
+            if current_usd and current_usd > 0
+            else 0.0
+        )
     else:
         daily_pnl_pct = float(daily_pnl_pct)
 
@@ -1934,7 +2107,9 @@ async def bots_detail(
     if not is_trdca:
         view_price = live_price if live_price > 0 else price
         try:
-            grid_points, profit_points, meta = compute_grid_profit_view(state or {}, config_for_grid, view_price)
+            grid_points, profit_points, meta = compute_grid_profit_view(
+                state or {}, config_for_grid, view_price
+            )
             reference_display = meta.get("ref_display")
             grid_meta = meta
         except Exception as e:
@@ -1946,14 +2121,20 @@ async def bots_detail(
     rebalancing_details: List[Dict[str, Any]] = []
     trdca_prices_cache: Optional[Dict[str, float]] = None  # parite için fiyat cache
     strategy_id = (raw.get("strategy_id") or "").strip().lower()
-    initial_capital = float(raw.get("initial_capital_usdt") or raw.get("budget_usd") or raw.get("bot_budget_quote") or 0)
+    initial_capital = float(
+        raw.get("initial_capital_usdt")
+        or raw.get("budget_usd")
+        or raw.get("bot_budget_quote")
+        or 0
+    )
     is_test = False
     try:
         from app.services.test_account import is_test_account
+
         is_test = is_test_account(bot.account_id, db)
     except Exception:
         pass
-    if (sym == "MULTI" or strategy_id in ("trdca_pro", "multi_asset_rebalance")):
+    if sym == "MULTI" or strategy_id in ("trdca_pro", "multi_asset_rebalance"):
         adapter = None
         quote_asset = (raw.get("quote_asset") or "USDT").strip().upper()
         assets = set()
@@ -1967,7 +2148,13 @@ async def bots_detail(
                 assets.add(str(k).strip().upper())
         if raw.get("assets"):
             for a in raw["assets"]:
-                s = (a.get("symbol") or "").upper().replace("USDT", "").replace("FDUSD", "").strip()
+                s = (
+                    (a.get("symbol") or "")
+                    .upper()
+                    .replace("USDT", "")
+                    .replace("FDUSD", "")
+                    .strip()
+                )
                 if s and s != quote_asset:
                     assets.add(s)
         assets.add(quote_asset)
@@ -1990,7 +2177,13 @@ async def bots_detail(
             # Eski state: vb'de 10k (test default) ve base 0 ise config'teki initial_capital kullan
             try:
                 from app.services.test_account import TEST_PAPER_BALANCE_USDT
-                if is_test and initial_capital > 0 and base_value_usd == 0 and quote_balance_usd == TEST_PAPER_BALANCE_USDT:
+
+                if (
+                    is_test
+                    and initial_capital > 0
+                    and base_value_usd == 0
+                    and quote_balance_usd == TEST_PAPER_BALANCE_USDT
+                ):
                     quote_balance_usd = initial_capital
                     live_total = initial_capital
                     current_usd = initial_capital
@@ -2002,6 +2195,7 @@ async def bots_detail(
             try:
                 from app.services.binance_assets import get_account_keys
                 from app.botengine.adapters.binance_adapter import BinanceAdapter
+
                 keys = None
                 try:
                     keys = await get_account_keys(bot.account_id, db)
@@ -2038,30 +2232,57 @@ async def bots_detail(
                     if live_total > 0:
                         current_usd = live_total
                     # Live (non-test) TRDCA/MULTI: worker caps effective portfolio to initial_capital; UI must match
-                    if not is_test and initial_capital > 0 and live_total > initial_capital and effective_balances_map:
+                    if (
+                        not is_test
+                        and initial_capital > 0
+                        and live_total > initial_capital
+                        and effective_balances_map
+                    ):
                         scale = initial_capital / live_total
                         for k in effective_balances_map:
-                            effective_balances_map[k] = float(effective_balances_map.get(k) or 0) * scale
+                            effective_balances_map[k] = (
+                                float(effective_balances_map.get(k) or 0) * scale
+                            )
                         base_value_usd = base_value_usd * scale
                         quote_balance_usd = quote_balance_usd * scale
                         current_usd = initial_capital
             except Exception as e:
-                logger.debug("bots_detail multi balances failed bot_id=%s: %s", bot.id, e)
+                logger.debug(
+                    "bots_detail multi balances failed bot_id=%s: %s", bot.id, e
+                )
         # Test hesabı + bakiye alınamadı: paper fallback (initial_capital ile başlangıç)
-        if is_test and initial_capital > 0 and (base_value_usd is None or quote_balance_usd is None):
+        if (
+            is_test
+            and initial_capital > 0
+            and (base_value_usd is None or quote_balance_usd is None)
+        ):
             base_value_usd = base_value_usd if base_value_usd is not None else 0.0
-            quote_balance_usd = quote_balance_usd if quote_balance_usd is not None else initial_capital
+            quote_balance_usd = (
+                quote_balance_usd if quote_balance_usd is not None else initial_capital
+            )
             if current_usd <= 0:
                 current_usd = initial_capital
 
         # Rebalancing detayları: her coin için miktar, referans %, anlık %, rebalancinge kalan %
-        target_weights = (raw.get("trb") or {}).get("target_weights_all") or (raw.get("dca") or {}).get("coin_weights") or {}
+        target_weights = (
+            (raw.get("trb") or {}).get("target_weights_all")
+            or (raw.get("dca") or {}).get("coin_weights")
+            or {}
+        )
         if not target_weights and raw.get("assets"):
             for a in raw["assets"]:
-                asset_sym = (a.get("symbol") or "").upper().replace("USDT", "").replace("FDUSD", "").strip()
+                asset_sym = (
+                    (a.get("symbol") or "")
+                    .upper()
+                    .replace("USDT", "")
+                    .replace("FDUSD", "")
+                    .strip()
+                )
                 if asset_sym:
                     target_weights[asset_sym] = float(a.get("target_pct") or 0) / 100.0
-        if target_weights and (sym == "MULTI" or strategy_id in ("trdca_pro", "multi_asset_rebalance")):
+        if target_weights and (
+            sym == "MULTI" or strategy_id in ("trdca_pro", "multi_asset_rebalance")
+        ):
             balances_map = {}
             if effective_balances_map:
                 balances_map = dict(effective_balances_map)
@@ -2070,8 +2291,15 @@ async def bots_detail(
                 # Eski test default (10k) düzelt: rebalancing hesapları için initial_capital kullan
                 try:
                     from app.services.test_account import TEST_PAPER_BALANCE_USDT
-                    if is_test and initial_capital > 0 and float(vb.get(quote_asset) or 0) == TEST_PAPER_BALANCE_USDT:
-                        base_sum = sum(float(vb.get(a) or 0) for a in assets if a != quote_asset)
+
+                    if (
+                        is_test
+                        and initial_capital > 0
+                        and float(vb.get(quote_asset) or 0) == TEST_PAPER_BALANCE_USDT
+                    ):
+                        base_sum = sum(
+                            float(vb.get(a) or 0) for a in assets if a != quote_asset
+                        )
                         if base_sum == 0:
                             balances_map[quote_asset] = initial_capital
                 except Exception:
@@ -2084,11 +2312,17 @@ async def bots_detail(
                         balances_map[a] = float(b.get("free") or 0)
                     # Live + initial_capital cap: scale to match worker
                     if not is_test and initial_capital > 0 and balances_map:
-                        prices_tmp = await _fetch_prices_parallel(list(assets), quote_asset)
+                        prices_tmp = await _fetch_prices_parallel(
+                            list(assets), quote_asset
+                        )
                         actual_total = 0.0
                         for a in assets:
                             qty = float(balances_map.get(a) or 0)
-                            p = float(prices_tmp.get(a) or 0) if a != quote_asset else 1.0
+                            p = (
+                                float(prices_tmp.get(a) or 0)
+                                if a != quote_asset
+                                else 1.0
+                            )
                             if p <= 0 and adapter and a != quote_asset:
                                 p = float(adapter.get_price(f"{a}{quote_asset}") or 0)
                             actual_total += qty * p
@@ -2104,7 +2338,11 @@ async def bots_detail(
             if total_usd_val <= 0:
                 total_usd_val = (base_value_usd or 0) + (quote_balance_usd or 0)
             # Rebalancing panel: base coinler + quote (USDT) satiri (parametrelerle base/quote tutarli)
-            base_assets = sorted(a for a in target_weights.keys() if a and str(a).strip().upper() != quote_asset)
+            base_assets = sorted(
+                a
+                for a in target_weights.keys()
+                if a and str(a).strip().upper() != quote_asset
+            )
             if not base_assets:
                 base_assets = sorted(a for a in assets if a != quote_asset)
             prices_map = await _fetch_prices_parallel(base_assets, quote_asset)
@@ -2115,31 +2353,39 @@ async def bots_detail(
                 if price <= 0 and adapter:
                     price = float(adapter.get_price(f"{a}{quote_asset}") or 0)
                 value_usd = qty * price if price else 0
-                current_pct = (value_usd / total_usd_val * 100.0) if total_usd_val > 0 else 0.0
+                current_pct = (
+                    (value_usd / total_usd_val * 100.0) if total_usd_val > 0 else 0.0
+                )
                 gap_pct = target_pct - current_pct
-                rebalancing_details.append({
-                    "asset": a,
-                    "qty": round(qty, 8),
-                    "price": round(price, 6) if price else 0,
-                    "value_usd": round(value_usd, 2),
-                    "target_pct": round(target_pct, 2),
-                    "current_pct": round(current_pct, 2),
-                    "gap_pct": round(gap_pct, 2),
-                })
+                rebalancing_details.append(
+                    {
+                        "asset": a,
+                        "qty": round(qty, 8),
+                        "price": round(price, 6) if price else 0,
+                        "value_usd": round(value_usd, 2),
+                        "target_pct": round(target_pct, 2),
+                        "current_pct": round(current_pct, 2),
+                        "gap_pct": round(gap_pct, 2),
+                    }
+                )
             # Quote (USDT) satiri: Referans % = hedef agirliktan; Anlik % = portfoydeki quote orani (base/quote bolunmesi netlesir)
             quote_target_pct = float(target_weights.get(quote_asset) or 0) * 100.0
             quote_value = float(quote_balance_usd or 0)
-            quote_current_pct = (quote_value / total_usd_val * 100.0) if total_usd_val > 0 else 0.0
+            quote_current_pct = (
+                (quote_value / total_usd_val * 100.0) if total_usd_val > 0 else 0.0
+            )
             if quote_target_pct != 0 or quote_value > 0:
-                rebalancing_details.append({
-                    "asset": quote_asset,
-                    "qty": round(float(balances_map.get(quote_asset) or 0), 8),
-                    "price": 1.0,
-                    "value_usd": round(quote_value, 2),
-                    "target_pct": round(quote_target_pct, 2),
-                    "current_pct": round(quote_current_pct, 2),
-                    "gap_pct": round(quote_target_pct - quote_current_pct, 2),
-                })
+                rebalancing_details.append(
+                    {
+                        "asset": quote_asset,
+                        "qty": round(float(balances_map.get(quote_asset) or 0), 8),
+                        "price": 1.0,
+                        "value_usd": round(quote_value, 2),
+                        "target_pct": round(quote_target_pct, 2),
+                        "current_pct": round(quote_current_pct, 2),
+                        "gap_pct": round(quote_target_pct - quote_current_pct, 2),
+                    }
+                )
 
         # TRDCA: grid noktaları portföy değeri (basket) referans alınarak
         if is_trdca:
@@ -2147,7 +2393,9 @@ async def bots_detail(
             basket_price = 0.0
             if coin_weights:
                 try:
-                    prices_map = await _fetch_prices_parallel(list(coin_weights.keys()), quote_asset)
+                    prices_map = await _fetch_prices_parallel(
+                        list(coin_weights.keys()), quote_asset
+                    )
                     trdca_prices_cache = prices_map
                     for asset, w in coin_weights.items():
                         if asset == quote_asset:
@@ -2195,7 +2443,12 @@ async def bots_detail(
         quote_b = float(state.get("quote_balance") or 0)
         equity_from_state = base_b * live_price + quote_b
         current_usd = equity_from_state
-        init_cap_detail = float(raw.get("initial_capital_usdt") or raw.get("budget_usd") or raw.get("bot_budget_quote") or 0)
+        init_cap_detail = float(
+            raw.get("initial_capital_usdt")
+            or raw.get("budget_usd")
+            or raw.get("bot_budget_quote")
+            or 0
+        )
         if state.get("initial_allocation_done"):
             daily_usd, daily_pnl_pct = ensure_daily_ref_and_compute(
                 state,
@@ -2210,7 +2463,11 @@ async def bots_detail(
 
     _ia_done = bool(state and state.get("initial_allocation_done"))
     _st = (bot.status or "stopped").lower()
-    _display_status = "starting" if _st == "running" and not _ia_done and (current_usd or 0) <= 0.01 else _st
+    _display_status = (
+        "starting"
+        if _st == "running" and not _ia_done and (current_usd or 0) <= 0.01
+        else _st
+    )
     result = {
         "bot_id": bot.id,
         "bot_code": getattr(bot, "bot_code", None) or str(bot.id),
@@ -2227,8 +2484,12 @@ async def bots_detail(
         "grid_meta": grid_meta,
         "current_price": live_price if live_price > 0 else None,
         "current_usd": round(current_usd, 2) if current_usd else None,
-        "base_value_usd": round(base_value_usd, 2) if base_value_usd is not None else None,
-        "quote_balance_usd": round(quote_balance_usd, 2) if quote_balance_usd is not None else None,
+        "base_value_usd": round(base_value_usd, 2)
+        if base_value_usd is not None
+        else None,
+        "quote_balance_usd": round(quote_balance_usd, 2)
+        if quote_balance_usd is not None
+        else None,
         "daily_pnl_usd": round(daily_usd, 2) if daily_usd is not None else None,
         "daily_pnl_pct": round(daily_pnl_pct, 2) if daily_pnl_pct is not None else None,
         "price_24h_change_pct": price_24h_change_pct,
@@ -2241,7 +2502,9 @@ async def bots_detail(
     if strategy_id == "trdca_pro" and initial_capital > 0 and current_usd is not None:
         try:
             row = db.execute(
-                text("SELECT chart_payload FROM bot_perf_chart_state WHERE bot_id = :bid"),
+                text(
+                    "SELECT chart_payload FROM bot_perf_chart_state WHERE bot_id = :bid"
+                ),
                 {"bid": bot.id},
             ).fetchone()
             payload = json.loads(row[0]) if row and row[0] else {}
@@ -2249,25 +2512,42 @@ async def bots_detail(
             initial_prices = baseline.get("initial_prices")
             coin_weights = baseline.get("coin_weights")
             if initial_prices and coin_weights:
-                cw_keys = [k for k in coin_weights if k and str(k).upper() != quote_asset]
+                cw_keys = [
+                    k for k in coin_weights if k and str(k).upper() != quote_asset
+                ]
                 if trdca_prices_cache and all(k in trdca_prices_cache for k in cw_keys):
                     current_prices = trdca_prices_cache
                 else:
                     current_prices = await _fetch_prices_parallel(cw_keys, quote_asset)
-                parite_pct_val = compute_trdca_parite_pct(initial_prices, coin_weights, current_prices, quote_asset)
-                bot_pct_val = (float(current_usd) - initial_capital) / initial_capital * 100.0
-                result["parite_pct"] = round(parite_pct_val, 2) if parite_pct_val is not None else None
+                parite_pct_val = compute_trdca_parite_pct(
+                    initial_prices, coin_weights, current_prices, quote_asset
+                )
+                bot_pct_val = (
+                    (float(current_usd) - initial_capital) / initial_capital * 100.0
+                )
+                result["parite_pct"] = (
+                    round(parite_pct_val, 2) if parite_pct_val is not None else None
+                )
                 result["bot_pct"] = round(bot_pct_val, 2)
         except Exception:
             pass
 
     # Dual PNL (Cash vs Inventory) for Trailing DCA — perfPanel + tradesPanel
-    if state and sym and sym != "MULTI" and strategy_id not in ("trdca_pro", "multi_asset_rebalance"):
+    if (
+        state
+        and sym
+        and sym != "MULTI"
+        and strategy_id not in ("trdca_pro", "multi_asset_rebalance")
+    ):
         try:
             from app.botengine.cycle_ledger import resolve_cycle_opened_at
 
             ledger = state.get("cycle_ledger_current")
-            current_price = float(live_price or 0) if live_price else (float(pnl_data.get("current_price") or 0) if pnl_data else 0)
+            current_price = (
+                float(live_price or 0)
+                if live_price
+                else (float(pnl_data.get("current_price") or 0) if pnl_data else 0)
+            )
             cash_pnl_cur = 0.0
             cash_fees_cur = 0.0
             inv_qty_cur = 0.0
@@ -2275,21 +2555,43 @@ async def bots_detail(
             fills_count = 0
             started_at = None
             if isinstance(ledger, dict) and ledger.get("symbol") == sym:
-                cash_pnl_cur = float(ledger.get("cash_fifo_pnl_usdt") if ledger.get("cash_fifo_pnl_usdt") is not None else ledger.get("cash_pnl_usdt") or 0)
-                cash_fees_cur = float(ledger.get("cash_fifo_fees_usdt") if ledger.get("cash_fifo_fees_usdt") is not None else ledger.get("cash_fees_usdt") or 0)
+                cash_pnl_cur = float(
+                    ledger.get("cash_fifo_pnl_usdt")
+                    if ledger.get("cash_fifo_pnl_usdt") is not None
+                    else ledger.get("cash_pnl_usdt") or 0
+                )
+                cash_fees_cur = float(
+                    ledger.get("cash_fifo_fees_usdt")
+                    if ledger.get("cash_fifo_fees_usdt") is not None
+                    else ledger.get("cash_fees_usdt") or 0
+                )
                 inv_qty_cur = float(ledger.get("inventory_coin_adv_qty") or 0)
                 inv_fees_cur = float(ledger.get("inventory_fees_usdt") or 0)
                 fills_count = len(ledger.get("fills") or [])
                 started_at = resolve_cycle_opened_at(state, ledger)
 
             completed = state.get("completed_cycle_dual_pnls") or []
-            completed_sorted = sorted(completed, key=lambda x: int(x.get("cycle_id") or 0), reverse=True)
+            completed_sorted = sorted(
+                completed, key=lambda x: int(x.get("cycle_id") or 0), reverse=True
+            )
 
-            cash_total = cash_pnl_cur + sum(float(c.get("cash_pnl_usdt") or 0) for c in completed)
-            cash_fees_total = cash_fees_cur + sum(float(c.get("cash_fees_usdt") or 0) for c in completed)
-            inv_qty_total = inv_qty_cur + sum(float(c.get("inventory_coin_adv_qty") or 0) for c in completed)
-            inv_fees_total = inv_fees_cur + sum(float(c.get("inventory_fees_usdt") or 0) for c in completed)
-            inv_usdt_equiv = (inv_qty_total * current_price - inv_fees_total) if current_price > 0 else (0.0 - inv_fees_total)
+            cash_total = cash_pnl_cur + sum(
+                float(c.get("cash_pnl_usdt") or 0) for c in completed
+            )
+            cash_fees_total = cash_fees_cur + sum(
+                float(c.get("cash_fees_usdt") or 0) for c in completed
+            )
+            inv_qty_total = inv_qty_cur + sum(
+                float(c.get("inventory_coin_adv_qty") or 0) for c in completed
+            )
+            inv_fees_total = inv_fees_cur + sum(
+                float(c.get("inventory_fees_usdt") or 0) for c in completed
+            )
+            inv_usdt_equiv = (
+                (inv_qty_total * current_price - inv_fees_total)
+                if current_price > 0
+                else (0.0 - inv_fees_total)
+            )
 
             result["dual_pnl"] = {
                 "current_price": round(current_price, 4) if current_price else None,
@@ -2314,7 +2616,12 @@ async def bots_detail(
         except Exception as e:
             logger.debug("bots_detail dual_pnl failed bot_id=%s: %s", bot.id, e)
 
-    if state and sym and sym != "MULTI" and strategy_id not in ("trdca_pro", "multi_asset_rebalance"):
+    if (
+        state
+        and sym
+        and sym != "MULTI"
+        and strategy_id not in ("trdca_pro", "multi_asset_rebalance")
+    ):
         try:
             snap = _build_live_snapshot_from_state(bot, state, db)
             if snap.get("stale"):
@@ -2330,12 +2637,18 @@ async def bots_detail(
     return result
 
 
-def _resolve_account_id(account_id: Optional[int], account_code: Optional[str], db: Session) -> Optional[int]:
+def _resolve_account_id(
+    account_id: Optional[int], account_code: Optional[str], db: Session
+) -> Optional[int]:
     """account_id yoksa account_code ile çöz. None dönerse account_id kullanılmaz (bot id ile bulunur)."""
     if account_id is not None:
         return account_id
     if account_code and str(account_code).strip():
-        acc = db.query(Account).filter(Account.account_code == str(account_code).strip()).first()
+        acc = (
+            db.query(Account)
+            .filter(Account.account_code == str(account_code).strip())
+            .first()
+        )
         if acc:
             return acc.id
     return None
@@ -2380,7 +2693,9 @@ def _parse_ts_utc(ts: Any) -> Optional[datetime]:
     return dt.astimezone(timezone.utc)
 
 
-def _heal_cycle_opened_at_state(db: Session, bot: Any, state: Optional[Dict[str, Any]]) -> None:
+def _heal_cycle_opened_at_state(
+    db: Session, bot: Any, state: Optional[Dict[str, Any]]
+) -> None:
     """Tur süresi: cycle_opened_at eksikse heal et; ledger started_at ile hizala; gerekirse kaydet."""
     if not state or not isinstance(state, dict):
         return
@@ -2418,7 +2733,11 @@ def _backfill_trades_from_ledger_fills(
         if oid is None or not str(oid).strip():
             continue
         try:
-            fee = float(f.get("fee_usdt") if f.get("fee_usdt") is not None else f.get("fee") or 0)
+            fee = float(
+                f.get("fee_usdt")
+                if f.get("fee_usdt") is not None
+                else f.get("fee") or 0
+            )
         except (TypeError, ValueError):
             fee = 0.0
         try:
@@ -2440,7 +2759,10 @@ def _backfill_trades_from_ledger_fills(
         except Exception as e:
             logger.debug(
                 "backfill trade from ledger bot_id=%s cycle_id=%s order_id=%s: %s",
-                bot.id, cycle_id, oid, e,
+                bot.id,
+                cycle_id,
+                oid,
+                e,
             )
 
 
@@ -2456,7 +2778,9 @@ def _synthetic_trades_from_state(
     out: List[Dict[str, Any]] = []
     seq = 0
 
-    def _append_hist(rows: List[Dict[str, Any]], side: str, default_reason: str) -> None:
+    def _append_hist(
+        rows: List[Dict[str, Any]], side: str, default_reason: str
+    ) -> None:
         nonlocal seq
         for h in rows or []:
             if not isinstance(h, dict):
@@ -2467,23 +2791,27 @@ def _synthetic_trades_from_state(
                 qty = 0.0
             if qty <= 0:
                 continue
-            reason = str(h.get("reason") or default_reason or "").strip() or default_reason
+            reason = (
+                str(h.get("reason") or default_reason or "").strip() or default_reason
+            )
             gi = h.get("grid_index")
             slot = int(gi) if gi is not None and str(gi).strip() != "" else None
-            out.append({
-                "id": f"state_{cycle_id}_{seq}",
-                "ts": h.get("ts") or h.get("time"),
-                "side": side,
-                "qty": qty,
-                "price": h.get("price"),
-                "fee": h.get("fee") if h.get("fee") is not None else 0,
-                "symbol": sym,
-                "cycle_id": int(cycle_id),
-                "reason": reason,
-                "slot_id": slot,
-                "client_order_id": f"state_{side.lower()}_{cycle_id}_{seq}",
-                "synthetic_from_state": True,
-            })
+            out.append(
+                {
+                    "id": f"state_{cycle_id}_{seq}",
+                    "ts": h.get("ts") or h.get("time"),
+                    "side": side,
+                    "qty": qty,
+                    "price": h.get("price"),
+                    "fee": h.get("fee") if h.get("fee") is not None else 0,
+                    "symbol": sym,
+                    "cycle_id": int(cycle_id),
+                    "reason": reason,
+                    "slot_id": slot,
+                    "client_order_id": f"state_{side.lower()}_{cycle_id}_{seq}",
+                    "synthetic_from_state": True,
+                }
+            )
             seq += 1
 
     _append_hist(state.get("sell_history") or [], "SELL", "trail_sell_grid")
@@ -2514,29 +2842,41 @@ def _synthetic_trades_from_state(
                     price = None
             if price is None or price <= 0:
                 continue
-            out.append({
-                "id": f"gridfired_{cycle_id}_{seq}",
-                "ts": None,
-                "side": side,
-                "qty": None,
-                "price": price,
-                "fee": 0,
-                "symbol": sym,
-                "cycle_id": int(cycle_id),
-                "reason": reason,
-                "slot_id": i,
-                "client_order_id": f"gridfired_{side.lower()}_{cycle_id}_{i}",
-                "synthetic_from_state": True,
-                "grid_detail": {
-                    "grid_index": i,
-                    "grid_label": f"Grid #{i + 1}",
-                    "display_label": f"{'Grid satış' if side == 'SELL' else 'Grid alım'} #{i + 1}",
-                },
-            })
+            out.append(
+                {
+                    "id": f"gridfired_{cycle_id}_{seq}",
+                    "ts": None,
+                    "side": side,
+                    "qty": None,
+                    "price": price,
+                    "fee": 0,
+                    "symbol": sym,
+                    "cycle_id": int(cycle_id),
+                    "reason": reason,
+                    "slot_id": i,
+                    "client_order_id": f"gridfired_{side.lower()}_{cycle_id}_{i}",
+                    "synthetic_from_state": True,
+                    "grid_detail": {
+                        "grid_index": i,
+                        "grid_label": f"Grid #{i + 1}",
+                        "display_label": f"{'Grid satış' if side == 'SELL' else 'Grid alım'} #{i + 1}",
+                    },
+                }
+            )
             seq += 1
 
-    _append_fired(state.get("sell_grid_fired"), state.get("sell_grid_fill_price"), "SELL", "trail_sell_grid")
-    _append_fired(state.get("buy_grid_fired"), state.get("buy_grid_fill_price"), "BUY", "trail_buy_grid")
+    _append_fired(
+        state.get("sell_grid_fired"),
+        state.get("sell_grid_fill_price"),
+        "SELL",
+        "trail_sell_grid",
+    )
+    _append_fired(
+        state.get("buy_grid_fired"),
+        state.get("buy_grid_fill_price"),
+        "BUY",
+        "trail_buy_grid",
+    )
     return _merge_cycle_trades(out) if out else out
 
 
@@ -2551,23 +2891,29 @@ def _ledger_fills_to_trade_dicts(
     for i, f in enumerate(fills or []):
         if not isinstance(f, dict):
             continue
-        out.append({
-            "id": f"ledger_{cycle_id}_{i}",
-            "ts": f.get("ts"),
-            "side": f.get("side"),
-            "qty": f.get("qty"),
-            "price": f.get("price"),
-            "fee": f.get("fee_usdt") if f.get("fee_usdt") is not None else f.get("fee"),
-            "fee_raw": f.get("fee_raw"),
-            "fee_usdt": f.get("fee_usdt") if f.get("fee_usdt") is not None else f.get("fee"),
-            "fee_asset": f.get("fee_asset"),
-            "order_id": f.get("order_id"),
-            "client_order_id": f.get("client_order_id"),
-            "symbol": sym,
-            "cycle_id": cycle_id,
-            "reason": f.get("reason"),
-            "slot_id": f.get("slot_id"),
-        })
+        out.append(
+            {
+                "id": f"ledger_{cycle_id}_{i}",
+                "ts": f.get("ts"),
+                "side": f.get("side"),
+                "qty": f.get("qty"),
+                "price": f.get("price"),
+                "fee": f.get("fee_usdt")
+                if f.get("fee_usdt") is not None
+                else f.get("fee"),
+                "fee_raw": f.get("fee_raw"),
+                "fee_usdt": f.get("fee_usdt")
+                if f.get("fee_usdt") is not None
+                else f.get("fee"),
+                "fee_asset": f.get("fee_asset"),
+                "order_id": f.get("order_id"),
+                "client_order_id": f.get("client_order_id"),
+                "symbol": sym,
+                "cycle_id": cycle_id,
+                "reason": f.get("reason"),
+                "slot_id": f.get("slot_id"),
+            }
+        )
     return out
 
 
@@ -2596,7 +2942,7 @@ def _trade_fee_usdt(
         price = 0.0
     from app.botengine.fee_utils import commission_to_usdt, symbol_base_asset
 
-    base = symbol_base_asset(symbol)
+    symbol_base_asset(symbol)
     qty = float(t.get("qty") or 0) if t.get("qty") is not None else 0.0
     notional = qty * price if qty > 0 and price > 0 else 0.0
     if fee > 0:
@@ -2881,7 +3227,9 @@ def _hydrate_trades_from_cycle_ledger(
             t["reference_price"] = f.get("reference_price")
 
 
-def _cycle_pnl_entry(state: Optional[Dict[str, Any]], cycle_id: int) -> Optional[Dict[str, Any]]:
+def _cycle_pnl_entry(
+    state: Optional[Dict[str, Any]], cycle_id: int
+) -> Optional[Dict[str, Any]]:
     if not state:
         return None
     for row in state.get("cycle_pnls") or []:
@@ -2914,8 +3262,13 @@ def _tag_cycle_close_trades(
     close_reason = (entry.get("close_reason") or "").strip()
     if close_reason not in ("trail_profit_sell", "trail_reentry_buy"):
         return
-    close_side = (entry.get("close_side") or ("SELL" if close_reason == "trail_profit_sell" else "BUY")).upper()
-    close_fill = entry.get("close_fill") if isinstance(entry.get("close_fill"), dict) else {}
+    close_side = (
+        entry.get("close_side")
+        or ("SELL" if close_reason == "trail_profit_sell" else "BUY")
+    ).upper()
+    close_fill = (
+        entry.get("close_fill") if isinstance(entry.get("close_fill"), dict) else {}
+    )
 
     def _matches_close_fill(t: Dict[str, Any]) -> bool:
         if (t.get("side") or "").upper() != close_side:
@@ -2929,7 +3282,9 @@ def _tag_cycle_close_trades(
             return False
         if cq <= 0 or cp <= 0:
             return False
-        return abs(tq - cq) <= max(1e-6, cq * 1e-4) and abs(tp - cp) <= max(0.5, cp * 0.02)
+        return abs(tq - cq) <= max(1e-6, cq * 1e-4) and abs(tp - cp) <= max(
+            0.5, cp * 0.02
+        )
 
     target: Optional[Dict[str, Any]] = None
     if close_fill:
@@ -2972,19 +3327,21 @@ def _cycle_open_to_trade_dicts(
         price = float(row.get("price") or 0)
         if qty > 0 and price > 0:
             cid = f"cycle_open_{cycle_id}"
-            out.append({
-                "id": cid,
-                "ts": row.get("ts"),
-                "side": (row.get("side") or "BUY").upper(),
-                "qty": qty,
-                "price": price,
-                "fee": float(row.get("fee") or 0),
-                "fee_asset": "USDT",
-                "client_order_id": cid,
-                "symbol": sym,
-                "cycle_id": int(cycle_id),
-                "reference_price": row.get("reference_price") or price,
-            })
+            out.append(
+                {
+                    "id": cid,
+                    "ts": row.get("ts"),
+                    "side": (row.get("side") or "BUY").upper(),
+                    "qty": qty,
+                    "price": price,
+                    "fee": float(row.get("fee") or 0),
+                    "fee_asset": "USDT",
+                    "client_order_id": cid,
+                    "symbol": sym,
+                    "cycle_id": int(cycle_id),
+                    "reference_price": row.get("reference_price") or price,
+                }
+            )
     if out:
         return out
     if int(state.get("cycle_id") or 1) != int(cycle_id):
@@ -2997,30 +3354,41 @@ def _cycle_open_to_trade_dicts(
     ts = ledger.get("started_at") if isinstance(ledger, dict) else None
     completed = state.get("completed_cycle_dual_pnls") or []
     if not ts and completed:
-        prev = [c for c in completed if int(c.get("cycle_id") or 0) == int(cycle_id) - 1]
+        prev = [
+            c for c in completed if int(c.get("cycle_id") or 0) == int(cycle_id) - 1
+        ]
         if prev:
             ts = prev[-1].get("completed_at")
     cid = f"cycle_open_{cycle_id}"
-    return [{
-        "id": cid,
-        "ts": ts,
-        "side": "BUY",
-        "qty": round(base_bal, 10),
-        "price": round(ref, 10),
-        "fee": 0.0,
-        "fee_asset": "USDT",
-        "client_order_id": cid,
-        "symbol": sym,
-        "cycle_id": int(cycle_id),
-        "reference_price": round(ref, 10),
-    }]
+    return [
+        {
+            "id": cid,
+            "ts": ts,
+            "side": "BUY",
+            "qty": round(base_bal, 10),
+            "price": round(ref, 10),
+            "fee": 0.0,
+            "fee_asset": "USDT",
+            "client_order_id": cid,
+            "symbol": sym,
+            "cycle_id": int(cycle_id),
+            "reference_price": round(ref, 10),
+        }
+    ]
 
 
-def _build_live_snapshot_from_state(bot: Bot, state: Optional[Dict[str, Any]], db: Session) -> dict:
+def _build_live_snapshot_from_state(
+    bot: Bot, state: Optional[Dict[str, Any]], db: Session
+) -> dict:
     """Build live snapshot from bot_engine_state + Bot only. No historical DB. Response < 15ms CPU."""
     status = (bot.status or "stopped").lower()
     raw = json.loads(bot.config_json or "{}")
-    initial_capital = float(raw.get("initial_capital_usdt") or raw.get("budget_usd") or raw.get("bot_budget_quote") or 0)
+    initial_capital = float(
+        raw.get("initial_capital_usdt")
+        or raw.get("budget_usd")
+        or raw.get("bot_budget_quote")
+        or 0
+    )
 
     last_tick_at: Optional[int] = None
     last_error_code: Optional[str] = None
@@ -3040,7 +3408,11 @@ def _build_live_snapshot_from_state(bot: Bot, state: Optional[Dict[str, Any]], d
                                 s = s.replace(" ", "T", 1)
                             if not (s.endswith("Z") or "+" in s[10:] or "-" in s[10:]):
                                 s = s + "+00:00"
-                            last_tick_at = int(datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp())
+                            last_tick_at = int(
+                                datetime.fromisoformat(
+                                    s.replace("Z", "+00:00")
+                                ).timestamp()
+                            )
                     except Exception:
                         pass
         last_error_code = state.get("last_error_code")
@@ -3098,7 +3470,12 @@ def _build_live_snapshot_from_state(bot: Bot, state: Optional[Dict[str, Any]], d
     daily_pnl_usd: Optional[float] = None
     daily_pnl_pct: Optional[float] = None
     daily_ref_usd: Optional[float] = None
-    if state and equity is not None and not equity_unavailable and state.get("initial_allocation_done"):
+    if (
+        state
+        and equity is not None
+        and not equity_unavailable
+        and state.get("initial_allocation_done")
+    ):
         daily_pnl_usd, daily_pnl_pct = ensure_daily_ref_and_compute(
             state,
             equity,
@@ -3122,8 +3499,12 @@ def _build_live_snapshot_from_state(bot: Bot, state: Optional[Dict[str, Any]], d
     base_balance = float(state.get("base_balance") or 0) if state else 0
     quote_balance = float(state.get("quote_balance") or 0) if state else 0
     cycle_id = int(state.get("cycle_id") or 1) if state else 1
-    initial_allocation_done = state.get("initial_allocation_done") is True if state else False
-    first_buy_pending = status == "running" and not initial_allocation_done and base_balance <= 0
+    initial_allocation_done = (
+        state.get("initial_allocation_done") is True if state else False
+    )
+    first_buy_pending = (
+        status == "running" and not initial_allocation_done and base_balance <= 0
+    )
     if first_buy_pending and pnl_pct is not None:
         pnl_pct = 0.0
 
@@ -3144,7 +3525,9 @@ def _build_live_snapshot_from_state(bot: Bot, state: Optional[Dict[str, Any]], d
         "cycle_id": cycle_id,
         "cycle_opened_at": (
             str(state.get("cycle_opened_at")).strip()
-            if state and isinstance(state.get("cycle_opened_at"), str) and str(state.get("cycle_opened_at")).strip()
+            if state
+            and isinstance(state.get("cycle_opened_at"), str)
+            and str(state.get("cycle_opened_at")).strip()
             else None
         ),
         "first_buy_pending": first_buy_pending,
@@ -3170,7 +3553,9 @@ def _build_live_snapshot_from_state(bot: Bot, state: Optional[Dict[str, Any]], d
                 {
                     "total_usd": float(equity),
                     "realized": 0.0,
-                    "unrealized": float(equity) - initial_capital if initial_capital > 0 else 0.0,
+                    "unrealized": float(equity) - initial_capital
+                    if initial_capital > 0
+                    else 0.0,
                     "daily": daily_pnl_usd or 0.0,
                     "monthly": 0.0,
                 },
@@ -3198,7 +3583,9 @@ async def bots_grid_points(
     resolved_account_id = _resolve_account_id(account_id, account_code, db)
     bot = _resolve_bot(bot_id, resolved_account_id, current, db)
     if not bot:
-        raise HTTPException(status_code=404, detail=_detail_err("NOT_FOUND", "Bot not found", rid))
+        raise HTTPException(
+            status_code=404, detail=_detail_err("NOT_FOUND", "Bot not found", rid)
+        )
 
     state = load_state(db, bot.id) or {}
     raw = json.loads(bot.config_json or "{}")
@@ -3221,16 +3608,20 @@ async def bots_grid_points(
         current_usd = 0.0
         if coin_weights:
             try:
-                prices_map = await _fetch_prices_parallel(list(coin_weights.keys()), quote_asset)
+                prices_map = await _fetch_prices_parallel(
+                    list(coin_weights.keys()), quote_asset
+                )
                 for asset, w in coin_weights.items():
                     if str(asset).upper() == quote_asset:
                         basket_price += float(w)
                     else:
                         basket_price += float(w) * float(prices_map.get(asset) or 0)
             except Exception as e:
-                logger.debug("bots_grid_points trdca basket failed bot_id=%s: %s", bot.id, e)
+                logger.debug(
+                    "bots_grid_points trdca basket failed bot_id=%s: %s", bot.id, e
+                )
         if basket_price <= 0:
-            base_b = float(state.get("base_balance") or 0)
+            float(state.get("base_balance") or 0)
             quote_b = float(state.get("quote_balance") or 0)
             basket_price = quote_b
             current_usd = quote_b
@@ -3244,9 +3635,13 @@ async def bots_grid_points(
         except Exception as e:
             logger.warning("bots_grid_points trdca failed bot_id=%s: %s", bot.id, e)
     else:
-        view_price = live_price if live_price > 0 else float(state.get("reference_price") or 0)
+        view_price = (
+            live_price if live_price > 0 else float(state.get("reference_price") or 0)
+        )
         try:
-            grid_points, profit_points, meta = compute_grid_profit_view(state, config_for_grid, view_price)
+            grid_points, profit_points, meta = compute_grid_profit_view(
+                state, config_for_grid, view_price
+            )
             reference_display = meta.get("ref_display")
         except Exception as e:
             logger.warning("bots_grid_points failed bot_id=%s: %s", bot.id, e)
@@ -3285,8 +3680,16 @@ async def bots_live_batch(
     resolved_account_id = _resolve_account_id(account_id, account_code, db)
     if resolved_account_id is None:
         if account_code and str(account_code).strip():
-            raise HTTPException(status_code=404, detail=_detail_err("ACCOUNT_NOT_FOUND", "Account not found", rid))
-        raise HTTPException(status_code=422, detail=_detail_err("ACCOUNT_REQUIRED", "account_id or account_code is required", rid))
+            raise HTTPException(
+                status_code=404,
+                detail=_detail_err("ACCOUNT_NOT_FOUND", "Account not found", rid),
+            )
+        raise HTTPException(
+            status_code=422,
+            detail=_detail_err(
+                "ACCOUNT_REQUIRED", "account_id or account_code is required", rid
+            ),
+        )
     get_account_or_403(current, resolved_account_id, db)
     id_list: List[int] = []
     for part in (bot_ids or "").split(","):
@@ -3335,7 +3738,9 @@ async def bots_live(
     resolved_account_id = _resolve_account_id(account_id, account_code, db)
     bot = _resolve_bot(bot_id, resolved_account_id, current, db)
     if not bot:
-        raise HTTPException(status_code=404, detail=_detail_err("NOT_FOUND", "Bot not found", rid))
+        raise HTTPException(
+            status_code=404, detail=_detail_err("NOT_FOUND", "Bot not found", rid)
+        )
 
     cached = _live_snapshot_get_cached(bot.id)
     if cached is not None:
@@ -3367,13 +3772,25 @@ def _compute_perf_series(
     payload = _load_perf_chart_payload(db, bot_id)
     samples = payload.get("samples") if isinstance(payload.get("samples"), list) else []
     baseline = payload.get("baseline") or {}
-    baseline_bot0 = baseline.get("bot0") if isinstance(baseline.get("bot0"), (int, float)) else 0.0
-    baseline_parite0 = baseline.get("parite0") if isinstance(baseline.get("parite0"), (int, float)) else 0.0
+    baseline_bot0 = (
+        baseline.get("bot0") if isinstance(baseline.get("bot0"), (int, float)) else 0.0
+    )
+    baseline_parite0 = (
+        baseline.get("parite0")
+        if isinstance(baseline.get("parite0"), (int, float))
+        else 0.0
+    )
     baseline_equity = baseline_bot0
 
     if bot_started_ts is not None:
-        samples = [s for s in samples if isinstance(s, dict) and (s.get("ts") or 0) >= bot_started_ts]
-    samples = [s for s in samples if isinstance(s, dict) and (s.get("ts") or 0) >= window_start]
+        samples = [
+            s
+            for s in samples
+            if isinstance(s, dict) and (s.get("ts") or 0) >= bot_started_ts
+        ]
+    samples = [
+        s for s in samples if isinstance(s, dict) and (s.get("ts") or 0) >= window_start
+    ]
     if not samples:
         return [], {"baseline_equity": baseline_equity, "points": 0}
 
@@ -3385,13 +3802,22 @@ def _compute_perf_series(
         bucket_ts = (int(ts) // bucket_sec) * bucket_sec
         bot_pct = s.get("botPct") if "botPct" in s else s.get("bot_pct")
         parite_pct = s.get("paritePct") if "paritePct" in s else s.get("basket_pct")
-        bucket_map[bucket_ts] = {"ts": bucket_ts, "bot_pct": bot_pct, "basket_pct": parite_pct}
+        bucket_map[bucket_ts] = {
+            "ts": bucket_ts,
+            "bot_pct": bot_pct,
+            "basket_pct": parite_pct,
+        }
 
     series = sorted(bucket_map.values(), key=lambda x: x["ts"])
     if len(series) > PERF_SERIES_MAX_POINTS:
         step = (len(series) + PERF_SERIES_MAX_POINTS - 1) // PERF_SERIES_MAX_POINTS
         series = series[::step]
-    meta = {"baseline_equity": baseline_equity, "baseline_bot0": baseline_bot0, "baseline_parite0": baseline_parite0, "points": len(series)}
+    meta = {
+        "baseline_equity": baseline_equity,
+        "baseline_bot0": baseline_bot0,
+        "baseline_parite0": baseline_parite0,
+        "points": len(series),
+    }
     return series, meta
 
 
@@ -3411,14 +3837,19 @@ async def bots_perf_chart_data(
     valid_ranges = ("1h", "4h", "1d", "7d", "30d")
     valid_buckets = ("1m", "5m", "1h", "4h", "1d")
     if range not in valid_ranges or bucket not in valid_buckets:
-        raise HTTPException(status_code=400, detail=_detail_err("INVALID_PARAMS", "range or bucket invalid", rid))
+        raise HTTPException(
+            status_code=400,
+            detail=_detail_err("INVALID_PARAMS", "range or bucket invalid", rid),
+        )
     if range == "1h" and bucket != "1h":
         bucket = "1h"
 
     resolved_account_id = _resolve_account_id(account_id, account_code, db)
     bot = _resolve_bot(bot_id, resolved_account_id, current, db)
     if not bot:
-        raise HTTPException(status_code=404, detail=_detail_err("NOT_FOUND", "Bot not found", rid))
+        raise HTTPException(
+            status_code=404, detail=_detail_err("NOT_FOUND", "Bot not found", rid)
+        )
 
     state_perf = load_state(db, bot.id) or {}
     started_dt = _bot_run_started_at_dt(bot, state_perf, db)
@@ -3453,20 +3884,32 @@ async def bots_get_perf_chart_state(
     resolved_account_id = _resolve_account_id(account_id, account_code, db)
     bot = _resolve_bot(bot_id, resolved_account_id, current, db)
     if not bot:
-        raise HTTPException(status_code=404, detail=_detail_err("NOT_FOUND", "Bot not found", rid))
+        raise HTTPException(
+            status_code=404, detail=_detail_err("NOT_FOUND", "Bot not found", rid)
+        )
     payload = _load_perf_chart_payload(db, bot.id)
     if not payload:
         return {"baseline": None, "samples": [], "range": "4h", "request_id": rid}
     try:
         baseline = payload.get("baseline")
-        samples = payload.get("samples") if isinstance(payload.get("samples"), list) else []
-        range_val = payload.get("range") if payload.get("range") in ("1m", "5m", "1h", "4h", "1d", "1w") else "4h"
+        samples = (
+            payload.get("samples") if isinstance(payload.get("samples"), list) else []
+        )
+        range_val = (
+            payload.get("range")
+            if payload.get("range") in ("1m", "5m", "1h", "4h", "1d", "1w")
+            else "4h"
+        )
         # Sadece bu çalıştırma (oturum started_at) sonrası veriyi göster
         state_pc = load_state(db, bot.id) or {}
         started_dt = _bot_run_started_at_dt(bot, state_pc, db)
         if started_dt is not None:
             started_ts = int(started_dt.timestamp())
-            samples = [s for s in samples if isinstance(s, dict) and (s.get("ts") or 0) >= started_ts]
+            samples = [
+                s
+                for s in samples
+                if isinstance(s, dict) and (s.get("ts") or 0) >= started_ts
+            ]
             if baseline and (baseline.get("ts0") or 0) < started_ts:
                 baseline = None
         return {
@@ -3500,11 +3943,16 @@ async def bots_put_perf_chart_state(
     resolved_account_id = _resolve_account_id(account_id, account_code, db)
     bot = _resolve_bot(bot_id, resolved_account_id, current, db)
     if not bot:
-        raise HTTPException(status_code=404, detail=_detail_err("NOT_FOUND", "Bot not found", rid))
+        raise HTTPException(
+            status_code=404, detail=_detail_err("NOT_FOUND", "Bot not found", rid)
+        )
     payload = {
         "baseline": body.baseline if body else None,
         "samples": body.samples if body and isinstance(body.samples, list) else [],
-        "range": (body.range if body and body.range in ("1h", "4h", "1d", "1w") else "4h") or "4h",
+        "range": (
+            body.range if body and body.range in ("1h", "4h", "1d", "1w") else "4h"
+        )
+        or "4h",
     }
     now = datetime.utcnow()
     db.execute(
@@ -3586,7 +4034,15 @@ def _compute_trdca_pnl_breakdown(
             side = (t.side or "").upper()
 
             if coid.startswith("TRB-"):
-                d = trb_by_coin.setdefault(base, {"buy_qty": 0.0, "buy_cost": 0.0, "sell_qty": 0.0, "sell_revenue": 0.0})
+                d = trb_by_coin.setdefault(
+                    base,
+                    {
+                        "buy_qty": 0.0,
+                        "buy_cost": 0.0,
+                        "sell_qty": 0.0,
+                        "sell_revenue": 0.0,
+                    },
+                )
                 if side == "BUY":
                     d["buy_qty"] += qty
                     d["buy_cost"] += qty * price
@@ -3594,7 +4050,15 @@ def _compute_trdca_pnl_breakdown(
                     d["sell_qty"] += qty
                     d["sell_revenue"] += qty * price
             elif coid.startswith("DCA-"):
-                d = dca_by_coin.setdefault(base, {"buy_qty": 0.0, "buy_cost": 0.0, "sell_qty": 0.0, "sell_revenue": 0.0})
+                d = dca_by_coin.setdefault(
+                    base,
+                    {
+                        "buy_qty": 0.0,
+                        "buy_cost": 0.0,
+                        "sell_qty": 0.0,
+                        "sell_revenue": 0.0,
+                    },
+                )
                 if side == "BUY":
                     d["buy_qty"] += qty
                     d["buy_cost"] += qty * price
@@ -3615,7 +4079,9 @@ def _compute_trdca_pnl_breakdown(
             cost_basis = d["buy_cost"] - d["sell_revenue"]
             current_value = current_qty * p if p > 0 else 0.0
             pnl = current_value - cost_basis
-            out["rebalance_pnl"].append({"asset": base, "pnl_usd": round(pnl, 2), "qty": round(current_qty, 8)})
+            out["rebalance_pnl"].append(
+                {"asset": base, "pnl_usd": round(pnl, 2), "qty": round(current_qty, 8)}
+            )
 
         for base, d in dca_by_coin.items():
             p = _get_price(base)
@@ -3623,7 +4089,13 @@ def _compute_trdca_pnl_breakdown(
                 current_value = d["buy_qty"] * p
                 cost = d["buy_cost"]
                 adet_pnl = current_value - cost
-                out["dca_adet_pnl"].append({"asset": base, "pnl_usd": round(adet_pnl, 2), "qty": round(d["buy_qty"], 8)})
+                out["dca_adet_pnl"].append(
+                    {
+                        "asset": base,
+                        "pnl_usd": round(adet_pnl, 2),
+                        "qty": round(d["buy_qty"], 8),
+                    }
+                )
 
         out["dca_pnl_usd"] = round(dca_sell_revenue - dca_buy_cost - dca_fees, 2)
     except Exception as e:
@@ -3653,10 +4125,17 @@ def append_perf_chart_sample(db: Session, bot_id: int) -> None:
             pnl_data = {}
         current_usd = float(pnl_data.get("total_usd") or 0)
         initial_capital = float(
-            raw.get("initial_capital_usdt") or raw.get("budget_usd")
-            or raw.get("bot_budget_usdt") or raw.get("bot_budget_quote") or 0
+            raw.get("initial_capital_usdt")
+            or raw.get("budget_usd")
+            or raw.get("bot_budget_usdt")
+            or raw.get("bot_budget_quote")
+            or 0
         )
-        bot_pct = (current_usd - initial_capital) / initial_capital * 100.0 if initial_capital > 0 else None
+        bot_pct = (
+            (current_usd - initial_capital) / initial_capital * 100.0
+            if initial_capital > 0
+            else None
+        )
 
         payload = _load_perf_chart_payload(db, bot_id)
         baseline = payload.get("baseline") or {}
@@ -3666,19 +4145,40 @@ def append_perf_chart_sample(db: Session, bot_id: int) -> None:
             initial_prices = baseline.get("initial_prices")
             coin_weights = baseline.get("coin_weights")
             if not initial_prices or not coin_weights:
-                target_weights = (raw.get("trb") or {}).get("target_weights_all") or (raw.get("dca") or {}).get("coin_weights") or {}
-                base_assets = [a for a in target_weights if a and str(a).strip().upper() != quote_asset]
+                target_weights = (
+                    (raw.get("trb") or {}).get("target_weights_all")
+                    or (raw.get("dca") or {}).get("coin_weights")
+                    or {}
+                )
+                base_assets = [
+                    a
+                    for a in target_weights
+                    if a and str(a).strip().upper() != quote_asset
+                ]
                 if base_assets:
                     initial_prices = _fetch_prices_for_assets(base_assets, quote_asset)
-                    total_w = sum(float(target_weights.get(a) or 0) for a in base_assets)
-                    coin_weights = {a: float(target_weights.get(a) or 0) / total_w for a in base_assets} if total_w > 0 else {}
+                    total_w = sum(
+                        float(target_weights.get(a) or 0) for a in base_assets
+                    )
+                    coin_weights = (
+                        {
+                            a: float(target_weights.get(a) or 0) / total_w
+                            for a in base_assets
+                        }
+                        if total_w > 0
+                        else {}
+                    )
                     if initial_prices and coin_weights:
                         baseline["initial_prices"] = initial_prices
                         baseline["coin_weights"] = coin_weights
                         payload["baseline"] = baseline
             if initial_prices and coin_weights:
-                current_prices = _fetch_prices_for_assets(list(coin_weights.keys()), quote_asset)
-                parite_pct = compute_trdca_parite_pct(initial_prices, coin_weights, current_prices, quote_asset)
+                current_prices = _fetch_prices_for_assets(
+                    list(coin_weights.keys()), quote_asset
+                )
+                parite_pct = compute_trdca_parite_pct(
+                    initial_prices, coin_weights, current_prices, quote_asset
+                )
         else:
             live_price = float(pnl_data.get("current_price") or 0)
             if live_price <= 0:
@@ -3691,13 +4191,27 @@ def append_perf_chart_sample(db: Session, bot_id: int) -> None:
             config_for_grid = _config_for_grid_view(raw)
             reference_display = None
             try:
-                view_price = live_price if live_price > 0 else float((state or {}).get("reference_price") or 0)
-                _, _, meta = compute_grid_profit_view(state or {}, config_for_grid, view_price)
+                view_price = (
+                    live_price
+                    if live_price > 0
+                    else float((state or {}).get("reference_price") or 0)
+                )
+                _, _, meta = compute_grid_profit_view(
+                    state or {}, config_for_grid, view_price
+                )
                 reference_display = meta.get("ref_display")
             except Exception:
                 pass
-            ref_price = reference_display if reference_display is not None and reference_display > 0 else float((state or {}).get("reference_price") or 0)
-            parite_pct = (live_price - ref_price) / ref_price * 100.0 if (ref_price and ref_price > 0 and live_price > 0) else None
+            ref_price = (
+                reference_display
+                if reference_display is not None and reference_display > 0
+                else float((state or {}).get("reference_price") or 0)
+            )
+            parite_pct = (
+                (live_price - ref_price) / ref_price * 100.0
+                if (ref_price and ref_price > 0 and live_price > 0)
+                else None
+            )
 
         if bot_pct is None and parite_pct is None:
             return
@@ -3710,7 +4224,9 @@ def append_perf_chart_sample(db: Session, bot_id: int) -> None:
         now_sec = int(datetime.now(timezone.utc).timestamp())
         samples.append({"ts": now_sec, "botPct": bot_pct, "paritePct": parite_pct})
         cut = now_sec - PERF_CHART_MAX_AGE_SEC
-        samples[:] = [s for s in samples if isinstance(s, dict) and (s.get("ts") or 0) >= cut]
+        samples[:] = [
+            s for s in samples if isinstance(s, dict) and (s.get("ts") or 0) >= cut
+        ]
         # Sadece bu çalıştırma (oturum started_at) sonrası örnekleri sakla
         state_pc = load_state(db, bot_id) or {}
         started_dt = _bot_run_started_at_dt(bot, state_pc, db)
@@ -3721,11 +4237,21 @@ def append_perf_chart_sample(db: Session, bot_id: int) -> None:
                 baseline = {"bot0": 0.0, "parite0": 0.0, "ts0": started_ts}
                 payload["baseline"] = baseline
         payload["samples"] = samples
-        payload["range"] = payload.get("range") if payload.get("range") in ("1h", "4h", "1d", "1w") else "4h"
+        payload["range"] = (
+            payload.get("range")
+            if payload.get("range") in ("1h", "4h", "1d", "1w")
+            else "4h"
+        )
         now = datetime.utcnow()
         db.execute(
-            text("UPDATE bot_perf_chart_state SET chart_payload = :payload, updated_at = :upd WHERE bot_id = :bid"),
-            {"bid": bot_id, "payload": json.dumps(payload, ensure_ascii=False), "upd": now},
+            text(
+                "UPDATE bot_perf_chart_state SET chart_payload = :payload, updated_at = :upd WHERE bot_id = :bid"
+            ),
+            {
+                "bid": bot_id,
+                "payload": json.dumps(payload, ensure_ascii=False),
+                "upd": now,
+            },
         )
         db.commit()
     except Exception as e:
@@ -3750,8 +4276,12 @@ async def bots_delete_perf_chart_state(
     resolved_account_id = _resolve_account_id(account_id, account_code, db)
     bot = _resolve_bot(bot_id, resolved_account_id, current, db)
     if not bot:
-        raise HTTPException(status_code=404, detail=_detail_err("NOT_FOUND", "Bot not found", rid))
-    db.execute(text("DELETE FROM bot_perf_chart_state WHERE bot_id = :bid"), {"bid": bot.id})
+        raise HTTPException(
+            status_code=404, detail=_detail_err("NOT_FOUND", "Bot not found", rid)
+        )
+    db.execute(
+        text("DELETE FROM bot_perf_chart_state WHERE bot_id = :bid"), {"bid": bot.id}
+    )
     db.commit()
     return {"ok": True, "bot_id": bot.id, "request_id": rid}
 
@@ -3813,10 +4343,15 @@ async def bots_start(
     resolved_account_id = _resolve_account_id(account_id, account_code, db)
     bot = _resolve_bot(bot_id, resolved_account_id, current, db)
     if not bot:
-        raise HTTPException(status_code=404, detail=_detail_err("NOT_FOUND", "Bot not found", rid))
+        raise HTTPException(
+            status_code=404, detail=_detail_err("NOT_FOUND", "Bot not found", rid)
+        )
     # Test hesabı paper modda kalmalı (API key yok)
     from app.services.test_account import is_test_account
-    if (getattr(bot, "mode", None) or "").lower() == "paper" and not is_test_account(bot.account_id, db):
+
+    if (getattr(bot, "mode", None) or "").lower() == "paper" and not is_test_account(
+        bot.account_id, db
+    ):
         bot.mode = "live"
         try:
             raw = json.loads(bot.config_json or "{}")
@@ -3832,7 +4367,9 @@ async def bots_start(
             state.pop("initial_alloc_base_qty", None)
             state.pop("initial_alloc_price", None)
             save_state(db, bot.id, bot.account_id, state)
-    ensure_state_row(db, bot.id, bot.account_id, (bot.symbol or "").upper() or "BTCUSDT")
+    ensure_state_row(
+        db, bot.id, bot.account_id, (bot.symbol or "").upper() or "BTCUSDT"
+    )
 
     strategy_id = ""
     try:
@@ -3840,7 +4377,10 @@ async def bots_start(
         strategy_id = (raw_cfg.get("strategy_id") or "").strip().lower()
     except Exception:
         raw_cfg = {}
-    if strategy_id not in ("trdca_pro", "multi_asset_rebalance") and (bot.symbol or "").upper() != "MULTI":
+    if (
+        strategy_id not in ("trdca_pro", "multi_asset_rebalance")
+        and (bot.symbol or "").upper() != "MULTI"
+    ):
         try:
             raw_cfg = normalize_max_buy_levels_payload(raw_cfg)
             if getattr(bot, "max_buy_levels", None) != raw_cfg.get("max_buy_levels"):
@@ -3848,14 +4388,26 @@ async def bots_start(
                 bot.config_json = json.dumps(raw_cfg, ensure_ascii=False)
                 db.commit()
         except MaxBuyLevelsError as e:
-            raise HTTPException(status_code=400, detail=_detail_err("MAX_BUY_LEVELS_INVALID", str(e), rid))
+            raise HTTPException(
+                status_code=400,
+                detail=_detail_err("MAX_BUY_LEVELS_INVALID", str(e), rid),
+            )
         from app.botengine.config_validate import validate_dca_payload
         from app.botengine.state_store import append_event
+
         ok_grid, grid_err, grid_viol, min_budget = validate_dca_payload(raw_cfg)
         if not ok_grid:
             append_event(
-                db, bot.id, bot.account_id, "ERROR", grid_err,
-                {"error_code": "GRID_NOTIONAL_TOO_LOW", "violations": grid_viol, "min_budget_usdt": min_budget},
+                db,
+                bot.id,
+                bot.account_id,
+                "ERROR",
+                grid_err,
+                {
+                    "error_code": "GRID_NOTIONAL_TOO_LOW",
+                    "violations": grid_viol,
+                    "min_budget_usdt": min_budget,
+                },
             )
             raise HTTPException(
                 status_code=400,
@@ -3867,10 +4419,17 @@ async def bots_start(
     if not is_test and (getattr(bot, "mode", None) or "").lower() == "live":
         try:
             raw = json.loads(bot.config_json or "{}")
-            budget = float(raw.get("initial_capital_usdt") or raw.get("budget_usd") or raw.get("bot_budget_usdt") or 0)
+            budget = float(
+                raw.get("initial_capital_usdt")
+                or raw.get("budget_usd")
+                or raw.get("bot_budget_usdt")
+                or 0
+            )
             sym = (bot.symbol or "").upper().strip()
             if sym == "MULTI":
-                quote_asset = (raw.get("quote_asset") or "USDT").strip().upper() or "USDT"
+                quote_asset = (
+                    raw.get("quote_asset") or "USDT"
+                ).strip().upper() or "USDT"
             else:
                 # Tek-sembol parite: bilinen quote son ekleri (USDT/FDUSD/BUSD/USDC/TUSD/BTC/ETH).
                 cfg_q = (raw.get("quote_asset") or "").strip().upper()
@@ -3884,6 +4443,7 @@ async def bots_start(
             if budget > 0:
                 from app.services.binance_assets import get_account_keys
                 from app.botengine.adapters.binance_adapter import BinanceAdapter
+
                 keys = await get_account_keys(bot.account_id, db)
                 adapter = BinanceAdapter(bot.account_id, keys, paper_mode=False)
                 balances = await adapter.get_account_balances()
@@ -3917,7 +4477,9 @@ async def bots_start(
         invalidate_dashboard_summary_cache(bot.account_id)
     except Exception:
         pass
-    command_id = _insert_engine_command(db, bot.account_id, bot.id, "START", request_id=rid)
+    command_id = _insert_engine_command(
+        db, bot.account_id, bot.id, "START", request_id=rid
+    )
     state = load_state(db, bot.id) or {}
     state["run_id"] = f"cmd{command_id}"
     mark_bot_run_started(state, connectivity_resume=False)
@@ -3925,11 +4487,21 @@ async def bots_start(
     logger.info("BOT_RUN_ID set bot_id=%s run_id=cmd%s", bot.id, command_id)
     account = db.query(Account).filter(Account.id == bot.account_id).first()
     audit_svc.log_event(
-        db, actor_type="admin" if current.get("is_admin") else "user", event_type="BOT_START", severity="INFO",
-        actor_user_id=current.get("user_id"), target_user_id=account.user_id if account else None, target_account_id=bot.account_id,
-        ip=get_client_ip(request), device_id=current.get("device_id"),
+        db,
+        actor_type="admin" if current.get("is_admin") else "user",
+        event_type="BOT_START",
+        severity="INFO",
+        actor_user_id=current.get("user_id"),
+        target_user_id=account.user_id if account else None,
+        target_account_id=bot.account_id,
+        ip=get_client_ip(request),
+        device_id=current.get("device_id"),
         request_id=rid,
-        meta={"bot_id": bot.id, "account_id": bot.account_id, "symbol": (bot.symbol or "") or ""},
+        meta={
+            "bot_id": bot.id,
+            "account_id": bot.account_id,
+            "symbol": (bot.symbol or "") or "",
+        },
     )
     worker_alive = _worker_process_alive()
     msg = "Command queued; worker will start the bot."
@@ -3961,7 +4533,9 @@ async def bots_stop(
     resolved_account_id = _resolve_account_id(account_id, account_code, db)
     bot = _resolve_bot(bot_id, resolved_account_id, current, db)
     if not bot:
-        raise HTTPException(status_code=404, detail=_detail_err("NOT_FOUND", "Bot not found", rid))
+        raise HTTPException(
+            status_code=404, detail=_detail_err("NOT_FOUND", "Bot not found", rid)
+        )
     from app.botengine.bot_session import clear_bot_run_started
 
     bot.status = "stopped"
@@ -3970,17 +4544,32 @@ async def bots_stop(
     save_state(db, bot.id, bot.account_id, state)
     db.commit()
     invalidate_live_snapshot_cache(bot.id)
-    command_id = _insert_engine_command(db, bot.account_id, bot.id, "STOP", request_id=rid)
+    command_id = _insert_engine_command(
+        db, bot.account_id, bot.id, "STOP", request_id=rid
+    )
     account = db.query(Account).filter(Account.id == bot.account_id).first()
     audit_svc.log_event(
-        db, actor_type="admin" if current.get("is_admin") else "user", event_type="BOT_STOP", severity="INFO",
-        actor_user_id=current.get("user_id"), target_user_id=account.user_id if account else None, target_account_id=bot.account_id,
-        ip=get_client_ip(request), device_id=current.get("device_id"),
+        db,
+        actor_type="admin" if current.get("is_admin") else "user",
+        event_type="BOT_STOP",
+        severity="INFO",
+        actor_user_id=current.get("user_id"),
+        target_user_id=account.user_id if account else None,
+        target_account_id=bot.account_id,
+        ip=get_client_ip(request),
+        device_id=current.get("device_id"),
         request_id=rid,
-        meta={"bot_id": bot.id, "account_id": bot.account_id, "symbol": (bot.symbol or "") or ""},
+        meta={
+            "bot_id": bot.id,
+            "account_id": bot.account_id,
+            "symbol": (bot.symbol or "") or "",
+        },
     )
     try:
-        from app.api.routes import invalidate_dashboard_summary_cache, invalidate_wallet_cache
+        from app.api.routes import (
+            invalidate_dashboard_summary_cache,
+            invalidate_wallet_cache,
+        )
 
         invalidate_dashboard_summary_cache(bot.account_id)
         await invalidate_wallet_cache(bot.account_id)
@@ -4001,7 +4590,11 @@ def _is_worker_only_order_error(e: Exception) -> bool:
     """True if e is the worker-only order placement guard (Web/API cannot place orders)."""
     try:
         from app.core.errors import AppError
-        if isinstance(e, AppError) and getattr(e, "error_code", None) == "WORKER_ONLY_OPERATION":
+
+        if (
+            isinstance(e, AppError)
+            and getattr(e, "error_code", None) == "WORKER_ONLY_OPERATION"
+        ):
             return True
     except Exception:
         pass
@@ -4016,10 +4609,14 @@ def _delete_convert_error_skippable(e: Exception, is_test_account: bool) -> bool
     if _is_worker_only_order_error(e):
         return True
     s = str(e).lower()
-    return "api anahtarı" in s or "api anahtari" in s or "api key" in s or "api keys" in s
+    return (
+        "api anahtarı" in s or "api anahtari" in s or "api key" in s or "api keys" in s
+    )
 
 
-async def _sell_symbol_base_on_delete(db: Session, account_id: int, bot_id: int, symbol: str) -> None:
+async def _sell_symbol_base_on_delete(
+    db: Session, account_id: int, bot_id: int, symbol: str
+) -> None:
     """Bot silinmeden önce Binance base → quote (açık emirleri iptal et, free+locked sat)."""
     from app.services.binance_assets import get_account_keys
     from app.services.binance_spot import cancel_order, get_open_orders, get_wallet
@@ -4043,10 +4640,15 @@ async def _sell_symbol_base_on_delete(db: Session, account_id: int, bot_id: int,
             except Exception as ce:
                 logger.warning(
                     "bots_delete convert cancel_order bot_id=%s symbol=%s order=%s err=%s",
-                    bot_id, sym, oid, ce,
+                    bot_id,
+                    sym,
+                    oid,
+                    ce,
                 )
     except Exception as e:
-        logger.warning("bots_delete convert list_orders bot_id=%s symbol=%s err=%s", bot_id, sym, e)
+        logger.warning(
+            "bots_delete convert list_orders bot_id=%s symbol=%s err=%s", bot_id, sym, e
+        )
 
     spot_cache.invalidate_balance(account_id)
 
@@ -4066,6 +4668,7 @@ async def _sell_symbol_base_on_delete(db: Session, account_id: int, bot_id: int,
         price = 0.0
         try:
             from app.services.market_data import get_price
+
             price = float(get_price(sym) or 0)
         except Exception:
             price = 0.0
@@ -4076,12 +4679,22 @@ async def _sell_symbol_base_on_delete(db: Session, account_id: int, bot_id: int,
         if notional < min_notional:
             logger.info(
                 "bots_delete convert skip bot_id=%s symbol=%s notional=%.2f min=%.2f",
-                bot_id, sym, notional, min_notional,
+                bot_id,
+                sym,
+                notional,
+                min_notional,
             )
             return
-        await engine.place_order(sym, "SELL", "MARKET", quantity=base_qty, allow_web=True)
+        await engine.place_order(
+            sym, "SELL", "MARKET", quantity=base_qty, allow_web=True
+        )
         spot_cache.invalidate_balance(account_id)
-        logger.info("bots_delete convert_base_to_quote bot_id=%s symbol=%s base_qty=%.8f", bot_id, sym, base_qty)
+        logger.info(
+            "bots_delete convert_base_to_quote bot_id=%s symbol=%s base_qty=%.8f",
+            bot_id,
+            sym,
+            base_qty,
+        )
 
 
 @router.post("/{bot_id}/delete")
@@ -4099,7 +4712,9 @@ async def bots_delete(
     resolved_account_id = _resolve_account_id(account_id, account_code, db)
     bot = _resolve_bot(bot_id, resolved_account_id, current, db)
     if not bot:
-        raise HTTPException(status_code=404, detail=_detail_err("NOT_FOUND", "Bot not found", rid))
+        raise HTTPException(
+            status_code=404, detail=_detail_err("NOT_FOUND", "Bot not found", rid)
+        )
     body = {}
     try:
         body = await request.json()
@@ -4123,6 +4738,7 @@ async def bots_delete(
         raw = json.loads(bot.config_json or "{}")
         quote_asset = (raw.get("quote_asset") or "USDT").strip().upper()
         if symbol == "MULTI":
+
             def _norm_base(s: str) -> str:
                 s = (s or "").strip().upper()
                 for suf in ("USDT", "FDUSD", "BUSD"):
@@ -4154,21 +4770,48 @@ async def bots_delete(
                         continue
                     sym_pair = f"{base_asset}{quote_asset}"
                     try:
-                        await _sell_symbol_base_on_delete(db, bot.account_id, bot.id, sym_pair)
+                        await _sell_symbol_base_on_delete(
+                            db, bot.account_id, bot.id, sym_pair
+                        )
                     except Exception as e:
-                        logger.warning("bots_delete convert_base_to_quote MULTI %s failed bot_id=%s: %s", sym_pair, bot.id, e)
+                        logger.warning(
+                            "bots_delete convert_base_to_quote MULTI %s failed bot_id=%s: %s",
+                            sym_pair,
+                            bot.id,
+                            e,
+                        )
             except Exception as e:
-                logger.warning("bots_delete convert_base_to_quote MULTI failed bot_id=%s: %s", bot.id, e)
-                raise HTTPException(status_code=400, detail=_detail_err("CONVERT_FAILED", str(e), rid))
+                logger.warning(
+                    "bots_delete convert_base_to_quote MULTI failed bot_id=%s: %s",
+                    bot.id,
+                    e,
+                )
+                raise HTTPException(
+                    status_code=400, detail=_detail_err("CONVERT_FAILED", str(e), rid)
+                )
         elif symbol and len(symbol) > 4 and symbol.endswith(("USDT", "FDUSD", "BUSD")):
             try:
                 await _sell_symbol_base_on_delete(db, bot.account_id, bot.id, symbol)
             except Exception as e:
-                logger.warning("bots_delete convert_base_to_quote failed bot_id=%s err=%s", bot.id, e)
-                if not _is_worker_only_order_error(e) and not _delete_convert_error_skippable(e, is_test):
-                    raise HTTPException(status_code=400, detail=_detail_err("CONVERT_FAILED", str(e), rid))
+                logger.warning(
+                    "bots_delete convert_base_to_quote failed bot_id=%s err=%s",
+                    bot.id,
+                    e,
+                )
+                if not _is_worker_only_order_error(
+                    e
+                ) and not _delete_convert_error_skippable(e, is_test):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=_detail_err("CONVERT_FAILED", str(e), rid),
+                    )
         try:
-            from app.api.routes import invalidate_dashboard_summary_cache, invalidate_open_orders_cache, invalidate_wallet_cache
+            from app.api.routes import (
+                invalidate_dashboard_summary_cache,
+                invalidate_open_orders_cache,
+                invalidate_wallet_cache,
+            )
+
             invalidate_dashboard_summary_cache(bot.account_id)
             await invalidate_wallet_cache(bot.account_id)
             await invalidate_open_orders_cache(bot.account_id)
@@ -4199,12 +4842,16 @@ async def bots_update_config(
     rid = _request_id(request)
     bot = _resolve_bot(bot_id, account_id, current, db)
     if not bot:
-        raise HTTPException(status_code=404, detail=_detail_err("NOT_FOUND", "Bot not found", rid))
+        raise HTTPException(
+            status_code=404, detail=_detail_err("NOT_FOUND", "Bot not found", rid)
+        )
     try:
         normalized_body = normalize_max_buy_levels_payload(body or {})
         cfg = config_from_ui_payload(normalized_body)
     except MaxBuyLevelsError as e:
-        raise HTTPException(status_code=400, detail=_detail_err("MAX_BUY_LEVELS_INVALID", str(e), rid))
+        raise HTTPException(
+            status_code=400, detail=_detail_err("MAX_BUY_LEVELS_INVALID", str(e), rid)
+        )
     bot.config_json = json.dumps(cfg.to_dict(), ensure_ascii=False)
     bot.max_buy_levels = cfg.max_buy_levels
     db.commit()
@@ -4226,10 +4873,18 @@ async def bots_health(
     resolved_account_id = _resolve_account_id(account_id, account_code, db)
     bot = _resolve_bot(bot_id, resolved_account_id, current, db)
     if not bot:
-        raise HTTPException(status_code=404, detail=_detail_err("NOT_FOUND", "Bot not found", rid))
-    from app.botengine.health_watch import evaluate_bot_health, _expected_tick_interval_sec, _parse_last_tick_ts
+        raise HTTPException(
+            status_code=404, detail=_detail_err("NOT_FOUND", "Bot not found", rid)
+        )
+    from app.botengine.health_watch import (
+        evaluate_bot_health,
+        _expected_tick_interval_sec,
+        _parse_last_tick_ts,
+    )
+
     try:
         from app.services.binance_connectivity import sync_bot_connectivity_on_view
+
         await sync_bot_connectivity_on_view(db, bot, source="health_poll")
     except Exception as e:
         logger.debug("bots_health connectivity probe bot_id=%s: %s", bot.id, e)
@@ -4246,13 +4901,15 @@ async def bots_health(
     interval_s = _expected_tick_interval_sec(bot)
     if tick_age is not None and tick_age < max(60.0, interval_s * 5.0):
         alerts = [
-            a for a in alerts
+            a
+            for a in alerts
             if str((a or {}).get("code") or "").upper() != "LOOP_TASK_MISSING"
         ]
     conn_fail = None
     connectivity_ok = True
     try:
         from app.services.binance_connectivity import active_failure
+
         rec = active_failure(bot.account_id)
         if rec:
             connectivity_ok = False
@@ -4294,10 +4951,12 @@ async def bots_health_ack(
     resolved_account_id = _resolve_account_id(account_id, account_code, db)
     bot = _resolve_bot(bot_id, resolved_account_id, current, db)
     if not bot:
-        raise HTTPException(status_code=404, detail=_detail_err("NOT_FOUND", "Bot not found", rid))
+        raise HTTPException(
+            status_code=404, detail=_detail_err("NOT_FOUND", "Bot not found", rid)
+        )
     state = load_state(db, bot.id) or {}
     now_ts = int(datetime.now(timezone.utc).timestamp())
-    prev_err = (state.pop("last_error_code", None) or "")
+    prev_err = state.pop("last_error_code", None) or ""
     prev_err = str(prev_err).strip() or None
     state["health_ack_at"] = now_ts
     if prev_err:
@@ -4335,9 +4994,12 @@ async def bots_events(
     resolved_account_id = _resolve_account_id(account_id, account_code, db)
     bot = _resolve_bot(bot_id, resolved_account_id, current, db)
     if not bot:
-        raise HTTPException(status_code=404, detail=_detail_err("NOT_FOUND", "Bot not found", rid))
+        raise HTTPException(
+            status_code=404, detail=_detail_err("NOT_FOUND", "Bot not found", rid)
+        )
     try:
         from app.services.binance_connectivity import sync_bot_connectivity_on_view
+
         # force_probe=False: /health (bot sayfası) zaten prob yapar; ikinci 8s cüzdan çağrısı UI timeout + flicker üretir.
         await sync_bot_connectivity_on_view(
             db,
@@ -4361,13 +5023,19 @@ async def bots_events(
                 anchors = filter_events_for_dismiss(anchors, dismiss_before)
             events = _merge_anchor_events(events, anchors)
         except Exception as anchor_ex:
-            logger.debug("bots_events lifecycle anchors bot_id=%s: %s", bot.id, anchor_ex)
+            logger.debug(
+                "bots_events lifecycle anchors bot_id=%s: %s", bot.id, anchor_ex
+            )
     try:
         if after_id is None:
             # İlk yükleme: anchor/sentetik satırlar + dedupe + enrich tam paket.
             events = _enrich_command_start_events(events, bot, state)
-            events = _merge_synthetic_cycle_end_events(events, state, db=db, bot_id=bot.id)
-            events = _merge_synthetic_cycle_start_events(events, state, db=db, bot_id=bot.id)
+            events = _merge_synthetic_cycle_end_events(
+                events, state, db=db, bot_id=bot.id
+            )
+            events = _merge_synthetic_cycle_start_events(
+                events, state, db=db, bot_id=bot.id
+            )
             events = _merge_synthetic_tur_after_initial_fill(events, state)
             _enrich_cycle_start_events_meta(events, state)
             events = _dedupe_cycle_end_events(events)
@@ -4389,6 +5057,7 @@ async def bots_events(
     connectivity_ok = True
     try:
         from app.services.binance_connectivity import active_failure
+
         rec = active_failure(bot.account_id)
         if rec:
             connectivity_ok = False
@@ -4421,18 +5090,30 @@ async def bots_cycles(
     resolved_account_id = _resolve_account_id(account_id, account_code, db)
     bot = _resolve_bot(bot_id, resolved_account_id, current, db)
     if not bot:
-        raise HTTPException(status_code=404, detail=_detail_err("NOT_FOUND", "Bot not found", rid))
+        raise HTTPException(
+            status_code=404, detail=_detail_err("NOT_FOUND", "Bot not found", rid)
+        )
     raw = json.loads(bot.config_json or "{}")
     strategy_id = (raw.get("strategy_id") or "").strip().lower()
     is_trdca = strategy_id == "trdca_pro" or (bot.symbol or "").upper() == "MULTI"
     dca_cycles = _merge_bot_cycle_ids(db, bot.id, bot.account_id)
     if not is_trdca:
-        return {"cycles": dca_cycles, "dca_cycles": dca_cycles, "trb_cycles": [], "request_id": rid}
+        return {
+            "cycles": dca_cycles,
+            "dca_cycles": dca_cycles,
+            "trb_cycles": [],
+            "request_id": rid,
+        }
     state = load_state(db, bot.id)
     trb = (state or {}).get("trb") or {}
     trb_count = int(trb.get("trb_cycles_count") or 0)
     trb_cycles = list(range(1, trb_count + 1)) if trb_count > 0 else []
-    return {"cycles": dca_cycles, "dca_cycles": dca_cycles, "trb_cycles": trb_cycles, "request_id": rid}
+    return {
+        "cycles": dca_cycles,
+        "dca_cycles": dca_cycles,
+        "trb_cycles": trb_cycles,
+        "request_id": rid,
+    }
 
 
 def _grid_qty_pct_display(raw: Any) -> Optional[float]:
@@ -4473,7 +5154,13 @@ def _is_grid_trade_row(t: Dict[str, Any]) -> bool:
     if cid.startswith("cycle_open_") or "init_" in cid or cid.startswith("init"):
         return False
     reason = (t.get("reason") or "").lower()
-    if reason in ("initial_allocation", "trail_reentry_buy", "trail_profit_sell", "reentry", "profit_exit"):
+    if reason in (
+        "initial_allocation",
+        "trail_reentry_buy",
+        "trail_profit_sell",
+        "reentry",
+        "profit_exit",
+    ):
         return False
     if "reentry" in cid or "profit_exit" in cid:
         return False
@@ -4560,7 +5247,9 @@ def _resolve_trade_grid_index(
                 return idx
     except (TypeError, ValueError):
         pass
-    archived = _archive_lookup_trade(state, cycle_id, side, t.get("qty"), t.get("price"))
+    archived = _archive_lookup_trade(
+        state, cycle_id, side, t.get("qty"), t.get("price")
+    )
     if archived and archived.get("grid_index") is not None:
         return int(archived["grid_index"])
     cur_cid = int(state.get("cycle_id") or 1) if state else None
@@ -4568,9 +5257,9 @@ def _resolve_trade_grid_index(
         hist_key = "sell_history" if side == "SELL" else "buy_history"
         try:
             tq = float(t.get("qty") or 0)
-            tp = float(t.get("price") or 0)
+            float(t.get("price") or 0)
         except (TypeError, ValueError):
-            tq = tp = 0.0
+            tq = 0.0
         for h in reversed(state.get(hist_key) or []):
             if not isinstance(h, dict):
                 continue
@@ -4583,15 +5272,16 @@ def _resolve_trade_grid_index(
             except (TypeError, ValueError):
                 continue
     peers = [
-        x for x in trades
+        x
+        for x in trades
         if (x.get("side") or "").upper() == side and _is_grid_trade_row(x)
     ]
     peers.sort(key=lambda x: str(x.get("ts") or ""))
     for i, p in enumerate(peers):
-        if p is t or (
-            p.get("id") is not None and p.get("id") == t.get("id")
-        ) or (
-            p.get("order_id") and p.get("order_id") == t.get("order_id")
+        if (
+            p is t
+            or (p.get("id") is not None and p.get("id") == t.get("id"))
+            or (p.get("order_id") and p.get("order_id") == t.get("order_id"))
         ):
             try:
                 if p.get("slot_id") is not None and int(p.get("slot_id")) >= 0:
@@ -4602,7 +5292,9 @@ def _resolve_trade_grid_index(
     return -1
 
 
-def _extreme_from_execution(side: str, exec_p: float, trail_pct: float) -> Optional[float]:
+def _extreme_from_execution(
+    side: str, exec_p: float, trail_pct: float
+) -> Optional[float]:
     if exec_p <= 0 or trail_pct <= 0:
         return None
     try:
@@ -4614,19 +5306,27 @@ def _extreme_from_execution(side: str, exec_p: float, trail_pct: float) -> Optio
         return None
 
 
-def _archive_lookup(state: Optional[Dict[str, Any]], cycle_id: int, grid_index: int, side: str) -> Optional[Dict[str, Any]]:
+def _archive_lookup(
+    state: Optional[Dict[str, Any]], cycle_id: int, grid_index: int, side: str
+) -> Optional[Dict[str, Any]]:
     if not state:
         return None
     side_u = (side or "").upper()
     for row in state.get("cycle_grid_fills_archive") or []:
         if not isinstance(row, dict):
             continue
-        if int(row.get("cycle_id") or 0) == int(cycle_id) and int(row.get("grid_index") or -1) == int(grid_index) and (row.get("side") or "").upper() == side_u:
+        if (
+            int(row.get("cycle_id") or 0) == int(cycle_id)
+            and int(row.get("grid_index") or -1) == int(grid_index)
+            and (row.get("side") or "").upper() == side_u
+        ):
             return row
     return None
 
 
-def _state_grid_arrays(state: Dict[str, Any], side: str, idx: int) -> Tuple[Optional[float], Optional[float], Optional[float]]:
+def _state_grid_arrays(
+    state: Dict[str, Any], side: str, idx: int
+) -> Tuple[Optional[float], Optional[float], Optional[float]]:
     if side == "SELL":
         trigs = state.get("sell_grid_trigger_price") or []
         exts = state.get("sell_grid_peak_price") or []
@@ -4638,6 +5338,7 @@ def _state_grid_arrays(state: Dict[str, Any], side: str, idx: int) -> Tuple[Opti
     trig = trigs[idx] if idx < len(trigs) else None
     ext = exts[idx] if idx < len(exts) else None
     exec_p = fills[idx] if idx < len(fills) else None
+
     def _sf(v: Any) -> Optional[float]:
         if v is None:
             return None
@@ -4645,6 +5346,7 @@ def _state_grid_arrays(state: Dict[str, Any], side: str, idx: int) -> Tuple[Opti
             return float(v)
         except (TypeError, ValueError):
             return None
+
     return _sf(trig), _sf(ext), _sf(exec_p)
 
 
@@ -4675,9 +5377,13 @@ def _enrich_trades_grid_detail(
         gcfg = grids[idx] if idx < len(grids) and isinstance(grids[idx], dict) else {}
         grid_pct = _grid_pct_from_config(gcfg, side)
         if side == "SELL":
-            qty_pct = _grid_qty_pct_display(gcfg.get("sell_qty_pct_of_base") or gcfg.get("qty_pct"))
+            qty_pct = _grid_qty_pct_display(
+                gcfg.get("sell_qty_pct_of_base") or gcfg.get("qty_pct")
+            )
         else:
-            qty_pct = _grid_qty_pct_display(gcfg.get("buy_qty_pct_of_quote") or gcfg.get("qty_pct"))
+            qty_pct = _grid_qty_pct_display(
+                gcfg.get("buy_qty_pct_of_quote") or gcfg.get("qty_pct")
+            )
         trail_pct = trail_sell if side == "SELL" else trail_buy
         trig: Optional[float] = None
         extreme: Optional[float] = None
@@ -4690,8 +5396,16 @@ def _enrich_trades_grid_detail(
             extreme = archived.get("extreme_price")
             exec_p = archived.get("execution_price")
         if state and cur_cid == int(cycle_id):
-            fired_list = state.get("sell_grid_fired") if side == "SELL" else state.get("buy_grid_fired")
-            if isinstance(fired_list, list) and idx < len(fired_list) and fired_list[idx]:
+            fired_list = (
+                state.get("sell_grid_fired")
+                if side == "SELL"
+                else state.get("buy_grid_fired")
+            )
+            if (
+                isinstance(fired_list, list)
+                and idx < len(fired_list)
+                and fired_list[idx]
+            ):
                 t_trig, t_ext, t_exec = _state_grid_arrays(state, side, idx)
                 trig = trig if trig is not None else t_trig
                 extreme = extreme if extreme is not None else t_ext
@@ -4723,7 +5437,11 @@ def _enrich_trades_grid_detail(
             except (TypeError, ValueError):
                 ref_p = None
         if trig is None and grid_pct is not None and cycle_ref and cycle_ref > 0:
-            trig = cycle_ref * (1 + grid_pct / 100.0) if side == "SELL" else cycle_ref * (1 - grid_pct / 100.0)
+            trig = (
+                cycle_ref * (1 + grid_pct / 100.0)
+                if side == "SELL"
+                else cycle_ref * (1 - grid_pct / 100.0)
+            )
         if ref_p is None and state and int(state.get("cycle_id") or 0) == int(cycle_id):
             try:
                 ref_p = float(state.get("reference_price") or 0) or None
@@ -4748,14 +5466,22 @@ def _enrich_trades_grid_detail(
             exec_p = fill_f
         extreme_basis = fill_f if fill_f is not None else exec_p
         if extreme is None and extreme_basis is not None and trail_pct is not None:
-            extreme = _extreme_from_execution(side, float(extreme_basis), float(trail_pct))
+            extreme = _extreme_from_execution(
+                side, float(extreme_basis), float(trail_pct)
+            )
         avg_buy_p: Optional[float] = None
         avg_buy_quote: Optional[float] = None
         if side == "SELL":
-            avg_buy_p, avg_buy_quote = _avg_buy_price_for_grid_sell(state, cycle_id, trades)
+            avg_buy_p, avg_buy_quote = _avg_buy_price_for_grid_sell(
+                state, cycle_id, trades
+            )
         elif side == "BUY" and fill_f is not None:
             avg_buy_p = fill_f
-            avg_buy_quote = (fill_f * float(t.get("qty") or 0)) if t.get("qty") is not None else None
+            avg_buy_quote = (
+                (fill_f * float(t.get("qty") or 0))
+                if t.get("qty") is not None
+                else None
+            )
         grid_side_label = "Grid satış" if side == "SELL" else "Grid alım"
         display_label = f"{grid_side_label} #{idx + 1}"
         t["grid_detail"] = {
@@ -4768,14 +5494,20 @@ def _enrich_trades_grid_detail(
             "qty_pct": qty_pct,
             "trailing_pct": trail_pct,
             "trigger_price": round(trig, 8) if trig is not None else None,
-            "trigger_level_price": round(trigger_level, 8) if trigger_level is not None else None,
-            "trigger_hit_price": round(trigger_hit, 8) if trigger_hit is not None else None,
+            "trigger_level_price": round(trigger_level, 8)
+            if trigger_level is not None
+            else None,
+            "trigger_hit_price": round(trigger_hit, 8)
+            if trigger_hit is not None
+            else None,
             "trigger_pct_basis": "reference_price",
             "extreme_price": round(extreme, 8) if extreme is not None else None,
             "execution_price": round(exec_p, 8) if exec_p is not None else None,
             "reference_price": round(ref_p, 8) if ref_p is not None else None,
             "average_buy_price": round(avg_buy_p, 8) if avg_buy_p is not None else None,
-            "average_buy_quote_usdt": round(float(avg_buy_quote), 2) if avg_buy_quote is not None else None,
+            "average_buy_quote_usdt": round(float(avg_buy_quote), 2)
+            if avg_buy_quote is not None
+            else None,
             "extreme_label": "Tepe fiyat" if side == "SELL" else "Dip fiyat",
         }
 
@@ -4801,7 +5533,9 @@ def _is_cycle_close_trade_row(t: Dict[str, Any]) -> bool:
     return reason in ("trail_profit_sell", "trail_reentry_buy")
 
 
-def _profit_params_from_config(cfg: Dict[str, Any], trade_type: str) -> Tuple[Optional[float], Optional[float]]:
+def _profit_params_from_config(
+    cfg: Dict[str, Any], trade_type: str
+) -> Tuple[Optional[float], Optional[float]]:
     profit = cfg.get("profit") or {}
     try:
         if trade_type == "profit_exit":
@@ -4818,7 +5552,9 @@ def _profit_params_from_config(cfg: Dict[str, Any], trade_type: str) -> Tuple[Op
         return None, None
 
 
-def _ledger_archive_block(state: Optional[Dict[str, Any]], cycle_id: int) -> Optional[Dict[str, Any]]:
+def _ledger_archive_block(
+    state: Optional[Dict[str, Any]], cycle_id: int
+) -> Optional[Dict[str, Any]]:
     if not state:
         return None
     for block in state.get("cycle_ledger_fills_archive") or []:
@@ -4827,7 +5563,9 @@ def _ledger_archive_block(state: Optional[Dict[str, Any]], cycle_id: int) -> Opt
     return None
 
 
-def _grid_cost_totals(rows: List[Dict[str, Any]]) -> Tuple[Optional[float], Optional[float]]:
+def _grid_cost_totals(
+    rows: List[Dict[str, Any]],
+) -> Tuple[Optional[float], Optional[float]]:
     """(ortalama fiyat, toplam quote USDT)"""
     if not rows:
         return None, None
@@ -4873,20 +5611,24 @@ def _avg_buy_price_for_grid_sell(
     return avg, quote
 
 
-def _avg_grid_cost_from_ledger_fills(fills: List[Dict[str, Any]], trade_type: str) -> Optional[float]:
+def _avg_grid_cost_from_ledger_fills(
+    fills: List[Dict[str, Any]], trade_type: str
+) -> Optional[float]:
     avg, _ = _grid_cost_totals_from_ledger_fills(fills, trade_type)
     return avg
 
 
 def _grid_cost_totals_from_ledger_fills(
-    fills: List[Dict[str, Any]], trade_type: str,
+    fills: List[Dict[str, Any]],
+    trade_type: str,
 ) -> Tuple[Optional[float], Optional[float]]:
     if trade_type == "profit_exit":
         reason, side = "trail_buy_grid", "BUY"
     else:
         reason, side = "trail_sell_grid", "SELL"
     rows = [
-        f for f in fills
+        f
+        for f in fills
         if isinstance(f, dict)
         and (f.get("reason") or "") == reason
         and (f.get("side") or "").upper() == side
@@ -4902,18 +5644,16 @@ def _cost_basis_for_close_trade(
 ) -> Tuple[Optional[float], Optional[float]]:
     """Ortalama maliyet ve grid bazlı toplam harcanan/kazanılan quote (USDT)."""
     if state:
-        from app.botengine.strategies.dca_grid_trailing import (
-            _avg_buy_grid_from_history,
-            _avg_sell_grid_from_history,
-        )
         if trade_type == "profit_exit":
             hist = [
-                h for h in (state.get("buy_history") or [])
+                h
+                for h in (state.get("buy_history") or [])
                 if isinstance(h, dict) and h.get("grid_index") is not None
             ]
         else:
             hist = [
-                h for h in (state.get("sell_history") or [])
+                h
+                for h in (state.get("sell_history") or [])
                 if isinstance(h, dict) and h.get("grid_index") is not None
             ]
         avg, quote = _grid_cost_totals(hist)
@@ -4939,7 +5679,8 @@ def _cost_basis_for_close_trade(
     if trades:
         grid_side = "BUY" if trade_type == "profit_exit" else "SELL"
         grid_rows = [
-            x for x in trades
+            x
+            for x in trades
             if (x.get("side") or "").upper() == grid_side and _trade_has_grid_slot(x)
         ]
         avg, quote = _grid_cost_totals(grid_rows)
@@ -4959,6 +5700,7 @@ def _avg_cost_for_close_trade(
         _avg_buy_grid_from_history,
         _avg_sell_grid_from_history,
     )
+
     if trade_type == "profit_exit":
         avg = _avg_buy_grid_from_history(state.get("buy_history") or [])
     else:
@@ -5019,7 +5761,8 @@ def _lookup_close_archive(
             best = row
     if best is None:
         matches = [
-            row for row in (state.get("cycle_close_trades_archive") or [])
+            row
+            for row in (state.get("cycle_close_trades_archive") or [])
             if isinstance(row, dict)
             and int(row.get("cycle_id") or 0) == int(cycle_id)
             and (row.get("reason") or "").lower() == reason_l
@@ -5033,7 +5776,9 @@ def _lookup_close_archive(
     return None
 
 
-def _breakeven_from_avg(avg_cost: Optional[float], cfg: Dict[str, Any]) -> Optional[float]:
+def _breakeven_from_avg(
+    avg_cost: Optional[float], cfg: Dict[str, Any]
+) -> Optional[float]:
     if avg_cost is None or avg_cost <= 0:
         return None
     try:
@@ -5054,7 +5799,12 @@ def _close_trade_fill_price(
 ) -> Optional[float]:
     """Binance fill (gerçekleşen) — trail eşiği değil."""
     arch = archived if isinstance(archived, dict) else {}
-    for raw in (close_fill.get("price"), t.get("price"), arch.get("fill_price"), arch.get("price")):
+    for raw in (
+        close_fill.get("price"),
+        t.get("price"),
+        arch.get("fill_price"),
+        arch.get("price"),
+    ):
         if raw is None:
             continue
         try:
@@ -5099,11 +5849,19 @@ def _enrich_trades_close_detail(
         if reason not in ("trail_profit_sell", "trail_reentry_buy"):
             continue
         trade_type = "profit_exit" if reason == "trail_profit_sell" else "reentry"
-        side = (t.get("side") or ("SELL" if trade_type == "profit_exit" else "BUY")).upper()
+        side = (
+            t.get("side") or ("SELL" if trade_type == "profit_exit" else "BUY")
+        ).upper()
         trigger_pct, trailing_pct = _profit_params_from_config(cfg, trade_type)
         pnl_entry = _cycle_pnl_entry(state, cycle_id)
-        close_fill = (pnl_entry or {}).get("close_fill") if isinstance((pnl_entry or {}).get("close_fill"), dict) else {}
-        archived = _lookup_close_archive(state, cycle_id, reason, side, t.get("qty"), t.get("price"))
+        close_fill = (
+            (pnl_entry or {}).get("close_fill")
+            if isinstance((pnl_entry or {}).get("close_fill"), dict)
+            else {}
+        )
+        archived = _lookup_close_archive(
+            state, cycle_id, reason, side, t.get("qty"), t.get("price")
+        )
         avg_cost = archived.get("average_cost") if archived else None
         avg_quote: Optional[float] = None
         trigger = archived.get("trigger_price") if archived else None
@@ -5112,12 +5870,20 @@ def _enrich_trades_close_detail(
         fill_p = _close_trade_fill_price(t, close_fill, archived)
         trail_exec_p = _close_trade_trail_execution_price(close_fill, archived)
         if close_fill:
-            if trade_type == "profit_exit" and avg_cost is None and close_fill.get("avg_cost_quote_per_base") is not None:
+            if (
+                trade_type == "profit_exit"
+                and avg_cost is None
+                and close_fill.get("avg_cost_quote_per_base") is not None
+            ):
                 try:
                     avg_cost = float(close_fill["avg_cost_quote_per_base"])
                 except (TypeError, ValueError):
                     pass
-            if trade_type == "reentry" and avg_cost is None and close_fill.get("avg_sell_grid_quote_per_base") is not None:
+            if (
+                trade_type == "reentry"
+                and avg_cost is None
+                and close_fill.get("avg_sell_grid_quote_per_base") is not None
+            ):
                 try:
                     avg_cost = float(close_fill["avg_sell_grid_quote_per_base"])
                 except (TypeError, ValueError):
@@ -5148,7 +5914,9 @@ def _enrich_trades_close_detail(
                         dip = float(anchor)
                     except (TypeError, ValueError):
                         pass
-        basis_avg, basis_quote = _cost_basis_for_close_trade(state, cycle_id, trade_type, trades)
+        basis_avg, basis_quote = _cost_basis_for_close_trade(
+            state, cycle_id, trade_type, trades
+        )
         if avg_cost is None and basis_avg is not None:
             avg_cost = basis_avg
         if avg_quote is None and basis_quote is not None:
@@ -5160,11 +5928,25 @@ def _enrich_trades_close_detail(
                 trigger = float(avg_cost) * (1.0 - float(trigger_pct) / 100.0)
         extreme_basis = fill_p if fill_p is not None else exec_p
         if trade_type == "profit_exit":
-            if tepe is None and extreme_basis is not None and trailing_pct is not None and trailing_pct > 0:
-                tepe = _extreme_from_execution("SELL", float(extreme_basis), float(trailing_pct))
+            if (
+                tepe is None
+                and extreme_basis is not None
+                and trailing_pct is not None
+                and trailing_pct > 0
+            ):
+                tepe = _extreme_from_execution(
+                    "SELL", float(extreme_basis), float(trailing_pct)
+                )
         else:
-            if dip is None and extreme_basis is not None and trailing_pct is not None and trailing_pct > 0:
-                dip = _extreme_from_execution("BUY", float(extreme_basis), float(trailing_pct))
+            if (
+                dip is None
+                and extreme_basis is not None
+                and trailing_pct is not None
+                and trailing_pct > 0
+            ):
+                dip = _extreme_from_execution(
+                    "BUY", float(extreme_basis), float(trailing_pct)
+                )
         label = "Kar satışı" if trade_type == "profit_exit" else "Kar alımı"
         pnl_net = (pnl_entry or {}).get("pnl_usdt_net")
         inv_adv = (pnl_entry or {}).get("inventory_coin_adv_qty")
@@ -5179,17 +5961,25 @@ def _enrich_trades_close_detail(
             "trigger_pct": trigger_pct,
             "trailing_pct": trailing_pct,
             "average_cost": round(float(avg_cost), 8) if avg_cost is not None else None,
-            "average_cost_quote_usdt": round(float(avg_quote), 2) if avg_quote is not None else None,
+            "average_cost_quote_usdt": round(float(avg_quote), 2)
+            if avg_quote is not None
+            else None,
             "trigger_price": round(float(trigger), 8) if trigger is not None else None,
             "tepe_price": round(float(tepe), 8) if tepe is not None else None,
             "dip_price": round(float(dip), 8) if dip is not None else None,
             "fill_price": round(float(fill_p), 8) if fill_p is not None else None,
-            "execution_price": round(float(fill_p), 8) if fill_p is not None else (
-                round(float(trail_exec_p), 8) if trail_exec_p is not None else None
-            ),
-            "trail_execution_price": round(float(trail_exec_p), 8) if trail_exec_p is not None else None,
-            "realized_profit_usdt": round(float(pnl_net), 4) if pnl_net is not None else None,
-            "inventory_coin_adv_qty": round(float(inv_adv), 8) if inv_adv is not None else None,
+            "execution_price": round(float(fill_p), 8)
+            if fill_p is not None
+            else (round(float(trail_exec_p), 8) if trail_exec_p is not None else None),
+            "trail_execution_price": round(float(trail_exec_p), 8)
+            if trail_exec_p is not None
+            else None,
+            "realized_profit_usdt": round(float(pnl_net), 4)
+            if pnl_net is not None
+            else None,
+            "inventory_coin_adv_qty": round(float(inv_adv), 8)
+            if inv_adv is not None
+            else None,
         }
 
 
@@ -5198,7 +5988,9 @@ async def bots_trades(
     request: Request,
     bot_id: int,
     limit: int = Query(50, le=200),
-    cycle_id: Optional[int] = Query(None, description="Filter by tur/round; omit for all"),
+    cycle_id: Optional[int] = Query(
+        None, description="Filter by tur/round; omit for all"
+    ),
     cycle_type: Optional[str] = Query(None, description="dca or trb; TRDCA only"),
     account_id: Optional[int] = Query(None),
     account_code: Optional[str] = Query(None),
@@ -5210,13 +6002,18 @@ async def bots_trades(
     resolved_account_id = _resolve_account_id(account_id, account_code, db)
     bot = _resolve_bot(bot_id, resolved_account_id, current, db)
     if not bot:
-        raise HTTPException(status_code=404, detail=_detail_err("NOT_FOUND", "Bot not found", rid))
+        raise HTTPException(
+            status_code=404, detail=_detail_err("NOT_FOUND", "Bot not found", rid)
+        )
     from app.bot.ledger import Ledger
+
     ct = (cycle_type or "dca").strip().lower()
     if ct == "trb":
         trades = []
     else:
-        trades = Ledger.get_trades_dict(db, bot.id, bot.account_id, limit=limit, cycle_id=cycle_id)
+        trades = Ledger.get_trades_dict(
+            db, bot.id, bot.account_id, limit=limit, cycle_id=cycle_id
+        )
     cycle_summary: Optional[Dict[str, Any]] = None
     state = load_state(db, bot.id) if cycle_id is not None else None
     if state:
@@ -5227,8 +6024,14 @@ async def bots_trades(
         cur_cid = int(state.get("cycle_id") or 1)
         if cur_cid == int(cycle_id):
             ledger = state.get("cycle_ledger_current") or {}
-            if isinstance(ledger, dict) and (not ledger.get("symbol") or ledger.get("symbol") == sym):
-                extra.extend(_ledger_fills_to_trade_dicts(ledger.get("fills") or [], sym, int(cycle_id)))
+            if isinstance(ledger, dict) and (
+                not ledger.get("symbol") or ledger.get("symbol") == sym
+            ):
+                extra.extend(
+                    _ledger_fills_to_trade_dicts(
+                        ledger.get("fills") or [], sym, int(cycle_id)
+                    )
+                )
         for block in state.get("cycle_ledger_fills_archive") or []:
             if not isinstance(block, dict):
                 continue
@@ -5240,21 +6043,29 @@ async def bots_trades(
     if cycle_id is not None and ct != "trb":
         trades = _merge_cycle_trades(trades, extra)
         if extra:
-            trades = Ledger.get_trades_dict(db, bot.id, bot.account_id, limit=limit, cycle_id=cycle_id)
+            trades = Ledger.get_trades_dict(
+                db, bot.id, bot.account_id, limit=limit, cycle_id=cycle_id
+            )
             trades = _merge_cycle_trades(trades, extra)
         if state and int(state.get("cycle_id") or 1) == int(cycle_id) and not trades:
             synth = _synthetic_trades_from_state(state, sym, int(cycle_id))
             if synth:
                 trades = _merge_cycle_trades(trades, synth)
     if cycle_id is not None and ct == "trb":
-        cycle_summary = {"cycle_type": "trb", "trade_count": 0, "note": "Rebalancing tur işlemleri ayrı kaydedilmiyor."}
+        cycle_summary = {
+            "cycle_type": "trb",
+            "trade_count": 0,
+            "note": "Rebalancing tur işlemleri ayrı kaydedilmiyor.",
+        }
     elif cycle_id is not None:
         ts_list: List[datetime] = []
         for t in trades:
             dt = _parse_ts_utc(t.get("ts"))
             if dt is not None:
                 ts_list.append(dt)
-        is_open_cycle = state is not None and int(state.get("cycle_id") or 1) == int(cycle_id)
+        is_open_cycle = state is not None and int(state.get("cycle_id") or 1) == int(
+            cycle_id
+        )
         duration_sec = 0.0
         started_at_iso: Optional[str] = None
         completed_snapshot: Optional[Dict[str, Any]] = None
@@ -5270,7 +6081,9 @@ async def bots_trades(
             started_at_iso = resolve_cycle_opened_at_for_cycle(state, int(cycle_id))
             start_dt = _parse_ts_utc(started_at_iso)
             if start_dt is not None:
-                duration_sec = max(0.0, (datetime.now(timezone.utc) - start_dt).total_seconds())
+                duration_sec = max(
+                    0.0, (datetime.now(timezone.utc) - start_dt).total_seconds()
+                )
         elif completed_snapshot:
             started_at_iso = completed_snapshot.get("started_at")
             start_dt = _parse_ts_utc(started_at_iso)
@@ -5281,7 +6094,12 @@ async def bots_trades(
                 try:
                     duration_sec = (max(ts_list) - min(ts_list)).total_seconds()
                 except Exception as e:
-                    logger.warning("bots_trades duration_sec failed bot_id=%s cycle_id=%s: %s", bot.id, cycle_id, e)
+                    logger.warning(
+                        "bots_trades duration_sec failed bot_id=%s cycle_id=%s: %s",
+                        bot.id,
+                        cycle_id,
+                        e,
+                    )
             from app.services.bot_performance_service import _completed_cycle_side
 
             snap_side = _completed_cycle_side(completed_snapshot)
@@ -5291,7 +6109,12 @@ async def bots_trades(
             try:
                 duration_sec = (max(ts_list) - min(ts_list)).total_seconds()
             except Exception as e:
-                logger.warning("bots_trades duration_sec failed bot_id=%s cycle_id=%s: %s", bot.id, cycle_id, e)
+                logger.warning(
+                    "bots_trades duration_sec failed bot_id=%s cycle_id=%s: %s",
+                    bot.id,
+                    cycle_id,
+                    e,
+                )
         pnl_usdt = None
         cycle_entry = None
         if state and isinstance(state.get("cycle_pnls"), list):
@@ -5313,7 +6136,9 @@ async def bots_trades(
 
         pnl_f = _safe_float(pnl_usdt)
         cycle_summary = {
-            "cycle_type": "Açık tur" if is_open_cycle and cycle_entry is None else "dca",
+            "cycle_type": "Açık tur"
+            if is_open_cycle and cycle_entry is None
+            else "dca",
             "duration_sec": round(duration_sec, 1) if duration_sec else None,
             "trade_count": sum(1 for t in trades if _is_cycle_trades_panel_row(t)),
             "pnl_usdt": round(pnl_f, 2) if pnl_f is not None else None,
@@ -5323,17 +6148,31 @@ async def bots_trades(
         if cycle_entry is not None:
             cycle_summary["cycle_type"] = cycle_entry.get("cycle_type") or "dca"
             cycle_summary["pnl_primary_mode"] = cycle_entry.get("pnl_primary_mode")
-            cycle_summary["inventory_coin_adv_qty"] = cycle_entry.get("inventory_coin_adv_qty")
-            cycle_summary["inventory_fees_usdt"] = cycle_entry.get("inventory_fees_usdt")
+            cycle_summary["inventory_coin_adv_qty"] = cycle_entry.get(
+                "inventory_coin_adv_qty"
+            )
+            cycle_summary["inventory_fees_usdt"] = cycle_entry.get(
+                "inventory_fees_usdt"
+            )
             cycle_summary["cash_pnl_usdt"] = cycle_entry.get("cash_pnl_usdt")
             cycle_summary["cash_fees_usdt"] = cycle_entry.get("cash_fees_usdt")
             cycle_summary["close_reason"] = cycle_entry.get("close_reason")
         elif is_open_cycle:
             ledger = state.get("cycle_ledger_current") or {}
             if isinstance(ledger, dict):
-                cycle_summary["cash_pnl_usdt"] = ledger.get("cash_fifo_pnl_usdt") if ledger.get("cash_fifo_pnl_usdt") is not None else ledger.get("cash_pnl_usdt")
-                cycle_summary["cash_fees_usdt"] = ledger.get("cash_fifo_fees_usdt") if ledger.get("cash_fifo_fees_usdt") is not None else ledger.get("cash_fees_usdt")
-                cycle_summary["inventory_coin_adv_qty"] = ledger.get("inventory_coin_adv_qty")
+                cycle_summary["cash_pnl_usdt"] = (
+                    ledger.get("cash_fifo_pnl_usdt")
+                    if ledger.get("cash_fifo_pnl_usdt") is not None
+                    else ledger.get("cash_pnl_usdt")
+                )
+                cycle_summary["cash_fees_usdt"] = (
+                    ledger.get("cash_fifo_fees_usdt")
+                    if ledger.get("cash_fifo_fees_usdt") is not None
+                    else ledger.get("cash_fees_usdt")
+                )
+                cycle_summary["inventory_coin_adv_qty"] = ledger.get(
+                    "inventory_coin_adv_qty"
+                )
                 cycle_summary["inventory_fees_usdt"] = ledger.get("inventory_fees_usdt")
             from app.botengine.strategies.dca_grid_trailing import infer_cycle_grid_side
 
@@ -5363,16 +6202,27 @@ async def bots_trades(
         _enrich_trades_fee(trades, sym, cfg_raw)
         _enrich_trades_grid_detail(trades, cfg_raw, state, int(cycle_id))
         _enrich_trades_close_detail(trades, cfg_raw, state, int(cycle_id))
-    return {"trades": trades, "cycle_summary": cycle_summary, "cycle_type": ct, "request_id": rid}
+    return {
+        "trades": trades,
+        "cycle_summary": cycle_summary,
+        "cycle_type": ct,
+        "request_id": rid,
+    }
 
 
 def _completed_cycle_side(entry: Dict[str, Any]) -> Optional[str]:
     from app.services.bot_performance_service import _completed_cycle_side as _side
+
     return _side(entry)
 
 
-def _completed_cycle_in_period(entry: Dict[str, Any], start_ts: Optional[datetime]) -> bool:
-    from app.services.bot_performance_service import _completed_cycle_in_period as _in_period
+def _completed_cycle_in_period(
+    entry: Dict[str, Any], start_ts: Optional[datetime]
+) -> bool:
+    from app.services.bot_performance_service import (
+        _completed_cycle_in_period as _in_period,
+    )
+
     return _in_period(entry, start_ts)
 
 
@@ -5382,6 +6232,7 @@ def _aggregate_dual_perf_closed_cycles(
     initial_capital: float,
 ) -> Dict[str, Any]:
     from app.services.bot_performance_service import aggregate_dual_perf_closed_cycles
+
     completed = (state or {}).get("completed_cycle_dual_pnls") or []
     return aggregate_dual_perf_closed_cycles(completed, start_ts, initial_capital)
 
@@ -5389,6 +6240,7 @@ def _aggregate_dual_perf_closed_cycles(
 def _performance_period_range(period: str):
     """Return (start_ts, end_ts) for period. end_ts=None means now."""
     from app.services.bot_performance_service import performance_period_start_ts
+
     return (performance_period_start_ts(period), None)
 
 
@@ -5407,11 +6259,20 @@ async def bots_performance(
     resolved_account_id = _resolve_account_id(account_id, account_code, db)
     bot = _resolve_bot(bot_id, resolved_account_id, current, db)
     if not bot:
-        raise HTTPException(status_code=404, detail=_detail_err("NOT_FOUND", "Bot not found", rid))
+        raise HTTPException(
+            status_code=404, detail=_detail_err("NOT_FOUND", "Bot not found", rid)
+        )
 
     pnl_data = PnlService.calculate_bot_pnl(db, bot.id, bot.account_id)
     if pnl_data.get("error"):
-        pnl_data = {"total_usd": 0.0, "realized": 0.0, "unrealized": 0.0, "daily": 0.0, "monthly": 0.0, "current_price": 0.0}
+        pnl_data = {
+            "total_usd": 0.0,
+            "realized": 0.0,
+            "unrealized": 0.0,
+            "daily": 0.0,
+            "monthly": 0.0,
+            "current_price": 0.0,
+        }
 
     now = datetime.now(timezone.utc)
     from app.services.bot_performance_service import (
@@ -5425,7 +6286,9 @@ async def bots_performance(
     start_ts, _ = _performance_period_range(period)
 
     # Trades in period (grafik/legacy); metrik kartları dosyadaki kapanan turlardan
-    q_trades = db.query(Trade).filter(Trade.bot_id == bot.id, Trade.account_id == bot.account_id)
+    q_trades = db.query(Trade).filter(
+        Trade.bot_id == bot.id, Trade.account_id == bot.account_id
+    )
     if start_ts:
         q_trades = q_trades.filter(Trade.ts >= start_ts)
     trades_in_period = q_trades.order_by(Trade.ts.asc()).all()
@@ -5436,17 +6299,26 @@ async def bots_performance(
     realized = float(pnl_data.get("realized", 0) or 0)
 
     # Initial and PnL for selected period. "all" = başlangıç sermayesine göre (başlar başlamaz kar göstermemek için).
-    cfg_perf = json.loads(bot.config_json or "{}") if getattr(bot, "config_json", None) else {}
+    cfg_perf = (
+        json.loads(bot.config_json or "{}") if getattr(bot, "config_json", None) else {}
+    )
     config_initial = float(
-        cfg_perf.get("initial_capital_usdt") or cfg_perf.get("budget_usd")
-        or cfg_perf.get("bot_budget_usdt") or cfg_perf.get("bot_budget_quote") or 0
+        cfg_perf.get("initial_capital_usdt")
+        or cfg_perf.get("budget_usd")
+        or cfg_perf.get("bot_budget_usdt")
+        or cfg_perf.get("bot_budget_quote")
+        or 0
     )
 
     if start_ts and trades_in_period:
         # Period start: first snapshot before start_ts or first trade in period as proxy
         first_snap = (
             db.query(PnlSnapshot)
-            .filter(PnlSnapshot.bot_id == bot.id, PnlSnapshot.account_id == bot.account_id, PnlSnapshot.ts < start_ts)
+            .filter(
+                PnlSnapshot.bot_id == bot.id,
+                PnlSnapshot.account_id == bot.account_id,
+                PnlSnapshot.ts < start_ts,
+            )
             .order_by(PnlSnapshot.ts.desc())
             .first()
         )
@@ -5461,7 +6333,16 @@ async def bots_performance(
         # period "all": referans = başlangıç sermayesi (config); böylece bot başlar başlamaz +%100 kar görünmez
         initial_usd = config_initial if config_initial > 0 else 0.0
         if initial_usd <= 0:
-            first_buy = db.query(Trade).filter(Trade.bot_id == bot.id, Trade.account_id == bot.account_id, Trade.side == "BUY").order_by(Trade.ts.asc()).first()
+            first_buy = (
+                db.query(Trade)
+                .filter(
+                    Trade.bot_id == bot.id,
+                    Trade.account_id == bot.account_id,
+                    Trade.side == "BUY",
+                )
+                .order_by(Trade.ts.asc())
+                .first()
+            )
             if first_buy:
                 initial_usd = float(first_buy.qty * first_buy.price)
         if initial_usd <= 0:
@@ -5472,7 +6353,8 @@ async def bots_performance(
     sym_perf = (bot.symbol or "").strip().upper()
     strategy_id_perf = (cfg_perf.get("strategy_id") or "").strip().lower()
     is_trailing_dual_dca = sym_perf != "MULTI" and strategy_id_perf not in (
-        "trdca_pro", "multi_asset_rebalance",
+        "trdca_pro",
+        "multi_asset_rebalance",
     )
     dual_perf: Optional[Dict[str, Any]] = None
     initial_for_pnl = config_initial if config_initial > 0 else (initial_usd or 0.0)
@@ -5481,7 +6363,9 @@ async def bots_performance(
         closed_cycles, perf_date_from, perf_date_to = load_bot_closed_cycles_for_period(
             db, bot.id, bot.account_id, period, state_for_pnl
         )
-        from app.services.bot_performance_service import aggregate_dual_perf_closed_cycles
+        from app.services.bot_performance_service import (
+            aggregate_dual_perf_closed_cycles,
+        )
 
         dual_perf = aggregate_dual_perf_closed_cycles(
             closed_cycles,
@@ -5495,10 +6379,14 @@ async def bots_performance(
         dual_perf["period_label"] = perf_period_label
         pnl_usd = float(dual_perf["cash_pnl_usdt"])
         pnl_pct = float(dual_perf["cash_pnl_pct"] or 0.0)
-        fees_usd = float(dual_perf["cash_fees_usdt"]) + float(dual_perf.get("inventory_fees_usdt") or 0)
+        fees_usd = float(dual_perf["cash_fees_usdt"]) + float(
+            dual_perf.get("inventory_fees_usdt") or 0
+        )
     if dual_perf is not None and initial_for_pnl > 0 and cur_px_perf > 0:
         inv_coin = float(dual_perf.get("inventory_pnl_coin") or 0)
-        dual_perf["inventory_pnl_pct"] = round(inv_coin * cur_px_perf / initial_for_pnl * 100.0, 2)
+        dual_perf["inventory_pnl_pct"] = round(
+            inv_coin * cur_px_perf / initial_for_pnl * 100.0, 2
+        )
     elif dual_perf is not None:
         dual_perf["inventory_pnl_pct"] = None
     elif state_for_pnl and state_for_pnl.get("cycle_pnls"):
@@ -5510,6 +6398,7 @@ async def bots_performance(
     else:
         pnl_usd = 0.0
         from sqlalchemy import text
+
         q_events = db.execute(
             text("""
                 SELECT meta_json FROM bot_engine_events
@@ -5529,7 +6418,9 @@ async def bots_performance(
                     pass
     if not is_trailing_dual_dca:
         pnl_pct = (pnl_usd / initial_for_pnl * 100.0) if initial_for_pnl > 0 else 0.0
-    real_performance_pct = pnl_pct if is_trailing_dual_dca or initial_for_pnl > 0 else 0.0
+    real_performance_pct = (
+        pnl_pct if is_trailing_dual_dca or initial_for_pnl > 0 else 0.0
+    )
 
     # Aktif tur: state + ledger birleşimi (/cycles ile aynı kaynak)
     merged_cycles = _merge_bot_cycle_ids(db, bot.id, bot.account_id)
@@ -5565,31 +6456,66 @@ async def bots_performance(
                 bp = float(bot_pct_val) if bot_pct_val is not None else 0.0
                 pp = float(parite_pct_val) if parite_pct_val is not None else 0.0
                 val_usd = init_cap * (1.0 + bp / 100.0) if init_cap > 0 else 0.0
-                chart_series.append({"t": t_str, "value": round(val_usd, 2), "pct": round(bp, 2)})
-                pair_series.append({"t": t_str, "price": 100.0 * (1.0 + pp / 100.0), "pct": round(pp, 2)})
+                chart_series.append(
+                    {"t": t_str, "value": round(val_usd, 2), "pct": round(bp, 2)}
+                )
+                pair_series.append(
+                    {
+                        "t": t_str,
+                        "price": 100.0 * (1.0 + pp / 100.0),
+                        "pct": round(pp, 2),
+                    }
+                )
             if chart_series and total_usd is not None:
                 last_val = chart_series[-1].get("value", 0)
                 if abs(float(total_usd) - last_val) > 0.01:
-                    bp_now = (total_usd / init_cap - 1.0) * 100.0 if init_cap > 0 else 0.0
-                    chart_series.append({"t": now.isoformat(), "value": round(float(total_usd), 2), "pct": round(bp_now, 2)})
+                    bp_now = (
+                        (total_usd / init_cap - 1.0) * 100.0 if init_cap > 0 else 0.0
+                    )
+                    chart_series.append(
+                        {
+                            "t": now.isoformat(),
+                            "value": round(float(total_usd), 2),
+                            "pct": round(bp_now, 2),
+                        }
+                    )
                     parite_now = pair_series[-1].get("pct") if pair_series else 0.0
                     init_prices = baseline_chart.get("initial_prices") or {}
                     coin_weights_b = baseline_chart.get("coin_weights") or {}
                     quote_a = (cfg_perf.get("quote_asset") or "USDT").strip().upper()
                     if init_prices and coin_weights_b:
                         try:
-                            curr_prices = await _fetch_prices_parallel(list(coin_weights_b.keys()), quote_a)
-                            parite_pct_live = compute_trdca_parite_pct(init_prices, coin_weights_b, curr_prices, quote_a)
+                            curr_prices = await _fetch_prices_parallel(
+                                list(coin_weights_b.keys()), quote_a
+                            )
+                            parite_pct_live = compute_trdca_parite_pct(
+                                init_prices, coin_weights_b, curr_prices, quote_a
+                            )
                             if parite_pct_live is not None:
                                 parite_now = round(parite_pct_live, 2)
                         except Exception:
                             pass
-                    pair_series.append({"t": now.isoformat(), "price": 100.0 * (1.0 + parite_now / 100.0), "pct": parite_now})
-        elif strategy_id_chart == "trdca_pro" and total_usd is not None and config_initial > 0:
+                    pair_series.append(
+                        {
+                            "t": now.isoformat(),
+                            "price": 100.0 * (1.0 + parite_now / 100.0),
+                            "pct": parite_now,
+                        }
+                    )
+        elif (
+            strategy_id_chart == "trdca_pro"
+            and total_usd is not None
+            and config_initial > 0
+        ):
             init_cap = config_initial
             bp_now = (total_usd / init_cap - 1.0) * 100.0
             parite_now = 0.0
-            row_b = db.execute(text("SELECT chart_payload FROM bot_perf_chart_state WHERE bot_id = :bid"), {"bid": bot.id}).fetchone()
+            row_b = db.execute(
+                text(
+                    "SELECT chart_payload FROM bot_perf_chart_state WHERE bot_id = :bid"
+                ),
+                {"bid": bot.id},
+            ).fetchone()
             payload_b = json.loads(row_b[0]) if row_b and row_b[0] else {}
             baseline_chart = payload_b.get("baseline") or {}
             init_prices = baseline_chart.get("initial_prices") or {}
@@ -5597,21 +6523,39 @@ async def bots_performance(
             quote_a = (cfg_perf.get("quote_asset") or "USDT").strip().upper()
             if init_prices and coin_weights_b:
                 try:
-                    curr_prices = await _fetch_prices_parallel(list(coin_weights_b.keys()), quote_a)
-                    parite_pct_live = compute_trdca_parite_pct(init_prices, coin_weights_b, curr_prices, quote_a)
+                    curr_prices = await _fetch_prices_parallel(
+                        list(coin_weights_b.keys()), quote_a
+                    )
+                    parite_pct_live = compute_trdca_parite_pct(
+                        init_prices, coin_weights_b, curr_prices, quote_a
+                    )
                     if parite_pct_live is not None:
                         parite_now = round(parite_pct_live, 2)
                 except Exception:
                     pass
-            chart_series = [{"t": now.isoformat(), "value": round(float(total_usd), 2), "pct": round(bp_now, 2)}]
-            pair_series = [{"t": now.isoformat(), "price": 100.0 * (1.0 + parite_now / 100.0), "pct": parite_now}]
+            chart_series = [
+                {
+                    "t": now.isoformat(),
+                    "value": round(float(total_usd), 2),
+                    "pct": round(bp_now, 2),
+                }
+            ]
+            pair_series = [
+                {
+                    "t": now.isoformat(),
+                    "price": 100.0 * (1.0 + parite_now / 100.0),
+                    "pct": parite_now,
+                }
+            ]
 
     all_snapshots = []
     all_trades = []
     if not chart_series and not pair_series:
         all_snapshots = (
             db.query(PnlSnapshot)
-            .filter(PnlSnapshot.bot_id == bot.id, PnlSnapshot.account_id == bot.account_id)
+            .filter(
+                PnlSnapshot.bot_id == bot.id, PnlSnapshot.account_id == bot.account_id
+            )
             .order_by(PnlSnapshot.ts.asc())
             .all()
         )
@@ -5636,24 +6580,48 @@ async def bots_performance(
                 sorted_times = [(now, now.isoformat())]
 
             first_ts = sorted_times[0][0] if sorted_times else now
-            init_usd = float(all_snapshots[0].total_usd) if all_snapshots else total_usd or 0.0
-            init_price = float(all_trades[0].price) if all_trades else float(pnl_data.get("current_price") or 0) or 0.0
+            init_usd = (
+                float(all_snapshots[0].total_usd) if all_snapshots else total_usd or 0.0
+            )
+            init_price = (
+                float(all_trades[0].price)
+                if all_trades
+                else float(pnl_data.get("current_price") or 0) or 0.0
+            )
             if init_price <= 0:
                 init_price = 1.0
 
             snap_idx = 0
             trade_idx = 0
             for ts, t_str in sorted_times:
-                while snap_idx < len(all_snapshots) and all_snapshots[snap_idx].ts <= ts:
+                while (
+                    snap_idx < len(all_snapshots) and all_snapshots[snap_idx].ts <= ts
+                ):
                     snap_idx += 1
                 while trade_idx < len(all_trades) and all_trades[trade_idx].ts <= ts:
                     trade_idx += 1
-                last_usd = float(all_snapshots[snap_idx - 1].total_usd) if snap_idx > 0 else init_usd
-                last_price = float(all_trades[trade_idx - 1].price) if trade_idx > 0 else init_price
-                balance_pct = (last_usd / init_usd - 1.0) * 100.0 if init_usd > 0 else 0.0
-                price_pct = (last_price / init_price - 1.0) * 100.0 if init_price > 0 else 0.0
-                chart_series.append({"t": t_str, "value": last_usd, "pct": round(balance_pct, 2)})
-                pair_series.append({"t": t_str, "price": last_price, "pct": round(price_pct, 2)})
+                last_usd = (
+                    float(all_snapshots[snap_idx - 1].total_usd)
+                    if snap_idx > 0
+                    else init_usd
+                )
+                last_price = (
+                    float(all_trades[trade_idx - 1].price)
+                    if trade_idx > 0
+                    else init_price
+                )
+                balance_pct = (
+                    (last_usd / init_usd - 1.0) * 100.0 if init_usd > 0 else 0.0
+                )
+                price_pct = (
+                    (last_price / init_price - 1.0) * 100.0 if init_price > 0 else 0.0
+                )
+                chart_series.append(
+                    {"t": t_str, "value": last_usd, "pct": round(balance_pct, 2)}
+                )
+                pair_series.append(
+                    {"t": t_str, "price": last_price, "pct": round(price_pct, 2)}
+                )
 
             # Resample: ilk 24 saat tüm noktalar; sonrası saat başı bir nokta (grafik bot açıldığından itibaren, kalp atışı gibi)
             one_day = timedelta(days=1)
@@ -5672,27 +6640,72 @@ async def bots_performance(
                 resampled_indices.add(0)
                 resampled_indices.add(len(sorted_times) - 1)
             if resampled_indices:
-                chart_series = [chart_series[i] for i in range(len(chart_series)) if i in resampled_indices]
-                pair_series = [pair_series[i] for i in range(len(pair_series)) if i in resampled_indices]
+                chart_series = [
+                    chart_series[i]
+                    for i in range(len(chart_series))
+                    if i in resampled_indices
+                ]
+                pair_series = [
+                    pair_series[i]
+                    for i in range(len(pair_series))
+                    if i in resampled_indices
+                ]
 
             if not chart_series and total_usd is not None:
                 chart_series = [{"t": now.isoformat(), "value": total_usd, "pct": 0.0}]
-                pair_series = [{"t": now.isoformat(), "price": float(pnl_data.get("current_price") or 0), "pct": 0.0}]
+                pair_series = [
+                    {
+                        "t": now.isoformat(),
+                        "price": float(pnl_data.get("current_price") or 0),
+                        "pct": 0.0,
+                    }
+                ]
             if len(chart_series) == 1 and total_usd is not None:
-                cur_price = float(pnl_data.get("current_price") or 0) or (float(all_trades[-1].price) if all_trades else 0)
+                cur_price = float(pnl_data.get("current_price") or 0) or (
+                    float(all_trades[-1].price) if all_trades else 0
+                )
                 init_usd_chart = float(chart_series[0]["value"])
-                init_price_chart = float(pair_series[0]["price"]) if pair_series and pair_series[0].get("price") else cur_price or 1.0
-                balance_pct = (total_usd / init_usd_chart - 1.0) * 100.0 if init_usd_chart > 0 else 0.0
-                price_pct = (cur_price / init_price_chart - 1.0) * 100.0 if init_price_chart > 0 else 0.0
-                chart_series.append({"t": now.isoformat(), "value": total_usd, "pct": round(balance_pct, 2)})
-                pair_series.append({"t": now.isoformat(), "price": cur_price, "pct": round(price_pct, 2)})
+                init_price_chart = (
+                    float(pair_series[0]["price"])
+                    if pair_series and pair_series[0].get("price")
+                    else cur_price or 1.0
+                )
+                balance_pct = (
+                    (total_usd / init_usd_chart - 1.0) * 100.0
+                    if init_usd_chart > 0
+                    else 0.0
+                )
+                price_pct = (
+                    (cur_price / init_price_chart - 1.0) * 100.0
+                    if init_price_chart > 0
+                    else 0.0
+                )
+                chart_series.append(
+                    {
+                        "t": now.isoformat(),
+                        "value": total_usd,
+                        "pct": round(balance_pct, 2),
+                    }
+                )
+                pair_series.append(
+                    {
+                        "t": now.isoformat(),
+                        "price": cur_price,
+                        "pct": round(price_pct, 2),
+                    }
+                )
 
     # Rapor için: başlangıç/güncel fiyat (perfReport'ta "—" çıkmaması için)
     state = state_for_pnl or load_state(db, bot.id)
     reference_price = None
     if all_trades:
         reference_price = float(all_trades[0].price)
-    elif pair_series and len(pair_series) > 0 and pair_series[0].get("price") is not None and float(pair_series[0]["price"]) > 0:
+    elif (
+        pair_series
+        and len(pair_series) > 0
+        and pair_series[0].get("price") is not None
+        and float(pair_series[0]["price"]) > 0
+    ):
         reference_price = float(pair_series[0]["price"])
     if reference_price is None and state and (state.get("reference_price") or 0) > 0:
         reference_price = float(state["reference_price"])
@@ -5701,7 +6714,12 @@ async def bots_performance(
         current_price_out = float(pnl_data["current_price"])
     elif all_trades:
         current_price_out = float(all_trades[-1].price)
-    elif pair_series and len(pair_series) > 0 and pair_series[-1].get("price") is not None and float(pair_series[-1]["price"]) > 0:
+    elif (
+        pair_series
+        and len(pair_series) > 0
+        and pair_series[-1].get("price") is not None
+        and float(pair_series[-1]["price"]) > 0
+    ):
         current_price_out = float(pair_series[-1]["price"])
     if current_price_out is None and state and (state.get("reference_price") or 0) > 0:
         current_price_out = float(state["reference_price"])
@@ -5712,7 +6730,11 @@ async def bots_performance(
                 current_price_out = float(hub_p)
         except Exception:
             pass
-    if reference_price is None and current_price_out is not None and current_price_out > 0:
+    if (
+        reference_price is None
+        and current_price_out is not None
+        and current_price_out > 0
+    ):
         reference_price = current_price_out
     if reference_price is not None and reference_price <= 0:
         reference_price = None
@@ -5745,10 +6767,20 @@ async def bots_performance(
             cycle_base_delta_last = round(float(bd), 8)
     if state_for_pnl and state_for_pnl.get("target_budgets"):
         tb = state_for_pnl["target_budgets"]
-        if isinstance(tb, dict) and any(k in tb for k in ("equity_usdt", "target_quote_usdt", "target_base_usdt")):
-            target_budgets = {k: round(float(v), 2) if isinstance(v, (int, float)) else v for k, v in tb.items() if k in ("equity_usdt", "target_quote_usdt", "target_base_usdt", "ts")}
+        if isinstance(tb, dict) and any(
+            k in tb for k in ("equity_usdt", "target_quote_usdt", "target_base_usdt")
+        ):
+            target_budgets = {
+                k: round(float(v), 2) if isinstance(v, (int, float)) else v
+                for k, v in tb.items()
+                if k in ("equity_usdt", "target_quote_usdt", "target_base_usdt", "ts")
+            }
 
-    current_cycle_id = int(state_for_pnl.get("cycle_id") or 1) if state_for_pnl else (cycles_count or 1)
+    current_cycle_id = (
+        int(state_for_pnl.get("cycle_id") or 1)
+        if state_for_pnl
+        else (cycles_count or 1)
+    )
 
     result = {
         "request_id": rid,
@@ -5767,8 +6799,12 @@ async def bots_performance(
         "balance_start_usd": round(initial_usd, 2),
         "config_budget_usd": config_budget_usd,
         "balance_end_usd": round(total_usd, 2),
-        "reference_price": round(reference_price, 8) if reference_price is not None else None,
-        "current_price": round(current_price_out, 8) if current_price_out is not None else None,
+        "reference_price": round(reference_price, 8)
+        if reference_price is not None
+        else None,
+        "current_price": round(current_price_out, 8)
+        if current_price_out is not None
+        else None,
         "chart_series": chart_series,
         "pair_series": pair_series,
         "cycle_pnl_last": cycle_pnl_last,

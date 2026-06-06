@@ -10,6 +10,7 @@ Usage:
 Arama (bulursa listeler):
   python3 scripts/maintenance/restore_dca_db.py --search
 """
+
 from __future__ import annotations
 
 import argparse
@@ -25,10 +26,12 @@ ROOT = Path(__file__).resolve().parents[2]
 def _active_db() -> Path:
     try:
         from dotenv import load_dotenv
+
         load_dotenv(ROOT / ".env")
     except Exception:
         pass
     import os
+
     url = os.getenv("DATABASE_URL", "")
     if url.startswith("sqlite:///"):
         p = url.replace("sqlite:///", "", 1).split("?")[0]
@@ -94,7 +97,9 @@ def restore(source: Path, target: Path) -> None:
             p.unlink()
 
     shutil.copy2(source, target)
-    subprocess.run(["sqlite3", str(target), "PRAGMA wal_checkpoint(TRUNCATE);"], check=False)
+    subprocess.run(
+        ["sqlite3", str(target), "PRAGMA wal_checkpoint(TRUNCATE);"], check=False
+    )
     print(f"Geri yuklendi: {source} -> {target}")
     print(f"integrity_check: {_integrity(target)}")
     con = sqlite3.connect(str(target))
@@ -118,8 +123,12 @@ def main() -> None:
         if not cands:
             print("  (bulunamadi)")
             print("\nSilinen ./dca.db icin Time Machine veya Disk Drill gerekebilir.")
-            print("Sunucuda kopya varsa: scp user@host:/path/dca.db ~/Desktop/dca.db.recovered")
-            print("Sonra: python3 scripts/maintenance/restore_dca_db.py ~/Desktop/dca.db.recovered")
+            print(
+                "Sunucuda kopya varsa: scp user@host:/path/dca.db ~/Desktop/dca.db.recovered"
+            )
+            print(
+                "Sonra: python3 scripts/maintenance/restore_dca_db.py ~/Desktop/dca.db.recovered"
+            )
         else:
             for p in cands[:20]:
                 print(f"  {p.stat().st_size:>9}  {p}")

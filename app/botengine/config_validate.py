@@ -1,6 +1,7 @@
 """
 DCA grid trailing: preflight validation (budget × grid % vs min notional).
 """
+
 from __future__ import annotations
 
 import math
@@ -29,7 +30,9 @@ def _grid_qty_fraction(raw: Any, default: float = 10.0) -> float:
     return v / 100.0
 
 
-def _notional_floor(cfg: DcaGridTrailingConfig, min_usdt: Optional[float] = None) -> float:
+def _notional_floor(
+    cfg: DcaGridTrailingConfig, min_usdt: Optional[float] = None
+) -> float:
     floor = max(MIN_GRID_NOTIONAL_USDT, _num(min_usdt, MIN_GRID_NOTIONAL_USDT))
     return max(floor, _num(getattr(cfg, "min_notional_guard", 5.0), 5.0))
 
@@ -38,7 +41,9 @@ def _buffer_factor(cfg: DcaGridTrailingConfig) -> float:
     return max(0.0, 1.0 - _num(cfg.available_quote_buffer_pct, 0.005))
 
 
-def _min_budget_for_leg(side_alloc_pct: float, qty_pct: float, buffer: float, floor: float) -> Optional[float]:
+def _min_budget_for_leg(
+    side_alloc_pct: float, qty_pct: float, buffer: float, floor: float
+) -> Optional[float]:
     side_frac = _num(side_alloc_pct) / 100.0
     qty_frac = _grid_qty_fraction(qty_pct, 0)
     denom = side_frac * qty_frac * buffer
@@ -47,7 +52,9 @@ def _min_budget_for_leg(side_alloc_pct: float, qty_pct: float, buffer: float, fl
     return math.ceil((floor + 0.001) / denom * 100.0) / 100.0
 
 
-def compute_min_budget_usdt(cfg: DcaGridTrailingConfig, min_usdt: Optional[float] = None) -> Optional[float]:
+def compute_min_budget_usdt(
+    cfg: DcaGridTrailingConfig, min_usdt: Optional[float] = None
+) -> Optional[float]:
     floor = _notional_floor(cfg, min_usdt)
     buffer = _buffer_factor(cfg)
     candidates: List[float] = []
@@ -82,22 +89,26 @@ def estimate_dca_grid_notionals(cfg: DcaGridTrailingConfig) -> List[Dict[str, An
         frac = _grid_qty_fraction(g.get("sell_qty_pct_of_base") or g.get("qty_pct"))
         if frac <= 0:
             continue
-        out.append({
-            "side": "sell",
-            "index": i,
-            "notional_usdt": round(base_usd * frac, 4),
-            "qty_pct": round(frac * 100.0, 2),
-        })
+        out.append(
+            {
+                "side": "sell",
+                "index": i,
+                "notional_usdt": round(base_usd * frac, 4),
+                "qty_pct": round(frac * 100.0, 2),
+            }
+        )
     for j, g in enumerate(cfg.buy_grids or []):
         frac = _grid_qty_fraction(g.get("buy_qty_pct_of_quote") or g.get("qty_pct"))
         if frac <= 0:
             continue
-        out.append({
-            "side": "buy",
-            "index": j,
-            "notional_usdt": round(quote_usd * frac, 4),
-            "qty_pct": round(frac * 100.0, 2),
-        })
+        out.append(
+            {
+                "side": "buy",
+                "index": j,
+                "notional_usdt": round(quote_usd * frac, 4),
+                "qty_pct": round(frac * 100.0, 2),
+            }
+        )
     return out
 
 
@@ -117,7 +128,9 @@ def validate_dca_grid_notionals(
     if not violations:
         return True, "", [], None
     min_budget = compute_min_budget_usdt(cfg, min_usdt)
-    msg = format_grid_notional_error(violations, floor, min_budget, _num(cfg.initial_capital_usdt))
+    msg = format_grid_notional_error(
+        violations, floor, min_budget, _num(cfg.initial_capital_usdt)
+    )
     return False, msg, violations, min_budget
 
 
@@ -145,11 +158,15 @@ def format_grid_notional_error(
             + (f" (girdiğiniz: {cur:.2f} USDT)." if cur > 0 else ".")
         )
     else:
-        parts.append("Bütçeyi artırın, grid sayısını azaltın veya grid miktar yüzdelerini yükseltin.")
+        parts.append(
+            "Bütçeyi artırın, grid sayısını azaltın veya grid miktar yüzdelerini yükseltin."
+        )
     return " ".join(parts)
 
 
-def validate_dca_payload(payload: Dict[str, Any]) -> Tuple[bool, str, List[Dict[str, Any]], Optional[float]]:
+def validate_dca_payload(
+    payload: Dict[str, Any],
+) -> Tuple[bool, str, List[Dict[str, Any]], Optional[float]]:
     """UI/API ham payload → DcaGridTrailingConfig → grid notional kontrolü."""
     try:
         cfg = config_from_ui_payload(payload or {})

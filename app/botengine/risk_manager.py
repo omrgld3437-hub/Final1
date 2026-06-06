@@ -1,4 +1,5 @@
 """Risk and execution guard facade."""
+
 from __future__ import annotations
 
 from app.botengine.dca_manager import (

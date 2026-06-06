@@ -2,13 +2,13 @@
 Bot Engine - Trading Bot Core
 VERSION: v2 - Binance API integration with comprehensive error handling
 """
-import asyncio
+
 import threading
 import logging
 import time
 from typing import List, Optional
 from app.bot.models import BotConfig, Slot
-from app.services.price_hub import price_hub
+
 # Optional Binance imports - will be added later
 try:
     from app.services.binance_client import (
@@ -16,7 +16,7 @@ try:
         BinanceAPIError,
         InsufficientBalanceError,
         InvalidAPIKeyError,
-        NetworkError
+        NetworkError,
     )
 except ImportError:
     BinanceClient = None
@@ -34,7 +34,13 @@ logger = logging.getLogger(__name__)
 class BotEngine:
     """Bot engine - tick loop for trading logic with Binance API integration"""
 
-    def __init__(self, bot_id: int, account_id: int, config: BotConfig, db: Optional[Session] = None):
+    def __init__(
+        self,
+        bot_id: int,
+        account_id: int,
+        config: BotConfig,
+        db: Optional[Session] = None,
+    ):
         self.bot_id = bot_id
         self.account_id = account_id
         self.config = config
@@ -43,11 +49,11 @@ class BotEngine:
         self._running = False
         self._thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()
-        
+
         # Binance client (lazy load - only for live mode)
         self.binance_client: Optional[BinanceClient] = None
         self.account: Optional[Account] = None
-        
+
         # Error tracking
         self.last_error: Optional[str] = None
         self.error_count = 0
@@ -57,7 +63,7 @@ class BotEngine:
         """Initialize grid slots"""
         if not self.config.upper_price or not self.config.lower_price:
             return
-        
+
         if self.config.upper_price <= self.config.lower_price:
             return
 
@@ -67,50 +73,51 @@ class BotEngine:
 
         for i in range(self.config.grid_count):
             slot_price = self.config.lower_price + (i * slot_size)
-            self.slots.append(Slot(
-                slot_id=i,
-                price=slot_price,
-                qty=0.0,
-                filled=False
-            ))
+            self.slots.append(Slot(slot_id=i, price=slot_price, qty=0.0, filled=False))
 
     def _get_binance_client(self) -> Optional[BinanceClient]:
         """Get or create Binance client (lazy load)"""
         if self.binance_client:
             return self.binance_client
-        
+
         # Only for live mode
         if self.config.mode != "live":
             return None
-        
+
         # Load account if not loaded
         if not self.account and self.db:
-            self.account = self.db.query(Account).filter(Account.id == self.account_id).first()
-        
+            self.account = (
+                self.db.query(Account).filter(Account.id == self.account_id).first()
+            )
+
         if not self.account:
             logger.error(f"Bot {self.bot_id}: Account {self.account_id} not found")
             return None
-        
+
         # Check if API keys exist
         if not self.account.api_key_enc or not self.account.api_secret_enc:
-            logger.error(f"Bot {self.bot_id}: Live mode requires API keys, but account {self.account_id} has no API keys")
+            logger.error(
+                f"Bot {self.bot_id}: Live mode requires API keys, but account {self.account_id} has no API keys"
+            )
             self.last_error = "Live mode requires Binance API keys"
             return None
-        
+
         try:
             # Decrypt and create client
             api_key = decrypt_account_api_key(self.account_id, self.account.api_key_enc)
-            api_secret = decrypt_account_api_secret(self.account_id, self.account.api_secret_enc)
-            
+            api_secret = decrypt_account_api_secret(
+                self.account_id, self.account.api_secret_enc
+            )
+
             if not api_key or not api_secret:
                 logger.error(f"Bot {self.bot_id}: Failed to decrypt API keys")
                 self.last_error = "Failed to decrypt API keys"
                 return None
-            
+
             self.binance_client = BinanceClient(api_key, api_secret, testnet=False)
             logger.info(f"Bot {self.bot_id}: Binance client created successfully")
             return self.binance_client
-            
+
         except InvalidAPIKeyError as e:
             logger.error(f"Bot {self.bot_id}: Invalid API keys: {e.message}")
             self.last_error = f"Invalid API keys: {e.message}"
@@ -123,34 +130,47 @@ class BotEngine:
             logger.error(f"Bot {self.bot_id}: Error creating Binance client: {e}")
             self.last_error = f"Error creating Binance client: {str(e)}"
             return None
-    
-    def _check_balance_before_order(self, side: str, quantity: float, quote_qty: float) -> tuple[bool, str]:
+
+    def _check_balance_before_order(
+        self, side: str, quantity: float, quote_qty: float
+    ) -> tuple[bool, str]:
         """Check if account has sufficient balance before placing order"""
         if self.config.mode != "live":
             return True, ""  # Paper mode - always allow
-        
+
         client = self._get_binance_client()
         if not client:
             return False, self.last_error or "Binance client not available"
-        
+
         try:
             if side == "BUY":
                 # Check quote asset balance
                 balance = client.get_balance(self.config.quote_asset)
                 if balance < quote_qty:
-                    return False, f"Insufficient {self.config.quote_asset} balance. Required: {quote_qty:.2f}, Available: {balance:.2f}"
+                    return (
+                        False,
+                        f"Insufficient {self.config.quote_asset} balance. Required: {quote_qty:.2f}, Available: {balance:.2f}",
+                    )
             elif side == "SELL":
                 # Check base asset balance
                 balance = client.get_balance(self.config.base_asset)
                 if balance < quantity:
-                    return False, f"Insufficient {self.config.base_asset} balance. Required: {quantity:.8f}, Available: {balance:.8f}"
-            
+                    return (
+                        False,
+                        f"Insufficient {self.config.base_asset} balance. Required: {quantity:.8f}, Available: {balance:.8f}",
+                    )
+
             return True, ""
         except Exception as e:
             logger.error(f"Bot {self.bot_id}: Error checking balance: {e}")
             return False, f"Error checking balance: {str(e)}"
-    
-    def _execute_order(self, side: str, quantity: Optional[float] = None, quote_qty: Optional[float] = None) -> Optional[dict]:
+
+    def _execute_order(
+        self,
+        side: str,
+        quantity: Optional[float] = None,
+        quote_qty: Optional[float] = None,
+    ) -> Optional[dict]:
         """Execute order with comprehensive error handling"""
         if self.config.mode != "live":
             # Paper mode - simulate order
@@ -160,14 +180,16 @@ class BotEngine:
                 "executedQty": str(quantity or 0),
                 "cummulativeQuoteQty": str(quote_qty or 0),
                 "status": "FILLED",
-                "fills": []
+                "fills": [],
             }
-        
+
         client = self._get_binance_client()
         if not client:
-            logger.error(f"Bot {self.bot_id}: Cannot execute order - Binance client not available")
+            logger.error(
+                f"Bot {self.bot_id}: Cannot execute order - Binance client not available"
+            )
             return None
-        
+
         # Check balance before order
         if side == "BUY" and quote_qty:
             sufficient, error_msg = self._check_balance_before_order(side, 0, quote_qty)
@@ -181,19 +203,21 @@ class BotEngine:
                 logger.warning(f"Bot {self.bot_id}: {error_msg}")
                 self.last_error = error_msg
                 return None
-        
+
         try:
             result = client.place_market_order(
                 symbol=self.config.symbol,
                 side=side,
                 quantity=quantity,
-                quote_order_qty=quote_qty
+                quote_order_qty=quote_qty,
             )
-            logger.info(f"Bot {self.bot_id}: {side} order executed successfully: {result.get('orderId')}")
+            logger.info(
+                f"Bot {self.bot_id}: {side} order executed successfully: {result.get('orderId')}"
+            )
             self.error_count = 0  # Reset error count on success
             self.last_error = None
             return result
-            
+
         except InsufficientBalanceError as e:
             logger.error(f"Bot {self.bot_id}: Insufficient balance: {e.message}")
             self.last_error = f"Insufficient balance: {e.message}"
@@ -212,7 +236,9 @@ class BotEngine:
             self.error_count += 1
             return None
         except BinanceAPIError as e:
-            logger.error(f"Bot {self.bot_id}: Binance API error: {e.message} (code: {e.code})")
+            logger.error(
+                f"Bot {self.bot_id}: Binance API error: {e.message} (code: {e.code})"
+            )
             self.last_error = f"Binance API error: {e.message}"
             self.error_count += 1
             return None
@@ -221,7 +247,7 @@ class BotEngine:
             self.last_error = f"Unexpected error: {str(e)}"
             self.error_count += 1
             return None
-    
+
     def _tick(self):
         """Main tick loop"""
         # Placeholder for trading logic
@@ -230,13 +256,15 @@ class BotEngine:
         # 2. Check grid slots
         # 3. Execute orders if needed
         # 4. Update slots
-        
+
         # Check error count - stop bot if too many errors
         if self.error_count >= self.max_errors:
-            logger.error(f"Bot {self.bot_id}: Too many errors ({self.error_count}), stopping bot")
+            logger.error(
+                f"Bot {self.bot_id}: Too many errors ({self.error_count}), stopping bot"
+            )
             self.stop()
             return
-        
+
         # For now, just log that bot is running
         # Real trading logic will be implemented based on bot type
         pass
@@ -244,7 +272,7 @@ class BotEngine:
     def _run_loop(self):
         """Run bot loop in background thread"""
         self._init_slots()
-        
+
         while self._running:
             try:
                 self._tick()
@@ -290,6 +318,5 @@ class BotEngine:
             "symbol": self.config.symbol,
             "status": "running" if self.is_running() else "stopped",
             "slot_count": len(self.slots),
-            "mode": self.config.mode
+            "mode": self.config.mode,
         }
-

@@ -1,6 +1,7 @@
 """
 Trade Ledger - Record and Snapshot Management
 """
+
 from datetime import datetime, timezone
 from typing import List, Dict, Optional, Tuple
 from sqlalchemy.orm import Session
@@ -86,7 +87,13 @@ class Ledger:
         )
         if cycle_id is not None:
             from sqlalchemy import or_
-            q = q.filter(or_(Trade.cycle_id == cycle_id, (Trade.cycle_id.is_(None)) & (cycle_id == 1)))
+
+            q = q.filter(
+                or_(
+                    Trade.cycle_id == cycle_id,
+                    (Trade.cycle_id.is_(None)) & (cycle_id == 1),
+                )
+            )
         return q.order_by(Trade.ts.desc()).limit(limit).all()
 
     @staticmethod
@@ -127,6 +134,7 @@ class Ledger:
     def get_cycle_ids(db: Session, bot_id: int, account_id: int) -> List[int]:
         """Distinct cycle_ids for this bot, newest first. Treats NULL as 1 for backward compat."""
         from sqlalchemy import distinct
+
         rows = (
             db.query(distinct(Trade.cycle_id))
             .filter(Trade.bot_id == bot_id, Trade.account_id == account_id)

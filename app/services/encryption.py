@@ -6,6 +6,7 @@ v1 (legacy): Fernet — eski kayıtlar okunur; kayıt/güncellemede v2'ye geçil
 
 Bağlam (context) örnekleri: account:{id}:api_key, account:{id}:api_secret, file:tx_history:{id}
 """
+
 from __future__ import annotations
 
 import base64
@@ -153,7 +154,9 @@ def tx_history_file_context(account_id: int) -> str:
     return f"file:tx_history:{account_id}"
 
 
-def maybe_upgrade_account_secrets(db, account_id: int, api_key: str, api_secret: str) -> None:
+def maybe_upgrade_account_secrets(
+    db, account_id: int, api_key: str, api_secret: str
+) -> None:
     """Legacy v1 ciphertext → v2 (hesap bağlamlı AES-GCM)."""
     from app.db.models import Account
 

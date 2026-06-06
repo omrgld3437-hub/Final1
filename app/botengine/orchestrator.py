@@ -1,6 +1,7 @@
 """
 Orchestrator: per-bot asyncio tasks, start/stop, crash recovery.
 """
+
 from __future__ import annotations
 import asyncio
 import json
@@ -13,7 +14,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
 # Log sayfası "Toplam istek": her BOT_LOOP_START'ta sayacı artırıp .run/worker_loop_count'a yazarız; Manager bu dosyadan okur
-_WORKER_LOOP_COUNT_FILE = Path(__file__).resolve().parents[2] / ".run" / "worker_loop_count"
+_WORKER_LOOP_COUNT_FILE = (
+    Path(__file__).resolve().parents[2] / ".run" / "worker_loop_count"
+)
 _worker_loop_count = 0
 _worker_loop_count_loaded = False
 
@@ -41,6 +44,7 @@ def _write_worker_loop_count() -> None:
     except OSError:
         pass
 
+
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
@@ -57,16 +61,25 @@ from app.botengine.locks import (
 from app.botengine.models import (
     DcaGridTrailingConfig,
     TrdcaProConfig,
-    config_from_ui_payload,
     config_multi_asset_from_payload,
     config_trdca_pro_from_payload,
     build_trdca_pro_state_skeleton,
-    MultiAssetRebalanceConfig,
 )
-from app.botengine.state_store import append_event, ensure_state_row, get_events_diagnostic_summary, load_state, save_state, flush_queued_events
+from app.botengine.state_store import (
+    append_event,
+    ensure_state_row,
+    get_events_diagnostic_summary,
+    load_state,
+    save_state,
+    flush_queued_events,
+)
 from app.botengine.strategies.registry import get_strategy_safe
 from app.botengine.strategies.trdca_pro import strategy_tick as trdca_strategy_tick
-from app.botengine.virtual_wallet import ensure_virtual_wallet, get_virtual_wallet, sync_virtual_wallet_from_state
+from app.botengine.virtual_wallet import (
+    ensure_virtual_wallet,
+    get_virtual_wallet,
+    sync_virtual_wallet_from_state,
+)
 from app.services.pnl_service import ensure_daily_ref_and_compute
 from app.utils.tz_utils import turkey_today_date_str
 
@@ -75,7 +88,9 @@ logger = logging.getLogger(__name__)
 _tasks: Dict[int, asyncio.Task] = {}
 _stop_requested: Set[int] = set()
 _reconcile_last_ts: Dict[int, float] = {}
-_config_cache: Dict[int, object] = {}  # DcaGridTrailingConfig | MultiAssetRebalanceConfig
+_config_cache: Dict[
+    int, object
+] = {}  # DcaGridTrailingConfig | MultiAssetRebalanceConfig
 _CONFIG_CACHE_MAX = 64
 _task_create_lock = asyncio.Lock()
 _bot_diag_logged: Set[int] = set()
@@ -93,6 +108,8 @@ def _config_cache_put(bot_id: int, cfg: object) -> None:
 def invalidate_config_cache(bot_id: int) -> None:
     """Clear cached config for bot (e.g. after update-config). Next tick will load fresh from DB."""
     _config_cache.pop(bot_id, None)
+
+
 _loop_instances: Dict[int, str] = {}  # bot_id -> loop_instance_id
 _engine_tick_task: Optional[asyncio.Task] = None
 # Throttle noisy events: "no price" / PRICE_STALE_OR_MISSING at most once per 5 min per bot
@@ -129,6 +146,7 @@ async def _engine_tick_loop() -> None:
 
 def _get_db():
     from app.db.session import SessionLocal
+
     db = SessionLocal()
     # DB session tracking
     session_id = id(db)
@@ -138,7 +156,12 @@ def _get_db():
     except Exception:
         conn_id = None
         bind_info = None
-    logger.debug("BOT_DB_SESSION session_id=%s conn_id=%s bind=%s", session_id, conn_id, bind_info)
+    logger.debug(
+        "BOT_DB_SESSION session_id=%s conn_id=%s bind=%s",
+        session_id,
+        conn_id,
+        bind_info,
+    )
     return db
 
 
@@ -152,7 +175,9 @@ def _apply_fills_to_virtual_balances(
     for f in fills or []:
         sym = (f.get("symbol") or "").upper()
         side = (f.get("side") or "BUY").upper()
-        qty = float(f.get("filled_qty") or f.get("executedQty") or f.get("fill_qty") or 0)
+        qty = float(
+            f.get("filled_qty") or f.get("executedQty") or f.get("fill_qty") or 0
+        )
         quote_val = float(f.get("filled_quote") or f.get("cummulativeQuoteQty") or 0)
         if not sym or qty <= 0:
             continue
@@ -188,11 +213,19 @@ async def _build_trdca_snapshot(
         initial = float(getattr(cfg, "initial_capital_usdt", 0) or 0)
         try:
             from app.services.test_account import TEST_PAPER_BALANCE_USDT
+
             # Eski default (10k) düzelt: allocation yoksa initial_capital kullan
-            if initial > 0 and float(vb.get(quote_asset) or 0) == TEST_PAPER_BALANCE_USDT:
-                base_sum = sum(float(vb.get(a) or 0) for a in assets if a != quote_asset)
+            if (
+                initial > 0
+                and float(vb.get(quote_asset) or 0) == TEST_PAPER_BALANCE_USDT
+            ):
+                base_sum = sum(
+                    float(vb.get(a) or 0) for a in assets if a != quote_asset
+                )
                 if base_sum == 0:
-                    balances_free = {a: (initial if a == quote_asset else 0.0) for a in assets}
+                    balances_free = {
+                        a: (initial if a == quote_asset else 0.0) for a in assets
+                    }
                 else:
                     balances_free = {a: float(vb.get(a) or 0) for a in assets}
             else:
@@ -200,9 +233,14 @@ async def _build_trdca_snapshot(
         except Exception:
             balances_free = {a: float(vb.get(a) or 0) for a in assets}
     elif adapter.paper_mode:
-        initial = float(getattr(cfg, "initial_capital_usdt", 0) or getattr(cfg, "bot_budget_usdt", 0) or 0)
+        initial = float(
+            getattr(cfg, "initial_capital_usdt", 0)
+            or getattr(cfg, "bot_budget_usdt", 0)
+            or 0
+        )
         if initial <= 0:
             from app.services.test_account import TEST_PAPER_BALANCE_USDT
+
             initial = float(TEST_PAPER_BALANCE_USDT)
         balances_free = {a: (initial if a == quote_asset else 0.0) for a in assets}
     else:
@@ -227,8 +265,7 @@ async def _build_trdca_snapshot(
                     else:
                         prices_tmp[a] = 0.0
             actual_total = sum(
-                balances_free.get(a, 0) * prices_tmp.get(a, 0)
-                for a in assets
+                balances_free.get(a, 0) * prices_tmp.get(a, 0) for a in assets
             )
             if actual_total > initial:
                 scale = initial / actual_total
@@ -253,10 +290,13 @@ async def _build_trdca_snapshot(
         filters[sym] = {"minQty": min_qty, "stepSize": step, "minNotional": mn}
     open_orders = await adapter.get_open_orders(symbol=None)
     open_order = None
-    for o in (open_orders or []):
+    for o in open_orders or []:
         sym = (o.get("symbol") or "").upper()
         if sym in symbols:
-            open_order = {"client_order_id": o.get("clientOrderId") or "", "status": o.get("status") or "NEW"}
+            open_order = {
+                "client_order_id": o.get("clientOrderId") or "",
+                "status": o.get("status") or "NEW",
+            }
             break
     fills = state.pop("_pending_fills", [])
     return {
@@ -274,7 +314,9 @@ async def _bot_loop(bot_id: int) -> None:
     loop_instance_id = str(uuid.uuid4())[:8]
     process_id = os.getpid()
     _loop_instances[bot_id] = loop_instance_id
-    logger.info("BOT_LOOP_START bot_id=%s loop=%s pid=%s", bot_id, loop_instance_id, process_id)
+    logger.info(
+        "BOT_LOOP_START bot_id=%s loop=%s pid=%s", bot_id, loop_instance_id, process_id
+    )
     global _worker_loop_count
     _worker_loop_count += 1
     _write_worker_loop_count()
@@ -284,6 +326,7 @@ async def _bot_loop(bot_id: int) -> None:
     symbol = ""
     try:
         from app.db.models import Bot
+
         db = _get_db()
         try:
             bot = db.query(Bot).filter(Bot.id == bot_id).first()
@@ -330,22 +373,39 @@ async def _bot_loop(bot_id: int) -> None:
                 is_multi = strategy_id_raw == "multi_asset_rebalance"
                 is_trdca = strategy_id_raw == "trdca_pro"
                 if is_trdca:
-                    cfg = _config_cache.get(bot_id) or config_trdca_pro_from_payload(raw)
+                    cfg = _config_cache.get(bot_id) or config_trdca_pro_from_payload(
+                        raw
+                    )
                     symbol = "MULTI"
                 else:
                     cfg = _config_cache.get(bot_id) or (
-                        config_multi_asset_from_payload(raw) if is_multi else DcaGridTrailingConfig(raw)
+                        config_multi_asset_from_payload(raw)
+                        if is_multi
+                        else DcaGridTrailingConfig(raw)
                     )
                 _config_cache_put(bot_id, cfg)
                 state = load_state(db, bot_id)
                 if not state:
                     if is_trdca:
-                        state = build_trdca_pro_state_skeleton(bot_id, account_id, getattr(cfg, "quote_asset", "USDT"))
+                        state = build_trdca_pro_state_skeleton(
+                            bot_id, account_id, getattr(cfg, "quote_asset", "USDT")
+                        )
                     else:
-                        state = {"bot_id": bot_id, "account_id": account_id, "symbol": symbol, "status": "running", "cycle_id": 1, "state_version": 0}
+                        state = {
+                            "bot_id": bot_id,
+                            "account_id": account_id,
+                            "symbol": symbol,
+                            "status": "running",
+                            "cycle_id": 1,
+                            "state_version": 0,
+                        }
                     save_state(db, bot_id, account_id, state)
-                elif is_trdca and (state.get("dca") is None or state.get("trb") is None):
-                    sk = build_trdca_pro_state_skeleton(bot_id, account_id, getattr(cfg, "quote_asset", "USDT"))
+                elif is_trdca and (
+                    state.get("dca") is None or state.get("trb") is None
+                ):
+                    sk = build_trdca_pro_state_skeleton(
+                        bot_id, account_id, getattr(cfg, "quote_asset", "USDT")
+                    )
                     for k, v in sk.items():
                         if state.get(k) is None:
                             state[k] = v
@@ -356,13 +416,22 @@ async def _bot_loop(bot_id: int) -> None:
                     # Paper modda kaydedilen simüle init trade'leri sayma; yoksa live'a geçince gerçek alım atlanır.
                 from app.services.test_account import test_account_paper_execution
                 from app.core.config import is_worker_role
-                bot_mode = (str(getattr(row, "mode", None) or "").strip().lower())
+
+                bot_mode = str(getattr(row, "mode", None) or "").strip().lower()
                 acct_test = test_account_paper_execution(account_id, db)
                 if state.get("run_id"):
                     if acct_test:
-                        logger.debug("BOT_RUN_ID run_id=%s bot_id=%s (test)", state.get("run_id"), bot_id)
+                        logger.debug(
+                            "BOT_RUN_ID run_id=%s bot_id=%s (test)",
+                            state.get("run_id"),
+                            bot_id,
+                        )
                     else:
-                        logger.debug("BOT_RUN_ID run_id=%s bot_id=%s", state.get("run_id"), bot_id)
+                        logger.debug(
+                            "BOT_RUN_ID run_id=%s bot_id=%s",
+                            state.get("run_id"),
+                            bot_id,
+                        )
                 # Production: paper_mode from DB; test hesabı her zaman paper, API anahtarı yok
                 paper_mode = acct_test or (bot_mode == "paper")
                 keys = None
@@ -370,12 +439,15 @@ async def _bot_loop(bot_id: int) -> None:
                 if not acct_test:
                     try:
                         from app.services.binance_assets import get_account_keys
+
                         keys = await get_account_keys(account_id, db)
                         has_keys = keys is not None
                     except Exception as e:
                         logger.info(
                             "BOT_ACCOUNT_KEYS_FAIL bot_id=%s account_id=%s err=%s (tick skipped, retry)",
-                            bot_id, account_id, e,
+                            bot_id,
+                            account_id,
+                            e,
                         )
                         keys = None
                         has_keys = False
@@ -386,31 +458,62 @@ async def _bot_loop(bot_id: int) -> None:
                     state["last_error_code"] = "ACCOUNT_KEYS_MISSING"
                     state["retry_at"] = datetime.utcnow()
                     save_state(db, bot_id, account_id, state)
-                    append_event(db, bot_id, account_id, "ERROR", "API anahtarı gerekli (live bot)", {"error_code": "ACCOUNT_KEYS_MISSING"})
+                    append_event(
+                        db,
+                        bot_id,
+                        account_id,
+                        "ERROR",
+                        "API anahtarı gerekli (live bot)",
+                        {"error_code": "ACCOUNT_KEYS_MISSING"},
+                    )
                     try:
                         from app.services import audit as _audit_svc
+
                         _audit_svc.log_event(
-                            db, actor_type="system", event_type="BOT_PAUSED_NO_KEYS",
-                            severity="WARN", target_account_id=account_id,
-                            meta={"bot_id": bot_id, "error_code": "ACCOUNT_KEYS_MISSING"},
+                            db,
+                            actor_type="system",
+                            event_type="BOT_PAUSED_NO_KEYS",
+                            severity="WARN",
+                            target_account_id=account_id,
+                            meta={
+                                "bot_id": bot_id,
+                                "error_code": "ACCOUNT_KEYS_MISSING",
+                            },
                         )
                     except Exception:
                         pass
-                    logger.warning("BOT_LIVE_NO_KEYS bot_id=%s account_id=%s paused_error (FAIL FAST)", bot_id, account_id)
+                    logger.warning(
+                        "BOT_LIVE_NO_KEYS bot_id=%s account_id=%s paused_error (FAIL FAST)",
+                        bot_id,
+                        account_id,
+                    )
                     await asyncio.sleep(30)
                     continue
                 if not has_keys and not paper_mode:
                     state["last_error_code"] = "ACCOUNT_KEYS_MISSING"
                     state["retry_at"] = datetime.utcnow()
                     save_state(db, bot_id, account_id, state)
-                    append_event(db, bot_id, account_id, "ERROR", "API anahtarı gerekli", {"error_code": "ACCOUNT_KEYS_MISSING"})
+                    append_event(
+                        db,
+                        bot_id,
+                        account_id,
+                        "ERROR",
+                        "API anahtarı gerekli",
+                        {"error_code": "ACCOUNT_KEYS_MISSING"},
+                    )
                     await asyncio.sleep(30)
                     continue
 
                 adapter = BinanceAdapter(account_id, keys, paper_mode=paper_mode)
                 mode_log = (
                     "BOT_MODE_CHECK bot_id=%s account_id=%s bot.mode=%s paper_mode=%s has_keys=%s is_worker_role=%s test_account=%s",
-                    bot_id, account_id, bot_mode, paper_mode, has_keys, is_worker_role(), acct_test,
+                    bot_id,
+                    account_id,
+                    bot_mode,
+                    paper_mode,
+                    has_keys,
+                    is_worker_role(),
+                    acct_test,
                 )
                 if acct_test:
                     logger.debug(*mode_log)
@@ -418,18 +521,34 @@ async def _bot_loop(bot_id: int) -> None:
                     logger.debug(*mode_log)
                 if not paper_mode and not is_trdca and symbol and symbol != "MULTI":
                     try:
-                        from app.botengine.intent_ledger import reconcile_open_orders_for_bot
+                        from app.botengine.intent_ledger import (
+                            reconcile_open_orders_for_bot,
+                        )
                         from app.services.binance_spot import is_ip_banned
+
                         now_ts = time.time()
-                        if not is_ip_banned() and now_ts - _reconcile_last_ts.get(bot_id, 0) >= 60:
-                            await reconcile_open_orders_for_bot(adapter, bot_id, account_id, db, symbol)
+                        if (
+                            not is_ip_banned()
+                            and now_ts - _reconcile_last_ts.get(bot_id, 0) >= 60
+                        ):
+                            await reconcile_open_orders_for_bot(
+                                adapter, bot_id, account_id, db, symbol
+                            )
                             _reconcile_last_ts[bot_id] = now_ts
                     except Exception as recon_err:
-                        logger.debug("reconcile_open_orders_for_bot bot_id=%s err=%s", bot_id, recon_err)
+                        logger.debug(
+                            "reconcile_open_orders_for_bot bot_id=%s err=%s",
+                            bot_id,
+                            recon_err,
+                        )
                 if is_trdca:
                     next_wake = getattr(cfg, "tick_interval_ms", 1000) / 1000.0
                 else:
-                    next_wake = (getattr(cfg, "interval_sec", 3600) if (is_multi or symbol == "MULTI") else getattr(cfg, "tick_interval_ms", 5000) / 1000.0)
+                    next_wake = (
+                        getattr(cfg, "interval_sec", 3600)
+                        if (is_multi or symbol == "MULTI")
+                        else getattr(cfg, "tick_interval_ms", 5000) / 1000.0
+                    )
                 if is_trdca:
                     try:
                         snapshot = await _build_trdca_snapshot(adapter, state, cfg)
@@ -439,7 +558,16 @@ async def _bot_loop(bot_id: int) -> None:
                         dec_type = decision.get("type") or "NOOP"
                         if dec_type == "SAFE_STOP":
                             save_state(db, bot_id, account_id, state)
-                            append_event(db, bot_id, account_id, "ERROR", (decision.get("reason") or {}).get("error_code", "SAFE_STOP"), decision.get("reason"))
+                            append_event(
+                                db,
+                                bot_id,
+                                account_id,
+                                "ERROR",
+                                (decision.get("reason") or {}).get(
+                                    "error_code", "SAFE_STOP"
+                                ),
+                                decision.get("reason"),
+                            )
                         elif dec_type == "RESUME_PENDING":
                             save_state(db, bot_id, account_id, state)
                         elif dec_type == "ACTIONS":
@@ -454,96 +582,192 @@ async def _bot_loop(bot_id: int) -> None:
                                     sym = (leg.get("symbol") or "").upper()
                                     side = (leg.get("side") or "BUY").upper()
                                     qty = float(leg.get("qty") or 0)
-                                    base = sym.replace(quote_asset, "") if quote_asset in sym else sym
+                                    base = (
+                                        sym.replace(quote_asset, "")
+                                        if quote_asset in sym
+                                        else sym
+                                    )
                                     price = prices.get(base) or prices.get(sym) or 0.0
-                                    trdca_actions.append({
-                                        "type": "place",
-                                        "side": side,
-                                        "symbol": sym,
-                                        "quantity": qty,
-                                        "quote_qty": (qty * price) if side == "BUY" and price else None,
-                                        "client_order_id": leg.get("client_order_id"),
-                                        "reason": "trdca_batch",
-                                    })
+                                    trdca_actions.append(
+                                        {
+                                            "type": "place",
+                                            "side": side,
+                                            "symbol": sym,
+                                            "quantity": qty,
+                                            "quote_qty": (qty * price)
+                                            if side == "BUY" and price
+                                            else None,
+                                            "client_order_id": leg.get(
+                                                "client_order_id"
+                                            ),
+                                            "reason": "trdca_batch",
+                                        }
+                                    )
                                 lock_sym = trade_lock_symbol(account_id, "MULTI")
-                                lock_held = try_acquire_symbol_lock(db, account_id, lock_sym, bot_id)
+                                lock_held = try_acquire_symbol_lock(
+                                    db, account_id, lock_sym, bot_id
+                                )
                                 if not lock_held:
-                                    append_event(db, bot_id, account_id, "LOCK_BUSY", "symbol lock busy skip trade", {"account_id": account_id, "symbol": lock_sym})
-                                elif not lease_still_valid(db, account_id, lock_sym, bot_id):
+                                    append_event(
+                                        db,
+                                        bot_id,
+                                        account_id,
+                                        "LOCK_BUSY",
+                                        "symbol lock busy skip trade",
+                                        {"account_id": account_id, "symbol": lock_sym},
+                                    )
+                                elif not lease_still_valid(
+                                    db, account_id, lock_sym, bot_id
+                                ):
                                     try:
-                                        release_symbol_lock(db, account_id, lock_sym, bot_id)
+                                        release_symbol_lock(
+                                            db, account_id, lock_sym, bot_id
+                                        )
                                     except Exception:
                                         pass
-                                    append_event(db, bot_id, account_id, "LOCK_LEASE_EXPIRED", "lease not valid before submit skip trade", {"account_id": account_id, "symbol": lock_sym})
+                                    append_event(
+                                        db,
+                                        bot_id,
+                                        account_id,
+                                        "LOCK_LEASE_EXPIRED",
+                                        "lease not valid before submit skip trade",
+                                        {"account_id": account_id, "symbol": lock_sym},
+                                    )
                                     logger.info(
                                         "BOT_TICK bot_id=%s lease_not_valid symbol=%s skip submit (expected during lock handoff)",
-                                        bot_id, lock_sym,
+                                        bot_id,
+                                        lock_sym,
                                     )
                                 else:
-                                    run_result = await run_actions(bot_id, account_id, trdca_actions, state, cfg, adapter, db=db, loop_id=loop_instance_id)
+                                    run_result = await run_actions(
+                                        bot_id,
+                                        account_id,
+                                        trdca_actions,
+                                        state,
+                                        cfg,
+                                        adapter,
+                                        db=db,
+                                        loop_id=loop_instance_id,
+                                    )
                                     pending_fills = []
                                     for r in run_result:
                                         st = (r.get("status") or "FILLED").upper()
-                                        pending_fills.append({
-                                            "client_order_id": r.get("client_order_id") or "",
-                                            "symbol": r.get("symbol") or "",
-                                            "side": r.get("side") or "BUY",
-                                            "status": st,
-                                            "filled_qty": r.get("fill_qty") or 0,
-                                            "filled_quote": r.get("filled_quote")
-                                            if r.get("filled_quote") is not None
-                                            else (r.get("fill_price") or 0) * (r.get("fill_qty") or 0),
-                                            "fee": r.get("fee") or 0,
-                                            "event_ts": int(time.time() * 1000),
-                                        })
+                                        pending_fills.append(
+                                            {
+                                                "client_order_id": r.get(
+                                                    "client_order_id"
+                                                )
+                                                or "",
+                                                "symbol": r.get("symbol") or "",
+                                                "side": r.get("side") or "BUY",
+                                                "status": st,
+                                                "filled_qty": r.get("fill_qty") or 0,
+                                                "filled_quote": r.get("filled_quote")
+                                                if r.get("filled_quote") is not None
+                                                else (r.get("fill_price") or 0)
+                                                * (r.get("fill_qty") or 0),
+                                                "fee": r.get("fee") or 0,
+                                                "event_ts": int(time.time() * 1000),
+                                            }
+                                        )
                                     state["_pending_fills"] = pending_fills
                                     for r in run_result:
                                         if r.get("event_logged"):
                                             continue
-                                        append_event(db, bot_id, account_id, "ORDER_FILLED", f"{r.get('side')} {r.get('fill_qty')} @ {r.get('fill_price')}", r)
+                                        append_event(
+                                            db,
+                                            bot_id,
+                                            account_id,
+                                            "ORDER_FILLED",
+                                            f"{r.get('side')} {r.get('fill_qty')} @ {r.get('fill_price')}",
+                                            r,
+                                        )
                                     # Paper mode: güncel sanal bakiyeyi state'e yaz (bots_detail gösterebilsin)
                                     if paper_mode:
-                                        base_bal = dict(snapshot.get("balances_free") or {})
-                                        state["virtual_balances"] = _apply_fills_to_virtual_balances(base_bal, pending_fills, quote_asset)
+                                        base_bal = dict(
+                                            snapshot.get("balances_free") or {}
+                                        )
+                                        state["virtual_balances"] = (
+                                            _apply_fills_to_virtual_balances(
+                                                base_bal, pending_fills, quote_asset
+                                            )
+                                        )
                                     try:
-                                        release_symbol_lock(db, account_id, lock_sym, bot_id)
+                                        release_symbol_lock(
+                                            db, account_id, lock_sym, bot_id
+                                        )
                                     except Exception as ex:
-                                        logger.debug("bot_engine release_symbol_lock bot_id=%s err=%s", bot_id, ex)
+                                        logger.debug(
+                                            "bot_engine release_symbol_lock bot_id=%s err=%s",
+                                            bot_id,
+                                            ex,
+                                        )
                         # Paper mode: ilk tick veya NOOP sonrası virtual_balances yoksa adapter'dan başlat
                         if paper_mode and not state.get("virtual_balances"):
-                            state["virtual_balances"] = dict(snapshot.get("balances_free") or {})
+                            state["virtual_balances"] = dict(
+                                snapshot.get("balances_free") or {}
+                            )
                         save_state(db, bot_id, account_id, state)
                         tick_count += 1
-                        if tick_count == 1 and state.get("_pending_connectivity_stable"):
+                        if tick_count == 1 and state.get(
+                            "_pending_connectivity_stable"
+                        ):
                             try:
-                                from app.services.binance_connectivity import flush_pending_connectivity_stable
+                                from app.services.binance_connectivity import (
+                                    flush_pending_connectivity_stable,
+                                )
 
-                                flush_pending_connectivity_stable(db, bot_id, after_loop_restart=True)
+                                flush_pending_connectivity_stable(
+                                    db, bot_id, after_loop_restart=True
+                                )
                             except Exception:
                                 pass
                     except Exception as tick_err:
                         error_id = str(uuid.uuid4())
                         logger.info(
                             "BOT_LOOP_TRDCA_EXCEPTION error_id=%s bot_id=%s %s (absorbed, loop continues)",
-                            error_id, bot_id, tick_err,
+                            error_id,
+                            bot_id,
+                            tick_err,
                         )
                         state["last_error_code"] = "BOT_LOOP_TRDCA_EXCEPTION"
                         state["health_error_since"] = int(time.time())
                         save_state(db, bot_id, account_id, state)
-                        append_event(db, bot_id, account_id, "ERROR", f"BOT_LOOP_TRDCA_EXCEPTION {error_id} {tick_err}", {
-                            "error_code": "BOT_LOOP_TRDCA_EXCEPTION", "error_id": error_id, "loop_id": loop_instance_id,
-                        })
+                        append_event(
+                            db,
+                            bot_id,
+                            account_id,
+                            "ERROR",
+                            f"BOT_LOOP_TRDCA_EXCEPTION {error_id} {tick_err}",
+                            {
+                                "error_code": "BOT_LOOP_TRDCA_EXCEPTION",
+                                "error_id": error_id,
+                                "loop_id": loop_instance_id,
+                            },
+                        )
                         try:
-                            from app.botengine.health_watch import emit_resilience_continue
+                            from app.botengine.health_watch import (
+                                emit_resilience_continue,
+                            )
+
                             emit_resilience_continue(
-                                db, bot_id, account_id, "BOT_LOOP_TRDCA_EXCEPTION", str(tick_err),
-                                error_id=error_id, loop_id=loop_instance_id,
+                                db,
+                                bot_id,
+                                account_id,
+                                "BOT_LOOP_TRDCA_EXCEPTION",
+                                str(tick_err),
+                                error_id=error_id,
+                                loop_id=loop_instance_id,
                             )
                         except Exception:
                             pass
                     from app.services.test_simulation import paper_tick_sleep_seconds
 
-                    await asyncio.sleep(paper_tick_sleep_seconds(next_wake, paper_mode, test_account=acct_test))
+                    await asyncio.sleep(
+                        paper_tick_sleep_seconds(
+                            next_wake, paper_mode, test_account=acct_test
+                        )
+                    )
                     continue
                 if is_multi or symbol == "MULTI":
                     # Multi-asset rebalance: no single symbol price; strategy uses per-asset prices later
@@ -557,36 +781,66 @@ async def _bot_loop(bot_id: int) -> None:
                     price = adapter.get_price(symbol)
                     if not price or price <= 0:
                         try:
-                            from app.services.market_data import refresh_worker_symbol_from_web
+                            from app.services.market_data import (
+                                refresh_worker_symbol_from_web,
+                            )
+
                             refetched = await refresh_worker_symbol_from_web(symbol)
                             if refetched and refetched > 0:
                                 price = refetched
                         except Exception:
                             pass
                     if not price or price <= 0:
-                        logger.debug("BOT_PRICE bot_id=%s loop=%s tick=%s status=STALE symbol=%s", bot_id, loop_instance_id, tick_count, symbol)
+                        logger.debug(
+                            "BOT_PRICE bot_id=%s loop=%s tick=%s status=STALE symbol=%s",
+                            bot_id,
+                            loop_instance_id,
+                            tick_count,
+                            symbol,
+                        )
                         now_ts = time.time()
                         if not state.get("price_stale_since"):
                             state["price_stale_since"] = int(now_ts)
                             save_state(db, bot_id, account_id, state)
-                        if (now_ts - _last_stale_event_ts.get(bot_id, 0)) >= _STALE_EVENT_THROTTLE_SEC:
+                        if (
+                            now_ts - _last_stale_event_ts.get(bot_id, 0)
+                        ) >= _STALE_EVENT_THROTTLE_SEC:
                             _last_stale_event_ts[bot_id] = now_ts
                             logger.info(
                                 "BOT_TICK_PRICE_MISSING bot_id=%s loop=%s tick=%s symbol=%s price=%s skip_trade=True next_wake=%.1f",
-                                bot_id, loop_instance_id, tick_count, symbol, price, next_wake,
+                                bot_id,
+                                loop_instance_id,
+                                tick_count,
+                                symbol,
+                                price,
+                                next_wake,
                             )
                             try:
                                 from app.botengine.health_watch import emit_price_stale
+
                                 emit_price_stale(db, bot_id, account_id, symbol)
                             except Exception:
                                 pass
-                        from app.services.test_simulation import paper_tick_sleep_seconds
+                        from app.services.test_simulation import (
+                            paper_tick_sleep_seconds,
+                        )
 
-                        await asyncio.sleep(paper_tick_sleep_seconds(next_wake, paper_mode, test_account=acct_test))
+                        await asyncio.sleep(
+                            paper_tick_sleep_seconds(
+                                next_wake, paper_mode, test_account=acct_test
+                            )
+                        )
                         continue
                     if state.pop("price_stale_since", None):
                         save_state(db, bot_id, account_id, state)
-                    logger.debug("BOT_PRICE bot_id=%s loop=%s tick=%s status=OK price=%.2f symbol=%s", bot_id, loop_instance_id, tick_count, price, symbol)
+                    logger.debug(
+                        "BOT_PRICE bot_id=%s loop=%s tick=%s status=OK price=%.2f symbol=%s",
+                        bot_id,
+                        loop_instance_id,
+                        tick_count,
+                        price,
+                        symbol,
+                    )
                     # Tur içi fiyat aralığı takibi (_cycle_price_high / _cycle_price_low)
                     if state.get("initial_allocation_done"):
                         _ph = state.get("_cycle_price_high")
@@ -595,21 +849,36 @@ async def _bot_loop(bot_id: int) -> None:
                             state["_cycle_price_high"] = round(price, 10)
                         if _pl is None or price < _pl:
                             state["_cycle_price_low"] = round(price, 10)
-                    init_quote = float(getattr(cfg, "initial_capital_usdt", 0) or getattr(cfg, "bot_budget_usdt", 0) or 0)
+                    init_quote = float(
+                        getattr(cfg, "initial_capital_usdt", 0)
+                        or getattr(cfg, "bot_budget_usdt", 0)
+                        or 0
+                    )
                     if init_quote <= 0 and paper_mode:
                         from app.services.test_account import TEST_PAPER_BALANCE_USDT
+
                         init_quote = float(TEST_PAPER_BALANCE_USDT)
                     ensure_virtual_wallet(db, bot_id, account_id, symbol, init_quote)
                     # State'te ilk alım yapılmışsa (repair veya fill sonrası) virtual_wallet güncel olmayabilir; önce state'ten sync et ki bakiye ezilmesin
-                    if state.get("initial_allocation_done") and (float(state.get("base_balance") or 0) != 0 or float(state.get("quote_balance") or 0) != 0):
+                    if state.get("initial_allocation_done") and (
+                        float(state.get("base_balance") or 0) != 0
+                        or float(state.get("quote_balance") or 0) != 0
+                    ):
                         try:
                             sync_virtual_wallet_from_state(
-                                db, bot_id, account_id, symbol,
+                                db,
+                                bot_id,
+                                account_id,
+                                symbol,
                                 float(state.get("base_balance") or 0),
                                 float(state.get("quote_balance") or 0),
                             )
                         except Exception as sync_err:
-                            logger.debug("orchestrator pre-tick sync_virtual_wallet_from_state bot_id=%s err=%s", bot_id, sync_err)
+                            logger.debug(
+                                "orchestrator pre-tick sync_virtual_wallet_from_state bot_id=%s err=%s",
+                                bot_id,
+                                sync_err,
+                            )
                     vb, vq = get_virtual_wallet(db, bot_id, symbol)
                     state["base_balance"] = vb
                     state["quote_balance"] = vq
@@ -619,7 +888,9 @@ async def _bot_loop(bot_id: int) -> None:
                 try:
                     strategy = get_strategy_safe(raw)
                     t0 = time.perf_counter()
-                    actions, next_wake = strategy.tick(state, cfg, price, base_balance, quote_balance)
+                    actions, next_wake = strategy.tick(
+                        state, cfg, price, base_balance, quote_balance
+                    )
                     # Günlük kayıp limiti aşıldıysa botu durdur
                     if state.get("_daily_loss_limit_hit"):
                         try:
@@ -629,20 +900,30 @@ async def _bot_loop(bot_id: int) -> None:
                             save_state(db, bot_id, account_id, state)
                             db.commit()
                             logger.warning(
-                                "BOT_DAILY_LOSS_LIMIT_PAUSED bot_id=%s account_id=%s", bot_id, account_id
+                                "BOT_DAILY_LOSS_LIMIT_PAUSED bot_id=%s account_id=%s",
+                                bot_id,
+                                account_id,
                             )
                         except Exception as _dll_ex:
-                            logger.debug("daily_loss_limit pause bot_id=%s: %s", bot_id, _dll_ex)
+                            logger.debug(
+                                "daily_loss_limit pause bot_id=%s: %s", bot_id, _dll_ex
+                            )
                         await asyncio.sleep(next_wake)
                         continue
                     try:
-                        from app.botengine.strategies.grid_outage_recovery import flush_outage_recovery_log_to_events
+                        from app.botengine.strategies.grid_outage_recovery import (
+                            flush_outage_recovery_log_to_events,
+                        )
 
-                        flush_outage_recovery_log_to_events(db, bot_id, account_id, state)
+                        flush_outage_recovery_log_to_events(
+                            db, bot_id, account_id, state
+                        )
                     except Exception as olog_ex:
-                        logger.debug("outage_recovery_log bot_id=%s: %s", bot_id, olog_ex)
+                        logger.debug(
+                            "outage_recovery_log bot_id=%s: %s", bot_id, olog_ex
+                        )
                     flush_queued_events(db, bot_id, account_id, state)
-                    elapsed_ms = (time.perf_counter() - t0) * 1000
+                    (time.perf_counter() - t0) * 1000
 
                     logger.debug(
                         "BOT_TICK_SUMMARY bot_id=%s actions=%s next_wake=%s initial_allocation_done=%s quote=%s base=%s price=%s",
@@ -659,31 +940,64 @@ async def _bot_loop(bot_id: int) -> None:
                     lock_held = False
                     if actions:
                         lock_sym = trade_lock_symbol(account_id, symbol)
-                        lock_held = try_acquire_symbol_lock(db, account_id, lock_sym, bot_id)
+                        lock_held = try_acquire_symbol_lock(
+                            db, account_id, lock_sym, bot_id
+                        )
                         if not lock_held:
-                            append_event(db, bot_id, account_id, "LOCK_BUSY", "symbol lock busy skip trade", {"account_id": account_id, "symbol": lock_sym})
-                            logger.info("BOT_TICK bot_id=%s LOCK_BUSY symbol=%s skip trade", bot_id, lock_sym)
+                            append_event(
+                                db,
+                                bot_id,
+                                account_id,
+                                "LOCK_BUSY",
+                                "symbol lock busy skip trade",
+                                {"account_id": account_id, "symbol": lock_sym},
+                            )
+                            logger.info(
+                                "BOT_TICK bot_id=%s LOCK_BUSY symbol=%s skip trade",
+                                bot_id,
+                                lock_sym,
+                            )
                         elif not lease_still_valid(db, account_id, lock_sym, bot_id):
                             try:
                                 release_symbol_lock(db, account_id, lock_sym, bot_id)
                             except Exception:
                                 pass
-                            append_event(db, bot_id, account_id, "LOCK_LEASE_EXPIRED", "lease not valid before submit skip trade", {"account_id": account_id, "symbol": lock_sym})
+                            append_event(
+                                db,
+                                bot_id,
+                                account_id,
+                                "LOCK_LEASE_EXPIRED",
+                                "lease not valid before submit skip trade",
+                                {"account_id": account_id, "symbol": lock_sym},
+                            )
                             logger.info(
                                 "BOT_TICK bot_id=%s lease_not_valid symbol=%s skip submit (expected during lock handoff)",
-                                bot_id, lock_sym,
+                                bot_id,
+                                lock_sym,
                             )
                         else:
                             for a in actions:
-                                ak = (a.get("reason") or "unknown") + "_" + str(a.get("grid_index", ""))
+                                ak = (
+                                    (a.get("reason") or "unknown")
+                                    + "_"
+                                    + str(a.get("grid_index", ""))
+                                )
                                 if a.get("reason") == "initial_allocation":
                                     ak = f"initial_allocation_{bot_id}_{state.get('state_version', 0)}_0"
                                 logger.info(
                                     "BOT_ACTION bot_id=%s loop=%s tick=%s action_key=%s type=%s reason=%s symbol=%s quote_qty=%s qty=%s",
-                                    bot_id, loop_instance_id, tick_count, ak, (a.get("side") or "").upper(), a.get("reason") or "", 
-                                    a.get("symbol"), a.get("quote_qty"), a.get("quantity"),
+                                    bot_id,
+                                    loop_instance_id,
+                                    tick_count,
+                                    ak,
+                                    (a.get("side") or "").upper(),
+                                    a.get("reason") or "",
+                                    a.get("symbol"),
+                                    a.get("quote_qty"),
+                                    a.get("quantity"),
                                 )
                             stop_hb = asyncio.Event()
+
                             async def _heartbeat_renew(acc_id: int, sym: str, bid: int):
                                 while not stop_hb.is_set():
                                     await asyncio.sleep(HEARTBEAT_RENEWAL_INTERVAL_SEC)
@@ -697,9 +1011,21 @@ async def _bot_loop(bot_id: int) -> None:
                                             _db.close()
                                     except Exception:
                                         pass
-                            hb_task = asyncio.create_task(_heartbeat_renew(account_id, lock_sym, bot_id))
+
+                            hb_task = asyncio.create_task(
+                                _heartbeat_renew(account_id, lock_sym, bot_id)
+                            )
                             try:
-                                run_result = await run_actions(bot_id, account_id, actions, state, cfg, adapter, db=db, loop_id=loop_instance_id)
+                                run_result = await run_actions(
+                                    bot_id,
+                                    account_id,
+                                    actions,
+                                    state,
+                                    cfg,
+                                    adapter,
+                                    db=db,
+                                    loop_id=loop_instance_id,
+                                )
                             finally:
                                 stop_hb.set()
                                 hb_task.cancel()
@@ -711,29 +1037,49 @@ async def _bot_loop(bot_id: int) -> None:
                                 if r.get("event_logged"):
                                     continue
                                 append_event(
-                                    db, bot_id, account_id, "ORDER_FILLED",
+                                    db,
+                                    bot_id,
+                                    account_id,
+                                    "ORDER_FILLED",
                                     f"{r['side']} {r['fill_qty']} @ {r['fill_price']}",
                                     r,
                                 )
                             if os.getenv("RAM_PROBE_ENABLED") == "1":
                                 try:
-                                    from app.observability.ram_probe import probe_bot_event
-                                    probe_bot_event("ORDER_FILLED", bot_id=bot_id, write_to_log=True)
+                                    from app.observability.ram_probe import (
+                                        probe_bot_event,
+                                    )
+
+                                    probe_bot_event(
+                                        "ORDER_FILLED", bot_id=bot_id, write_to_log=True
+                                    )
                                 except Exception:
                                     pass
                             try:
                                 release_symbol_lock(db, account_id, lock_sym, bot_id)
                             except Exception as ex:
-                                logger.debug("bot_engine release_symbol_lock bot_id=%s err=%s", bot_id, ex)
+                                logger.debug(
+                                    "bot_engine release_symbol_lock bot_id=%s err=%s",
+                                    bot_id,
+                                    ex,
+                                )
                             lock_held = False
                     save_state(db, bot_id, account_id, state)
                     # BNB fee dönüşüm uyarılarını bot event'e çevir
-                    _fee_warns = state.get("cycle_ledger_current", {}).get("_fee_conversion_warn") or []
+                    _fee_warns = (
+                        state.get("cycle_ledger_current", {}).get(
+                            "_fee_conversion_warn"
+                        )
+                        or []
+                    )
                     if _fee_warns:
                         for _fw in _fee_warns:
                             try:
                                 append_event(
-                                    db, bot_id, account_id, "WARN",
+                                    db,
+                                    bot_id,
+                                    account_id,
+                                    "WARN",
                                     f"Komisyon USDT'ye çevrilemedi: {_fw.get('fee_asset')} "
                                     f"{_fw.get('fee_raw'):.8f} — dönem K/Z eksik hesaplanıyor",
                                     {"error_code": "FEE_CONVERSION_FAILED", **_fw},
@@ -741,14 +1087,20 @@ async def _bot_loop(bot_id: int) -> None:
                             except Exception:
                                 pass
                         try:
-                            state["cycle_ledger_current"].pop("_fee_conversion_warn", None)
+                            state["cycle_ledger_current"].pop(
+                                "_fee_conversion_warn", None
+                            )
                         except Exception:
                             pass
                     if state.get("_pending_connectivity_stable"):
                         try:
-                            from app.services.binance_connectivity import flush_pending_connectivity_stable
+                            from app.services.binance_connectivity import (
+                                flush_pending_connectivity_stable,
+                            )
 
-                            flush_pending_connectivity_stable(db, bot_id, after_loop_restart=False)
+                            flush_pending_connectivity_stable(
+                                db, bot_id, after_loop_restart=False
+                            )
                         except Exception:
                             pass
                         state.pop("_pending_connectivity_stable", None)
@@ -756,17 +1108,29 @@ async def _bot_loop(bot_id: int) -> None:
                         state.pop("_pending_connectivity_stable_prev_err", None)
                     try:
                         sync_virtual_wallet_from_state(
-                            db, bot_id, account_id, symbol,
+                            db,
+                            bot_id,
+                            account_id,
+                            symbol,
                             float(state.get("base_balance") or 0),
                             float(state.get("quote_balance") or 0),
                         )
                     except Exception as sync_err:
-                        logger.debug("bot_engine sync_virtual_wallet_from_state failed bot_id=%s err=%s", bot_id, sync_err)
+                        logger.debug(
+                            "bot_engine sync_virtual_wallet_from_state failed bot_id=%s err=%s",
+                            bot_id,
+                            sync_err,
+                        )
                     # Günlük K/Z referansı: gece 00:00 (Türkiye) equity; gün değişince ref=equity
                     if state.get("initial_allocation_done"):
-                        equity = float(state.get("base_balance") or 0) * float(price or 0) + float(state.get("quote_balance") or 0)
+                        equity = float(state.get("base_balance") or 0) * float(
+                            price or 0
+                        ) + float(state.get("quote_balance") or 0)
                         init_cap_tick = float(
-                            raw.get("initial_capital_usdt") or raw.get("budget_usd") or raw.get("bot_budget_quote") or 0
+                            raw.get("initial_capital_usdt")
+                            or raw.get("budget_usd")
+                            or raw.get("bot_budget_quote")
+                            or 0
                         )
                         ensure_daily_ref_and_compute(
                             state,
@@ -781,23 +1145,36 @@ async def _bot_loop(bot_id: int) -> None:
                     # Skip routine TICK log (elapsed_ms/actions) to reduce noise; only errors/skips/fills are logged
 
                     # Periyodik sanal vs gerçek bakiye doğrulaması (live, her 50 tick, ilk alım sonrası)
-                    if (not paper_mode and not acct_test
-                            and state.get("initial_allocation_done")
-                            and tick_count > 0 and tick_count % 50 == 0):
+                    if (
+                        not paper_mode
+                        and not acct_test
+                        and state.get("initial_allocation_done")
+                        and tick_count > 0
+                        and tick_count % 50 == 0
+                    ):
                         try:
                             from app.botengine.execution import _emit_balance_sync_check
+
                             await _emit_balance_sync_check(
                                 adapter, db, bot_id, account_id, symbol, state, price
                             )
                         except Exception as _bsc_ex:
-                            logger.debug("balance_sync_check bot_id=%s: %s", bot_id, _bsc_ex)
+                            logger.debug(
+                                "balance_sync_check bot_id=%s: %s", bot_id, _bsc_ex
+                            )
 
                     tick_count += 1
                     state_ver = state.get("state_version", 0)
                     if os.getenv("RAM_PROBE_ENABLED") == "1" and tick_count % 60 == 0:
                         try:
                             from app.observability.ram_probe import probe_bot_event
-                            probe_bot_event("cycle_tick", bot_id=bot_id, task_count=len(_tasks), write_to_log=True)
+
+                            probe_bot_event(
+                                "cycle_tick",
+                                bot_id=bot_id,
+                                task_count=len(_tasks),
+                                write_to_log=True,
+                            )
                         except Exception:
                             pass
                     logger.debug("BOT_TICK bot_id=%s state_ver=%s", bot_id, state_ver)
@@ -805,7 +1182,11 @@ async def _bot_loop(bot_id: int) -> None:
                     error_id = str(uuid.uuid4())
                     logger.info(
                         "BOT_LOOP_TOPLEVEL_EXCEPTION error_id=%s bot_id=%s account_id=%s loop_id=%s error=%s (absorbed)",
-                        error_id, bot_id, account_id or 0, loop_instance_id, tick_err,
+                        error_id,
+                        bot_id,
+                        account_id or 0,
+                        loop_instance_id,
+                        tick_err,
                     )
                     try:
                         state_err = load_state(db, bot_id) or {}
@@ -814,15 +1195,31 @@ async def _bot_loop(bot_id: int) -> None:
                         save_state(db, bot_id, account_id, state_err)
                     except Exception:
                         pass
-                    append_event(db, bot_id, account_id, "ERROR", f"BOT_TICK_EXCEPTION {error_id} {tick_err}", {
-                        "error_code": "BOT_TICK_EXCEPTION", "error_id": error_id, "bot_id": bot_id,
-                        "account_id": account_id or 0, "loop_id": loop_instance_id,
-                    })
+                    append_event(
+                        db,
+                        bot_id,
+                        account_id,
+                        "ERROR",
+                        f"BOT_TICK_EXCEPTION {error_id} {tick_err}",
+                        {
+                            "error_code": "BOT_TICK_EXCEPTION",
+                            "error_id": error_id,
+                            "bot_id": bot_id,
+                            "account_id": account_id or 0,
+                            "loop_id": loop_instance_id,
+                        },
+                    )
                     try:
                         from app.botengine.health_watch import emit_resilience_continue
+
                         emit_resilience_continue(
-                            db, bot_id, account_id, "BOT_TICK_EXCEPTION", str(tick_err),
-                            error_id=error_id, loop_id=loop_instance_id,
+                            db,
+                            bot_id,
+                            account_id,
+                            "BOT_TICK_EXCEPTION",
+                            str(tick_err),
+                            error_id=error_id,
+                            loop_id=loop_instance_id,
                         )
                     except Exception:
                         pass
@@ -831,14 +1228,20 @@ async def _bot_loop(bot_id: int) -> None:
 
             from app.services.test_simulation import paper_tick_sleep_seconds
 
-            await asyncio.sleep(paper_tick_sleep_seconds(next_wake, paper_mode, test_account=acct_test))
+            await asyncio.sleep(
+                paper_tick_sleep_seconds(next_wake, paper_mode, test_account=acct_test)
+            )
     except asyncio.CancelledError:
         logger.info("bot_engine loop cancelled bot_id=%s", bot_id)
     except Exception as e:
         error_id = str(uuid.uuid4())
         logger.exception(
             "BOT_LOOP_FATAL error_id=%s bot_id=%s account_id=%s loop_id=%s error=%s",
-            error_id, bot_id, account_id or 0, loop_instance_id, e,
+            error_id,
+            bot_id,
+            account_id or 0,
+            loop_instance_id,
+            e,
         )
         try:
             d = _get_db()
@@ -849,10 +1252,20 @@ async def _bot_loop(bot_id: int) -> None:
                 save_state(d, bot_id, account_id or 0, state)
             except Exception:
                 pass
-            append_event(d, bot_id, account_id or 0, "ERROR", f"BOT_LOOP_TOPLEVEL_EXCEPTION {error_id} {e}", {
-                "error_code": "BOT_LOOP_TOPLEVEL_EXCEPTION", "error_id": error_id, "bot_id": bot_id,
-                "account_id": account_id or 0, "loop_id": loop_instance_id,
-            })
+            append_event(
+                d,
+                bot_id,
+                account_id or 0,
+                "ERROR",
+                f"BOT_LOOP_TOPLEVEL_EXCEPTION {error_id} {e}",
+                {
+                    "error_code": "BOT_LOOP_TOPLEVEL_EXCEPTION",
+                    "error_id": error_id,
+                    "bot_id": bot_id,
+                    "account_id": account_id or 0,
+                    "loop_id": loop_instance_id,
+                },
+            )
             d.close()
         except Exception:
             pass
@@ -862,12 +1275,19 @@ async def _bot_loop(bot_id: int) -> None:
         _stop_requested.discard(bot_id)
         _tasks.pop(bot_id, None)
         _loop_instances.pop(bot_id, None)
-        logger.info("BOT_LOOP_END bot_id=%s loop=%s cancelled=%s", bot_id, loop_instance_id, cancelled)
+        logger.info(
+            "BOT_LOOP_END bot_id=%s loop=%s cancelled=%s",
+            bot_id,
+            loop_instance_id,
+            cancelled,
+        )
         if not cancelled:
             await _try_restart_bot_loop(bot_id, loop_instance_id, "loop_exit")
 
 
-async def _try_restart_bot_loop(bot_id: int, loop_instance_id: str, reason: str) -> bool:
+async def _try_restart_bot_loop(
+    bot_id: int, loop_instance_id: str, reason: str
+) -> bool:
     """Restart asyncio loop when DB status is still running (crash recovery)."""
     if bot_id in _stop_requested:
         return False
@@ -875,13 +1295,17 @@ async def _try_restart_bot_loop(bot_id: int, loop_instance_id: str, reason: str)
     account_id = 0
     try:
         from app.db.models import Bot
+
         bot = db.query(Bot).filter(Bot.id == bot_id).first()
         if not bot or (bot.status or "").lower() != "running":
             return False
         account_id = bot.account_id
         try:
             from app.botengine.health_watch import emit_loop_auto_restart
-            emit_loop_auto_restart(db, bot_id, account_id, reason, loop_id=loop_instance_id)
+
+            emit_loop_auto_restart(
+                db, bot_id, account_id, reason, loop_id=loop_instance_id
+            )
         except Exception:
             pass
     finally:
@@ -890,15 +1314,23 @@ async def _try_restart_bot_loop(bot_id: int, loop_instance_id: str, reason: str)
         if bot_id in _tasks and not _tasks[bot_id].done():
             return False
         _tasks[bot_id] = asyncio.create_task(_bot_loop(bot_id))
-        logger.info("BOT_LOOP_RESTART bot_id=%s reason=%s prev_loop=%s", bot_id, reason, loop_instance_id)
+        logger.info(
+            "BOT_LOOP_RESTART bot_id=%s reason=%s prev_loop=%s",
+            bot_id,
+            reason,
+            loop_instance_id,
+        )
     return True
 
 
-async def start_bot(bot_id: int, db: Session, *, connectivity_resume: bool = False) -> bool:
+async def start_bot(
+    bot_id: int, db: Session, *, connectivity_resume: bool = False
+) -> bool:
     from app.db.models import Bot
     from app.botengine.bot_session import mark_bot_run_started, touch_bot_started_at
     from app.botengine.state_store import load_state, save_state
     from app.services.perf_chart_state import seed_perf_chart_state_on_bot_start
+
     bot = db.query(Bot).filter(Bot.id == bot_id).first()
     if not bot:
         return False
@@ -912,22 +1344,32 @@ async def start_bot(bot_id: int, db: Session, *, connectivity_resume: bool = Fal
     if not connectivity_resume:
         seed_perf_chart_state_on_bot_start(db, bot_id)
         try:
-            from app.services.bot_performance_service import sync_bot_cycles_file_from_state
+            from app.services.bot_performance_service import (
+                sync_bot_cycles_file_from_state,
+            )
 
             sync_bot_cycles_file_from_state(db, bot_id, account_id, state)
         except Exception as e:
             logger.debug("sync_bot_cycles_file_from_state bot_id=%s: %s", bot_id, e)
-    logger.info("BOT_STATUS_CHANGED bot_id=%s account_id=%s status=running", bot_id, account_id)
+    logger.info(
+        "BOT_STATUS_CHANGED bot_id=%s account_id=%s status=running", bot_id, account_id
+    )
     db.refresh(bot)
     if (bot.status or "").lower() != "running":
-        logger.warning("BOT_START_DB_VERIFY_FAIL bot_id=%s account_id=%s status_after_commit=%s", bot_id, account_id, bot.status)
+        logger.warning(
+            "BOT_START_DB_VERIFY_FAIL bot_id=%s account_id=%s status_after_commit=%s",
+            bot_id,
+            account_id,
+            bot.status,
+        )
     _stop_requested.discard(bot_id)
     async with _task_create_lock:
         if bot_id in _tasks:
             existing_loop = _loop_instances.get(bot_id, "unknown")
             logger.info(
                 "BOT_START_SKIPPED_ALREADY_RUNNING bot_id=%s existing_loop=%s (expected)",
-                bot_id, existing_loop,
+                bot_id,
+                existing_loop,
             )
             return True
         t = asyncio.create_task(_bot_loop(bot_id))
@@ -935,7 +1377,10 @@ async def start_bot(bot_id: int, db: Session, *, connectivity_resume: bool = Fal
     if os.getenv("RAM_PROBE_ENABLED") == "1":
         try:
             from app.observability.ram_probe import probe_bot_event
-            probe_bot_event("start", bot_id=bot_id, task_count=len(_tasks), write_to_log=True)
+
+            probe_bot_event(
+                "start", bot_id=bot_id, task_count=len(_tasks), write_to_log=True
+            )
         except Exception:
             pass
     logger.info("bot_engine started bot_id=%s", bot_id)
@@ -954,6 +1399,7 @@ async def stop_bot(bot_id: int, db: Session) -> bool:
     from app.db.models import Bot
     from app.botengine.bot_session import clear_bot_run_started
     from app.botengine.state_store import load_state, save_state
+
     _stop_requested.add(bot_id)
     bot = db.query(Bot).filter(Bot.id == bot_id).first()
     if bot:
@@ -974,7 +1420,10 @@ async def stop_bot(bot_id: int, db: Session) -> bool:
     if os.getenv("RAM_PROBE_ENABLED") == "1":
         try:
             from app.observability.ram_probe import probe_bot_event
-            probe_bot_event("stop", bot_id=bot_id, task_count=len(_tasks), write_to_log=True)
+
+            probe_bot_event(
+                "stop", bot_id=bot_id, task_count=len(_tasks), write_to_log=True
+            )
         except Exception:
             pass
     logger.info("bot_engine stopped bot_id=%s", bot_id)
@@ -984,11 +1433,14 @@ async def stop_bot(bot_id: int, db: Session) -> bool:
 _ensure_running_bots_first_run = True
 
 
-async def ensure_running_bots(db: Session, recovery_source: str = "worker_poll") -> None:
+async def ensure_running_bots(
+    db: Session, recovery_source: str = "worker_poll"
+) -> None:
     """Start loops for all DB bots with status=running (crash recovery)."""
     global _ensure_running_bots_first_run
     from app.db.models import Bot
     from app.services.perf_chart_state import seed_perf_chart_state_on_bot_start
+
     _load_worker_loop_count_from_file()
     _write_worker_loop_count()
     pid = os.getpid()
@@ -1012,8 +1464,11 @@ async def ensure_running_bots(db: Session, recovery_source: str = "worker_poll")
                 seed_perf_chart_state_on_bot_start(db, bot.id)
             try:
                 from app.botengine.health_watch import emit_loop_auto_restart
+
                 emit_loop_auto_restart(
-                    db, bot.id, bot.account_id,
+                    db,
+                    bot.id,
+                    bot.account_id,
                     recovery_source,
                 )
             except Exception:
@@ -1024,7 +1479,9 @@ async def ensure_running_bots(db: Session, recovery_source: str = "worker_poll")
     if recovered:
         logger.info(
             "bot_engine ensure_running_bots recovered %s bots bot_ids=%s source=%s",
-            len(recovered), recovered, recovery_source,
+            len(recovered),
+            recovered,
+            recovery_source,
         )
     else:
         logger.debug("bot_engine ensure_running_bots recovered 0 bots bot_ids=[]")
@@ -1035,28 +1492,44 @@ async def delete_bot_fully(bot_id: int, db: Session) -> None:
     """Stop bot, then release symbol lock, persist today's realized PnL to cache, delete virtual wallet, events, state, trades, pnl, bot. Patch-2 + multibot."""
     from app.db.models import Bot, Trade, PnlSnapshot
     from app.services.pnl_service import PnlService
+
     await stop_bot(bot_id, db)
     bot = db.query(Bot).filter(Bot.id == bot_id).first()
     if bot:
         try:
-            release_symbol_lock(db, bot.account_id, trade_lock_symbol(bot.account_id), bot_id)
+            release_symbol_lock(
+                db, bot.account_id, trade_lock_symbol(bot.account_id), bot_id
+            )
         except Exception:
             pass
         # Performans arşivi + günlük KPI cache
         try:
             from app.services.bot_performance_service import archive_bot_performance
+
             archive_bot_performance(db, bot_id, bot.account_id)
         except Exception as e:
             logger.warning("delete_bot_fully archive bot_id=%s: %s", bot_id, e)
         today_str = turkey_today_date_str()
-        bot_today_realized = PnlService._daily_realized_for_bot_trades(db, bot_id, bot.account_id)
+        bot_today_realized = PnlService._daily_realized_for_bot_trades(
+            db, bot_id, bot.account_id
+        )
         if bot_today_realized != 0:
-            PnlService.add_to_account_daily_realized_cache(db, bot.account_id, today_str, bot_today_realized)
-    db.execute(text("DELETE FROM bot_virtual_wallet WHERE bot_id = :bid"), {"bid": bot_id})
-    db.execute(text("DELETE FROM bot_engine_events WHERE bot_id = :bid"), {"bid": bot_id})
-    db.execute(text("DELETE FROM bot_engine_state WHERE bot_id = :bid"), {"bid": bot_id})
+            PnlService.add_to_account_daily_realized_cache(
+                db, bot.account_id, today_str, bot_today_realized
+            )
+    db.execute(
+        text("DELETE FROM bot_virtual_wallet WHERE bot_id = :bid"), {"bid": bot_id}
+    )
+    db.execute(
+        text("DELETE FROM bot_engine_events WHERE bot_id = :bid"), {"bid": bot_id}
+    )
+    db.execute(
+        text("DELETE FROM bot_engine_state WHERE bot_id = :bid"), {"bid": bot_id}
+    )
     db.query(Trade).filter(Trade.bot_id == bot_id).delete(synchronize_session=False)
-    db.query(PnlSnapshot).filter(PnlSnapshot.bot_id == bot_id).delete(synchronize_session=False)
+    db.query(PnlSnapshot).filter(PnlSnapshot.bot_id == bot_id).delete(
+        synchronize_session=False
+    )
     if bot:
         db.query(Bot).filter(Bot.id == bot_id).delete(synchronize_session=False)
     db.commit()

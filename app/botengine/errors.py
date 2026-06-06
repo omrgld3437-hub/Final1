@@ -2,6 +2,7 @@
 Bot Engine v5 – Typed errors and retry taxonomy.
 Every error includes: error_code, error_id, request_id, context.
 """
+
 from __future__ import annotations
 import uuid
 from dataclasses import dataclass, field

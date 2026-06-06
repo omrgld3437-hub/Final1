@@ -1,16 +1,21 @@
 """
 Leaderboard API: top bots by structure / global. Auth required. No username/balance/bot_id in response.
 """
+
 import logging
 import time
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.api.auth import require_auth
 from app.db.session import get_db
-from app.services.leaderboard_service import get_global_top, get_top_by_structure, refresh_bot_public_metrics
+from app.services.leaderboard_service import (
+    get_global_top,
+    get_top_by_structure,
+    refresh_bot_public_metrics,
+)
 
 logger = logging.getLogger(__name__)
 

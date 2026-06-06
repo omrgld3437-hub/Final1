@@ -3,6 +3,7 @@ TRDCA PRO+ (Trailing Rebalancing + Trailing DCA/Grid).
 Snapshot-driven strategy: strategy_tick(snapshot, state) -> (next_state, decision).
 Consumption/advance only in apply_fills. Two motors: DCA + TRB; arbitration picks 0/1 intent per tick.
 """
+
 from __future__ import annotations
 import hashlib
 import json
@@ -52,13 +53,19 @@ def _reason(error_code: str, request_id_str: str, detail: Any = None) -> Dict[st
     }
 
 
-def _basket_price(weights: Dict[str, float], prices: Dict[str, float], quote_asset: str) -> Optional[float]:
+def _basket_price(
+    weights: Dict[str, float], prices: Dict[str, float], quote_asset: str
+) -> Optional[float]:
     total = 0.0
     for asset, w in weights.items():
         if asset == quote_asset:
             total += w * 1.0
             continue
-        p = prices.get(asset) if asset in prices else prices.get(f"{asset}{quote_asset}")
+        p = (
+            prices.get(asset)
+            if asset in prices
+            else prices.get(f"{asset}{quote_asset}")
+        )
         if p is None or _num(p) <= 0:
             return None
         total += w * _num(p)
@@ -111,9 +118,15 @@ def validate_and_normalize_batch(
             return False, None, f"INVALID_BATCH_NO_PRICE symbol={sym}"
         price_f = _num(price)
         notional = qty * price_f if side == "SELL" else qty * price_f
-        min_notional_leg = f.get("minNotional") or getattr(config, "min_notional_guard", 10.0)
+        min_notional_leg = f.get("minNotional") or getattr(
+            config, "min_notional_guard", 10.0
+        )
         if notional < _num(min_notional_leg):
-            return False, None, f"INVALID_BATCH_MIN_NOTIONAL symbol={sym} notional={notional} min={min_notional_leg}"
+            return (
+                False,
+                None,
+                f"INVALID_BATCH_MIN_NOTIONAL symbol={sym} notional={notional} min={min_notional_leg}",
+            )
         step = f.get("stepSize") or 0.00001
         if step > 0:
             leg["qty"] = _floor_to_step(qty, step)
@@ -122,7 +135,12 @@ def validate_and_normalize_batch(
 
 # --- DCA motor (pure) ---
 def _dca_armed_none() -> Dict[str, Any]:
-    return {"type": "NONE", "level_idx": None, "peak_or_trough": None, "started_at_ts": None}
+    return {
+        "type": "NONE",
+        "level_idx": None,
+        "peak_or_trough": None,
+        "started_at_ts": None,
+    }
 
 
 def dca_tick(
@@ -170,7 +188,7 @@ def dca_tick(
 
     weights = getattr(config, "dca_coin_weights", None) or {}
     price_null_assets = set()
-    for asset in (weights or {}):
+    for asset in weights or {}:
         if asset == quote_asset:
             continue
         p = prices_asset.get(asset)
@@ -193,7 +211,9 @@ def dca_tick(
     up_consumed = dca.get("grid_up_consumed") or [False] * len(grid_up)
     down_consumed = dca.get("grid_down_consumed") or [False] * len(grid_down)
     up_consumed = list(up_consumed) + [False] * (len(grid_up) - len(up_consumed))
-    down_consumed = list(down_consumed) + [False] * (len(grid_down) - len(down_consumed))
+    down_consumed = list(down_consumed) + [False] * (
+        len(grid_down) - len(down_consumed)
+    )
     dca["grid_up_consumed"] = up_consumed[: len(grid_up)]
     dca["grid_down_consumed"] = down_consumed[: len(grid_down)]
 
@@ -205,7 +225,9 @@ def dca_tick(
     dip_trigger = _num(getattr(config, "dca_post_sell_dip_trigger_pct", 2)) / 100.0
     dip_trail = _num(getattr(config, "dca_post_sell_dip_trail_up_pct", 0.8)) / 100.0
     profit_trigger = _num(getattr(config, "dca_post_buy_profit_trigger_pct", 2)) / 100.0
-    profit_trail = _num(getattr(config, "dca_post_buy_profit_sell_trail_back_pct", 0.8)) / 100.0
+    profit_trail = (
+        _num(getattr(config, "dca_post_buy_profit_sell_trail_back_pct", 0.8)) / 100.0
+    )
     buy_buffer = _num(getattr(config, "dca_buy_buffer_pct", 0.2)) / 100.0
 
     # Precedence: 1) POSTSELL_DIP 2) POSTBUY_PEAK 3) UP_SELL smallest k 4) DOWN_BUY smallest k
@@ -214,29 +236,63 @@ def dca_tick(
     target_notional = 0.0
 
     # 1) POSTSELL_DIP
-    if vwap_sell and (armed.get("type") == "POSTSELL_DIP" or (basket <= vwap_sell.get("price", 0) * (1 - dip_trigger))):
-        vp = _num(vwap_sell.get("price"))
+    if vwap_sell and (
+        armed.get("type") == "POSTSELL_DIP"
+        or (basket <= vwap_sell.get("price", 0) * (1 - dip_trigger))
+    ):
+        _num(vwap_sell.get("price"))
         if armed.get("type") == "POSTSELL_DIP":
             trough = _num(armed.get("peak_or_trough")) or basket
             trough = min(trough, basket)
-            dca["armed"] = {"type": "POSTSELL_DIP", "level_idx": None, "peak_or_trough": trough, "started_at_ts": armed.get("started_at_ts") or ts_ms}
+            dca["armed"] = {
+                "type": "POSTSELL_DIP",
+                "level_idx": None,
+                "peak_or_trough": trough,
+                "started_at_ts": armed.get("started_at_ts") or ts_ms,
+            }
             if basket >= trough * (1 + dip_trail):
                 chosen_type = "POSTSELL_DIP"
-                target_notional = _num(getattr(config, "dca_post_sell_dip_buy_notional_usdt", 200))
+                target_notional = _num(
+                    getattr(config, "dca_post_sell_dip_buy_notional_usdt", 200)
+                )
         else:
-            dca["armed"] = {"type": "POSTSELL_DIP", "level_idx": None, "peak_or_trough": basket, "started_at_ts": ts_ms}
+            dca["armed"] = {
+                "type": "POSTSELL_DIP",
+                "level_idx": None,
+                "peak_or_trough": basket,
+                "started_at_ts": ts_ms,
+            }
 
-    if chosen_type is None and vwap_buy and (armed.get("type") == "POSTBUY_PEAK" or (basket >= vwap_buy.get("price", 0) * (1 + profit_trigger))):
-        vp = _num(vwap_buy.get("price"))
+    if (
+        chosen_type is None
+        and vwap_buy
+        and (
+            armed.get("type") == "POSTBUY_PEAK"
+            or (basket >= vwap_buy.get("price", 0) * (1 + profit_trigger))
+        )
+    ):
+        _num(vwap_buy.get("price"))
         if armed.get("type") == "POSTBUY_PEAK":
             peak = _num(armed.get("peak_or_trough")) or basket
             peak = max(peak, basket)
-            dca["armed"] = {"type": "POSTBUY_PEAK", "level_idx": None, "peak_or_trough": peak, "started_at_ts": armed.get("started_at_ts") or ts_ms}
+            dca["armed"] = {
+                "type": "POSTBUY_PEAK",
+                "level_idx": None,
+                "peak_or_trough": peak,
+                "started_at_ts": armed.get("started_at_ts") or ts_ms,
+            }
             if basket <= peak * (1 - profit_trail):
                 chosen_type = "POSTBUY_PEAK"
-                target_notional = _num(getattr(config, "dca_post_buy_profit_sell_notional_usdt", 200))
+                target_notional = _num(
+                    getattr(config, "dca_post_buy_profit_sell_notional_usdt", 200)
+                )
         else:
-            dca["armed"] = {"type": "POSTBUY_PEAK", "level_idx": None, "peak_or_trough": basket, "started_at_ts": ts_ms}
+            dca["armed"] = {
+                "type": "POSTBUY_PEAK",
+                "level_idx": None,
+                "peak_or_trough": basket,
+                "started_at_ts": ts_ms,
+            }
 
     if chosen_type is None:
         for k in range(len(grid_up)):
@@ -247,14 +303,33 @@ def dca_tick(
                 if armed.get("type") == "UP_SELL" and armed.get("level_idx") == k:
                     peak = _num(armed.get("peak_or_trough")) or basket
                     peak = max(peak, basket)
-                    dca["armed"] = {"type": "UP_SELL", "level_idx": k, "peak_or_trough": peak, "started_at_ts": armed.get("started_at_ts") or ts_ms}
+                    dca["armed"] = {
+                        "type": "UP_SELL",
+                        "level_idx": k,
+                        "peak_or_trough": peak,
+                        "started_at_ts": armed.get("started_at_ts") or ts_ms,
+                    }
                     if basket <= peak * (1 - sell_trail):
                         chosen_type = "UP_SELL"
                         chosen_level_idx = k
-                        target_notional = _num((getattr(config, "dca_grid_up_notional_usdt", [200, 200, 200])[k] if k < len(getattr(config, "dca_grid_up_notional_usdt", [])) else 200))
+                        target_notional = _num(
+                            (
+                                getattr(
+                                    config, "dca_grid_up_notional_usdt", [200, 200, 200]
+                                )[k]
+                                if k
+                                < len(getattr(config, "dca_grid_up_notional_usdt", []))
+                                else 200
+                            )
+                        )
                         break
                 else:
-                    dca["armed"] = {"type": "UP_SELL", "level_idx": k, "peak_or_trough": basket, "started_at_ts": ts_ms}
+                    dca["armed"] = {
+                        "type": "UP_SELL",
+                        "level_idx": k,
+                        "peak_or_trough": basket,
+                        "started_at_ts": ts_ms,
+                    }
                 break
 
     if chosen_type is None:
@@ -266,14 +341,37 @@ def dca_tick(
                 if armed.get("type") == "DOWN_BUY" and armed.get("level_idx") == k:
                     trough = _num(armed.get("peak_or_trough")) or basket
                     trough = min(trough, basket)
-                    dca["armed"] = {"type": "DOWN_BUY", "level_idx": k, "peak_or_trough": trough, "started_at_ts": armed.get("started_at_ts") or ts_ms}
+                    dca["armed"] = {
+                        "type": "DOWN_BUY",
+                        "level_idx": k,
+                        "peak_or_trough": trough,
+                        "started_at_ts": armed.get("started_at_ts") or ts_ms,
+                    }
                     if basket >= trough * (1 + buy_trail):
                         chosen_type = "DOWN_BUY"
                         chosen_level_idx = k
-                        target_notional = _num((getattr(config, "dca_grid_down_notional_usdt", [200, 200, 200])[k] if k < len(getattr(config, "dca_grid_down_notional_usdt", [])) else 200))
+                        target_notional = _num(
+                            (
+                                getattr(
+                                    config,
+                                    "dca_grid_down_notional_usdt",
+                                    [200, 200, 200],
+                                )[k]
+                                if k
+                                < len(
+                                    getattr(config, "dca_grid_down_notional_usdt", [])
+                                )
+                                else 200
+                            )
+                        )
                         break
                 else:
-                    dca["armed"] = {"type": "DOWN_BUY", "level_idx": k, "peak_or_trough": basket, "started_at_ts": ts_ms}
+                    dca["armed"] = {
+                        "type": "DOWN_BUY",
+                        "level_idx": k,
+                        "peak_or_trough": basket,
+                        "started_at_ts": ts_ms,
+                    }
                 break
 
     if chosen_type is None:
@@ -284,10 +382,19 @@ def dca_tick(
     filters = snapshot.get("filters") or {}
     legs = []
     bot_id = int(_num(state.get("bot_id") or 0))
-    config_hash = state.get("config_hash") or _hash_id(json.dumps(config.to_dict(), sort_keys=True))
-    anchor_id = state.get("anchor_id") or _hash_id(config_hash, state.get("basket_weights_hash", ""), anchor, state.get("anchor_set_ts_bucket", 0))
-    basket_weights_hash = state.get("basket_weights_hash") or _hash_id(json.dumps(weights, sort_keys=True))
-    batch_id = _hash_id(bot_id, "DCA", chosen_type, chosen_level_idx, anchor_id, config_hash)
+    config_hash = state.get("config_hash") or _hash_id(
+        json.dumps(config.to_dict(), sort_keys=True)
+    )
+    anchor_id = state.get("anchor_id") or _hash_id(
+        config_hash,
+        state.get("basket_weights_hash", ""),
+        anchor,
+        state.get("anchor_set_ts_bucket", 0),
+    )
+    state.get("basket_weights_hash") or _hash_id(json.dumps(weights, sort_keys=True))
+    batch_id = _hash_id(
+        bot_id, "DCA", chosen_type, chosen_level_idx, anchor_id, config_hash
+    )
     intent_id = _hash_id(bot_id, "DCA", batch_id, anchor_id, config_hash)
 
     is_sell = chosen_type in ("UP_SELL", "POSTBUY_PEAK")
@@ -425,13 +532,19 @@ def trb_tick(
     current_weights = {}
     for asset, w in target_weights.items():
         if asset == quote_asset:
-            current_weights[asset] = _num(balances.get(asset)) / total_value if total_value else 0
+            current_weights[asset] = (
+                _num(balances.get(asset)) / total_value if total_value else 0
+            )
         else:
             sym = f"{asset}{quote_asset}"
             p = prices.get(asset) or prices.get(sym)
             if p is None or _num(p) <= 0:
                 continue
-            current_weights[asset] = (_num(balances.get(asset)) * _num(p)) / total_value if total_value else 0
+            current_weights[asset] = (
+                (_num(balances.get(asset)) * _num(p)) / total_value
+                if total_value
+                else 0
+            )
     gap_pct = 0.0
     for asset in target_weights:
         tw = _num(target_weights.get(asset))
@@ -441,7 +554,8 @@ def trb_tick(
     # Initial allocation: tüm base asset'ler 0 iken (100% quote) hemen alım yap
     base_sum = sum(
         _num(balances.get(a)) * _num(prices.get(a) or prices.get(f"{a}{quote_asset}"))
-        for a in target_weights if a != quote_asset
+        for a in target_weights
+        if a != quote_asset
     )
     is_initial_allocation = base_sum <= 0 and _num(balances.get(quote_asset)) > 0
 
@@ -452,7 +566,9 @@ def trb_tick(
             trb["trb_triggered_at_ts"] = ts_ms
             # İlk tahsis: IDLE->TRAIL geçişinde hemen plan yap ve execute et (2. tick bekleme)
             if is_initial_allocation:
-                trb_state = "TRAIL"  # Aşağıdaki TRAIL bloğuna düş, aynı tick'te alım yap
+                trb_state = (
+                    "TRAIL"  # Aşağıdaki TRAIL bloğuna düş, aynı tick'te alım yap
+                )
             else:
                 proposal["reason"] = "IDLE"
                 return patch, proposal
@@ -463,18 +579,31 @@ def trb_tick(
     if trb_state == "TRAIL":
         trb["gap_peak_pct"] = max(gap_peak, gap_pct)
         # İlk tahsis: 100% quote iken hemen al; trail_back için gap düşmeyi bekleme
-        gap_ok = gap_pct <= gap_peak * (1 - trail_back_pct) or (is_initial_allocation and gap_pct >= gap_arm_pct)
+        gap_ok = gap_pct <= gap_peak * (1 - trail_back_pct) or (
+            is_initial_allocation and gap_pct >= gap_arm_pct
+        )
         if gap_ok:
             plan = trb.get("plan")
             if not plan:
                 plan_id = _hash_id(state.get("bot_id"), "TRB", ts_ms, gap_peak)
-                steps = _trb_build_steps(state, config, balances, prices, target_weights, total_value, quote_asset, snapshot)
+                steps = _trb_build_steps(
+                    state,
+                    config,
+                    balances,
+                    prices,
+                    target_weights,
+                    total_value,
+                    quote_asset,
+                    snapshot,
+                )
                 if not steps:
                     proposal["reason"] = "NO_STEPS"
                     return patch, proposal
                 trb["plan"] = {
                     "plan_id": plan_id,
-                    "plan_weights_hash": _hash_id(json.dumps(target_weights, sort_keys=True)),
+                    "plan_weights_hash": _hash_id(
+                        json.dumps(target_weights, sort_keys=True)
+                    ),
                     "created_at_ts": ts_ms,
                     "step_idx": 0,
                     "steps": steps,
@@ -486,7 +615,9 @@ def trb_tick(
                 if step_idx < len(steps):
                     batch = steps[step_idx]
                     bot_id = int(_num(state.get("bot_id") or 0))
-                    intent_id = _hash_id(bot_id, "TRB", batch.get("batch_id"), plan.get("plan_id"))
+                    intent_id = _hash_id(
+                        bot_id, "TRB", batch.get("batch_id"), plan.get("plan_id")
+                    )
                     proposal["want_action"] = True
                     proposal["action"] = batch
                     proposal["intent_id"] = intent_id
@@ -496,7 +627,11 @@ def trb_tick(
                     proposal["triggered_at_ts"] = plan.get("created_at_ts") or ts_ms
                     proposal["notional_estimate"] = _num(batch.get("notional_estimate"))
                     proposal["impact_score"] = proposal["notional_estimate"]
-                    proposal["meta"] = {"reason_code": "TRB_STEP", "armed_type": None, "level_idx": None}
+                    proposal["meta"] = {
+                        "reason_code": "TRB_STEP",
+                        "armed_type": None,
+                        "level_idx": None,
+                    }
         proposal["reason"] = proposal["reason"] or "TRAIL"
     return patch, proposal
 
@@ -505,7 +640,9 @@ def _trb_legs_signature(sell_legs: List[Dict], buy_legs: List[Dict]) -> str:
     """Deterministic signature from leg content (symbol, side, qty) for restart-safe batch_id."""
     combined = []
     for leg in sell_legs + buy_legs:
-        combined.append((leg.get("symbol", ""), leg.get("side", ""), _num(leg.get("qty"))))
+        combined.append(
+            (leg.get("symbol", ""), leg.get("side", ""), _num(leg.get("qty")))
+        )
     combined.sort(key=lambda x: (x[0], x[1]))
     return _hash_id(json.dumps(combined, sort_keys=True))
 
@@ -524,7 +661,9 @@ def _trb_build_steps(
     filters = snapshot.get("filters") or {}
     max_legs = int(getattr(config, "trb_max_batch_legs", 8) or 8)
     sell_first = bool(getattr(config, "trb_sell_first", True))
-    step_mode = (getattr(config, "trb_step_mode", None) or "SELL_ONLY_THEN_BUY").strip().upper()
+    step_mode = (
+        (getattr(config, "trb_step_mode", None) or "SELL_ONLY_THEN_BUY").strip().upper()
+    )
 
     sell_legs = []
     buy_legs = []
@@ -578,19 +717,55 @@ def _trb_build_steps(
         if sell_legs:
             sell_chunk = sell_legs[:max_legs]
             assign_coids(sell_chunk, 0)
-            notional = sum(_num(l.get("qty")) * _num(prices.get((l.get("symbol") or "").replace(quote_asset, ""))) for l in sell_chunk)
-            steps.append({"kind": "BATCH_MARKET_ORDERS", "source": "TRB", "batch_id": batch_id, "legs": sell_chunk, "notional_estimate": notional})
+            notional = sum(
+                _num(l.get("qty"))
+                * _num(prices.get((l.get("symbol") or "").replace(quote_asset, "")))
+                for l in sell_chunk
+            )
+            steps.append(
+                {
+                    "kind": "BATCH_MARKET_ORDERS",
+                    "source": "TRB",
+                    "batch_id": batch_id,
+                    "legs": sell_chunk,
+                    "notional_estimate": notional,
+                }
+            )
         if buy_legs:
             buy_chunk = buy_legs[:max_legs]
             assign_coids(buy_chunk, len(sell_legs))
-            notional = sum(_num(l.get("qty")) * _num(prices.get((l.get("symbol") or "").replace(quote_asset, ""))) for l in buy_chunk)
-            steps.append({"kind": "BATCH_MARKET_ORDERS", "source": "TRB", "batch_id": batch_id, "legs": buy_chunk, "notional_estimate": notional})
+            notional = sum(
+                _num(l.get("qty"))
+                * _num(prices.get((l.get("symbol") or "").replace(quote_asset, "")))
+                for l in buy_chunk
+            )
+            steps.append(
+                {
+                    "kind": "BATCH_MARKET_ORDERS",
+                    "source": "TRB",
+                    "batch_id": batch_id,
+                    "legs": buy_chunk,
+                    "notional_estimate": notional,
+                }
+            )
     else:
         all_legs = (sell_legs + buy_legs)[:max_legs]
         if all_legs:
             assign_coids(all_legs, 0)
-            notional = sum(_num(l.get("qty")) * _num(prices.get((l.get("symbol") or "").replace(quote_asset, ""))) for l in all_legs)
-            steps.append({"kind": "BATCH_MARKET_ORDERS", "source": "TRB", "batch_id": batch_id, "legs": all_legs, "notional_estimate": notional})
+            notional = sum(
+                _num(l.get("qty"))
+                * _num(prices.get((l.get("symbol") or "").replace(quote_asset, "")))
+                for l in all_legs
+            )
+            steps.append(
+                {
+                    "kind": "BATCH_MARKET_ORDERS",
+                    "source": "TRB",
+                    "batch_id": batch_id,
+                    "legs": all_legs,
+                    "notional_estimate": notional,
+                }
+            )
     return steps
 
 
@@ -621,6 +796,7 @@ def arbitrate(
             p.get("source") or "",
             p.get("action", {}).get("batch_id") or "",
         )
+
     candidates.sort(key=key)
     return candidates[0]
 
@@ -638,7 +814,7 @@ def apply_fills(
         return state
 
     expected_legs = active.get("legs") or []
-    legs_expected = len(expected_legs)
+    len(expected_legs)
     status_map = {}
     for leg in expected_legs:
         coid = leg.get("client_order_id")
@@ -659,7 +835,12 @@ def apply_fills(
 
     if any(v == "PARTIAL" for v in status_map.values()):
         state["mode"] = "SAFE_STOP"
-        state["last_reason"] = {"error_code": "PARTIAL_BATCH_EXECUTION", "error_id": str(uuid.uuid4()), "request_id": request_id_str, "detail": status_map}
+        state["last_reason"] = {
+            "error_code": "PARTIAL_BATCH_EXECUTION",
+            "error_id": str(uuid.uuid4()),
+            "request_id": request_id_str,
+            "detail": status_map,
+        }
         state["last_tick_ts"] = snapshot_ts
         return state
 
@@ -668,10 +849,20 @@ def apply_fills(
 
     state["last_tick_ts"] = snapshot_ts
     commit = active.get("commit_snapshot") or {}
-    pq = _num(state.get("pending_quote_committed")) - _num(commit.get("commit_quote_total"))
+    pq = _num(state.get("pending_quote_committed")) - _num(
+        commit.get("commit_quote_total")
+    )
     if pq < 0:
         state["mode"] = "SAFE_STOP"
-        state["last_reason"] = _reason("PENDING_CLEANUP_MISMATCH", request_id_str, {"detail": "pending_quote_committed would go negative", "before": state.get("pending_quote_committed"), "commit_quote_total": commit.get("commit_quote_total")})
+        state["last_reason"] = _reason(
+            "PENDING_CLEANUP_MISMATCH",
+            request_id_str,
+            {
+                "detail": "pending_quote_committed would go negative",
+                "before": state.get("pending_quote_committed"),
+                "commit_quote_total": commit.get("commit_quote_total"),
+            },
+        )
         return state
     state["pending_quote_committed"] = pq
     for asset, amt in (commit.get("commit_base_total_by_asset") or {}).items():
@@ -679,7 +870,16 @@ def apply_fills(
         before_a = _num(state["pending_base_committed"].get(asset)) - _num(amt)
         if before_a < 0:
             state["mode"] = "SAFE_STOP"
-            state["last_reason"] = _reason("PENDING_CLEANUP_MISMATCH", request_id_str, {"detail": "pending_base_committed would go negative", "asset": asset, "before": state["pending_base_committed"].get(asset), "commit_amt": amt})
+            state["last_reason"] = _reason(
+                "PENDING_CLEANUP_MISMATCH",
+                request_id_str,
+                {
+                    "detail": "pending_base_committed would go negative",
+                    "asset": asset,
+                    "before": state["pending_base_committed"].get(asset),
+                    "commit_amt": amt,
+                },
+            )
             return state
         state["pending_base_committed"][asset] = before_a
 
@@ -701,7 +901,9 @@ def apply_fills(
             dca["grid_down_consumed"] = consumed
         exec_basket = active.get("exec_basket_price")
         if exec_basket is not None:
-            notional = _num(active.get("commit_snapshot", {}).get("commit_quote_total")) or _num(commit.get("commit_quote_total"))
+            notional = _num(
+                active.get("commit_snapshot", {}).get("commit_quote_total")
+            ) or _num(commit.get("commit_quote_total"))
             if "SELL" in str(meta.get("reason_code", "")):
                 dca["vwap_sell"] = {"price": exec_basket, "notional": notional}
             else:
@@ -729,7 +931,9 @@ def apply_fills(
     return state
 
 
-def _build_commit_snapshot(batch_intent: Dict[str, Any], prices: Dict[str, Any], quote_asset: str) -> Dict[str, Any]:
+def _build_commit_snapshot(
+    batch_intent: Dict[str, Any], prices: Dict[str, Any], quote_asset: str
+) -> Dict[str, Any]:
     commit_quote_by_leg = {}
     commit_base_by_leg = {}
     commit_quote_total = 0.0
@@ -747,7 +951,9 @@ def _build_commit_snapshot(batch_intent: Dict[str, Any], prices: Dict[str, Any],
             commit_quote_total += notional
         else:
             commit_base_by_leg[coid] = qty
-            commit_base_total_by_asset[base] = commit_base_total_by_asset.get(base, 0) + qty
+            commit_base_total_by_asset[base] = (
+                commit_base_total_by_asset.get(base, 0) + qty
+            )
     return {
         "commit_quote_by_leg": commit_quote_by_leg,
         "commit_base_by_leg": commit_base_by_leg,
@@ -772,25 +978,49 @@ def strategy_tick(
     request_id = _request_id(bot_id, ts_ms)
     quote_asset = state.get("quote_asset") or config.quote_asset
 
-    if not snapshot.get("ts") or not isinstance(snapshot.get("balances_free"), dict) or not isinstance(snapshot.get("prices_last"), dict):
+    if (
+        not snapshot.get("ts")
+        or not isinstance(snapshot.get("balances_free"), dict)
+        or not isinstance(snapshot.get("prices_last"), dict)
+    ):
         state["mode"] = "SAFE_STOP"
-        state["last_reason"] = _reason("SNAPSHOT_INVALID", request_id, "missing critical fields")
+        state["last_reason"] = _reason(
+            "SNAPSHOT_INVALID", request_id, "missing critical fields"
+        )
         state["last_tick_ts"] = ts_ms
-        return state, {"type": "SAFE_STOP", "reason": state["last_reason"], "debug": {"bot_id": bot_id, "ts": ts_ms}}
+        return state, {
+            "type": "SAFE_STOP",
+            "reason": state["last_reason"],
+            "debug": {"bot_id": bot_id, "ts": ts_ms},
+        }
     if "filters" not in snapshot or "open_order" not in snapshot:
         state["mode"] = "SAFE_STOP"
-        state["last_reason"] = _reason("SNAPSHOT_INVALID", request_id, "missing filters or open_order")
+        state["last_reason"] = _reason(
+            "SNAPSHOT_INVALID", request_id, "missing filters or open_order"
+        )
         state["last_tick_ts"] = ts_ms
-        return state, {"type": "SAFE_STOP", "reason": state["last_reason"], "debug": {"bot_id": bot_id, "ts": ts_ms}}
+        return state, {
+            "type": "SAFE_STOP",
+            "reason": state["last_reason"],
+            "debug": {"bot_id": bot_id, "ts": ts_ms},
+        }
 
     if ts_ms <= int(_num(state.get("last_tick_ts") or 0)):
         return state, {"type": "NOOP", "debug": {"bot_id": bot_id, "ts": ts_ms}}
 
     mode = state.get("mode") or "RUNNING"
     if mode == "SAFE_STOP":
-        return state, {"type": "SAFE_STOP", "reason": state.get("last_reason"), "debug": {"bot_id": bot_id}}
+        return state, {
+            "type": "SAFE_STOP",
+            "reason": state.get("last_reason"),
+            "debug": {"bot_id": bot_id},
+        }
     if mode == "RESUME_PENDING":
-        return state, {"type": "RESUME_PENDING", "reason": state.get("last_reason"), "debug": {"bot_id": bot_id}}
+        return state, {
+            "type": "RESUME_PENDING",
+            "reason": state.get("last_reason"),
+            "debug": {"bot_id": bot_id},
+        }
 
     if snapshot.get("fills"):
         state = apply_fills(state, snapshot["fills"], snapshot)
@@ -807,13 +1037,23 @@ def strategy_tick(
             state["mode"] = "RESUME_PENDING"
             state["last_reason"] = _reason("ORDER_ACK_WAIT", request_id)
             state["last_tick_ts"] = ts_ms
-            return state, {"type": "RESUME_PENDING", "reason": state["last_reason"], "debug": {"bot_id": bot_id}}
+            return state, {
+                "type": "RESUME_PENDING",
+                "reason": state["last_reason"],
+                "debug": {"bot_id": bot_id},
+            }
         # ACK timeout: distinguish "no ack" vs "some legs never reported" (UNKNOWN forever)
-        reason_code = "UNKNOWN_LEGS_ACK_TIMEOUT" if snapshot.get("fills") else "ORDER_ACK_TIMEOUT"
+        reason_code = (
+            "UNKNOWN_LEGS_ACK_TIMEOUT" if snapshot.get("fills") else "ORDER_ACK_TIMEOUT"
+        )
         state["mode"] = "SAFE_STOP"
         state["last_reason"] = _reason(reason_code, request_id)
         state["last_tick_ts"] = ts_ms
-        return state, {"type": "SAFE_STOP", "reason": state["last_reason"], "debug": {"bot_id": bot_id}}
+        return state, {
+            "type": "SAFE_STOP",
+            "reason": state["last_reason"],
+            "debug": {"bot_id": bot_id},
+        }
 
     dca_patch, prop_dca = dca_tick(snapshot, state, config)
     trb_patch, prop_trb = trb_tick(snapshot, state, config)
@@ -823,8 +1063,14 @@ def strategy_tick(
         state[k] = v
 
     # Data health gate: merge price_null_strikes, SAFE_STOP on limit breach
-    null_union = set(dca_patch.get("price_null_assets") or []) | set(trb_patch.get("price_null_assets") or [])
-    all_assets = set(getattr(config, "trb_target_weights_all", None) or {}) | set(getattr(config, "dca_coin_weights", None) or {}) | {quote_asset}
+    null_union = set(dca_patch.get("price_null_assets") or []) | set(
+        trb_patch.get("price_null_assets") or []
+    )
+    all_assets = (
+        set(getattr(config, "trb_target_weights_all", None) or {})
+        | set(getattr(config, "dca_coin_weights", None) or {})
+        | {quote_asset}
+    )
     strikes = dict(state.get("price_null_strikes") or {})
     for asset in all_assets:
         if asset in null_union:
@@ -836,17 +1082,29 @@ def strategy_tick(
     strike_limit = int(_num(getattr(config, "price_null_strike_limit", 10)) or 10)
     if strike_limit > 0 and (max(strikes.values()) >= strike_limit):
         state["mode"] = "SAFE_STOP"
-        state["last_reason"] = _reason("MARKET_DATA_INCOMPLETE", request_id, {"strikes": strikes, "limit": strike_limit})
+        state["last_reason"] = _reason(
+            "MARKET_DATA_INCOMPLETE",
+            request_id,
+            {"strikes": strikes, "limit": strike_limit},
+        )
         state["last_tick_ts"] = ts_ms
-        return state, {"type": "SAFE_STOP", "reason": state["last_reason"], "debug": {"bot_id": bot_id, "ts": ts_ms}}
+        return state, {
+            "type": "SAFE_STOP",
+            "reason": state["last_reason"],
+            "debug": {"bot_id": bot_id, "ts": ts_ms},
+        }
 
     if prop_dca.get("want_action"):
-        ok, norm, err = validate_and_normalize_batch(snapshot, state, config, prop_dca.get("action") or {})
+        ok, norm, err = validate_and_normalize_batch(
+            snapshot, state, config, prop_dca.get("action") or {}
+        )
         if not ok:
             prop_dca["want_action"] = False
             prop_dca["valid"] = False
     if prop_trb.get("want_action"):
-        ok, norm, err = validate_and_normalize_batch(snapshot, state, config, prop_trb.get("action") or {})
+        ok, norm, err = validate_and_normalize_batch(
+            snapshot, state, config, prop_trb.get("action") or {}
+        )
         if not ok:
             prop_trb["want_action"] = False
             prop_trb["valid"] = False
@@ -861,7 +1119,9 @@ def strategy_tick(
         state["last_tick_ts"] = ts_ms
         return state, {"type": "NOOP", "debug": {"bot_id": bot_id}}
 
-    commit = _build_commit_snapshot(action, snapshot.get("prices_last") or {}, quote_asset)
+    commit = _build_commit_snapshot(
+        action, snapshot.get("prices_last") or {}, quote_asset
+    )
     state["active_intent"] = {
         "source": action.get("source"),
         "intent_id": winner.get("intent_id"),
@@ -874,17 +1134,32 @@ def strategy_tick(
         "send_time_ms": ts_ms,
         "status": "SENT",
     }
-    state["pending_quote_committed"] = state.get("pending_quote_committed", 0) + commit.get("commit_quote_total", 0)
+    state["pending_quote_committed"] = state.get(
+        "pending_quote_committed", 0
+    ) + commit.get("commit_quote_total", 0)
     for asset, amt in (commit.get("commit_base_total_by_asset") or {}).items():
         state["pending_base_committed"] = state.get("pending_base_committed") or {}
-        state["pending_base_committed"][asset] = state["pending_base_committed"].get(asset, 0) + amt
-    state["arb_last"] = {"ts": ts_ms, "winner": action.get("source"), "loser": "TRB" if action.get("source") == "DCA" else "DCA"}
+        state["pending_base_committed"][asset] = (
+            state["pending_base_committed"].get(asset, 0) + amt
+        )
+    state["arb_last"] = {
+        "ts": ts_ms,
+        "winner": action.get("source"),
+        "loser": "TRB" if action.get("source") == "DCA" else "DCA",
+    }
     state["last_tick_ts"] = ts_ms
 
     return state, {
         "type": "ACTIONS",
         "actions": [action],
-        "debug": {"bot_id": bot_id, "ts": ts_ms, "winner": action.get("source"), "batch_id": action.get("batch_id"), "legs_count": len(action.get("legs", [])), "notional_estimate": action.get("notional_estimate")},
+        "debug": {
+            "bot_id": bot_id,
+            "ts": ts_ms,
+            "winner": action.get("source"),
+            "batch_id": action.get("batch_id"),
+            "legs_count": len(action.get("legs", [])),
+            "notional_estimate": action.get("notional_estimate"),
+        },
     }
 
 
@@ -921,4 +1196,3 @@ class TrdcaProStrategy(Strategy):
     ) -> Dict[str, Any]:
         """Apply batch fills to state (called by engine when snapshot.fills present)."""
         return apply_fills(state, fills, snapshot)
-

@@ -23,10 +23,15 @@ def test_wallet_refresh_force_still_respects_cooldown():
     db.commit()
     account_id = account.id
 
-    app.dependency_overrides[home_routes.require_auth] = lambda: {"is_admin": True, "user_id": 1}
+    app.dependency_overrides[home_routes.require_auth] = lambda: {
+        "is_admin": True,
+        "user_id": 1,
+    }
     home_routes._wallet_cooldown_until[account_id] = time.monotonic() + 60
     try:
-        resp = TestClient(app).post(f"/api/home/wallet/refresh?account_id={account_id}&force=1")
+        resp = TestClient(app).post(
+            f"/api/home/wallet/refresh?account_id={account_id}&force=1"
+        )
         assert resp.status_code == 200, resp.text
         data = resp.json()["data"]
         assert data["skipped"] is True
@@ -66,7 +71,10 @@ def test_wallet_status_reports_stale_snapshot_age():
     db.add(snap)
     db.commit()
 
-    app.dependency_overrides[home_routes.require_auth] = lambda: {"is_admin": True, "user_id": 1}
+    app.dependency_overrides[home_routes.require_auth] = lambda: {
+        "is_admin": True,
+        "user_id": 1,
+    }
     try:
         resp = TestClient(app).get(f"/api/home/wallet/status?account_id={account_id}")
         assert resp.status_code == 200, resp.text

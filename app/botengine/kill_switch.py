@@ -1,6 +1,7 @@
 """
 Bot Engine v5 – Global kill switch. When enabled, no new order submits.
 """
+
 from __future__ import annotations
 import os
 import threading
@@ -27,5 +28,6 @@ def set_kill_switch(enabled: bool) -> None:
 def check_kill_switch() -> None:
     """Raise if kill switch enabled. Call before any order submit."""
     from app.botengine.errors import KillSwitchError
+
     if is_kill_switch_enabled():
         raise KillSwitchError("Global kill switch is enabled; new submits denied")

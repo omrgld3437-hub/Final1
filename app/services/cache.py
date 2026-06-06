@@ -1,10 +1,12 @@
 """
 cache modulu (services/).
 """
+
 # app/services/cache.py
 from __future__ import annotations
 import time
 from typing import Any, Dict, Tuple
+
 
 class TTLCache:
     def __init__(self):
@@ -27,5 +29,3 @@ class TTLCache:
         keys = [k for k in self._store.keys() if k.startswith(prefix)]
         for k in keys:
             self._store.pop(k, None)
-
-

@@ -2,7 +2,9 @@
 """Ilk admin kullanici ve hesabi yoksa olusturur. Varsayilan sifre yok; ilk girisinde yazacagi sifre kalici olur.
 Calistir: .venv/bin/python scripts/migrations/create_first_admin.py
 """
+
 import sys
+
 sys.path.insert(0, ".")
 
 from app.db.session import SessionLocal
@@ -22,7 +24,10 @@ def run():
             admin.username = ADMIN_USERNAME
             admin.failed_login_attempts = 0
             db.commit()
-            print("  Admin zaten var; kullanici adi '%s' olarak guncellendi." % ADMIN_USERNAME)
+            print(
+                "  Admin zaten var; kullanici adi '%s' olarak guncellendi."
+                % ADMIN_USERNAME
+            )
             return
 
         account_code = generate_account_code(db)
@@ -56,7 +61,10 @@ def run():
         db.refresh(user)
         account.user_id = user.id
         db.commit()
-        print("  Ilk admin olusturuldu: kullanici adi '%s'. Ilk girisinde yazacagi sifre kalici olacak." % ADMIN_USERNAME)
+        print(
+            "  Ilk admin olusturuldu: kullanici adi '%s'. Ilk girisinde yazacagi sifre kalici olacak."
+            % ADMIN_USERNAME
+        )
     finally:
         db.close()
     print("Done.")

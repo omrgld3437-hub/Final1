@@ -1,4 +1,5 @@
 """Strategy signal facade for bot engine ticks."""
+
 from __future__ import annotations
 
 from app.botengine.strategies.dca_grid_trailing import tick_dca_grid_trailing

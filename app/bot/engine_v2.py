@@ -4,16 +4,21 @@ VERSION: v1
 DATE: 2026-01-21
 CHANGE: DCA Bot V2 Engine - State machine with trailing extremes and profit cycles
 """
+
 import json
 import logging
-import time
-from typing import Dict, List, Optional, Tuple
+from typing import List, Optional
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
 from sqlalchemy.orm import Session
 from app.bot.models_v2 import (
-    BotV2, BotBalanceV2, BotGridV2, BotCycleV2, BotTradeV2, BotStateV2
+    BotV2,
+    BotBalanceV2,
+    BotGridV2,
+    BotCycleV2,
+    BotTradeV2,
+    BotStateV2,
 )
 from app.bot.binance_adapter_v2 import BinanceSpotAdapterV2
 from app.services.encryption import decrypt_account_api_key, decrypt_account_api_secret
@@ -42,31 +47,42 @@ class BotEngineV2:
         if not self.bot:
             raise ValueError(f"Bot {self.bot_id} not found")
 
-        self.balances = self.db.query(BotBalanceV2).filter(
-            BotBalanceV2.bot_id == self.bot_id
-        ).first()
+        self.balances = (
+            self.db.query(BotBalanceV2)
+            .filter(BotBalanceV2.bot_id == self.bot_id)
+            .first()
+        )
 
-        all_grids = self.db.query(BotGridV2).filter(
-            BotGridV2.bot_id == self.bot_id,
-            BotGridV2.enabled == True
-        ).order_by(BotGridV2.idx).all()
+        all_grids = (
+            self.db.query(BotGridV2)
+            .filter(BotGridV2.bot_id == self.bot_id, BotGridV2.enabled == True)
+            .order_by(BotGridV2.idx)
+            .all()
+        )
 
         self.grids_up = [g for g in all_grids if g.side == "UP_SELL"]
         self.grids_down = [g for g in all_grids if g.side == "DOWN_BUY"]
 
         # Load active cycle
-        self.current_cycle = self.db.query(BotCycleV2).filter(
-            BotCycleV2.bot_id == self.bot_id,
-            BotCycleV2.status == "OPEN"
-        ).order_by(BotCycleV2.cycle_no.desc()).first()
+        self.current_cycle = (
+            self.db.query(BotCycleV2)
+            .filter(BotCycleV2.bot_id == self.bot_id, BotCycleV2.status == "OPEN")
+            .order_by(BotCycleV2.cycle_no.desc())
+            .first()
+        )
 
         # Initialize adapter
         if self.bot.mode == "live":
             from app.db.models import Account
-            account = self.db.query(Account).filter(Account.id == self.bot.account_id).first()
+
+            account = (
+                self.db.query(Account).filter(Account.id == self.bot.account_id).first()
+            )
             if account:
                 api_key = decrypt_account_api_key(account.id, account.api_key_enc)
-                api_secret = decrypt_account_api_secret(account.id, account.api_secret_enc)
+                api_secret = decrypt_account_api_secret(
+                    account.id, account.api_secret_enc
+                )
                 self.adapter = BinanceSpotAdapterV2(
                     self.bot.account_id, "live", api_key, api_secret
                 )
@@ -174,7 +190,9 @@ class BotEngineV2:
 
             # Apply precision and check min notional
             qty = self.adapter.apply_precision(self.bot.symbol, qty, is_price=False)
-            ok, msg = self.adapter.check_min_notional(self.bot.symbol, qty, self.last_price)
+            ok, msg = self.adapter.check_min_notional(
+                self.bot.symbol, qty, self.last_price
+            )
             if not ok:
                 grid.state = "SKIPPED"
                 return
@@ -184,19 +202,23 @@ class BotEngineV2:
                 self.bot.symbol,
                 qty,
                 slippage_bps=self.bot.slippage_bps,
-                taker_fee_bps=self.bot.taker_fee_bps
+                taker_fee_bps=self.bot.taker_fee_bps,
             )
 
             # Update grid state
             grid.state = "EXECUTED"
             grid.executed_qty = result["executedQty"]
             grid.executed_quote = result["cumulativeQuoteQty"]
-            grid.executed_avg_price = result["cumulativeQuoteQty"] / result["executedQty"]
+            grid.executed_avg_price = (
+                result["cumulativeQuoteQty"] / result["executedQty"]
+            )
             grid.updated_at = datetime.utcnow()
 
             # Update balances
             self.balances.base_free -= result["executedQty"]
-            self.balances.quote_free += (result["cumulativeQuoteQty"] - result["fee_usdt"])
+            self.balances.quote_free += (
+                result["cumulativeQuoteQty"] - result["fee_usdt"]
+            )
 
             # Create trade record
             self._create_trade(
@@ -205,7 +227,7 @@ class BotEngineV2:
                 price=grid.executed_avg_price,
                 quote_qty=result["cumulativeQuoteQty"],
                 fee_usdt=result["fee_usdt"],
-                reason=f"GRID_UP_{grid.idx}"
+                reason=f"GRID_UP_{grid.idx}",
             )
 
             # Update cycle aggregates
@@ -233,19 +255,23 @@ class BotEngineV2:
                 self.bot.symbol,
                 quote_to_spend,
                 slippage_bps=self.bot.slippage_bps,
-                taker_fee_bps=self.bot.taker_fee_bps
+                taker_fee_bps=self.bot.taker_fee_bps,
             )
 
             # Update grid state
             grid.state = "EXECUTED"
             grid.executed_qty = result["executedQty"]
             grid.executed_quote = result["cumulativeQuoteQty"]
-            grid.executed_avg_price = result["cumulativeQuoteQty"] / result["executedQty"]
+            grid.executed_avg_price = (
+                result["cumulativeQuoteQty"] / result["executedQty"]
+            )
             grid.updated_at = datetime.utcnow()
 
             # Update balances
             self.balances.base_free += result["executedQty"]
-            self.balances.quote_free -= (result["cumulativeQuoteQty"] + result["fee_usdt"])
+            self.balances.quote_free -= (
+                result["cumulativeQuoteQty"] + result["fee_usdt"]
+            )
 
             # Create trade record
             self._create_trade(
@@ -254,7 +280,7 @@ class BotEngineV2:
                 price=grid.executed_avg_price,
                 quote_qty=result["cumulativeQuoteQty"],
                 fee_usdt=result["fee_usdt"],
-                reason=f"GRID_DOWN_{grid.idx}"
+                reason=f"GRID_DOWN_{grid.idx}",
             )
 
             # Update cycle aggregates
@@ -277,8 +303,9 @@ class BotEngineV2:
         if total_qty > 0:
             # Weighted average
             new_avg = (
-                (self.current_cycle.sell_avg_price or 0) * self.current_cycle.sell_total_qty +
-                grid.executed_avg_price * grid.executed_qty
+                (self.current_cycle.sell_avg_price or 0)
+                * self.current_cycle.sell_total_qty
+                + grid.executed_avg_price * grid.executed_qty
             ) / total_qty
             self.current_cycle.sell_avg_price = new_avg
             self.current_cycle.sell_total_qty = total_qty
@@ -296,8 +323,9 @@ class BotEngineV2:
         if total_qty > 0:
             # Weighted average
             new_avg = (
-                (self.current_cycle.buy_avg_price or 0) * self.current_cycle.buy_total_qty +
-                grid.executed_avg_price * grid.executed_qty
+                (self.current_cycle.buy_avg_price or 0)
+                * self.current_cycle.buy_total_qty
+                + grid.executed_avg_price * grid.executed_qty
             ) / total_qty
             self.current_cycle.buy_avg_price = new_avg
             self.current_cycle.buy_total_qty = total_qty
@@ -319,28 +347,40 @@ class BotEngineV2:
         profit_resell_trigger_pct = 2.0  # TODO: load from bot config
 
         # If sells executed, check for profit rebuy
-        if (self.current_cycle.sell_avg_price and
-            self.current_cycle.profit_mode != "REBUY" and
-            self.current_cycle.profit_mode != "RESELL"):
-            drop_threshold = self.current_cycle.sell_avg_price * (1 - profit_rebuy_trigger_pct / 100.0)
+        if (
+            self.current_cycle.sell_avg_price
+            and self.current_cycle.profit_mode != "REBUY"
+            and self.current_cycle.profit_mode != "RESELL"
+        ):
+            drop_threshold = self.current_cycle.sell_avg_price * (
+                1 - profit_rebuy_trigger_pct / 100.0
+            )
             if self.last_price <= drop_threshold:
                 self.current_cycle.profit_mode = "REBUY"
                 # Start tracking dip
-                state_json = json.loads(self.bot.state.state_json) if self.bot.state else {}
+                state_json = (
+                    json.loads(self.bot.state.state_json) if self.bot.state else {}
+                )
                 state_json["profit_extreme"] = self.last_price
                 state_json["profit_threshold"] = None
                 if self.bot.state:
                     self.bot.state.state_json = json.dumps(state_json)
 
         # If buys executed, check for profit resell
-        if (self.current_cycle.buy_avg_price and
-            self.current_cycle.profit_mode != "REBUY" and
-            self.current_cycle.profit_mode != "RESELL"):
-            rise_threshold = self.current_cycle.buy_avg_price * (1 + profit_resell_trigger_pct / 100.0)
+        if (
+            self.current_cycle.buy_avg_price
+            and self.current_cycle.profit_mode != "REBUY"
+            and self.current_cycle.profit_mode != "RESELL"
+        ):
+            rise_threshold = self.current_cycle.buy_avg_price * (
+                1 + profit_resell_trigger_pct / 100.0
+            )
             if self.last_price >= rise_threshold:
                 self.current_cycle.profit_mode = "RESELL"
                 # Start tracking peak
-                state_json = json.loads(self.bot.state.state_json) if self.bot.state else {}
+                state_json = (
+                    json.loads(self.bot.state.state_json) if self.bot.state else {}
+                )
                 state_json["profit_extreme"] = self.last_price
                 state_json["profit_threshold"] = None
                 if self.bot.state:
@@ -402,8 +442,15 @@ class BotEngineV2:
         # TODO: Implement cycle completion logic
         pass
 
-    def _create_trade(self, side: str, qty: float, price: float, quote_qty: float,
-                     fee_usdt: float, reason: str):
+    def _create_trade(
+        self,
+        side: str,
+        qty: float,
+        price: float,
+        quote_qty: float,
+        fee_usdt: float,
+        reason: str,
+    ):
         """Create trade record and audit log."""
         ts_now = datetime.utcnow()
         trade = BotTradeV2(
@@ -418,17 +465,28 @@ class BotEngineV2:
             fee_usdt=fee_usdt,
             fee_asset="USDT",
             reason=reason,
-            mode=self.bot.mode
+            mode=self.bot.mode,
         )
         self.db.add(trade)
         acc = self.db.query(Account).filter(Account.id == self.bot.account_id).first()
         audit_svc.log_event(
-            self.db, actor_type="system", event_type="BOT_TRADE", severity="INFO",
-            target_user_id=acc.user_id if acc else None, target_account_id=self.bot.account_id,
+            self.db,
+            actor_type="system",
+            event_type="BOT_TRADE",
+            severity="INFO",
+            target_user_id=acc.user_id if acc else None,
+            target_account_id=self.bot.account_id,
             meta={
-                "bot_id": self.bot_id, "symbol": self.bot.symbol, "side": side, "qty": qty,
-                "price": price, "quote_qty": quote_qty, "fee_usdt": fee_usdt, "reason": reason,
-                "trade_ts": ts_now.isoformat() if ts_now else None, "mode": self.bot.mode,
+                "bot_id": self.bot_id,
+                "symbol": self.bot.symbol,
+                "side": side,
+                "qty": qty,
+                "price": price,
+                "quote_qty": quote_qty,
+                "fee_usdt": fee_usdt,
+                "reason": reason,
+                "trade_ts": ts_now.isoformat() if ts_now else None,
+                "mode": self.bot.mode,
             },
         )
 
@@ -444,13 +502,12 @@ class BotEngineV2:
             "base_free": self.balances.base_free,
             "quote_free": self.balances.quote_free,
             "profit_extreme": None,
-            "profit_threshold": None
+            "profit_threshold": None,
         }
 
         if not self.bot.state:
             self.bot.state = BotStateV2(
-                bot_id=self.bot_id,
-                state_json=json.dumps(state_data)
+                bot_id=self.bot_id, state_json=json.dumps(state_data)
             )
         else:
             existing = json.loads(self.bot.state.state_json)
@@ -459,9 +516,9 @@ class BotEngineV2:
 
         # Update equity
         self.balances.base_value_usdt = self.balances.base_free * self.last_price
-        self.balances.total_value_usdt = self.balances.base_value_usdt + self.balances.quote_free
+        self.balances.total_value_usdt = (
+            self.balances.base_value_usdt + self.balances.quote_free
+        )
         self.bot.budget_usdt_current = self.balances.total_value_usdt
 
         self.db.commit()
-
-

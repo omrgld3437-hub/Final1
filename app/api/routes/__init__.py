@@ -1,6 +1,7 @@
 """
 routes Python paketi.
 """
+
 # app.api.routes is a package; the main router and helpers live in the sibling module routes.py.
 # Load that module explicitly (it is shadowed by this package) and re-export for "from app.api.routes import ...".
 import importlib.util
@@ -17,8 +18,10 @@ _spec.loader.exec_module(_mod)
 router = _mod.router
 invalidate_wallet_cache = _mod.invalidate_wallet_cache
 invalidate_open_orders_cache = _mod.invalidate_open_orders_cache
+invalidate_dashboard_summary_cache = _mod.invalidate_dashboard_summary_cache
 _get_snapshot_wallet_cached = _mod._get_snapshot_wallet_cached
 _enrich_snapshot_wallet_with_bot_locked = _mod._enrich_snapshot_wallet_with_bot_locked
+
 
 def __getattr__(name):
     # Lazy export for names used by main.py, admin.py, finance.py, routes/home.py, subroutes/home.py
@@ -30,6 +33,7 @@ def __getattr__(name):
         "_cache",
         "_fetch_server_public_ip",
         "_parse_public_ip_response",
+        "invalidate_dashboard_summary_cache",
         "_get_snapshot_wallet_cached",
         "_enrich_snapshot_wallet_with_bot_locked",
     ):

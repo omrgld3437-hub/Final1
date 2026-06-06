@@ -1,6 +1,7 @@
 """
 Strategy registry: plugin by strategy_id. Default dca_grid_trailing.
 """
+
 from __future__ import annotations
 import logging
 from typing import Any, Dict, Type
@@ -37,15 +38,27 @@ def get_strategy(strategy_id: str) -> Strategy:
 
 
 def _ensure_default():
-    if "dca_grid_trailing" not in _strategies and "dca_grid_trailing" not in _strategy_classes:
+    if (
+        "dca_grid_trailing" not in _strategies
+        and "dca_grid_trailing" not in _strategy_classes
+    ):
         try:
-            from app.botengine.strategies.dca_grid_trailing import DcaGridTrailingStrategy
+            from app.botengine.strategies.dca_grid_trailing import (
+                DcaGridTrailingStrategy,
+            )
+
             register(DcaGridTrailingStrategy)
         except Exception as e:
             logger.debug("registry default strategy: %s", e)
-    if "multi_asset_rebalance" not in _strategies and "multi_asset_rebalance" not in _strategy_classes:
+    if (
+        "multi_asset_rebalance" not in _strategies
+        and "multi_asset_rebalance" not in _strategy_classes
+    ):
         try:
-            from app.botengine.strategies.multi_asset_rebalance import MultiAssetRebalanceStrategy
+            from app.botengine.strategies.multi_asset_rebalance import (
+                MultiAssetRebalanceStrategy,
+            )
+
             register(MultiAssetRebalanceStrategy)
         except Exception as e:
             logger.debug("registry multi_asset_rebalance: %s", e)

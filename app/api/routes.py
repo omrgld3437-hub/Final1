@@ -1,7 +1,7 @@
 """
 API Routes - REST Endpoints
 """
-import requests
+
 import json
 from fastapi import APIRouter, Depends, HTTPException, Query, Body, Request
 from fastapi.responses import StreamingResponse, JSONResponse
@@ -21,28 +21,44 @@ TR_TZ = ZoneInfo("Europe/Istanbul")
 logger = logging.getLogger(__name__)
 _snapshot_wallet_refresh_tasks: Dict[int, asyncio.Task] = {}
 _snapshot_wallet_refresh_last_at: Dict[int, float] = {}
-_SNAPSHOT_WALLET_REFRESH_GAP_SEC = float(os.environ.get("SNAPSHOT_WALLET_REFRESH_GAP_SEC", "30"))
+_SNAPSHOT_WALLET_REFRESH_GAP_SEC = float(
+    os.environ.get("SNAPSHOT_WALLET_REFRESH_GAP_SEC", "30")
+)
 
 from app.db.session import get_db
 from app.db.base import SessionLocal
-from app.db.models import Account, Bot, Trade, PnlSnapshot, User, ChatThread, ErrorLog, AssetSnapshot
+from app.db.models import (
+    Account,
+    Bot,
+    Trade,
+    PnlSnapshot,
+    User,
+    ChatThread,
+    ErrorLog,
+    AssetSnapshot,
+)
 from app.services.encryption import (
     encrypt_account_api_key,
     encrypt_account_api_secret,
     encrypt_account_ip_whitelist,
     encrypt_text,
 )
-from app.api.auth import require_auth, require_account_access, get_client_ip, verify_password
+from app.api.auth import (
+    require_auth,
+    require_account_access,
+    get_client_ip,
+    verify_password,
+)
 from app.services import audit as audit_svc
 from app.utils.account_code import generate_account_code
 from app.utils.tz_utils import turkey_today_start_utc, turkey_today_date_str
+
 # Binance kaldırıldı – sonra temiz kurulum ile eklenecek
 from app.services.price_hub import price_hub
 from app.services.pnl_service import PnlService
 from app.bot.manager import bot_manager
 from app.bot.ledger import Ledger
 from app.botengine.state_store import load_state
-from app.bot.models import BotConfig
 from app.services.data_hub import data_hub
 from app.error_logging import persist_error as error_logging_persist
 from app.core.logging_helpers import log_wallet_trace
@@ -65,10 +81,12 @@ _SENSITIVE_URL_RE = _re.compile(
     _re.IGNORECASE,
 )
 
+
 def _sanitize_url(url: Optional[str]) -> Optional[str]:
     if not url:
         return url
     return _SENSITIVE_URL_RE.sub(r"\1\2=[REDACTED]", url)
+
 
 def _check_log_error_rate_limit(client_ip: str) -> bool:
     """True = allowed. Sliding-window per IP."""
@@ -117,7 +135,7 @@ async def api_log_error(
         message = (payload.get("message") or "").strip()[:1000] or "(no message)"
         source = (payload.get("source") or "frontend")[:32]
         raw_detail = payload.get("detail")
-        detail = (str(raw_detail)[:4000] if raw_detail is not None else None)
+        detail = str(raw_detail)[:4000] if raw_detail is not None else None
         raw_path = (payload.get("path") or "")[:512]
         path = _sanitize_url(raw_path)
         raw_ctx = payload.get("context")
@@ -136,10 +154,15 @@ async def api_log_error(
         user_id = None
         account_id = None
         is_admin = False
-        auth = request.headers.get("Authorization") or request.headers.get("authorization") or ""
+        auth = (
+            request.headers.get("Authorization")
+            or request.headers.get("authorization")
+            or ""
+        )
         if auth.startswith("Bearer "):
             try:
                 from app.api.auth import _session_get
+
                 session = _session_get(auth[7:].strip())
                 if session:
                     user_id = session.get("user_id")
@@ -166,13 +189,22 @@ async def api_log_error(
             level=log_level,
         )
         import json as _json
+
         _ctx_str = ""
         try:
-            _ctx_str = _json.dumps(context, ensure_ascii=False, default=str)[:3500] if context else ""
+            _ctx_str = (
+                _json.dumps(context, ensure_ascii=False, default=str)[:3500]
+                if context
+                else ""
+            )
         except Exception:
             _ctx_str = str(context)[:3500] if context else ""
-        _detail_str = (str(detail)[:1500] if detail is not None else "")
-        _req_id = (request.headers.get("X-Request-ID") or request.headers.get("X-Request-Id") or "")[:64]
+        _detail_str = str(detail)[:1500] if detail is not None else ""
+        _req_id = (
+            request.headers.get("X-Request-ID")
+            or request.headers.get("X-Request-Id")
+            or ""
+        )[:64]
         logger.warning(
             "ADMIN_PANEL_CLIENT_ERROR source=%s message=%s path=%s detail=%s context=%s "
             "user_id=%s account_id=%s is_admin=%s ip=%s request_id=%s ua=%s",
@@ -191,6 +223,7 @@ async def api_log_error(
         return {"ok": True}
     except Exception as e:
         import logging
+
         logging.getLogger(__name__).warning("log-error endpoint failed: %s", e)
         return {"ok": False}
 
@@ -204,6 +237,7 @@ async def api_error_logs_test_account(
 ):
     """Son hata logları (sadece test hesabı). Anasayfada 'tüm sistem hataları' için."""
     from app.services.test_account import is_test_account
+
     # Test kullanıcısı kendi oturumundaki hesaba erişiyorsa query'deki account_id uyuşmasa bile session account_id kullan (403 önle)
     session_account_id = current.get("account_id")
     if session_account_id is not None and is_test_account(session_account_id, db):
@@ -212,7 +246,9 @@ async def api_error_logs_test_account(
     else:
         require_account_access(current, account_id)
     if not is_test_account(account_id, db):
-        raise HTTPException(status_code=403, detail="Bu özellik sadece test hesabında kullanılabilir.")
+        raise HTTPException(
+            status_code=403, detail="Bu özellik sadece test hesabında kullanılabilir."
+        )
     rows = (
         db.query(ErrorLog)
         .filter(ErrorLog.account_id == account_id)
@@ -228,17 +264,21 @@ async def api_error_logs_test_account(
                 ctx = json.loads(r.context_json)
             except Exception:
                 pass
-        out.append({
-            "id": r.id,
-            "created_at": r.created_at.isoformat() + "Z" if getattr(r.created_at, "isoformat", None) else None,
-            "source": getattr(r, "source", None),
-            "level": getattr(r, "level", None),
-            "message": (r.message or "")[:500],
-            "detail": (r.detail or "")[:1000] if r.detail else None,
-            "path": getattr(r, "path", None),
-            "request_id": getattr(r, "request_id", None),
-            "context": ctx,
-        })
+        out.append(
+            {
+                "id": r.id,
+                "created_at": r.created_at.isoformat() + "Z"
+                if getattr(r.created_at, "isoformat", None)
+                else None,
+                "source": getattr(r, "source", None),
+                "level": getattr(r, "level", None),
+                "message": (r.message or "")[:500],
+                "detail": (r.detail or "")[:1000] if r.detail else None,
+                "path": getattr(r, "path", None),
+                "request_id": getattr(r, "request_id", None),
+                "context": ctx,
+            }
+        )
     return {"items": out}
 
 
@@ -266,9 +306,15 @@ async def api_test_daily_spot_ref_sync(
     else:
         require_account_access(current, account_id)
     if not is_test_account(account_id, db):
-        raise HTTPException(status_code=403, detail="Bu özellik sadece test hesabında kullanılabilir.")
+        raise HTTPException(
+            status_code=403, detail="Bu özellik sadece test hesabında kullanılabilir."
+        )
     set_test_daily_spot_ref_usd(account_id, float(body.ref_usd), body.date)
-    return {"ok": True, "account_id": account_id, "ref_usd": round(float(body.ref_usd), 2)}
+    return {
+        "ok": True,
+        "account_id": account_id,
+        "ref_usd": round(float(body.ref_usd), 2),
+    }
 
 
 # POST /api/error-logs/clear -> main.py'de tanımlı (404 önlemek için doğrudan app'te)
@@ -280,19 +326,19 @@ async def create_account(
     name: str,
     exchange: str = "BINANCE",
     mode: str = "paper",
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     """Create new account (API key/secret kaldırıldı - sonra entegre edilecek)"""
     # Generate unique account code
     account_code = generate_account_code(db)
-    
+
     account = Account(
         account_code=account_code,
         name=name,
         exchange=exchange,
         api_key_enc=encrypt_text(""),
         api_secret_enc=encrypt_text(""),
-        mode=mode
+        mode=mode,
     )
     db.add(account)
     db.commit()
@@ -303,7 +349,7 @@ async def create_account(
         "name": account.name,
         "exchange": account.exchange,
         "mode": account.mode,
-        "created_at": account.created_at.isoformat() if account.created_at else None
+        "created_at": account.created_at.isoformat() if account.created_at else None,
     }
 
 
@@ -317,7 +363,7 @@ async def list_accounts(db: Session = Depends(get_db)):
             "name": a.name,
             "exchange": a.exchange,
             "mode": a.mode,
-            "created_at": a.created_at.isoformat() if a.created_at else None
+            "created_at": a.created_at.isoformat() if a.created_at else None,
         }
         for a in accounts
     ]
@@ -330,7 +376,9 @@ async def get_account_by_code(
     current: dict = Depends(require_auth),
 ):
     """Resolve 6-digit account code to account details. Auth required; only own account or admin."""
-    account = db.query(Account).filter(Account.account_code == account_code.strip()).first()
+    account = (
+        db.query(Account).filter(Account.account_code == account_code.strip()).first()
+    )
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
     require_account_access(current, account.id)
@@ -340,7 +388,7 @@ async def get_account_by_code(
         "name": account.name,
         "exchange": account.exchange,
         "mode": account.mode,
-        "created_at": account.created_at.isoformat() if account.created_at else None
+        "created_at": account.created_at.isoformat() if account.created_at else None,
     }
 
 
@@ -361,7 +409,7 @@ async def get_account(
         "name": account.name,
         "exchange": account.exchange,
         "mode": account.mode,
-        "created_at": account.created_at.isoformat() if account.created_at else None
+        "created_at": account.created_at.isoformat() if account.created_at else None,
     }
 
 
@@ -413,9 +461,16 @@ async def get_account_settings(
         u = db.query(User).filter(User.id == account.user_id).first()
         if u:
             user_phone = u.phone
-    from app.services.test_account import is_test_account, account_has_binance_keys, clear_first_login_if_keys_configured
+    from app.services.test_account import (
+        is_test_account,
+        account_has_binance_keys,
+        clear_first_login_if_keys_configured,
+    )
+
     if is_test_account(account_id, db):
-        has_binance_keys = True  # Test hesabında Binance uyarısı gösterme; paper 10k USDT
+        has_binance_keys = (
+            True  # Test hesabında Binance uyarısı gösterme; paper 10k USDT
+        )
     else:
         has_binance_keys = account_has_binance_keys(account)
     if has_binance_keys:
@@ -426,7 +481,9 @@ async def get_account_settings(
         try:
             arr = json.loads(raw)
             if isinstance(arr, list):
-                spot_favorites = [str(s).strip().upper() for s in arr if s and str(s).strip()]
+                spot_favorites = [
+                    str(s).strip().upper() for s in arr if s and str(s).strip()
+                ]
         except (TypeError, ValueError):
             pass
     return {
@@ -434,7 +491,9 @@ async def get_account_settings(
         "account_name": account.name,
         "current_ip": client_ip or "—",
         "server_public_ip": server_public_ip or "—",
-        "is_first_login": account.is_first_login if hasattr(account, 'is_first_login') else False,
+        "is_first_login": account.is_first_login
+        if hasattr(account, "is_first_login")
+        else False,
         "user_phone": user_phone or "",
         "has_binance_keys": has_binance_keys,
         "spot_favorites": spot_favorites,
@@ -475,9 +534,13 @@ async def update_account_settings(
         )
     try:
         if body.api_key is not None:
-            account.api_key_enc = encrypt_account_api_key(account_id, body.api_key or "")
+            account.api_key_enc = encrypt_account_api_key(
+                account_id, body.api_key or ""
+            )
         if body.api_secret is not None:
-            account.api_secret_enc = encrypt_account_api_secret(account_id, body.api_secret or "")
+            account.api_secret_enc = encrypt_account_api_secret(
+                account_id, body.api_secret or ""
+            )
     except ValueError as e:
         msg = str(e)
         if "BINANCE_MASTER_KEY" in msg or "environment" in msg.lower():
@@ -486,21 +549,30 @@ async def update_account_settings(
                 detail={
                     "error_code": "ENCRYPTION_NOT_CONFIGURED",
                     "message": "Şifreleme anahtarı (BINANCE_MASTER_KEY) .env dosyasında tanımlı değil. API anahtarı kaydedilemiyor.",
-                    "fix": "Proje kökünde .env dosyası oluşturun veya açın; BINANCE_MASTER_KEY= ile en az 32 karakterlik bir anahtar ekleyin. Anahtar üretmek için: python -c \"import secrets; print(secrets.token_urlsafe(24))\"  Çalıştırdıktan sonra web/manager servisini yeniden başlatın.",
+                    "fix": 'Proje kökünde .env dosyası oluşturun veya açın; BINANCE_MASTER_KEY= ile en az 32 karakterlik bir anahtar ekleyin. Anahtar üretmek için: python -c "import secrets; print(secrets.token_urlsafe(24))"  Çalıştırdıktan sonra web/manager servisini yeniden başlatın.',
                 },
             )
-        raise HTTPException(status_code=400, detail={"error_code": "ENCRYPTION_ERROR", "message": msg})
+        raise HTTPException(
+            status_code=400, detail={"error_code": "ENCRYPTION_ERROR", "message": msg}
+        )
     if body.name is not None and body.name.strip():
         account.name = body.name.strip()
     if body.api_ip_whitelist is not None:
         raw_wl = (body.api_ip_whitelist or "").strip()
-        account.api_ip_whitelist = encrypt_account_ip_whitelist(account_id, raw_wl) if raw_wl else ""
+        account.api_ip_whitelist = (
+            encrypt_account_ip_whitelist(account_id, raw_wl) if raw_wl else ""
+        )
     if body.is_first_login is not None:
         account.is_first_login = body.is_first_login
     if body.isolate_from_admin is not None:
         val = bool(body.isolate_from_admin)
-        db.execute(update(Account).where(Account.id == account_id).values(isolate_from_admin=val))
+        db.execute(
+            update(Account)
+            .where(Account.id == account_id)
+            .values(isolate_from_admin=val)
+        )
     from app.services.test_account import account_has_binance_keys
+
     keys_updated = body.api_key is not None or body.api_secret is not None
     if account_has_binance_keys(account):
         account.is_first_login = False
@@ -513,11 +585,16 @@ async def update_account_settings(
         db.rollback()
         raise HTTPException(
             status_code=500,
-            detail={"error_code": "SAVE_FAILED", "message": "Ayarlar kaydedilirken veritabanı hatası oluştu."},
+            detail={
+                "error_code": "SAVE_FAILED",
+                "message": "Ayarlar kaydedilirken veritabanı hatası oluştu.",
+            },
         )
     if keys_updated and account_has_binance_keys(account):
         try:
-            from app.services.transaction_history_file_store import clear_tx_history_bootstrap
+            from app.services.transaction_history_file_store import (
+                clear_tx_history_bootstrap,
+            )
             import asyncio
             from app.db.base import SessionLocal
 
@@ -526,15 +603,21 @@ async def update_account_settings(
             async def _bootstrap_tx_after_keys() -> None:
                 db_bg = SessionLocal()
                 try:
-                    from app.services.transaction_history_file_store import bootstrap_tx_history_from_binance
+                    from app.services.transaction_history_file_store import (
+                        bootstrap_tx_history_from_binance,
+                    )
 
-                    await bootstrap_tx_history_from_binance(db_bg, account_id, force=True)
+                    await bootstrap_tx_history_from_binance(
+                        db_bg, account_id, force=True
+                    )
                 finally:
                     db_bg.close()
 
             asyncio.create_task(_bootstrap_tx_after_keys())
         except Exception as boot_ex:
-            logger.warning("tx_history bootstrap after keys account_id=%s: %s", account_id, boot_ex)
+            logger.warning(
+                "tx_history bootstrap after keys account_id=%s: %s", account_id, boot_ex
+            )
     return {"ok": True, "message": "Ayarlar güncellendi."}
 
 
@@ -555,11 +638,24 @@ def _get_account_bot_total_equity_initial(db: Session, account_id: int) -> tuple
             cfg = json.loads(bot.config_json or "{}")
         except Exception:
             pass
-        initial_usd = float(cfg.get("budget_usd") or cfg.get("bot_budget_quote") or cfg.get("initial_capital_usdt") or 0)
-        current_usd = pnl_data.get("total_usd", initial_usd) if not pnl_data.get("error") else initial_usd
+        initial_usd = float(
+            cfg.get("budget_usd")
+            or cfg.get("bot_budget_quote")
+            or cfg.get("initial_capital_usdt")
+            or 0
+        )
+        current_usd = (
+            pnl_data.get("total_usd", initial_usd)
+            if not pnl_data.get("error")
+            else initial_usd
+        )
         sym = (bot.symbol or "").strip().upper()
         strategy_id = (cfg.get("strategy_id") or "").strip().lower()
-        if sym and sym != "MULTI" and strategy_id not in ("trdca_pro", "multi_asset_rebalance"):
+        if (
+            sym
+            and sym != "MULTI"
+            and strategy_id not in ("trdca_pro", "multi_asset_rebalance")
+        ):
             try:
                 state = load_state(db, bot.id) or {}
                 base_b = float(state.get("base_balance") or 0)
@@ -593,8 +689,13 @@ async def get_bot_performance(
     if p == "total":
         p = "all"
     try:
-        from app.services.bot_performance_service import get_account_performance_breakdown
-        return get_account_performance_breakdown(db, account_id, p, force_refresh=bool(refresh))
+        from app.services.bot_performance_service import (
+            get_account_performance_breakdown,
+        )
+
+        return get_account_performance_breakdown(
+            db, account_id, p, force_refresh=bool(refresh)
+        )
     except Exception as e:
         logger.exception("bot-performance error: %s", e)
         raise HTTPException(status_code=500, detail="Performans hesaplanamadı.")
@@ -613,7 +714,6 @@ async def get_transaction_history_revision(
     require_account_access(current, account_id)
     try:
         from app.services.transaction_history_file_store import (
-            ensure_tx_history_fresh_from_db,
             get_public_revision,
         )
 
@@ -639,15 +739,25 @@ def _get_test_account_tx_history(
     # Yatırım/çekim: test hesabında yok
     tf = (type_filter or "all").strip().lower()
     if tf in ("deposit", "withdraw", "depositwithdraw"):
-        return {"items": [], "total": 0, "page": page, "per_page": per_page,
-                "total_pages": 0, "is_test": True}
+        return {
+            "items": [],
+            "total": 0,
+            "page": page,
+            "per_page": per_page,
+            "total_pages": 0,
+            "is_test": True,
+        }
 
     # Dönem aralığı
     today_start = turkey_today_start_utc()
     end_dt = datetime.utcnow()
     period_days = {"daily": 1, "weekly": 7, "monthly": 30, "all": None}
     days = period_days.get(period, 7)
-    start_dt = (today_start - timedelta(days=days - 1)) if days is not None else (end_dt - timedelta(days=365))
+    start_dt = (
+        (today_start - timedelta(days=days - 1))
+        if days is not None
+        else (end_dt - timedelta(days=365))
+    )
 
     q = db.query(Trade).filter(
         Trade.account_id == account_id,
@@ -667,7 +777,11 @@ def _get_test_account_tx_history(
     bot_ids = {t.bot_id for t in trades if t.bot_id}
     bot_map: dict = {}
     if bot_ids:
-        bots = db.query(Bot).filter(Bot.id.in_(bot_ids), Bot.account_id == account_id).all()
+        bots = (
+            db.query(Bot)
+            .filter(Bot.id.in_(bot_ids), Bot.account_id == account_id)
+            .all()
+        )
         bot_map = {b.id: (b.symbol or "?") for b in bots}
 
     items = []
@@ -679,34 +793,40 @@ def _get_test_account_tx_history(
         bid = t.bot_id
         ts_iso = (t.ts.isoformat() + "Z") if t.ts else None
         side_u = (t.side or "BUY").upper()
-        source = ("Bot " + bot_map[bid]) if bid and bid in bot_map else ("Bot" if bid else "Kullanıcı")
-        items.append({
-            "id": f"paper_{t.id}",
-            "trade_id": t.order_id or f"paper_{t.id}",
-            "order_id": t.order_id or f"paper_{t.id}",
-            "time": ts_iso,
-            "type": "buy" if side_u == "BUY" else "sell",
-            "side": side_u,
-            "symbol": t.symbol or "—",
-            # _txDisplayAmounts qty + price + quote_qty alanlarını okur
-            "qty": round(qty, 8),
-            "price": round(price, 8),
-            "quote_qty": quote_qty,
-            # finance_reports uyumluluğu için executed_qty / avg_price de taşı
-            "executed_qty": round(qty, 8),
-            "avg_price": round(price, 8),
-            "commission": round(fee, 8),
-            "commission_usdt": round(fee, 4),
-            "commission_asset": t.fee_asset or "USDT",
-            "fills_count": 1,
-            "bot_id": bid,
-            "is_bot": bid is not None,
-            "source": "bot" if bid else "spot",
-            "source_label": source,
-            "platform": "TraderTrailing",
-            "is_paper": True,
-            "type_label": ("Simüle Alış" if side_u == "BUY" else "Simüle Satış"),
-        })
+        source = (
+            ("Bot " + bot_map[bid])
+            if bid and bid in bot_map
+            else ("Bot" if bid else "Kullanıcı")
+        )
+        items.append(
+            {
+                "id": f"paper_{t.id}",
+                "trade_id": t.order_id or f"paper_{t.id}",
+                "order_id": t.order_id or f"paper_{t.id}",
+                "time": ts_iso,
+                "type": "buy" if side_u == "BUY" else "sell",
+                "side": side_u,
+                "symbol": t.symbol or "—",
+                # _txDisplayAmounts qty + price + quote_qty alanlarını okur
+                "qty": round(qty, 8),
+                "price": round(price, 8),
+                "quote_qty": quote_qty,
+                # finance_reports uyumluluğu için executed_qty / avg_price de taşı
+                "executed_qty": round(qty, 8),
+                "avg_price": round(price, 8),
+                "commission": round(fee, 8),
+                "commission_usdt": round(fee, 4),
+                "commission_asset": t.fee_asset or "USDT",
+                "fills_count": 1,
+                "bot_id": bid,
+                "is_bot": bid is not None,
+                "source": "bot" if bid else "spot",
+                "source_label": source,
+                "platform": "TraderTrailing",
+                "is_paper": True,
+                "type_label": ("Simüle Alış" if side_u == "BUY" else "Simüle Satış"),
+            }
+        )
 
     total_pages = max(1, -(-total // per_page)) if total > 0 else 0
     return {
@@ -724,11 +844,15 @@ def _get_test_account_tx_history(
 async def get_transaction_history(
     account_id: int,
     period: str = Query("weekly", description="daily | weekly | monthly | all"),
-    type_filter: str = Query("all", description="all | buy | sell | deposit | withdraw"),
+    type_filter: str = Query(
+        "all", description="all | buy | sell | deposit | withdraw"
+    ),
     source_filter: str = Query("all", description="all | spot | bot"),
     page: int = Query(1, ge=1, description="Page number"),
     sync: int = Query(0, description="1 = sync trades from Binance first"),
-    revision: Optional[str] = Query(None, description="İstemci revision — eşleşirse DB sync atlanır"),
+    revision: Optional[str] = Query(
+        None, description="İstemci revision — eşleşirse DB sync atlanır"
+    ),
     db: Session = Depends(get_db),
     current: dict = Depends(require_auth),
 ):
@@ -794,6 +918,7 @@ async def get_transaction_history(
     except Exception:
         pass
     from app.services.transaction_history_service import TransactionHistoryService
+
     p = (period or "weekly").strip().lower()
     tf = (type_filter or "all").strip().lower()
     sf = (source_filter or "all").strip().lower()
@@ -807,14 +932,22 @@ async def get_transaction_history(
         )
 
         if sync or not ledger_has_deposit_withdraw(account_id):
-            from app.api.finance_reports import _fetch_deposit_withdraw, _normalize_deposit, _normalize_withdraw
+            from app.api.finance_reports import (
+                _fetch_deposit_withdraw,
+                _normalize_deposit,
+                _normalize_withdraw,
+            )
             from app.utils.tz_utils import parse_binance_ms_to_utc_naive
 
             start_time, end_time = TransactionHistoryService.get_date_range(p)
             try:
-                deposits, withdrawals = await _fetch_deposit_withdraw(account_id, start_time, end_time, None, db)
+                deposits, withdrawals = await _fetch_deposit_withdraw(
+                    account_id, start_time, end_time, None, db
+                )
             except Exception as e:
-                logger.warning("transaction-history deposit/withdraw fetch failed: %s", e)
+                logger.warning(
+                    "transaction-history deposit/withdraw fetch failed: %s", e
+                )
                 deposits, withdrawals = [], []
             for d in deposits:
                 t = parse_binance_ms_to_utc_naive(d.get("insertTime"))
@@ -823,20 +956,33 @@ async def get_transaction_history(
                 row = _normalize_deposit(d, t)
                 upsert_deposit_withdraw(
                     account_id,
-                    order_id=str(row.get("order_id") or row.get("symbol") or d.get("insertTime") or ""),
+                    order_id=str(
+                        row.get("order_id")
+                        or row.get("symbol")
+                        or d.get("insertTime")
+                        or ""
+                    ),
                     time=t,
                     side="DEPOSIT",
                     symbol=row.get("symbol") or "",
                     qty=float(row.get("executed_qty") or 0),
                 )
             for w in withdrawals:
-                t = parse_binance_ms_to_utc_naive(w.get("applyTime") or w.get("completeTime"))
+                t = parse_binance_ms_to_utc_naive(
+                    w.get("applyTime") or w.get("completeTime")
+                )
                 if t is None:
                     continue
                 row = _normalize_withdraw(w, t)
                 upsert_deposit_withdraw(
                     account_id,
-                    order_id=str(row.get("order_id") or row.get("symbol") or w.get("applyTime") or w.get("completeTime") or ""),
+                    order_id=str(
+                        row.get("order_id")
+                        or row.get("symbol")
+                        or w.get("applyTime")
+                        or w.get("completeTime")
+                        or ""
+                    ),
                     time=t,
                     side="WITHDRAW",
                     symbol=row.get("symbol") or "",
@@ -854,10 +1000,15 @@ async def get_transaction_history(
         )
     # Test (paper) hesabı: Binance trade yok, Trade tablosundan paper bot işlemlerini döndür
     from app.services.test_account import is_test_account
-    if is_test_account(account_id, db):
-        return _get_test_account_tx_history(db, account_id, period=p, type_filter=tf, page=page)
 
-    return TransactionHistoryService.get_transactions(db, account_id, period=p, type_filter=tf, source_filter=sf, page=page)
+    if is_test_account(account_id, db):
+        return _get_test_account_tx_history(
+            db, account_id, period=p, type_filter=tf, page=page
+        )
+
+    return TransactionHistoryService.get_transactions(
+        db, account_id, period=p, type_filter=tf, source_filter=sf, page=page
+    )
 
 
 @router.get("/accounts/{account_id}/spot-favorites")
@@ -881,7 +1032,10 @@ async def get_spot_favorites(
         pass
     return JSONResponse(
         content={"symbols": arr},
-        headers={"Cache-Control": "no-store, no-cache, must-revalidate", "Pragma": "no-cache"},
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate",
+            "Pragma": "no-cache",
+        },
     )
 
 
@@ -897,14 +1051,19 @@ async def put_spot_favorites(
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
     require_account_access(current, account_id)
-    symbols = [str(s).strip().upper() for s in (body.symbols or []) if s and str(s).strip()]
+    symbols = [
+        str(s).strip().upper() for s in (body.symbols or []) if s and str(s).strip()
+    ]
     if not hasattr(account, "spot_favorites_json"):
-        raise HTTPException(status_code=500, detail="spot_favorites column not available; run scripts/migrations/migrate_spot_favorites.py")
+        raise HTTPException(
+            status_code=500,
+            detail="spot_favorites column not available; run scripts/migrations/migrate_spot_favorites.py",
+        )
     account.spot_favorites_json = json.dumps(symbols)
     try:
         db.commit()
         db.refresh(account)
-    except Exception as e:
+    except Exception:
         db.rollback()
         raise HTTPException(status_code=500, detail="Kaydedilemedi.")
     return {"ok": True, "symbols": symbols}
@@ -935,6 +1094,7 @@ async def chat_reopen(body: ChatReopenBody = Body(...), db: Session = Depends(ge
 
 class DeleteAccountRequest(BaseModel):
     """Şifre ile hesap silme – mevcut şifre zorunlu."""
+
     password: str
 
 
@@ -957,13 +1117,14 @@ async def delete_account_with_password(
     user = db.query(User).filter(User.id == account.user_id).first()
     if not user:
         raise HTTPException(status_code=400, detail="Kullanıcı bulunamadı.")
-    if not verify_password((body.password or "").strip(), getattr(user, "password_hash", None)):
+    if not verify_password(
+        (body.password or "").strip(), getattr(user, "password_hash", None)
+    ):
         raise HTTPException(status_code=400, detail="Şifre hatalı.")
     bots = db.query(Bot).filter(Bot.account_id == account_id).all()
     if bots:
         raise HTTPException(
-            status_code=400,
-            detail=f"Hesapta {len(bots)} bot var. Önce botları silin."
+            status_code=400, detail=f"Hesapta {len(bots)} bot var. Önce botları silin."
         )
     try:
         user.is_deleted = True
@@ -973,7 +1134,12 @@ async def delete_account_with_password(
         db.query(PnlSnapshot).filter(PnlSnapshot.account_id == account_id).delete()
         try:
             from app.db.models import FinancialPortfolio
-            fp = db.query(FinancialPortfolio).filter(FinancialPortfolio.account_id == account_id).first()
+
+            fp = (
+                db.query(FinancialPortfolio)
+                .filter(FinancialPortfolio.account_id == account_id)
+                .first()
+            )
             if fp:
                 db.delete(fp)
         except Exception:
@@ -989,35 +1155,34 @@ async def delete_account_with_password(
 # Price Updates
 @router.get("/prices")
 async def get_prices(
-    symbols: str = Query(..., description="Comma-separated list of symbols (e.g., BTCUSDT,ETHUSDT)")
+    symbols: str = Query(
+        ..., description="Comma-separated list of symbols (e.g., BTCUSDT,ETHUSDT)"
+    ),
 ):
     """Get prices for multiple symbols - optimized for real-time updates"""
     try:
         symbol_list = [s.strip().upper() for s in symbols.split(",") if s.strip()]
         if not symbol_list:
             return {}
-        
+
         # Get prices from price_hub cache first
         result = {}
         symbols_to_fetch = []
-        
+
         for symbol in symbol_list:
             cached_price = price_hub.get_price(symbol)
             if cached_price is not None:
                 result[symbol] = cached_price
             else:
                 symbols_to_fetch.append(symbol)
-        
+
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching prices: {str(e)}")
 
 
 @router.get("/binance/prices")
-async def get_binance_prices(
-    symbols: str = Query(...),
-    account_id: int = Query(None)
-):
+async def get_binance_prices(symbols: str = Query(...), account_id: int = Query(None)):
     """Binance kaldırıldı – boş fiyat"""
     return {}
 
@@ -1031,6 +1196,7 @@ async def get_login_crypto():
     """Login sayfasindaki kripto listesi — DataHub cache (Binance REST bypass)."""
     try:
         from app.services.data_hub import data_hub
+
         data = {}
         for sym in LOGIN_CRYPTO_SYMBOLS:
             pair = sym + "USDT"
@@ -1065,11 +1231,15 @@ async def get_login_forex():
     gold_gram_try = None
     try:
         async with httpx.AsyncClient(timeout=8.0) as client:
-            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; rv:109.0) Gecko/20100101 Firefox/115.0"}
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; rv:109.0) Gecko/20100101 Firefox/115.0"
+            }
             r_usd, r_eur, r_gold = await asyncio.gather(
                 client.get("https://api.exchangerate-api.com/v4/latest/USD"),
                 client.get("https://api.exchangerate-api.com/v4/latest/EUR"),
-                client.get("https://data-asg.goldprice.org/dbXRates/USD", headers=headers),
+                client.get(
+                    "https://data-asg.goldprice.org/dbXRates/USD", headers=headers
+                ),
             )
             if r_usd.status_code == 200:
                 data = r_usd.json()
@@ -1085,11 +1255,16 @@ async def get_login_forex():
                 gold = r_gold.json()
                 if isinstance(gold.get("xauPrice"), (int, float)):
                     xau_usd = float(gold["xauPrice"])
-                elif isinstance(gold.get("items"), list) and gold["items"] and isinstance(gold["items"][0].get("xauPrice"), (int, float)):
+                elif (
+                    isinstance(gold.get("items"), list)
+                    and gold["items"]
+                    and isinstance(gold["items"][0].get("xauPrice"), (int, float))
+                ):
                     xau_usd = float(gold["items"][0]["xauPrice"])
             if xau_usd is None:
                 try:
                     from app.services.data_hub import data_hub
+
                     p = data_hub.get_price("PAXGUSDT")
                     if p is not None:
                         xau_usd = float(p)
@@ -1107,26 +1282,41 @@ async def get_login_forex():
 async def get_binance_24h_ticker(
     symbol: str = Query(...),
     account_id: int = Query(None),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     """Binance kaldırıldı – minimal ticker"""
-    return {"symbol": symbol, "price": 0.0, "volume": 0.0, "quoteVolume": 0.0, "priceChangePercent": 0.0, "volumePercent": 0.0}
+    return {
+        "symbol": symbol,
+        "price": 0.0,
+        "volume": 0.0,
+        "quoteVolume": 0.0,
+        "priceChangePercent": 0.0,
+        "volumePercent": 0.0,
+    }
 
 
 @router.get("/binance/exchange_info")
 async def get_binance_exchange_info(
     symbol: str = Query(...),
     account_id: int = Query(None),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     """Binance kaldırıldı – default exchange info"""
     s = symbol.strip().upper()
     base = s.replace("USDT", "").replace("BTC", "").replace("ETH", "") or "BTC"
-    return {"symbol": s, "status": "TRADING", "baseAsset": base, "quoteAsset": "USDT", "filters": []}
+    return {
+        "symbol": s,
+        "status": "TRADING",
+        "baseAsset": base,
+        "quoteAsset": "USDT",
+        "filters": [],
+    }
 
 
 @router.get("/binance/symbols/search")
-async def search_binance_symbols(q: str = Query(""), account_id: int = Query(None), db: Session = Depends(get_db)):
+async def search_binance_symbols(
+    q: str = Query(""), account_id: int = Query(None), db: Session = Depends(get_db)
+):
     """Binance kaldırıldı – boş arama"""
     return {"query": q or "", "symbols": []}
 
@@ -1136,6 +1326,7 @@ async def api_pricing_summary():
     """Üst ticker şeridi: canlı FX, metals, crypto. Cache TTL + in-flight dedupe."""
     from fastapi.responses import JSONResponse
     from app.services.pricing_summary import get_summary
+
     data = await get_summary()
     return JSONResponse(
         content=data,
@@ -1164,7 +1355,7 @@ async def list_bots(
             "symbol": b.symbol,
             "mode": b.mode,
             "status": b.status,
-            "started_at": b.started_at.isoformat() if b.started_at else None
+            "started_at": b.started_at.isoformat() if b.started_at else None,
         }
         for b in bots
     ]
@@ -1183,10 +1374,10 @@ async def get_bot_status(
     if not engine:
         # Try to load from DB
         engine = bot_manager.load_bot_from_db(db, bot_id, account_id)
-    
+
     if not engine:
         raise HTTPException(status_code=404, detail="Bot not found")
-    
+
     return engine.get_status()
 
 
@@ -1202,10 +1393,10 @@ async def get_bot_slots(
     engine = bot_manager.get_bot(bot_id, account_id)
     if not engine:
         engine = bot_manager.load_bot_from_db(db, bot_id, account_id)
-    
+
     if not engine:
         raise HTTPException(status_code=404, detail="Bot not found")
-    
+
     slots = engine.get_slots()
     return [s.to_dict() for s in slots]
 
@@ -1235,7 +1426,7 @@ async def get_bot_pnl(
     bot = db.query(Bot).filter(Bot.id == bot_id, Bot.account_id == account_id).first()
     if not bot:
         raise HTTPException(status_code=404, detail="Bot not found")
-    
+
     pnl_data = PnlService.calculate_bot_pnl(db, bot_id, account_id)
     return pnl_data
 
@@ -1246,30 +1437,30 @@ async def create_bot(
     symbol: str,
     config_json: str = "{}",
     mode: str = "paper",
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     """Create new bot"""
     account = db.query(Account).filter(Account.id == account_id).first()
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
-    
+
     bot = Bot(
         account_id=account_id,
         symbol=symbol,
         mode=mode,
         config_json=config_json,
-        status="stopped"
+        status="stopped",
     )
     db.add(bot)
     db.commit()
     db.refresh(bot)
-    
+
     return {
         "id": bot.id,
         "account_id": bot.account_id,
         "symbol": bot.symbol,
         "mode": bot.mode,
-        "status": bot.status
+        "status": bot.status,
     }
 
 
@@ -1284,21 +1475,21 @@ async def create_bot_with_config(
         body = await request.json()
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid JSON body: {str(e)}")
-    
+
     account_id = body.get("account_id")
     if not account_id:
         raise HTTPException(status_code=400, detail="account_id required")
     require_account_access(current, int(account_id))
-    
+
     account = db.query(Account).filter(Account.id == account_id).first()
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
-    
+
     # Get config_json from body
     config_json = body.get("config_json", "{}")
     if isinstance(config_json, dict):
         config_json = json.dumps(config_json)
-    
+
     # Parse and validate config
     try:
         config_data = json.loads(config_json)
@@ -1306,13 +1497,22 @@ async def create_bot_with_config(
         # Botlar her zaman canlı modda oluşturulur — test hesabında paper zorunlu
         mode = "live"
         from app.db.models import User
-        from app.services.test_account import is_test_account_username, TEST_PAPER_BALANCE_USDT
+        from app.services.test_account import (
+            is_test_account_username,
+            TEST_PAPER_BALANCE_USDT,
+        )
+
         test_user = db.query(User).filter(User.account_id == account_id).first()
         if test_user and is_test_account_username(getattr(test_user, "username", None)):
             mode = "paper"
             config_data["paper_mode"] = True
             config_data["mode"] = "paper"
-            budget = float(config_data.get("budget_usd") or config_data.get("initial_capital_usdt") or config_data.get("budget_usdt") or 0)
+            budget = float(
+                config_data.get("budget_usd")
+                or config_data.get("initial_capital_usdt")
+                or config_data.get("budget_usdt")
+                or 0
+            )
             if budget <= 0 or budget > TEST_PAPER_BALANCE_USDT:
                 config_data["budget_usd"] = TEST_PAPER_BALANCE_USDT
                 config_data["initial_capital_usdt"] = TEST_PAPER_BALANCE_USDT
@@ -1321,24 +1521,32 @@ async def create_bot_with_config(
             config_json = json.dumps(config_data, ensure_ascii=False)
     except json.JSONDecodeError:
         raise HTTPException(status_code=400, detail="Invalid config_json")
-    
+
     symbol = (config_data.get("symbol") or "").upper().strip()
     if strategy_id == "trdca_pro":
-        raise HTTPException(status_code=400, detail="TRDCA Pro+ strategy is no longer available. Use Trailing DCA Bot.")
+        raise HTTPException(
+            status_code=400,
+            detail="TRDCA Pro+ strategy is no longer available. Use Trailing DCA Bot.",
+        )
     elif strategy_id == "multi_asset_rebalance":
         # Multi-asset rebalance: symbol = MULTI, validate assets
         from app.botengine.models import config_multi_asset_from_payload
+
         try:
             multi_cfg = config_multi_asset_from_payload(config_data)
         except Exception as e:
-            raise HTTPException(status_code=400, detail=f"Invalid multi_asset config: {e}")
+            raise HTTPException(
+                status_code=400, detail=f"Invalid multi_asset config: {e}"
+            )
         if len(multi_cfg.assets) < 2:
             raise HTTPException(status_code=400, detail="At least 2 assets required")
         if len(multi_cfg.assets) > 10:
             raise HTTPException(status_code=400, detail="At most 10 assets allowed")
         total_pct = sum(a.get("target_pct", 0) for a in multi_cfg.assets)
         if abs(total_pct - 100.0) > 0.01:
-            raise HTTPException(status_code=400, detail="Target percentages must sum to 100")
+            raise HTTPException(
+                status_code=400, detail="Target percentages must sum to 100"
+            )
         symbols_seen = set()
         for a in multi_cfg.assets:
             s = (a.get("symbol") or "").upper()
@@ -1351,10 +1559,14 @@ async def create_bot_with_config(
         if not symbol:
             symbol = (config_data.get("symbol") or "").upper().strip() or "BTCUSDT"
         if not symbol:
-            raise HTTPException(status_code=400, detail="symbol required in config_json")
+            raise HTTPException(
+                status_code=400, detail="symbol required in config_json"
+            )
         from app.botengine.models import config_from_ui_payload
+
         cfg = config_from_ui_payload(config_data)
         from app.botengine.config_validate import validate_dca_grid_notionals
+
         ok_grid, grid_err, _, _ = validate_dca_grid_notionals(cfg)
         if not ok_grid:
             raise HTTPException(status_code=400, detail=grid_err)
@@ -1362,39 +1574,52 @@ async def create_bot_with_config(
         stored["strategy_id"] = "dca_grid_trailing"
         config_json = json.dumps(stored, ensure_ascii=False)
         config_data = stored
-    
+
     bot = Bot(
         account_id=account_id,
         symbol=symbol,
         mode=mode,
         config_json=config_json,
-        status="stopped"
+        status="stopped",
     )
     db.add(bot)
     db.commit()
     db.refresh(bot)
-    
+
     # İşlem geçmişi: bot oluşturma (admin hesapta işlem yaptıysa "Admin" görünsün)
-    config_summary = {k: v for k, v in config_data.items() if k not in ("api_key", "api_secret", "password", "token")}
+    config_summary = {
+        k: v
+        for k, v in config_data.items()
+        if k not in ("api_key", "api_secret", "password", "token")
+    }
     audit_svc.log_event(
-        db, actor_type="admin" if current.get("is_admin") else "user", event_type="BOT_CREATE", severity="INFO",
-        actor_user_id=current.get("user_id"), target_user_id=account.user_id, target_account_id=account_id,
-        ip=get_client_ip(request), device_id=current.get("device_id"),
+        db,
+        actor_type="admin" if current.get("is_admin") else "user",
+        event_type="BOT_CREATE",
+        severity="INFO",
+        actor_user_id=current.get("user_id"),
+        target_user_id=account.user_id,
+        target_account_id=account_id,
+        ip=get_client_ip(request),
+        device_id=current.get("device_id"),
         request_id=getattr(request.state, "request_id", None),
         meta={
-            "bot_id": bot.id, "account_id": account_id, "symbol": symbol, "mode": mode,
+            "bot_id": bot.id,
+            "account_id": account_id,
+            "symbol": symbol,
+            "mode": mode,
             "config_summary": config_summary,
             "user_agent": (request.headers.get("user-agent") or "")[:200],
         },
     )
-    
+
     return {
         "bot_id": bot.id,
         "id": bot.id,
         "account_id": bot.account_id,
         "symbol": bot.symbol,
         "mode": bot.mode,
-        "status": bot.status
+        "status": bot.status,
     }
 
 
@@ -1411,19 +1636,30 @@ async def delete_bot(
     bot = db.query(Bot).filter(Bot.id == bot_id, Bot.account_id == account_id).first()
     if not bot:
         raise HTTPException(status_code=404, detail="Bot not found")
-    
+
     symbol_saved = getattr(bot, "symbol", None) or ""
     acc = db.query(Account).filter(Account.id == account_id).first()
-    
+
     # İşlem geçmişi: bot silme (admin hesapta işlem yaptıysa "Admin" görünsün)
     audit_svc.log_event(
-        db, actor_type="admin" if current.get("is_admin") else "user", event_type="BOT_DELETE", severity="INFO",
-        actor_user_id=current.get("user_id"), target_user_id=acc.user_id if acc else None, target_account_id=account_id,
-        ip=get_client_ip(request), device_id=current.get("device_id"),
+        db,
+        actor_type="admin" if current.get("is_admin") else "user",
+        event_type="BOT_DELETE",
+        severity="INFO",
+        actor_user_id=current.get("user_id"),
+        target_user_id=acc.user_id if acc else None,
+        target_account_id=account_id,
+        ip=get_client_ip(request),
+        device_id=current.get("device_id"),
         request_id=getattr(request.state, "request_id", None),
-        meta={"bot_id": bot_id, "account_id": account_id, "symbol": symbol_saved, "user_agent": (request.headers.get("user-agent") or "")[:200]},
+        meta={
+            "bot_id": bot_id,
+            "account_id": account_id,
+            "symbol": symbol_saved,
+            "user_agent": (request.headers.get("user-agent") or "")[:200],
+        },
     )
-    
+
     # Stop bot if running
     try:
         if bot.status == "running":
@@ -1432,63 +1668,87 @@ async def delete_bot(
             invalidate_dashboard_summary_cache(account_id)
     except Exception as e:
         import logging
+
         logger = logging.getLogger(__name__)
         logger.warning(f"Error stopping bot before delete: {e}")
         db.rollback()
-    
+
     try:
         from app.services.bot_performance_service import archive_bot_performance
+
         archive_bot_performance(db, bot_id, account_id)
     except Exception as e:
         import logging
-        logging.getLogger(__name__).warning("delete_bot archive bot_id=%s: %s", bot_id, e)
-    
+
+        logging.getLogger(__name__).warning(
+            "delete_bot archive bot_id=%s: %s", bot_id, e
+        )
+
     # Delete related trades (cascade should handle this, but be explicit)
     try:
-        db.query(Trade).filter(Trade.bot_id == bot_id, Trade.account_id == account_id).delete(synchronize_session=False)
+        db.query(Trade).filter(
+            Trade.bot_id == bot_id, Trade.account_id == account_id
+        ).delete(synchronize_session=False)
         db.commit()
     except Exception as e:
         import logging
+
         logger = logging.getLogger(__name__)
         logger.warning(f"Error deleting trades: {e}")
         db.rollback()
-    
+
     # Delete related PnL snapshots
     try:
-        db.query(PnlSnapshot).filter(PnlSnapshot.bot_id == bot_id, PnlSnapshot.account_id == account_id).delete(synchronize_session=False)
+        db.query(PnlSnapshot).filter(
+            PnlSnapshot.bot_id == bot_id, PnlSnapshot.account_id == account_id
+        ).delete(synchronize_session=False)
         db.commit()
     except Exception as e:
         import logging
+
         logger = logging.getLogger(__name__)
         logger.warning(f"Error deleting PnL snapshots: {e}")
         db.rollback()
-    
+
     # Delete bot (use raw SQL to avoid relationship loading issues)
     try:
         # First, delete related records manually to avoid cascade issues with missing tables
         try:
-            db.execute(text("DELETE FROM trades WHERE bot_id = :bot_id AND account_id = :account_id"), 
-                       {"bot_id": bot_id, "account_id": account_id})
+            db.execute(
+                text(
+                    "DELETE FROM trades WHERE bot_id = :bot_id AND account_id = :account_id"
+                ),
+                {"bot_id": bot_id, "account_id": account_id},
+            )
         except Exception as e:
             import logging
+
             logging.getLogger(__name__).warning(f"Error deleting trades: {e}")
-        
+
         try:
-            db.execute(text("DELETE FROM pnl_snapshots WHERE bot_id = :bot_id AND account_id = :account_id"), 
-                       {"bot_id": bot_id, "account_id": account_id})
+            db.execute(
+                text(
+                    "DELETE FROM pnl_snapshots WHERE bot_id = :bot_id AND account_id = :account_id"
+                ),
+                {"bot_id": bot_id, "account_id": account_id},
+            )
         except Exception as e:
             import logging
+
             logging.getLogger(__name__).warning(f"Error deleting pnl_snapshots: {e}")
-        
+
         # Delete bot using raw SQL to avoid relationship loading
-        db.execute(text("DELETE FROM bots WHERE id = :bot_id AND account_id = :account_id"), 
-                   {"bot_id": bot_id, "account_id": account_id})
+        db.execute(
+            text("DELETE FROM bots WHERE id = :bot_id AND account_id = :account_id"),
+            {"bot_id": bot_id, "account_id": account_id},
+        )
         db.commit()
         invalidate_dashboard_summary_cache(account_id)
         return {"message": "Bot deleted successfully"}
     except Exception as e:
         db.rollback()
         import logging
+
         logger = logging.getLogger(__name__)
         logger.exception(f"Error deleting bot: {e}")
         raise HTTPException(status_code=500, detail=f"Error deleting bot: {str(e)}")
@@ -1507,35 +1767,58 @@ async def start_bot(
     bot = db.query(Bot).filter(Bot.id == bot_id, Bot.account_id == account_id).first()
     if not bot:
         raise HTTPException(status_code=404, detail="Bot not found")
-    
+
     if bot.status == "running":
         return {"message": "Bot is already running", "status": bot.status}
-    
+
     try:
         from app.botengine.state_store import ensure_state_row, load_state, save_state
         from app.services.perf_chart_state import seed_perf_chart_state_on_bot_start
         from app.api.bots_engine import _insert_engine_command
         from app.botengine.bot_session import mark_bot_run_started, touch_bot_started_at
-        ensure_state_row(db, bot.id, account_id, (bot.symbol or "").upper() or "BTCUSDT")
+
+        ensure_state_row(
+            db, bot.id, account_id, (bot.symbol or "").upper() or "BTCUSDT"
+        )
 
         bot.status = "running"
         touch_bot_started_at(bot, connectivity_resume=False)
         db.commit()
         invalidate_dashboard_summary_cache(account_id)
         seed_perf_chart_state_on_bot_start(db, bot.id)
-        cmd_id = _insert_engine_command(db, account_id, bot.id, "START", request_id=getattr(request.state, "request_id", None))
+        cmd_id = _insert_engine_command(
+            db,
+            account_id,
+            bot.id,
+            "START",
+            request_id=getattr(request.state, "request_id", None),
+        )
         st = load_state(db, bot.id) or {}
         mark_bot_run_started(st, connectivity_resume=False)
         save_state(db, bot.id, account_id, st)
         account = db.query(Account).filter(Account.id == account_id).first()
         audit_svc.log_event(
-            db, actor_type="admin" if current.get("is_admin") else "user", event_type="BOT_START", severity="INFO",
-            actor_user_id=current.get("user_id"), target_user_id=account.user_id if account else None, target_account_id=account_id,
-            ip=get_client_ip(request), device_id=current.get("device_id"),
+            db,
+            actor_type="admin" if current.get("is_admin") else "user",
+            event_type="BOT_START",
+            severity="INFO",
+            actor_user_id=current.get("user_id"),
+            target_user_id=account.user_id if account else None,
+            target_account_id=account_id,
+            ip=get_client_ip(request),
+            device_id=current.get("device_id"),
             request_id=getattr(request.state, "request_id", None),
-            meta={"bot_id": bot.id, "account_id": account_id, "symbol": getattr(bot, "symbol", "") or ""},
+            meta={
+                "bot_id": bot.id,
+                "account_id": account_id,
+                "symbol": getattr(bot, "symbol", "") or "",
+            },
         )
-        return {"message": "Bot started successfully", "status": "running", "command_id": cmd_id}
+        return {
+            "message": "Bot started successfully",
+            "status": "running",
+            "command_id": cmd_id,
+        }
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Error starting bot: {str(e)}")
@@ -1554,23 +1837,40 @@ async def stop_bot(
     bot = db.query(Bot).filter(Bot.id == bot_id, Bot.account_id == account_id).first()
     if not bot:
         raise HTTPException(status_code=404, detail="Bot not found")
-    
+
     if bot.status not in ("running", "paused"):
         return {"message": "Bot is not running or paused", "status": bot.status}
 
     try:
         from app.api.bots_engine import _insert_engine_command
+
         bot.status = "stopped"
         db.commit()
         invalidate_dashboard_summary_cache(account_id)
-        _insert_engine_command(db, account_id, bot.id, "STOP", request_id=getattr(request.state, "request_id", None))
+        _insert_engine_command(
+            db,
+            account_id,
+            bot.id,
+            "STOP",
+            request_id=getattr(request.state, "request_id", None),
+        )
         account = db.query(Account).filter(Account.id == account_id).first()
         audit_svc.log_event(
-            db, actor_type="admin" if current.get("is_admin") else "user", event_type="BOT_STOP", severity="INFO",
-            actor_user_id=current.get("user_id"), target_user_id=account.user_id if account else None, target_account_id=account_id,
-            ip=get_client_ip(request), device_id=current.get("device_id"),
+            db,
+            actor_type="admin" if current.get("is_admin") else "user",
+            event_type="BOT_STOP",
+            severity="INFO",
+            actor_user_id=current.get("user_id"),
+            target_user_id=account.user_id if account else None,
+            target_account_id=account_id,
+            ip=get_client_ip(request),
+            device_id=current.get("device_id"),
             request_id=getattr(request.state, "request_id", None),
-            meta={"bot_id": bot.id, "account_id": account_id, "symbol": getattr(bot, "symbol", "") or ""},
+            meta={
+                "bot_id": bot.id,
+                "account_id": account_id,
+                "symbol": getattr(bot, "symbol", "") or "",
+            },
         )
         return {"message": "Bot stopped successfully", "status": "stopped"}
     except Exception as e:
@@ -1637,6 +1937,7 @@ async def resume_bot(
 _price_cache: Dict[str, tuple] = {}
 _PRICE_CACHE_MAX_KEYS = 200
 
+
 def _price_cache_evict():
     if len(_price_cache) <= _PRICE_CACHE_MAX_KEYS:
         return
@@ -1644,8 +1945,11 @@ def _price_cache_evict():
     for k, _ in by_ts[: len(_price_cache) - _PRICE_CACHE_MAX_KEYS]:
         _price_cache.pop(k, None)
 
+
 @router.get("/price")
-async def api_price(symbol: str = Query(..., description="Symbol (e.g., BTCUSDT)")) -> Dict:
+async def api_price(
+    symbol: str = Query(..., description="Symbol (e.g., BTCUSDT)"),
+) -> Dict:
     """Binance kaldırıldı – sadece cache veya 0"""
     sym = symbol.strip().upper().replace("/", "").replace(" ", "")
     if not sym:
@@ -1676,8 +1980,11 @@ async def dashboard_bot_detail(
     """Get full bot detail with grids, profit triggers, events, trades. Auth required."""
     require_account_access(current, account_id)
     import json as _json
+
     try:
-        bot = db.query(Bot).filter(Bot.id == bot_id, Bot.account_id == account_id).first()
+        bot = (
+            db.query(Bot).filter(Bot.id == bot_id, Bot.account_id == account_id).first()
+        )
         if not bot:
             raise HTTPException(status_code=404, detail="Bot not found")
         config = {}
@@ -1688,7 +1995,9 @@ async def dashboard_bot_detail(
         alloc = config.get("allocation", {})
         base_pct = alloc.get("base_pct", 50)
         quote_pct = alloc.get("quote_pct", 50)
-        budget_usd = float(config.get("budget_usd") or config.get("bot_budget_quote") or 0)
+        budget_usd = float(
+            config.get("budget_usd") or config.get("bot_budget_quote") or 0
+        )
         up_cfg = config.get("up", {})
         down_cfg = config.get("down", {})
         profit_cfg = config.get("profit", {})
@@ -1696,20 +2005,41 @@ async def dashboard_bot_detail(
         down_grids = down_cfg.get("grids", [])
         pnl_data = PnlService.calculate_bot_pnl(db, bot_id, account_id)
         if pnl_data.get("error"):
-            pnl_data = {"total_usd": 0.0, "realized": 0.0, "unrealized": 0.0, "daily": 0.0, "monthly": 0.0, "current_price": 0.0}
+            pnl_data = {
+                "total_usd": 0.0,
+                "realized": 0.0,
+                "unrealized": 0.0,
+                "daily": 0.0,
+                "monthly": 0.0,
+                "current_price": 0.0,
+            }
         trades = Ledger.get_trades_dict(db, bot_id, account_id, 50)
         ref_price = pnl_data.get("current_price") or 0.0
-        
+
         # Calculate profit mechanism states from trades (trades is list of dicts from Ledger.get_trades_dict)
-        sell_trades = [t for t in trades if isinstance(t, dict) and t.get("side") == "SELL"]
-        buy_trades = [t for t in trades if isinstance(t, dict) and t.get("side") == "BUY"]
+        sell_trades = [
+            t for t in trades if isinstance(t, dict) and t.get("side") == "SELL"
+        ]
+        buy_trades = [
+            t for t in trades if isinstance(t, dict) and t.get("side") == "BUY"
+        ]
         sell_avg_price = None
         buy_avg_price = None
         if sell_trades:
-            sell_avg_price = sum(t.get("price", 0) * t.get("qty", 0) for t in sell_trades) / sum(t.get("qty", 0) for t in sell_trades) if sum(t.get("qty", 0) for t in sell_trades) > 0 else None
+            sell_avg_price = (
+                sum(t.get("price", 0) * t.get("qty", 0) for t in sell_trades)
+                / sum(t.get("qty", 0) for t in sell_trades)
+                if sum(t.get("qty", 0) for t in sell_trades) > 0
+                else None
+            )
         if buy_trades:
-            buy_avg_price = sum(t.get("price", 0) * t.get("qty", 0) for t in buy_trades) / sum(t.get("qty", 0) for t in buy_trades) if sum(t.get("qty", 0) for t in buy_trades) > 0 else None
-        
+            buy_avg_price = (
+                sum(t.get("price", 0) * t.get("qty", 0) for t in buy_trades)
+                / sum(t.get("qty", 0) for t in buy_trades)
+                if sum(t.get("qty", 0) for t in buy_trades) > 0
+                else None
+            )
+
         # Determine profit mechanism states
         profit_mode = "NONE"
         profit_armed = False
@@ -1721,7 +2051,7 @@ async def dashboard_bot_detail(
         resell_state = "IDLE"
         resell_extreme = None
         resell_threshold = None
-        
+
         if sell_avg_price and buy_avg_price and ref_price:
             # Check rebuy (buy after sell at lower price)
             if "rebuy_trigger_pct" in profit_cfg:
@@ -1736,7 +2066,7 @@ async def dashboard_bot_detail(
                     profit_armed = True
                     profit_extreme = rebuy_extreme
                     profit_threshold = rebuy_threshold
-            
+
             # Check resell (sell after buy at higher price)
             if "resell_trigger_pct" in profit_cfg:
                 trigger_pct = profit_cfg.get("resell_trigger_pct", 0.8)
@@ -1750,25 +2080,32 @@ async def dashboard_bot_detail(
                     profit_armed = True
                     profit_extreme = resell_extreme
                     profit_threshold = resell_threshold
-        base_asset = (bot.symbol or "BTCUSDT").replace("USDT", "").replace("BUSD", "").replace("FDUSD", "")
+        base_asset = (
+            (bot.symbol or "BTCUSDT")
+            .replace("USDT", "")
+            .replace("BUSD", "")
+            .replace("FDUSD", "")
+        )
         quote_asset = "USDT"
         if "BUSD" in bot.symbol:
             quote_asset = "BUSD"
         elif "FDUSD" in bot.symbol:
             quote_asset = "FDUSD"
         # Get trades to determine grid states and tracked extremes
-        all_trades = db.query(Trade).filter(
-            Trade.bot_id == bot_id,
-            Trade.account_id == account_id
-        ).order_by(Trade.ts.asc()).all()
-        
+        all_trades = (
+            db.query(Trade)
+            .filter(Trade.bot_id == bot_id, Trade.account_id == account_id)
+            .order_by(Trade.ts.asc())
+            .all()
+        )
+
         # Calculate grid states from trades
         up_list = []
         for i, g in enumerate(up_grids):
             trigger_pct = g.get("trigger_pct", 0)
             qty_pct = g.get("qty_pct", 0)
             trigger_price = ref_price * (1 + trigger_pct / 100) if ref_price else 0
-            
+
             # Find trades for this grid slot
             grid_trades = [t for t in all_trades if t.slot_id == i and t.side == "SELL"]
             state = "IDLE"
@@ -1776,7 +2113,7 @@ async def dashboard_bot_detail(
             extreme_price = None  # Peak price after trigger
             threshold_price = None
             armed_at_price = None
-            
+
             if grid_trades:
                 # Grid was executed
                 state = "EXECUTED"
@@ -1799,25 +2136,33 @@ async def dashboard_bot_detail(
                 trail_pct = up_cfg.get("trail_pct", 0)
                 if trail_pct:
                     threshold_price = extreme_price * (1 - trail_pct / 100)
-            
-            up_list.append({
-                "idx": i,
-                "trigger_pct": trigger_pct,
-                "qty_pct": qty_pct,
-                "trigger_price": round(trigger_price, 2),
-                "state": state,
-                "armed_at_price": round(armed_at_price, 2) if armed_at_price else None,
-                "executed_price": round(executed_price, 2) if executed_price else None,
-                "extreme_price": round(extreme_price, 2) if extreme_price else None,
-                "threshold_price": round(threshold_price, 2) if threshold_price else None
-            })
-        
+
+            up_list.append(
+                {
+                    "idx": i,
+                    "trigger_pct": trigger_pct,
+                    "qty_pct": qty_pct,
+                    "trigger_price": round(trigger_price, 2),
+                    "state": state,
+                    "armed_at_price": round(armed_at_price, 2)
+                    if armed_at_price
+                    else None,
+                    "executed_price": round(executed_price, 2)
+                    if executed_price
+                    else None,
+                    "extreme_price": round(extreme_price, 2) if extreme_price else None,
+                    "threshold_price": round(threshold_price, 2)
+                    if threshold_price
+                    else None,
+                }
+            )
+
         down_list = []
         for i, g in enumerate(down_grids):
             trigger_pct = g.get("trigger_pct", 0)
             qty_pct = g.get("qty_pct", 0)
             trigger_price = ref_price * (1 - trigger_pct / 100) if ref_price else 0
-            
+
             # Find trades for this grid slot
             grid_trades = [t for t in all_trades if t.slot_id == i and t.side == "BUY"]
             state = "IDLE"
@@ -1825,7 +2170,7 @@ async def dashboard_bot_detail(
             extreme_price = None  # Dip price after trigger
             threshold_price = None
             armed_at_price = None
-            
+
             if grid_trades:
                 # Grid was executed
                 state = "EXECUTED"
@@ -1848,18 +2193,26 @@ async def dashboard_bot_detail(
                 trail_pct = down_cfg.get("trail_pct", 0)
                 if trail_pct:
                     threshold_price = extreme_price * (1 + trail_pct / 100)
-            
-            down_list.append({
-                "idx": i,
-                "trigger_pct": trigger_pct,
-                "qty_pct": qty_pct,
-                "trigger_price": round(trigger_price, 2),
-                "state": state,
-                "armed_at_price": round(armed_at_price, 2) if armed_at_price else None,
-                "executed_price": round(executed_price, 2) if executed_price else None,
-                "extreme_price": round(extreme_price, 2) if extreme_price else None,
-                "threshold_price": round(threshold_price, 2) if threshold_price else None
-            })
+
+            down_list.append(
+                {
+                    "idx": i,
+                    "trigger_pct": trigger_pct,
+                    "qty_pct": qty_pct,
+                    "trigger_price": round(trigger_price, 2),
+                    "state": state,
+                    "armed_at_price": round(armed_at_price, 2)
+                    if armed_at_price
+                    else None,
+                    "executed_price": round(executed_price, 2)
+                    if executed_price
+                    else None,
+                    "extreme_price": round(extreme_price, 2) if extreme_price else None,
+                    "threshold_price": round(threshold_price, 2)
+                    if threshold_price
+                    else None,
+                }
+            )
         return {
             "bot": {
                 "id": bot.id,
@@ -1876,7 +2229,7 @@ async def dashboard_bot_detail(
                 "quote_free": 0.0,
                 "ref_price": round(ref_price, 2),
                 "start_ts": bot.started_at.isoformat() if bot.started_at else None,
-                "updated_ts": None
+                "updated_ts": None,
             },
             "strategy": {
                 "base_alloc_pct": base_pct,
@@ -1890,15 +2243,15 @@ async def dashboard_bot_detail(
                     "trigger_pct": profit_cfg.get("rebuy_trigger_pct", 0.8),
                     "trailing_pct": profit_cfg.get("rebuy_trail_pct", 0.35),
                     "qty_mode": "use_sold_quote_proceeds",
-                    "qty_pct": 100
+                    "qty_pct": 100,
                 },
                 "profit_resell": {
                     "enabled": "resell_trigger_pct" in profit_cfg,
                     "trigger_pct": profit_cfg.get("resell_trigger_pct", 0.8),
                     "trailing_pct": profit_cfg.get("resell_trail_pct", 0.35),
                     "qty_mode": "use_bought_base_qty",
-                    "qty_pct": 100
-                }
+                    "qty_pct": 100,
+                },
             },
             "engine_state": {
                 "last_price": round(pnl_data.get("current_price", 0) or 0, 2),
@@ -1907,7 +2260,7 @@ async def dashboard_bot_detail(
                 "active_grid_index": None,
                 "tracked_extreme": None,
                 "tracked_threshold": None,
-                "distance_pct": None
+                "distance_pct": None,
             },
             "grids": {"up": up_list, "down": down_list},
             "profit": {
@@ -1916,38 +2269,48 @@ async def dashboard_bot_detail(
                 "profit_mode": profit_mode,
                 "profit_armed": profit_armed,
                 "profit_extreme": round(profit_extreme, 2) if profit_extreme else None,
-                "profit_threshold": round(profit_threshold, 2) if profit_threshold else None,
+                "profit_threshold": round(profit_threshold, 2)
+                if profit_threshold
+                else None,
                 "rebuy": {
                     "enabled": "rebuy_trigger_pct" in profit_cfg,
                     "state": rebuy_state,
                     "trigger_pct": profit_cfg.get("rebuy_trigger_pct", 0.8),
                     "trailing_pct": profit_cfg.get("rebuy_trail_pct", 0.35),
                     "extreme_price": round(rebuy_extreme, 2) if rebuy_extreme else None,
-                    "threshold_price": round(rebuy_threshold, 2) if rebuy_threshold else None
+                    "threshold_price": round(rebuy_threshold, 2)
+                    if rebuy_threshold
+                    else None,
                 },
                 "resell": {
                     "enabled": "resell_trigger_pct" in profit_cfg,
                     "state": resell_state,
                     "trigger_pct": profit_cfg.get("resell_trigger_pct", 0.8),
                     "trailing_pct": profit_cfg.get("resell_trail_pct", 0.35),
-                    "extreme_price": round(resell_extreme, 2) if resell_extreme else None,
-                    "threshold_price": round(resell_threshold, 2) if resell_threshold else None
-                }
+                    "extreme_price": round(resell_extreme, 2)
+                    if resell_extreme
+                    else None,
+                    "threshold_price": round(resell_threshold, 2)
+                    if resell_threshold
+                    else None,
+                },
             },
             "pnl": {
                 "daily_usd": round(pnl_data.get("daily", 0), 2),
                 "monthly_usd": round(pnl_data.get("monthly", 0), 2),
                 "realized_usd": round(pnl_data.get("realized", 0), 2),
                 "unrealized_usd": round(pnl_data.get("unrealized", 0), 2),
-                "total_usd": round(pnl_data.get("total_usd", 0), 2)
+                "total_usd": round(pnl_data.get("total_usd", 0), 2),
             },
             "events": [],
-            "trades": trades
+            "trades": trades,
         }
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error fetching bot detail: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Error fetching bot detail: {str(e)}"
+        )
 
 
 @router.get("/bots/{bot_id}/detail")
@@ -1962,16 +2325,25 @@ async def get_bot_detail(
     try:
         # Reuse existing dashboard_bot_detail logic but enhance response
         detail = await dashboard_bot_detail(bot_id, account_id, 0, db, current)
-        
+
         # Enhance with balances, cycles, prices
-        bot = db.query(Bot).filter(Bot.id == bot_id, Bot.account_id == account_id).first()
+        bot = (
+            db.query(Bot).filter(Bot.id == bot_id, Bot.account_id == account_id).first()
+        )
         if not bot:
             raise HTTPException(status_code=404, detail="Bot not found")
-        
+
         pnl_data = PnlService.calculate_bot_pnl(db, bot_id, account_id)
         if pnl_data.get("error"):
-            pnl_data = {"total_usd": 0.0, "realized": 0.0, "unrealized": 0.0, "daily": 0.0, "monthly": 0.0, "current_price": 0.0}
-        
+            pnl_data = {
+                "total_usd": 0.0,
+                "realized": 0.0,
+                "unrealized": 0.0,
+                "daily": 0.0,
+                "monthly": 0.0,
+                "current_price": 0.0,
+            }
+
         # Extract base/quote assets
         symbol = bot.symbol or "BTCUSDT"
         base_asset = symbol.replace("USDT", "").replace("BUSD", "").replace("FDUSD", "")
@@ -1980,7 +2352,7 @@ async def get_bot_detail(
             quote_asset = "BUSD"
         elif "FDUSD" in symbol:
             quote_asset = "FDUSD"
-        
+
         # Get balances (simplified - in real implementation, get from ledger)
         base_qty = 0.0
         quote_qty = 0.0
@@ -1990,63 +2362,68 @@ async def get_bot_detail(
             quote_qty = ledger.get_quote_balance()
         except:
             pass
-        
+
         detail["balances"] = {
             "base_asset": base_asset,
             "quote_asset": quote_asset,
             "base_qty": round(base_qty, 8),
             "quote_qty": round(quote_qty, 2),
-            "total_value_quote": round(pnl_data.get("total_usd", 0), 2)
+            "total_value_quote": round(pnl_data.get("total_usd", 0), 2),
         }
-        
+
         # Get live price - try multiple sources
         live_price = 0.0
-        
+
         # 1. Try from engine_state
         engine_last_price = detail.get("engine_state", {}).get("last_price")
         if engine_last_price and engine_last_price > 0:
             live_price = float(engine_last_price)
-        
+
         # 2. Try from PnL data
         if (not live_price or live_price == 0) and pnl_data.get("current_price"):
             live_price = float(pnl_data.get("current_price", 0))
-        
+
         # Get initial price
         initial_price = detail.get("bot", {}).get("ref_price", 0)
         if not initial_price or initial_price == 0:
             initial_price = live_price
-        
+
         # Set prices in detail
         detail["prices"] = {
             "live_price": round(float(live_price), 2),
-            "initial_price": round(float(initial_price), 2)
+            "initial_price": round(float(initial_price), 2),
         }
-        
+
         detail["cycles"] = {
             "today": 0,  # TODO: Calculate from trades
             "total": detail.get("bot", {}).get("cycle_no", 0),
-            "current_cycle_id": detail.get("bot", {}).get("cycle_no", 0)
+            "current_cycle_id": detail.get("bot", {}).get("cycle_no", 0),
         }
-        
+
         detail["last_trade_at"] = None
         try:
-            last_trade = db.query(Trade).filter(
-                Trade.bot_id == bot_id,
-                Trade.account_id == account_id
-            ).order_by(Trade.ts.desc()).first()
+            last_trade = (
+                db.query(Trade)
+                .filter(Trade.bot_id == bot_id, Trade.account_id == account_id)
+                .order_by(Trade.ts.desc())
+                .first()
+            )
             if last_trade and hasattr(last_trade, "ts"):
                 detail["last_trade_at"] = last_trade.ts.isoformat() + "Z"
         except Exception:
             pass
-        
+
         return detail
     except HTTPException:
         raise
     except Exception as e:
         import logging
+
         logger = logging.getLogger(__name__)
         logger.exception(f"Error in get_bot_detail: {e}")
-        raise HTTPException(status_code=500, detail=f"Error fetching bot detail: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Error fetching bot detail: {str(e)}"
+        )
 
 
 @router.get("/bots/{bot_id}/events")
@@ -2061,55 +2438,51 @@ async def get_bot_events(
     bot = db.query(Bot).filter(Bot.id == bot_id, Bot.account_id == account_id).first()
     if not bot:
         raise HTTPException(status_code=404, detail="Bot not found")
-    
+
     async def event_generator():
         try:
             # Simple polling-based SSE (in production, use proper event queue)
-            last_event_id = 0
             while True:
                 # Check if bot still exists
                 bot_check = db.query(Bot).filter(Bot.id == bot_id).first()
                 if not bot_check:
                     break
-                
+
                 # Get latest events (simplified - in production, use proper event log)
                 # For now, just send heartbeat
                 event_data = {
                     "ts": datetime.utcnow().isoformat() + "Z",
                     "type": "heartbeat",
                     "msg": "Bot aktif",
-                    "bot_id": bot_id
+                    "bot_id": bot_id,
                 }
-                
+
                 yield f"data: {json.dumps(event_data)}\n\n"
                 await asyncio.sleep(5)  # Send heartbeat every 5s
-                
+
         except asyncio.CancelledError:
             pass
         except Exception as e:
             error_event = {
                 "ts": datetime.utcnow().isoformat() + "Z",
                 "type": "error",
-                "msg": f"SSE error: {str(e)}"
+                "msg": f"SSE error: {str(e)}",
             }
             yield f"data: {json.dumps(error_event)}\n\n"
-    
+
     return StreamingResponse(
         event_generator(),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
-            "X-Accel-Buffering": "no"
-        }
+            "X-Accel-Buffering": "no",
+        },
     )
 
 
 # Ticker cache for global ticker bar
-_ticker_cache = {
-    "data": None,
-    "updated_at": None
-}
+_ticker_cache = {"data": None, "updated_at": None}
 
 
 @router.get("/ticker")
@@ -2122,12 +2495,10 @@ async def api_ticker():
     from datetime import datetime, timezone
     from fastapi.responses import JSONResponse
     import time
-    import httpx
-    import asyncio
-    
+
     now = datetime.now(timezone.utc)
     server_time_ms = int(time.time() * 1000)
-    
+
     # Check cache (3 second TTL)
     if _ticker_cache["data"] and _ticker_cache["updated_at"]:
         age = (now - _ticker_cache["updated_at"]).total_seconds()
@@ -2136,20 +2507,21 @@ async def api_ticker():
             cached = _ticker_cache["data"].copy()
             cached["ts"] = now.isoformat()
             cached["server_time_ms"] = server_time_ms
-            
+
             return JSONResponse(
                 content=cached,
                 headers={
                     "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
                     "Pragma": "no-cache",
-                    "Expires": "0"
-                }
+                    "Expires": "0",
+                },
             )
-    
+
     # Populate prices from DataHub (gram altın ve portföy özeti için gerekli)
     prices = {}
     try:
         from app.services.data_hub import data_hub
+
         all_prices = data_hub.get_all_prices()
         if all_prices:
             for sym, data in all_prices.items():
@@ -2160,7 +2532,9 @@ async def api_ticker():
 
     # Fallback: USDTTRY veya altın fiyatı yoksa dış API (login-forex)
     gram_altin_try_external = None
-    if not prices.get("USDTTRY") or not (prices.get("XAUUSDT") or prices.get("PAXGUSDT")):
+    if not prices.get("USDTTRY") or not (
+        prices.get("XAUUSDT") or prices.get("PAXGUSDT")
+    ):
         try:
             forex = await get_login_forex()
             if forex.get("usd_try") is not None:
@@ -2174,29 +2548,31 @@ async def api_ticker():
     btcusd = prices.get("BTCUSDT")
     ethusd = prices.get("ETHUSDT")
     usdttry = prices.get("USDTTRY")
-    
+
     # EURTRY: try direct EURTRY, fallback to EURUSDT * USDTTRY
     eurtry = prices.get("EURTRY")
     if eurtry is None and usdttry:
         eurusdt = prices.get("EURUSDT")
         if eurusdt:
             eurtry = eurusdt * usdttry
-    
+
     # GBPTRY: try direct GBPTRY, fallback to GBPUSDT * USDTTRY
     gbptry = prices.get("GBPTRY")
     if gbptry is None and usdttry:
         gbpusdt = prices.get("GBPUSDT")
         if gbpusdt:
             gbptry = gbpusdt * usdttry
-    
+
     # Gold: Try XAUUSDT first, then PAXGUSDT
     ons_altin_usd = prices.get("XAUUSDT") or prices.get("PAXGUSDT")
-    
+
     # GRAM_ALTIN_TRY: dış API'den gelen değer yoksa DataHub ile hesapla (1 ONS = 31.1034768 gram)
-    gram_altin_try = gram_altin_try_external if gram_altin_try_external is not None else None
+    gram_altin_try = (
+        gram_altin_try_external if gram_altin_try_external is not None else None
+    )
     if gram_altin_try is None and ons_altin_usd and usdttry:
         gram_altin_try = (ons_altin_usd * usdttry) / _OZ_TO_GRAM
-    
+
     # Build result (all keys present, numeric or null)
     result = {
         "ts": now.isoformat(),
@@ -2207,20 +2583,20 @@ async def api_ticker():
         "BTCUSD": btcusd,
         "ETHUSD": ethusd,
         "GRAM_ALTIN_TRY": gram_altin_try,
-        "ONS_ALTIN_USD": ons_altin_usd
+        "ONS_ALTIN_USD": ons_altin_usd,
     }
-    
+
     # Update cache
     _ticker_cache["data"] = result
     _ticker_cache["updated_at"] = now
-    
+
     return JSONResponse(
         content=result,
         headers={
             "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
             "Pragma": "no-cache",
-            "Expires": "0"
-        }
+            "Expires": "0",
+        },
     )
 
 
@@ -2241,6 +2617,7 @@ def invalidate_dashboard_summary_cache(account_id: int) -> None:
         _dashboard_summary_cache.pop(int(account_id), None)
     except Exception:
         pass
+
 
 def _is_binance_invalid_key(exc: Exception) -> bool:
     """True if upstream error is 401 or 400 with Binance code -2015 (Invalid API-key, IP, or permissions)."""
@@ -2267,7 +2644,9 @@ WALLET_RESPONSE_CACHE_TTL = 30.0
 _wallet_inflight: Dict[int, asyncio.Task] = {}  # account_id -> task (in-flight dedupe)
 
 # Open-orders: TTL + in-flight dedupe; 429/418 → serve stale (weight tasarrufu, IP ban riski azaltma)
-_open_orders_cache: Dict[tuple, tuple] = {}  # (account_id, symbol or "") -> (response_dict, ts)
+_open_orders_cache: Dict[
+    tuple, tuple
+] = {}  # (account_id, symbol or "") -> (response_dict, ts)
 _open_orders_cache_lock = asyncio.Lock()
 OPEN_ORDERS_CACHE_TTL = 30.0
 _OPEN_ORDERS_CACHE_MAX_KEYS = 100
@@ -2286,11 +2665,17 @@ _UPSTREAM_ERROR_LOG_THROTTLE_SEC = 60.0
 _UPSTREAM_ERROR_LOG_THROTTLE_INVALID_KEY_SEC = 300.0
 
 
-async def _should_log_upstream_error(endpoint: str, account_id: int, reason: str) -> bool:
+async def _should_log_upstream_error(
+    endpoint: str, account_id: int, reason: str
+) -> bool:
     """Aynı endpoint/account/reason için True döner (WARNING yazılacak); throttle süresi dolmamışsa False."""
     key = (endpoint, account_id, reason)
     now = time.time()
-    throttle = _UPSTREAM_ERROR_LOG_THROTTLE_INVALID_KEY_SEC if reason == "invalid_api_key" else _UPSTREAM_ERROR_LOG_THROTTLE_SEC
+    throttle = (
+        _UPSTREAM_ERROR_LOG_THROTTLE_INVALID_KEY_SEC
+        if reason == "invalid_api_key"
+        else _UPSTREAM_ERROR_LOG_THROTTLE_SEC
+    )
     async with _upstream_error_log_lock:
         last = _upstream_error_log_ts.get(key)
         if last is not None and (now - last) < throttle:
@@ -2309,8 +2694,16 @@ def get_binance_cache_stats() -> dict:
     total_w = _wallet_cache_hits + _wallet_cache_misses
     total_o = _open_orders_cache_hits + _open_orders_cache_misses
     return {
-        "wallet": {"hits": _wallet_cache_hits, "misses": _wallet_cache_misses, "hit_rate": round(_wallet_cache_hits / total_w, 2) if total_w else 0},
-        "open_orders": {"hits": _open_orders_cache_hits, "misses": _open_orders_cache_misses, "hit_rate": round(_open_orders_cache_hits / total_o, 2) if total_o else 0},
+        "wallet": {
+            "hits": _wallet_cache_hits,
+            "misses": _wallet_cache_misses,
+            "hit_rate": round(_wallet_cache_hits / total_w, 2) if total_w else 0,
+        },
+        "open_orders": {
+            "hits": _open_orders_cache_hits,
+            "misses": _open_orders_cache_misses,
+            "hit_rate": round(_open_orders_cache_hits / total_o, 2) if total_o else 0,
+        },
     }
 
 
@@ -2323,6 +2716,7 @@ async def invalidate_wallet_cache(account_id: int) -> None:
     invalidate_dashboard_summary_cache(account_id)
     try:
         from app.api.routes.home import invalidate_home_wallet_cache
+
         invalidate_home_wallet_cache(account_id)
     except Exception:
         pass
@@ -2340,7 +2734,9 @@ async def invalidate_open_orders_cache(account_id: int) -> None:
 
 
 # Günlük KPI referansı: botlar için lazy ref (cüzdan günlük değişimi AssetSnapshot ile gün başı bakiyesinden hesaplanır)
-_daily_kpi_ref: Dict[int, dict] = {}  # account_id -> {ref_date: str, bots_ref_usd: float}
+_daily_kpi_ref: Dict[
+    int, dict
+] = {}  # account_id -> {ref_date: str, bots_ref_usd: float}
 
 
 def _turkey_date_str() -> str:
@@ -2360,7 +2756,10 @@ async def api_dashboard_bootstrap(
     require_account_access(current, account_id)
     try:
         from app.api.routes import dashboard_bootstrap as db_mod
-        return await db_mod.dashboard_bootstrap(request, account_id=account_id, db=db, current=current)
+
+        return await db_mod.dashboard_bootstrap(
+            request, account_id=account_id, db=db, current=current
+        )
     except Exception as e:
         logger.warning("Dashboard bootstrap delegate failed, returning minimal: %s", e)
     request_id = getattr(request.state, "request_id", None) or ""
@@ -2375,7 +2774,11 @@ async def api_dashboard_bootstrap(
     wallet_cached, wallet_cached_at = None, None
     try:
         from app.api.routes.home import _get_wallet_cached_enriched_with_new_session
-        wallet_cached, wallet_cached_at = await asyncio.get_running_loop().run_in_executor(
+
+        (
+            wallet_cached,
+            wallet_cached_at,
+        ) = await asyncio.get_running_loop().run_in_executor(
             None, lambda: _get_wallet_cached_enriched_with_new_session(account_id, 20)
         )
     except Exception:
@@ -2383,12 +2786,18 @@ async def api_dashboard_bootstrap(
     kpis = {}
     try:
         from app.api.routes.home import _get_kpis_minimal
+
         kpis = await _get_kpis_minimal(account_id, db)
     except Exception:
         pass
     ek = getattr(account, "api_key_enc", None)
     es = getattr(account, "api_secret_enc", None)
-    keys_configured = bool(ek and es and (not isinstance(ek, str) or ek.strip()) and (not isinstance(es, str) or es.strip()))
+    keys_configured = bool(
+        ek
+        and es
+        and (not isinstance(ek, str) or ek.strip())
+        and (not isinstance(es, str) or es.strip())
+    )
     return {
         "ok": True,
         "data": {
@@ -2396,7 +2805,11 @@ async def api_dashboard_bootstrap(
             "kpis": kpis,
             "wallet_cached": wallet_cached,
             "wallet_cached_at": wallet_cached_at,
-            "wallet_status": {"keys_configured": keys_configured, "last_error_code": None, "cooldown_until": None},
+            "wallet_status": {
+                "keys_configured": keys_configured,
+                "last_error_code": None,
+                "cooldown_until": None,
+            },
         },
         "meta": {"request_id": request_id, "server_ms": 0},
     }
@@ -2422,10 +2835,13 @@ async def api_dashboard_summary(
             return cached
         if len(_dashboard_summary_cache) > _DASHBOARD_SUMMARY_CACHE_MAX_KEYS:
             cutoff = now - DASHBOARD_SUMMARY_CACHE_TTL * 2
-            for aid in [a for a, (_, t) in _dashboard_summary_cache.items() if t < cutoff]:
+            for aid in [
+                a for a, (_, t) in _dashboard_summary_cache.items() if t < cutoff
+            ]:
                 _dashboard_summary_cache.pop(aid, None)
 
     from app.services.test_account import is_test_account, TEST_PAPER_BALANCE_USDT
+
     is_test = is_test_account(account_id, db)
     binance_equity = 0.0
     if is_test:
@@ -2440,8 +2856,11 @@ async def api_dashboard_summary(
             from app.services.binance_assets import get_account_keys
             from app.services.binance_spot import get_wallet
             from app.services.wallet_pricing import build_wallet_price_map
+
             keys = await get_account_keys(account_id, db)
-            wallet_data = await asyncio.wait_for(get_wallet(keys, tag="dashboard_summary"), timeout=6.0)
+            wallet_data = await asyncio.wait_for(
+                get_wallet(keys, tag="dashboard_summary"), timeout=6.0
+            )
             balances = wallet_data.get("balances") or []
             price_map = await build_wallet_price_map(balances, testnet=keys.testnet)
             resp = _wallet_response(account_id, balances, price_map)
@@ -2458,6 +2877,7 @@ async def api_dashboard_summary(
 
     active_bots = count_running_bots(bots)
     import json as _json
+
     total_bot_equity_usd = 0.0
     total_bot_initial_usd = 0.0  # Sum of all bot initial balances
     daily_pnl_usd_acc = 0.0
@@ -2471,20 +2891,42 @@ async def api_dashboard_summary(
         initial_usd = 0.0
         try:
             cfg = _json.loads(bot.config_json or "{}")
-            initial_usd = float(cfg.get("budget_usd") or cfg.get("bot_budget_quote") or cfg.get("initial_capital_usdt") or 0)
+            initial_usd = float(
+                cfg.get("budget_usd")
+                or cfg.get("bot_budget_quote")
+                or cfg.get("initial_capital_usdt")
+                or 0
+            )
         except Exception:
             pass
-        current_usd = pnl_data.get("total_usd", 0.0) if not pnl_data.get("error") else 0.0
+        current_usd = (
+            pnl_data.get("total_usd", 0.0) if not pnl_data.get("error") else 0.0
+        )
         daily_bot = pnl_data.get("daily", 0.0) if not pnl_data.get("error") else 0.0
-        daily_pnl_pct = float(pnl_data.get("daily_pnl_pct") or 0.0) if not pnl_data.get("error") else 0.0
+        daily_pnl_pct = (
+            float(pnl_data.get("daily_pnl_pct") or 0.0)
+            if not pnl_data.get("error")
+            else 0.0
+        )
         _sym = (bot.symbol or "").strip().upper()
-        _strategy_id = (_json.loads(bot.config_json or "{}").get("strategy_id") or "").strip().lower()
+        _strategy_id = (
+            (_json.loads(bot.config_json or "{}").get("strategy_id") or "")
+            .strip()
+            .lower()
+        )
         _state = load_state(db, bot.id) or {}
         _ia_done = bool(_state.get("initial_allocation_done"))
         from app.services.bot_equity import compute_bot_equity_usd
-        if _sym and _sym != "MULTI" and _strategy_id not in ("trdca_pro", "multi_asset_rebalance"):
+
+        if (
+            _sym
+            and _sym != "MULTI"
+            and _strategy_id not in ("trdca_pro", "multi_asset_rebalance")
+        ):
             try:
-                current_usd = compute_bot_equity_usd(db, bot, _state, pnl_data, initial_usd=initial_usd)
+                current_usd = compute_bot_equity_usd(
+                    db, bot, _state, pnl_data, initial_usd=initial_usd
+                )
                 if _ia_done:
                     _ref_date = _state.get("daily_ref_date")
                     _ref_usd = float(_state.get("daily_ref_usd") or 0)
@@ -2499,7 +2941,9 @@ async def api_dashboard_summary(
                 pass
         elif _sym == "MULTI" or _strategy_id in ("trdca_pro", "multi_asset_rebalance"):
             try:
-                current_usd = compute_bot_equity_usd(db, bot, _state, pnl_data, initial_usd=initial_usd)
+                current_usd = compute_bot_equity_usd(
+                    db, bot, _state, pnl_data, initial_usd=initial_usd
+                )
             except Exception:
                 pass
         daily_pnl_usd_acc += daily_bot
@@ -2507,14 +2951,22 @@ async def api_dashboard_summary(
             total_bot_equity_usd += current_usd
             total_bot_initial_usd += initial_usd
 
-        last_t = db.query(Trade).filter(
-            Trade.bot_id == bot.id,
-            Trade.account_id == account_id
-        ).order_by(Trade.ts.desc()).first()
-        last_trade_at = last_t.ts.isoformat() + "Z" if last_t and getattr(last_t, "ts", None) else None
+        last_t = (
+            db.query(Trade)
+            .filter(Trade.bot_id == bot.id, Trade.account_id == account_id)
+            .order_by(Trade.ts.desc())
+            .first()
+        )
+        last_trade_at = (
+            last_t.ts.isoformat() + "Z"
+            if last_t and getattr(last_t, "ts", None)
+            else None
+        )
 
         total_pnl_usd_bot = current_usd - initial_usd
-        total_pnl_pct_bot = (total_pnl_usd_bot / initial_usd * 100) if initial_usd > 0 else 0.0
+        total_pnl_pct_bot = (
+            (total_pnl_usd_bot / initial_usd * 100) if initial_usd > 0 else 0.0
+        )
         cycles = Ledger.get_cycle_ids(db, bot.id, account_id)
         total_cycles_completed = max(cycles) if cycles else 0
         _state_cycle_id = int(_state.get("cycle_id") or 0)
@@ -2524,32 +2976,38 @@ async def api_dashboard_summary(
             bot_config = _json.loads(bot.config_json or "{}")
         except Exception:
             bot_config = {}
-        _display_status = (bot.status or "stopped")
-        if (_display_status or "").lower() == "running" and not _ia_done and current_usd <= 0.01:
+        _display_status = bot.status or "stopped"
+        if (
+            (_display_status or "").lower() == "running"
+            and not _ia_done
+            and current_usd <= 0.01
+        ):
             _display_status = "starting"
-        bots_array.append({
-            "bot_id": bot.id,
-            "id": bot.id,
-            "bot_code": getattr(bot, "bot_code", None) or str(bot.id),
-            "symbol": bot.symbol,
-            "config": bot_config,
-            "status": bot.status or "stopped",
-            "display_status": _display_status,
-            "initial_allocation_done": _ia_done,
-            "base_balance": round(float(_state.get("base_balance") or 0), 8),
-            "quote_balance": round(float(_state.get("quote_balance") or 0), 8),
-            "budget_usd": round(initial_usd, 2),
-            "initial_usd": round(initial_usd, 2),
-            "current_usd": round(current_usd, 2),
-            "daily_pnl_usd": round(daily_bot, 2),
-            "daily_pnl_pct": round(daily_pnl_pct, 2),
-            "total_pnl_usd": round(total_pnl_usd_bot, 2),
-            "total_pnl_pct": round(total_pnl_pct_bot, 2),
-            "account_id": account_id,
-            "last_trade_at": last_trade_at,
-            "total_cycles_completed": total_cycles_completed,
-            "cycle_id": int(_state.get("cycle_id") or total_cycles_completed or 1),
-        })
+        bots_array.append(
+            {
+                "bot_id": bot.id,
+                "id": bot.id,
+                "bot_code": getattr(bot, "bot_code", None) or str(bot.id),
+                "symbol": bot.symbol,
+                "config": bot_config,
+                "status": bot.status or "stopped",
+                "display_status": _display_status,
+                "initial_allocation_done": _ia_done,
+                "base_balance": round(float(_state.get("base_balance") or 0), 8),
+                "quote_balance": round(float(_state.get("quote_balance") or 0), 8),
+                "budget_usd": round(initial_usd, 2),
+                "initial_usd": round(initial_usd, 2),
+                "current_usd": round(current_usd, 2),
+                "daily_pnl_usd": round(daily_bot, 2),
+                "daily_pnl_pct": round(daily_pnl_pct, 2),
+                "total_pnl_usd": round(total_pnl_usd_bot, 2),
+                "total_pnl_pct": round(total_pnl_pct_bot, 2),
+                "account_id": account_id,
+                "last_trade_at": last_trade_at,
+                "total_cycles_completed": total_cycles_completed,
+                "cycle_id": int(_state.get("cycle_id") or total_cycles_completed or 1),
+            }
+        )
 
     user_name = None
     user_surname = None
@@ -2561,7 +3019,9 @@ async def api_dashboard_summary(
             user_surname = u.surname
             user_phone = u.phone
     # Günlük PnL (botlar): sadece o gün tamamlanan turların (cycle) kârlarının toplamı
-    daily_bot_pnl_usd_kpi = PnlService.daily_realized_from_cycles_completed_today(db, account_id)
+    daily_bot_pnl_usd_kpi = PnlService.daily_realized_from_cycles_completed_today(
+        db, account_id
+    )
     today_tr = _turkey_date_str()
     today_start_utc = turkey_today_start_utc()
     # Cüzdan günlük değişimi: gün başı (Türkiye 00:00) bakiyesine göre; AssetSnapshot ile doğru referans
@@ -2569,34 +3029,52 @@ async def api_dashboard_summary(
     try:
         last_before_today = (
             db.query(AssetSnapshot)
-            .filter(AssetSnapshot.account_id == account_id, AssetSnapshot.timestamp < today_start_utc)
+            .filter(
+                AssetSnapshot.account_id == account_id,
+                AssetSnapshot.timestamp < today_start_utc,
+            )
             .order_by(desc(AssetSnapshot.timestamp))
             .first()
         )
-        if last_before_today and getattr(last_before_today, "total_usd_value", None) is not None:
+        if (
+            last_before_today
+            and getattr(last_before_today, "total_usd_value", None) is not None
+        ):
             ref_cuzdan = float(last_before_today.total_usd_value)
         else:
             first_today = (
                 db.query(AssetSnapshot)
-                .filter(AssetSnapshot.account_id == account_id, AssetSnapshot.timestamp >= today_start_utc)
+                .filter(
+                    AssetSnapshot.account_id == account_id,
+                    AssetSnapshot.timestamp >= today_start_utc,
+                )
                 .order_by(AssetSnapshot.timestamp.asc())
                 .first()
             )
-            if first_today and getattr(first_today, "total_usd_value", None) is not None:
+            if (
+                first_today
+                and getattr(first_today, "total_usd_value", None) is not None
+            ):
                 ref_cuzdan = float(first_today.total_usd_value)
     except Exception:
         pass
     if ref_cuzdan is None:
         ref_cuzdan = binance_equity  # Snapshot yoksa değişim 0
     daily_wallet_pnl_usd = binance_equity - ref_cuzdan
-    daily_wallet_pnl_pct = (daily_wallet_pnl_usd / ref_cuzdan * 100.0) if ref_cuzdan and ref_cuzdan > 0 else 0.0
+    daily_wallet_pnl_pct = (
+        (daily_wallet_pnl_usd / ref_cuzdan * 100.0)
+        if ref_cuzdan and ref_cuzdan > 0
+        else 0.0
+    )
     # Bot günlük % için lazy ref (ilk istekte mevcut bakiye = ref)
     ref = _daily_kpi_ref.get(account_id)
     if ref is None or ref.get("ref_date") != today_tr:
         ref = {"ref_date": today_tr, "bots_ref_usd": total_bot_equity_usd}
         _daily_kpi_ref[account_id] = ref
     ref_bots = ref["bots_ref_usd"]
-    daily_bot_pnl_pct_kpi = (daily_bot_pnl_usd_kpi / ref_bots * 100.0) if ref_bots and ref_bots > 0 else 0.0
+    daily_bot_pnl_pct_kpi = (
+        (daily_bot_pnl_usd_kpi / ref_bots * 100.0) if ref_bots and ref_bots > 0 else 0.0
+    )
 
     out = {
         "account": {
@@ -2651,7 +3129,11 @@ def _snapshot_wallet_from_asset_row(row) -> Dict[str, Any]:
     total_usd = float(getattr(row, "total_usd_value", 0) or 0)
     assets: List[Dict[str, Any]] = []
     try:
-        breakdown = json.loads(row.breakdown_json or "{}") if getattr(row, "breakdown_json", None) else {}
+        breakdown = (
+            json.loads(row.breakdown_json or "{}")
+            if getattr(row, "breakdown_json", None)
+            else {}
+        )
     except Exception:
         breakdown = {}
     for asset, data in (breakdown or {}).items():
@@ -2665,24 +3147,36 @@ def _snapshot_wallet_from_asset_row(row) -> Dict[str, Any]:
             total = free + locked + bot_locked
         usd_val = data.get("usdValue")
         usdt_value = float(usd_val) if usd_val is not None else None
-        if total <= 0 and free <= 0 and locked <= 0 and (usdt_value is None or usdt_value <= 0):
+        if (
+            total <= 0
+            and free <= 0
+            and locked <= 0
+            and (usdt_value is None or usdt_value <= 0)
+        ):
             continue
-        assets.append({
-            "asset": asset,
-            "free": free,
-            "locked": locked,
-            "total": total if total > 0 else None,
-            "bot_locked": bot_locked if bot_locked > 0 else None,
-            "usdt_value": round(usdt_value, 2) if usdt_value is not None else None,
-        })
+        assets.append(
+            {
+                "asset": asset,
+                "free": free,
+                "locked": locked,
+                "total": total if total > 0 else None,
+                "bot_locked": bot_locked if bot_locked > 0 else None,
+                "usdt_value": round(usdt_value, 2) if usdt_value is not None else None,
+            }
+        )
     # Sort by usdt_value desc, cap
-    with_val = [(a, (a.get("usdt_value") if a.get("usdt_value") is not None else -1.0)) for a in assets]
+    with_val = [
+        (a, (a.get("usdt_value") if a.get("usdt_value") is not None else -1.0))
+        for a in assets
+    ]
     with_val.sort(key=lambda x: (x[1] < 0, -x[1]))
     assets = [x[0] for x in with_val[:SNAPSHOT_WALLET_MAX_ASSETS]]
     return {"total_usd": round(total_usd, 2), "assets": assets}
 
 
-def _enrich_snapshot_wallet_with_bot_locked(wallet: Dict[str, Any], account_id: int, db: Session) -> None:
+def _enrich_snapshot_wallet_with_bot_locked(
+    wallet: Dict[str, Any], account_id: int, db: Session
+) -> None:
     """
     Snapshot cüzdanına bot kilitli ve kilitli USD alanlarını ekler (strip ve varlık tablosu doğru göstersin).
     Test hesabında tek kaynak: build_test_account_wallet (paper 10k + bot satırları).
@@ -2697,6 +3191,7 @@ def _enrich_snapshot_wallet_with_bot_locked(wallet: Dict[str, Any], account_id: 
             wallet.update(rebuilt)
         return
     from app.botengine.virtual_wallet import get_bot_locked_balances_for_account
+
     if not wallet or not isinstance(wallet.get("assets"), list):
         return
     bot_locked = get_bot_locked_balances_for_account(db, account_id) or {}
@@ -2759,21 +3254,23 @@ def _enrich_snapshot_wallet_with_bot_locked(wallet: Dict[str, Any], account_id: 
             continue
         bl_val = round(bl_qty * price, 2)
         total_bot_locked_usd += bl_val
-        wallet["assets"].append({
-            "asset": asset,
-            "free": 0.0,
-            "locked": 0.0,
-            "total": bl_qty,
-            "bot_locked": round(bl_qty, 8),
-            "available": 0.0,
-            "free_usd": 0.0,
-            "locked_usd": 0.0,
-            "total_usd": bl_val,
-            "usdt_value": bl_val,
-            "bot_locked_usd": bl_val,
-            "available_usd": 0.0,
-            "_synthetic": True,
-        })
+        wallet["assets"].append(
+            {
+                "asset": asset,
+                "free": 0.0,
+                "locked": 0.0,
+                "total": bl_qty,
+                "bot_locked": round(bl_qty, 8),
+                "available": 0.0,
+                "free_usd": 0.0,
+                "locked_usd": 0.0,
+                "total_usd": bl_val,
+                "usdt_value": bl_val,
+                "bot_locked_usd": bl_val,
+                "available_usd": 0.0,
+                "_synthetic": True,
+            }
+        )
         wallet["total_usd"] = round((wallet.get("total_usd") or 0) + bl_val, 2)
     wallet["free_usd"] = round(free_usd_tot, 2)
     wallet["locked_usd"] = round(locked_usd_tot, 2)
@@ -2801,12 +3298,18 @@ def _get_snapshot_wallet_cached(account_id: int, db: Session):
             return (None, None, "none", None)
         ts_utc = None
         if hasattr(ts, "tzinfo"):
-            ts_utc = ts.replace(tzinfo=timezone.utc) if ts.tzinfo is None else ts.astimezone(timezone.utc)
+            ts_utc = (
+                ts.replace(tzinfo=timezone.utc)
+                if ts.tzinfo is None
+                else ts.astimezone(timezone.utc)
+            )
             ts_iso = ts_utc.isoformat()
         else:
             ts_iso = str(ts)
         if not ts_iso.endswith("Z"):
-            ts_iso = ts_iso.replace("+00:00", "Z") if "+00:00" in ts_iso else ts_iso + "Z"
+            ts_iso = (
+                ts_iso.replace("+00:00", "Z") if "+00:00" in ts_iso else ts_iso + "Z"
+            )
         wallet = _snapshot_wallet_from_asset_row(row)
         now = time.time()
         try:
@@ -2816,7 +3319,9 @@ def _get_snapshot_wallet_cached(account_id: int, db: Session):
         age_sec = round(now - ts_epoch, 2) if ts_epoch else None
         return (wallet, ts_iso, "db_snapshot", age_sec)
     except Exception as e:
-        logging.getLogger(__name__).warning("[snapshot] wallet cache read error account_id=%s: %s", account_id, e)
+        logging.getLogger(__name__).warning(
+            "[snapshot] wallet cache read error account_id=%s: %s", account_id, e
+        )
         return (None, None, "none", None)
 
 
@@ -2834,11 +3339,16 @@ def _schedule_snapshot_wallet_refresh(account_id: int, request_id: str) -> bool:
         db2 = SessionLocal()
         try:
             from app.api.routes.home import _do_wallet_refresh
-            await _do_wallet_refresh(account_id, db2, request_id or "snapshot-stale", True)
+
+            await _do_wallet_refresh(
+                account_id, db2, request_id or "snapshot-stale", True
+            )
         except Exception as exc:
             logging.getLogger(__name__).warning(
                 "snapshot_wallet_refresh_failed account_id=%s request_id=%s error=%s",
-                account_id, request_id, str(exc)[:200],
+                account_id,
+                request_id,
+                str(exc)[:200],
             )
         finally:
             try:
@@ -2860,7 +3370,10 @@ def _schedule_snapshot_wallet_refresh(account_id: int, request_id: str) -> bool:
 async def api_dashboard_snapshot(
     request: Request,
     account_id: int = Query(..., description="Account ID"),
-    fields: Optional[str] = Query(None, description="Comma-separated: prices,wallet,bots,kpis. Default: prices,kpis"),
+    fields: Optional[str] = Query(
+        None,
+        description="Comma-separated: prices,wallet,bots,kpis. Default: prices,kpis",
+    ),
     db: Session = Depends(get_db),
     current: dict = Depends(require_auth),
 ):
@@ -2870,18 +3383,25 @@ async def api_dashboard_snapshot(
     """
     t0 = time.perf_counter()
     request_id = getattr(request.state, "request_id", None) or ""
-    from app.core.constants import MAX_SNAPSHOT_BYTES, SNAPSHOT_FIELDS_ENABLED, SNAPSHOT_TRIM_ENABLED
+    from app.core.constants import (
+        MAX_SNAPSHOT_BYTES,
+        SNAPSHOT_FIELDS_ENABLED,
+        SNAPSHOT_TRIM_ENABLED,
+    )
+
     try:
         from app.api.utils.fields import parse_snapshot_fields, ALLOWED_SNAPSHOT_FIELDS
     except ImportError:
         _ALLOWED = {"prices", "wallet", "bots", "kpis"}
         _DEFAULT = ["prices", "kpis"]
+
         def parse_snapshot_fields(fields_param):
             if not fields_param or not fields_param.strip():
                 return (_DEFAULT.copy(), None)
             parts = [p.strip().lower() for p in fields_param.split(",") if p.strip()]
             invalid = [p for p in parts if p not in _ALLOWED]
             return ([], invalid) if invalid else (parts or _DEFAULT.copy(), None)
+
         ALLOWED_SNAPSHOT_FIELDS = _ALLOWED
 
     if SNAPSHOT_FIELDS_ENABLED:
@@ -2896,7 +3416,10 @@ async def api_dashboard_snapshot(
                         "error_id": str(__import__("uuid").uuid4()),
                         "request_id": request_id,
                         "message": "Unknown snapshot fields",
-                        "details": {"invalid_fields": invalid, "allowed": list(ALLOWED_SNAPSHOT_FIELDS)},
+                        "details": {
+                            "invalid_fields": invalid,
+                            "allowed": list(ALLOWED_SNAPSHOT_FIELDS),
+                        },
                     },
                 },
             )
@@ -2917,14 +3440,22 @@ async def api_dashboard_snapshot(
     except ImportError as e:
         raise HTTPException(
             status_code=503,
-            detail={"ok": False, "error": "Snapshot service unavailable (missing app.services.dashboard_snapshot). Deploy or git pull."},
+            detail={
+                "ok": False,
+                "error": "Snapshot service unavailable (missing app.services.dashboard_snapshot). Deploy or git pull.",
+            },
         ) from e
 
     _log = logging.getLogger(__name__)
 
     def _is_api_key_error(e):
         s = str(e)
-        return "401" in s or "Unauthorized" in s or "Invalid API-key" in s or "invalid_api_key" in s.lower()
+        return (
+            "401" in s
+            or "Unauthorized" in s
+            or "Invalid API-key" in s
+            or "invalid_api_key" in s.lower()
+        )
 
     async def _safe(coro, name):
         try:
@@ -2973,7 +3504,11 @@ async def api_dashboard_snapshot(
     bots_raw = by_name.get("bots", {})
     pnl_raw = by_name.get("pnl", {})
 
-    prices = prices_raw if isinstance(prices_raw, dict) and "_error" not in prices_raw else {}
+    prices = (
+        prices_raw
+        if isinstance(prices_raw, dict) and "_error" not in prices_raw
+        else {}
+    )
     pnl = pnl_raw if isinstance(pnl_raw, dict) and "_error" not in pnl_raw else {}
 
     # Wallet: cache-only (DB AssetSnapshot). Never call Binance here.
@@ -2989,9 +3524,17 @@ async def api_dashboard_snapshot(
         if acc:
             ek = getattr(acc, "api_key_enc", None)
             es = getattr(acc, "api_secret_enc", None)
-            keys_configured = bool(ek and es and (not isinstance(ek, str) or ek.strip()) and (not isinstance(es, str) or es.strip()))
-        wallet_cached, wallet_ts_iso, wallet_source, wallet_age_sec = _get_snapshot_wallet_cached(account_id, db)
+            keys_configured = bool(
+                ek
+                and es
+                and (not isinstance(ek, str) or ek.strip())
+                and (not isinstance(es, str) or es.strip())
+            )
+        wallet_cached, wallet_ts_iso, wallet_source, wallet_age_sec = (
+            _get_snapshot_wallet_cached(account_id, db)
+        )
         from app.services.test_account import is_test_account
+
         is_test_wallet = is_test_account(account_id, db)
         if is_test_wallet:
             from app.services.wallet_display import build_test_account_wallet
@@ -3015,18 +3558,28 @@ async def api_dashboard_snapshot(
                 "ts": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             }
         try:
-            stale_threshold_sec = float(os.environ.get("WALLET_SNAPSHOT_WARN_AGE_SEC", "900"))
+            stale_threshold_sec = float(
+                os.environ.get("WALLET_SNAPSHOT_WARN_AGE_SEC", "900")
+            )
         except Exception:
             stale_threshold_sec = 900.0
-        if keys_configured and not is_test_wallet and (wallet_age_sec is None or float(wallet_age_sec) >= stale_threshold_sec):
-            wallet_refresh_scheduled = _schedule_snapshot_wallet_refresh(account_id, request_id)
+        if (
+            keys_configured
+            and not is_test_wallet
+            and (wallet_age_sec is None or float(wallet_age_sec) >= stale_threshold_sec)
+        ):
+            wallet_refresh_scheduled = _schedule_snapshot_wallet_refresh(
+                account_id, request_id
+            )
 
     # On wallet error: use last-known total_usd from cache so UI does not flash to 0 (stale fallback)
     SNAPSHOT_WALLET_STALE_FALLBACK_SEC = 120.0
     last_known_total = None
     if wallet_error and account_id in _wallet_total_cache:
         total_usd, ts = _wallet_total_cache[account_id]
-        if (time.time() - ts) < SNAPSHOT_WALLET_STALE_FALLBACK_SEC and (total_usd is not None and total_usd > 0):
+        if (time.time() - ts) < SNAPSHOT_WALLET_STALE_FALLBACK_SEC and (
+            total_usd is not None and total_usd > 0
+        ):
             last_known_total = float(total_usd)
 
     bots = []
@@ -3036,14 +3589,19 @@ async def api_dashboard_snapshot(
         account_kpis = bots_raw.get("account") or {}
         if wallet and "total_usd" in wallet:
             if is_test_account(account_id, db):
-                account_kpis["spot_balance_usd"] = wallet.get("spot_kpi_total_usd") or wallet.get("total_usd", 0)
+                account_kpis["spot_balance_usd"] = wallet.get(
+                    "spot_kpi_total_usd"
+                ) or wallet.get("total_usd", 0)
             else:
                 account_kpis["spot_balance_usd"] = wallet.get("total_usd", 0)
         elif last_known_total is not None:
             account_kpis["spot_balance_usd"] = last_known_total
         today_tr = _turkey_date_str()
         total_bot_equity = float(bots_raw.get("total_bot_equity_usd", 0) or 0)
-        if is_test_account(account_id, db) and wallet.get("daily_wallet_pnl_usd") is not None:
+        if (
+            is_test_account(account_id, db)
+            and wallet.get("daily_wallet_pnl_usd") is not None
+        ):
             daily_wallet_pnl_usd = float(wallet.get("daily_wallet_pnl_usd") or 0)
             daily_wallet_pnl_pct = float(wallet.get("daily_wallet_pnl_pct") or 0)
         else:
@@ -3052,46 +3610,71 @@ async def api_dashboard_snapshot(
                     wallet.get("spot_kpi_total_usd") or wallet.get("total_usd") or 0
                 )
             else:
-                binance_equity = float(wallet.get("total_usd", 0) or 0) if wallet else (last_known_total or 0.0)
+                binance_equity = (
+                    float(wallet.get("total_usd", 0) or 0)
+                    if wallet
+                    else (last_known_total or 0.0)
+                )
             today_start_utc = turkey_today_start_utc()
             ref_cuzdan = None
             try:
                 last_before_today = (
                     db.query(AssetSnapshot)
-                    .filter(AssetSnapshot.account_id == account_id, AssetSnapshot.timestamp < today_start_utc)
+                    .filter(
+                        AssetSnapshot.account_id == account_id,
+                        AssetSnapshot.timestamp < today_start_utc,
+                    )
                     .order_by(desc(AssetSnapshot.timestamp))
                     .first()
                 )
-                if last_before_today and getattr(last_before_today, "total_usd_value", None) is not None:
+                if (
+                    last_before_today
+                    and getattr(last_before_today, "total_usd_value", None) is not None
+                ):
                     ref_cuzdan = float(last_before_today.total_usd_value)
                 else:
                     first_today = (
                         db.query(AssetSnapshot)
-                        .filter(AssetSnapshot.account_id == account_id, AssetSnapshot.timestamp >= today_start_utc)
+                        .filter(
+                            AssetSnapshot.account_id == account_id,
+                            AssetSnapshot.timestamp >= today_start_utc,
+                        )
                         .order_by(AssetSnapshot.timestamp.asc())
                         .first()
                     )
-                    if first_today and getattr(first_today, "total_usd_value", None) is not None:
+                    if (
+                        first_today
+                        and getattr(first_today, "total_usd_value", None) is not None
+                    ):
                         ref_cuzdan = float(first_today.total_usd_value)
             except Exception:
                 pass
             if ref_cuzdan is None:
                 ref_cuzdan = binance_equity
             daily_wallet_pnl_usd = binance_equity - ref_cuzdan
-            daily_wallet_pnl_pct = (daily_wallet_pnl_usd / ref_cuzdan * 100.0) if ref_cuzdan and ref_cuzdan > 0 else 0.0
+            daily_wallet_pnl_pct = (
+                (daily_wallet_pnl_usd / ref_cuzdan * 100.0)
+                if ref_cuzdan and ref_cuzdan > 0
+                else 0.0
+            )
         ref = _daily_kpi_ref.get(account_id)
         if ref is None or ref.get("ref_date") != today_tr:
             ref = {"ref_date": today_tr, "bots_ref_usd": total_bot_equity}
             _daily_kpi_ref[account_id] = ref
         ref_bots = ref.get("bots_ref_usd") or 0
         daily_bot_pnl_usd_kpi = bots_raw.get("daily_bot_pnl_usd_kpi") or 0
-        daily_bot_pnl_pct_kpi = (daily_bot_pnl_usd_kpi / ref_bots * 100.0) if ref_bots and ref_bots > 0 else 0.0
+        daily_bot_pnl_pct_kpi = (
+            (daily_bot_pnl_usd_kpi / ref_bots * 100.0)
+            if ref_bots and ref_bots > 0
+            else 0.0
+        )
         account_kpis["daily_wallet_pnl_usd"] = round(daily_wallet_pnl_usd, 2)
         account_kpis["daily_wallet_pnl_pct"] = round(daily_wallet_pnl_pct, 2)
         account_kpis["daily_bot_pnl_usd"] = round(daily_bot_pnl_usd_kpi, 2)
         account_kpis["daily_bot_pnl_pct"] = round(daily_bot_pnl_pct_kpi, 2)
 
     from app.services.test_account import is_test_account
+
     account_kpis["is_test_account"] = is_test_account(account_id, db)
 
     elapsed_ms = (time.perf_counter() - t0) * 1000
@@ -3099,6 +3682,7 @@ async def api_dashboard_snapshot(
     prices_ready = True
     try:
         from app.services.data_hub import data_hub
+
         st = data_hub.get_status()
         stale_symbols_count = st.get("stale_symbols_count", 0)
         prices_ready = bool(data_hub.prices)
@@ -3162,8 +3746,12 @@ async def api_dashboard_snapshot(
 
     _log.info(
         "snapshot_served wallet_source=%s wallet_age_sec=%s request_id=%s payload_bytes=%s server_ms=%s fields=%s",
-        wallet_source if need_wallet else "n/a", wallet_age_sec if need_wallet else None, request_id,
-        len(payload_bytes), round(elapsed_ms, 2), requested_fields,
+        wallet_source if need_wallet else "n/a",
+        wallet_age_sec if need_wallet else None,
+        request_id,
+        len(payload_bytes),
+        round(elapsed_ms, 2),
+        requested_fields,
     )
     if "wallet" in data and data.get("wallet") and isinstance(data["wallet"], dict):
         w = data["wallet"]
@@ -3189,6 +3777,7 @@ async def api_dashboard_snapshot(
         )
     try:
         from app.observability.metrics_stubs import record_snapshot
+
         record_snapshot(round(elapsed_ms, 2), len(payload_bytes))
     except Exception:
         pass
@@ -3234,7 +3823,9 @@ def _map_binance_error(e: Exception):
                 status = 429
                 error_code = "BINANCE_RATE_LIMIT"
                 try:
-                    ra = getattr(resp, "headers", None) and resp.headers.get("Retry-After")
+                    ra = getattr(resp, "headers", None) and resp.headers.get(
+                        "Retry-After"
+                    )
                     if ra is not None:
                         retry_after = int(ra) if str(ra).isdigit() else 10
                 except Exception:
@@ -3251,7 +3842,12 @@ def _map_binance_error(e: Exception):
             elif 500 <= sc < 600:
                 error_code = "BINANCE_UPSTREAM_ERROR"
                 status = 502
-    detail = {"error_code": error_code, "message": message, "details": {}, "retry_after": retry_after}
+    detail = {
+        "error_code": error_code,
+        "message": message,
+        "details": {},
+        "retry_after": retry_after,
+    }
     if status == 429:
         detail["retry_after"] = retry_after
     raise HTTPException(status_code=status, detail=detail)
@@ -3262,7 +3858,9 @@ def _map_binance_error(e: Exception):
 FIAT_ASSETS = {"TRY", "EUR", "GBP"}
 
 
-def _resolve_asset_price_usd(asset: str, free: float, locked: float, prices: dict) -> tuple:
+def _resolve_asset_price_usd(
+    asset: str, free: float, locked: float, prices: dict
+) -> tuple:
     """
     Returns (free_val, locked_val) in USD or (None, None) if unpriced.
     Tries: {asset}USDT, {asset}BUSD, {asset}FDUSD, {asset}USDC (quote per 1 base),
@@ -3319,21 +3917,23 @@ def _wallet_response(
             if free_val is None:
                 unpriced_assets.append(asset)
                 available_qty = max(0.0, free - bot_locked_qty)
-                assets.append({
-                    "asset": asset,
-                    "free": free,
-                    "locked": locked,
-                    "total": free + locked,
-                    "bot_locked": round(bot_locked_qty, 8),
-                    "available": round(available_qty, 8),
-                    "price_usd": None,
-                    "value_usd": None,
-                    "free_usd": None,
-                    "locked_usd": None,
-                    "total_usd": None,
-                    "bot_locked_usd": None,
-                    "available_usd": None,
-                })
+                assets.append(
+                    {
+                        "asset": asset,
+                        "free": free,
+                        "locked": locked,
+                        "total": free + locked,
+                        "bot_locked": round(bot_locked_qty, 8),
+                        "available": round(available_qty, 8),
+                        "price_usd": None,
+                        "value_usd": None,
+                        "free_usd": None,
+                        "locked_usd": None,
+                        "total_usd": None,
+                        "bot_locked_usd": None,
+                        "available_usd": None,
+                    }
+                )
                 continue
             total_qty = free + locked
             price_usd = (free_val + locked_val) / total_qty if total_qty > 0 else None
@@ -3349,21 +3949,23 @@ def _wallet_response(
         free_usd_rounded = round(free_val, 2)
         locked_usd_rounded = round(locked_val, 2)
         total_bot_locked_usd += bot_locked_val
-        assets.append({
-            "asset": asset,
-            "free": free,
-            "locked": locked,
-            "total": total_qty,
-            "bot_locked": round(bot_locked_qty, 8),
-            "available": round(available_qty, 8),
-            "price_usd": round(price_usd, 8) if price_usd is not None else None,
-            "value_usd": value_usd,
-            "free_usd": free_usd_rounded,
-            "locked_usd": locked_usd_rounded,
-            "total_usd": value_usd,
-            "bot_locked_usd": round(bot_locked_val, 2),
-            "available_usd": round(available_val, 2),
-        })
+        assets.append(
+            {
+                "asset": asset,
+                "free": free,
+                "locked": locked,
+                "total": total_qty,
+                "bot_locked": round(bot_locked_qty, 8),
+                "available": round(available_qty, 8),
+                "price_usd": round(price_usd, 8) if price_usd is not None else None,
+                "value_usd": value_usd,
+                "free_usd": free_usd_rounded,
+                "locked_usd": locked_usd_rounded,
+                "total_usd": value_usd,
+                "bot_locked_usd": round(bot_locked_val, 2),
+                "available_usd": round(available_val, 2),
+            }
+        )
         total_usd += value_usd
         free_usd += free_usd_rounded
         locked_usd += locked_usd_rounded
@@ -3376,29 +3978,33 @@ def _wallet_response(
             price_usd = 1.0
             value_usd = float(qty) * price_usd
         else:
-            free_val, locked_val = _resolve_asset_price_usd(asset, float(qty), 0.0, prices)
+            free_val, locked_val = _resolve_asset_price_usd(
+                asset, float(qty), 0.0, prices
+            )
             if free_val is None:
                 continue
             price_usd = free_val / float(qty) if float(qty) > 0 else None
             value_usd = free_val
         total_bot_locked_usd += value_usd
         total_usd += round(value_usd, 2)
-        assets.append({
-            "asset": asset,
-            "free": 0.0,
-            "locked": 0.0,
-            "total": float(qty),
-            "bot_locked": round(float(qty), 8),
-            "available": 0.0,
-            "price_usd": round(price_usd, 8) if price_usd is not None else None,
-            "value_usd": round(value_usd, 2),
-            "free_usd": 0.0,
-            "locked_usd": 0.0,
-            "total_usd": round(value_usd, 2),
-            "bot_locked_usd": round(value_usd, 2),
-            "available_usd": 0.0,
-            "_synthetic": True,
-        })
+        assets.append(
+            {
+                "asset": asset,
+                "free": 0.0,
+                "locked": 0.0,
+                "total": float(qty),
+                "bot_locked": round(float(qty), 8),
+                "available": 0.0,
+                "price_usd": round(price_usd, 8) if price_usd is not None else None,
+                "value_usd": round(value_usd, 2),
+                "free_usd": 0.0,
+                "locked_usd": 0.0,
+                "total_usd": round(value_usd, 2),
+                "bot_locked_usd": round(value_usd, 2),
+                "available_usd": 0.0,
+                "_synthetic": True,
+            }
+        )
     available_usd = max(0.0, free_usd - total_bot_locked_usd)
     ts_iso = datetime.utcnow().isoformat() + "Z"
     ts_ms = int(time.time() * 1000)
@@ -3423,8 +4029,9 @@ async def _fetch_wallet_uncached(account_id: int, db: Session):
     Fiyat: ticker/24hr (weightedAvgPrice > lastPrice) Binance UI'ya yakın; yoksa DataHub + ticker/price.
     Test hesabında: API key yok; 10.000 USDT paper bakiye döner (Binance uyarısı kalkar, KPI 10k gösterir).
     """
-    from app.services.test_account import is_test_account, TEST_PAPER_BALANCE_USDT
+    from app.services.test_account import is_test_account
     from app.botengine.virtual_wallet import get_bot_locked_balances_for_account
+
     if is_test_account(account_id, db):
         from app.services.wallet_display import build_test_account_wallet
 
@@ -3432,16 +4039,17 @@ async def _fetch_wallet_uncached(account_id: int, db: Session):
     from app.services.binance_assets import get_account_keys
     from app.services.binance_spot import get_wallet
     from app.services.wallet_pricing import build_wallet_price_map
+
     keys = await get_account_keys(account_id, db)
     wallet_data = await get_wallet(keys, tag="wallet_snapshot")
     balances = wallet_data.get("balances") or []
     price_map = await build_wallet_price_map(balances, testnet=keys.testnet)
-    from app.botengine.virtual_wallet import get_bot_locked_balances_for_account
     bot_locked = get_bot_locked_balances_for_account(db, account_id)
     out = _wallet_response(account_id, balances, price_map, bot_locked=bot_locked)
     out["keys_configured"] = True
     try:
         from app.services.binance_connectivity import note_binance_success
+
         note_binance_success(account_id)
     except Exception:
         pass
@@ -3449,7 +4057,11 @@ async def _fetch_wallet_uncached(account_id: int, db: Session):
 
 
 def _get_request_id(request: Request) -> Optional[str]:
-    return getattr(request.state, "request_id", None) if hasattr(request, "state") else None
+    return (
+        getattr(request.state, "request_id", None)
+        if hasattr(request, "state")
+        else None
+    )
 
 
 @router.get("/binance/wallet")
@@ -3468,6 +4080,7 @@ async def api_binance_wallet(
     """
     require_account_access(current, account_id)
     import logging
+
     log = logging.getLogger(__name__)
     request_id = _get_request_id(request)
     now = time.time()
@@ -3480,7 +4093,12 @@ async def api_binance_wallet(
             if now - ts < WALLET_RESPONSE_CACHE_TTL:
                 global _wallet_cache_hits
                 _wallet_cache_hits += 1
-                log.info("wallet cache_hit=true upstream_call=false account_id=%s request_id=%s age_sec=%.2f", account_id, request_id, now - ts)
+                log.info(
+                    "wallet cache_hit=true upstream_call=false account_id=%s request_id=%s age_sec=%.2f",
+                    account_id,
+                    request_id,
+                    now - ts,
+                )
                 log_wallet_trace(
                     event="wallet_payload_out",
                     request_id=request_id or "",
@@ -3498,14 +4116,22 @@ async def api_binance_wallet(
                 return cached
         if account_id in _wallet_inflight:
             task = _wallet_inflight[account_id]
-            log.info("wallet cache_hit=false upstream_call=false in_flight_reuse account_id=%s request_id=%s", account_id, request_id)
+            log.info(
+                "wallet cache_hit=false upstream_call=false in_flight_reuse account_id=%s request_id=%s",
+                account_id,
+                request_id,
+            )
         else:
             global _wallet_cache_misses
             _wallet_cache_misses += 1
             task = asyncio.create_task(_fetch_wallet_uncached(account_id, db))
             _wallet_inflight[account_id] = task
             is_creator = True
-            log.info("wallet cache_hit=false upstream_call=true account_id=%s request_id=%s", account_id, request_id)
+            log.info(
+                "wallet cache_hit=false upstream_call=true account_id=%s request_id=%s",
+                account_id,
+                request_id,
+            )
 
     t0 = time.perf_counter()
     try:
@@ -3513,23 +4139,36 @@ async def api_binance_wallet(
     except Exception as e:
         if is_creator:
             async with _wallet_cache_lock:
-                if account_id in _wallet_inflight and _wallet_inflight[account_id] == task:
+                if (
+                    account_id in _wallet_inflight
+                    and _wallet_inflight[account_id] == task
+                ):
                     del _wallet_inflight[account_id]
         if isinstance(e, ValueError):
             code = str(e)
             if code == "ACCOUNT_NOT_FOUND":
-                raise HTTPException(status_code=404, detail={"error_code": code, "message": "Account not found"})
+                raise HTTPException(
+                    status_code=404,
+                    detail={"error_code": code, "message": "Account not found"},
+                )
             from app.services.binance_assets import KEY_ERROR_CODES
+
             if code in KEY_ERROR_CODES:
                 out = _wallet_response(account_id, [], {})
                 out["keys_configured"] = False
                 if code == "ACCOUNT_KEYS_DECRYPT_FAIL":
-                    out["message"] = "API anahtarları decrypt edilemedi. MASTER_KEY veya env farklı olabilir. Anahtarı Ayarlar üzerinden yeniden kaydedin."
+                    out["message"] = (
+                        "API anahtarları decrypt edilemedi. MASTER_KEY veya env farklı olabilir. Anahtarı Ayarlar üzerinden yeniden kaydedin."
+                    )
                     out["_error_code"] = code
                 else:
-                    out["message"] = "Binance API anahtarları tanımlı değil. Ayarlar üzerinden API Key ve Secret ekleyin."
+                    out["message"] = (
+                        "Binance API anahtarları tanımlı değil. Ayarlar üzerinden API Key ve Secret ekleyin."
+                    )
                 return out
-            raise HTTPException(status_code=400, detail={"error_code": "ACCOUNT_ERROR", "message": code})
+            raise HTTPException(
+                status_code=400, detail={"error_code": "ACCOUNT_ERROR", "message": code}
+            )
         # Serve stale: 429/401/400(-2015)/5xx/timeout → 200 + cache if exists, else 200 + boş/stale (UI'a 429 göndermiyoruz)
         upstream_status = getattr(getattr(e, "response", None), "status_code", None)
         invalid_key = _is_binance_invalid_key(e)
@@ -3538,13 +4177,20 @@ async def api_binance_wallet(
                 cached, _ = _wallet_response_cache[account_id]
                 stale = dict(cached)
                 stale["data_status"] = "stale"
-                stale["stale_reason"] = "invalid_api_key" if invalid_key else "upstream_rate_limit"
+                stale["stale_reason"] = (
+                    "invalid_api_key" if invalid_key else "upstream_rate_limit"
+                )
                 stale["retry_after"] = 10
                 if invalid_key:
-                    stale["message"] = "Binance API anahtarı veya IP izni geçersiz (401/-2015). Binance hesabında API Key ve IP kısıtlamasını kontrol edin."
+                    stale["message"] = (
+                        "Binance API anahtarı veya IP izni geçersiz (401/-2015). Binance hesabında API Key ve IP kısıtlamasını kontrol edin."
+                    )
                 try:
                     from app.services.binance_connectivity import note_binance_failure
-                    err_code = "API_UNAUTHORIZED" if invalid_key else "BINANCE_UNREACHABLE"
+
+                    err_code = (
+                        "API_UNAUTHORIZED" if invalid_key else "BINANCE_UNREACHABLE"
+                    )
                     note_binance_failure(
                         account_id,
                         err_code,
@@ -3554,27 +4200,47 @@ async def api_binance_wallet(
                 except Exception:
                     pass
                 if invalid_key:
-                    log.debug("wallet serve_stale=200 cache_hit=true upstream_failed account_id=%s reason=invalid_api_key", account_id)
+                    log.debug(
+                        "wallet serve_stale=200 cache_hit=true upstream_failed account_id=%s reason=invalid_api_key",
+                        account_id,
+                    )
                 else:
-                    log.debug("wallet serve_stale=200 cache_hit=true upstream_failed account_id=%s request_id=%s reason=%s error=%s", account_id, request_id, stale["stale_reason"], type(e).__name__)
+                    log.debug(
+                        "wallet serve_stale=200 cache_hit=true upstream_failed account_id=%s request_id=%s reason=%s error=%s",
+                        account_id,
+                        request_id,
+                        stale["stale_reason"],
+                        type(e).__name__,
+                    )
                 return stale
         # Cache boş + upstream hata → UI'a 429 göndermiyoruz; 200 + boş cüzdan + stale metadata
         reason = "invalid_api_key" if invalid_key else "upstream_rate_limit"
         if invalid_key:
-            log.debug("wallet upstream_error reason=invalid_api_key account_id=%s (API anahtarı yok/geçersiz; manager logda gösterme)", account_id)
+            log.debug(
+                "wallet upstream_error reason=invalid_api_key account_id=%s (API anahtarı yok/geçersiz; manager logda gösterme)",
+                account_id,
+            )
         elif await _should_log_upstream_error("wallet", account_id, reason):
             log.warning(
                 "wallet upstream_error status=%s reason=%s source=upstream cache_empty=true account_id=%s request_id=%s error=%s (200+boş/stale dönülüyor)",
                 upstream_status if upstream_status is not None else "?",
                 reason,
-                account_id, request_id, type(e).__name__,
+                account_id,
+                request_id,
+                type(e).__name__,
             )
         else:
-            log.debug("wallet upstream_error throttled account_id=%s reason=%s", account_id, reason)
+            log.debug(
+                "wallet upstream_error throttled account_id=%s reason=%s",
+                account_id,
+                reason,
+            )
         out = _wallet_response(account_id, [], {})
         out["keys_configured"] = True
         out["data_status"] = "stale"
-        out["stale_reason"] = "invalid_api_key" if invalid_key else "upstream_rate_limit"
+        out["stale_reason"] = (
+            "invalid_api_key" if invalid_key else "upstream_rate_limit"
+        )
         out["retry_after"] = 10
         out["request_id"] = request_id
         out["message"] = (
@@ -3584,6 +4250,7 @@ async def api_binance_wallet(
         )
         try:
             from app.services.binance_connectivity import note_binance_failure
+
             err_code = "API_UNAUTHORIZED" if invalid_key else "BINANCE_UNREACHABLE"
             note_binance_failure(account_id, err_code, out["message"], "wallet")
         except Exception:
@@ -3595,7 +4262,9 @@ async def api_binance_wallet(
         async with _wallet_cache_lock:
             _wallet_response_cache[account_id] = (out, time.time())
             _wallet_total_cache[account_id] = (out.get("total_usd") or 0, time.time())
-            _dashboard_summary_cache.pop(account_id, None)  # next /dashboard/summary sees fresh wallet
+            _dashboard_summary_cache.pop(
+                account_id, None
+            )  # next /dashboard/summary sees fresh wallet
             if len(_wallet_response_cache) > _WALLET_CACHE_MAX_KEYS:
                 oldest = min(_wallet_response_cache.items(), key=lambda x: x[1][1])
                 aid = oldest[0]
@@ -3619,10 +4288,14 @@ async def api_binance_wallet(
         )
         log.info(
             "wallet cache_hit=false upstream_call=true upstream_ok account_id=%s latency_ms=%.0f request_id=%s total_usd=%s",
-            account_id, latency_ms, request_id, out.get("total_usd"),
+            account_id,
+            latency_ms,
+            request_id,
+            out.get("total_usd"),
         )
         try:
             from app.services.binance_connectivity import note_binance_success
+
             note_binance_success(account_id)
         except Exception:
             pass
@@ -3663,6 +4336,7 @@ async def api_debug_wallet_diag(
     }
     from app.db.models import AssetSnapshot
     from app.services.binance_assets import get_account_keys
+
     acc = db.query(Account).filter(Account.id == account_id).first()
     if acc:
         ek = getattr(acc, "api_key_enc", None)
@@ -3670,27 +4344,44 @@ async def api_debug_wallet_diag(
         result["key_len"] = len(ek or "")
         result["secret_len"] = len(es or "")
         result["keys_configured"] = bool(
-            result["key_len"] > 0 and result["secret_len"] > 0
+            result["key_len"] > 0
+            and result["secret_len"] > 0
             and (not isinstance(ek, str) or ek.strip())
             and (not isinstance(es, str) or es.strip())
         )
         if result["keys_configured"]:
             try:
                 keys = await get_account_keys(account_id, db)
-                result["decrypt_ok"] = bool(keys and keys.get("api_key") and keys.get("api_secret"))
+                result["decrypt_ok"] = bool(
+                    keys and keys.get("api_key") and keys.get("api_secret")
+                )
             except Exception as e:
                 result["decrypt_ok"] = False
                 result["decrypt_error"] = str(e)[:200]
-                result["last_error_code"] = str(e) if isinstance(e, ValueError) else type(e).__name__
-    row = db.query(AssetSnapshot).filter(AssetSnapshot.account_id == account_id).order_by(desc(AssetSnapshot.timestamp)).limit(1).first()
+                result["last_error_code"] = (
+                    str(e) if isinstance(e, ValueError) else type(e).__name__
+                )
+    row = (
+        db.query(AssetSnapshot)
+        .filter(AssetSnapshot.account_id == account_id)
+        .order_by(desc(AssetSnapshot.timestamp))
+        .limit(1)
+        .first()
+    )
     if row:
-        result["last_snapshot_at"] = row.timestamp.isoformat().replace("+00:00", "Z") if row.timestamp.tzinfo else str(row.timestamp)
+        result["last_snapshot_at"] = (
+            row.timestamp.isoformat().replace("+00:00", "Z")
+            if row.timestamp.tzinfo
+            else str(row.timestamp)
+        )
         result["snapshot_total_usd"] = row.total_usd_value
         try:
             bd = json.loads(row.breakdown_json or "{}")
             result["snapshot_asset_count"] = sum(
-                1 for v in (bd or {}).values()
-                if isinstance(v, dict) and ((float(v.get("free") or 0) + float(v.get("locked") or 0)) > 0)
+                1
+                for v in (bd or {}).values()
+                if isinstance(v, dict)
+                and ((float(v.get("free") or 0) + float(v.get("locked") or 0)) > 0)
             )
         except Exception:
             result["snapshot_asset_count"] = None
@@ -3702,35 +4393,62 @@ async def api_debug_wallet_diag(
             result["wallet_cache_total_usd"] = cached.get("total_usd")
             result["wallet_cache_asset_count"] = len(cached.get("assets") or [])
     try:
-        live = await asyncio.wait_for(_fetch_wallet_uncached(account_id, db), timeout=3.0)
+        live = await asyncio.wait_for(
+            _fetch_wallet_uncached(account_id, db), timeout=3.0
+        )
         if isinstance(live, dict) and live.get("_error"):
             ec = live.get("code") or live.get("_error_code")
             if ec and result.get("last_error_code") is None:
                 result["last_error_code"] = ec
-            result["live_fetch"] = {"ok": False, "error": str(live.get("_error", ""))[:200], "error_code": ec}
+            result["live_fetch"] = {
+                "ok": False,
+                "error": str(live.get("_error", ""))[:200],
+                "error_code": ec,
+            }
         else:
             result["live_fetch"] = {
                 "ok": True,
                 "total_usd": live.get("total_usd") if isinstance(live, dict) else None,
-                "asset_count": len(live.get("assets") or []) if isinstance(live, dict) else 0,
+                "asset_count": len(live.get("assets") or [])
+                if isinstance(live, dict)
+                else 0,
             }
     except asyncio.TimeoutError:
-        result["live_fetch"] = {"ok": False, "error": "timeout", "error_code": "TIMEOUT"}
+        result["live_fetch"] = {
+            "ok": False,
+            "error": "timeout",
+            "error_code": "TIMEOUT",
+        }
     except Exception as e:
-        result["live_fetch"] = {"ok": False, "error": str(e)[:200], "error_code": type(e).__name__}
+        result["live_fetch"] = {
+            "ok": False,
+            "error": str(e)[:200],
+            "error_code": type(e).__name__,
+        }
     return {"ok": True, "data": result}
 
 
-def _open_orders_response(account_id: int, orders: list, keys_configured: bool = True) -> dict:
-    return {"account_id": account_id, "orders": orders, "count": len(orders), "keys_configured": keys_configured}
+def _open_orders_response(
+    account_id: int, orders: list, keys_configured: bool = True
+) -> dict:
+    return {
+        "account_id": account_id,
+        "orders": orders,
+        "count": len(orders),
+        "keys_configured": keys_configured,
+    }
 
 
-async def _fetch_open_orders_uncached(account_id: int, symbol: Optional[str], db: Session) -> dict:
+async def _fetch_open_orders_uncached(
+    account_id: int, symbol: Optional[str], db: Session
+) -> dict:
     from app.services.test_account import is_test_account
+
     if is_test_account(account_id, db):
         return _open_orders_response(account_id, [], True)
     from app.services.binance_assets import get_account_keys
     from app.services.binance_spot import get_open_orders
+
     keys = await get_account_keys(account_id, db)
     orders = await get_open_orders(keys, symbol)
     return _open_orders_response(account_id, orders, True)
@@ -3741,10 +4459,11 @@ async def api_binance_open_orders(
     request: Request,
     account_id: int = Query(..., description="Account ID"),
     symbol: Optional[str] = Query(None),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     """Binance açık emirler: TTL 2s + in-flight dedupe; 429 → serve stale. Anahtar yoksa 200 + boş liste."""
     import logging
+
     log = logging.getLogger(__name__)
     request_id = _get_request_id(request)
     now = time.time()
@@ -3758,37 +4477,63 @@ async def api_binance_open_orders(
             if now - ts < OPEN_ORDERS_CACHE_TTL:
                 global _open_orders_cache_hits
                 _open_orders_cache_hits += 1
-                log.debug("open_orders cache_hit=true upstream_call=false account_id=%s request_id=%s", account_id, request_id)
+                log.debug(
+                    "open_orders cache_hit=true upstream_call=false account_id=%s request_id=%s",
+                    account_id,
+                    request_id,
+                )
                 return cached
         if cache_key in _open_orders_inflight:
             task = _open_orders_inflight[cache_key]
-            log.debug("open_orders cache_hit=false upstream_call=false in_flight_reuse account_id=%s request_id=%s", account_id, request_id)
+            log.debug(
+                "open_orders cache_hit=false upstream_call=false in_flight_reuse account_id=%s request_id=%s",
+                account_id,
+                request_id,
+            )
         else:
             global _open_orders_cache_misses
             _open_orders_cache_misses += 1
-            task = asyncio.create_task(_fetch_open_orders_uncached(account_id, symbol or None, db))
+            task = asyncio.create_task(
+                _fetch_open_orders_uncached(account_id, symbol or None, db)
+            )
             _open_orders_inflight[cache_key] = task
             is_creator = True
-            log.debug("open_orders cache_hit=false upstream_call=true account_id=%s request_id=%s", account_id, request_id)
+            log.debug(
+                "open_orders cache_hit=false upstream_call=true account_id=%s request_id=%s",
+                account_id,
+                request_id,
+            )
 
     try:
         out = await asyncio.wait_for(task, timeout=12.0)
     except ValueError as e:
         if is_creator:
             async with _open_orders_cache_lock:
-                if cache_key in _open_orders_inflight and _open_orders_inflight[cache_key] == task:
+                if (
+                    cache_key in _open_orders_inflight
+                    and _open_orders_inflight[cache_key] == task
+                ):
                     del _open_orders_inflight[cache_key]
         code = str(e)
         if code == "ACCOUNT_NOT_FOUND":
-            raise HTTPException(status_code=404, detail={"error_code": code, "message": "Account not found"})
+            raise HTTPException(
+                status_code=404,
+                detail={"error_code": code, "message": "Account not found"},
+            )
         from app.services.binance_assets import KEY_ERROR_CODES
+
         if code in KEY_ERROR_CODES:
             return _open_orders_response(account_id, [], False)
-        raise HTTPException(status_code=400, detail={"error_code": "ACCOUNT_ERROR", "message": code})
+        raise HTTPException(
+            status_code=400, detail={"error_code": "ACCOUNT_ERROR", "message": code}
+        )
     except Exception as e:
         if is_creator:
             async with _open_orders_cache_lock:
-                if cache_key in _open_orders_inflight and _open_orders_inflight[cache_key] == task:
+                if (
+                    cache_key in _open_orders_inflight
+                    and _open_orders_inflight[cache_key] == task
+                ):
                     del _open_orders_inflight[cache_key]
         upstream_status = getattr(getattr(e, "response", None), "status_code", None)
         invalid_key = _is_binance_invalid_key(e)
@@ -3797,31 +4542,55 @@ async def api_binance_open_orders(
                 cached, _ = _open_orders_cache[cache_key]
                 stale = dict(cached)
                 stale["data_status"] = "stale"
-                stale["stale_reason"] = "invalid_api_key" if invalid_key else "upstream_rate_limit"
+                stale["stale_reason"] = (
+                    "invalid_api_key" if invalid_key else "upstream_rate_limit"
+                )
                 stale["retry_after"] = 10
                 if invalid_key:
-                    stale["message"] = "Binance API anahtarı veya IP izni geçersiz (401/-2015). Binance hesabında API Key ve IP kısıtlamasını kontrol edin."
+                    stale["message"] = (
+                        "Binance API anahtarı veya IP izni geçersiz (401/-2015). Binance hesabında API Key ve IP kısıtlamasını kontrol edin."
+                    )
                 if invalid_key:
-                    log.debug("open_orders serve_stale=200 cache_hit=true upstream_failed account_id=%s reason=invalid_api_key", account_id)
+                    log.debug(
+                        "open_orders serve_stale=200 cache_hit=true upstream_failed account_id=%s reason=invalid_api_key",
+                        account_id,
+                    )
                 else:
-                    log.debug("open_orders serve_stale=200 cache_hit=true upstream_failed account_id=%s request_id=%s reason=%s error=%s", account_id, request_id, stale["stale_reason"], type(e).__name__)
+                    log.debug(
+                        "open_orders serve_stale=200 cache_hit=true upstream_failed account_id=%s request_id=%s reason=%s error=%s",
+                        account_id,
+                        request_id,
+                        stale["stale_reason"],
+                        type(e).__name__,
+                    )
                 return stale
         # Cache boş + upstream hata → UI'a 429 göndermiyoruz; 200 + boş liste + stale metadata
         reason = "invalid_api_key" if invalid_key else "upstream_rate_limit"
         if invalid_key:
-            log.debug("open_orders upstream_error reason=invalid_api_key account_id=%s (API anahtarı yok/geçersiz; manager logda gösterme)", account_id)
+            log.debug(
+                "open_orders upstream_error reason=invalid_api_key account_id=%s (API anahtarı yok/geçersiz; manager logda gösterme)",
+                account_id,
+            )
         elif await _should_log_upstream_error("open_orders", account_id, reason):
             log.warning(
                 "open_orders upstream_error status=%s reason=%s source=upstream cache_empty=true account_id=%s request_id=%s error=%s (200+boş/stale dönülüyor)",
                 upstream_status if upstream_status is not None else "?",
                 reason,
-                account_id, request_id, type(e).__name__,
+                account_id,
+                request_id,
+                type(e).__name__,
             )
         else:
-            log.debug("open_orders upstream_error throttled account_id=%s reason=%s", account_id, reason)
+            log.debug(
+                "open_orders upstream_error throttled account_id=%s reason=%s",
+                account_id,
+                reason,
+            )
         out = _open_orders_response(account_id, [], True)
         out["data_status"] = "stale"
-        out["stale_reason"] = "invalid_api_key" if invalid_key else "upstream_rate_limit"
+        out["stale_reason"] = (
+            "invalid_api_key" if invalid_key else "upstream_rate_limit"
+        )
         out["retry_after"] = 10
         out["request_id"] = request_id
         out["message"] = (
@@ -3837,7 +4606,10 @@ async def api_binance_open_orders(
             if len(_open_orders_cache) > _OPEN_ORDERS_CACHE_MAX_KEYS:
                 oldest_key = min(_open_orders_cache.items(), key=lambda x: x[1][1])[0]
                 _open_orders_cache.pop(oldest_key, None)
-            if cache_key in _open_orders_inflight and _open_orders_inflight[cache_key] == task:
+            if (
+                cache_key in _open_orders_inflight
+                and _open_orders_inflight[cache_key] == task
+            ):
                 del _open_orders_inflight[cache_key]
     return out
 
@@ -3854,12 +4626,15 @@ class OrderRequest(BaseModel):
 
 
 @router.post("/binance/order")
-async def place_binance_order(order: OrderRequest, request: Request, db: Session = Depends(get_db)):
+async def place_binance_order(
+    order: OrderRequest, request: Request, db: Session = Depends(get_db)
+):
     """Binance spot emir: signed POST /api/v3/order. Worker-only: web returns 403 WORKER_ONLY_OPERATION."""
     try:
         from app.core.errors import AppError
         from app.services.binance_assets import get_account_keys
         from app.services.binance_spot import place_order as binance_place_order
+
         keys = await get_account_keys(order.account_id, db)
         payload = {
             "symbol": (order.symbol or "").upper(),
@@ -3880,11 +4655,23 @@ async def place_binance_order(order: OrderRequest, request: Request, db: Session
     except ValueError as e:
         code = str(e)
         if code == "ACCOUNT_NOT_FOUND":
-            raise HTTPException(status_code=404, detail={"error_code": code, "message": "Account not found"})
+            raise HTTPException(
+                status_code=404,
+                detail={"error_code": code, "message": "Account not found"},
+            )
         from app.services.binance_assets import KEY_ERROR_CODES
+
         if code in KEY_ERROR_CODES:
-            raise HTTPException(status_code=400, detail={"error_code": code, "message": "Binance API anahtarları bu hesap için tanımlı değil veya geçersiz. Ayarlar üzerinden API Key ve Secret ekleyin."})
-        raise HTTPException(status_code=400, detail={"error_code": "ACCOUNT_ERROR", "message": code})
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error_code": code,
+                    "message": "Binance API anahtarları bu hesap için tanımlı değil veya geçersiz. Ayarlar üzerinden API Key ve Secret ekleyin.",
+                },
+            )
+        raise HTTPException(
+            status_code=400, detail={"error_code": "ACCOUNT_ERROR", "message": code}
+        )
     except Exception as e:
         _map_binance_error(e)
 
@@ -3894,12 +4681,13 @@ async def cancel_binance_order(
     account_id: int = Query(...),
     symbol: str = Query(...),
     order_id: int = Query(...),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     """Binance emir iptali: DELETE /api/v3/order."""
     try:
         from app.services.binance_assets import get_account_keys
         from app.services.binance_spot import cancel_order
+
         keys = await get_account_keys(account_id, db)
         result = await cancel_order(keys, symbol, order_id)
         return {
@@ -3912,22 +4700,40 @@ async def cancel_binance_order(
     except ValueError as e:
         code = str(e)
         if code == "ACCOUNT_NOT_FOUND":
-            raise HTTPException(status_code=404, detail={"error_code": code, "message": "Account not found"})
+            raise HTTPException(
+                status_code=404,
+                detail={"error_code": code, "message": "Account not found"},
+            )
         from app.services.binance_assets import KEY_ERROR_CODES
+
         if code in KEY_ERROR_CODES:
             raise HTTPException(
                 status_code=400,
-                detail={"error_code": code, "message": "Binance API anahtarları tanımlı değil. Ayarlardan API Key ve Secret ekleyin."}
+                detail={
+                    "error_code": code,
+                    "message": "Binance API anahtarları tanımlı değil. Ayarlardan API Key ve Secret ekleyin.",
+                },
             )
-        raise HTTPException(status_code=400, detail={"error_code": "ACCOUNT_ERROR", "message": code})
+        raise HTTPException(
+            status_code=400, detail={"error_code": "ACCOUNT_ERROR", "message": code}
+        )
     except Exception as e:
         _map_binance_error(e)
 
 
 @router.get("/binance/fee-rates")
-async def get_binance_fee_rates(account_id: int = Query(...), db: Session = Depends(get_db)):
+async def get_binance_fee_rates(
+    account_id: int = Query(...), db: Session = Depends(get_db)
+):
     """Binance kaldırıldı – varsayılan fee"""
-    return {"fee_rates": {"taker": 0.001, "maker": 0.001, "taker_pct": 0.1, "maker_pct": 0.1}}
+    return {
+        "fee_rates": {
+            "taker": 0.001,
+            "maker": 0.001,
+            "taker_pct": 0.1,
+            "maker_pct": 0.1,
+        }
+    }
 
 
 @router.get("/binance/order-history")
@@ -3935,10 +4741,16 @@ async def get_binance_order_history(
     account_id: int = Query(...),
     symbol: Optional[str] = Query(None),
     limit: int = Query(100),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     """Binance kaldırıldı – boş emir/trade listesi"""
-    return {"account_id": account_id, "orders": [], "trades": [], "orders_count": 0, "trades_count": 0}
+    return {
+        "account_id": account_id,
+        "orders": [],
+        "trades": [],
+        "orders_count": 0,
+        "trades_count": 0,
+    }
 
 
 @router.get("/binance/coin-list")
@@ -3952,16 +4764,17 @@ async def get_binance_coin_list(limit: int = Query(100), db: Session = Depends(g
 # ============================================================
 # In-memory cache for modal data (capped for RAM stability)
 _modal_cache = {
-    "prices": {},      # symbol -> {price, ts}
-    "balances": {},    # account_id -> {data, ts}
-    "filters": {},     # symbol -> {data, ts}
+    "prices": {},  # symbol -> {price, ts}
+    "balances": {},  # account_id -> {data, ts}
+    "filters": {},  # symbol -> {data, ts}
 }
-CACHE_TTL_PRICE = 2      # 2 seconds
-CACHE_TTL_BALANCE = 3   # 3 seconds
+CACHE_TTL_PRICE = 2  # 2 seconds
+CACHE_TTL_BALANCE = 3  # 3 seconds
 CACHE_TTL_FILTER = 6 * 60 * 60  # 6 hours
 _MODAL_CACHE_MAX_PRICES = 200
 _MODAL_CACHE_MAX_BALANCES = 40
 _MODAL_CACHE_MAX_FILTERS = 120
+
 
 def _get_cached_price(symbol: str) -> Optional[float]:
     """Get cached price if fresh"""
@@ -3974,12 +4787,14 @@ def _get_cached_price(symbol: str) -> Optional[float]:
         return None
     return entry["price"]
 
+
 def _set_cached_price(symbol: str, price: float):
     """Cache price (max entries to limit RAM)."""
     _modal_cache["prices"][symbol] = {"price": price, "ts": time.time()}
     if len(_modal_cache["prices"]) > _MODAL_CACHE_MAX_PRICES:
         oldest = min(_modal_cache["prices"].items(), key=lambda x: x[1]["ts"])
         del _modal_cache["prices"][oldest[0]]
+
 
 def _get_cached_balance(account_id: int) -> Optional[Dict]:
     """Get cached balance if fresh"""
@@ -3992,12 +4807,14 @@ def _get_cached_balance(account_id: int) -> Optional[Dict]:
         return None
     return entry["data"]
 
+
 def _set_cached_balance(account_id: int, data: Dict):
     """Cache balance (max entries to limit RAM)."""
     _modal_cache["balances"][account_id] = {"data": data, "ts": time.time()}
     if len(_modal_cache["balances"]) > _MODAL_CACHE_MAX_BALANCES:
         oldest = min(_modal_cache["balances"].items(), key=lambda x: x[1]["ts"])
         del _modal_cache["balances"][oldest[0]]
+
 
 def _get_cached_filters(symbol: str) -> Optional[Dict]:
     """Get cached filters if fresh"""
@@ -4010,6 +4827,7 @@ def _get_cached_filters(symbol: str) -> Optional[Dict]:
         return None
     return entry["data"]
 
+
 def _set_cached_filters(symbol: str, data: Dict):
     """Cache filters (max entries to limit RAM)."""
     _modal_cache["filters"][symbol] = {"data": data, "ts": time.time()}
@@ -4017,11 +4835,12 @@ def _set_cached_filters(symbol: str, data: Dict):
         oldest = min(_modal_cache["filters"].items(), key=lambda x: x[1]["ts"])
         del _modal_cache["filters"][oldest[0]]
 
+
 @router.get("/binance/spot_modal_bootstrap")
 async def get_spot_modal_bootstrap(
     account_id: int = Query(...),
     symbol: str = Query(...),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     """Binance kaldırıldı – minimal bootstrap (price 0, boş bakiye)"""
     s = symbol.strip().upper()
@@ -4029,7 +4848,13 @@ async def get_spot_modal_bootstrap(
     return {
         "symbol": s,
         "price": 0.0,
-        "filters": {"tickSize": "0.01", "stepSize": "0.00001", "minNotional": "5", "baseAsset": base, "quoteAsset": "USDT"},
+        "filters": {
+            "tickSize": "0.01",
+            "stepSize": "0.00001",
+            "minNotional": "5",
+            "baseAsset": base,
+            "quoteAsset": "USDT",
+        },
         "balances": {"baseFree": 0.0, "quoteFree": 0.0, "base": base, "quote": "USDT"},
-        "ts": time.time()
+        "ts": time.time(),
     }

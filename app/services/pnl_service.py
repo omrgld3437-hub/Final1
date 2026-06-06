@@ -6,6 +6,7 @@ bu referansa göre değişim 23:59'a kadar günlük K/Z olarak gösterilir. Her 
 Bot Performans Havuzu: account_daily_realized_pnl tablosu günlük gerçekleşen PnL'ı saklar.
 Bot silinse/kapatılsa bile PnL hafızada kalır. Günlük/Haftalık/Aylık/Genel özetleri bu havuzdan hesaplanır.
 """
+
 import json
 from typing import Dict, List, Optional
 from datetime import datetime, timedelta
@@ -21,6 +22,7 @@ from app.utils.tz_utils import (
 
 # FIFO fallback: çok uzun geçmişte tam trade listesi RAM patlamasını önler
 _MAX_FIFO_TRADES_ROWS = 4000
+_PNL_SNAPSHOT_MIN_INTERVAL_SEC = 60
 from sqlalchemy import text
 from app.services.price_hub import price_hub
 
@@ -29,6 +31,7 @@ def _get_virtual_wallet_or_none(db: Session, bot_id: int, symbol: str):
     """Lazy import to avoid circular deps."""
     try:
         from app.botengine.virtual_wallet import get_virtual_wallet_or_none
+
         return get_virtual_wallet_or_none(db, bot_id, symbol)
     except Exception:
         return None
@@ -38,18 +41,22 @@ def _fetch_price_from_datahub(symbol_pair: str) -> float:
     """Get price from DataHub cache only. No per-symbol Binance REST."""
     try:
         from app.services.data_hub import data_hub
+
         p = data_hub.get_price(symbol_pair.upper())
         return float(p) if p is not None and float(p) > 0 else 0.0
     except Exception:
         return 0.0
 
 
-def _compute_multi_total_usd_from_state(db: Session, bot_id: int, account_id: int, raw: dict) -> float:
+def _compute_multi_total_usd_from_state(
+    db: Session, bot_id: int, account_id: int, raw: dict
+) -> float:
     """
     MULTI/TRDCA paper botlar için state.virtual_balances üzerinden total_usd hesapla.
     virtual_wallet MULTI için 0/0 döndüğünde dashboard summary'de doğru bakiye gösterilsin.
     """
     from app.botengine.state_store import load_state
+
     state = load_state(db, bot_id) or {}
     vb = state.get("virtual_balances")
     if not vb or not isinstance(vb, dict):
@@ -63,7 +70,13 @@ def _compute_multi_total_usd_from_state(db: Session, bot_id: int, account_id: in
         if k and str(k).upper() != quote_asset:
             assets.add(str(k).strip().upper())
     for a in raw.get("assets") or []:
-        s = (a.get("symbol") or "").upper().replace("USDT", "").replace("FDUSD", "").strip()
+        s = (
+            (a.get("symbol") or "")
+            .upper()
+            .replace("USDT", "")
+            .replace("FDUSD", "")
+            .strip()
+        )
         if s and s != quote_asset:
             assets.add(s)
     assets.add(quote_asset)
@@ -84,11 +97,24 @@ def _compute_multi_total_usd_from_state(db: Session, bot_id: int, account_id: in
     total = base_value_usd + quote_balance
     if total > 0:
         return total
-    initial_capital = float(raw.get("initial_capital_usdt") or raw.get("budget_usd") or raw.get("bot_budget_quote") or 0)
+    initial_capital = float(
+        raw.get("initial_capital_usdt")
+        or raw.get("budget_usd")
+        or raw.get("bot_budget_quote")
+        or 0
+    )
     if initial_capital > 0:
         try:
-            from app.services.test_account import is_test_account, TEST_PAPER_BALANCE_USDT
-            if is_test_account(account_id, db) and quote_balance == TEST_PAPER_BALANCE_USDT and base_value_usd == 0:
+            from app.services.test_account import (
+                is_test_account,
+                TEST_PAPER_BALANCE_USDT,
+            )
+
+            if (
+                is_test_account(account_id, db)
+                and quote_balance == TEST_PAPER_BALANCE_USDT
+                and base_value_usd == 0
+            ):
                 return initial_capital
         except Exception:
             pass
@@ -123,11 +149,20 @@ def _fee_quote(t: Trade) -> float:
 
 
 def _apply_stale_return(
-    db: Session, bot_id: int, account_id: int, state: dict, out: Dict, initial_capital: float
+    db: Session,
+    bot_id: int,
+    account_id: int,
+    state: dict,
+    out: Dict,
+    initial_capital: float,
 ) -> None:
     """When stale: fill total_usd/daily from last_fill_snapshot or last PnlSnapshot; do not update state or write snapshot."""
     snap = state.get("last_fill_snapshot") or {}
-    if isinstance(snap, dict) and snap.get("snapshot_at") and snap.get("total_usd") is not None:
+    if (
+        isinstance(snap, dict)
+        and snap.get("snapshot_at")
+        and snap.get("total_usd") is not None
+    ):
         out["total_usd"] = float(snap["total_usd"])
         return
     last_row = (
@@ -139,7 +174,11 @@ def _apply_stale_return(
     if last_row:
         out["total_usd"] = float(last_row.total_usd)
         out["daily"] = float(last_row.daily or 0)
-        out["daily_pnl_pct"] = round((out["daily"] / float(last_row.total_usd or 1) * 100.0), 2) if last_row.total_usd else 0.0
+        out["daily_pnl_pct"] = (
+            round((out["daily"] / float(last_row.total_usd or 1) * 100.0), 2)
+            if last_row.total_usd
+            else 0.0
+        )
         out["monthly"] = float(last_row.monthly or 0)
 
 
@@ -243,7 +282,13 @@ def ensure_daily_ref_and_compute(
         daily_ref_usd = open_eq
         changed = True
 
-    if changed and persist and db is not None and bot_id is not None and account_id is not None:
+    if (
+        changed
+        and persist
+        and db is not None
+        and bot_id is not None
+        and account_id is not None
+    ):
         save_state(db, bot_id, account_id, state)
 
     daily = float(total_usd) - daily_ref_usd
@@ -267,7 +312,9 @@ class PnlService:
         """
         Calculate current PnL. When price_is_stale or price invalid: return last snapshot without updating daily_ref or writing PnlSnapshot.
         """
-        bot = db.query(Bot).filter(Bot.id == bot_id, Bot.account_id == account_id).first()
+        bot = (
+            db.query(Bot).filter(Bot.id == bot_id, Bot.account_id == account_id).first()
+        )
         if not bot:
             return {"error": "Bot not found"}
         sym = (bot.symbol or "").strip().upper()
@@ -283,13 +330,26 @@ class PnlService:
 
         raw = {}
         try:
-            raw = json.loads(bot.config_json or "{}") if getattr(bot, "config_json", None) else {}
+            raw = (
+                json.loads(bot.config_json or "{}")
+                if getattr(bot, "config_json", None)
+                else {}
+            )
         except Exception:
             pass
         strategy_id = (raw.get("strategy_id") or "").strip().lower()
-        is_multi = sym == "MULTI" or strategy_id in ("trdca_pro", "multi_asset_rebalance")
-        initial_capital = float(raw.get("initial_capital_usdt") or raw.get("budget_usd") or raw.get("bot_budget_quote") or 0)
-        from app.botengine.state_store import load_state, save_state
+        is_multi = sym == "MULTI" or strategy_id in (
+            "trdca_pro",
+            "multi_asset_rebalance",
+        )
+        initial_capital = float(
+            raw.get("initial_capital_usdt")
+            or raw.get("budget_usd")
+            or raw.get("bot_budget_quote")
+            or 0
+        )
+        from app.botengine.state_store import load_state
+
         state = load_state(db, bot_id) or {}
 
         total_usd = 0.0
@@ -309,7 +369,9 @@ class PnlService:
             quote_qty = float(vq)
             pnl_mode_used = "virtual_wallet"
             if is_multi and total_usd <= 0:
-                fallback = _compute_multi_total_usd_from_state(db, bot_id, account_id, raw)
+                fallback = _compute_multi_total_usd_from_state(
+                    db, bot_id, account_id, raw
+                )
                 if fallback > 0:
                     total_usd = fallback
         elif not state.get("initial_allocation_done") and not is_multi:
@@ -328,7 +390,11 @@ class PnlService:
                 total_usd = initial_capital
             base_qty = 0.0
             quote_qty = total_usd
-            pnl_mode_used = "initial_capital_override" if total_usd == initial_capital else "virtual_wallet"
+            pnl_mode_used = (
+                "initial_capital_override"
+                if total_usd == initial_capital
+                else "virtual_wallet"
+            )
         else:
             if trades is None:
                 trades = (
@@ -353,8 +419,12 @@ class PnlService:
                     "stale": False,
                     "pnl_mode_used": "fifo_trades",
                 }
-                if price_is_stale or (pnl_mode_used == "virtual_wallet" and not price_valid):
-                    _apply_stale_return(db, bot_id, account_id, state, out, initial_capital)
+                if price_is_stale or (
+                    pnl_mode_used == "virtual_wallet" and not price_valid
+                ):
+                    _apply_stale_return(
+                        db, bot_id, account_id, state, out, initial_capital
+                    )
                 return out
             base_qty = 0.0
             quote_qty = 0.0
@@ -379,21 +449,30 @@ class PnlService:
                 current_price = trades[-1].price
                 price_valid = current_price and float(current_price) > 0
             avg_buy_final = total_cost / base_qty if base_qty > 0 else None
-            unrealized = (float(current_price or 0) - avg_buy_final) * base_qty if (base_qty > 0 and avg_buy_final is not None and current_price) else 0.0
+            unrealized = (
+                (float(current_price or 0) - avg_buy_final) * base_qty
+                if (base_qty > 0 and avg_buy_final is not None and current_price)
+                else 0.0
+            )
             total_usd = quote_qty + base_qty * float(current_price or 0.0)
             pnl_mode_used = "fifo_trades"
 
         now = now_utc_naive or datetime.utcnow()
-        today_start = turkey_today_start_utc()
+        turkey_today_start_utc()
         month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
-        monthly_snap = db.query(PnlSnapshot).filter(
-            PnlSnapshot.bot_id == bot_id,
-            PnlSnapshot.account_id == account_id,
-            PnlSnapshot.ts >= month_start
-        ).order_by(PnlSnapshot.ts.asc()).first()
+        monthly_snap = (
+            db.query(PnlSnapshot)
+            .filter(
+                PnlSnapshot.bot_id == bot_id,
+                PnlSnapshot.account_id == account_id,
+                PnlSnapshot.ts >= month_start,
+            )
+            .order_by(PnlSnapshot.ts.asc())
+            .first()
+        )
 
-        today_date = turkey_today_date_str()
+        turkey_today_date_str()
         # Stale or invalid price: do NOT update daily_ref or write snapshot (Spec B)
         if price_is_stale or (pnl_mode_used == "virtual_wallet" and not price_valid):
             out = {
@@ -426,7 +505,11 @@ class PnlService:
             daily = 0.0
             daily_pnl_pct = 0.0
 
-        monthly = total_usd - monthly_snap.total_usd if monthly_snap else total_usd - initial_capital
+        monthly = (
+            total_usd - monthly_snap.total_usd
+            if monthly_snap
+            else total_usd - initial_capital
+        )
 
         return {
             "total_usd": total_usd,
@@ -443,7 +526,9 @@ class PnlService:
         }
 
     @staticmethod
-    def _daily_realized_for_bot_trades(db: Session, bot_id: int, account_id: int) -> float:
+    def _daily_realized_for_bot_trades(
+        db: Session, bot_id: int, account_id: int
+    ) -> float:
         """Spec §10: One bot's cycles completed today (Turkey day); FIFO with fees. Used before bot delete to cache."""
         today_start = turkey_today_start_utc()
         today_str = today_start.strftime("%Y-%m-%d")
@@ -457,6 +542,7 @@ class PnlService:
         if not trades:
             return 0.0
         from collections import defaultdict
+
         by_cycle = defaultdict(list)
         for t in trades:
             cid = t.cycle_id if t.cycle_id is not None else 1
@@ -488,7 +574,9 @@ class PnlService:
         return total
 
     @staticmethod
-    def get_account_daily_realized_cache(db: Session, account_id: int, date_tr: str) -> float:
+    def get_account_daily_realized_cache(
+        db: Session, account_id: int, date_tr: str
+    ) -> float:
         """Hesap bazlı günlük gerçekleşen PnL cache (silinen botlardan bugün kapanan turlar)."""
         row = db.execute(
             text(
@@ -499,7 +587,9 @@ class PnlService:
         return float(row[0]) if row and row[0] is not None else 0.0
 
     @staticmethod
-    def add_to_account_daily_realized_cache(db: Session, account_id: int, date_tr: str, amount_usd: float) -> None:
+    def add_to_account_daily_realized_cache(
+        db: Session, account_id: int, date_tr: str, amount_usd: float
+    ) -> None:
         """Silinen botun bugünkü gerçekleşen PnL'ini cache'e ekler (INSERT veya UPDATE)."""
         now_iso = datetime.utcnow().isoformat()
         db.execute(
@@ -515,7 +605,9 @@ class PnlService:
         db.commit()
 
     @staticmethod
-    def daily_realized_from_cycles_completed_today(db: Session, account_id: int) -> float:
+    def daily_realized_from_cycles_completed_today(
+        db: Session, account_id: int
+    ) -> float:
         """
         Günlük PnL = sadece o gün tamamlanan turların (cycle) kârlarının toplamı.
         Tur "bugün tamamlandı" = o turun son işleminin tarihi bugün (Türkiye 00:00+).
@@ -527,6 +619,7 @@ class PnlService:
         bots = db.query(Bot).filter(Bot.account_id == account_id).all()
         total_daily = 0.0
         from collections import defaultdict
+
         for bot in bots:
             trades = (
                 db.query(Trade)
@@ -563,7 +656,9 @@ class PnlService:
                         base_qty -= sell_qty
                         total_cost -= avg_buy * sell_qty
                 total_daily += realized
-        total_daily += PnlService.get_account_daily_realized_cache(db, account_id, today_str)
+        total_daily += PnlService.get_account_daily_realized_cache(
+            db, account_id, today_str
+        )
         return total_daily
 
     @staticmethod
@@ -577,17 +672,69 @@ class PnlService:
             realized=pnl_data["realized"],
             unrealized=pnl_data["unrealized"],
             daily=pnl_data["daily"],
-            monthly=pnl_data["monthly"]
+            monthly=pnl_data["monthly"],
         )
         db.add(snapshot)
         db.commit()
 
+    @staticmethod
+    def save_snapshot_if_due(
+        db: Session,
+        bot_id: int,
+        account_id: int,
+        pnl_data: Dict,
+        *,
+        min_interval_sec: int = _PNL_SNAPSHOT_MIN_INTERVAL_SEC,
+    ) -> bool:
+        """
+        Persist a lightweight mark-to-market PnL snapshot at a bounded cadence.
+        Returns True when a row is written.
+        """
+        try:
+            total_usd = float(pnl_data.get("total_usd") or 0)
+        except (TypeError, ValueError):
+            total_usd = 0.0
+        if total_usd <= 0:
+            return False
+
+        last = (
+            db.query(PnlSnapshot)
+            .filter(PnlSnapshot.bot_id == bot_id, PnlSnapshot.account_id == account_id)
+            .order_by(PnlSnapshot.ts.desc())
+            .first()
+        )
+        now = datetime.utcnow()
+        if last and last.ts:
+            try:
+                age = (now - last.ts).total_seconds()
+                if age < max(1, int(min_interval_sec)):
+                    return False
+            except Exception:
+                return False
+
+        snapshot = PnlSnapshot(
+            bot_id=bot_id,
+            account_id=account_id,
+            ts=now,
+            total_usd=total_usd,
+            realized=float(pnl_data.get("realized") or 0.0),
+            unrealized=float(pnl_data.get("unrealized") or 0.0),
+            daily=float(pnl_data.get("daily") or 0.0),
+            monthly=float(pnl_data.get("monthly") or 0.0),
+        )
+        db.add(snapshot)
+        db.commit()
+        return True
+
     # --- Bot Performans Havuzu (günlük/haftalık/aylık/genel) ---
 
     @staticmethod
-    def _realized_for_date_from_trades(db: Session, account_id: int, date_tr: str) -> float:
+    def _realized_for_date_from_trades(
+        db: Session, account_id: int, date_tr: str
+    ) -> float:
         """Spec §10/§59: Cycles completed on date_tr (Turkey day); FIFO realized with fees in quote subtracted."""
         from collections import defaultdict
+
         try:
             day_start = turkey_day_start_utc_for_date(date_tr)
             day_end = turkey_day_end_utc_for_date(date_tr)
@@ -639,7 +786,9 @@ class PnlService:
         Belirli tarihin PnL'ını havuzda günceller. Cache (silinen botlar) + Trade'dan hesaplanan değeri birleştirir.
         Bot silinse bile PnL hafızada kalır.
         """
-        from_cache = PnlService.get_account_daily_realized_cache(db, account_id, date_tr)
+        from_cache = PnlService.get_account_daily_realized_cache(
+            db, account_id, date_tr
+        )
         from_trades = PnlService._realized_for_date_from_trades(db, account_id, date_tr)
         total = from_cache + from_trades
         now_iso = datetime.utcnow().isoformat()
@@ -657,9 +806,7 @@ class PnlService:
         return total
 
     @staticmethod
-    def get_aggregated_pnl(
-        db: Session, account_id: int, period: str
-    ) -> Dict[str, any]:
+    def get_aggregated_pnl(db: Session, account_id: int, period: str) -> Dict[str, any]:
         """
         Seçilen dönem için toplam bot PnL.
         period: daily | weekly | monthly | all
@@ -700,10 +847,14 @@ class PnlService:
             while current <= end:
                 d_str = current.strftime("%Y-%m-%d")
                 if d_str == today_str:
-                    total += PnlService.daily_realized_from_cycles_completed_today(db, account_id)
+                    total += PnlService.daily_realized_from_cycles_completed_today(
+                        db, account_id
+                    )
                 else:
                     PnlService.consolidate_date(db, account_id, d_str)
-                    total += PnlService.get_account_daily_realized_cache(db, account_id, d_str)
+                    total += PnlService.get_account_daily_realized_cache(
+                        db, account_id, d_str
+                    )
                 current += timedelta(days=1)
         else:
             date_from_dt = today - timedelta(days=365)
@@ -713,10 +864,14 @@ class PnlService:
             while current <= end:
                 d_str = current.strftime("%Y-%m-%d")
                 if d_str == today_str:
-                    total += PnlService.daily_realized_from_cycles_completed_today(db, account_id)
+                    total += PnlService.daily_realized_from_cycles_completed_today(
+                        db, account_id
+                    )
                 else:
                     PnlService.consolidate_date(db, account_id, d_str)
-                    total += PnlService.get_account_daily_realized_cache(db, account_id, d_str)
+                    total += PnlService.get_account_daily_realized_cache(
+                        db, account_id, d_str
+                    )
                 current += timedelta(days=1)
 
         return {

@@ -1,6 +1,7 @@
 """
 Database Session Management
 """
+
 from app.db.base import SessionLocal
 
 
@@ -11,4 +12,3 @@ def get_db():
         yield db
     finally:
         db.close()
-

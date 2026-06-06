@@ -2,15 +2,18 @@
 """Tek seferlik: Admin hesabi yoksa olusturur, varsa (silinmis dahil) sifreyi Adminadmin01. yapar.
 Login: kullanici adi 'Admin', sifre 'Adminadmin01.' (ilk giris sonrasi Ayarlar'dan degistirin).
 Run once: .venv/bin/python scripts/migrations/set_admin_password_once.py"""
+
 import sys
 import os
 from pathlib import Path
+
 _root = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_root))
 os.chdir(_root)
 # Sunucu ile ayni veritabanini kullan (DATABASE_URL .env'den)
 try:
     from dotenv import load_dotenv
+
     load_dotenv(str(_root / ".env"))
 except Exception:
     pass
@@ -23,6 +26,7 @@ from app.services.encryption import encrypt_text
 
 ADMIN_TEMP_PASSWORD = "Adminadmin01."
 ADMIN_USERNAME = "Admin"
+
 
 def run():
     db = SessionLocal()
@@ -55,7 +59,14 @@ def run():
                 acc.user_id = admin.id
             db.commit()
             ok = verify_password(ADMIN_TEMP_PASSWORD, admin.password_hash)
-            print("  Admin hesabi guncellendi. Giris: Admin / Adminadmin01." + (" Sifre dogrulandi: OK" if ok else " UYARI: Sifre dogrulamasi basarisiz!"))
+            print(
+                "  Admin hesabi guncellendi. Giris: Admin / Adminadmin01."
+                + (
+                    " Sifre dogrulandi: OK"
+                    if ok
+                    else " UYARI: Sifre dogrulamasi basarisiz!"
+                )
+            )
         else:
             account_code = generate_account_code(db)
             account = Account(
@@ -89,10 +100,18 @@ def run():
             account.user_id = user.id
             db.commit()
             ok = verify_password(ADMIN_TEMP_PASSWORD, user.password_hash)
-            print("  Admin hesabi olusturuldu. Giris: Admin / Adminadmin01." + (" Sifre dogrulandi: OK" if ok else " UYARI: Sifre dogrulamasi basarisiz!"))
+            print(
+                "  Admin hesabi olusturuldu. Giris: Admin / Adminadmin01."
+                + (
+                    " Sifre dogrulandi: OK"
+                    if ok
+                    else " UYARI: Sifre dogrulamasi basarisiz!"
+                )
+            )
     finally:
         db.close()
     print("Done.")
+
 
 if __name__ == "__main__":
     run()

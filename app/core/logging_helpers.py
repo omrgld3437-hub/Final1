@@ -2,6 +2,7 @@
 Wallet trace logging for debugging UI/backend wallet data flow.
 Logs JSON-friendly events at every wallet boundary.
 """
+
 from __future__ import annotations
 
 import logging

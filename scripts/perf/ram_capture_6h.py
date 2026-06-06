@@ -16,6 +16,7 @@ Ortam (opsiyonel auth senaryoları):
   RAM_TEST_AUTH_TOKEN=...   veya RAM_TEST_PHONE + RAM_TEST_PASSWORD
   RAM_TEST_ACCOUNT_ID=3 RAM_TEST_BOT_ID=2
 """
+
 from __future__ import annotations
 
 import argparse
@@ -52,7 +53,12 @@ def _py() -> str:
 
 def discover_targets() -> Dict[str, Any]:
     """Çalışan bot + hesap — mevcut botu bozmaz, yalnızca okur."""
-    out: Dict[str, Any] = {"account_id": None, "bot_id": None, "symbol": None, "status": None}
+    out: Dict[str, Any] = {
+        "account_id": None,
+        "bot_id": None,
+        "symbol": None,
+        "status": None,
+    }
     env_aid = os.getenv("RAM_TEST_ACCOUNT_ID", "").strip()
     env_bid = os.getenv("RAM_TEST_BOT_ID", "").strip()
     if env_aid.isdigit():
@@ -208,7 +214,11 @@ def run_one_scenario(
 
     scen = get_scenario_by_id(scenario_id, account_id, bot_id)
     if not scen:
-        rec = {"kind": "scenario_skip", "scenario_id": scenario_id, "reason": "unknown_scenario"}
+        rec = {
+            "kind": "scenario_skip",
+            "scenario_id": scenario_id,
+            "reason": "unknown_scenario",
+        }
         append_scenario_record(session_id, rec)
         return rec
 
@@ -216,7 +226,13 @@ def run_one_scenario(
     auth_blocked = False
     for step in scen.steps:
         for rep in range(max(1, step.repeat)):
-            if auth_blocked and step.path.startswith("/api/") and "health" not in step.path and "config/public" not in step.path and not step.path.startswith("/api/data"):
+            if (
+                auth_blocked
+                and step.path.startswith("/api/")
+                and "health" not in step.path
+                and "config/public" not in step.path
+                and not step.path.startswith("/api/data")
+            ):
                 steps_out.append(
                     {"label": step.label, "skipped": True, "reason": "no_auth"}
                 )
@@ -287,11 +303,18 @@ def cmd_run_scenarios(session_id: str, duration_sec: int) -> int:
                     run_one_scenario(client, session_id, sid, account_id, bot_id, phase)
                 else:
                     run_one_scenario(client, session_id, "S00_baseline", 0, 0, phase)
-                    run_one_scenario(client, session_id, "S01_market_public", 0, 0, phase)
+                    run_one_scenario(
+                        client, session_id, "S01_market_public", 0, 0, phase
+                    )
             except Exception as e:
                 append_scenario_record(
                     session_id,
-                    {"kind": "scenario_error", "phase": phase, "scenario_id": sid, "error": str(e)},
+                    {
+                        "kind": "scenario_error",
+                        "phase": phase,
+                        "scenario_id": sid,
+                        "error": str(e),
+                    },
                 )
             phase += 1
             sleep_sec = min(_PHASE_INTERVAL_SEC, max(0, end_at - time.time()))
@@ -310,7 +333,9 @@ def cmd_run_scenarios(session_id: str, duration_sec: int) -> int:
     finally:
         client.close()
 
-    append_scenario_record(session_id, {"kind": "runner_end", "phases_completed": phase})
+    append_scenario_record(
+        session_id, {"kind": "runner_end", "phases_completed": phase}
+    )
     return 0
 
 
@@ -331,14 +356,34 @@ def restart_web_worker_capture(session_id: str) -> None:
             except (ProcessLookupError, ValueError, OSError):
                 pass
             pf.unlink(missing_ok=True)
-    subprocess.run(["bash", "-c", "lsof -ti:8000 | xargs kill -KILL 2>/dev/null || true"], check=False)
+    subprocess.run(
+        ["bash", "-c", "lsof -ti:8000 | xargs kill -KILL 2>/dev/null || true"],
+        check=False,
+    )
 
     env = _ram_capture_env(session_id)
     _LOGS.mkdir(parents=True, exist_ok=True)
     _RUN.mkdir(parents=True, exist_ok=True)
     with open(_LOGS / "web.log", "a", encoding="utf-8") as wf:
         subprocess.Popen(
-            [py, "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8000", "--workers", "2", "--loop", "uvloop", "--http", "httptools", "--log-level", "info"],
+            [
+                py,
+                "-m",
+                "uvicorn",
+                "app.main:app",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "8000",
+                "--workers",
+                "2",
+                "--loop",
+                "uvloop",
+                "--http",
+                "httptools",
+                "--log-level",
+                "info",
+            ],
             stdout=wf,
             stderr=subprocess.STDOUT,
             cwd=str(_PROJECT_ROOT),
@@ -399,7 +444,9 @@ def restart_worker_capture(session_id: str) -> int:
     _LOGS.mkdir(parents=True, exist_ok=True)
     _RUN.mkdir(parents=True, exist_ok=True)
     with open(_LOGS / "worker.log", "a", encoding="utf-8") as wf:
-        wf.write(f"\n--- worker restart {datetime.now(timezone.utc).isoformat()} session={session_id} ---\n")
+        wf.write(
+            f"\n--- worker restart {datetime.now(timezone.utc).isoformat()} session={session_id} ---\n"
+        )
         p = subprocess.Popen(
             [py, "-m", "app.botengine.worker_main"],
             stdout=wf,
@@ -440,10 +487,14 @@ def cmd_start() -> int:
     targets = discover_targets()
     print("=== RAM 6h Capture Başlatılıyor ===")
     print(f"Session: {sid}")
-    print(f"Süre: {_DURATION_SEC // 3600} saat | snapshot: {_CAPTURE_INTERVAL}s | probe: {_PROBE_INTERVAL}s")
+    print(
+        f"Süre: {_DURATION_SEC // 3600} saat | snapshot: {_CAPTURE_INTERVAL}s | probe: {_PROBE_INTERVAL}s"
+    )
     print(f"Hedef bot: {targets}")
     print()
-    print("Web + worker RAM_CAPTURE ile yeniden başlatılıyor (bot DB status=running kalır)...")
+    print(
+        "Web + worker RAM_CAPTURE ile yeniden başlatılıyor (bot DB status=running kalır)..."
+    )
     restart_web_worker_capture(sid)
     time.sleep(5)
     manifest = {
@@ -465,12 +516,24 @@ def cmd_start() -> int:
     )
     runner_log = _LOGS / "ram_scenario_runner.log"
     with open(runner_log, "a", encoding="utf-8") as lf:
-        lf.write(f"\n--- runner start {datetime.now(timezone.utc).isoformat()} session={sid} ---\n")
+        lf.write(
+            f"\n--- runner start {datetime.now(timezone.utc).isoformat()} session={sid} ---\n"
+        )
         runner_env = os.environ.copy()
-        runner_env["RAM_TEST_ACCOUNT_ID"] = str(targets.get("account_id") or os.getenv("RAM_TEST_ACCOUNT_ID", "3"))
-        runner_env["RAM_TEST_BOT_ID"] = str(targets.get("bot_id") or os.getenv("RAM_TEST_BOT_ID", "2"))
+        runner_env["RAM_TEST_ACCOUNT_ID"] = str(
+            targets.get("account_id") or os.getenv("RAM_TEST_ACCOUNT_ID", "3")
+        )
+        runner_env["RAM_TEST_BOT_ID"] = str(
+            targets.get("bot_id") or os.getenv("RAM_TEST_BOT_ID", "2")
+        )
         proc = subprocess.Popen(
-            [_py(), str(_SCRIPT_DIR / "ram_capture_6h.py"), "--run-scenarios", "--session", sid],
+            [
+                _py(),
+                str(_SCRIPT_DIR / "ram_capture_6h.py"),
+                "--run-scenarios",
+                "--session",
+                sid,
+            ],
             stdout=lf,
             stderr=subprocess.STDOUT,
             cwd=str(_PROJECT_ROOT),
@@ -479,7 +542,7 @@ def cmd_start() -> int:
         )
     (_RUN / "ram6h_runner.pid").write_text(str(proc.pid))
     print(f"Senaryo koşucu PID: {proc.pid}")
-    print(f"Ham veri:")
+    print("Ham veri:")
     for k, v in manifest["files"].items():
         print(f"  {k}: {v}")
     print()
@@ -499,7 +562,11 @@ def cmd_status() -> int:
     if mf.exists():
         sid = json.loads(mf.read_text()).get("session_id", "")
     if sid:
-        for pattern in [f"ram_capture_{sid}_web.jsonl", f"ram_capture_{sid}_worker.jsonl", f"ram_scenario_{sid}.jsonl"]:
+        for pattern in [
+            f"ram_capture_{sid}_web.jsonl",
+            f"ram_capture_{sid}_worker.jsonl",
+            f"ram_scenario_{sid}.jsonl",
+        ]:
             p = _LOGS / pattern
             if p.exists():
                 n = sum(1 for _ in open(p, encoding="utf-8", errors="replace"))
@@ -546,9 +613,17 @@ def cmd_ensure() -> int:
         runner_env["RAM_TEST_ACCOUNT_ID"] = str(targets.get("account_id") or 3)
         runner_env["RAM_TEST_BOT_ID"] = str(targets.get("bot_id") or 2)
         with open(runner_log, "a", encoding="utf-8") as lf:
-            lf.write(f"\n--- runner restart {datetime.now(timezone.utc).isoformat()} ---\n")
+            lf.write(
+                f"\n--- runner restart {datetime.now(timezone.utc).isoformat()} ---\n"
+            )
             p = subprocess.Popen(
-                [_py(), str(_SCRIPT_DIR / "ram_capture_6h.py"), "--run-scenarios", "--session", sid],
+                [
+                    _py(),
+                    str(_SCRIPT_DIR / "ram_capture_6h.py"),
+                    "--run-scenarios",
+                    "--session",
+                    sid,
+                ],
                 stdout=lf,
                 stderr=subprocess.STDOUT,
                 cwd=str(_PROJECT_ROOT),
@@ -581,7 +656,9 @@ def cmd_analyze(session_id: Optional[str]) -> int:
 
     sid = session_id
     if not sid and (_LOGS / "ram_capture_session.json").exists():
-        sid = json.loads((_LOGS / "ram_capture_session.json").read_text()).get("session_id")
+        sid = json.loads((_LOGS / "ram_capture_session.json").read_text()).get(
+            "session_id"
+        )
     if not sid:
         print("session_id gerekli", file=sys.stderr)
         return 1
@@ -609,13 +686,21 @@ def cmd_analyze(session_id: Optional[str]) -> int:
     for r in runs:
         steps = r.get("steps") or []
         slow = sorted(
-            [s for s in steps if isinstance(s, dict) and (s.get("duration_ms") or 0) > 500],
+            [
+                s
+                for s in steps
+                if isinstance(s, dict) and (s.get("duration_ms") or 0) > 500
+            ],
             key=lambda s: s.get("duration_ms", 0),
             reverse=True,
         )[:3]
-        out.append(f"- **{r.get('scenario_id')}** phase={r.get('phase')} steps={len(steps)} auth_blocked={r.get('auth_blocked')}")
+        out.append(
+            f"- **{r.get('scenario_id')}** phase={r.get('phase')} steps={len(steps)} auth_blocked={r.get('auth_blocked')}"
+        )
         for s in slow:
-            out.append(f"  - slow: {s.get('label')} {s.get('duration_ms')}ms status={s.get('status')}")
+            out.append(
+                f"  - slow: {s.get('label')} {s.get('duration_ms')}ms status={s.get('status')}"
+            )
     summary_path.write_text("\n".join(out), encoding="utf-8")
     print("Reports:", report, summary_path)
     return 0
@@ -623,10 +708,14 @@ def cmd_analyze(session_id: Optional[str]) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="6 saatlik RAM capture + senaryolar")
-    parser.add_argument("--start", action="store_true", help="Web/worker capture + senaryo runner")
+    parser.add_argument(
+        "--start", action="store_true", help="Web/worker capture + senaryo runner"
+    )
     parser.add_argument("--status", action="store_true")
     parser.add_argument("--analyze", action="store_true")
-    parser.add_argument("--ensure", action="store_true", help="Ölü süreçleri yeniden başlat")
+    parser.add_argument(
+        "--ensure", action="store_true", help="Ölü süreçleri yeniden başlat"
+    )
     parser.add_argument(
         "--restart-worker",
         action="store_true",

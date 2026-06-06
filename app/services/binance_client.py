@@ -3,6 +3,7 @@ FILE: binance_client.py
 Sync facade for bot engines: uses binance_spot as single gateway (sync_public/sync_signed).
 All Binance HTTP goes through binance_spot; no duplicate signature logic.
 """
+
 from __future__ import annotations
 import logging
 from typing import Any, Dict, Optional
@@ -49,6 +50,7 @@ class BinanceClient:
         """Current price from DataHub cache only. No per-symbol Binance REST."""
         try:
             from app.services.data_hub import data_hub
+
             p = data_hub.get_price(symbol.upper())
             return float(p) if p is not None and float(p) > 0 else 0.0
         except Exception as e:
@@ -58,7 +60,9 @@ class BinanceClient:
     def get_exchange_info(self, symbol: str) -> Dict:
         """Exchange info for symbol (filters: LOT_SIZE, PRICE_FILTER, MIN_NOTIONAL). Sync via binance_spot."""
         try:
-            data = _sync_public_get("/api/v3/exchangeInfo", {"symbol": symbol.upper()}, self._keys.testnet)
+            data = _sync_public_get(
+                "/api/v3/exchangeInfo", {"symbol": symbol.upper()}, self._keys.testnet
+            )
             if not data or "symbols" not in data:
                 return {"filters": []}
             for s in data.get("symbols", []):

@@ -13,6 +13,7 @@ Ortam:
 
 Analiz: python scripts/perf/ram_capture_5min.py --analyze
 """
+
 from __future__ import annotations
 
 import json
@@ -23,7 +24,7 @@ import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -54,10 +55,9 @@ def _session_id_value() -> str:
     global _session_id
     if _session_id:
         return _session_id
-    _session_id = (
-        os.getenv("RAM_CAPTURE_SESSION", "").strip()
-        or datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    )
+    _session_id = os.getenv("RAM_CAPTURE_SESSION", "").strip() or datetime.now(
+        timezone.utc
+    ).strftime("%Y%m%d_%H%M%S")
     return _session_id
 
 
@@ -66,7 +66,9 @@ def get_capture_log_path(component: Optional[str] = None) -> Path:
     return _LOGS_DIR / f"ram_capture_{_session_id_value()}_{comp}.jsonl"
 
 
-def _append_capture_line(payload: Dict[str, Any], component: Optional[str] = None) -> None:
+def _append_capture_line(
+    payload: Dict[str, Any], component: Optional[str] = None
+) -> None:
     global _line_count
     if not is_capture_enabled():
         return
@@ -95,13 +97,17 @@ def _approx_mapping_bytes(obj: Any, max_sample: int = 8) -> int:
                 return 0
             keys = list(obj.keys())[:max_sample]
             sample = {k: obj[k] for k in keys}
-            per = len(json.dumps(sample, ensure_ascii=False, default=str)) / max(1, len(keys))
+            per = len(json.dumps(sample, ensure_ascii=False, default=str)) / max(
+                1, len(keys)
+            )
             return int(per * len(obj))
         if isinstance(obj, (list, tuple)):
             if not obj:
                 return 0
             sample = obj[:max_sample]
-            per = len(json.dumps(sample, ensure_ascii=False, default=str)) / max(1, len(sample))
+            per = len(json.dumps(sample, ensure_ascii=False, default=str)) / max(
+                1, len(sample)
+            )
             return int(per * len(obj))
         return len(json.dumps(obj, ensure_ascii=False, default=str))
     except Exception:
@@ -126,14 +132,20 @@ def collect_ram_inventory() -> Dict[str, Any]:
             "prices_len": _safe_len(getattr(data_hub, "prices", None)),
             "mini_ws_len": _safe_len(getattr(data_hub, "_mini_ws", None)),
             "coin_list_len": _safe_len(getattr(data_hub, "coin_list", None) or []),
-            "account_balances_len": _safe_len(getattr(data_hub, "account_balances", None)),
+            "account_balances_len": _safe_len(
+                getattr(data_hub, "account_balances", None)
+            ),
             "all_symbols_len": _safe_len(getattr(data_hub, "all_symbols", None) or []),
             "top_100_len": _safe_len(getattr(data_hub, "top_100_symbols", None) or []),
             "ws_status": getattr(data_hub, "ws_status", None),
             "hub_snapshot_cached": getattr(data_hub, "_hub_snapshot", None) is not None,
         }
-        dh["prices_est_bytes"] = _approx_mapping_bytes(getattr(data_hub, "prices", None))
-        dh["mini_ws_est_bytes"] = _approx_mapping_bytes(getattr(data_hub, "_mini_ws", None))
+        dh["prices_est_bytes"] = _approx_mapping_bytes(
+            getattr(data_hub, "prices", None)
+        )
+        dh["mini_ws_est_bytes"] = _approx_mapping_bytes(
+            getattr(data_hub, "_mini_ws", None)
+        )
     except Exception as e:
         inv["subsystems"]["data_hub"] = {"error": str(e)}
 
@@ -168,7 +180,9 @@ def collect_ram_inventory() -> Dict[str, Any]:
         perf = getattr(be, "PerfLRUCache", None)
         live = getattr(be, "_live_snapshot_cache", None)
         inv["subsystems"]["bots_engine_cache"] = {
-            "perf_lru_entries": _safe_len(getattr(perf, "_cache", None) or {}) if perf else 0,
+            "perf_lru_entries": _safe_len(getattr(perf, "_cache", None) or {})
+            if perf
+            else 0,
             "live_snapshot_entries": _safe_len(live or {}),
         }
     except Exception as e:
@@ -279,9 +293,17 @@ def start_ram_capture_session(
         return _log_path
 
     _component = component
-    dur = duration_sec if duration_sec is not None else int(os.getenv("RAM_CAPTURE_DURATION", "300"))
-    interval = interval_sec if interval_sec is not None else int(
-        os.getenv("RAM_CAPTURE_INTERVAL", os.getenv("RAM_PROBE_INTERVAL", "10"))
+    dur = (
+        duration_sec
+        if duration_sec is not None
+        else int(os.getenv("RAM_CAPTURE_DURATION", "300"))
+    )
+    interval = (
+        interval_sec
+        if interval_sec is not None
+        else int(
+            os.getenv("RAM_CAPTURE_INTERVAL", os.getenv("RAM_PROBE_INTERVAL", "10"))
+        )
     )
     if dur >= 3600:
         interval = max(30, min(300, interval))
@@ -446,7 +468,9 @@ def register_default_capture_hooks(component: str) -> None:
 
                 return {
                     "prices_len": _safe_len(getattr(data_hub, "prices", None)),
-                    "all_symbols_len": _safe_len(getattr(data_hub, "all_symbols", None) or []),
+                    "all_symbols_len": _safe_len(
+                        getattr(data_hub, "all_symbols", None) or []
+                    ),
                 }
             except Exception as e:
                 return {"error": str(e)}
@@ -525,9 +549,7 @@ def analyze_session(session_id: Optional[str] = None) -> Path:
         snapshots = [r for r in rows if r.get("kind") == "snapshot"]
         events = [r for r in rows if r.get("kind") == "event"]
         rss_vals = [
-            float(r["rss_mb"])
-            for r in snapshots
-            if r.get("rss_mb") is not None
+            float(r["rss_mb"]) for r in snapshots if r.get("rss_mb") is not None
         ]
         lines_out.append(f"## {comp} — `{path.name}`")
         lines_out.append("")
@@ -536,7 +558,7 @@ def analyze_session(session_id: Optional[str] = None) -> Path:
         lines_out.append(f"- Events: {len(events)}")
         if rss_vals:
             lines_out.append(
-                f"- RSS (MB): start={rss_vals[0]:.1f} end={rss_vals[-1]:.1f} max={max(rss_vals):.1f} delta={rss_vals[-1]-rss_vals[0]:+.1f}"
+                f"- RSS (MB): start={rss_vals[0]:.1f} end={rss_vals[-1]:.1f} max={max(rss_vals):.1f} delta={rss_vals[-1] - rss_vals[0]:+.1f}"
             )
         lines_out.append("")
 

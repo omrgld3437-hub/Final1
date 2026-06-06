@@ -1,4 +1,5 @@
 """pricing_summary — ticker 24s / günlük baz % alanları."""
+
 from __future__ import annotations
 
 import app.services.pricing_summary as ps
@@ -14,6 +15,8 @@ def test_fx_daily_chg_pct_resets_on_new_day(monkeypatch):
 
 
 def test_resolve_chg_pct_prefers_hub(monkeypatch):
-    monkeypatch.setattr(ps, "_ticker_chg_from_hub", lambda *s: 1.25 if s == ("USDTTRY",) else None)
+    monkeypatch.setattr(
+        ps, "_ticker_chg_from_hub", lambda *s: 1.25 if s == ("USDTTRY",) else None
+    )
     monkeypatch.setattr(ps, "_fx_daily_chg_pct", lambda f, p: 99.0)
     assert ps._resolve_chg_pct("usdtry", 45.0, ("USDTTRY",)) == 1.25

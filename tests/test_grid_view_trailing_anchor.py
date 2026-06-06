@@ -1,4 +1,5 @@
 """Grid trailing dip/tepe: UI view uses state only (motor min/max günceller)."""
+
 from app.botengine.grid_view import compute_grid_profit_view
 
 

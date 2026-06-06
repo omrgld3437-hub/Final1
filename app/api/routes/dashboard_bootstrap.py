@@ -4,13 +4,13 @@ GET /api/dashboard/bootstrap?account_id=...
 Returns: prices (cached), kpis (cached/derived), wallet_cached (DB snapshot), wallet_status.
 MUST NOT call Binance. Target <300ms typical.
 """
+
 from __future__ import annotations
 
 import asyncio
 import logging
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict
 
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
@@ -41,13 +41,15 @@ async def dashboard_bootstrap(
     account = db.query(Account).filter(Account.id == account_id).first()
     if not account:
         from fastapi import HTTPException
+
         raise HTTPException(status_code=404, detail="Account not found")
 
     # keys_configured from Account
     ek = getattr(account, "api_key_enc", None)
     es = getattr(account, "api_secret_enc", None)
     keys_configured = bool(
-        ek and es
+        ek
+        and es
         and (not isinstance(ek, str) or ek.strip())
         and (not isinstance(es, str) or es.strip())
     )
@@ -57,17 +59,25 @@ async def dashboard_bootstrap(
     cooldown_until_iso = None
     try:
         import app.api.routes.home as home_mod
-        last_error_code = getattr(home_mod, "_wallet_last_error_code", {}).get(account_id)
+
+        last_error_code = getattr(home_mod, "_wallet_last_error_code", {}).get(
+            account_id
+        )
         cooldown_until = getattr(home_mod, "_wallet_cooldown_until", {}).get(account_id)
         if cooldown_until is not None:
             from datetime import timedelta
+
             now_mono = time.monotonic()
             if cooldown_until > now_mono:
                 delta_sec = cooldown_until - now_mono
                 cooldown_until_iso = (
-                    datetime.now(timezone.utc).replace(tzinfo=timezone.utc)
-                    + timedelta(seconds=delta_sec)
-                ).isoformat().replace("+00:00", "Z")
+                    (
+                        datetime.now(timezone.utc).replace(tzinfo=timezone.utc)
+                        + timedelta(seconds=delta_sec)
+                    )
+                    .isoformat()
+                    .replace("+00:00", "Z")
+                )
     except Exception:
         pass
 
@@ -84,6 +94,7 @@ async def dashboard_bootstrap(
     def _get_prices():
         try:
             from app.services.data_hub import data_hub
+
             return data_hub.get_all_prices() or {}
         except Exception:
             return {}
@@ -92,6 +103,7 @@ async def dashboard_bootstrap(
     def _get_wallet():
         try:
             from app.api.routes.home import _get_wallet_cached_enriched_with_new_session
+
             return _get_wallet_cached_enriched_with_new_session(account_id, max_assets)
         except Exception as e:
             logger.debug("[bootstrap] wallet snapshot error: %s", e)
@@ -103,6 +115,7 @@ async def dashboard_bootstrap(
     # KPIs: async (DB)
     try:
         from app.api.routes.home import _get_kpis_minimal
+
         kpis = await _get_kpis_minimal(account_id, db)
     except Exception as e:
         logger.debug("[bootstrap] kpis error: %s", e)
@@ -111,7 +124,9 @@ async def dashboard_bootstrap(
     server_ms = (time.perf_counter() - t0) * 1000
     logger.info(
         "dashboard_bootstrap_served account_id=%s request_id=%s server_ms=%.2f",
-        account_id, request_id, server_ms,
+        account_id,
+        request_id,
+        server_ms,
     )
 
     return {

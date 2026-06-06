@@ -1,6 +1,7 @@
 """
 Cüzdan tablosu: Binance bakiyesinde olmayan bot-kilitli varlık satırları (test paper + canlı hesap).
 """
+
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -31,7 +32,10 @@ def get_running_bots_equity_usd(db: Any, account_id: int) -> float:
         try:
             cfg = json.loads(getattr(bot, "config_json", None) or "{}")
             initial_usd = float(
-                cfg.get("initial_capital_usdt") or cfg.get("budget_usd") or cfg.get("bot_budget_quote") or 0
+                cfg.get("initial_capital_usdt")
+                or cfg.get("budget_usd")
+                or cfg.get("bot_budget_quote")
+                or 0
             )
         except Exception:
             initial_usd = 0.0
@@ -39,7 +43,10 @@ def get_running_bots_equity_usd(db: Any, account_id: int) -> float:
         pnl_data = PnlService.calculate_bot_pnl(db, bot.id, int(account_id))
         try:
             total += float(
-                compute_bot_equity_usd(db, bot, state, pnl_data, initial_usd=initial_usd) or 0
+                compute_bot_equity_usd(
+                    db, bot, state, pnl_data, initial_usd=initial_usd
+                )
+                or 0
             )
         except Exception:
             total += float(pnl_data.get("total_usd") or initial_usd or 0)
@@ -56,7 +63,9 @@ def wallet_prices_map_from_datahub() -> Dict[str, float]:
         return {}
 
 
-def resolve_asset_price_usd(asset: str, qty: float, prices: Dict[str, float]) -> Tuple[Optional[float], Optional[float]]:
+def resolve_asset_price_usd(
+    asset: str, qty: float, prices: Dict[str, float]
+) -> Tuple[Optional[float], Optional[float]]:
     """USD değeri ve birim fiyat (qty>0). Fiyat yoksa (None, None)."""
     if qty <= 0:
         return (0.0, None)
@@ -118,7 +127,9 @@ def append_bot_only_wallet_asset_rows(
             "free_usd": 0.0,
             "locked_usd": 0.0,
             "total_usd": round(bot_locked_val, 2) if value_usd is not None else None,
-            "bot_locked_usd": round(bot_locked_val, 2) if value_usd is not None else None,
+            "bot_locked_usd": round(bot_locked_val, 2)
+            if value_usd is not None
+            else None,
             "available_usd": 0.0,
         }
         assets.append(row)
@@ -148,7 +159,9 @@ def _test_running_bots_usdt_budget(db: Any, account_id: int) -> float:
     for bot in bots or []:
         try:
             raw = json.loads(getattr(bot, "config_json", None) or "{}")
-            total += float(raw.get("initial_capital_usdt") or raw.get("budget_usd") or 0)
+            total += float(
+                raw.get("initial_capital_usdt") or raw.get("budget_usd") or 0
+            )
         except Exception:
             continue
     return round(max(0.0, total), 2)
@@ -186,7 +199,9 @@ def build_test_account_wallet(account_id: int, db: Any) -> Dict[str, Any]:
     return out
 
 
-def apply_test_wallet_equity_totals(wallet: Dict[str, Any], db: Any, account_id: int) -> None:
+def apply_test_wallet_equity_totals(
+    wallet: Dict[str, Any], db: Any, account_id: int
+) -> None:
     """
     Test paper: satır bazlı bot_locked / available / total_usd; strip = satır toplamları.
     USDT (kullanılabilir + bot kilitli) + base (ör. ETH bot kilitli) satırları; toplam = 10k paper.
@@ -319,7 +334,9 @@ def apply_test_wallet_equity_totals(wallet: Dict[str, Any], db: Any, account_id:
         priced: List[Tuple[Dict[str, Any], float]] = []
         for base_row in non_stable_rows:
             asset_sym = (base_row.get("asset") or "").strip()
-            bl_qty = float(base_row.get("bot_locked") or 0) or float(bot_locked.get(asset_sym, 0) or 0)
+            bl_qty = float(base_row.get("bot_locked") or 0) or float(
+                bot_locked.get(asset_sym, 0) or 0
+            )
             bl_usd, px = resolve_asset_price_usd(asset_sym, bl_qty, prices)
             bl_usd = float(bl_usd or 0.0)
             if bl_qty <= 0 and remaining_usd > 0:
@@ -333,11 +350,15 @@ def apply_test_wallet_equity_totals(wallet: Dict[str, Any], db: Any, account_id:
         for base_row, bl_usd in priced:
             asset_sym = (base_row.get("asset") or "").strip()
             if total_non_stable_usd > 0 and remaining_usd > 0:
-                share = bl_usd / total_non_stable_usd if bl_usd > 0 else 1.0 / len(priced)
+                share = (
+                    bl_usd / total_non_stable_usd if bl_usd > 0 else 1.0 / len(priced)
+                )
                 base_bl_usd = round(remaining_usd * share, 2)
             else:
                 base_bl_usd = round(bl_usd, 2)
-            base_bl_qty = float(base_row.get("bot_locked") or 0) or float(bot_locked.get(asset_sym, 0) or 0)
+            base_bl_qty = float(base_row.get("bot_locked") or 0) or float(
+                bot_locked.get(asset_sym, 0) or 0
+            )
             base_row["bot_locked"] = round(base_bl_qty, 8)
             base_row["bot_locked_usd"] = base_bl_usd
             base_row["total_usd"] = base_bl_usd
@@ -358,7 +379,11 @@ def apply_test_wallet_equity_totals(wallet: Dict[str, Any], db: Any, account_id:
                 base_row["price_usd"] = round(base_bl_usd / base_bl_qty, 8)
 
     row_locked = round(
-        sum(float(a.get("locked_usd") or 0) for a in wallet.get("assets") or [] if isinstance(a, dict)),
+        sum(
+            float(a.get("locked_usd") or 0)
+            for a in wallet.get("assets") or []
+            if isinstance(a, dict)
+        ),
         2,
     )
     bot_equity = get_running_bots_equity_usd(db, account_id)
@@ -367,12 +392,18 @@ def apply_test_wallet_equity_totals(wallet: Dict[str, Any], db: Any, account_id:
     wallet["locked_usd"] = row_locked
     wallet["total_usd"] = round(float(TEST_PAPER_BALANCE_USDT), 2)
     wallet["free_usd"] = round(
-        sum(float(a.get("free_usd") or 0) for a in wallet.get("assets") or [] if isinstance(a, dict)),
+        sum(
+            float(a.get("free_usd") or 0)
+            for a in wallet.get("assets") or []
+            if isinstance(a, dict)
+        ),
         2,
     )
 
 
-def enrich_test_wallet_dashboard_kpi(wallet: Dict[str, Any], db: Any, account_id: int) -> None:
+def enrich_test_wallet_dashboard_kpi(
+    wallet: Dict[str, Any], db: Any, account_id: int
+) -> None:
     """Dashboard KPI strip + admin tile: spot_kpi_total_usd, daily_wallet_pnl_*."""
     import logging
 
@@ -383,7 +414,9 @@ def enrich_test_wallet_dashboard_kpi(wallet: Dict[str, Any], db: Any, account_id
             get_test_daily_spot_ref_for_pnl,
         )
 
-        total, _, bot_eq, _locked = compute_test_account_spot_strip_total_usd(wallet, db, account_id)
+        total, _, bot_eq, _locked = compute_test_account_spot_strip_total_usd(
+            wallet, db, account_id
+        )
         ref = get_test_daily_spot_ref_for_pnl(account_id, total)
         pnl_usd = round(total - ref, 2)
         pnl_pct = round((pnl_usd / ref * 100.0), 2) if ref > 0 else 0.0
@@ -392,4 +425,6 @@ def enrich_test_wallet_dashboard_kpi(wallet: Dict[str, Any], db: Any, account_id
         wallet["daily_wallet_pnl_pct"] = pnl_pct
         wallet["bot_locked_usd"] = bot_eq
     except Exception as ex:
-        logger.debug("enrich_test_wallet_dashboard_kpi account_id=%s: %s", account_id, ex)
+        logger.debug(
+            "enrich_test_wallet_dashboard_kpi account_id=%s: %s", account_id, ex
+        )

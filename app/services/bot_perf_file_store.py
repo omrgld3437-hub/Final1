@@ -6,6 +6,7 @@ Bot performans dosya deposu — hızlı okuma için kompakt JSON.
 - Saatlik (bugün): `.run/bot_perf/hourly/{account_id}_{date_tr}.json` — yedek.
 - Kalıcı günlük: `.run/bot_perf/daily/{account_id}.json` — yedek.
 """
+
 from __future__ import annotations
 
 import json
@@ -216,7 +217,12 @@ def hourly_to_series(data: Dict[str, Any]) -> List[Dict[str, Any]]:
 def load_daily_ledger(account_id: int) -> Dict[str, Any]:
     path = _daily_path(account_id)
     if not path.is_file():
-        return {"v": _STORE_VERSION, "aid": account_id, "days": {}, "u": datetime.now(timezone.utc).isoformat()}
+        return {
+            "v": _STORE_VERSION,
+            "aid": account_id,
+            "days": {},
+            "u": datetime.now(timezone.utc).isoformat(),
+        }
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
@@ -227,7 +233,12 @@ def load_daily_ledger(account_id: int) -> Dict[str, Any]:
         return data
     except Exception as e:
         logger.debug("load_daily_ledger account_id=%s: %s", account_id, e)
-        return {"v": _STORE_VERSION, "aid": account_id, "days": {}, "u": datetime.now(timezone.utc).isoformat()}
+        return {
+            "v": _STORE_VERSION,
+            "aid": account_id,
+            "days": {},
+            "u": datetime.now(timezone.utc).isoformat(),
+        }
 
 
 def record_bot_daily_pnl_file(
@@ -265,7 +276,12 @@ def record_bot_daily_pnl_file(
     try:
         _atomic_write_json(path, data)
     except Exception as e:
-        logger.warning("record_bot_daily_pnl_file account_id=%s bot_id=%s: %s", account_id, bot_id, e)
+        logger.warning(
+            "record_bot_daily_pnl_file account_id=%s bot_id=%s: %s",
+            account_id,
+            bot_id,
+            e,
+        )
 
 
 def rebuild_bot_daily_in_file(
@@ -313,7 +329,12 @@ def rebuild_bot_daily_in_file(
     try:
         _atomic_write_json(path, data)
     except Exception as e:
-        logger.warning("rebuild_bot_daily_in_file account_id=%s bot_id=%s: %s", account_id, bot_id, e)
+        logger.warning(
+            "rebuild_bot_daily_in_file account_id=%s bot_id=%s: %s",
+            account_id,
+            bot_id,
+            e,
+        )
 
 
 def write_daily_ledger(account_id: int, days: Dict[str, Any]) -> None:
@@ -354,7 +375,9 @@ def query_daily_series_from_file(
     return out
 
 
-def sum_daily_from_file(account_id: int, date_from: str, date_to: str) -> Tuple[float, float]:
+def sum_daily_from_file(
+    account_id: int, date_from: str, date_to: str
+) -> Tuple[float, float]:
     series = query_daily_series_from_file(account_id, date_from, date_to)
     pnl = sum(d["pnl_usd"] for d in series)
     fees = sum(d["fees_usd"] for d in series)
@@ -371,7 +394,9 @@ def _base_from_symbol(symbol: str) -> str:
     return s
 
 
-def _compact_cycle(entry: Dict[str, Any], *, symbol: str = "") -> Optional[Dict[str, Any]]:
+def _compact_cycle(
+    entry: Dict[str, Any], *, symbol: str = ""
+) -> Optional[Dict[str, Any]]:
     """Tamamlanan tur → kompakt kayıt."""
     if not entry or not isinstance(entry, dict):
         return None
@@ -447,7 +472,14 @@ def _cycle_dedupe_key(compact: Dict[str, Any]) -> str:
 def load_bot_cycles_file(bot_id: int) -> Dict[str, Any]:
     path = _bot_cycles_path(bot_id)
     if not path.is_file():
-        return {"v": _STORE_VERSION, "bid": bot_id, "aid": None, "sym": "", "c": [], "u": datetime.now(timezone.utc).isoformat()}
+        return {
+            "v": _STORE_VERSION,
+            "bid": bot_id,
+            "aid": None,
+            "sym": "",
+            "c": [],
+            "u": datetime.now(timezone.utc).isoformat(),
+        }
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
@@ -458,7 +490,14 @@ def load_bot_cycles_file(bot_id: int) -> Dict[str, Any]:
         return data
     except Exception as e:
         logger.debug("load_bot_cycles_file bot_id=%s: %s", bot_id, e)
-        return {"v": _STORE_VERSION, "bid": bot_id, "aid": None, "sym": "", "c": [], "u": datetime.now(timezone.utc).isoformat()}
+        return {
+            "v": _STORE_VERSION,
+            "bid": bot_id,
+            "aid": None,
+            "sym": "",
+            "c": [],
+            "u": datetime.now(timezone.utc).isoformat(),
+        }
 
 
 def list_bot_completed_cycles(bot_id: int) -> List[Dict[str, Any]]:
@@ -495,9 +534,7 @@ def reconcile_bot_cycles_file_with_state(
     data = load_bot_cycles_file(bot_id)
     file_aid = data.get("aid")
     file_keys = {
-        _cycle_dedupe_key(c)
-        for c in (data.get("c") or [])
-        if isinstance(c, dict)
+        _cycle_dedupe_key(c) for c in (data.get("c") or []) if isinstance(c, dict)
     }
     state_keys = _completed_cycles_dedupe_keys(completed_cycles, symbol=symbol)
     mismatch = False

@@ -1,4 +1,5 @@
 """Small shared services for the bots_engine API module."""
+
 from __future__ import annotations
 
 import logging
@@ -20,4 +21,9 @@ def detail_err(code: str, message: str, request_id: str) -> dict:
         request_id,
         message,
     )
-    return {"error_code": code, "message": message, "request_id": request_id, "error_id": error_id}
+    return {
+        "error_code": code,
+        "message": message,
+        "request_id": request_id,
+        "error_id": error_id,
+    }

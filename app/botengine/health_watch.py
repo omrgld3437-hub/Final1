@@ -2,6 +2,7 @@
 Per-bot lightweight health checks (worker ~60s). Emits HEALTH_WARN / HEALTH_CRITICAL to bot_engine_events.
 Does not stop bots for recoverable faults — alerts only; loop crashes are auto-restarted while status=running.
 """
+
 from __future__ import annotations
 
 import json
@@ -20,29 +21,35 @@ logger = logging.getLogger(__name__)
 _WARN_EMIT_INTERVAL = 300.0
 _CRIT_EMIT_INTERVAL = 120.0
 
-_CRITICAL_ERROR_CODES = frozenset({
-    "API_UNAUTHORIZED",
-    "BINANCE_UNREACHABLE",
-    "SAFE_STOP",
-    "ACCOUNT_KEYS_MISSING",
-    "WORKER_ONLY_OPERATION",
-})
+_CRITICAL_ERROR_CODES = frozenset(
+    {
+        "API_UNAUTHORIZED",
+        "BINANCE_UNREACHABLE",
+        "SAFE_STOP",
+        "ACCOUNT_KEYS_MISSING",
+        "WORKER_ONLY_OPERATION",
+    }
+)
 
 # Tick/loop exceptions: bot running kalır ve döngü devam eder / yeniden başlar.
 # Bunlar durduruldu statüsü üretmemeli; aktif takip için sarı uyarı seviyesindedir.
-_RECOVERABLE_LOOP_ERRORS = frozenset({
-    "BOT_LOOP_TOPLEVEL_EXCEPTION",
-    "BOT_LOOP_TRDCA_EXCEPTION",
-    "BOT_TICK_EXCEPTION",
-    "RUN_ACTION_EXCEPTION",
-})
+_RECOVERABLE_LOOP_ERRORS = frozenset(
+    {
+        "BOT_LOOP_TOPLEVEL_EXCEPTION",
+        "BOT_LOOP_TRDCA_EXCEPTION",
+        "BOT_TICK_EXCEPTION",
+        "RUN_ACTION_EXCEPTION",
+    }
+)
 
-_FATAL_PAUSE_CODES = frozenset({
-    "API_UNAUTHORIZED",
-    "ACCOUNT_KEYS_MISSING",
-    "INSUFFICIENT_BALANCE",
-    "SAFE_STOP",
-})
+_FATAL_PAUSE_CODES = frozenset(
+    {
+        "API_UNAUTHORIZED",
+        "ACCOUNT_KEYS_MISSING",
+        "INSUFFICIENT_BALANCE",
+        "SAFE_STOP",
+    }
+)
 
 _HEALTH_MESSAGES: Dict[str, Dict[str, Any]] = {
     "TICK_STALE_WARN": {
@@ -262,20 +269,25 @@ _HEALTH_MESSAGES: Dict[str, Dict[str, Any]] = {
     },
 }
 
-_STATE_SKIP_HEALTH_KEYS = frozenset({
-    "LOT_SIZE",
-    "MIN_NOTIONAL",
-    "MIN_NOTIONAL_AFTER_CAP",
-    "ORDER_FAILED",
-    "INSUFFICIENT_QUOTE",
-    "ORDER_TIMEOUT",
-})
+_STATE_SKIP_HEALTH_KEYS = frozenset(
+    {
+        "LOT_SIZE",
+        "MIN_NOTIONAL",
+        "MIN_NOTIONAL_AFTER_CAP",
+        "ORDER_FAILED",
+        "INSUFFICIENT_QUOTE",
+        "ORDER_TIMEOUT",
+    }
+)
 
-_CONNECTIVITY_HEALTH_DEDUP_KEYS = frozenset({
-    "API_UNAUTHORIZED",
-    "ACCOUNT_KEYS_MISSING",
-    "BINANCE_UNREACHABLE",
-})
+_CONNECTIVITY_HEALTH_DEDUP_KEYS = frozenset(
+    {
+        "API_UNAUTHORIZED",
+        "ACCOUNT_KEYS_MISSING",
+        "BINANCE_UNREACHABLE",
+    }
+)
+
 
 def _wallet_snapshot_warn_age_sec() -> float:
     try:
@@ -284,7 +296,9 @@ def _wallet_snapshot_warn_age_sec() -> float:
         return float(os.getenv("WALLET_SNAPSHOT_WARN_AGE_SEC", "900"))
 
 
-def _account_wallet_stale_alert(db: Optional[Session], account_id: int) -> Optional[Dict[str, Any]]:
+def _account_wallet_stale_alert(
+    db: Optional[Session], account_id: int
+) -> Optional[Dict[str, Any]]:
     """Return warning when the latest spot wallet snapshot is old enough to be user-visible stale."""
     if db is None or not account_id:
         return None
@@ -295,7 +309,9 @@ def _account_wallet_stale_alert(db: Optional[Session], account_id: int) -> Optio
         acc = db.query(Account).filter(Account.id == int(account_id)).first()
         if not acc:
             return None
-        if not (getattr(acc, "api_key_enc", None) and getattr(acc, "api_secret_enc", None)):
+        if not (
+            getattr(acc, "api_key_enc", None) and getattr(acc, "api_secret_enc", None)
+        ):
             return None
         row = (
             db.query(AssetSnapshot)
@@ -319,6 +335,7 @@ def _account_wallet_stale_alert(db: Optional[Session], account_id: int) -> Optio
         # (gecici stream kopukluğu sahte uyarı üretmesin).
         try:
             from app.botengine.user_stream import stream_down_since
+
             down_ts = stream_down_since(int(account_id))
             if down_ts is not None:
                 threshold_s = max(threshold_s, threshold_s * 2)
@@ -336,13 +353,17 @@ def _account_wallet_stale_alert(db: Optional[Session], account_id: int) -> Optio
             msg = "Cüzdan verisi henüz canlı snapshot üretmedi"
         else:
             msg = f"Cüzdan verisi güncel değil: son snapshot {age_s / 60:.0f} dk önce"
-        return _alert_from_tmpl("WALLET_SNAPSHOT_STALE", "warn", tmpl, meta, message=msg)
+        return _alert_from_tmpl(
+            "WALLET_SNAPSHOT_STALE", "warn", tmpl, meta, message=msg
+        )
     except Exception as e:
         logger.debug("health_watch wallet stale account_id=%s: %s", account_id, e)
         return None
 
 
-def _recent_event_with_code(db: Session, bot_id: int, code: str, within_sec: float = 900.0) -> bool:
+def _recent_event_with_code(
+    db: Session, bot_id: int, code: str, within_sec: float = 900.0
+) -> bool:
     """True if SKIP/ERROR log already documents this code (skip duplicate HEALTH emit)."""
     try:
         from app.botengine.state_store import list_events
@@ -356,7 +377,11 @@ def _recent_event_with_code(db: Session, bot_id: int, code: str, within_sec: flo
             if ty not in ("SKIP_REASON", "ERROR"):
                 continue
             meta = ev.get("meta") or {}
-            ec = (meta.get("skip_reason") or meta.get("error_code") or "").strip().upper()
+            ec = (
+                (meta.get("skip_reason") or meta.get("error_code") or "")
+                .strip()
+                .upper()
+            )
             if ec != c:
                 continue
             ts = ev.get("ts")
@@ -392,7 +417,10 @@ def _count_recent_events(
             ty = (ev.get("type") or "").upper()
             if types and ty not in types:
                 continue
-            if message_contains and message_contains.lower() not in str(ev.get("message") or "").lower():
+            if (
+                message_contains
+                and message_contains.lower() not in str(ev.get("message") or "").lower()
+            ):
                 continue
             ts = ev.get("ts")
             if ts:
@@ -473,7 +501,8 @@ def emit_resilience_continue(
         bot_id,
         account_id,
         "HEALTH_WARN",
-        f"Tick hatası ({code}) — bot çalışmaya devam ediyor" + (f" · {short}" if short else ""),
+        f"Tick hatası ({code}) — bot çalışmaya devam ediyor"
+        + (f" · {short}" if short else ""),
         meta,
     )
     append_event(
@@ -569,7 +598,9 @@ def _format_tr_duration(seconds: Optional[int]) -> str:
     return f"{hours} saat"
 
 
-def humanize_restart_reason(reason: str, *, unavailable_sec: Optional[int] = None) -> str:
+def humanize_restart_reason(
+    reason: str, *, unavailable_sec: Optional[int] = None
+) -> str:
     """Teknik restart_reason kodunu Türkçe kullanıcı mesajına çevirir."""
     r = (reason or "").strip()
     low = r.lower()
@@ -610,7 +641,9 @@ def emit_loop_auto_restart(
     now = time.time()
     last_emit = float(emit_map.get("BOT_LOOP_AUTO_RESTART") or 0)
     worker_started = _worker_started_ts()
-    new_worker_boot = bool(worker_started and last_emit > 0 and last_emit < worker_started)
+    new_worker_boot = bool(
+        worker_started and last_emit > 0 and last_emit < worker_started
+    )
     if not new_worker_boot and now - last_emit < 60.0:
         return
     emit_map["BOT_LOOP_AUTO_RESTART"] = now
@@ -663,7 +696,10 @@ def emit_loop_auto_restart(
         bot = db.query(Bot).filter(Bot.id == int(bot_id)).first()
         if bot and (bot.status or "").lower() == "running":
             mark_pending_connectivity_stable(
-                db, bot, state, previous_error="WORKER_RESTART",
+                db,
+                bot,
+                state,
+                previous_error="WORKER_RESTART",
             )
             save_state(db, bot_id, account_id, state)
     except Exception as flush_ex:
@@ -754,6 +790,7 @@ def _loop_task_alive(bot_id: int) -> Optional[bool]:
         return None
     try:
         from app.botengine.orchestrator import _tasks
+
         task = _tasks.get(bot_id)
         if task is None:
             return False
@@ -762,7 +799,9 @@ def _loop_task_alive(bot_id: int) -> Optional[bool]:
         return None
 
 
-def evaluate_bot_health(bot, state: Optional[Dict[str, Any]], db: Session) -> List[Dict[str, Any]]:
+def evaluate_bot_health(
+    bot, state: Optional[Dict[str, Any]], db: Session
+) -> List[Dict[str, Any]]:
     """Return active alerts [{level, code, title, message, cause, actions, meta}]. No DB writes."""
     from app.botengine.state_store import load_state
 
@@ -780,20 +819,29 @@ def evaluate_bot_health(bot, state: Optional[Dict[str, Any]], db: Session) -> Li
             _first_fail_ts_by_account,
             _TRANSIENT_OUTAGE_LOG_DELAY_SEC,
         )
+
         bfail = active_failure(bot.account_id)
         if bfail:
             first_fail = _first_fail_ts_by_account.get(int(bot.account_id), 0)
-            fail_age = _time.time() - first_fail if first_fail > 0 else _TRANSIENT_OUTAGE_LOG_DELAY_SEC + 1
+            fail_age = (
+                _time.time() - first_fail
+                if first_fail > 0
+                else _TRANSIENT_OUTAGE_LOG_DELAY_SEC + 1
+            )
             if fail_age >= _TRANSIENT_OUTAGE_LOG_DELAY_SEC:
                 tmpl = _HEALTH_MESSAGES["BINANCE_UNREACHABLE"]
-                alerts.append(_alert_from_tmpl(
-                    "BINANCE_UNREACHABLE", "critical", tmpl,
-                    {
-                        "error_code": bfail.get("error_code"),
-                        "source": bfail.get("source"),
-                    },
-                    message=bfail.get("message") or tmpl.get("title"),
-                ))
+                alerts.append(
+                    _alert_from_tmpl(
+                        "BINANCE_UNREACHABLE",
+                        "critical",
+                        tmpl,
+                        {
+                            "error_code": bfail.get("error_code"),
+                            "source": bfail.get("source"),
+                        },
+                        message=bfail.get("message") or tmpl.get("title"),
+                    )
+                )
     except Exception as e:
         logger.debug("health_watch binance_connectivity bot_id=%s: %s", bot.id, e)
     if not any(a.get("code") == "BINANCE_UNREACHABLE" for a in alerts):
@@ -821,20 +869,43 @@ def evaluate_bot_health(bot, state: Optional[Dict[str, Any]], db: Session) -> Li
         started = _bot_started_ts(bot)
         if started and (now - started) > 90:
             tmpl = _HEALTH_MESSAGES["NO_TICK_YET"]
-            alerts.append(_alert_from_tmpl("NO_TICK_YET", "warn", tmpl, {"tick_age_s": None, "interval_s": interval}))
+            alerts.append(
+                _alert_from_tmpl(
+                    "NO_TICK_YET",
+                    "warn",
+                    tmpl,
+                    {"tick_age_s": None, "interval_s": interval},
+                )
+            )
     elif tick_age is not None:
         if tick_age >= crit_thresh:
             tmpl = _HEALTH_MESSAGES["TICK_STALE_CRIT"]
-            alerts.append(_alert_from_tmpl(
-                "TICK_STALE_CRIT", "critical", tmpl,
-                {"tick_age_s": round(tick_age, 1), "interval_s": interval, "threshold_s": crit_thresh},
-            ))
+            alerts.append(
+                _alert_from_tmpl(
+                    "TICK_STALE_CRIT",
+                    "critical",
+                    tmpl,
+                    {
+                        "tick_age_s": round(tick_age, 1),
+                        "interval_s": interval,
+                        "threshold_s": crit_thresh,
+                    },
+                )
+            )
         elif tick_age >= warn_thresh:
             tmpl = _HEALTH_MESSAGES["TICK_STALE_WARN"]
-            alerts.append(_alert_from_tmpl(
-                "TICK_STALE_WARN", "warn", tmpl,
-                {"tick_age_s": round(tick_age, 1), "interval_s": interval, "threshold_s": warn_thresh},
-            ))
+            alerts.append(
+                _alert_from_tmpl(
+                    "TICK_STALE_WARN",
+                    "warn",
+                    tmpl,
+                    {
+                        "tick_age_s": round(tick_age, 1),
+                        "interval_s": interval,
+                        "threshold_s": warn_thresh,
+                    },
+                )
+            )
 
     err_code = (state.get("last_error_code") or "").strip()
     ack_at = int(state.get("health_ack_at") or 0)
@@ -843,52 +914,77 @@ def evaluate_bot_health(bot, state: Optional[Dict[str, Any]], db: Session) -> Li
     if backoff_until > now and status == "running":
         tmpl = _HEALTH_MESSAGES.get("CONNECTIVITY_DEGRADED")
         if tmpl:
-            alerts.append(_alert_from_tmpl(
-                "CONNECTIVITY_DEGRADED", "warn", tmpl,
-                {"backoff_until": backoff_until},
-            ))
+            alerts.append(
+                _alert_from_tmpl(
+                    "CONNECTIVITY_DEGRADED",
+                    "warn",
+                    tmpl,
+                    {"backoff_until": backoff_until},
+                )
+            )
 
     price_stale_since = int(state.get("price_stale_since") or 0)
     if price_stale_since and (now - price_stale_since) >= 90:
         tmpl = _HEALTH_MESSAGES["PRICE_STALE_OR_MISSING"]
-        alerts.append(_alert_from_tmpl(
-            "PRICE_STALE_OR_MISSING", "warn", tmpl,
-            {"price_stale_since": price_stale_since, "stale_s": now - price_stale_since},
-        ))
+        alerts.append(
+            _alert_from_tmpl(
+                "PRICE_STALE_OR_MISSING",
+                "warn",
+                tmpl,
+                {
+                    "price_stale_since": price_stale_since,
+                    "stale_s": now - price_stale_since,
+                },
+            )
+        )
 
     if err_code:
         stale_after_ack = ack_at > 0 and (not err_since or err_since <= ack_at)
         if not stale_after_ack:
             if err_code in _RECOVERABLE_LOOP_ERRORS:
                 tmpl = _HEALTH_MESSAGES["BOT_CONTINUES_ON_ERROR"]
-                alerts.append(_alert_from_tmpl(
-                    "BOT_CONTINUES_ON_ERROR", "warn", tmpl,
-                    {"error_code": err_code, "continues_running": True},
-                    message=f"Tick hatası ({err_code}) — bot çalışmaya devam ediyor",
-                ))
+                alerts.append(
+                    _alert_from_tmpl(
+                        "BOT_CONTINUES_ON_ERROR",
+                        "warn",
+                        tmpl,
+                        {"error_code": err_code, "continues_running": True},
+                        message=f"Tick hatası ({err_code}) — bot çalışmaya devam ediyor",
+                    )
+                )
             elif err_code in _CRITICAL_ERROR_CODES or err_code in _FATAL_PAUSE_CODES:
                 tmpl = _HEALTH_MESSAGES["STATE_ERROR"]
-                alerts.append(_alert_from_tmpl(
-                    "STATE_ERROR", "critical", tmpl,
-                    {"error_code": err_code},
-                    message=f"Kritik hata: {err_code}",
-                ))
+                alerts.append(
+                    _alert_from_tmpl(
+                        "STATE_ERROR",
+                        "critical",
+                        tmpl,
+                        {"error_code": err_code},
+                        message=f"Kritik hata: {err_code}",
+                    )
+                )
             elif err_code in _STATE_SKIP_HEALTH_KEYS:
                 tmpl = _HEALTH_MESSAGES[err_code]
-                alerts.append(_alert_from_tmpl(
-                    err_code,
-                    str(tmpl.get("severity") or "warn"),
-                    tmpl,
-                    {"error_code": err_code},
-                    message=str(tmpl.get("title") or err_code),
-                ))
+                alerts.append(
+                    _alert_from_tmpl(
+                        err_code,
+                        str(tmpl.get("severity") or "warn"),
+                        tmpl,
+                        {"error_code": err_code},
+                        message=str(tmpl.get("title") or err_code),
+                    )
+                )
             else:
                 tmpl = _HEALTH_MESSAGES["STATE_ERROR_WARN"]
-                alerts.append(_alert_from_tmpl(
-                    "STATE_ERROR_WARN", "warn", tmpl,
-                    {"error_code": err_code},
-                    message=f"Uyarı kodu: {err_code}",
-                ))
+                alerts.append(
+                    _alert_from_tmpl(
+                        "STATE_ERROR_WARN",
+                        "warn",
+                        tmpl,
+                        {"error_code": err_code},
+                        message=f"Uyarı kodu: {err_code}",
+                    )
+                )
 
     ia_done = state.get("initial_allocation_done") is True
     base_bal = float(state.get("base_balance") or 0)
@@ -896,7 +992,11 @@ def evaluate_bot_health(bot, state: Optional[Dict[str, Any]], db: Session) -> Li
         started = _bot_started_ts(bot)
         if started and (now - started) > 120 and not _recent_initial_fill(db, bot.id):
             tmpl = _HEALTH_MESSAGES["FIRST_BUY_STUCK"]
-            alerts.append(_alert_from_tmpl("FIRST_BUY_STUCK", "warn", tmpl, {"initial_allocation_done": False}))
+            alerts.append(
+                _alert_from_tmpl(
+                    "FIRST_BUY_STUCK", "warn", tmpl, {"initial_allocation_done": False}
+                )
+            )
 
     loop_ok = _loop_task_alive(bot.id)
     if loop_ok is False:
@@ -909,6 +1009,7 @@ def evaluate_bot_health(bot, state: Optional[Dict[str, Any]], db: Session) -> Li
 
     try:
         from app.botengine.state_store import list_events
+
         recent = list_events(db, bot.id, limit=40)
         fail_count = 0
         cutoff = now - 900
@@ -923,7 +1024,12 @@ def evaluate_bot_health(bot, state: Optional[Dict[str, Any]], db: Session) -> Li
             if skip in ("LOT_SIZE", "MIN_NOTIONAL", "MIN_NOTIONAL_AFTER_CAP"):
                 if not meta.get("binance_code"):
                     continue
-            if skip not in ("ORDER_FAILED", "LOT_SIZE", "MIN_NOTIONAL", "INSUFFICIENT_QUOTE"):
+            if skip not in (
+                "ORDER_FAILED",
+                "LOT_SIZE",
+                "MIN_NOTIONAL",
+                "INSUFFICIENT_QUOTE",
+            ):
                 continue
             ts = ev.get("ts")
             if ts:
@@ -941,26 +1047,44 @@ def evaluate_bot_health(bot, state: Optional[Dict[str, Any]], db: Session) -> Li
             fail_count += 1
         if fail_count >= 3:
             tmpl = _HEALTH_MESSAGES["REPEATED_ORDER_FAIL"]
-            alerts.append(_alert_from_tmpl(
-                "REPEATED_ORDER_FAIL", "warn", tmpl,
-                {"fail_count": fail_count, "window_min": 15},
-            ))
+            alerts.append(
+                _alert_from_tmpl(
+                    "REPEATED_ORDER_FAIL",
+                    "warn",
+                    tmpl,
+                    {"fail_count": fail_count, "window_min": 15},
+                )
+            )
     except Exception as e:
         logger.debug("health_watch recent skips bot_id=%s: %s", bot.id, e)
 
-    lock_busy_n = _count_recent_events(db, bot.id, types=("LOCK_BUSY", "LOCK_LEASE_EXPIRED"), within_sec=900.0)
+    lock_busy_n = _count_recent_events(
+        db, bot.id, types=("LOCK_BUSY", "LOCK_LEASE_EXPIRED"), within_sec=900.0
+    )
     if lock_busy_n >= 5:
         tmpl = _HEALTH_MESSAGES["REPEATED_LOCK_BUSY"]
-        alerts.append(_alert_from_tmpl(
-            "REPEATED_LOCK_BUSY", "warn", tmpl, {"lock_skip_count": lock_busy_n, "window_min": 15},
-        ))
+        alerts.append(
+            _alert_from_tmpl(
+                "REPEATED_LOCK_BUSY",
+                "warn",
+                tmpl,
+                {"lock_skip_count": lock_busy_n, "window_min": 15},
+            )
+        )
 
-    slip_n = _count_recent_events(db, bot.id, types=("SLIPPAGE_WARN",), within_sec=900.0)
+    slip_n = _count_recent_events(
+        db, bot.id, types=("SLIPPAGE_WARN",), within_sec=900.0
+    )
     if slip_n >= 3:
         tmpl = _HEALTH_MESSAGES["REPEATED_SLIPPAGE"]
-        alerts.append(_alert_from_tmpl(
-            "REPEATED_SLIPPAGE", "warn", tmpl, {"slippage_count": slip_n, "window_min": 15},
-        ))
+        alerts.append(
+            _alert_from_tmpl(
+                "REPEATED_SLIPPAGE",
+                "warn",
+                tmpl,
+                {"slippage_count": slip_n, "window_min": 15},
+            )
+        )
 
     return alerts
 
@@ -989,6 +1113,7 @@ def evaluate_bot_health_lite(
     if account_failure is _UNSET:
         try:
             from app.services.binance_connectivity import active_failure
+
             account_failure = active_failure(bot.account_id)
         except Exception:
             account_failure = None
@@ -1000,29 +1125,46 @@ def evaluate_bot_health_lite(
                 _first_fail_ts_by_account,
                 _TRANSIENT_OUTAGE_LOG_DELAY_SEC,
             )
+
             first_fail = _first_fail_ts_by_account.get(int(bot.account_id), 0)
-            fail_age = _time.time() - first_fail if first_fail > 0 else _TRANSIENT_OUTAGE_LOG_DELAY_SEC + 1
+            fail_age = (
+                _time.time() - first_fail
+                if first_fail > 0
+                else _TRANSIENT_OUTAGE_LOG_DELAY_SEC + 1
+            )
         except Exception:
             fail_age = _TRANSIENT_OUTAGE_LOG_DELAY_SEC + 1
         if fail_age >= _TRANSIENT_OUTAGE_LOG_DELAY_SEC:
             tmpl = _HEALTH_MESSAGES["BINANCE_UNREACHABLE"]
-            alerts.append(_alert_from_tmpl(
-                "BINANCE_UNREACHABLE", "critical", tmpl,
-                {
-                    "error_code": account_failure.get("error_code"),
-                    "source": account_failure.get("source"),
-                },
-                message=account_failure.get("message") or tmpl.get("title"),
-            ))
-    if not any(a.get("code") == "BINANCE_UNREACHABLE" for a in alerts) and account_wallet_alert:
+            alerts.append(
+                _alert_from_tmpl(
+                    "BINANCE_UNREACHABLE",
+                    "critical",
+                    tmpl,
+                    {
+                        "error_code": account_failure.get("error_code"),
+                        "source": account_failure.get("source"),
+                    },
+                    message=account_failure.get("message") or tmpl.get("title"),
+                )
+            )
+    if (
+        not any(a.get("code") == "BINANCE_UNREACHABLE" for a in alerts)
+        and account_wallet_alert
+    ):
         alerts.append(dict(account_wallet_alert))
 
     # paused_insufficient_balance: status running değil ama kullanıcıya kritik bildir
     if status == "paused_insufficient_balance":
         tmpl = _HEALTH_MESSAGES["INSUFFICIENT_BALANCE"]
-        alerts.append(_alert_from_tmpl(
-            "INSUFFICIENT_BALANCE", "critical", tmpl, {},
-        ))
+        alerts.append(
+            _alert_from_tmpl(
+                "INSUFFICIENT_BALANCE",
+                "critical",
+                tmpl,
+                {},
+            )
+        )
         return alerts
 
     if status != "running":
@@ -1039,39 +1181,71 @@ def evaluate_bot_health_lite(
         started = _bot_started_ts(bot)
         if started and (now - started) > 90:
             tmpl = _HEALTH_MESSAGES["NO_TICK_YET"]
-            alerts.append(_alert_from_tmpl(
-                "NO_TICK_YET", "warn", tmpl,
-                {"tick_age_s": None, "interval_s": interval},
-            ))
+            alerts.append(
+                _alert_from_tmpl(
+                    "NO_TICK_YET",
+                    "warn",
+                    tmpl,
+                    {"tick_age_s": None, "interval_s": interval},
+                )
+            )
     elif tick_age is not None:
         if tick_age >= crit_thresh:
             tmpl = _HEALTH_MESSAGES["TICK_STALE_CRIT"]
-            alerts.append(_alert_from_tmpl(
-                "TICK_STALE_CRIT", "critical", tmpl,
-                {"tick_age_s": round(tick_age, 1), "interval_s": interval, "threshold_s": crit_thresh},
-            ))
+            alerts.append(
+                _alert_from_tmpl(
+                    "TICK_STALE_CRIT",
+                    "critical",
+                    tmpl,
+                    {
+                        "tick_age_s": round(tick_age, 1),
+                        "interval_s": interval,
+                        "threshold_s": crit_thresh,
+                    },
+                )
+            )
         elif tick_age >= warn_thresh:
             tmpl = _HEALTH_MESSAGES["TICK_STALE_WARN"]
-            alerts.append(_alert_from_tmpl(
-                "TICK_STALE_WARN", "warn", tmpl,
-                {"tick_age_s": round(tick_age, 1), "interval_s": interval, "threshold_s": warn_thresh},
-            ))
+            alerts.append(
+                _alert_from_tmpl(
+                    "TICK_STALE_WARN",
+                    "warn",
+                    tmpl,
+                    {
+                        "tick_age_s": round(tick_age, 1),
+                        "interval_s": interval,
+                        "threshold_s": warn_thresh,
+                    },
+                )
+            )
 
     backoff_until = float(state.get("backoff_until") or 0)
     if backoff_until > now:
         tmpl = _HEALTH_MESSAGES.get("CONNECTIVITY_DEGRADED")
         if tmpl:
-            alerts.append(_alert_from_tmpl(
-                "CONNECTIVITY_DEGRADED", "warn", tmpl, {"backoff_until": backoff_until},
-            ))
+            alerts.append(
+                _alert_from_tmpl(
+                    "CONNECTIVITY_DEGRADED",
+                    "warn",
+                    tmpl,
+                    {"backoff_until": backoff_until},
+                )
+            )
 
     price_stale_since = int(state.get("price_stale_since") or 0)
     if price_stale_since and (now - price_stale_since) >= 90:
         tmpl = _HEALTH_MESSAGES["PRICE_STALE_OR_MISSING"]
-        alerts.append(_alert_from_tmpl(
-            "PRICE_STALE_OR_MISSING", "warn", tmpl,
-            {"price_stale_since": price_stale_since, "stale_s": now - price_stale_since},
-        ))
+        alerts.append(
+            _alert_from_tmpl(
+                "PRICE_STALE_OR_MISSING",
+                "warn",
+                tmpl,
+                {
+                    "price_stale_since": price_stale_since,
+                    "stale_s": now - price_stale_since,
+                },
+            )
+        )
 
     err_code = (state.get("last_error_code") or "").strip()
     ack_at = int(state.get("health_ack_at") or 0)
@@ -1081,34 +1255,48 @@ def evaluate_bot_health_lite(
         if not stale_after_ack:
             if err_code in _RECOVERABLE_LOOP_ERRORS:
                 tmpl = _HEALTH_MESSAGES["BOT_CONTINUES_ON_ERROR"]
-                alerts.append(_alert_from_tmpl(
-                    "BOT_CONTINUES_ON_ERROR", "warn", tmpl,
-                    {"error_code": err_code, "continues_running": True},
-                    message=f"Tick hatası ({err_code}) — bot çalışmaya devam ediyor",
-                ))
+                alerts.append(
+                    _alert_from_tmpl(
+                        "BOT_CONTINUES_ON_ERROR",
+                        "warn",
+                        tmpl,
+                        {"error_code": err_code, "continues_running": True},
+                        message=f"Tick hatası ({err_code}) — bot çalışmaya devam ediyor",
+                    )
+                )
             elif err_code in _CRITICAL_ERROR_CODES or err_code in _FATAL_PAUSE_CODES:
                 tmpl = _HEALTH_MESSAGES["STATE_ERROR"]
-                alerts.append(_alert_from_tmpl(
-                    "STATE_ERROR", "critical", tmpl,
-                    {"error_code": err_code},
-                    message=f"Kritik hata: {err_code}",
-                ))
+                alerts.append(
+                    _alert_from_tmpl(
+                        "STATE_ERROR",
+                        "critical",
+                        tmpl,
+                        {"error_code": err_code},
+                        message=f"Kritik hata: {err_code}",
+                    )
+                )
             elif err_code in _STATE_SKIP_HEALTH_KEYS:
                 tmpl = _HEALTH_MESSAGES[err_code]
-                alerts.append(_alert_from_tmpl(
-                    err_code,
-                    str(tmpl.get("severity") or "warn"),
-                    tmpl,
-                    {"error_code": err_code},
-                    message=str(tmpl.get("title") or err_code),
-                ))
+                alerts.append(
+                    _alert_from_tmpl(
+                        err_code,
+                        str(tmpl.get("severity") or "warn"),
+                        tmpl,
+                        {"error_code": err_code},
+                        message=str(tmpl.get("title") or err_code),
+                    )
+                )
             else:
                 tmpl = _HEALTH_MESSAGES["STATE_ERROR_WARN"]
-                alerts.append(_alert_from_tmpl(
-                    "STATE_ERROR_WARN", "warn", tmpl,
-                    {"error_code": err_code},
-                    message=f"Uyarı kodu: {err_code}",
-                ))
+                alerts.append(
+                    _alert_from_tmpl(
+                        "STATE_ERROR_WARN",
+                        "warn",
+                        tmpl,
+                        {"error_code": err_code},
+                        message=f"Uyarı kodu: {err_code}",
+                    )
+                )
 
     loop_ok = _loop_task_alive(bot.id)
     if loop_ok is False:
@@ -1157,7 +1345,9 @@ def _should_emit(state: Dict[str, Any], code: str, severity: str) -> bool:
     return True
 
 
-def emit_health_alerts(db: Session, bot, state: Dict[str, Any], alerts: List[Dict[str, Any]]) -> int:
+def emit_health_alerts(
+    db: Session, bot, state: Dict[str, Any], alerts: List[Dict[str, Any]]
+) -> int:
     """Throttled append_event for new alerts. Returns count emitted."""
     from app.botengine.state_store import append_event, save_state
 
@@ -1168,7 +1358,9 @@ def emit_health_alerts(db: Session, bot, state: Dict[str, Any], alerts: List[Dic
         code = a.get("code") or "HEALTH"
         level = a.get("level") or "warn"
         ec = ((a.get("meta") or {}).get("error_code") or code or "").strip().upper()
-        if ec in (_STATE_SKIP_HEALTH_KEYS | _CONNECTIVITY_HEALTH_DEDUP_KEYS) and _recent_event_with_code(db, bot.id, ec):
+        if ec in (
+            _STATE_SKIP_HEALTH_KEYS | _CONNECTIVITY_HEALTH_DEDUP_KEYS
+        ) and _recent_event_with_code(db, bot.id, ec):
             continue
         if not _should_emit(state, code, level):
             continue

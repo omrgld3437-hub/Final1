@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Create database tables if they do not exist."""
+
 import sys
+
 sys.path.insert(0, ".")
 
 from app.db.base import Base, engine

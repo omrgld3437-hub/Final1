@@ -2,6 +2,7 @@
 Üst ticker şeridi için canlı fiyat özeti: FX, metals, crypto.
 Cache TTL ve in-flight dedupe ile tek endpoint.
 """
+
 from __future__ import annotations
 import asyncio
 import logging
@@ -31,10 +32,12 @@ _http_client: Optional[httpx.AsyncClient] = None
 _fx_day_open: Dict[str, float] = {}
 _fx_day_open_date: str = ""
 
+
 def _ticker_chg_from_hub(*symbols: str) -> Optional[float]:
     """Binance 24s % — DataHub ticker/24hr veya WS mini."""
     try:
         from app.services.data_hub import data_hub
+
         for sym in symbols:
             if not sym:
                 continue
@@ -45,12 +48,14 @@ def _ticker_chg_from_hub(*symbols: str) -> Optional[float]:
         logger.debug("[pricing_summary] hub chg %s: %s", symbols, e)
     return None
 
+
 def _fx_daily_chg_pct(field: str, current: Optional[float]) -> Optional[float]:
     """FX dış API: günün ilk kaydı (UTC) baz — hub yoksa."""
     global _fx_day_open, _fx_day_open_date
     if current is None or not (float(current) > 0):
         return None
     from datetime import datetime, timezone
+
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     if _fx_day_open_date != today:
         _fx_day_open = {}
@@ -64,11 +69,15 @@ def _fx_daily_chg_pct(field: str, current: Optional[float]) -> Optional[float]:
         return None
     return ((cur - open_v) / open_v) * 100.0
 
-def _resolve_chg_pct(field: str, price: Optional[float], hub_symbols: tuple[str, ...]) -> Optional[float]:
+
+def _resolve_chg_pct(
+    field: str, price: Optional[float], hub_symbols: tuple[str, ...]
+) -> Optional[float]:
     pct = _ticker_chg_from_hub(*hub_symbols)
     if pct is not None:
         return pct
     return _fx_daily_chg_pct(field, price)
+
 
 def _get_client() -> httpx.AsyncClient:
     global _http_client
@@ -76,9 +85,11 @@ def _get_client() -> httpx.AsyncClient:
         _http_client = httpx.AsyncClient(timeout=httpx.Timeout(8.0, connect=3.0))
     return _http_client
 
+
 async def _fetch_crypto() -> tuple[Optional[float], Optional[float], str]:
     """BTC/USD, ETH/USD. DataHub only (serve-stale). No direct Binance REST fallback."""
     from app.services.data_hub import data_hub
+
     btc, eth = None, None
     status = "error"
     try:
@@ -95,7 +106,10 @@ async def _fetch_crypto() -> tuple[Optional[float], Optional[float], str]:
 
     return btc, eth, status
 
-async def _fetch_fx_upstream() -> tuple[Optional[float], Optional[float], Optional[float], str]:
+
+async def _fetch_fx_upstream() -> tuple[
+    Optional[float], Optional[float], Optional[float], str
+]:
     """Tek upstream: ExchangeRate-API open access (ücretsiz, anahtar yok). Fallback: exchangerate.host."""
     usdtry, eurtry, gbptry = None, None, None
     status = "error"
@@ -125,11 +139,18 @@ async def _fetch_fx_upstream() -> tuple[Optional[float], Optional[float], Option
         try:
             # Fallback: exchangerate.host (sınırlı/anahtar gerekebilir)
             client = _get_client()
-            r = await client.get("https://api.exchangerate.host/latest", params={"base": "USD", "symbols": "TRY,EUR,GBP"})
+            r = await client.get(
+                "https://api.exchangerate.host/latest",
+                params={"base": "USD", "symbols": "TRY,EUR,GBP"},
+            )
             if r.status_code == 200:
                 data = r.json()
                 rates = data.get("rates") or {}
-                usd_try, usd_eur, usd_gbp = rates.get("TRY"), rates.get("EUR"), rates.get("GBP")
+                usd_try, usd_eur, usd_gbp = (
+                    rates.get("TRY"),
+                    rates.get("EUR"),
+                    rates.get("GBP"),
+                )
                 if usd_try is not None and float(usd_try) > 0:
                     usdtry = float(usd_try)
                 if usd_eur and usd_try is not None and float(usd_eur) != 0:
@@ -182,16 +203,24 @@ async def _fetch_fx() -> tuple[Optional[float], Optional[float], Optional[float]
             )
         return None, None, None, "error"
 
+
 async def _fetch_metals() -> tuple[Optional[float], str]:
     """Ons altın USD (XAUUSD). Binance PAXGUSDT (1 PAXG ≈ 1 troy oz). Status: live|stale|error."""
     global _metals_cache, _metals_ts
     now = time.time()
-    if _metals_ts and (now - _metals_ts) < METALS_TTL and _metals_cache.get("xauusd") is not None:
-        return _metals_cache.get("xauusd"), "live" if (now - _metals_ts) < METALS_TTL else "stale"
+    if (
+        _metals_ts
+        and (now - _metals_ts) < METALS_TTL
+        and _metals_cache.get("xauusd") is not None
+    ):
+        return _metals_cache.get("xauusd"), "live" if (
+            now - _metals_ts
+        ) < METALS_TTL else "stale"
     xauusd = None
     status = "error"
     try:
         from app.services.data_hub import data_hub
+
         p = data_hub.get_price("PAXGUSDT")
         if p is not None and float(p) > 0:
             xauusd = float(p)
@@ -205,10 +234,12 @@ async def _fetch_metals() -> tuple[Optional[float], str]:
         status = "stale"
     return xauusd, status
 
+
 def _gram_altin_tl(xauusd: Optional[float], usdtry: Optional[float]) -> Optional[float]:
     if xauusd is None or usdtry is None or xauusd <= 0:
         return None
     return (xauusd * usdtry) / 31.1034768
+
 
 async def get_summary() -> Dict[str, Any]:
     """Tek çağrıda tüm ticker özeti. In-flight dedupe ile aynı anda gelen istekler tek upstream yapar."""
@@ -232,7 +263,9 @@ async def get_summary() -> Dict[str, Any]:
         ons_altin_usd = xauusd
         gram_altin_tl = _gram_altin_tl(xauusd, usdtry)
 
-        gold_chg = _resolve_chg_pct("ons_altin_usd", ons_altin_usd, ("PAXGUSDT", "XAUUSDT"))
+        gold_chg = _resolve_chg_pct(
+            "ons_altin_usd", ons_altin_usd, ("PAXGUSDT", "XAUUSDT")
+        )
 
         out = {
             "ts": server_ts,

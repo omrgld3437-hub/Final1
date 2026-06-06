@@ -3,6 +3,7 @@ SQLAlchemy Base
 Varsayilan: veritabani ~/.trader/dca.db konumunda (proje silinip yeniden kurulunca korunur).
 WAL mode: concurrent reads during writes. Separate engines for web (read-heavy) vs worker (write-heavy).
 """
+
 from pathlib import Path
 from sqlalchemy import create_engine, event
 from sqlalchemy.ext.declarative import declarative_base
@@ -58,4 +59,3 @@ engine_web = engine_worker = engine
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()
-

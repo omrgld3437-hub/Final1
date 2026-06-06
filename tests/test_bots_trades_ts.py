@@ -1,4 +1,5 @@
 """bots_trades timestamp parsing — naive DB + aware ledger must not crash duration."""
+
 from datetime import datetime, timezone
 
 from app.api.bots_engine import _parse_ts_utc
@@ -25,4 +26,7 @@ def test_mixed_ts_list_max_min():
 
 
 def test_ledger_trade_ts_serializes_naive_as_utc_z():
-    assert Ledger._trade_ts_iso_utc(datetime(2026, 5, 24, 12, 30, 45)) == "2026-05-24T12:30:45Z"
+    assert (
+        Ledger._trade_ts_iso_utc(datetime(2026, 5, 24, 12, 30, 45))
+        == "2026-05-24T12:30:45Z"
+    )

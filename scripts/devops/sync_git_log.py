@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Proje kökünde GIT.md üretir: GitHub bilgileri + tam commit geçmişi (git log)."""
+
 from __future__ import annotations
 
 import subprocess
@@ -20,7 +21,9 @@ def build_content() -> tuple[str, int]:
     branch = run("git branch --show-current")
     head_short = run("git rev-parse --short HEAD")
     head_full = run("git rev-parse HEAD")
-    counts = run("git rev-list --left-right --count origin/main...HEAD 2>/dev/null || echo '0\t0'")
+    counts = run(
+        "git rev-list --left-right --count origin/main...HEAD 2>/dev/null || echo '0\t0'"
+    )
     behind_s, ahead_s = counts.split()
     behind, ahead = int(behind_s), int(ahead_s)
     total = run("git rev-list --count HEAD")
@@ -91,7 +94,9 @@ def build_content() -> tuple[str, int]:
             continue
         full, short, author, email, date, subject = parts[:6]
         body = parts[6].strip() if len(parts) > 6 else ""
-        body = body.replace("Co-authored-by: Cursor <cursoragent@cursor.com>", "").strip()
+        body = body.replace(
+            "Co-authored-by: Cursor <cursoragent@cursor.com>", ""
+        ).strip()
 
         lines.append(f"### {i}. `{short}` — {subject}")
         lines.append("")

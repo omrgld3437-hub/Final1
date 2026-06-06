@@ -2,16 +2,14 @@
 RAM Probe — measurement only. JSONL to logs/ram_snapshots.log.
 Controlled via env RAM_PROBE=1 (or RAM_PROBE_ENABLED=1).
 """
+
 from __future__ import annotations
 
 import gc
 import json
 import logging
 import os
-import platform
-import sys
 import threading
-import time
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -33,8 +31,10 @@ _component: Optional[str] = None
 
 
 def _is_enabled() -> bool:
-    return (os.getenv("RAM_PROBE", "").strip() == "1" or
-            os.getenv("RAM_PROBE_ENABLED", "").strip() == "1")
+    return (
+        os.getenv("RAM_PROBE", "").strip() == "1"
+        or os.getenv("RAM_PROBE_ENABLED", "").strip() == "1"
+    )
 
 
 def _ensure_tracemalloc() -> None:
@@ -43,6 +43,7 @@ def _ensure_tracemalloc() -> None:
         return
     try:
         import tracemalloc
+
         tracemalloc.start(25)
         _tracemalloc_started = True
         logger.info("RAM_PROBE tracemalloc started (depth=25)")
@@ -59,6 +60,7 @@ def _get_process_memory() -> Dict[str, float]:
     out = {"rss_mb": 0.0, "vms_mb": 0.0}
     try:
         import psutil
+
         p = psutil.Process(os.getpid())
         mem = p.memory_info()
         out["rss_mb"] = round(mem.rss / (1024 * 1024), 2)
@@ -74,6 +76,7 @@ def _get_tracemalloc_mb() -> tuple:
     """Returns (current_mb, peak_mb)."""
     try:
         import tracemalloc
+
         cur, peak = tracemalloc.get_traced_memory()
         return (round(cur / (1024 * 1024), 2), round(peak / (1024 * 1024), 2))
     except Exception:
@@ -84,6 +87,7 @@ def _get_top_allocations(limit: int = 10) -> List[Dict[str, Any]]:
     result: List[Dict[str, Any]] = []
     try:
         import tracemalloc
+
         snap = tracemalloc.take_snapshot()
         top = snap.statistics("lineno")
         for stat in top[:limit]:
@@ -94,11 +98,13 @@ def _get_top_allocations(limit: int = 10) -> List[Dict[str, Any]]:
                 frame = stat.traceback[-1]
                 file_path = getattr(frame, "filename", "") or ""
                 line_no = getattr(frame, "lineno", None)
-            result.append({
-                "file": file_path,
-                "line": line_no,
-                "size_mb": round(size_mb, 2),
-            })
+            result.append(
+                {
+                    "file": file_path,
+                    "line": line_no,
+                    "size_mb": round(size_mb, 2),
+                }
+            )
     except Exception as e:
         logger.debug("RAM_PROBE tracemalloc top: %s", e)
     return result
@@ -124,6 +130,7 @@ def _get_gc_counts() -> Dict[str, Any]:
         out["bytes"] = type_counts.get("bytes", 0)
         try:
             import asyncio
+
             out["asyncio.Task"] = sum(1 for o in objs if isinstance(o, asyncio.Task))
         except Exception:
             out["asyncio.Task"] = 0
@@ -154,7 +161,8 @@ def snapshot_now(component: str, reason: str = "") -> Dict[str, Any]:
     }
     # Process memory (psutil)
     try:
-        import psutil
+        import psutil  # noqa: F401
+
         proc = _get_process_memory()
         payload["rss_mb"] = proc["rss_mb"]
         payload["vms_mb"] = proc["vms_mb"]
@@ -245,13 +253,15 @@ def start_ram_probe(component: str, interval_sec: int = 30) -> None:
             except Exception as e:
                 logger.warning("RAM_PROBE snapshot_loop: %s", e)
                 try:
-                    _write_snapshot_line({
-                        "ts": datetime.now(timezone.utc).isoformat(),
-                        "component": _component or "unknown",
-                        "pid": os.getpid(),
-                        "error": "probe_snapshot_failed",
-                        "message": str(e),
-                    })
+                    _write_snapshot_line(
+                        {
+                            "ts": datetime.now(timezone.utc).isoformat(),
+                            "component": _component or "unknown",
+                            "pid": os.getpid(),
+                            "error": "probe_snapshot_failed",
+                            "message": str(e),
+                        }
+                    )
                 except Exception:
                     pass
             if _probe_stop.wait(timeout=interval_sec):
@@ -268,16 +278,23 @@ def start_ram_probe(component: str, interval_sec: int = 30) -> None:
     except Exception as e:
         logger.warning("RAM_PROBE initial snapshot: %s", e)
         try:
-            _write_snapshot_line({
-                "ts": datetime.now(timezone.utc).isoformat(),
-                "component": component,
-                "pid": os.getpid(),
-                "error": "probe_startup_snapshot_failed",
-                "message": str(e),
-            })
+            _write_snapshot_line(
+                {
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                    "component": component,
+                    "pid": os.getpid(),
+                    "error": "probe_startup_snapshot_failed",
+                    "message": str(e),
+                }
+            )
         except Exception:
             pass
-    logger.info("RAM_PROBE started component=%s interval_sec=%s log=%s", component, interval_sec, _RAM_SNAPSHOT_LOG)
+    logger.info(
+        "RAM_PROBE started component=%s interval_sec=%s log=%s",
+        component,
+        interval_sec,
+        _RAM_SNAPSHOT_LOG,
+    )
 
 
 def get_last_snapshot() -> Optional[Dict[str, Any]]:
@@ -290,6 +307,7 @@ def get_ram_snapshot_log_path() -> Path:
 
 
 # --- Backward compatibility / optional helpers ---
+
 
 def take_snapshot(
     label: Optional[str] = None,
@@ -313,7 +331,9 @@ def start_global_monitor() -> bool:
     """Legacy: start probe with component=web, interval from env."""
     if not _is_enabled():
         return False
-    interval = int(os.getenv("RAM_PROBE_INTERVAL", os.getenv("RAM_PROBE_INTERVAL", "30")))
+    interval = int(
+        os.getenv("RAM_PROBE_INTERVAL", os.getenv("RAM_PROBE_INTERVAL", "30"))
+    )
     start_ram_probe(component="web", interval_sec=interval)
     return True
 
@@ -375,7 +395,10 @@ def probe_event_store(
 def _get_asyncio_task_count() -> int:
     try:
         import asyncio
-        return sum(1 for o in gc.get_objects() if isinstance(o, asyncio.Task) and not o.done())
+
+        return sum(
+            1 for o in gc.get_objects() if isinstance(o, asyncio.Task) and not o.done()
+        )
     except Exception:
         return 0
 

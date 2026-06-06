@@ -1,12 +1,13 @@
 """
 In-memory rate limiter for login and sensitive endpoints. Sliding window; configurable limits.
 """
+
 import logging
 import os
 import time
 import random
 from collections import defaultdict
-from typing import Optional, Tuple
+from typing import Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +25,11 @@ def _config_int(key: str, default: int) -> int:
 
 
 def _enabled() -> bool:
-    return os.environ.get("AUTH_RATE_LIMIT_ENABLED", "1").strip().lower() in ("1", "true", "yes")
+    return os.environ.get("AUTH_RATE_LIMIT_ENABLED", "1").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
 
 
 def _cleanup():
@@ -36,7 +41,9 @@ def _cleanup():
             if not _store[k]:
                 del _store[k]
         if len(_store) > _MAX_KEYS:
-            by_age = sorted(_store.keys(), key=lambda k: min(_store[k]) if _store[k] else 0)
+            by_age = sorted(
+                _store.keys(), key=lambda k: min(_store[k]) if _store[k] else 0
+            )
             for k in by_age[: len(_store) - _MAX_KEYS]:
                 del _store[k]
 
@@ -70,11 +77,22 @@ def check_login_rate_limit(ip: str, user_key: str) -> Tuple[bool, int]:
     if ip_count >= limit_ip:
         # Jitter to avoid thundering herd
         retry = min(window, 60 + random.randint(0, 30))
-        logger.info("rate_limit login ip=%s ip_count=%s limit=%s retry_after=%s", ip[:16] + "***", ip_count, limit_ip, retry)
+        logger.info(
+            "rate_limit login ip=%s ip_count=%s limit=%s retry_after=%s",
+            ip[:16] + "***",
+            ip_count,
+            limit_ip,
+            retry,
+        )
         return False, retry
     if user_count >= limit_user:
         retry = min(window, 60 + random.randint(0, 30))
-        logger.info("rate_limit login user_key_count=%s limit=%s retry_after=%s", user_count, limit_user, retry)
+        logger.info(
+            "rate_limit login user_key_count=%s limit=%s retry_after=%s",
+            user_count,
+            limit_user,
+            retry,
+        )
         return False, retry
 
     _store[ip_key].append(now)

@@ -2,6 +2,7 @@
 Cycle Trade Ledger: single source of truth for cycle PnL (fee-aware, cycle-isolated).
 Each cycle records only fills belonging to that cycle; realized_pnl_quote = sell_quote - buy_quote - fees.
 """
+
 from __future__ import annotations
 import copy
 import logging
@@ -11,9 +12,14 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 # Reasons that belong to the current cycle (not initial_allocation)
-CYCLE_FILL_REASONS = frozenset({
-    "trail_buy_grid", "trail_sell_grid", "trail_reentry_buy", "trail_profit_sell",
-})
+CYCLE_FILL_REASONS = frozenset(
+    {
+        "trail_buy_grid",
+        "trail_sell_grid",
+        "trail_reentry_buy",
+        "trail_profit_sell",
+    }
+)
 
 
 def _num(v: Any) -> float:
@@ -59,7 +65,9 @@ def _parse_iso_ts_ms(ts: Any) -> int:
         return 0
 
 
-def _cycle_open_trade_row(state: Dict[str, Any], cycle_id: int) -> Optional[Dict[str, Any]]:
+def _cycle_open_trade_row(
+    state: Dict[str, Any], cycle_id: int
+) -> Optional[Dict[str, Any]]:
     """Tur açılış satırı (cycle_open_trades içinde tek kayıt / tur)."""
     cid = int(cycle_id or 1)
     for row in reversed(state.get("cycle_open_trades") or []):
@@ -138,7 +146,11 @@ def heal_cycle_opened_at(state: Dict[str, Any]) -> None:
     best = min(candidates)
     best_ms = _parse_iso_ts_ms(best)
     current = state.get("cycle_opened_at")
-    cur_ms = _parse_iso_ts_ms(current) if isinstance(current, str) and str(current).strip() else 0
+    cur_ms = (
+        _parse_iso_ts_ms(current)
+        if isinstance(current, str) and str(current).strip()
+        else 0
+    )
     if cid > 1 and row_ms > 0 and (cur_ms <= 0 or row_ms > cur_ms + 2000):
         state["cycle_opened_at"] = row_ts
         return
@@ -165,7 +177,9 @@ def resolve_cycle_opened_at_for_cycle(
     cur_cid = int(state.get("cycle_id") or 1)
     if cid == cur_cid:
         ledger = state.get("cycle_ledger_current")
-        return resolve_cycle_opened_at(state, ledger if isinstance(ledger, dict) else None)
+        return resolve_cycle_opened_at(
+            state, ledger if isinstance(ledger, dict) else None
+        )
     candidates: List[str] = []
     row_ts = _cycle_open_trade_ts(state, cid)
     if cid > 1 and row_ts:
@@ -192,7 +206,9 @@ def sync_ledger_started_at(state: Dict[str, Any], ledger: Dict[str, Any]) -> Non
             state["cycle_opened_at"] = opened
 
 
-def ensure_cycle_ledger(state: Dict[str, Any], symbol: str, cycle_id: int) -> Dict[str, Any]:
+def ensure_cycle_ledger(
+    state: Dict[str, Any], symbol: str, cycle_id: int
+) -> Dict[str, Any]:
     """Mevcut ledger veya yeni; started_at tur açılışından, ilk grid fill anından değil."""
     heal_cycle_opened_at(state)
     sym = (symbol or "").upper().strip()
@@ -220,7 +236,11 @@ def build_cycle_ledger_empty(
 ) -> Dict[str, Any]:
     """Empty cycle ledger snapshot for a new cycle."""
     base_asset, quote_asset = _symbol_to_base_quote(symbol)
-    ts = started_at if isinstance(started_at, str) and started_at.strip() else datetime.now(timezone.utc).isoformat()
+    ts = (
+        started_at
+        if isinstance(started_at, str) and started_at.strip()
+        else datetime.now(timezone.utc).isoformat()
+    )
     return {
         "cycle_id": cycle_id,
         "symbol": symbol,
@@ -264,7 +284,9 @@ def cycle_ledger_add_fill(
     qty = max(0.0, _num(qty))
     price = max(0.0, _num(price))
     fee = max(0.0, _num(fee))
-    fee_quote = fee  # USDT-normalized (execution: parse_fill_commission → commission_to_usdt)
+    fee_quote = (
+        fee  # USDT-normalized (execution: parse_fill_commission → commission_to_usdt)
+    )
     raw_fee = max(0.0, _num(fee_raw)) if fee_raw is not None else 0.0
     asset = (fee_asset or "USDT").strip().upper()
     if raw_fee > 0 and fee_quote <= 0 and asset != "USDT":
@@ -275,15 +297,15 @@ def cycle_ledger_add_fill(
         )
         # Kullanıcıya görünür bot event — PnL'nin eksik gösterildiğini bilmeli
         try:
-            from app.botengine.state_store import queue_engine_event
-            bot_id_log = None  # ledger'dan bot_id alınamaz; orchestrator flush eder
             # ledger içinde state referansı yok — event state üzerinden orchestrator'da yazılır
             # ledger.setdefault kullanarak meta olarak işaretle; orchestrator flush'ta yakalar
-            ledger.setdefault("_fee_conversion_warn", []).append({
-                "fee_asset": asset,
-                "fee_raw": round(raw_fee, 8),
-                "order_id": order_id,
-            })
+            ledger.setdefault("_fee_conversion_warn", []).append(
+                {
+                    "fee_asset": asset,
+                    "fee_raw": round(raw_fee, 8),
+                    "order_id": order_id,
+                }
+            )
         except Exception:
             pass
     entry = {
@@ -309,11 +331,15 @@ def cycle_ledger_add_fill(
     if side and side.upper() == "BUY":
         ledger["buy_qty_total"] = _num(ledger.get("buy_qty_total")) + qty
         ledger["buy_quote_total"] = _num(ledger.get("buy_quote_total")) + qty * price
-        ledger["buy_fee_total_quote"] = _num(ledger.get("buy_fee_total_quote")) + fee_quote
+        ledger["buy_fee_total_quote"] = (
+            _num(ledger.get("buy_fee_total_quote")) + fee_quote
+        )
     else:
         ledger["sell_qty_total"] = _num(ledger.get("sell_qty_total")) + qty
         ledger["sell_quote_total"] = _num(ledger.get("sell_quote_total")) + qty * price
-        ledger["sell_fee_total_quote"] = _num(ledger.get("sell_fee_total_quote")) + fee_quote
+        ledger["sell_fee_total_quote"] = (
+            _num(ledger.get("sell_fee_total_quote")) + fee_quote
+        )
     _cycle_ledger_recompute(ledger)
 
 
@@ -386,10 +412,14 @@ def _recompute_dual_pnl(ledger: Dict[str, Any]) -> None:
                     continue
                 take = min(sq, buy_qty_rem)
                 sell_fee_alloc = sf * (take / sq) if sq > 0 else 0
-                buy_fee_alloc = buy_fee_total * (take / buy_qty_total) if buy_qty_total > 0 else 0
+                buy_fee_alloc = (
+                    buy_fee_total * (take / buy_qty_total) if buy_qty_total > 0 else 0
+                )
                 sell_proceeds_net = take * sp - sell_fee_alloc
                 buy_price_eff = price if price > 0 else 1.0
-                buy_qty_equiv = sell_proceeds_net / buy_price_eff if buy_price_eff > 0 else 0
+                buy_qty_equiv = (
+                    sell_proceeds_net / buy_price_eff if buy_price_eff > 0 else 0
+                )
                 inv_coin_adv += buy_qty_equiv - take
                 inv_fees += sell_fee_alloc + buy_fee_alloc
                 inv_sells[idx][0] = sq - take
@@ -397,7 +427,11 @@ def _recompute_dual_pnl(ledger: Dict[str, Any]) -> None:
                 if inv_sells[idx][0] <= 0:
                     idx += 1
             if buy_qty_rem > 0 and idx >= len(inv_sells):
-                inv_fees += buy_fee_total * (buy_qty_rem / buy_qty_total) if buy_qty_total > 0 else 0
+                inv_fees += (
+                    buy_fee_total * (buy_qty_rem / buy_qty_total)
+                    if buy_qty_total > 0
+                    else 0
+                )
         elif reason == "trail_buy_grid" and side == "BUY":
             cash_buys.append([qty, price, fee])
         elif reason == "trail_profit_sell" and side == "SELL":
@@ -412,7 +446,11 @@ def _recompute_dual_pnl(ledger: Dict[str, Any]) -> None:
                     continue
                 take = min(bq, sell_qty_rem)
                 buy_fee_alloc = bf * (take / bq) if bq > 0 else 0
-                sell_fee_alloc = sell_fee_total * (take / sell_qty_total) if sell_qty_total > 0 else 0
+                sell_fee_alloc = (
+                    sell_fee_total * (take / sell_qty_total)
+                    if sell_qty_total > 0
+                    else 0
+                )
                 gross = take * (price - bp)
                 cash_pnl += gross - buy_fee_alloc - sell_fee_alloc
                 cash_fees += buy_fee_alloc + sell_fee_alloc
@@ -421,7 +459,11 @@ def _recompute_dual_pnl(ledger: Dict[str, Any]) -> None:
                 if cash_buys[idx][0] <= 0:
                     idx += 1
             if sell_qty_rem > 0 and idx >= len(cash_buys):
-                cash_fees += sell_fee_total * (sell_qty_rem / sell_qty_total) if sell_qty_total > 0 else 0
+                cash_fees += (
+                    sell_fee_total * (sell_qty_rem / sell_qty_total)
+                    if sell_qty_total > 0
+                    else 0
+                )
 
     ledger["inventory_coin_adv_qty"] = round(inv_coin_adv, 8)
     ledger["inventory_fees_usdt"] = round(inv_fees, 6)
@@ -463,7 +505,9 @@ def cycle_ledger_trigger_price(
     if be is None or be <= 0:
         return None
     min_net = max(0.0, _num(min_net_profit_rate))
-    rise = max(0.0, _num(profit_rise_pct) / 100.0) if profit_rise_pct is not None else 0.0
+    rise = (
+        max(0.0, _num(profit_rise_pct) / 100.0) if profit_rise_pct is not None else 0.0
+    )
     effective_rate = max(min_net, rise)
     return round(be * (1.0 + effective_rate), 6)
 
@@ -582,12 +626,14 @@ def archive_cycle_ledger_fills(state: Dict[str, Any], cycle_id: int) -> None:
     for block in archive:
         if isinstance(block, dict) and int(block.get("cycle_id") or 0) == int(cycle_id):
             return
-    archive.append({
-        "cycle_id": int(cycle_id),
-        "fills": copy.deepcopy(fills),
-        "avg_cost_quote_per_base": ledger.get("avg_cost_quote_per_base"),
-        "buy_quote_total": ledger.get("buy_quote_total"),
-        "sell_quote_total": ledger.get("sell_quote_total"),
-    })
+    archive.append(
+        {
+            "cycle_id": int(cycle_id),
+            "fills": copy.deepcopy(fills),
+            "avg_cost_quote_per_base": ledger.get("avg_cost_quote_per_base"),
+            "buy_quote_total": ledger.get("buy_quote_total"),
+            "sell_quote_total": ledger.get("sell_quote_total"),
+        }
+    )
     if len(archive) > 50:
         state["cycle_ledger_fills_archive"] = archive[-50:]

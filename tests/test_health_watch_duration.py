@@ -1,4 +1,5 @@
 """Bot restart mesajı süre formatı."""
+
 from __future__ import annotations
 
 import time
@@ -95,7 +96,9 @@ def test_emit_loop_auto_restart_allows_new_worker_boot(monkeypatch):
     monkeypatch.setattr("app.botengine.state_store.append_event", fake_append)
     monkeypatch.setattr("app.botengine.state_store.load_state", fake_load)
     monkeypatch.setattr("app.botengine.state_store.save_state", fake_save)
-    monkeypatch.setattr("app.botengine.health_watch._worker_started_ts", lambda: 1_700_000_100.0)
+    monkeypatch.setattr(
+        "app.botengine.health_watch._worker_started_ts", lambda: 1_700_000_100.0
+    )
     monkeypatch.setattr(
         "app.services.binance_connectivity.mark_pending_connectivity_stable",
         fake_mark,
@@ -122,7 +125,9 @@ def test_emit_loop_auto_restart_dedup_same_worker(monkeypatch):
     monkeypatch.setattr("app.botengine.state_store.append_event", fake_append)
     monkeypatch.setattr("app.botengine.state_store.load_state", fake_load)
     monkeypatch.setattr("app.botengine.state_store.save_state", lambda *a, **k: None)
-    monkeypatch.setattr("app.botengine.health_watch._worker_started_ts", lambda: time.time() - 3600)
+    monkeypatch.setattr(
+        "app.botengine.health_watch._worker_started_ts", lambda: time.time() - 3600
+    )
 
     emit_loop_auto_restart(None, 42, 1, "worker_poll")
 

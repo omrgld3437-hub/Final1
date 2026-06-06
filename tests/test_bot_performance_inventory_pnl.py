@@ -5,7 +5,9 @@ from app.services.bot_performance_service import _cycle_ledger_amounts
 
 def test_inventory_cycle_pnl_uses_locked_close_price(monkeypatch):
     def fail_if_market_price_used(symbol):
-        raise AssertionError("completed inventory PnL must not drift with live market price")
+        raise AssertionError(
+            "completed inventory PnL must not drift with live market price"
+        )
 
     monkeypatch.setattr("app.services.market_data.get_price", fail_if_market_price_used)
 

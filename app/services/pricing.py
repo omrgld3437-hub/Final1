@@ -2,6 +2,7 @@
 pricing modulu (services/).
 Fiyatlar: market_data (DataHub cache) — Binance REST yok.
 """
+
 from __future__ import annotations
 from typing import Dict, Any, List
 import asyncio

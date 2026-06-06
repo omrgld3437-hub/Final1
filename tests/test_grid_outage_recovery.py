@@ -1,4 +1,5 @@
 """Grid outage recovery — bağlantı kopması sonrası tetik/tepe-dip davranışı."""
+
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -105,7 +106,6 @@ def test_sell_grid_not_reset_when_price_between_exec_and_trigger():
     assert st.get("_outage_favorable_sell") == []
 
 
-
 def test_sell_favorable_when_price_below_trigger_but_at_exec():
     """Tepe tetik üstünde; fiyat tetik altında ama gerçekleşme eşiğinde — satış işlenmeli."""
     cfg = _cfg()
@@ -152,8 +152,7 @@ def test_buy_favorable_when_price_below_execution():
     assert 0 in st.get("_outage_favorable_buy", [])
 
 
-
-def test_buy_favorable_when_price_below_execution():
+def test_buy_reanchor_does_not_raise_trigger():
     cfg = _cfg()
     st = _state_with_gap()
     apply_grid_outage_recovery(st, cfg, 98.0, gap_sec=60.0)
@@ -211,7 +210,9 @@ def test_profit_exit_force_on_new_high_after_gap():
 
 
 def test_flush_outage_recovery_emits_connectivity_stable(monkeypatch):
-    from app.botengine.strategies.grid_outage_recovery import flush_outage_recovery_log_to_events
+    from app.botengine.strategies.grid_outage_recovery import (
+        flush_outage_recovery_log_to_events,
+    )
 
     appended = []
 

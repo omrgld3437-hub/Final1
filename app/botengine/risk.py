@@ -1,11 +1,12 @@
 """
 Risk & guardrails: trade lock, max notional, min notional, duplicate prevention.
 """
+
 from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import Dict, Optional, Set, Tuple
+from typing import Dict, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -31,13 +32,23 @@ async def acquire_bot_lock(bot_id: int) -> asyncio.Lock:
 # Idempotency: (bot_id, action_key) -> last use ts. Skip if same key used recently.
 _action_keys: Dict[Tuple[int, str], float] = {}
 _ACTION_KEY_TTL = 5.0  # seconds
-_ACTION_KEY_TTL_INITIAL_ALLOC = 2.0  # seconds; allow retry every 2s until success (avoid double-place within 2s)
+_ACTION_KEY_TTL_INITIAL_ALLOC = (
+    2.0  # seconds; allow retry every 2s until success (avoid double-place within 2s)
+)
 
 
-def check_idempotency(bot_id: int, action_key: str, ttl_override: Optional[float] = None) -> bool:
+def check_idempotency(
+    bot_id: int, action_key: str, ttl_override: Optional[float] = None
+) -> bool:
     """True if we should skip (duplicate)."""
-    is_initial = action_key == "initial_allocation_0" or (isinstance(action_key, str) and action_key.startswith("initial_allocation_"))
-    ttl = _ACTION_KEY_TTL_INITIAL_ALLOC if is_initial else (ttl_override or _ACTION_KEY_TTL)
+    is_initial = action_key == "initial_allocation_0" or (
+        isinstance(action_key, str) and action_key.startswith("initial_allocation_")
+    )
+    ttl = (
+        _ACTION_KEY_TTL_INITIAL_ALLOC
+        if is_initial
+        else (ttl_override or _ACTION_KEY_TTL)
+    )
     k = (bot_id, action_key)
     now = time.time()
     if k in _action_keys and (now - _action_keys[k]) < ttl:

@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Add last_login_ip, last_activity_at, kicked_at to users table if missing.
 Run once: .venv/bin/python migrate_user_activity.py"""
+
 import sys
+
 sys.path.insert(0, ".")
 
 from app.db.base import engine
@@ -13,6 +15,7 @@ COLUMNS = [
     ("kicked_at", "DATETIME"),
     ("must_change_password", "BOOLEAN"),
 ]
+
 
 def run():
     with engine.connect() as conn:
@@ -28,6 +31,7 @@ def run():
                 else:
                     raise
     print("Done.")
+
 
 if __name__ == "__main__":
     run()

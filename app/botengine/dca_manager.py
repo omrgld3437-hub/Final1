@@ -4,6 +4,7 @@ DCA manager guards.
 Single source for max_buy_levels validation/enforcement across API, UI payloads,
 engine ticks, execution and DB backfills.
 """
+
 from __future__ import annotations
 
 import json
@@ -52,7 +53,9 @@ def normalize_max_buy_levels_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     grid_count = buy_grid_count_from_payload(raw)
     limit = _as_int(raw.get("max_buy_levels"), field="max_buy_levels")
     if grid_count <= 0:
-        raise MaxBuyLevelsError("max_buy_levels için en az bir alım grid'i tanımlanmalı")
+        raise MaxBuyLevelsError(
+            "max_buy_levels için en az bir alım grid'i tanımlanmalı"
+        )
     if limit > grid_count:
         raise MaxBuyLevelsError(
             f"max_buy_levels ({limit}) alım grid sayısını ({grid_count}) aşamaz"
