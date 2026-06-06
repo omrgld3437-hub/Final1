@@ -1,6 +1,6 @@
 # Git — Final1
 
-> HEAD `4302855` · Toplam **235** commit · branch `main`
+> HEAD `0686ad5` · Toplam **237** commit · branch `main`
 
 ## GitHub
 
@@ -11,8 +11,8 @@
 | SSH (origin) | `git@github.com:omrgld3437-hub/Final1.git` |
 | HTTPS | `https://github.com/omrgld3437-hub/Final1.git` |
 | Aktif branch | `main` |
-| HEAD (kısa) | `4302855` |
-| HEAD (tam) | `430285571a8d2034100f15a46cc92a8278d15f3d` |
+| HEAD (kısa) | `0686ad5` |
+| HEAD (tam) | `0686ad533c18ff1404aa7f65fcf64e3beff3a1ae` |
 | Remote durumu | `origin/main`'den **1** commit önde |
 
 ## Submodule: marketing
@@ -26,7 +26,31 @@
 
 En yeni commit üstte.
 
-### 1. `4302855` — ci: ruff lint+format hatalarını düzelt, ruff.toml ekle
+### 1. `0686ad5` — fix(test): test_parallel_grids max_buy_levels=2 eksikti
+
+- **Commit no (tam):** `0686ad533c18ff1404aa7f65fcf64e3beff3a1ae`
+- **Commit no (kısa):** `0686ad5`
+- **Tarih:** 2026-06-06 04:52:46 +0300
+- **Yazar:** Ömer Altın <omeraltin@192.168.1.25>
+- **Detay:**
+  - _cfg_two_buy() fixture'ında max_buy_levels belirtilmemişti; default 1
+  - olduğu için ikinci buy grid BOT_BUY_LEVEL_BLOCKED ile bloklanıyor ve
+  - test assert len(buys)==2 başarısız oluyordu.
+  - Test 2 paralel alış grid'ini doğruladığından max_buy_levels=2 zorunlu.
+  - Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+
+---
+
+### 2. `199eda6` — docs: sync GIT.md (git log)
+
+- **Commit no (tam):** `199eda69530a0a09de8413071d502ea0aee6918a`
+- **Commit no (kısa):** `199eda6`
+- **Tarih:** 2026-06-06 04:47:55 +0300
+- **Yazar:** Ömer Altın <omeraltin@192.168.1.25>
+
+---
+
+### 3. `4302855` — ci: ruff lint+format hatalarını düzelt, ruff.toml ekle
 
 - **Commit no (tam):** `430285571a8d2034100f15a46cc92a8278d15f3d`
 - **Commit no (kısa):** `4302855`
@@ -43,7 +67,7 @@ En yeni commit üstte.
 
 ---
 
-### 2. `058d706` — docs: sync GIT.md (git log)
+### 4. `058d706` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `058d706c6849160eac8043190e683c1fa515dde5`
 - **Commit no (kısa):** `058d706`
@@ -52,7 +76,7 @@ En yeni commit üstte.
 
 ---
 
-### 3. `318fc0b` — fix: bot detay start logları gizlenme hatası düzeltildi
+### 5. `318fc0b` — fix: bot detay start logları gizlenme hatası düzeltildi
 
 - **Commit no (tam):** `318fc0b6768e7db9cde4a5dfb6c57d02d1a9422d`
 - **Commit no (kısa):** `318fc0b`
@@ -71,7 +95,7 @@ En yeni commit üstte.
 
 ---
 
-### 4. `14db907` — docs: sync GIT.md (git log)
+### 6. `14db907` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `14db907a96baf9f39ba5d5408db5f81a8d25e102`
 - **Commit no (kısa):** `14db907`
@@ -80,7 +104,7 @@ En yeni commit üstte.
 
 ---
 
-### 5. `1f93013` — fix: user stream yeniden başlatma sonrası hatalı ERROR seviyesi giderildi
+### 7. `1f93013` — fix: user stream yeniden başlatma sonrası hatalı ERROR seviyesi giderildi
 
 - **Commit no (tam):** `1f93013ada64fa8d8dc657bc5291f043d0313539`
 - **Commit no (kısa):** `1f93013`
@@ -96,7 +120,7 @@ En yeni commit üstte.
 
 ---
 
-### 6. `3422321` — docs: sync GIT.md (git log)
+### 8. `3422321` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `3422321d3ec72930844a478336ea64f2ed47c8f8`
 - **Commit no (kısa):** `3422321`
@@ -105,7 +129,7 @@ En yeni commit üstte.
 
 ---
 
-### 7. `dadd9fc` — fix: user stream HTML yanıt tespiti — ağ engeli ile API hatası ayırt edildi
+### 9. `dadd9fc` — fix: user stream HTML yanıt tespiti — ağ engeli ile API hatası ayırt edildi
 
 - **Commit no (tam):** `dadd9fc9b8d154c883c1e83425165f6ab0323369`
 - **Commit no (kısa):** `dadd9fc`
@@ -122,7 +146,7 @@ En yeni commit üstte.
 
 ---
 
-### 8. `b812b9e` — docs: sync GIT.md (git log)
+### 10. `b812b9e` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `b812b9ea662ca1530b9774dd24dcb05ae4050d4d`
 - **Commit no (kısa):** `b812b9e`
@@ -131,7 +155,7 @@ En yeni commit üstte.
 
 ---
 
-### 9. `222124e` — feat: kapsamlı UI/UX ve backend iyileştirmeleri
+### 11. `222124e` — feat: kapsamlı UI/UX ve backend iyileştirmeleri
 
 - **Commit no (tam):** `222124e75f9cfd9286d7a51b0f4b24d1d3df8221`
 - **Commit no (kısa):** `222124e`
@@ -166,7 +190,7 @@ En yeni commit üstte.
 
 ---
 
-### 10. `21ba7ad` — docs: sync GIT.md (git log)
+### 12. `21ba7ad` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `21ba7adbaef83d4636fc2843c4a78f21e44825b8`
 - **Commit no (kısa):** `21ba7ad`
@@ -175,7 +199,7 @@ En yeni commit üstte.
 
 ---
 
-### 11. `d796e70` — Display enriched CYCLE_END/START fields in bot engine log UI
+### 13. `d796e70` — Display enriched CYCLE_END/START fields in bot engine log UI
 
 - **Commit no (tam):** `d796e70c2938f496f50dc85999ed629abb39889a`
 - **Commit no (kısa):** `d796e70`
@@ -202,7 +226,7 @@ En yeni commit üstte.
 
 ---
 
-### 12. `64e412a` — docs: sync GIT.md (git log)
+### 14. `64e412a` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `64e412a226788074295d6f1a5881c8b691f26dd4`
 - **Commit no (kısa):** `64e412a`
@@ -211,7 +235,7 @@ En yeni commit üstte.
 
 ---
 
-### 13. `0abf741` — Enrich CYCLE_END/START events: duration, grid utilization, price range, breakeven, cumulative PnL
+### 15. `0abf741` — Enrich CYCLE_END/START events: duration, grid utilization, price range, breakeven, cumulative PnL
 
 - **Commit no (tam):** `0abf7417c0792dda4a0e96f40c015e565e134e6b`
 - **Commit no (kısa):** `0abf741`
@@ -247,7 +271,7 @@ En yeni commit üstte.
 
 ---
 
-### 14. `4d4f417` — docs: sync GIT.md (git log)
+### 16. `4d4f417` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `4d4f417c044e379573200bc8efe4f98ea989631e`
 - **Commit no (kısa):** `4d4f417`
@@ -256,7 +280,7 @@ En yeni commit üstte.
 
 ---
 
-### 15. `869b4bc` — Production hardening and bot health fixes
+### 17. `869b4bc` — Production hardening and bot health fixes
 
 - **Commit no (tam):** `869b4bc84e8feeaec2eedd135a54ef0742e6a90e`
 - **Commit no (kısa):** `869b4bc`
@@ -265,7 +289,7 @@ En yeni commit üstte.
 
 ---
 
-### 16. `3b15063` — docs: sync GIT.md (git log)
+### 18. `3b15063` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `3b15063525c9295831e9b0f05f0aa4cd5f17a3a3`
 - **Commit no (kısa):** `3b15063`
@@ -274,7 +298,7 @@ En yeni commit üstte.
 
 ---
 
-### 17. `1580b25` — Fix USER_STREAM 410 Gone: auto-reconnect + account label in logs
+### 19. `1580b25` — Fix USER_STREAM 410 Gone: auto-reconnect + account label in logs
 
 - **Commit no (tam):** `1580b256718190e2bd2dbd5ad6290dca0a25b236`
 - **Commit no (kısa):** `1580b25`
@@ -306,7 +330,7 @@ En yeni commit üstte.
 
 ---
 
-### 18. `a6c1c0a` — docs: sync GIT.md (git log)
+### 20. `a6c1c0a` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `a6c1c0a415cc6a3671bf1636c75d839e22ba8e56`
 - **Commit no (kısa):** `a6c1c0a`
@@ -315,7 +339,7 @@ En yeni commit üstte.
 
 ---
 
-### 19. `c2b777a` — Modularize dashboard.js phase 3: bot-perf, tx-history, bots, create-modal, tabs
+### 21. `c2b777a` — Modularize dashboard.js phase 3: bot-perf, tx-history, bots, create-modal, tabs
 
 - **Commit no (tam):** `c2b777a10884bf719f8f75bc6e65665a398c107b`
 - **Commit no (kısa):** `c2b777a`
@@ -357,7 +381,7 @@ En yeni commit üstte.
 
 ---
 
-### 20. `dbc5d9d` — docs: sync GIT.md (git log)
+### 22. `dbc5d9d` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `dbc5d9dc0ec7cd7bcb50435f9ba83512eb6f8cd3`
 - **Commit no (kısa):** `dbc5d9d`
@@ -366,7 +390,7 @@ En yeni commit üstte.
 
 ---
 
-### 21. `1c609e8` — Modularize dashboard.js phase 2: appbar, wallet-state, spot-trade, finance
+### 23. `1c609e8` — Modularize dashboard.js phase 2: appbar, wallet-state, spot-trade, finance
 
 - **Commit no (tam):** `1c609e8bccee89d4122ace1860705c6b75636318`
 - **Commit no (kısa):** `1c609e8`
@@ -403,7 +427,7 @@ En yeni commit üstte.
 
 ---
 
-### 22. `43481a5` — docs: sync GIT.md (git log)
+### 24. `43481a5` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `43481a5f09d9bbf2178d174a02ad2b2a45e3e040`
 - **Commit no (kısa):** `43481a5`
@@ -412,7 +436,7 @@ En yeni commit üstte.
 
 ---
 
-### 23. `a0f71b9` — Modularize dashboard.js: extract format utils + leaderboard (phase 1)
+### 25. `a0f71b9` — Modularize dashboard.js: extract format utils + leaderboard (phase 1)
 
 - **Commit no (tam):** `a0f71b900fc811b206c056e57820457d11912a6d`
 - **Commit no (kısa):** `a0f71b9`
@@ -443,7 +467,7 @@ En yeni commit üstte.
 
 ---
 
-### 24. `7bdf56b` — docs: sync GIT.md (git log)
+### 26. `7bdf56b` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `7bdf56b9893d47c876b02abe5418fe83169c17d4`
 - **Commit no (kısa):** `7bdf56b`
@@ -452,7 +476,7 @@ En yeni commit üstte.
 
 ---
 
-### 25. `f932464` — Implement CTO report items: CORS, admin security, daily loss limit, health endpoints
+### 27. `f932464` — Implement CTO report items: CORS, admin security, daily loss limit, health endpoints
 
 - **Commit no (tam):** `f932464983772b2fec1df10a3ae42660040cc746`
 - **Commit no (kısa):** `f932464`
@@ -485,7 +509,7 @@ En yeni commit üstte.
 
 ---
 
-### 26. `d1dae1d` — docs: sync GIT.md (git log)
+### 28. `d1dae1d` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `d1dae1d46c5ea229c7a0a4d4310dc121ef7a90a3`
 - **Commit no (kısa):** `d1dae1d`
@@ -494,7 +518,7 @@ En yeni commit üstte.
 
 ---
 
-### 27. `777335c` — Fix BINANCE_UNREACHABLE false-positive: suppress transient outage alerts & faster recovery
+### 29. `777335c` — Fix BINANCE_UNREACHABLE false-positive: suppress transient outage alerts & faster recovery
 
 - **Commit no (tam):** `777335c52a1958e1ba7499bf4f8c97c086322028`
 - **Commit no (kısa):** `777335c`
@@ -521,7 +545,7 @@ En yeni commit üstte.
 
 ---
 
-### 28. `375f01e` — docs: sync GIT.md (git log)
+### 30. `375f01e` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `375f01e1a03d9209a40971391ac68d742b9d323f`
 - **Commit no (kısa):** `375f01e`
@@ -530,7 +554,7 @@ En yeni commit üstte.
 
 ---
 
-### 29. `7858715` — Fix wallet stale flicker, bot yellow mislead, ETH synthetic balance & cycle ledger fee bug
+### 31. `7858715` — Fix wallet stale flicker, bot yellow mislead, ETH synthetic balance & cycle ledger fee bug
 
 - **Commit no (tam):** `7858715c65b345f096438619e6f4ca234a1d8434`
 - **Commit no (kısa):** `7858715`
@@ -563,7 +587,7 @@ En yeni commit üstte.
 
 ---
 
-### 30. `83e9281` — docs: sync GIT.md (git log)
+### 32. `83e9281` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `83e92817e7f88317e8c6f5d158390071c3a8555f`
 - **Commit no (kısa):** `83e9281`
@@ -572,7 +596,7 @@ En yeni commit üstte.
 
 ---
 
-### 31. `25383a3` — Speed up finance history first paint
+### 33. `25383a3` — Speed up finance history first paint
 
 - **Commit no (tam):** `25383a3617c19f606ab21257f1eddf55516b1a9d`
 - **Commit no (kısa):** `25383a3`
@@ -581,7 +605,7 @@ En yeni commit üstte.
 
 ---
 
-### 32. `7f1fde1` — docs: sync GIT.md (git log)
+### 34. `7f1fde1` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `7f1fde138eb1afb14df64bb25dc9d8a823782374`
 - **Commit no (kısa):** `7f1fde1`
@@ -590,7 +614,7 @@ En yeni commit üstte.
 
 ---
 
-### 33. `f9a88b1` — Add bounded log maintenance and reduce runtime noise
+### 35. `f9a88b1` — Add bounded log maintenance and reduce runtime noise
 
 - **Commit no (tam):** `f9a88b168ac8364e7900a00cac2468da8e04055e`
 - **Commit no (kısa):** `f9a88b1`
@@ -599,7 +623,7 @@ En yeni commit üstte.
 
 ---
 
-### 34. `f0f5704` — docs: sync GIT.md (git log)
+### 36. `f0f5704` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `f0f5704bc1ee3edef3a508bc15880c737eea6839`
 - **Commit no (kısa):** `f0f5704`
@@ -608,7 +632,7 @@ En yeni commit üstte.
 
 ---
 
-### 35. `f838887` — Stabilize dashboard runtime and UI state
+### 37. `f838887` — Stabilize dashboard runtime and UI state
 
 - **Commit no (tam):** `f838887dce8d37693108a2b40a03cf18e0bf113a`
 - **Commit no (kısa):** `f838887`
@@ -617,7 +641,7 @@ En yeni commit üstte.
 
 ---
 
-### 36. `a4f7bdf` — docs: sync GIT.md (git log)
+### 38. `a4f7bdf` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `a4f7bdf5c96792a08516769c272096f5ef04b47b`
 - **Commit no (kısa):** `a4f7bdf`
@@ -626,7 +650,7 @@ En yeni commit üstte.
 
 ---
 
-### 37. `28bd1cb` — Improve admin, dashboard, and bot detail UX with perf and scroll fixes.
+### 39. `28bd1cb` — Improve admin, dashboard, and bot detail UX with perf and scroll fixes.
 
 - **Commit no (tam):** `28bd1cb752bb919ed220b94397b74c838857b4a9`
 - **Commit no (kısa):** `28bd1cb`
@@ -637,7 +661,7 @@ En yeni commit üstte.
 
 ---
 
-### 38. `16f4b0e` — docs: sync GIT.md (git log)
+### 40. `16f4b0e` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `16f4b0e58252187b7eed873378339a3262eb4d8b`
 - **Commit no (kısa):** `16f4b0e`
@@ -646,7 +670,7 @@ En yeni commit üstte.
 
 ---
 
-### 39. `40d94b5` — Expand login page with zip welcome layout and market dock.
+### 41. `40d94b5` — Expand login page with zip welcome layout and market dock.
 
 - **Commit no (tam):** `40d94b5be5f5a1bff744e332ba94448dc627b1d8`
 - **Commit no (kısa):** `40d94b5`
@@ -657,7 +681,7 @@ En yeni commit üstte.
 
 ---
 
-### 40. `3233273` — docs: sync GIT.md (git log)
+### 42. `3233273` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `323327374e9730b8a4fd23e51c70e51b524af502`
 - **Commit no (kısa):** `3233273`
@@ -666,7 +690,7 @@ En yeni commit üstte.
 
 ---
 
-### 41. `49894a6` — Redesign login page with zip AuthCard glass theme.
+### 43. `49894a6` — Redesign login page with zip AuthCard glass theme.
 
 - **Commit no (tam):** `49894a600393259748d91d36db62c3835cfe113b`
 - **Commit no (kısa):** `49894a6`
@@ -677,7 +701,7 @@ En yeni commit üstte.
 
 ---
 
-### 42. `f0f5f39` — docs: sync GIT.md (git log)
+### 44. `f0f5f39` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `f0f5f39d51791d87e7108c1c464090d95d67c87a`
 - **Commit no (kısa):** `f0f5f39`
@@ -686,7 +710,7 @@ En yeni commit üstte.
 
 ---
 
-### 43. `20f5dea` — Fix Binance wallet errors, dashboard UX, and engine log stability.
+### 45. `20f5dea` — Fix Binance wallet errors, dashboard UX, and engine log stability.
 
 - **Commit no (tam):** `20f5dea7b53e7d02930a78b4c91bdec5456b2a25`
 - **Commit no (kısa):** `20f5dea`
@@ -697,7 +721,7 @@ En yeni commit üstte.
 
 ---
 
-### 44. `9e2975d` — docs: sync GIT.md (git log)
+### 46. `9e2975d` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `9e2975dbb3fd9685a4db340b367d3f27054804fa`
 - **Commit no (kısa):** `9e2975d`
@@ -706,7 +730,7 @@ En yeni commit üstte.
 
 ---
 
-### 45. `8cc402b` — Fix dashboard connectivity, rate-limit toasts, and bot UX regressions.
+### 47. `8cc402b` — Fix dashboard connectivity, rate-limit toasts, and bot UX regressions.
 
 - **Commit no (tam):** `8cc402bbf630b60c3c9d3061b023b10dd3ddef6d`
 - **Commit no (kısa):** `8cc402b`
@@ -717,7 +741,7 @@ En yeni commit üstte.
 
 ---
 
-### 46. `25b1172` — docs: sync GIT.md (git log)
+### 48. `25b1172` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `25b11728b61b86f18bd34c8a935dd37b43984068`
 - **Commit no (kısa):** `25b1172`
@@ -726,7 +750,7 @@ En yeni commit üstte.
 
 ---
 
-### 47. `8bda11c` — UI: redesign admin header/KPI/tabs and improve dashboard Bots persistence.
+### 49. `8bda11c` — UI: redesign admin header/KPI/tabs and improve dashboard Bots persistence.
 
 - **Commit no (tam):** `8bda11c74230f55d4a94a66f642053092650fd2b`
 - **Commit no (kısa):** `8bda11c`
@@ -737,7 +761,7 @@ En yeni commit üstte.
 
 ---
 
-### 48. `24b8cbd` — docs: sync GIT.md with Bots tab and wallet UX commit details.
+### 50. `24b8cbd` — docs: sync GIT.md with Bots tab and wallet UX commit details.
 
 - **Commit no (tam):** `24b8cbd8a303cfaa359a7b908217e71fd6660b6d`
 - **Commit no (kısa):** `24b8cbd`
@@ -746,7 +770,7 @@ En yeni commit üstte.
 
 ---
 
-### 49. `7d8dec2` — docs: sync GIT.md (git log)
+### 51. `7d8dec2` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `7d8dec2083bdf31b250a5dff1e56b8b4b3d4b866`
 - **Commit no (kısa):** `7d8dec2`
@@ -755,7 +779,7 @@ En yeni commit üstte.
 
 ---
 
-### 50. `4a0c8c0` — Restore dashboard Bots tab and improve wallet/manager spot UX.
+### 52. `4a0c8c0` — Restore dashboard Bots tab and improve wallet/manager spot UX.
 
 - **Commit no (tam):** `4a0c8c02af6fbd282d50d13de0b38307223cd3b2`
 - **Commit no (kısa):** `4a0c8c0`
@@ -766,7 +790,7 @@ En yeni commit üstte.
 
 ---
 
-### 51. `d1e1413` — docs: sync GIT.md (git log)
+### 53. `d1e1413` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `d1e14132a2b551fc310ebf29f80c70c24e8d6b45`
 - **Commit no (kısa):** `d1e1413`
@@ -775,7 +799,7 @@ En yeni commit üstte.
 
 ---
 
-### 52. `6101503` — Perf: batch live API, bulk state loads, and calmer UI polling.
+### 54. `6101503` — Perf: batch live API, bulk state loads, and calmer UI polling.
 
 - **Commit no (tam):** `6101503cd6d0bc9f0c58137dbae77ed606baf847`
 - **Commit no (kısa):** `6101503`
@@ -788,7 +812,7 @@ En yeni commit üstte.
 
 ---
 
-### 53. `b222a55` — docs: sync GIT.md (git log)
+### 55. `b222a55` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `b222a552ee0b1c6baa9ffe5b1107437a33644689`
 - **Commit no (kısa):** `b222a55`
@@ -797,7 +821,7 @@ En yeni commit üstte.
 
 ---
 
-### 54. `c47d391` — UI stability, manager metrics, and test-account worker hardening.
+### 56. `c47d391` — UI stability, manager metrics, and test-account worker hardening.
 
 - **Commit no (tam):** `c47d391ee4e7342e782be744f40828ac77c11eb1`
 - **Commit no (kısa):** `c47d391`
@@ -810,7 +834,7 @@ En yeni commit üstte.
 
 ---
 
-### 55. `5ba06fe` — docs: sync GIT.md (git log)
+### 57. `5ba06fe` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `5ba06fe4fac0cdb4094f9649829a097c7e5f17c2`
 - **Commit no (kısa):** `5ba06fe`
@@ -819,7 +843,7 @@ En yeni commit üstte.
 
 ---
 
-### 56. `7b8d1d2` — Improve test paper trading realism and align test KPIs across admin and dashboard.
+### 58. `7b8d1d2` — Improve test paper trading realism and align test KPIs across admin and dashboard.
 
 - **Commit no (tam):** `7b8d1d2632b1bcd4a810043c3fbee18549565d34`
 - **Commit no (kısa):** `7b8d1d2`
@@ -830,7 +854,7 @@ En yeni commit üstte.
 
 ---
 
-### 57. `2b6259e` — docs: sync GIT.md (git log)
+### 59. `2b6259e` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `2b6259ec3974fb243fe171db3cbfa73feb775a1a`
 - **Commit no (kısa):** `2b6259e`
@@ -839,7 +863,7 @@ En yeni commit üstte.
 
 ---
 
-### 58. `5c4268f` — Align admin active bot count and reduce Binance/asyncio log noise.
+### 60. `5c4268f` — Align admin active bot count and reduce Binance/asyncio log noise.
 
 - **Commit no (tam):** `5c4268fcff0422d3f25c12896cb5446ed24c4dc7`
 - **Commit no (kısa):** `5c4268f`
@@ -850,7 +874,7 @@ En yeni commit üstte.
 
 ---
 
-### 59. `64e9548` — docs: sync GIT.md (git log)
+### 61. `64e9548` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `64e9548ef9e4fd720ee921adc86c3cd4f2ca5cf0`
 - **Commit no (kısa):** `64e9548`
@@ -859,7 +883,7 @@ En yeni commit üstte.
 
 ---
 
-### 60. `c9eb79d` — Fix test account wallet KPI/strip and harden upstream error handling.
+### 62. `c9eb79d` — Fix test account wallet KPI/strip and harden upstream error handling.
 
 - **Commit no (tam):** `c9eb79d56111fdd658a1e449043c98db8bccd3b2`
 - **Commit no (kısa):** `c9eb79d`
@@ -870,7 +894,7 @@ En yeni commit üstte.
 
 ---
 
-### 61. `d0e5d36` — docs: sync GIT.md (git log)
+### 63. `d0e5d36` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `d0e5d361b56d8df7e724fe1d6951e99c23837bdc`
 - **Commit no (kısa):** `d0e5d36`
@@ -879,7 +903,7 @@ En yeni commit üstte.
 
 ---
 
-### 62. `40f92bc` — docs: sync GIT.md (git log)
+### 64. `40f92bc` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `40f92bcbf92d3e29cb4b91c13494d8c0289b0a14`
 - **Commit no (kısa):** `40f92bc`
@@ -888,7 +912,7 @@ En yeni commit üstte.
 
 ---
 
-### 63. `80d8055` — Fix bot state hero panel live updates and duration ticker.
+### 65. `80d8055` — Fix bot state hero panel live updates and duration ticker.
 
 - **Commit no (tam):** `80d80550c5ef2129aae13aace5675ba8bb2eae0c`
 - **Commit no (kısa):** `80d8055`
@@ -899,7 +923,7 @@ En yeni commit üstte.
 
 ---
 
-### 64. `b58ec63` — docs: sync GIT.md (git log)
+### 66. `b58ec63` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `b58ec6376d18f5bfbfbfa3f6bbb2dce8929db790`
 - **Commit no (kısa):** `b58ec63`
@@ -908,7 +932,7 @@ En yeni commit üstte.
 
 ---
 
-### 65. `130f23e` — docs: sync GIT.md (git log)
+### 67. `130f23e` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `130f23e3efa1b4c4ea4f2753122ee17855ce4cdc`
 - **Commit no (kısa):** `130f23e`
@@ -917,7 +941,7 @@ En yeni commit üstte.
 
 ---
 
-### 66. `26f244c` — Fix manager global restart UnboundLocalError causing HTTP 500.
+### 68. `26f244c` — Fix manager global restart UnboundLocalError causing HTTP 500.
 
 - **Commit no (tam):** `26f244c44db15d772f867d847c8c03bd1392e9d7`
 - **Commit no (kısa):** `26f244c`
@@ -928,7 +952,7 @@ En yeni commit üstte.
 
 ---
 
-### 67. `45762b5` — docs: sync GIT.md (git log)
+### 69. `45762b5` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `45762b542f097c10903d4924c78b05dc7a0f1535`
 - **Commit no (kısa):** `45762b5`
@@ -937,7 +961,7 @@ En yeni commit üstte.
 
 ---
 
-### 68. `c9ed330` — docs: sync GIT.md (git log)
+### 70. `c9ed330` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `c9ed330ce2d63bbd17c769db970a7e685a65949d`
 - **Commit no (kısa):** `c9ed330`
@@ -946,7 +970,7 @@ En yeni commit üstte.
 
 ---
 
-### 69. `5ce1931` — docs: sync GIT.md (git log)
+### 71. `5ce1931` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `5ce193135ab711efc67ead70593574a13b15604e`
 - **Commit no (kısa):** `5ce1931`
@@ -955,7 +979,7 @@ En yeni commit üstte.
 
 ---
 
-### 70. `7731660` — Bot UI/engine reliability: daily K/Z, cycle timer, logs, and manager global actions.
+### 72. `7731660` — Bot UI/engine reliability: daily K/Z, cycle timer, logs, and manager global actions.
 
 - **Commit no (tam):** `77316606b4b6e33d8c0d91af807ae43ece1e0c4c`
 - **Commit no (kısa):** `7731660`
@@ -966,7 +990,7 @@ En yeni commit üstte.
 
 ---
 
-### 71. `6efd6f2` — docs: sync GIT.md (git log)
+### 73. `6efd6f2` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `6efd6f2929d1eab162eb82ddcf49f57c239220a0`
 - **Commit no (kısa):** `6efd6f2`
@@ -975,7 +999,7 @@ En yeni commit üstte.
 
 ---
 
-### 72. `e7ab403` — docs: sync GIT.md (git log)
+### 74. `e7ab403` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `e7ab403ad233b29fdd6f8b9b715bf7e4cf4d051e`
 - **Commit no (kısa):** `e7ab403`
@@ -984,7 +1008,7 @@ En yeni commit üstte.
 
 ---
 
-### 73. `8a32511` — docs: sync GIT.md (git log)
+### 75. `8a32511` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `8a32511cd942e83e85fcae39c690d576a64c199c`
 - **Commit no (kısa):** `8a32511`
@@ -993,7 +1017,7 @@ En yeni commit üstte.
 
 ---
 
-### 74. `17c7138` — docs: sync GIT.md (git log)
+### 76. `17c7138` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `17c71384f33f6c99241ff48018c4850149cd0b07`
 - **Commit no (kısa):** `17c7138`
@@ -1002,7 +1026,7 @@ En yeni commit üstte.
 
 ---
 
-### 75. `6efb1c5` — Bot session tenure, connectivity restore, synthetic cycle logs, and wallet KPI alignment.
+### 77. `6efb1c5` — Bot session tenure, connectivity restore, synthetic cycle logs, and wallet KPI alignment.
 
 - **Commit no (tam):** `6efb1c5d7c413450963c229b99ee61cb6763a58e`
 - **Commit no (kısa):** `6efb1c5`
@@ -1013,7 +1037,7 @@ En yeni commit üstte.
 
 ---
 
-### 76. `4af6274` — Dashboard, manager, and engine hardening across bot perf, leaderboard, and ops.
+### 78. `4af6274` — Dashboard, manager, and engine hardening across bot perf, leaderboard, and ops.
 
 - **Commit no (tam):** `4af6274785dc0513c920f0a0d8b6a99ded099deb`
 - **Commit no (kısa):** `4af6274`
@@ -1024,7 +1048,7 @@ En yeni commit üstte.
 
 ---
 
-### 77. `d19ed58` — docs: sync GIT.md (git log)
+### 79. `d19ed58` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `d19ed58b33c8311bf8a7e8f1087eb639e9e13bd5`
 - **Commit no (kısa):** `d19ed58`
@@ -1033,7 +1057,7 @@ En yeni commit üstte.
 
 ---
 
-### 78. `21db228` — Bot health resilience, grid/profit UI polish, and engine hardening.
+### 80. `21db228` — Bot health resilience, grid/profit UI polish, and engine hardening.
 
 - **Commit no (tam):** `21db22880c7bef30401e6d4c6607108d391b60d2`
 - **Commit no (kısa):** `21db228`
@@ -1048,7 +1072,7 @@ En yeni commit üstte.
 
 ---
 
-### 79. `2a5dcd3` — docs: sync GIT.md (git log)
+### 81. `2a5dcd3` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `2a5dcd3749212819373c9ae75a46b5360aa929f9`
 - **Commit no (kısa):** `2a5dcd3`
@@ -1057,7 +1081,7 @@ En yeni commit üstte.
 
 ---
 
-### 80. `6066d76` — Grid trailing, Binance connectivity, and dashboard KPI hardening.
+### 82. `6066d76` — Grid trailing, Binance connectivity, and dashboard KPI hardening.
 
 - **Commit no (tam):** `6066d76754d8b4f9df0655288d286e5d050a13fc`
 - **Commit no (kısa):** `6066d76`
@@ -1068,7 +1092,7 @@ En yeni commit üstte.
 
 ---
 
-### 81. `06cef9a` — docs: sync GIT.md (git log)
+### 83. `06cef9a` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `06cef9a963df271c824cbbf0c5d0932c6a3209e8`
 - **Commit no (kısa):** `06cef9a`
@@ -1077,7 +1101,7 @@ En yeni commit üstte.
 
 ---
 
-### 82. `901f1a3` — Add grid trade modal, manager log UX, and bot detail sync fixes.
+### 84. `901f1a3` — Add grid trade modal, manager log UX, and bot detail sync fixes.
 
 - **Commit no (tam):** `901f1a38ef259b1628b882b0c499c54c09009885`
 - **Commit no (kısa):** `901f1a3`
@@ -1088,7 +1112,7 @@ En yeni commit üstte.
 
 ---
 
-### 83. `9cd5850` — Update marketing submodule to latest landing and deploy changes.
+### 85. `9cd5850` — Update marketing submodule to latest landing and deploy changes.
 
 - **Commit no (tam):** `9cd58508c8eb8f39db2e310d75c5812bc67a0468`
 - **Commit no (kısa):** `9cd5850`
@@ -1097,7 +1121,7 @@ En yeni commit üstte.
 
 ---
 
-### 84. `f2b5379` — Engine log UX, health alerts, grid trailing hardening, and tur trade fixes.
+### 86. `f2b5379` — Engine log UX, health alerts, grid trailing hardening, and tur trade fixes.
 
 - **Commit no (tam):** `f2b5379965137f4740064252dcc16e194153cd08`
 - **Commit no (kısa):** `f2b5379`
@@ -1108,7 +1132,7 @@ En yeni commit üstte.
 
 ---
 
-### 85. `a699226` — Checkpoint: pre profit-exit trigger fix (REST SSOT, UI, ops reorg).
+### 87. `a699226` — Checkpoint: pre profit-exit trigger fix (REST SSOT, UI, ops reorg).
 
 - **Commit no (tam):** `a699226c773b7d0cb8ab5bfd3de660899a62f29f`
 - **Commit no (kısa):** `a699226`
@@ -1119,7 +1143,7 @@ En yeni commit üstte.
 
 ---
 
-### 86. `f203968` — Sunucu deploy.sh: guncel commit ciktida, degisti ise belirtilir
+### 88. `f203968` — Sunucu deploy.sh: guncel commit ciktida, degisti ise belirtilir
 
 - **Commit no (tam):** `f2039688c3cd0bcdbf5bd0838842a943ecf9291a`
 - **Commit no (kısa):** `f203968`
@@ -1128,7 +1152,7 @@ En yeni commit üstte.
 
 ---
 
-### 87. `f9fcf9b` — Linux HTML başlatma, bakiye doğrulama, dual PNL (Cash/Inventory), perfPanel+tradesPanel, Aktif Emirler sadece Anasayfa
+### 89. `f9fcf9b` — Linux HTML başlatma, bakiye doğrulama, dual PNL (Cash/Inventory), perfPanel+tradesPanel, Aktif Emirler sadece Anasayfa
 
 - **Commit no (tam):** `f9fcf9bcbd3d6837662549eca990a6045f92de35`
 - **Commit no (kısa):** `f9fcf9b`
@@ -1137,7 +1161,7 @@ En yeni commit üstte.
 
 ---
 
-### 88. `2fea40c` — Admin: askı cache invalidation + çevrimiçi last_seen 2dk; sohbet flicker/typing düzeltmesi; coin logo cache 31 gün
+### 90. `2fea40c` — Admin: askı cache invalidation + çevrimiçi last_seen 2dk; sohbet flicker/typing düzeltmesi; coin logo cache 31 gün
 
 - **Commit no (tam):** `2fea40ce1f4362ac9f1133d0c05c98a9fd03144c`
 - **Commit no (kısa):** `2fea40c`
@@ -1146,7 +1170,7 @@ En yeni commit üstte.
 
 ---
 
-### 89. `da82dd3` — Sohbet: admin yazıyor göstergesi + kullanıcı çevrimiçi/çevrimdışı nokta (yeşil/kırmızı)
+### 91. `da82dd3` — Sohbet: admin yazıyor göstergesi + kullanıcı çevrimiçi/çevrimdışı nokta (yeşil/kırmızı)
 
 - **Commit no (tam):** `da82dd38212237c7b96597374b2ea93938b9bc39`
 - **Commit no (kısa):** `da82dd3`
@@ -1155,7 +1179,7 @@ En yeni commit üstte.
 
 ---
 
-### 90. `8fa1d4a` — Sohbet: anında mesaj (admin poll 2.5s, kullanıcı poll 2.5s, gönderim sonrası yenileme, welcome 1.2s)
+### 92. `8fa1d4a` — Sohbet: anında mesaj (admin poll 2.5s, kullanıcı poll 2.5s, gönderim sonrası yenileme, welcome 1.2s)
 
 - **Commit no (tam):** `8fa1d4a4731c9d6c2e215c4ef283b47faf4a375b`
 - **Commit no (kısa):** `8fa1d4a`
@@ -1164,7 +1188,7 @@ En yeni commit üstte.
 
 ---
 
-### 91. `4a93a08` — Login: kripto logo flicker onleme - liste bir kez render, sonra sadece fiyat/chg guncelle
+### 93. `4a93a08` — Login: kripto logo flicker onleme - liste bir kez render, sonra sadece fiyat/chg guncelle
 
 - **Commit no (tam):** `4a93a08717a30602cdc8ba9a1f446ca58421d4e9`
 - **Commit no (kısa):** `4a93a08`
@@ -1173,7 +1197,7 @@ En yeni commit üstte.
 
 ---
 
-### 92. `c82c2d7` — Aktif Emirler paneli: emir yokken her zaman İşlem Geçmişi altında (txPanel.after)
+### 94. `c82c2d7` — Aktif Emirler paneli: emir yokken her zaman İşlem Geçmişi altında (txPanel.after)
 
 - **Commit no (tam):** `c82c2d797abed869efad750cfe111798cbf2e556`
 - **Commit no (kısa):** `c82c2d7`
@@ -1182,7 +1206,7 @@ En yeni commit üstte.
 
 ---
 
-### 93. `37791ce` — Admin: sunucu paneli, audit, hata logları, API rehberi
+### 95. `37791ce` — Admin: sunucu paneli, audit, hata logları, API rehberi
 
 - **Commit no (tam):** `37791ce96e060ac8741c48b09139ee7e0a35cb10`
 - **Commit no (kısa):** `37791ce`
@@ -1200,7 +1224,7 @@ En yeni commit üstte.
 
 ---
 
-### 94. `a411a4b` — fix: logo flicker, price blink, bot performance period update; suppress ProactorBasePipeTransport log
+### 96. `a411a4b` — fix: logo flicker, price blink, bot performance period update; suppress ProactorBasePipeTransport log
 
 - **Commit no (tam):** `a411a4b86b455e78b8d9364830945a3898d6d5fe`
 - **Commit no (kısa):** `a411a4b`
@@ -1209,7 +1233,7 @@ En yeni commit üstte.
 
 ---
 
-### 95. `535a648` — omeraltin.com kapanma: HTML watchdog + auto_start + start.py sertlestirme
+### 97. `535a648` — omeraltin.com kapanma: HTML watchdog + auto_start + start.py sertlestirme
 
 - **Commit no (tam):** `535a6480ff06ad8f1f74b44e846778de56c1a649`
 - **Commit no (kısa):** `535a648`
@@ -1222,7 +1246,7 @@ En yeni commit üstte.
 
 ---
 
-### 96. `ae3d5d3` — Admin tabs: mobile Sekmeler fix + perf (store, preload, instant switch)
+### 98. `ae3d5d3` — Admin tabs: mobile Sekmeler fix + perf (store, preload, instant switch)
 
 - **Commit no (tam):** `ae3d5d3cac2cd4e5404e08e9ede6326a614bd601`
 - **Commit no (kısa):** `ae3d5d3`
@@ -1238,7 +1262,7 @@ En yeni commit üstte.
 
 ---
 
-### 97. `801d68d` — Bot sayfası: Başlat kaldırıldı; 401'de Hata (API anahtarı) gösterimi; strip fiyat/24h/mini grafik layout kayması düzeltmesi
+### 99. `801d68d` — Bot sayfası: Başlat kaldırıldı; 401'de Hata (API anahtarı) gösterimi; strip fiyat/24h/mini grafik layout kayması düzeltmesi
 
 - **Commit no (tam):** `801d68d86b35e6c03286219f63998626eb3bdd43`
 - **Commit no (kısa):** `801d68d`
@@ -1247,7 +1271,7 @@ En yeni commit üstte.
 
 ---
 
-### 98. `b2717f2` — Manager: GET / redirect, 401/ConnectionResetError log bastırma; Oluştur=anında başlat; Başlat butonu sadece stopped; Leaderboard parametreleri görüntüle + modal
+### 100. `b2717f2` — Manager: GET / redirect, 401/ConnectionResetError log bastırma; Oluştur=anında başlat; Başlat butonu sadece stopped; Leaderboard parametreleri görüntüle + modal
 
 - **Commit no (tam):** `b2717f28f2409a6b6037d5ca88b6520adc6a491c`
 - **Commit no (kısa):** `b2717f2`
@@ -1256,7 +1280,7 @@ En yeni commit üstte.
 
 ---
 
-### 99. `ef90350` — Bot 401: pause bot on Binance Unauthorized, set API_UNAUTHORIZED and ERROR event for UI
+### 101. `ef90350` — Bot 401: pause bot on Binance Unauthorized, set API_UNAUTHORIZED and ERROR event for UI
 
 - **Commit no (tam):** `ef903504d00ff9d7f9519af2b8d563468e89ae52`
 - **Commit no (kısa):** `ef90350`
@@ -1265,7 +1289,7 @@ En yeni commit üstte.
 
 ---
 
-### 100. `9a1b6f8` — UI/UX: flicker fixes, mobile padding, admin tabs, leaderboard, chat; deploy nginx config
+### 102. `9a1b6f8` — UI/UX: flicker fixes, mobile padding, admin tabs, leaderboard, chat; deploy nginx config
 
 - **Commit no (tam):** `9a1b6f8506c86cbb64e5620823c7e4a78aa10075`
 - **Commit no (kısa):** `9a1b6f8`
@@ -1274,7 +1298,7 @@ En yeni commit üstte.
 
 ---
 
-### 101. `d0c1f26` — Deploy: Nginx domain eski gorunum notu (DEPLOY.md) + show-nginx-config.bat (Windows)
+### 103. `d0c1f26` — Deploy: Nginx domain eski gorunum notu (DEPLOY.md) + show-nginx-config.bat (Windows)
 
 - **Commit no (tam):** `d0c1f263a0cdf7b58c9283300b6854f0ddee001c`
 - **Commit no (kısa):** `d0c1f26`
@@ -1283,7 +1307,7 @@ En yeni commit üstte.
 
 ---
 
-### 102. `89cf45b` — start.bat: teshis ciktisi - Dashboard (diskte) surum + build-info URL + eski gorunum notu
+### 104. `89cf45b` — start.bat: teshis ciktisi - Dashboard (diskte) surum + build-info URL + eski gorunum notu
 
 - **Commit no (tam):** `89cf45bc3548800e1176e1f8800a11808985e228`
 - **Commit no (kısa):** `89cf45b`
@@ -1292,7 +1316,7 @@ En yeni commit üstte.
 
 ---
 
-### 103. `e81ea4f` — build-info login fix + no-cache UI: path normalize, route ilk sırada, no-cache middleware, DEPLOY notları
+### 105. `e81ea4f` — build-info login fix + no-cache UI: path normalize, route ilk sırada, no-cache middleware, DEPLOY notları
 
 - **Commit no (tam):** `e81ea4f5d985d8293de523ae0a79aa3da1fb85f5`
 - **Commit no (kısa):** `e81ea4f`
@@ -1301,7 +1325,7 @@ En yeni commit üstte.
 
 ---
 
-### 104. `e8cd6f8` — api/debug/build-info: lockdown whitelist'e ekle (giriş olmadan erişilebilsin)
+### 106. `e8cd6f8` — api/debug/build-info: lockdown whitelist'e ekle (giriş olmadan erişilebilsin)
 
 - **Commit no (tam):** `e8cd6f8426b18e511246128a362d42146a38fa6f`
 - **Commit no (kısa):** `e8cd6f8`
@@ -1310,7 +1334,7 @@ En yeni commit üstte.
 
 ---
 
-### 105. `61248cf` — Deploy: Değişiklikler yansımıyor rehberi + /api/debug/build-info endpoint
+### 107. `61248cf` — Deploy: Değişiklikler yansımıyor rehberi + /api/debug/build-info endpoint
 
 - **Commit no (tam):** `61248cfc2b061dcc7a7b5a5415bb1a7d9de8c66b`
 - **Commit no (kısa):** `61248cf`
@@ -1319,7 +1343,7 @@ En yeni commit üstte.
 
 ---
 
-### 106. `f5fb145` — Bot engine, routes, cycle_ledger, dashboard snapshot, UI: tüm kalan değişiklikler
+### 108. `f5fb145` — Bot engine, routes, cycle_ledger, dashboard snapshot, UI: tüm kalan değişiklikler
 
 - **Commit no (tam):** `f5fb14584fd0b7e38a19dc154d37062ed2a7f2bf`
 - **Commit no (kısa):** `f5fb145`
@@ -1328,7 +1352,7 @@ En yeni commit üstte.
 
 ---
 
-### 107. `a3b8688` — Leaderboard: sadece kârda botlar; Bulunamadı mesajı. Admin: sarı çerçeve, tab sarı+kayma, koyu tema, hover glow
+### 109. `a3b8688` — Leaderboard: sadece kârda botlar; Bulunamadı mesajı. Admin: sarı çerçeve, tab sarı+kayma, koyu tema, hover glow
 
 - **Commit no (tam):** `a3b868868291d76a521b8408903f58783a408b05`
 - **Commit no (kısa):** `a3b8688`
@@ -1337,7 +1361,7 @@ En yeni commit üstte.
 
 ---
 
-### 108. `9153e39` — Admin: tab slider indicator + içerik kayma animasyonu
+### 110. `9153e39` — Admin: tab slider indicator + içerik kayma animasyonu
 
 - **Commit no (tam):** `9153e39dc693d32aa68b9dac00485036282fb2de`
 - **Commit no (kısa):** `9153e39`
@@ -1353,7 +1377,7 @@ En yeni commit üstte.
 
 ---
 
-### 109. `cd4e83d` — Copy Trading + Global Leaderboard; admin hesap kartları stil
+### 111. `cd4e83d` — Copy Trading + Global Leaderboard; admin hesap kartları stil
 
 - **Commit no (tam):** `cd4e83d70bd7c2c5285375383765b3cb071e7e23`
 - **Commit no (kısa):** `cd4e83d`
@@ -1369,7 +1393,7 @@ En yeni commit üstte.
 
 ---
 
-### 110. `4598ac0` — Spot modal: hemen açılma + yüzde flicker düzeltmesi; ilk giriş popup sırası + mobil X
+### 112. `4598ac0` — Spot modal: hemen açılma + yüzde flicker düzeltmesi; ilk giriş popup sırası + mobil X
 
 - **Commit no (tam):** `4598ac0e8700d45c89848d3c4b6d0672778a04c4`
 - **Commit no (kısa):** `4598ac0`
@@ -1383,7 +1407,7 @@ En yeni commit üstte.
 
 ---
 
-### 111. `c170a91` — binance_spot: _binance_ip_ban global kaldırıldı – mutable state ile 'used prior to global declaration' hatası giderildi
+### 113. `c170a91` — binance_spot: _binance_ip_ban global kaldırıldı – mutable state ile 'used prior to global declaration' hatası giderildi
 
 - **Commit no (tam):** `c170a913c348fcc74c111cd4668a737f2f5233da`
 - **Commit no (kısa):** `c170a91`
@@ -1392,7 +1416,7 @@ En yeni commit üstte.
 
 ---
 
-### 112. `7a0817a` — Wallet: bot/emir kilitli strip+tablo; Trade favori: sembol/fiyat tam görünsün
+### 114. `7a0817a` — Wallet: bot/emir kilitli strip+tablo; Trade favori: sembol/fiyat tam görünsün
 
 - **Commit no (tam):** `7a0817a480f9cfcf3c7fc1ac0e62546ee78e38d6`
 - **Commit no (kısa):** `7a0817a`
@@ -1405,7 +1429,7 @@ En yeni commit üstte.
 
 ---
 
-### 113. `0698e05` — Dashboard, bot panel, popup, perf: İşlem geçmişi görünürlük, fiyat blink, live K/Z, popup etiket, SLOW_REQUEST optimizasyonu
+### 115. `0698e05` — Dashboard, bot panel, popup, perf: İşlem geçmişi görünürlük, fiyat blink, live K/Z, popup etiket, SLOW_REQUEST optimizasyonu
 
 - **Commit no (tam):** `0698e05da4402ef236c369d726a06e0308313ee0`
 - **Commit no (kısa):** `0698e05`
@@ -1422,7 +1446,7 @@ En yeni commit üstte.
 
 ---
 
-### 114. `e210bf5` — Dashboard & API: perf, UX, işlem geçmişi, yenilemede sekme koruma
+### 116. `e210bf5` — Dashboard & API: perf, UX, işlem geçmişi, yenilemede sekme koruma
 
 - **Commit no (tam):** `e210bf55fddd31593482567ba7e66995d202a63e`
 - **Commit no (kısa):** `e210bf5`
@@ -1439,7 +1463,7 @@ En yeni commit üstte.
 
 ---
 
-### 115. `64fb33e` — ui: dashboard trade view + wallet refresh + bot detail back link
+### 117. `64fb33e` — ui: dashboard trade view + wallet refresh + bot detail back link
 
 - **Commit no (tam):** `64fb33e2c39f83d5a256ba2f8c8ae5d117d2b6e9`
 - **Commit no (kısa):** `64fb33e`
@@ -1454,7 +1478,7 @@ En yeni commit üstte.
 
 ---
 
-### 116. `c1012b3` — fix: bot running but no real Binance trades — run_id, reconcile NOT_FOUND, verify-before-repair
+### 118. `c1012b3` — fix: bot running but no real Binance trades — run_id, reconcile NOT_FOUND, verify-before-repair
 
 - **Commit no (tam):** `c1012b3aa5f672522cbeaae5bef27959460c3d26`
 - **Commit no (kısa):** `c1012b3`
@@ -1471,7 +1495,7 @@ En yeni commit üstte.
 
 ---
 
-### 117. `3dfdd54` — feat: BOT_TICK_SUMMARY + BOT_TEŞHIS_DUMP on loop start; favori coin layout fix
+### 119. `3dfdd54` — feat: BOT_TICK_SUMMARY + BOT_TEŞHIS_DUMP on loop start; favori coin layout fix
 
 - **Commit no (tam):** `3dfdd54af012f6a307a49f7adc7827508ae9cbf0`
 - **Commit no (kısa):** `3dfdd54`
@@ -1485,7 +1509,7 @@ En yeni commit üstte.
 
 ---
 
-### 118. `7f879df` — fix: live/paper audit logs, Bot Performansı %, Favori Coinler, İşlem Geçmişi paneli, manager favicon/alerts
+### 120. `7f879df` — fix: live/paper audit logs, Bot Performansı %, Favori Coinler, İşlem Geçmişi paneli, manager favicon/alerts
 
 - **Commit no (tam):** `7f879dfc37576d1ae4159c6de5fb860eb418fe20`
 - **Commit no (kısa):** `7f879df`
@@ -1500,7 +1524,7 @@ En yeni commit üstte.
 
 ---
 
-### 119. `218a086` — fix: avoid logout on 401 UNAUTHORIZED (missing_token); only SESSION_NOT_FOUND triggers session invalid; auth missing_token log at DEBUG
+### 121. `218a086` — fix: avoid logout on 401 UNAUTHORIZED (missing_token); only SESSION_NOT_FOUND triggers session invalid; auth missing_token log at DEBUG
 
 - **Commit no (tam):** `218a086567612b18e4922e0023239edaf94a05ef`
 - **Commit no (kısa):** `218a086`
@@ -1509,7 +1533,7 @@ En yeni commit üstte.
 
 ---
 
-### 120. `ca855ba` — fix: force mainnet for non-test accounts; log BOT_ACCOUNT_CTX (paper_mode, testnet) at tick start
+### 122. `ca855ba` — fix: force mainnet for non-test accounts; log BOT_ACCOUNT_CTX (paper_mode, testnet) at tick start
 
 - **Commit no (tam):** `ca855bad7e878c1cf5aeadc84c900dcdeb7a195d`
 - **Commit no (kısa):** `ca855ba`
@@ -1518,7 +1542,7 @@ En yeni commit üstte.
 
 ---
 
-### 121. `1cdf887` — fix: sync virtual_wallet from state when initial_allocation_done so balance not overwritten; repair log
+### 123. `1cdf887` — fix: sync virtual_wallet from state when initial_allocation_done so balance not overwritten; repair log
 
 - **Commit no (tam):** `1cdf88769e41e01ad7f84a5e4619008c32bcc921`
 - **Commit no (kısa):** `1cdf887`
@@ -1530,7 +1554,7 @@ En yeni commit üstte.
 
 ---
 
-### 122. `113c237` — fix: real account never runs in paper mode (paper only when test user and no API keys)
+### 124. `113c237` — fix: real account never runs in paper mode (paper only when test user and no API keys)
 
 - **Commit no (tam):** `113c2373b6d8370a4bf6f772555f9b0345cd64bd`
 - **Commit no (kısa):** `113c237`
@@ -1543,7 +1567,7 @@ En yeni commit üstte.
 
 ---
 
-### 123. `d40a24e` — fix: repair set initial_allocation_done to stop repeat repair; data_hub get_all_prices snapshot
+### 125. `d40a24e` — fix: repair set initial_allocation_done to stop repeat repair; data_hub get_all_prices snapshot
 
 - **Commit no (tam):** `d40a24e4d340d13052e48bc8fb37c1616b5c204d`
 - **Commit no (kısa):** `d40a24e`
@@ -1555,7 +1579,7 @@ En yeni commit üstte.
 
 ---
 
-### 124. `edb7864` — fix: initial allocation repair use intent client_order_id; dashboard bot performance range flicker
+### 126. `edb7864` — fix: initial allocation repair use intent client_order_id; dashboard bot performance range flicker
 
 - **Commit no (tam):** `edb7864c3c9351e51bceb789bede2c6293a5d46d`
 - **Commit no (kısa):** `edb7864`
@@ -1567,7 +1591,7 @@ En yeni commit üstte.
 
 ---
 
-### 125. `7891d83` — feat: pre-fill bot create form with last used params (localStorage)
+### 127. `7891d83` — feat: pre-fill bot create form with last used params (localStorage)
 
 - **Commit no (tam):** `7891d83ac730c58cbd33e7b26d91138b2cf70e4f`
 - **Commit no (kısa):** `7891d83`
@@ -1576,7 +1600,7 @@ En yeni commit üstte.
 
 ---
 
-### 126. `84ec6d2` — fix: initial allocation 1s retry; v5 use strategy next_wake; remove Performans raporu block; spec
+### 128. `84ec6d2` — fix: initial allocation 1s retry; v5 use strategy next_wake; remove Performans raporu block; spec
 
 - **Commit no (tam):** `84ec6d2ec1eeaf08f758e4c701f47907bc8fe6c8`
 - **Commit no (kısa):** `84ec6d2`
@@ -1585,7 +1609,7 @@ En yeni commit üstte.
 
 ---
 
-### 127. `af57288` — fix: restore Favori Coinler layout to previous working state (inline list style, simpler mobile CSS)
+### 129. `af57288` — fix: restore Favori Coinler layout to previous working state (inline list style, simpler mobile CSS)
 
 - **Commit no (tam):** `af572881da05fa75f9161792e8c2fd05a8716e62`
 - **Commit no (kısa):** `af57288`
@@ -1594,7 +1618,7 @@ En yeni commit üstte.
 
 ---
 
-### 128. `c6a7d68` — fix: bot detail live price + initial allocation state UX
+### 130. `c6a7d68` — fix: bot detail live price + initial allocation state UX
 
 - **Commit no (tam):** `c6a7d68e70ed155b213c8bc87289675d1d62adf5`
 - **Commit no (kısa):** `c6a7d68`
@@ -1607,7 +1631,7 @@ En yeni commit üstte.
 
 ---
 
-### 129. `d2741b4` — fix: bots_delete skip convert on worker-only error, proceed with delete
+### 131. `d2741b4` — fix: bots_delete skip convert on worker-only error, proceed with delete
 
 - **Commit no (tam):** `d2741b4f1fabb737aae2321cb3a46fe788283665`
 - **Commit no (kısa):** `d2741b4`
@@ -1616,7 +1640,7 @@ En yeni commit üstte.
 
 ---
 
-### 130. `1b0bb33` — fix: remove redundant local import of update_intent_filled to fix UnboundLocalError
+### 132. `1b0bb33` — fix: remove redundant local import of update_intent_filled to fix UnboundLocalError
 
 - **Commit no (tam):** `1b0bb33c5bfd44727593384c7d352d5a286bbc51`
 - **Commit no (kısa):** `1b0bb33`
@@ -1625,7 +1649,7 @@ En yeni commit üstte.
 
 ---
 
-### 131. `e3bb759` — fix: chart page mobile – flex layout, 44px touch targets, no horizontal overflow
+### 133. `e3bb759` — fix: chart page mobile – flex layout, 44px touch targets, no horizontal overflow
 
 - **Commit no (tam):** `e3bb7597fd5eae287e2b3ffbc2c3c62e1a1a5352`
 - **Commit no (kısa):** `e3bb759`
@@ -1634,7 +1658,7 @@ En yeni commit üstte.
 
 ---
 
-### 132. `3b6989a` — fix: Bot Create modal mobile – viewport lock, body-only scroll, form spacing
+### 134. `3b6989a` — fix: Bot Create modal mobile – viewport lock, body-only scroll, form spacing
 
 - **Commit no (tam):** `3b6989a14b3d88d99522246f618e8375e1dc3ddf`
 - **Commit no (kısa):** `3b6989a`
@@ -1643,7 +1667,7 @@ En yeni commit üstte.
 
 ---
 
-### 133. `d2719ec` — perf & UI: finance/trades 365d cap; snapshot 5s; bot perf flicker fix; tx history order grouping + Binance platform + layout; mobile trade favs & Bot Create modal
+### 135. `d2719ec` — perf & UI: finance/trades 365d cap; snapshot 5s; bot perf flicker fix; tx history order grouping + Binance platform + layout; mobile trade favs & Bot Create modal
 
 - **Commit no (tam):** `d2719ec785a22e6adcf9cec169e297a6b4dde1c3`
 - **Commit no (kısa):** `d2719ec`
@@ -1652,7 +1676,7 @@ En yeni commit üstte.
 
 ---
 
-### 134. `6c5dd19` — fix: spot order HTTPException re-raise (no 500); mobile trade fav layout 30/50px from logo
+### 136. `6c5dd19` — fix: spot order HTTPException re-raise (no 500); mobile trade fav layout 30/50px from logo
 
 - **Commit no (tam):** `6c5dd198b5cd2827bcb5343df325f1b78afe49fe`
 - **Commit no (kısa):** `6c5dd19`
@@ -1661,7 +1685,7 @@ En yeni commit üstte.
 
 ---
 
-### 135. `2bfb377` — Trade favorileri: sembol logonun yanında, fiyat 30 boşluk, yüzde 50 boşluk hizalama
+### 137. `2bfb377` — Trade favorileri: sembol logonun yanında, fiyat 30 boşluk, yüzde 50 boşluk hizalama
 
 - **Commit no (tam):** `2bfb377eeb529314feee3c100412013a9cd36d15`
 - **Commit no (kısa):** `2bfb377`
@@ -1670,7 +1694,7 @@ En yeni commit üstte.
 
 ---
 
-### 136. `7dc4458` — fix: Bot Performansı PnL flicker – sadece değer değişince DOM güncelle
+### 138. `7dc4458` — fix: Bot Performansı PnL flicker – sadece değer değişince DOM güncelle
 
 - **Commit no (tam):** `7dc44585795b23bb685daff771e7f54b0cb8e140`
 - **Commit no (kısa):** `7dc4458`
@@ -1679,7 +1703,7 @@ En yeni commit üstte.
 
 ---
 
-### 137. `e8cb0a2` — Dashboard: Trade favorileri mobil sığdırma, sembol/logo hizalama, 30 boşluk spacer
+### 139. `e8cb0a2` — Dashboard: Trade favorileri mobil sığdırma, sembol/logo hizalama, 30 boşluk spacer
 
 - **Commit no (tam):** `e8cb0a2753a70025fbc6581ec5f240e00e71517d`
 - **Commit no (kısa):** `e8cb0a2`
@@ -1688,7 +1712,7 @@ En yeni commit üstte.
 
 ---
 
-### 138. `cf33970` — fix: bootstrap 404, mobile wallet, spot order from web, ticker desktop-only
+### 140. `cf33970` — fix: bootstrap 404, mobile wallet, spot order from web, ticker desktop-only
 
 - **Commit no (tam):** `cf339701bfccbd146494a0036d4dbc8b8060a40e`
 - **Commit no (kısa):** `cf33970`
@@ -1703,7 +1727,7 @@ En yeni commit üstte.
 
 ---
 
-### 139. `29335ec` — fix(mobile): wallet data on mobile — sync bootstrap wallet from dashboardStore to assetsState
+### 141. `29335ec` — fix(mobile): wallet data on mobile — sync bootstrap wallet from dashboardStore to assetsState
 
 - **Commit no (tam):** `29335ec6e84d64a4c30d15056a2d832028bcacfd`
 - **Commit no (kısa):** `29335ec`
@@ -1717,7 +1741,7 @@ En yeni commit üstte.
 
 ---
 
-### 140. `fd2b91d` — fix(mobile): hide top ticker strip; ensure Binance data loads on mobile
+### 142. `fd2b91d` — fix(mobile): hide top ticker strip; ensure Binance data loads on mobile
 
 - **Commit no (tam):** `fd2b91defb15608bdc7caaea4b81c99aeb797a57`
 - **Commit no (kısa):** `fd2b91d`
@@ -1730,7 +1754,7 @@ En yeni commit üstte.
 
 ---
 
-### 141. `eee7bea` — fix: snapshot cache-only wallet + dashboard bootstrap + mobile ticker hide
+### 143. `eee7bea` — fix: snapshot cache-only wallet + dashboard bootstrap + mobile ticker hide
 
 - **Commit no (tam):** `eee7bea518240463ced9e681b1265dd27a339d48`
 - **Commit no (kısa):** `eee7bea`
@@ -1748,7 +1772,7 @@ En yeni commit üstte.
 
 ---
 
-### 142. `51ba364` — mobile: root fix - tabs + prices visible
+### 144. `51ba364` — mobile: root fix - tabs + prices visible
 
 - **Commit no (tam):** `51ba3640cd678d714dc897b08e85b4574c72d0ea`
 - **Commit no (kısa):** `51ba364`
@@ -1763,7 +1787,7 @@ En yeni commit üstte.
 
 ---
 
-### 143. `e11dfec` — fix: SyntaxError in api_debug_wallet_diag snapshot_asset_count
+### 145. `e11dfec` — fix: SyntaxError in api_debug_wallet_diag snapshot_asset_count
 
 - **Commit no (tam):** `e11dfecad6b3b6b1dde354cc81c71320353ff1c1`
 - **Commit no (kısa):** `e11dfec`
@@ -1772,7 +1796,7 @@ En yeni commit üstte.
 
 ---
 
-### 144. `6ef26df` — wallet: CURSOR TASK - normalizeAndApplyWallet, debug overlay, trace logs, diag endpoint
+### 146. `6ef26df` — wallet: CURSOR TASK - normalizeAndApplyWallet, debug overlay, trace logs, diag endpoint
 
 - **Commit no (tam):** `6ef26df2ac7164c7924587eac4a385bba58f9cc2`
 - **Commit no (kısa):** `6ef26df`
@@ -1789,7 +1813,7 @@ En yeni commit üstte.
 
 ---
 
-### 145. `e6f75cc` — fix: Wallet loading / cüzdan hiç gelmiyor — 5 patch uygulandı
+### 147. `e6f75cc` — fix: Wallet loading / cüzdan hiç gelmiyor — 5 patch uygulandı
 
 - **Commit no (tam):** `e6f75cc91c2d630b8e7ebe20dd9cc08da738527b`
 - **Commit no (kısa):** `e6f75cc`
@@ -1807,7 +1831,7 @@ En yeni commit üstte.
 
 ---
 
-### 146. `43b775a` — fix: dashboard flicker, wallet loading, appbar mobile, manager Windows Server
+### 148. `43b775a` — fix: dashboard flicker, wallet loading, appbar mobile, manager Windows Server
 
 - **Commit no (tam):** `43b775a04900cf8172d26f977d24f5ff0eff3605`
 - **Commit no (kısa):** `43b775a`
@@ -1823,7 +1847,7 @@ En yeni commit üstte.
 
 ---
 
-### 147. `cb7fdc9` — fix: Flash Home fallback + mobile Trade favori/arama
+### 149. `cb7fdc9` — fix: Flash Home fallback + mobile Trade favori/arama
 
 - **Commit no (tam):** `cb7fdc90c6bdfd4e30c91b854840e4e5e090d904`
 - **Commit no (kısa):** `cb7fdc9`
@@ -1835,7 +1859,7 @@ En yeni commit üstte.
 
 ---
 
-### 148. `1b22c82` — fix(ui): preserve last good spot balance in Flash Home walletCachedToAssetsState
+### 150. `1b22c82` — fix(ui): preserve last good spot balance in Flash Home walletCachedToAssetsState
 
 - **Commit no (tam):** `1b22c82cdc2d430edae8e0c1b1229c98a7765589`
 - **Commit no (kısa):** `1b22c82`
@@ -1844,7 +1868,7 @@ En yeni commit üstte.
 
 ---
 
-### 149. `caab28d` — fix: Binance wallet flash to 0 + mobile appbar center width
+### 151. `caab28d` — fix: Binance wallet flash to 0 + mobile appbar center width
 
 - **Commit no (tam):** `caab28d8ed914dce11086f5f7017025b26c7da78`
 - **Commit no (kısa):** `caab28d`
@@ -1857,7 +1881,7 @@ En yeni commit üstte.
 
 ---
 
-### 150. `3976ba6` — fix(ui): mobile dashboard appbar single-row layout and alignment
+### 152. `3976ba6` — fix(ui): mobile dashboard appbar single-row layout and alignment
 
 - **Commit no (tam):** `3976ba6ade8b77866ae53d64c0baa82b8c360948`
 - **Commit no (kısa):** `3976ba6`
@@ -1866,7 +1890,7 @@ En yeni commit üstte.
 
 ---
 
-### 151. `51c93ef` — Binance: 429 reduce myTrades to 40 symbols + delay + cooldown 10min; 401/timeout: 8s timeout, timestamp fallback, wallet_error in snapshot
+### 153. `51c93ef` — Binance: 429 reduce myTrades to 40 symbols + delay + cooldown 10min; 401/timeout: 8s timeout, timestamp fallback, wallet_error in snapshot
 
 - **Commit no (tam):** `51c93ef25921bb78950840bf04b0a60c0d8011aa`
 - **Commit no (kısa):** `51c93ef`
@@ -1875,7 +1899,7 @@ En yeni commit üstte.
 
 ---
 
-### 152. `048c42f` — start.bat: checkout stop.bat before pull to avoid merge abort; note for file-in-use error
+### 154. `048c42f` — start.bat: checkout stop.bat before pull to avoid merge abort; note for file-in-use error
 
 - **Commit no (tam):** `048c42fe8ba503f732d4b86970b025974c0fb76b`
 - **Commit no (kısa):** `048c42f`
@@ -1884,7 +1908,7 @@ En yeni commit üstte.
 
 ---
 
-### 153. `3718194` — Manager: global actions include HTML, restart(html), loading state and feedback for all buttons; stop.bat and DEPLOY notes
+### 155. `3718194` — Manager: global actions include HTML, restart(html), loading state and feedback for all buttons; stop.bat and DEPLOY notes
 
 - **Commit no (tam):** `3718194b7de37467741dc9dd913de51b1fc8ff79`
 - **Commit no (kısa):** `3718194`
@@ -1893,7 +1917,7 @@ En yeni commit üstte.
 
 ---
 
-### 154. `08d71d1` — Add app.services.dashboard_snapshot to repo; 503 on snapshot when module missing
+### 156. `08d71d1` — Add app.services.dashboard_snapshot to repo; 503 on snapshot when module missing
 
 - **Commit no (tam):** `08d71d17d1840247c6c5fb437d09955b3b31c0c9`
 - **Commit no (kısa):** `08d71d1`
@@ -1902,7 +1926,7 @@ En yeni commit üstte.
 
 ---
 
-### 155. `25fa288` — fix(stop.bat): port-based kill first, locale-safe netstat, run-as-admin hint
+### 157. `25fa288` — fix(stop.bat): port-based kill first, locale-safe netstat, run-as-admin hint
 
 - **Commit no (tam):** `25fa288a7ada2d1b4b3be32f7215d63d8bbdbb49`
 - **Commit no (kısa):** `25fa288`
@@ -1911,7 +1935,7 @@ En yeni commit üstte.
 
 ---
 
-### 156. `01a9542` — docs: add app.api.utils to ModuleNotFoundError section in DEPLOY.md
+### 158. `01a9542` — docs: add app.api.utils to ModuleNotFoundError section in DEPLOY.md
 
 - **Commit no (tam):** `01a95425a15e640cb0efe84fd5cb1f1247380525`
 - **Commit no (kısa):** `01a9542`
@@ -1920,7 +1944,7 @@ En yeni commit üstte.
 
 ---
 
-### 157. `4de2f98` — Add app.api.utils (fields) for snapshot; defensive import in routes (fallback if module missing)
+### 159. `4de2f98` — Add app.api.utils (fields) for snapshot; defensive import in routes (fallback if module missing)
 
 - **Commit no (tam):** `4de2f9889261ab987049b26d644e0aacd91a4095`
 - **Commit no (kısa):** `4de2f98`
@@ -1929,7 +1953,7 @@ En yeni commit üstte.
 
 ---
 
-### 158. `00e4eab` — Server: middleware optional (app.middleware yoksa baslar), middleware repoya, worker DataHub warmup, deploy CRASH_LOOP notu
+### 160. `00e4eab` — Server: middleware optional (app.middleware yoksa baslar), middleware repoya, worker DataHub warmup, deploy CRASH_LOOP notu
 
 - **Commit no (tam):** `00e4eaba3922feae063e09159ab45cb0e8d76cf3`
 - **Commit no (kısa):** `00e4eab`
@@ -1938,7 +1962,7 @@ En yeni commit üstte.
 
 ---
 
-### 159. `b65acc8` — deploy: ModuleNotFoundError (app.core / intent_ledger) icin git pull ve manuel kopya notu
+### 161. `b65acc8` — deploy: ModuleNotFoundError (app.core / intent_ledger) icin git pull ve manuel kopya notu
 
 - **Commit no (tam):** `b65acc8e798f50ddfda520695d956eb49db93172`
 - **Commit no (kısa):** `b65acc8`
@@ -1947,7 +1971,7 @@ En yeni commit üstte.
 
 ---
 
-### 160. `766165d` — Add app.core module (auth.token_utils, config, constants, errors, security) for server - fix ModuleNotFoundError: app.core
+### 162. `766165d` — Add app.core module (auth.token_utils, config, constants, errors, security) for server - fix ModuleNotFoundError: app.core
 
 - **Commit no (tam):** `766165dd7dfd275cfb13764fffc2081bc6c21f74`
 - **Commit no (kısa):** `766165d`
@@ -1956,7 +1980,7 @@ En yeni commit üstte.
 
 ---
 
-### 161. `bc08bf0` — Windows: uvloop/httptools atlama (ModuleNotFoundError on server)
+### 163. `bc08bf0` — Windows: uvloop/httptools atlama (ModuleNotFoundError on server)
 
 - **Commit no (tam):** `bc08bf0e8ec59cb527f1b64aef09216b8d1cf268`
 - **Commit no (kısa):** `bc08bf0`
@@ -1965,7 +1989,7 @@ En yeni commit üstte.
 
 ---
 
-### 162. `354b34d` — Add missing botengine modules (intent_ledger, kill_switch, reconcile, scheduler, bot_run, errors, user_stream) for server deploy
+### 164. `354b34d` — Add missing botengine modules (intent_ledger, kill_switch, reconcile, scheduler, bot_run, errors, user_stream) for server deploy
 
 - **Commit no (tam):** `354b34dac91f6081b719aefd33837c76984c52f3`
 - **Commit no (kısa):** `354b34d`
@@ -1974,7 +1998,7 @@ En yeni commit üstte.
 
 ---
 
-### 163. `d7a979c` — UI: popup 405 fix, Görüntüleyen+UTC+3, auth log, appbar sticky, login telefon label/placeholder, dm-tabs sola
+### 165. `d7a979c` — UI: popup 405 fix, Görüntüleyen+UTC+3, auth log, appbar sticky, login telefon label/placeholder, dm-tabs sola
 
 - **Commit no (tam):** `d7a979c6bf5baab8f27e63f8715fd12a009f48d8`
 - **Commit no (kısa):** `d7a979c`
@@ -1983,7 +2007,7 @@ En yeni commit üstte.
 
 ---
 
-### 164. `0a724da` — UI: çıkış butonu ortala/KPI hiza, popup detay+okuyanlar, Ayarlar sekmesi sağa
+### 166. `0a724da` — UI: çıkış butonu ortala/KPI hiza, popup detay+okuyanlar, Ayarlar sekmesi sağa
 
 - **Commit no (tam):** `0a724da04ab6654fd853347dee19497adf974946`
 - **Commit no (kısa):** `0a724da`
@@ -1992,7 +2016,7 @@ En yeni commit üstte.
 
 ---
 
-### 165. `1bcc836` — fix(auth): do not logout on boot_id change; validate via whoami
+### 167. `1bcc836` — fix(auth): do not logout on boot_id change; validate via whoami
 
 - **Commit no (tam):** `1bcc83643b16fb571ae96c2f2e216f7cd041f8f4`
 - **Commit no (kısa):** `1bcc836`
@@ -2001,7 +2025,7 @@ En yeni commit üstte.
 
 ---
 
-### 166. `5bda1f6` — fix: perf chart modal crosshair guard (pt + try/catch), cache bust v=2
+### 168. `5bda1f6` — fix: perf chart modal crosshair guard (pt + try/catch), cache bust v=2
 
 - **Commit no (tam):** `5bda1f6f582bf2cf0a87ee15fc1bfaf3c865e9c1`
 - **Commit no (kısa):** `5bda1f6`
@@ -2010,7 +2034,7 @@ En yeni commit üstte.
 
 ---
 
-### 167. `46e3874` — Login-forex paralel; rebalancing USDT satiri; finance trades 90s timeout + cache bust; perf_chart crosshair param guard
+### 169. `46e3874` — Login-forex paralel; rebalancing USDT satiri; finance trades 90s timeout + cache bust; perf_chart crosshair param guard
 
 - **Commit no (tam):** `46e38746c6885dad647a9d39d4bc392be9889681`
 - **Commit no (kısa):** `46e3874`
@@ -2019,7 +2043,7 @@ En yeni commit üstte.
 
 ---
 
-### 168. `af74323` — Login-forex: altin yedek Binance PAXGUSDT; Manager: web durumu port 8000 ile
+### 170. `af74323` — Login-forex: altin yedek Binance PAXGUSDT; Manager: web durumu port 8000 ile
 
 - **Commit no (tam):** `af7432300473c57cbd0bbbbe1cdd70360515c815`
 - **Commit no (kısa):** `af74323`
@@ -2028,7 +2052,7 @@ En yeni commit üstte.
 
 ---
 
-### 169. `248d1a2` — Login: döviz/altin backend /api/login-forex proxy (CORS cozumu)
+### 171. `248d1a2` — Login: döviz/altin backend /api/login-forex proxy (CORS cozumu)
 
 - **Commit no (tam):** `248d1a2b2d2a2c5f5378ead9f73e5614e06da148`
 - **Commit no (kısa):** `248d1a2`
@@ -2037,7 +2061,7 @@ En yeni commit üstte.
 
 ---
 
-### 170. `8686cb2` — 503 hata mesaji: backend detail.message goster (BINANCE_MASTER_KEY uyarisi)
+### 172. `8686cb2` — 503 hata mesaji: backend detail.message goster (BINANCE_MASTER_KEY uyarisi)
 
 - **Commit no (tam):** `8686cb211da13b9f80e66c51e06458e8e95ef2fc`
 - **Commit no (kısa):** `8686cb2`
@@ -2046,7 +2070,7 @@ En yeni commit üstte.
 
 ---
 
-### 171. `41ff1ef` — Login: kripto fiyatlari backend /api/login-crypto uzerinden (CORS cozumu)
+### 173. `41ff1ef` — Login: kripto fiyatlari backend /api/login-crypto uzerinden (CORS cozumu)
 
 - **Commit no (tam):** `41ff1ef0c471d9dbdf607e39d3b747f7307e2ced`
 - **Commit no (kısa):** `41ff1ef`
@@ -2055,7 +2079,7 @@ En yeni commit üstte.
 
 ---
 
-### 172. `5da991d` — Admin panel: giris yapan adminin kendi hesabi tile listesinde gosterilmesin
+### 174. `5da991d` — Admin panel: giris yapan adminin kendi hesabi tile listesinde gosterilmesin
 
 - **Commit no (tam):** `5da991d0072908bee48b82044256c1b8b5650b2d`
 - **Commit no (kısa):** `5da991d`
@@ -2064,7 +2088,7 @@ En yeni commit üstte.
 
 ---
 
-### 173. `9b8ee7e` — Login: ilk admin sentinel bcrypt kaldirildi (Invalid salt hatasi duzeltildi)
+### 175. `9b8ee7e` — Login: ilk admin sentinel bcrypt kaldirildi (Invalid salt hatasi duzeltildi)
 
 - **Commit no (tam):** `9b8ee7e875584d39f3b744b9368902270d599b89`
 - **Commit no (kısa):** `9b8ee7e`
@@ -2073,7 +2097,7 @@ En yeni commit üstte.
 
 ---
 
-### 174. `b83fce6` — İlk admin otomatik, varsayılan şifre kaldırıldı; ilk girişte yazılan şifre kalıcı. Kullanıcı yoksa 'Kullanıcı bulunamadı' mesajı.
+### 176. `b83fce6` — İlk admin otomatik, varsayılan şifre kaldırıldı; ilk girişte yazılan şifre kalıcı. Kullanıcı yoksa 'Kullanıcı bulunamadı' mesajı.
 
 - **Commit no (tam):** `b83fce6c9aff9006e575cf83cd95ca601de3d27c`
 - **Commit no (kısa):** `b83fce6`
@@ -2082,7 +2106,7 @@ En yeni commit üstte.
 
 ---
 
-### 175. `7c6c910` — create_first_admin.py: ilk admin yoksa olusturur (Admin / Omeromer01.)
+### 177. `7c6c910` — create_first_admin.py: ilk admin yoksa olusturur (Admin / Omeromer01.)
 
 - **Commit no (tam):** `7c6c91044188d5b6857d19f63b640ac1f2ff8722`
 - **Commit no (kısa):** `7c6c910`
@@ -2091,7 +2115,7 @@ En yeni commit üstte.
 
 ---
 
-### 176. `1c595b3` — Login 401: localhostta debug_hint (user_not_found / invalid_password) ve arayuzde gosterim
+### 178. `1c595b3` — Login 401: localhostta debug_hint (user_not_found / invalid_password) ve arayuzde gosterim
 
 - **Commit no (tam):** `1c595b3ceb2386381afcbce04d16e3322247c8b6`
 - **Commit no (kısa):** `1c595b3`
@@ -2100,7 +2124,7 @@ En yeni commit üstte.
 
 ---
 
-### 177. `58e28a4` — Giris: sifre dogrulama NFC + NFD + raw strip ile tam uyumluluk
+### 179. `58e28a4` — Giris: sifre dogrulama NFC + NFD + raw strip ile tam uyumluluk
 
 - **Commit no (tam):** `58e28a4f3a416f8dde93ead1e312cf4620bb8ef1`
 - **Commit no (kısa):** `58e28a4`
@@ -2109,7 +2133,7 @@ En yeni commit üstte.
 
 ---
 
-### 178. `40174e9` — Silinen dosyalar: SEO_MASTER_*, calistir.bat
+### 180. `40174e9` — Silinen dosyalar: SEO_MASTER_*, calistir.bat
 
 - **Commit no (tam):** `40174e90ef6e3b637dfdc23104bc959085f66667`
 - **Commit no (kısa):** `40174e9`
@@ -2118,7 +2142,7 @@ En yeni commit üstte.
 
 ---
 
-### 179. `15efe04` — Admin varsayilan sifre Omeromer01., giris sonrasi yeni sifre zorunlu
+### 181. `15efe04` — Admin varsayilan sifre Omeromer01., giris sonrasi yeni sifre zorunlu
 
 - **Commit no (tam):** `15efe0446e916040283decf36beeae3c13a9a74e`
 - **Commit no (kısa):** `15efe04`
@@ -2127,7 +2151,7 @@ En yeni commit üstte.
 
 ---
 
-### 180. `6b9b6c3` — guncelle.bat mesaji; deploy_windows.sh Windows sunucu deploy
+### 182. `6b9b6c3` — guncelle.bat mesaji; deploy_windows.sh Windows sunucu deploy
 
 - **Commit no (tam):** `6b9b6c33b0dc7dacd666cc6af5b60c6fb43e2ec5`
 - **Commit no (kısa):** `6b9b6c3`
@@ -2136,7 +2160,7 @@ En yeni commit üstte.
 
 ---
 
-### 181. `0b57ef0` — Admin sifresi giris yapmadan sifirlama: ADMIN_PASSWORD_RESET_SECRET ile endpoint
+### 183. `0b57ef0` — Admin sifresi giris yapmadan sifirlama: ADMIN_PASSWORD_RESET_SECRET ile endpoint
 
 - **Commit no (tam):** `0b57ef0dc68ab023a450df8382bbf22367dffac4`
 - **Commit no (kısa):** `0b57ef0`
@@ -2145,7 +2169,7 @@ En yeni commit üstte.
 
 ---
 
-### 182. `584f60e` — Admin: telefon ile sifre atama endpointi (yayinda giris icin sifre senkron)
+### 184. `584f60e` — Admin: telefon ile sifre atama endpointi (yayinda giris icin sifre senkron)
 
 - **Commit no (tam):** `584f60ec6724ad75394538956fd0484f4d8b0aed`
 - **Commit no (kısa):** `584f60e`
@@ -2154,7 +2178,7 @@ En yeni commit üstte.
 
 ---
 
-### 183. `efc00af` — Giris: sifre NFC/NFD normalizasyonu - local ve yayinda ayni sifre kabulu, invalid password log
+### 185. `efc00af` — Giris: sifre NFC/NFD normalizasyonu - local ve yayinda ayni sifre kabulu, invalid password log
 
 - **Commit no (tam):** `efc00afb248947b09f865ebbf06e7ed3f9b02c0a`
 - **Commit no (kısa):** `efc00af`
@@ -2163,7 +2187,7 @@ En yeni commit üstte.
 
 ---
 
-### 184. `1b99ed6` — guncelle.bat: sunucuda start.bat eski kaldiginda once calistirilacak proje guncelleme scripti
+### 186. `1b99ed6` — guncelle.bat: sunucuda start.bat eski kaldiginda once calistirilacak proje guncelleme scripti
 
 - **Commit no (tam):** `1b99ed66d8b310edc2d51ed6fae108ed945b4353`
 - **Commit no (kısa):** `1b99ed6`
@@ -2172,7 +2196,7 @@ En yeni commit üstte.
 
 ---
 
-### 185. `8bf6d31` — Giris: sifre dogrulama guclendirildi, trim ve hash str/bytes destegi
+### 187. `8bf6d31` — Giris: sifre dogrulama guclendirildi, trim ve hash str/bytes destegi
 
 - **Commit no (tam):** `8bf6d317cebc2e307cd53386e88c8090d7fa5761`
 - **Commit no (kısa):** `8bf6d31`
@@ -2181,7 +2205,7 @@ En yeni commit üstte.
 
 ---
 
-### 186. `b05f62e` — start.bat: batch echo duzeltmeleri, calistir kelimesi stir hatasini onlemek icin baslat ile degistirildi
+### 188. `b05f62e` — start.bat: batch echo duzeltmeleri, calistir kelimesi stir hatasini onlemek icin baslat ile degistirildi
 
 - **Commit no (tam):** `b05f62e5e993ca2f0013b82f42b3b91cd0a9120a`
 - **Commit no (kısa):** `b05f62e`
@@ -2190,7 +2214,7 @@ En yeni commit üstte.
 
 ---
 
-### 187. `25e105e` — start.bat: git pull ciktisi goster; Omeraltinhtml yoksa yonlendirme mesaji
+### 189. `25e105e` — start.bat: git pull ciktisi goster; Omeraltinhtml yoksa yonlendirme mesaji
 
 - **Commit no (tam):** `25e105efa66f6f13c5f4c47ca7bdc25fbe235e76`
 - **Commit no (kısa):** `25e105e`
@@ -2199,7 +2223,7 @@ En yeni commit üstte.
 
 ---
 
-### 188. `044e331` — start.bat: guncel commit goster; Omeraltinhtml klasorunu adinda omeraltin gecen her varyanttan bul
+### 190. `044e331` — start.bat: guncel commit goster; Omeraltinhtml klasorunu adinda omeraltin gecen her varyanttan bul
 
 - **Commit no (tam):** `044e331a42dafd6723530b2322d1e5ac3d0d5877`
 - **Commit no (kısa):** `044e331`
@@ -2208,7 +2232,7 @@ En yeni commit üstte.
 
 ---
 
-### 189. `be4f246` — start/restart.bat: her calistirmada git pull; Omeraltinhtml klasor adi kontrolu
+### 191. `be4f246` — start/restart.bat: her calistirmada git pull; Omeraltinhtml klasor adi kontrolu
 
 - **Commit no (tam):** `be4f2468f2e8a3f29086ea8cadf3a268ed0a0897`
 - **Commit no (kısa):** `be4f246`
@@ -2217,7 +2241,7 @@ En yeni commit üstte.
 
 ---
 
-### 190. `a388351` — Login: şifre butonu yayında tutarlı, login.css v=2 cache-bust
+### 192. `a388351` — Login: şifre butonu yayında tutarlı, login.css v=2 cache-bust
 
 - **Commit no (tam):** `a3883517daada091e923b3744f8753f7b8de1378`
 - **Commit no (kısa):** `a388351`
@@ -2226,7 +2250,7 @@ En yeni commit üstte.
 
 ---
 
-### 191. `455adb7` — Şifre göster/gizle butonu: göz ikonu ve düzenli stil
+### 193. `455adb7` — Şifre göster/gizle butonu: göz ikonu ve düzenli stil
 
 - **Commit no (tam):** `455adb7714150d063188fcffa6fe349993bf8ae6`
 - **Commit no (kısa):** `455adb7`
@@ -2235,7 +2259,7 @@ En yeni commit üstte.
 
 ---
 
-### 192. `fecf44b` — deploy test
+### 194. `fecf44b` — deploy test
 
 - **Commit no (tam):** `fecf44bbe07e21d49b9ca441486e1e3dcb26117b`
 - **Commit no (kısa):** `fecf44b`
@@ -2244,7 +2268,7 @@ En yeni commit üstte.
 
 ---
 
-### 193. `e529605` — init: project source
+### 195. `e529605` — init: project source
 
 - **Commit no (tam):** `e529605152ee34a53d22d8b180350f0533ec7223`
 - **Commit no (kısa):** `e529605`
@@ -2253,7 +2277,7 @@ En yeni commit üstte.
 
 ---
 
-### 194. `fe8c9cf` — chore: prepare repo for deploy (ignore runtime/data)
+### 196. `fe8c9cf` — chore: prepare repo for deploy (ignore runtime/data)
 
 - **Commit no (tam):** `fe8c9cf32fb8b28f387e3fdb47b7005e18a85edd`
 - **Commit no (kısa):** `fe8c9cf`
@@ -2262,7 +2286,7 @@ En yeni commit üstte.
 
 ---
 
-### 195. `358d5f8` — init: first push
+### 197. `358d5f8` — init: first push
 
 - **Commit no (tam):** `358d5f85fd8ae326ebb4e56a63283e29e3fb4e16`
 - **Commit no (kısa):** `358d5f8`
@@ -2271,7 +2295,7 @@ En yeni commit üstte.
 
 ---
 
-### 196. `3e6fcbc` — chore: prepare project for git-based deploy (no logic changes)
+### 198. `3e6fcbc` — chore: prepare project for git-based deploy (no logic changes)
 
 - **Commit no (tam):** `3e6fcbc8463add3d38efe7ba9e709fb053fc2b47`
 - **Commit no (kısa):** `3e6fcbc`
@@ -2280,7 +2304,7 @@ En yeni commit üstte.
 
 ---
 
-### 197. `78acfea` — TRDCA bakiye düzeltmesi, login mobil scroll, favori coinler daraltma
+### 199. `78acfea` — TRDCA bakiye düzeltmesi, login mobil scroll, favori coinler daraltma
 
 - **Commit no (tam):** `78acfea0d76643f5469f0b32cd1055d5af823d55`
 - **Commit no (kısa):** `78acfea`
@@ -2294,7 +2318,7 @@ En yeni commit üstte.
 
 ---
 
-### 198. `23d2d4e` — Kurulum: ilk calistirmada otomatik Kurulum.bat. start.bat: 8080/Omeraltinhtml terminal mesajlari. Kadran: tek renk koyu yesil + kucuk sik balik sirti efekti
+### 200. `23d2d4e` — Kurulum: ilk calistirmada otomatik Kurulum.bat. start.bat: 8080/Omeraltinhtml terminal mesajlari. Kadran: tek renk koyu yesil + kucuk sik balik sirti efekti
 
 - **Commit no (tam):** `23d2d4e322640862e9ad92cae86acc001136eac8`
 - **Commit no (kısa):** `23d2d4e`
@@ -2303,7 +2327,7 @@ En yeni commit üstte.
 
 ---
 
-### 199. `2a2cc3e` — Login: sözleşme onayları, modal scroll, Geri/Okudum anladım. stop/start/restart.bat düzeltmeleri, deploy ve command klasörleri
+### 201. `2a2cc3e` — Login: sözleşme onayları, modal scroll, Geri/Okudum anladım. stop/start/restart.bat düzeltmeleri, deploy ve command klasörleri
 
 - **Commit no (tam):** `2a2cc3ea4380f34c9252291407872092f164e1e8`
 - **Commit no (kısa):** `2a2cc3e`
@@ -2312,7 +2336,7 @@ En yeni commit üstte.
 
 ---
 
-### 200. `c871840` — Admin: tema, mobil sekmeler, sunucu paneli, ticker gizleme, sekme hatırlama
+### 202. `c871840` — Admin: tema, mobil sekmeler, sunucu paneli, ticker gizleme, sekme hatırlama
 
 - **Commit no (tam):** `c871840341b5a75df02080ffc74767a74e807d5d`
 - **Commit no (kısa):** `c871840`
@@ -2328,7 +2352,7 @@ En yeni commit üstte.
 
 ---
 
-### 201. `c2b240e` — Login: çıkış uyarısı kutu içinde kısa, Güvenli çıkış yapıldı, mobil Sekmeler dropdown sayfa içinde
+### 203. `c2b240e` — Login: çıkış uyarısı kutu içinde kısa, Güvenli çıkış yapıldı, mobil Sekmeler dropdown sayfa içinde
 
 - **Commit no (tam):** `c2b240e7ab06fd81478b050717099f48109b7066`
 - **Commit no (kısa):** `c2b240e`
@@ -2337,7 +2361,7 @@ En yeni commit üstte.
 
 ---
 
-### 202. `2618660` — Login: topbar bayrak sağda/buton boyu, kayan yıldız düz, mobil tab 50/50, modal sekmeler ortala
+### 204. `2618660` — Login: topbar bayrak sağda/buton boyu, kayan yıldız düz, mobil tab 50/50, modal sekmeler ortala
 
 - **Commit no (tam):** `2618660dbf1d6eddac151590c021ea56b7aeb44d`
 - **Commit no (kısa):** `2618660`
@@ -2346,7 +2370,7 @@ En yeni commit üstte.
 
 ---
 
-### 203. `e7b6395` — Login: saatler koyu Rolex yeşili ve zengin görünüm, nebula sağda sabit ve görünür
+### 205. `e7b6395` — Login: saatler koyu Rolex yeşili ve zengin görünüm, nebula sağda sabit ve görünür
 
 - **Commit no (tam):** `e7b6395079ef78d8dfc850bf3525c577ed4b1637`
 - **Commit no (kısa):** `e7b6395`
@@ -2355,7 +2379,7 @@ En yeni commit üstte.
 
 ---
 
-### 204. `b1dc19c` — Admin panel mobil: sekme dropdown hesapların üstünde görünsün (z-index düzeltmesi)
+### 206. `b1dc19c` — Admin panel mobil: sekme dropdown hesapların üstünde görünsün (z-index düzeltmesi)
 
 - **Commit no (tam):** `b1dc19cf1b594c306adc66a9c5fed1af79f90b12`
 - **Commit no (kısa):** `b1dc19c`
@@ -2364,7 +2388,7 @@ En yeni commit üstte.
 
 ---
 
-### 205. `86882a5` — feat: MULTI bot Sonlandır ve Sil - tüm coinleri quote'a çevir, modal metni güncelle
+### 207. `86882a5` — feat: MULTI bot Sonlandır ve Sil - tüm coinleri quote'a çevir, modal metni güncelle
 
 - **Commit no (tam):** `86882a58ab67880df1b39be03de79c3060083aed`
 - **Commit no (kısa):** `86882a5`
@@ -2377,7 +2401,7 @@ En yeni commit üstte.
 
 ---
 
-### 206. `e8ccbd7` — Start/stop sadece final1 kokunde: start.bat, stop.bat, restart.bat + .command; diger tum start/stop dosyalari kaldirildi
+### 208. `e8ccbd7` — Start/stop sadece final1 kokunde: start.bat, stop.bat, restart.bat + .command; diger tum start/stop dosyalari kaldirildi
 
 - **Commit no (tam):** `e8ccbd731d9bf615a36339527a75ff9fb96993e6`
 - **Commit no (kısa):** `e8ccbd7`
@@ -2386,7 +2410,7 @@ En yeni commit üstte.
 
 ---
 
-### 207. `e823e3c` — Manager panel: özet flicker düzeltmesi, WS errors_ring/warns_ring birleştirme, Hata/Uyarı panel etiketleri, 401 throttle özet satırı
+### 209. `e823e3c` — Manager panel: özet flicker düzeltmesi, WS errors_ring/warns_ring birleştirme, Hata/Uyarı panel etiketleri, 401 throttle özet satırı
 
 - **Commit no (tam):** `e823e3c7385d9adf6e279374e6a4e07a2821aa1c`
 - **Commit no (kısa):** `e823e3c`
@@ -2395,7 +2419,7 @@ En yeni commit üstte.
 
 ---
 
-### 208. `501052e` — Hata logları sıfırlama: backend clear endpoint + frontend entegrasyonu (yenileyince kalıcı temiz)
+### 210. `501052e` — Hata logları sıfırlama: backend clear endpoint + frontend entegrasyonu (yenileyince kalıcı temiz)
 
 - **Commit no (tam):** `501052eaad101920bae0bcf5eed22beb3bbcf8af`
 - **Commit no (kısa):** `501052e`
@@ -2404,7 +2428,7 @@ En yeni commit üstte.
 
 ---
 
-### 209. `2bebb02` — TRDCA Pro+ parametre ekranı, test hesabı iyileştirmeleri, hata logları ve UI düzeltmeleri
+### 211. `2bebb02` — TRDCA Pro+ parametre ekranı, test hesabı iyileştirmeleri, hata logları ve UI düzeltmeleri
 
 - **Commit no (tam):** `2bebb026ccdfe6a5e4dc5b2eec5b7ce3ab775042`
 - **Commit no (kısa):** `2bebb02`
@@ -2423,7 +2447,7 @@ En yeni commit üstte.
 
 ---
 
-### 210. `041c4ff` — Test hesabı (test_local): sadece localhost giriş, paper mod, 10.000 USDT sanal bakiye
+### 212. `041c4ff` — Test hesabı (test_local): sadece localhost giriş, paper mod, 10.000 USDT sanal bakiye
 
 - **Commit no (tam):** `041c4ff003be802d97862d4f88a8ba32ad0f5322`
 - **Commit no (kısa):** `041c4ff`
@@ -2432,7 +2456,7 @@ En yeni commit üstte.
 
 ---
 
-### 211. `3d4e9ee` — TRDCA Pro+ strateji entegrasyonu: backend (strategy_tick, apply_fills, DCA/TRB), orchestrator snapshot, execution batch, UI parametre ve detay sayfası
+### 213. `3d4e9ee` — TRDCA Pro+ strateji entegrasyonu: backend (strategy_tick, apply_fills, DCA/TRB), orchestrator snapshot, execution batch, UI parametre ve detay sayfası
 
 - **Commit no (tam):** `3d4e9eeec99612dc9b4f7cd45e4880943e695324`
 - **Commit no (kısa):** `3d4e9ee`
@@ -2441,7 +2465,7 @@ En yeni commit üstte.
 
 ---
 
-### 212. `2dff087` — Mobil uyumluluk, admin/error-logs API, Windows launcher ve genel güncellemeler
+### 214. `2dff087` — Mobil uyumluluk, admin/error-logs API, Windows launcher ve genel güncellemeler
 
 - **Commit no (tam):** `2dff0872d582f89d5a8962976f5e55ff97362015`
 - **Commit no (kısa):** `2dff087`
@@ -2450,7 +2474,7 @@ En yeni commit üstte.
 
 ---
 
-### 213. `4f745c1` — Manager panel (7999): hız, restart, log ve overview iyileştirmeleri
+### 215. `4f745c1` — Manager panel (7999): hız, restart, log ve overview iyileştirmeleri
 
 - **Commit no (tam):** `4f745c1ab4928d4f289a1c513d1988553a446d08`
 - **Commit no (kısa):** `4f745c1`
@@ -2468,7 +2492,7 @@ En yeni commit üstte.
 
 ---
 
-### 214. `dcb5cd9` — logs: .meta yeşil metin, #panelAnasistem dış çerçeve cırtlak pembe
+### 216. `dcb5cd9` — logs: .meta yeşil metin, #panelAnasistem dış çerçeve cırtlak pembe
 
 - **Commit no (tam):** `dcb5cd90aaa378812a1104047299825311f66586`
 - **Commit no (kısa):** `dcb5cd9`
@@ -2477,7 +2501,7 @@ En yeni commit üstte.
 
 ---
 
-### 215. `184d766` — Rebalancing entegrasyonu, UI/API düzeltmeleri, Binance saat senkronu
+### 217. `184d766` — Rebalancing entegrasyonu, UI/API düzeltmeleri, Binance saat senkronu
 
 - **Commit no (tam):** `184d766eef30f6d12d756e0487e8238a923e7f7e`
 - **Commit no (kısa):** `184d766`
@@ -2493,7 +2517,7 @@ En yeni commit üstte.
 
 ---
 
-### 216. `0951fa5` — Log sunucusu düzeltmeleri: Python 3.9 uyumu (Optional[int]), Server Start'ta terminalde log, Yeniden Başlat sonrası poll+Sayfayı yenile, Anasistem sunucu istekleri
+### 218. `0951fa5` — Log sunucusu düzeltmeleri: Python 3.9 uyumu (Optional[int]), Server Start'ta terminalde log, Yeniden Başlat sonrası poll+Sayfayı yenile, Anasistem sunucu istekleri
 
 - **Commit no (tam):** `0951fa5b1074c36341955e53b059caea65abee8e`
 - **Commit no (kısa):** `0951fa5`
@@ -2502,7 +2526,7 @@ En yeni commit üstte.
 
 ---
 
-### 217. `907e638` — Worker sekmesi Toplam istek canlı güncelleme: worker_main sayacı, local_logs fallback, manager okuma sırası
+### 219. `907e638` — Worker sekmesi Toplam istek canlı güncelleme: worker_main sayacı, local_logs fallback, manager okuma sırası
 
 - **Commit no (tam):** `907e638adfb36455486cb7d6f3764a4ae2bed799`
 - **Commit no (kısa):** `907e638`
@@ -2511,7 +2535,7 @@ En yeni commit üstte.
 
 ---
 
-### 218. `eb3c400` — Değişiklikler kaydedildi: Server Start, local_logs, orchestrator, worker_main, local_web_worker_helper, manager_backend, logs
+### 220. `eb3c400` — Değişiklikler kaydedildi: Server Start, local_logs, orchestrator, worker_main, local_web_worker_helper, manager_backend, logs
 
 - **Commit no (tam):** `eb3c40062c544968471980ebc1b9c17e7f0b84c6`
 - **Commit no (kısa):** `eb3c400`
@@ -2520,7 +2544,7 @@ En yeni commit üstte.
 
 ---
 
-### 219. `8fe922a` — Log sınıflandırma düzeltmesi: INFO/WARNING yanlış hata sayılması engellendi
+### 221. `8fe922a` — Log sınıflandırma düzeltmesi: INFO/WARNING yanlış hata sayılması engellendi
 
 - **Commit no (tam):** `8fe922a8f5fe908fcb521b95495c9b65f8016a40`
 - **Commit no (kısa):** `8fe922a`
@@ -2533,7 +2557,7 @@ En yeni commit üstte.
 
 ---
 
-### 220. `e9d5f2a` — Proje güncellemesi: Server Start/Stop, loglar sayfası (7999), web/worker ayrı yönetim, Sıfırla/401/renklendirme düzeltmeleri
+### 222. `e9d5f2a` — Proje güncellemesi: Server Start/Stop, loglar sayfası (7999), web/worker ayrı yönetim, Sıfırla/401/renklendirme düzeltmeleri
 
 - **Commit no (tam):** `e9d5f2a5e2f2053013fcee680745d627b2ba16af`
 - **Commit no (kısa):** `e9d5f2a`
@@ -2542,7 +2566,7 @@ En yeni commit üstte.
 
 ---
 
-### 221. `fb7a619` — feat: günlük PnL bot silindiğinde sıfırlanmasın — account_daily_realized_pnl cache
+### 223. `fb7a619` — feat: günlük PnL bot silindiğinde sıfırlanmasın — account_daily_realized_pnl cache
 
 - **Commit no (tam):** `fb7a61950d4bb55ce1fc8d29078a8c703b18eee0`
 - **Commit no (kısa):** `fb7a619`
@@ -2556,7 +2580,7 @@ En yeni commit üstte.
 
 ---
 
-### 222. `fe407f5` — Clean cycle boundaries + compounding + perf chart + SELL balance guard
+### 224. `fe407f5` — Clean cycle boundaries + compounding + perf chart + SELL balance guard
 
 - **Commit no (tam):** `fe407f5e2a74417d14b03e0543b1c2752de49e97`
 - **Commit no (kısa):** `fe407f5`
@@ -2573,7 +2597,7 @@ En yeni commit üstte.
 
 ---
 
-### 223. `f17a949` — Cycle PnL fix (fee-aware), perf chart, XRAY doc
+### 225. `f17a949` — Cycle PnL fix (fee-aware), perf chart, XRAY doc
 
 - **Commit no (tam):** `f17a94989ae6ba7e88c8129404dbdcb3bf414a85`
 - **Commit no (kısa):** `f17a949`
@@ -2590,7 +2614,7 @@ En yeni commit üstte.
 
 ---
 
-### 224. `0d41fe9` — Grafik 1m/5m penceresi, canlı uç setData, tur/trades canlı güncelleme, işlem satırına gerçekleşme %, reference_price düzeltmesi
+### 226. `0d41fe9` — Grafik 1m/5m penceresi, canlı uç setData, tur/trades canlı güncelleme, işlem satırına gerçekleşme %, reference_price düzeltmesi
 
 - **Commit no (tam):** `0d41fe9553c38d06f8f75d6c1e71425fb6c2f5ee`
 - **Commit no (kısa):** `0d41fe9`
@@ -2604,7 +2628,7 @@ En yeni commit üstte.
 
 ---
 
-### 225. `206a309` — Güvenlik: breach shutdown + hesap askıya alma uyarısı; grid tamamlanınca tepe/dip/gerçekleşme dondurma; fill fiyatı 4 ondalık; fill fiyatı state ile grid UI
+### 227. `206a309` — Güvenlik: breach shutdown + hesap askıya alma uyarısı; grid tamamlanınca tepe/dip/gerçekleşme dondurma; fill fiyatı 4 ondalık; fill fiyatı state ile grid UI
 
 - **Commit no (tam):** `206a309ac05aa0896cb8cc095294cc5ecf0b64b2`
 - **Commit no (kısa):** `206a309`
@@ -2613,7 +2637,7 @@ En yeni commit üstte.
 
 ---
 
-### 226. `b5a5e57` — Grafik: sunucuda state, yeni tarayıcıda yükleme, sekme kapalıyken kayıt
+### 228. `b5a5e57` — Grafik: sunucuda state, yeni tarayıcıda yükleme, sekme kapalıyken kayıt
 
 - **Commit no (tam):** `b5a5e57f5e38ca69147eccc8fab73657d9b72617`
 - **Commit no (kısa):** `b5a5e57`
@@ -2627,7 +2651,7 @@ En yeni commit üstte.
 
 ---
 
-### 227. `287db18` — UI: Genel buton/perfGenelValue, işlemler yenileme, filtre-tablo boşlukları
+### 229. `287db18` — UI: Genel buton/perfGenelValue, işlemler yenileme, filtre-tablo boşlukları
 
 - **Commit no (tam):** `287db18b0da2f2746397a104ee3d35252193305d`
 - **Commit no (kısa):** `287db18`
@@ -2640,7 +2664,7 @@ En yeni commit üstte.
 
 ---
 
-### 228. `037f675` — UI: grafik yüzdeleri, grid/kar panelleri, cycle report, header/state sırası, bot tipi başlık, refD hatası
+### 230. `037f675` — UI: grafik yüzdeleri, grid/kar panelleri, cycle report, header/state sırası, bot tipi başlık, refD hatası
 
 - **Commit no (tam):** `037f675695bd760a89e75fe6e2173d0dd9682e9b`
 - **Commit no (kısa):** `037f675`
@@ -2656,7 +2680,7 @@ En yeni commit üstte.
 
 ---
 
-### 229. `aa21968` — Sonlandır/sil: base→quote seçilince Binance market satış; grafik bot bazlı clearForBot + başlatınca sıfırla
+### 231. `aa21968` — Sonlandır/sil: base→quote seçilince Binance market satış; grafik bot bazlı clearForBot + başlatınca sıfırla
 
 - **Commit no (tam):** `aa21968fca3b934f8fb8f539fa099a88755b92bf`
 - **Commit no (kısa):** `aa21968`
@@ -2665,7 +2689,7 @@ En yeni commit üstte.
 
 ---
 
-### 230. `6f13e74` — Paper→live zorunlu, initial allocation sıfırlama, ortalama maliyet execution_price, grafik bot bazlı, form varsayılanları
+### 232. `6f13e74` — Paper→live zorunlu, initial allocation sıfırlama, ortalama maliyet execution_price, grafik bot bazlı, form varsayılanları
 
 - **Commit no (tam):** `6f13e745e4acb9bc911e6720522cda3aaa6f6852`
 - **Commit no (kısa):** `6f13e74`
@@ -2674,7 +2698,7 @@ En yeni commit üstte.
 
 ---
 
-### 231. `73e411b` — Performans grafiği (Lightweight Charts), bot başlangıç/duration, cycle raporu, PNL/kar satışı, hata log API, grafik Sıfırla kaldırıldı
+### 233. `73e411b` — Performans grafiği (Lightweight Charts), bot başlangıç/duration, cycle raporu, PNL/kar satışı, hata log API, grafik Sıfırla kaldırıldı
 
 - **Commit no (tam):** `73e411b3382753c1474a96b1bcbb92f23bd5dc94`
 - **Commit no (kısa):** `73e411b`
@@ -2683,7 +2707,7 @@ En yeni commit üstte.
 
 ---
 
-### 232. `ef44e08` — UI: cycle trades labels, symbol chart modal back fix, perf chart debug doc
+### 234. `ef44e08` — UI: cycle trades labels, symbol chart modal back fix, perf chart debug doc
 
 - **Commit no (tam):** `ef44e08de03202368b99989f645e6beca64e36fa`
 - **Commit no (kısa):** `ef44e08`
@@ -2697,7 +2721,7 @@ En yeni commit üstte.
 
 ---
 
-### 233. `0e1e645` — Dashboard & bot: KPI bot bakiyesi, günlük PnL (tur kârı), işlemler sync, Toplam K/Z, performans grafiği
+### 235. `0e1e645` — Dashboard & bot: KPI bot bakiyesi, günlük PnL (tur kârı), işlemler sync, Toplam K/Z, performans grafiği
 
 - **Commit no (tam):** `0e1e645b36cf52ed1cdc8be8f80f5569c6333654`
 - **Commit no (kısa):** `0e1e645`
@@ -2713,7 +2737,7 @@ En yeni commit üstte.
 
 ---
 
-### 234. `6fa4eae` — Dashboard & bot: KPI günlük ref, işlemler TR saati, grid qty_pct, PNL kartı, blink, buton stilleri
+### 236. `6fa4eae` — Dashboard & bot: KPI günlük ref, işlemler TR saati, grid qty_pct, PNL kartı, blink, buton stilleri
 
 - **Commit no (tam):** `6fa4eae60b7289d659309fec08a8cdb47367a8a9`
 - **Commit no (kısa):** `6fa4eae`
@@ -2736,7 +2760,7 @@ En yeni commit üstte.
 
 ---
 
-### 235. `397ead6` — Performans raporu canlı veri, grid referans düzeltmesi, Bot Logları, bileşik tur
+### 237. `397ead6` — Performans raporu canlı veri, grid referans düzeltmesi, Bot Logları, bileşik tur
 
 - **Commit no (tam):** `397ead6b9c0dcd7db6eac32bdb113b13a4f617f0`
 - **Commit no (kısa):** `397ead6`
