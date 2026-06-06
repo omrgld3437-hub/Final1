@@ -1049,11 +1049,43 @@
     /** Bağlantı sonrası ikinci START veya connectivity START — üstteki yinelenen Bot başlatıldı. */
     function shouldHideDuplicateBotStart(ev, meta, raw) {
         if (!/COMMAND_EXECUTED.*START/i.test(String(raw || ''))) return false;
+        // Bağlantı devamı (connectivity_resume) başlatmaları her zaman gizle
         if (meta.connectivity_resume === true) return true;
         var events = _logContext.events || [];
         var id = Number(ev.id || 0);
         if (!id || !events.length) return false;
-        var olderStart = false;
+        // Bu en son start logu mu? En son olan asla gizlenmez.
+        for (var j = 0; j < events.length; j++) {
+            var ej = events[j];
+            var ejid = Number(ej.id || 0);
+            if (ejid <= id) continue;
+            var ejm = ej.meta || {};
+            var ejmsg = ej.message || '';
+            if (ejm.connectivity_resume !== true &&
+                ejmsg.indexOf('COMMAND_EXECUTED') >= 0 &&
+                ejmsg.indexOf('START') >= 0) {
+                // id'si büyük, connectivity_resume olmayan bir start var — bu eski, gizlenebilir
+                break;
+            }
+        }
+        // Sadece daha sonra gelen başka bir gerçek start varsa bu gizlensin.
+        // Aksi hâlde (bu en son start ise) her zaman göster.
+        var hasNewerRealStart = false;
+        for (var k = 0; k < events.length; k++) {
+            var ek = events[k];
+            var ekid = Number(ek.id || 0);
+            if (ekid <= id) continue;
+            var ekm = ek.meta || {};
+            var ekmsg = ek.message || '';
+            if (ekm.connectivity_resume !== true &&
+                ekmsg.indexOf('COMMAND_EXECUTED') >= 0 &&
+                ekmsg.indexOf('START') >= 0) {
+                hasNewerRealStart = true;
+                break;
+            }
+        }
+        if (!hasNewerRealStart) return false; // en son start — her zaman göster
+        // Eski start: sadece bağlantı kesintisi recovery durumunda gizle
         var recoveryBefore = false;
         for (var i = 0; i < events.length; i++) {
             var e = events[i];
@@ -1061,10 +1093,12 @@
             if (!eid || eid >= id) continue;
             var em = e.meta || {};
             var msg = e.message || '';
-            if (msg.indexOf('COMMAND_EXECUTED') >= 0 && msg.indexOf('START') >= 0) olderStart = true;
-            if (em.error_code === 'CONNECTIVITY_RECOVERED' || /tekrar aktif edildi/i.test(msg)) recoveryBefore = true;
+            if (em.error_code === 'CONNECTIVITY_RECOVERED' || /tekrar aktif edildi/i.test(msg)) {
+                recoveryBefore = true;
+                break;
+            }
         }
-        return olderStart && (recoveryBefore || meta.initial_allocation_done === true);
+        return recoveryBefore;
     }
 
     function formatOrderAttempt(meta) {
