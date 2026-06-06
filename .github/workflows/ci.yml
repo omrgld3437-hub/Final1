@@ -5,18 +5,27 @@ on:
     branches: ["**"]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   quality:
     name: lint-format-import-test
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          submodules: false
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
           cache: pip
@@ -43,7 +52,7 @@ jobs:
           ALLOWED_ORIGINS: http://localhost:8000,http://127.0.0.1:8000
           BINANCE_MASTER_KEY: ci-placeholder-master-key-32-characters
           DATABASE_URL: sqlite:///./ci-test.db
-        run: pytest tests -q
+        run: python -m pytest tests -q
 
   deploy:
     name: deploy-placeholder
