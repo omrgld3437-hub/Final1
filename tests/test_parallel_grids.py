@@ -20,6 +20,7 @@ def _cfg_two_buy():
             ],
             "sell_trigger_trailing_pct": 0.3,
             "buy_trigger_trailing_pct": 0.3,
+            "max_buy_levels": 2,  # İki paralel alış grid'i test ediliyor
         }
     )
 
