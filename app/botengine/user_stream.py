@@ -32,6 +32,8 @@ OrderUpdateCallback = Callable[[int, Dict[str, Any]], Awaitable[None]]
 _LISTEN_KEY_EXPIRED_STATUS = 410
 # Keepalive aralığı: Binance listenKey 60 dak dolsa da 30'da bir yenile
 _KEEPALIVE_INTERVAL_SEC = 25 * 60  # 25 dakika (güvenlik payı)
+# Ağ/proxy engeli devam ederken aynı uyarıyı her reconnect denemesinde yazma.
+_NETWORK_BLOCK_LOG_INTERVAL_SEC = 60 * 60
 
 
 @dataclass
@@ -46,6 +48,8 @@ class UserStreamClient:
     keepalive_task: Optional[asyncio.Task] = None
     stop_event: Optional[asyncio.Event] = None
     _force_reconnect: bool = field(default=False, repr=False)
+    _last_network_block_warn_at: float = field(default=0.0, repr=False)
+    _network_block_suppressed: int = field(default=0, repr=False)
 
     def _log_id(self) -> str:
         """Log için hesap tanımlayıcı: 'AdSoyad #ABC123 (id=3)'"""
@@ -92,6 +96,17 @@ class UserStreamClient:
             else "/api/v3/userDataStream"
         )
 
+    def _network_block_log_payload(self) -> tuple[bool, int]:
+        now = time.time()
+        elapsed = now - self._last_network_block_warn_at
+        if self._last_network_block_warn_at <= 0 or elapsed >= _NETWORK_BLOCK_LOG_INTERVAL_SEC:
+            suppressed = self._network_block_suppressed
+            self._last_network_block_warn_at = now
+            self._network_block_suppressed = 0
+            return True, suppressed
+        self._network_block_suppressed += 1
+        return False, self._network_block_suppressed
+
     async def _create_listen_key(self) -> str:
         url = self._http_base() + self._listen_key_path()
         headers = {"X-MBX-APIKEY": getattr(self.keys, "api_key", "")}
@@ -110,14 +125,30 @@ class UserStreamClient:
 
                 if is_html:
                     # HTML yanıt = istek Binance'e ulaşmadı (proxy/güvenlik duvarı/ISP engeli)
-                    logger.warning(
-                        "USER_STREAM_NETWORK_BLOCK %s market=%s status=%s — "
-                        "Binance API'ye ulaşılamıyor: yanıt HTML (proxy/güvenlik duvarı/ISP engeli). "
-                        "VPN, DNS veya ağ ayarları kontrol edilmeli.",
-                        self._log_id(),
-                        self.market,
-                        res.status_code,
-                    )
+                    should_warn, suppressed = self._network_block_log_payload()
+                    if should_warn:
+                        suffix = (
+                            f" Önceki saat içinde {suppressed} aynı uyarı bastırıldı."
+                            if suppressed
+                            else ""
+                        )
+                        logger.warning(
+                            "USER_STREAM_NETWORK_BLOCK %s market=%s status=%s — "
+                            "Binance API'ye ulaşılamıyor: yanıt HTML (proxy/güvenlik duvarı/ISP engeli). "
+                            "VPN, DNS veya ağ ayarları kontrol edilmeli.%s",
+                            self._log_id(),
+                            self.market,
+                            res.status_code,
+                            suffix,
+                        )
+                    else:
+                        logger.debug(
+                            "USER_STREAM_NETWORK_BLOCK_SUPPRESSED %s market=%s status=%s suppressed=%s",
+                            self._log_id(),
+                            self.market,
+                            res.status_code,
+                            suppressed,
+                        )
                 else:
                     logger.warning(
                         "USER_STREAM_CREATE_410 %s market=%s status=%s — "
@@ -236,6 +267,8 @@ class UserStreamClient:
                 # Başarılı bağlantı — sayaçları sıfırla
                 _consecutive_create_failures = 0
                 backoff = 1.0
+                self._last_network_block_warn_at = 0.0
+                self._network_block_suppressed = 0
 
                 # Keepalive'ı başlat (önceki varsa durdur)
                 if self.keepalive_task and not self.keepalive_task.done():

@@ -48,14 +48,14 @@ def _avg_sell_price_grid_only(state: Dict) -> Optional[float]:
     if tq <= 0:
         return None
     tv = sum(
-        _f(x.get("qty")) * _f(x.get("execution_price") or x.get("price"))
+        _f(x.get("qty")) * _f(x.get("price") or x.get("execution_price"))
         for x in grid_h
     )
     return tv / tq
 
 
 def _avg_buy_price_grid_only(state: Dict) -> Optional[float]:
-    """Ortalama alım: yalnız kapanmış grid fill fiyatları (qty-ağırlıklı VWAP)."""
+    """Ortalama alım: yalnız kapanmış grid fill fiyatları (qty-ağırlıklı VWAP, Binance fill `price`)."""
     h = state.get("buy_history") or []
     grid_h = [x for x in h if x.get("grid_index") is not None]
     if not grid_h:
@@ -64,7 +64,7 @@ def _avg_buy_price_grid_only(state: Dict) -> Optional[float]:
     if tq <= 0:
         return None
     tv = sum(
-        _f(x.get("qty")) * _f(x.get("execution_price") or x.get("price"))
+        _f(x.get("qty")) * _f(x.get("price") or x.get("execution_price"))
         for x in grid_h
     )
     return tv / tq
@@ -305,9 +305,13 @@ def compute_grid_profit_view(
         trigger_hit = trigger_sell[i] if i < len(trigger_sell) else None
         th_num = _f(trigger_hit) if trigger_hit is not None else None
         calc_trigger = round(ref * (1 + pct / 100.0), 4) if ref_available else None
-        trigger_price = calc_trigger
-        if trigger_price is None and fired and th_num is not None:
+        # Tetiklenmiş/armed grid: gerçek (state'te saklı) tetik fiyatını göster;
+        # canlı referanstan yeniden hesaplama YAPMA. Bu, tetik ≤ tepe değişmezini
+        # korur ve Dynamic Mode'da (arm anındaki % ≠ manuel config %) doğru olur.
+        if th_num is not None:
             trigger_price = round(th_num, 4)
+        else:
+            trigger_price = calc_trigger
         anchor: Optional[float] = None
         execution_price: Optional[float] = None
         triggered_trailing = (not fired) and (th_num is not None)
@@ -370,9 +374,12 @@ def compute_grid_profit_view(
         trigger_hit = trigger_buy[j] if j < len(trigger_buy) else None
         th_num = _f(trigger_hit) if trigger_hit is not None else None
         calc_trigger = round(ref * (1 - pct / 100.0), 4) if ref_available else None
-        trigger_price = calc_trigger
-        if trigger_price is None and fired and th_num is not None:
+        # Tetiklenmiş/armed grid: gerçek (state'te saklı) tetik fiyatını göster;
+        # canlı referanstan yeniden hesaplama YAPMA (tetik ≥ dip değişmezi korunur).
+        if th_num is not None:
             trigger_price = round(th_num, 4)
+        else:
+            trigger_price = calc_trigger
         anchor = None
         execution_price = None
         triggered_trailing = (not fired) and (th_num is not None)

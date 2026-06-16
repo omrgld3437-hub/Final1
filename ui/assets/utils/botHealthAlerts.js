@@ -6,6 +6,8 @@
     'use strict';
 
     var _lastDomSyncKey = '';
+    var _lastHadActiveHealthUi = {};
+    var _autoHealthAckTimerByBot = {};
     var LOG_REGISTRY_PREFIX = 'botHealthLogRegistry_';
     var ROW_STATE_PREFIX = 'botHealthRowState_v1_';
     var ROW_STATE_TTL_MS = 120000;
@@ -206,6 +208,29 @@
         return tickAge < threshold;
     }
 
+    /** /health anlık görüntüsü sorunun bittiğini gösteriyorsa uyarıyı aktif sayma. */
+    function isAlertResolvedByHealthSnapshot(alert, healthSnapshot) {
+        if (!alert || !healthSnapshot) return false;
+        var code = healthAlertCode(alert);
+        if (healthSnapshot.connectivity_ok !== false && !healthSnapshot.connectivity_failure) {
+            if (/^(BINANCE_UNREACHABLE|CONNECTIVITY_DEGRADED|SERVER_UNREACHABLE)$/.test(code)) return true;
+        }
+        var tickAge = Number(healthSnapshot.tick_age_s);
+        var interval = Number(healthSnapshot.tick_interval_s) || 2;
+        if (Number.isFinite(tickAge)) {
+            if (code === 'TICK_STALE_CRIT' && tickAge < Math.max(60, interval * 5)) return true;
+            if (code === 'TICK_STALE_WARN' && tickAge < Math.max(20, interval * 2.5)) return true;
+        }
+        if (code === 'LOOP_TASK_MISSING' && isFreshLoopTaskMissingAlert(alert, healthSnapshot)) return true;
+        var meta = alert.meta || {};
+        var errCode = String(meta.error_code || alert.error_code || '').toUpperCase();
+        if (/^(BOT_CONTINUES_ON_ERROR|STATE_ERROR_WARN)$/.test(code)
+            || /^(RUN_ACTION_EXCEPTION|BOT_TICK_EXCEPTION|BOT_LOOP_TRDCA_EXCEPTION|BOT_LOOP_TOPLEVEL_EXCEPTION)$/.test(errCode)) {
+            if (Number.isFinite(tickAge) && tickAge < Math.max(20, interval * 2.5)) return true;
+        }
+        return false;
+    }
+
     function healthAlertCode(alert) {
         return String((alert && (alert.code || alert.health_code || alert.error_code)) || '').toUpperCase();
     }
@@ -232,7 +257,7 @@
         if (!alertCode || !recoveryCode) return false;
         if (recoveryCode === alertCode) return true;
         if (recoveryCode === 'CONNECTIVITY_STABLE') {
-            return /LOOP_TASK_MISSING|BOT_LOOP_AUTO_RESTART|BOT_CONTINUES_ON_ERROR|TICK_STALE_WARN|TICK_STALE_CRIT|CONNECTIVITY_DEGRADED|BINANCE_UNREACHABLE|SERVER_UNREACHABLE/.test(alertCode);
+            return /LOOP_TASK_MISSING|BOT_LOOP_AUTO_RESTART|BOT_CONTINUES_ON_ERROR|TICK_STALE_WARN|TICK_STALE_CRIT|CONNECTIVITY_DEGRADED|BINANCE_UNREACHABLE|SERVER_UNREACHABLE|STATE_ERROR|STATE_ERROR_WARN|RUN_ACTION_EXCEPTION/.test(alertCode);
         }
         return false;
     }
@@ -264,6 +289,7 @@
             return a
                 && !isAccountWalletStaleAlert(a)
                 && !isFreshLoopTaskMissingAlert(a, healthSnapshot)
+                && !isAlertResolvedByHealthSnapshot(a, healthSnapshot)
                 && !hasRecoveryAfterAlert(a, recentEvents || []);
         });
     }
@@ -965,9 +991,9 @@
 
         var liveProblem = !!(global._botLiveProblem) && !opts.suppressLiveProblem;
         var connFailCode = global._lastConnectivityFailure && global._lastConnectivityFailure.error_code;
-        var liveCrit = liveProblem && !!(connFailCode || global._serverUnreachable);
-        var liveWarn = liveProblem && !liveCrit;
-        var warnActive = hasWarn || (running && liveWarn && !hasCrit);
+        var liveCrit = !hasCrit && !hasWarn && liveProblem && !!(connFailCode || global._serverUnreachable);
+        var liveWarn = !hasCrit && !hasWarn && liveProblem && !liveCrit;
+        var warnActive = hasWarn || (running && liveWarn);
         var critActive = hasCrit || (running && liveCrit);
 
         var syncKey = [
@@ -991,18 +1017,85 @@
         }
     }
 
+    function hadActiveHealthRegistry(botId) {
+        var reg = loadLogRegistry(botId);
+        return Object.keys(reg.entries || {}).some(function (k) {
+            var e = reg.entries[k];
+            return e && e.active && !e.dismissed;
+        });
+    }
+
+    function scheduleAutoHealthAck(botId) {
+        var id = String(botId || '');
+        if (!id) return;
+        if (_autoHealthAckTimerByBot[id]) {
+            clearTimeout(_autoHealthAckTimerByBot[id]);
+        }
+        _autoHealthAckTimerByBot[id] = setTimeout(function () {
+            _autoHealthAckTimerByBot[id] = null;
+            if (typeof global.scheduleAutoHealthAck === 'function') {
+                global.scheduleAutoHealthAck(botId);
+            }
+        }, 900);
+    }
+
+    /** Sorun çözüldüyse Resetle ile aynı UI temizliği (manuel tık gerekmez). */
+    function autoClearResolvedHealthState(botId, rawAlerts, recentEvents, healthData) {
+        var id = String(botId || '');
+        if (!id) return false;
+        var normalized = normalizeActiveAlerts(rawAlerts || [], healthData, recentEvents || []);
+        if (normalized.length > 0) return false;
+
+        var hadRegistry = hadActiveHealthRegistry(id);
+        var hadUi = hadRegistry
+            || _lastHadActiveHealthUi[id] === true
+            || !!(global._botLiveProblem)
+            || !!(global._botBlockingStatus);
+        if (!hadUi) return false;
+
+        clearLogRegistry(id);
+        if (healthData && healthData.connectivity_ok !== false && !healthData.connectivity_failure) {
+            global._lastConnectivityFailure = null;
+        }
+        if (typeof global.clearBotBlockingStatus === 'function') {
+            global.clearBotBlockingStatus();
+        } else {
+            global._botBlockingStatus = null;
+        }
+        global._botLiveProblem = false;
+        _lastDomSyncKey = '';
+        setDismiss(id, rawAlerts || [], recentEvents || []);
+        scheduleAutoHealthAck(id);
+        if (typeof global.onBotHealthAutoCleared === 'function') {
+            global.onBotHealthAutoCleared(botId);
+        }
+        return true;
+    }
+
     function applyHealth(botId, healthData, running, recentEvents) {
         var dismiss = getDismissInfo(botId);
         var alerts = (healthData && healthData.alerts) ? healthData.alerts : [];
         var picked = filterAlertsForUi(alerts, dismiss, recentEvents, healthData);
+        if (running && !picked.criticals.length && !picked.warns.length) {
+            if (autoClearResolvedHealthState(botId, alerts, recentEvents, healthData)) {
+                dismiss = getDismissInfo(botId);
+                picked = filterAlertsForUi(alerts, dismiss, recentEvents, healthData);
+            }
+        }
+        var id = String(botId || '');
+        _lastHadActiveHealthUi[id] = !!(running && (picked.criticals.length || picked.warns.length));
         if (typeof global !== 'undefined') global._lastHealthUiPick = picked;
+        if (running && !picked.criticals.length && !picked.warns.length) {
+            global._botLiveProblem = false;
+        }
         var connDismissed = !!(dismiss && dismiss.codes.indexOf('BINANCE_UNREACHABLE') >= 0);
         var statusDismissed = !!(dismiss && dismiss.codes.indexOf('STATE_ERROR') >= 0);
+        var connectivityOk = healthData && healthData.connectivity_ok !== false && !healthData.connectivity_failure;
         syncDom({
             running: running,
             warns: picked.warns,
             criticals: picked.criticals,
-            suppressLiveProblem: connDismissed || statusDismissed
+            suppressLiveProblem: connDismissed || statusDismissed || connectivityOk
         });
         var level = null;
         if (running && picked.criticals.length > 0 && picked.warns.length > 0) level = 'both';
@@ -1098,9 +1191,12 @@
         return shouldHideResetLogEvent(ev, botId);
     }
 
-    function classifyRowAlerts(botId, healthData, running) {
+    function classifyRowAlerts(botId, healthData, running, recentEvents) {
         if (!running) return { level: null, hasCrit: false, hasWarn: false };
-        var alerts = normalizeActiveAlerts((healthData && healthData.alerts) ? healthData.alerts.slice() : [], healthData, []);
+        recentEvents = recentEvents
+            || (typeof global !== 'undefined' && global._lastEngineEvents)
+            || [];
+        var alerts = normalizeActiveAlerts((healthData && healthData.alerts) ? healthData.alerts.slice() : [], healthData, recentEvents);
         if (healthData && healthData.connectivity_ok === false && healthData.connectivity_failure) {
             alerts.push({
                 code: healthData.connectivity_failure.error_code || 'BINANCE_UNREACHABLE',
@@ -1108,7 +1204,7 @@
                 message: healthData.connectivity_failure.message
             });
         }
-        var picked = filterAlertsForUi(alerts, getDismissInfo(botId), [], healthData);
+        var picked = filterAlertsForUi(alerts, getDismissInfo(botId), recentEvents, healthData);
         var hasCrit = picked.criticals.length > 0;
         var hasWarn = picked.warns.length > 0;
         if (hasCrit && hasWarn) return { level: 'both', hasCrit: true, hasWarn: true };
@@ -1121,6 +1217,7 @@
         getDismissInfo: getDismissInfo,
         resetUi: resetUi,
         applyHealth: applyHealth,
+        autoClearResolvedHealthState: autoClearResolvedHealthState,
         classifyRowAlerts: classifyRowAlerts,
         getStoredRowAlerts: getStoredRowAlerts,
         setStoredRowAlert: setStoredRowAlert,

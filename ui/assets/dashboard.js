@@ -890,12 +890,19 @@ function maybeRefreshStaleWalletFromDashboard() {
     if (!State.accountId || (typeof State !== 'undefined' && State.isTestAccount)) return;
     if (typeof triggerWalletRefreshForVarliklar !== 'function') return;
     if (typeof isWalletPanelUpdating === 'function' && isWalletPanelUpdating()) return;
+    if (typeof isWalletDataLive === 'function' && isWalletDataLive()) return;
+    if (typeof _walletHasDisplayableAssets === 'function' && _walletHasDisplayableAssets()
+        && typeof _isHardWalletError === 'function' && !_isHardWalletError(walletErrorCode())) {
+        return;
+    }
     var stale = false;
     if (window.__walletDebugMeta && window.__walletDebugMeta.wallet_age_sec != null) {
         stale = Number(window.__walletDebugMeta.wallet_age_sec) >= 900;
     }
     if (!stale && assetsState && assetsState.wallet) {
-        stale = assetsState.wallet.data_status === 'stale' || (typeof isWalletDataLive === 'function' && !isWalletDataLive());
+        stale = assetsState.wallet.data_status === 'stale'
+            && typeof _isHardWalletError === 'function'
+            && _isHardWalletError(walletErrorCode());
     }
     if (!stale) return;
     var now = Date.now();
@@ -1236,20 +1243,19 @@ function normalizeAndApplyWallet(payload, meta) {
     assetsState.wallet.unpriced_assets = Array.isArray(payload.unpriced_assets) ? payload.unpriced_assets : [];
     if (err && _isLiveWalletSource(source)) {
         markWalletLiveFetchFailed(err.error_code || err.code);
-    } else if ((_isLiveWalletSource(source) || snapshotFresh) && keysConfigured && !err) {
-        if (explicitStatus === 'stale' || meta.stale) {
-            if (meta.skipped || totalUsd != null || assets.length > 0) {
-                assetsState.wallet.data_status = 'cached';
-                assetsState.wallet.status = 'ready';
-                assetsState.wallet.error = null;
-                markWalletCachedLiveFetchStale(meta.stale_code || payload.last_error_code || payload._error_code || 'BINANCE_UNREACHABLE');
-                scheduleSilentWalletRecovery();
-            } else {
-                markWalletLiveFetchFailed(meta.stale_code || 'BINANCE_UNREACHABLE');
-            }
-        } else if (meta.skipped && (totalUsd != null || assets.length > 0) && !meta.stale) {
+    } else if (keysConfigured && !err && (totalUsd != null || assets.length > 0)) {
+        var staleMeta = explicitStatus === 'stale' || meta.stale;
+        var staleCode = meta.stale_code || payload.last_error_code || payload._error_code || '';
+        if (staleMeta && _isHardWalletError(staleCode)) {
+            assetsState.wallet.data_status = 'stale';
+            markWalletLiveFetchFailed(staleCode || 'API_UNAUTHORIZED', { force: true });
+        } else if (staleMeta) {
+            assetsState.wallet.data_status = 'cached';
+            assetsState.wallet.status = 'ready';
+            assetsState.wallet.error = null;
             markWalletLiveFetchOk();
-        } else if (!meta.skipped && (totalUsd != null || assets.length > 0)) {
+        } else if (_isLiveWalletSource(source) || snapshotFresh || source === 'dashboard_snapshot') {
+            assetsState.wallet.data_status = snapshotFresh ? 'fresh' : 'cached';
             markWalletLiveFetchOk();
         }
     }
@@ -2402,21 +2408,6 @@ function testAccountRunningBotsEquityUsd() {
     return sum;
 }
 
-/** Test paper: TOPLAM SPOT = USDT kullanılabilir + çalışan bot equity + kilitli. */
-function testAccountKpiTotalUsd(tbody) {
-    var avail = testAccountUsdtAvailableFromTable(tbody);
-    if (!(avail > 0) && assetsState && assetsState.wallet) {
-        if (typeof assetsState.wallet.available_usd === 'number') avail = assetsState.wallet.available_usd;
-        else avail = testAccountUsdtAvailablePool(assetsState.wallet.assets || []);
-    }
-    var botEq = testAccountRunningBotsEquityUsd();
-    if (!(botEq > 0) && assetsState && assetsState.wallet && typeof assetsState.wallet.bot_locked_usd === 'number') {
-        botEq = assetsState.wallet.bot_locked_usd;
-    }
-    var locked = testAccountReadStripUsdValue(document.getElementById('binanceLockedAssets'));
-    return avail + botEq + locked;
-}
-
 function testAccountVarlikPortfolioTotal(list) {
     if (!list || !list.length) return 0;
     return list.reduce(function (sum, x) { return sum + (Number(x._valueUsd) || 0); }, 0);
@@ -2553,6 +2544,7 @@ function updateTestAccountStripCell(stripEl, sum) {
 
 var _testKpiRefreshTimer = null;
 var TEST_KPI_REFRESH_MS = 450;
+var _testKpiStableSpot = { total: null, avail: null, locked: null, botSig: '', at: 0 };
 
 function scheduleTestAccountKpiCuzdanRefresh() {
     if (_testKpiRefreshTimer) return;
@@ -2576,10 +2568,94 @@ function testAccountStripTotalUsd() {
         + testAccountReadStripUsdValue(document.getElementById('binanceLockedAssets'));
 }
 
+function testAccountRunningBotsStructureSignature() {
+    if (typeof State === 'undefined') return '';
+    var bots = (State.summary && Array.isArray(State.summary.bots) && State.summary.bots.length)
+        ? State.summary.bots
+        : (Array.isArray(State.bots) ? State.bots : []);
+    return bots.filter(function (b) {
+        var st = String((b && b.status) || '').toLowerCase();
+        return st === 'running' || st === 'active';
+    }).map(function (b) {
+        return String((b && (b.bot_id || b.id)) || '') + ':' + String((b && b.symbol) || '');
+    }).sort().join('|');
+}
+
+function testAccountBotLockedQtySignature(tbody) {
+    var root = tbody || document.getElementById('varliklarTableBody');
+    if (root && root.querySelectorAll) {
+        var rows = Array.from(root.querySelectorAll('tr[data-asset]')).map(function (row) {
+            var asset = row.getAttribute('data-asset') || '';
+            var qty = Number(row.getAttribute('data-bot-locked') || 0) || 0;
+            return asset.toUpperCase() + ':' + qty.toFixed(8);
+        });
+        if (rows.length) return rows.sort().join('|');
+    }
+    var assets = (assetsState && assetsState.wallet && assetsState.wallet.assets) || [];
+    return assets.map(function (a) {
+        var asset = (a && a.asset) || '';
+        var qty = Number((a && a.bot_locked) || 0) || 0;
+        return asset.toUpperCase() + ':' + qty.toFixed(8);
+    }).sort().join('|');
+}
+
+function testAccountKpiParts(tbody) {
+    var avail = testAccountUsdtAvailableFromTable(tbody);
+    if (!(avail > 0) && assetsState && assetsState.wallet) {
+        if (typeof assetsState.wallet.available_usd === 'number') avail = assetsState.wallet.available_usd;
+        else avail = testAccountUsdtAvailablePool(assetsState.wallet.assets || []);
+    }
+    var botEq = testAccountRunningBotsEquityUsd();
+    if (!(botEq > 0) && assetsState && assetsState.wallet && typeof assetsState.wallet.bot_locked_usd === 'number') {
+        botEq = assetsState.wallet.bot_locked_usd;
+    }
+    var locked = testAccountReadStripUsdValue(document.getElementById('binanceLockedAssets'));
+    return {
+        avail: Number(avail) || 0,
+        botEq: Number(botEq) || 0,
+        locked: Number(locked) || 0,
+        botSig: testAccountRunningBotsStructureSignature() + '|' + testAccountBotLockedQtySignature(tbody)
+    };
+}
+
+/** Test paper: TOPLAM SPOT = USDT kullanılabilir + çalışan bot equity + kilitli. */
+function testAccountKpiTotalUsd(tbody) {
+    var parts = testAccountKpiParts(tbody);
+    return parts.avail + parts.botEq + parts.locked;
+}
+
+function stabilizeTestAccountSpotKpi(parts) {
+    var total = (Number(parts.avail) || 0) + (Number(parts.botEq) || 0) + (Number(parts.locked) || 0);
+    if (!(total > 0)) return total;
+    var prev = _testKpiStableSpot;
+    var structureSame = prev.botSig === parts.botSig;
+    var availSame = prev.avail != null && Math.abs(Number(prev.avail) - Number(parts.avail)) < 0.01;
+    var lockedSame = prev.locked != null && Math.abs(Number(prev.locked) - Number(parts.locked)) < 0.01;
+    var prevTotal = Number(prev.total);
+    if (
+        Number.isFinite(prevTotal)
+        && prevTotal > 0
+        && structureSame
+        && availSame
+        && lockedSame
+    ) {
+        return prevTotal;
+    }
+    _testKpiStableSpot = {
+        total: total,
+        avail: Number(parts.avail) || 0,
+        locked: Number(parts.locked) || 0,
+        botSig: parts.botSig || '',
+        at: Date.now()
+    };
+    return total;
+}
+
 function updateTestAccountKpiCuzdanFromStrip() {
     if (typeof State === 'undefined' || !State.isTestAccount) return;
     var tbody = document.getElementById('varliklarTableBody');
-    var total = testAccountKpiTotalUsd(tbody);
+    var parts = testAccountKpiParts(tbody);
+    var total = stabilizeTestAccountSpotKpi(parts);
     if (!(total > 0) && assetsState && assetsState.wallet && Array.isArray(assetsState.wallet.assets)) {
         var avail = testAccountUsdtAvailablePool(assetsState.wallet.assets);
         var botEq = testAccountRunningBotsEquityUsd();
@@ -2587,7 +2663,12 @@ function updateTestAccountKpiCuzdanFromStrip() {
             botEq = assetsState.wallet.bot_locked_usd;
         }
         var locked = typeof assetsState.wallet.locked_usd === 'number' ? assetsState.wallet.locked_usd : 0;
-        total = avail + botEq + locked;
+        total = stabilizeTestAccountSpotKpi({
+            avail: avail,
+            botEq: botEq,
+            locked: locked,
+            botSig: testAccountRunningBotsStructureSignature() + '|' + testAccountBotLockedQtySignature()
+        });
     }
     if (!(total > 0) && _kpiCuzdanLastSpot > 0) total = _kpiCuzdanLastSpot;
     if (!(total > 0) && State.accountId) {
@@ -3114,9 +3195,9 @@ function scheduleSilentWalletRecovery() {
             window.homeFlash.resetRefreshThrottle(State.accountId);
         }
         if (typeof triggerWalletRefreshForVarliklar === 'function') {
-            triggerWalletRefreshForVarliklar(State.accountId, { force: false });
+            triggerWalletRefreshForVarliklar(State.accountId, { force: true });
         } else if (window.homeFlash && typeof window.homeFlash.triggerRefresh === 'function') {
-            window.homeFlash.triggerRefresh(State.accountId, false);
+            window.homeFlash.triggerRefresh(State.accountId, true);
         }
     }, 6000);
 }
@@ -3169,6 +3250,14 @@ function pollWalletRefreshUntilDone(accountId) {
                 if (typeof setWalletPanelUpdating === 'function') setWalletPanelUpdating(false);
                 var errCode = d.last_error_code ? String(d.last_error_code).toUpperCase() : '';
                 if (errCode) {
+                    var softErrWithCache = typeof _walletHasDisplayableAssets === 'function' && _walletHasDisplayableAssets()
+                        && typeof _isHardWalletError === 'function'
+                        && !_isHardWalletError(errCode);
+                    if (softErrWithCache && typeof markWalletLiveFetchOk === 'function') {
+                        markWalletLiveFetchOk();
+                        if (typeof updateKpiCuzdanLiveStatus === 'function') updateKpiCuzdanLiveStatus();
+                        return;
+                    }
                     if (typeof _walletHasDisplayableAssets === 'function' && _walletHasDisplayableAssets()
                         && typeof markWalletCachedLiveFetchStale === 'function') {
                         markWalletCachedLiveFetchStale(errCode);
@@ -3178,6 +3267,14 @@ function pollWalletRefreshUntilDone(accountId) {
                     return;
                 }
                 if (d.snapshot_stale) {
+                    var softSnapshotStale = typeof _walletHasDisplayableAssets === 'function' && _walletHasDisplayableAssets()
+                        && typeof _isHardWalletError === 'function'
+                        && !_isHardWalletError(d.last_error_code);
+                    if (softSnapshotStale && typeof markWalletLiveFetchOk === 'function') {
+                        markWalletLiveFetchOk();
+                        if (typeof updateKpiCuzdanLiveStatus === 'function') updateKpiCuzdanLiveStatus();
+                        return;
+                    }
                     if (typeof _walletHasDisplayableAssets === 'function' && _walletHasDisplayableAssets()
                         && typeof markWalletCachedLiveFetchStale === 'function') {
                         markWalletCachedLiveFetchStale('WALLET_SNAPSHOT_STALE');
@@ -3265,11 +3362,24 @@ function triggerWalletRefreshForVarliklar(accountId, opts) {
                     stale: !!d.stale,
                     stale_code: d.last_error_code || d.error_code || null
                 });
+                var appliedOk = !d.stale && !d.skipped;
+                var softStaleWithCache = d.stale
+                    && typeof _walletHasDisplayableAssets === 'function' && _walletHasDisplayableAssets()
+                    && typeof _isHardWalletError === 'function'
+                    && !_isHardWalletError(d.last_error_code || d.error_code);
+                if ((appliedOk || softStaleWithCache) && typeof markWalletLiveFetchOk === 'function') {
+                    markWalletLiveFetchOk();
+                }
             }
-            if (res && res.data && res.data.stale && res.data.last_error_code && typeof markWalletCachedLiveFetchStale === 'function') {
+            var gotWalletLive = !!(res && res.ok && res.data && res.data.wallet_live);
+            if (res && res.data && res.data.stale && gotWalletLive
+                && typeof _walletHasDisplayableAssets === 'function' && _walletHasDisplayableAssets()
+                && typeof _isHardWalletError === 'function'
+                && !_isHardWalletError(res.data.last_error_code || res.data.error_code)) {
+                /* yumuşak stale + geçerli bakiye: rozeti canlı tut, döngüye girme */
+            } else if (res && res.data && res.data.stale && res.data.last_error_code && typeof markWalletCachedLiveFetchStale === 'function') {
                 markWalletCachedLiveFetchStale(res.data.last_error_code);
-            }
-            if (res && res.data && res.data.stale && !res.data.last_error_code && typeof markWalletCachedLiveFetchStale === 'function') {
+            } else if (res && res.data && res.data.stale && !res.data.last_error_code && typeof markWalletCachedLiveFetchStale === 'function') {
                 markWalletCachedLiveFetchStale('WALLET_SNAPSHOT_STALE');
             }
             if (res && res.data && res.data.inflight && typeof pollWalletRefreshUntilDone === 'function') {
@@ -4290,6 +4400,11 @@ async function initDashboard() {
         if (window.FLASH_HOME_ENABLED && window.homeFlash && typeof window.homeFlash.init === 'function') {
             window.homeFlash.init();
             fetchSnapshot();
+            setTimeout(function () {
+                if (typeof maybeRefreshStaleWalletFromDashboard === 'function') {
+                    maybeRefreshStaleWalletFromDashboard();
+                }
+            }, 2500);
         } else {
             fetchSnapshot();
         }

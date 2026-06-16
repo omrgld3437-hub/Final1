@@ -113,3 +113,23 @@ def test_reentry_only_after_sell_grid_fill():
     tick_dca_grid_trailing(state, cfg, 99.0, 0.9, 60.0)
     assert state.get("cycle_grid_side") == "SELL"
     assert state.get("mode") == "TRAIL_REENTRY_BUY"
+
+
+def test_heal_stale_profit_exit_flags_when_sell_fill_missing():
+    """Kopma sonrası _profit_exit_done takılı kalınca kar satışı yeniden devreye girmeli."""
+    from app.botengine.strategies.dca_grid_trailing import _heal_stale_cycle_close_flags
+
+    state = _base_state()
+    state["cycle_grid_side"] = "BUY"
+    state["buy_history"] = [{"grid_index": 0, "qty": 0.1, "price": 99.0, "execution_price": 99.0}]
+    state["_profit_exit_done"] = True
+    state["_cycle_complete"] = True
+    state["cycle_ledger_current"] = {
+        "cycle_id": 1,
+        "symbol": "ETHUSDT",
+        "buy_qty_total": 0.1,
+        "sell_qty_total": 0.0,
+    }
+    _heal_stale_cycle_close_flags(state)
+    assert not state.get("_profit_exit_done")
+    assert not state.get("_cycle_complete")

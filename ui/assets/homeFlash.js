@@ -88,7 +88,23 @@
         renderHome.hideSkeleton();
 
         return loadFast(accountId).then(function () {
-            triggerRefresh(accountId, false);
+            if (typeof window.isWalletDataLive === 'function' && window.isWalletDataLive()) {
+                return;
+            }
+            var force = false;
+            if (window.__walletDebugMeta && window.__walletDebugMeta.wallet_age_sec != null) {
+                force = Number(window.__walletDebugMeta.wallet_age_sec) >= 900;
+            }
+            if (!force && window.assetsState && window.assetsState.wallet) {
+                var code = typeof window.walletErrorCode === 'function' ? window.walletErrorCode() : '';
+                force = window.assetsState.wallet.data_status === 'stale'
+                    && typeof window._isHardWalletError === 'function'
+                    && window._isHardWalletError(code);
+            }
+            if (!force && typeof window._walletHasDisplayableAssets === 'function' && window._walletHasDisplayableAssets()) {
+                return;
+            }
+            triggerRefresh(accountId, force);
         });
     }
 
@@ -236,6 +252,13 @@
                     wallet_cached_at: data.wallet_live_at
                 });
                 if (data.stale && data.last_error_code) {
+                    var softStale = typeof window._walletHasDisplayableAssets === 'function' && window._walletHasDisplayableAssets()
+                        && typeof window._isHardWalletError === 'function'
+                        && !window._isHardWalletError(data.last_error_code);
+                    if (softStale) {
+                        if (typeof window.markWalletLiveFetchOk === 'function') window.markWalletLiveFetchOk();
+                        return;
+                    }
                     if (typeof window.scheduleSilentWalletRecovery === 'function') {
                         window.scheduleSilentWalletRecovery();
                     } else {

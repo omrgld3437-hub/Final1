@@ -112,21 +112,76 @@ def _parse_iso_ms(iso: Optional[str]) -> int:
         return 0
 
 
-def infer_bot_run_started_at_from_events(db: "Session", bot_id: int) -> Optional[str]:
-    """Son STOP sonrası ilk soğuk START (connectivity_resume değil)."""
+def _last_stop_event_id(db: "Session", bot_id: int) -> int:
+    from sqlalchemy import text
+
+    row = db.execute(
+        text("""
+            SELECT id FROM bot_engine_events
+            WHERE bot_id = :bid AND event_type = 'INFO'
+              AND message LIKE '%COMMAND_EXECUTED%' AND message LIKE '%STOP%'
+            ORDER BY id DESC LIMIT 1
+        """),
+        {"bid": int(bot_id)},
+    ).fetchone()
+    return int(row[0]) if row else 0
+
+
+def _first_cold_start_after_stop(db: "Session", bot_id: int, last_stop_id: int) -> Optional[Dict[str, Any]]:
+    from sqlalchemy import text
+
+    from app.botengine.state_store import normalize_event_ts_iso_z
+
+    rows = db.execute(
+        text("""
+            SELECT id, ts, event_type, message, meta_json FROM bot_engine_events
+            WHERE bot_id = :bid AND id > :stop_id AND event_type = 'INFO'
+              AND message LIKE '%COMMAND_EXECUTED%' AND message LIKE '%START%'
+            ORDER BY id ASC LIMIT 32
+        """),
+        {"bid": int(bot_id), "stop_id": int(last_stop_id)},
+    ).fetchall()
+    for row in rows:
+        meta: Dict[str, Any] = {}
+        if row[4]:
+            try:
+                meta = json.loads(row[4])
+            except Exception:
+                meta = {}
+        if meta.get("connectivity_resume"):
+            continue
+        return {
+            "id": row[0],
+            "ts": normalize_event_ts_iso_z(row[1]),
+            "type": row[2],
+            "message": row[3] or "",
+            "meta": meta,
+        }
+    return None
+
+
+def resolve_bot_session_start_event_id(
+    db: "Session",
+    bot_id: int,
+    state: Optional[Dict[str, Any]] = None,
+) -> int:
+    """Son manuel STOP sonrası ilk soğuk START event id (0 = bilinmiyor)."""
+    last_stop_id = _last_stop_event_id(db, int(bot_id))
+    start_ev = _first_cold_start_after_stop(db, int(bot_id), last_stop_id)
+    if start_ev:
+        return int(start_ev.get("id") or 0)
+    st = state if isinstance(state, dict) else {}
+    run_iso = (st.get(_STATE_KEY) or "").strip()
+    if not run_iso:
+        return 0
+    run_ms = _parse_iso_ms(run_iso)
+    if run_ms <= 0:
+        return 0
     from app.botengine.state_store import list_events
 
-    events = list_events(db, int(bot_id), limit=500)
-    if not events:
-        return None
-    by_id = sorted(events, key=lambda e: int(e.get("id") or 0))
-    last_stop_id = 0
-    for ev in by_id:
-        raw = (ev.get("message") or "").upper()
-        if "COMMAND_EXECUTED" in raw and "STOP" in raw:
-            last_stop_id = max(last_stop_id, int(ev.get("id") or 0))
-    for ev in by_id:
-        if int(ev.get("id") or 0) <= last_stop_id:
+    for ev in list_events(db, int(bot_id), limit=500):
+        ts_ms = _parse_iso_ms(ev.get("ts"))
+        if ts_ms <= 0 or ts_ms + 5000 < run_ms:
             continue
         if (ev.get("type") or "").upper() != "INFO":
             continue
@@ -141,9 +196,16 @@ def infer_bot_run_started_at_from_events(db: "Session", bot_id: int) -> Optional
                 meta = {}
         if meta.get("connectivity_resume"):
             continue
-        ts = ev.get("ts")
-        if ts:
-            return _normalize_iso_z(str(ts))
+        return int(ev.get("id") or 0)
+    return 0
+
+
+def infer_bot_run_started_at_from_events(db: "Session", bot_id: int) -> Optional[str]:
+    """Son STOP sonrası ilk soğuk START (connectivity_resume değil)."""
+    last_stop_id = _last_stop_event_id(db, int(bot_id))
+    start_ev = _first_cold_start_after_stop(db, int(bot_id), last_stop_id)
+    if start_ev and start_ev.get("ts"):
+        return _normalize_iso_z(str(start_ev["ts"]))
     return None
 
 

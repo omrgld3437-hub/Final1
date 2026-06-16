@@ -14,12 +14,13 @@ var _kpiCuzdanLastSpot = 0;
 var KPI_CUZDAN_SESSION_PREFIX = "kpi_cuzdan_snap_v1_";
 var KPI_CUZDAN_SESSION_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 var KPI_CUZDAN_LOCAL_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
-var _walletStaleUi = { wasStale: false, liveSince: null };
+var _walletStaleUi = { wasStale: false, liveSince: null, liveHoldUntil: 0 };
 var _walletPanelUpdating = false;
 var _walletPanelUpdatingClearTimer = null;
 var _walletPanelStaleTimer = null;
 var _walletPanelStaleFailureAt = 0;
-var WALLET_LIVE_OK_TTL_MS = 60000;
+var WALLET_LIVE_OK_TTL_MS = 300000;
+var WALLET_STALE_BADGE_HYSTERESIS_MS = 45000;
 var WALLET_STALE_HIDE_AFTER_LIVE_MS = 15000;
 var WALLET_PANEL_STALE_DELAY_MS = 10000;
 var _dashboardWalletForceTick = 0;
@@ -139,6 +140,7 @@ function markWalletLiveFetchOk() {
     _walletPanelStaleFailureAt = 0;
     _walletStaleUi.wasStale = false;
     _walletStaleUi.liveSince = null;
+    _walletStaleUi.liveHoldUntil = Date.now() + WALLET_STALE_BADGE_HYSTERESIS_MS;
     if (typeof State !== 'undefined') State.walletLastErrorCode = null;
     if (assetsState.wallet && assetsState.wallet.error) {
         assetsState.wallet.error = null;
@@ -176,16 +178,29 @@ function markWalletLiveFetchFailed(errorCode, opts) {
 }
 window.markWalletLiveFetchFailed = markWalletLiveFetchFailed;
 
+function _isHardWalletError(code) {
+    var c = String(code || '').toUpperCase();
+    if (!c) return false;
+    return /API_UNAUTHORIZED|ACCOUNT_KEYS|CLOCK_DRIFT|-2015|KEYS_DECRYPT|KEYS_MISSING|KEYS_EMPTY/.test(c);
+}
+window._isHardWalletError = _isHardWalletError;
+
 function markWalletCachedLiveFetchStale(errorCode) {
     var code = errorCode ? String(errorCode).toUpperCase() : 'WALLET_STALE';
-    _walletLiveFailedAt = Date.now();
-    if (typeof State !== 'undefined') State.walletLastErrorCode = code;
-    if (assetsState.wallet) {
-        assetsState.wallet.data_status = 'stale';
-        if (assetsState.wallet.status !== 'error') assetsState.wallet.status = 'ready';
+    var hard = _isHardWalletError(code);
+    if (hard) {
+        _walletLiveFailedAt = Date.now();
+        if (typeof State !== 'undefined') State.walletLastErrorCode = code;
     }
-    scheduleSilentWalletRecovery();
-    scheduleWalletPanelStaleBadgeAfterFailure();
+    if (assetsState.wallet) {
+        assetsState.wallet.data_status = hard ? 'stale' : 'cached';
+        if (assetsState.wallet.status !== 'error') assetsState.wallet.status = 'ready';
+        assetsState.wallet.error = null;
+    }
+    if (hard) {
+        scheduleSilentWalletRecovery();
+        scheduleWalletPanelStaleBadgeAfterFailure();
+    }
     if (typeof updateKpiCuzdanLiveStatus === 'function') updateKpiCuzdanLiveStatus();
     if (window.BinanceAssetsPanel && typeof window.BinanceAssetsPanel.render === 'function') window.BinanceAssetsPanel.render();
     else if (typeof renderVarliklarList === 'function') renderVarliklarList();
@@ -203,12 +218,19 @@ function _walletLiveFailedAfterOk() {
 /** Gerçek canlı Binance cüzdan verisi (KPI/PnL iç mantığı). */
 function isWalletDataLive() {
     if (typeof State !== 'undefined' && State.isTestAccount) return true;
-    if (assetsState.wallet.keys_configured !== true) return false;
-    if (assetsState.wallet.error || assetsState.wallet.status === 'error') return false;
-    if (assetsState.wallet.data_status === 'stale') return false;
-    if (_walletLiveFailedAfterOk()) return false;
+    if (!assetsState.wallet || assetsState.wallet.keys_configured !== true) return false;
+    var code = walletErrorCode();
+    if (_isHardWalletError(code)) return false;
+    if (assetsState.wallet.status === 'error' && assetsState.wallet.error && _isHardWalletError(assetsState.wallet.error.error_code)) {
+        return false;
+    }
+    if (assetsState.wallet.data_status === 'stale' && _isHardWalletError(code)) return false;
+    if (_walletLiveFailedAfterOk() && _isHardWalletError(code)) return false;
     if (_walletLiveOkAt && (Date.now() - _walletLiveOkAt) <= WALLET_LIVE_OK_TTL_MS) return true;
-    return assetsState.wallet.data_status === 'fresh';
+    if (assetsState.wallet.data_status === 'fresh') return true;
+    var hasBal = typeof _walletHasDisplayableAssets === 'function' && _walletHasDisplayableAssets();
+    if (hasBal && !_isHardWalletError(code)) return true;
+    return false;
 }
 window.isWalletDataLive = isWalletDataLive;
 
@@ -262,9 +284,10 @@ function walletLastUpdatedText() {
 }
 window.walletLastUpdatedText = walletLastUpdatedText;
 
-/** Stale KPI rozeti: CLOCK_DRIFT için kısa etiket. */
+/** Stale KPI rozeti: yalnızca gerçek bağlantı/API hatasında. */
 function walletStaleStatusText() {
     var code = walletErrorCode();
+    if (!_isHardWalletError(code) && typeof isWalletDataLive === 'function' && isWalletDataLive()) return 'Canlı';
     var base = 'Güncel değil';
     if (code === 'CLOCK_DRIFT') base = 'Saat senkronu';
     else if (code === 'API_UNAUTHORIZED' || code.indexOf('KEY') >= 0) base = 'API / IP';
@@ -350,6 +373,22 @@ function applyWalletStaleWarningEl(el) {
         return;
     }
     var showStale = shouldShowWalletStaleWarning();
+    if (!showStale && _walletStaleUi.liveHoldUntil && Date.now() < _walletStaleUi.liveHoldUntil) {
+        if (warnOnly) {
+            el.hidden = true;
+            el.textContent = '';
+            el.classList.remove('kpi-spot-status--live', 'kpi-spot-status--stale', 'kpi-spot-status--offline');
+            return;
+        }
+        el.hidden = false;
+        el.textContent = 'Canlı';
+        el.title = 'Cüzdan Binance üzerinden güncellendi.';
+        el.classList.toggle('kpi-spot-status--live', true);
+        el.classList.toggle('kpi-spot-status--stale', false);
+        el.classList.toggle('kpi-spot-status--offline', false);
+        el.classList.toggle('kpi-spot-status--test', false);
+        return;
+    }
     if (!showStale && warnOnly) {
         el.hidden = true;
         el.textContent = '';
@@ -660,17 +699,7 @@ function updateKPIs(data) {
 
     var walletEl = document.getElementById("kpiCuzdan");
     if (typeof State !== 'undefined' && State.isTestAccount && typeof updateTestAccountKpiCuzdanFromStrip === 'function') {
-        var apiSpot = (account.spot_balance_usd != null && Number(account.spot_balance_usd) > 0)
-            ? Number(account.spot_balance_usd)
-            : ((data && data.spot_balance_usd != null && Number(data.spot_balance_usd) > 0) ? Number(data.spot_balance_usd) : 0);
-        if (apiSpot > 0) {
-            _kpiCuzdanLastSpot = apiSpot;
-            updateKpiCuzdanBalance(walletEl, apiSpot);
-            if (typeof updateTestAccountCuzdanDailyPnlLive === 'function') updateTestAccountCuzdanDailyPnlLive(apiSpot);
-            _persistKpiCuzdanSessionCache(State.accountId, apiSpot, _kpiCuzdanPnlDisplay.pnlUsd, _kpiCuzdanPnlDisplay.pnlPct);
-        } else {
-            updateTestAccountKpiCuzdanFromStrip();
-        }
+        updateTestAccountKpiCuzdanFromStrip();
     } else {
         updateKpiCuzdanBalance(walletEl, walletTotal);
     }
@@ -905,6 +934,9 @@ function _persistKpisStorageCache(account, data) {
     account = account || {};
     data = data || {};
     var spot = account.spot_balance_usd ?? data.spot_balance_usd ?? (_kpiCuzdanLastSpot > 0 ? _kpiCuzdanLastSpot : assetsState.wallet?.total_usd);
+    if (typeof State !== 'undefined' && State.isTestAccount && _kpiCuzdanLastSpot > 0) {
+        spot = _kpiCuzdanLastSpot;
+    }
     if (account.daily_wallet_pnl_usd == null && data.daily_wallet_pnl_usd == null && spot == null) return;
     var pnl = account.daily_wallet_pnl_usd ?? data.daily_wallet_pnl_usd ?? _kpiCuzdanPnlDisplay.pnlUsd;
     var pct = account.daily_wallet_pnl_pct ?? data.daily_wallet_pnl_pct ?? _kpiCuzdanPnlDisplay.pnlPct;

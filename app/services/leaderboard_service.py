@@ -134,6 +134,92 @@ def _strip_budget_from_public_params(params: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+def _cfg_dynamic_enabled(cfg: Dict[str, Any]) -> bool:
+    v = (cfg or {}).get("dynamic_mode")
+    if v is None:
+        return False
+    if isinstance(v, str):
+        return v.strip().lower() in ("1", "true", "yes", "on")
+    return bool(v)
+
+
+def _public_dynamic_mode_for_leaderboard(
+    db: Session,
+    bot_id: Optional[int],
+    account_id: Optional[int],
+    config_json_raw: Optional[str],
+) -> Dict[str, Any]:
+    """Sanitized dynamic-mode snapshot for Parametreler modal (no balances / bot_id)."""
+    cfg: Dict[str, Any] = {}
+    if config_json_raw:
+        try:
+            cfg = json.loads(config_json_raw or "{}")
+        except Exception:
+            cfg = {}
+    enabled = _cfg_dynamic_enabled(cfg)
+    if not enabled:
+        return {"enabled": False, "active": False}
+
+    active = False
+    safety_ok = False
+    try:
+        from app.botengine.dynamic import safety_gate as _dyn_gate
+
+        active = bool(_dyn_gate.is_dynamic_mode_active(cfg))
+        safety_ok = bool(_dyn_gate.check_prerequisites(cfg).ok)
+    except Exception:
+        pass
+
+    snap_out: Optional[Dict[str, Any]] = None
+    position: Optional[Dict[str, Any]] = None
+    if bot_id is not None:
+        try:
+            from app.botengine.state_store import load_state
+
+            state = load_state(db, bot_id) or {}
+            raw_snap = state.get("dynamic_snapshot")
+            if isinstance(raw_snap, dict):
+                applied = raw_snap.get("applied") if isinstance(raw_snap.get("applied"), dict) else {}
+                feats = raw_snap.get("features") if isinstance(raw_snap.get("features"), dict) else {}
+                snap_out = {
+                    "cycle_id": raw_snap.get("cycle_id"),
+                    "regime": raw_snap.get("regime"),
+                    "data_fresh": raw_snap.get("data_fresh"),
+                    "stale_reason": raw_snap.get("stale_reason"),
+                    "applied": applied,
+                    "features": {
+                        k: feats.get(k)
+                        for k in ("atr_pct_5m", "adx_1h", "bbw_1h", "rsi_5m", "spread_bps")
+                        if feats.get(k) is not None
+                    },
+                }
+            buy_fired = state.get("buy_grid_fired") or []
+            sell_fired = state.get("sell_grid_fired") or []
+            ap = (snap_out or {}).get("applied") or {}
+            position = {
+                "base_alloc_pct": ap.get("base_alloc_pct"),
+                "quote_alloc_pct": ap.get("quote_alloc_pct"),
+                "buy_levels_fired": sum(1 for x in buy_fired if x),
+                "sell_levels_fired": sum(1 for x in sell_fired if x),
+                "max_buy_levels": int(cfg.get("max_buy_levels") or 1),
+                "sell_grid_count": len(ap.get("sell_grids") or []),
+                "buy_grid_count": len(ap.get("buy_grids") or []),
+                "initial_allocation_done": bool(state.get("initial_allocation_done")),
+            }
+        except Exception as e:
+            logger.debug(
+                "leaderboard dynamic_mode block failed bot_id=%s: %s", bot_id, e
+            )
+
+    return {
+        "enabled": True,
+        "active": active,
+        "safety_gate": {"ok": safety_ok},
+        "snapshot": snap_out,
+        "position": position,
+    }
+
+
 def _resolve_leaderboard_params(
     db: Session,
     params: Dict[str, Any],
@@ -355,6 +441,9 @@ def _global_top_from_running_bots(db: Session, limit: int) -> List[Dict[str, Any
                 "running_since_iso": _running_since_iso_for_bot(db, bot),
                 "symbol": symbol,
                 "reference_price": ref_price,
+                "dynamic_mode": _public_dynamic_mode_for_leaderboard(
+                    db, bot.id, bot.account_id, bot.config_json
+                ),
             }
         )
     return out
@@ -432,6 +521,9 @@ def get_global_top(db: Session, limit: int = 1) -> List[Dict[str, Any]]:
                     "running_since_iso": running_since_iso,
                     "symbol": symbol,
                     "reference_price": ref_price,
+                    "dynamic_mode": _public_dynamic_mode_for_leaderboard(
+                        db, bot_id, account_id, config_json_raw
+                    ),
                 }
             )
             if len(out) >= limit:

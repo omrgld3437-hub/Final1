@@ -149,6 +149,10 @@ class DcaGridTrailingConfig:
         _mbl_val = _int_or(_mbl, 0) if _mbl not in (None, "") else 0
         self.max_buy_levels: int = max(1, _mbl_val)
 
+        # Dynamic Mode: ON/OFF, default False (mevcut manuel mod aynen çalışır).
+        # Kullanıcıdan ek parametre ALINMAZ; sistem tüm dinamik değerleri otomatik üretir.
+        self.dynamic_mode: bool = bool(r.get("dynamic_mode") or False)
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "symbol": self.symbol,
@@ -180,6 +184,7 @@ class DcaGridTrailingConfig:
             "available_quote_buffer_pct": self.available_quote_buffer_pct,
             "daily_loss_limit_usd": self.daily_loss_limit_usd,
             "max_buy_levels": self.max_buy_levels,
+            "dynamic_mode": self.dynamic_mode,
         }
 
 
@@ -431,6 +436,23 @@ def config_from_ui_payload(payload: Dict[str, Any]) -> DcaGridTrailingConfig:
             }
         )
     profit = payload.get("profit") or {}
+    # Dynamic Mode requires a positive daily_loss_limit_usd as a safety
+    # prerequisite. The create modal injects a default (budget×5%), but
+    # API-direct create/update payloads may omit it — in that case dynamic mode
+    # would silently never activate. Mirror the UI default here so the backend
+    # is self-sufficient and the safety gate is always satisfiable.
+    dynamic_on = bool(payload.get("dynamic_mode") or False)
+    daily_loss = payload.get("daily_loss_limit_usd")
+    if dynamic_on and (
+        daily_loss in (None, "", 0) or _float_or(daily_loss, 0.0) <= 0
+    ):
+        budget_for_dll = _float_or(
+            payload.get("budget_usd")
+            or payload.get("initial_capital_usdt")
+            or payload.get("bot_budget_usdt"),
+            1000.0,
+        )
+        daily_loss = max(5.0, round(budget_for_dll * 0.05, 2))
     raw = {
         "symbol": payload.get("symbol"),
         "budget_usd": payload.get("budget_usd"),
@@ -452,6 +474,8 @@ def config_from_ui_payload(payload: Dict[str, Any]) -> DcaGridTrailingConfig:
         "max_orders_per_minute": payload.get("max_orders_per_minute", 12),
         "max_slippage_pct": payload.get("max_slippage_pct", 0.5),
         "max_buy_levels": payload.get("max_buy_levels"),
+        "dynamic_mode": dynamic_on,
+        "daily_loss_limit_usd": daily_loss,
     }
     return DcaGridTrailingConfig(raw)
 

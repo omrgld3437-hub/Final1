@@ -111,6 +111,7 @@
         .health-warn-page-frame.is-visible {
             opacity: 1;
         }
+        body:not(.engine-log-admin) #engineLogPanel { display: none !important; visibility: hidden; }
         #engineLogPanel.panel-health-log-active {
             outline: 1px solid rgba(240, 185, 11, 0.15);
             border-radius: 8px;
@@ -925,9 +926,10 @@
     <script src="/ui/assets/utils/coinLogo.js?v=1"></script>
     <script src="/ui/assets/core/apiClient.js?v=refactor1"></script>
     <script src="/ui/assets/utils/gridTrailEnvelope.js?v=2"></script>
+    <script src="/ui/assets/utils/engineLogAccess.js?v=1"></script>
     <script src="/ui/assets/utils/engineLogArchive.js?v=1"></script>
     <script src="/ui/assets/utils/engineLogFormat.js?v=64"></script>
-    <script src="/ui/assets/utils/botHealthAlerts.js?v=31"></script>
+    <script src="/ui/assets/utils/botHealthAlerts.js?v=35"></script>
     <script src="/ui/assets/utils/engineLogLive.js?v=31"></script>
     <script src="/ui/vendor/lightweight-charts.standalone.production.js"></script>
     <script src="/ui/assets/perf_chart_tv.js?v=1"></script>
@@ -1351,7 +1353,12 @@
             }
         };
 
+        function canViewEngineLogs() {
+            return !!(window.EngineLogAccess && window.EngineLogAccess.canView && window.EngineLogAccess.canView());
+        }
+
         function loadEngineEvents(bid, incremental) {
+            if (!canViewEngineLogs()) return Promise.resolve([]);
             if (!bid || !window.EngineLogLive) return;
             _engineLogLiveOpts.botId = bid;
             _engineLogLiveOpts.container = engineLogList;
@@ -1359,6 +1366,7 @@
         }
 
         function startEngineLogLive() {
+            if (!canViewEngineLogs()) return;
             if (!window.EngineLogLive || !botId) return;
             _engineLogLiveOpts._logBootstrapping = true;
             _engineLogLiveOpts._lastLogRenderSig = null;
@@ -2305,7 +2313,11 @@
                 }
             }
             perfPanel.style.display = 'block';
-            if (window.innerWidth > 768) { engineLogPanel.style.display = 'block'; } else { engineLogPanel.style.display = 'none'; }
+            if (canViewEngineLogs() && window.innerWidth > 768 && engineLogPanel) {
+                engineLogPanel.style.display = 'block';
+            } else if (engineLogPanel) {
+                engineLogPanel.style.display = 'none';
+            }
             if (window.EngineLogFormat && window.EngineLogFormat.setLogContext) {
                 window.EngineLogFormat.setLogContext({
                     botId: botId,
@@ -2661,6 +2673,10 @@
                 if (window.EngineLogFormat && window.EngineLogFormat.setLogContext) {
                     window.EngineLogFormat.setLogContext({ botId: botId });
                 }
+                if (_engineLogLiveOpts) {
+                    _engineLogLiveOpts._lastLogRenderSig = null;
+                    _engineLogLiveOpts._connectivitySynthetic = null;
+                }
                 if (window.EngineLogLive && _engineLogLiveOpts) {
                     window.EngineLogLive.renderDisplayEvents(_engineLogLiveOpts);
                 }
@@ -2680,6 +2696,30 @@
                 finish();
             }
         }
+
+        window.onBotHealthAutoCleared = function () {
+            if (_engineLogLiveOpts) {
+                _engineLogLiveOpts._lastLogRenderSig = null;
+                _engineLogLiveOpts._connectivitySynthetic = null;
+            }
+            if (window.EngineLogLive && _engineLogLiveOpts) {
+                window.EngineLogLive.renderDisplayEvents(_engineLogLiveOpts);
+            }
+        };
+
+        window.scheduleAutoHealthAck = function (ackBotId) {
+            if (!window.apiClient || !ackBotId || String(ackBotId) !== String(botId)) return;
+            var q = accountCode ? '?account_code=' + encodeURIComponent(accountCode) : '?account_id=' + (accountId || '');
+            window.apiClient.post('/api/bots-engine/' + ackBotId + '/health/ack' + q, {})
+                .then(function (res) {
+                    if (res && res.engine_log_dismiss_before_id != null) {
+                        window._lastHealthData = window._lastHealthData || {};
+                        window._lastHealthData.engine_log_dismiss_before_id = res.engine_log_dismiss_before_id;
+                    }
+                    if (typeof fetchBotHealth === 'function') fetchBotHealth();
+                })
+                .catch(function () {});
+        };
 
         var btnEngineLogReset = document.getElementById('btnEngineLogReset');
         if (btnEngineLogReset) btnEngineLogReset.addEventListener('click', resetHealthAlerts);
@@ -2775,7 +2815,12 @@
         }
 
         function run() {
-            loadDetail();
+            var boot = function () { loadDetail(); };
+            if (window.EngineLogAccess && typeof window.EngineLogAccess.resolve === 'function') {
+                window.EngineLogAccess.resolve().finally(boot);
+            } else {
+                boot();
+            }
         }
 
         if (accountCode && !accountId && window.apiClient) {

@@ -52,12 +52,13 @@ def test_planned_sell_qty_before_any_fill():
     assert sell[1]["planned_base_qty"] == round(0.013 * 0.6, 8)
 
 
-def test_profit_points_avg_cost_grid_only_uses_execution_price():
-    """Ortalama maliyet: yalnız grid fill; execution_price varsa fill price yerine o kullanılır."""
+def test_profit_points_avg_cost_grid_only_uses_fill_price():
+    """Ortalama maliyet: yalnız grid fill; Binance fill `price` (grid tablosu gerçekleşme ile aynı)."""
     state = {
         "reference_price": 2092.64,
         "base_balance": 0.01,
         "quote_balance": 50.0,
+        "cycle_grid_side": "SELL",
         "sell_grid_fired": [True],
         "buy_grid_fired": [],
         "sell_history": [
@@ -77,8 +78,8 @@ def test_profit_points_avg_cost_grid_only_uses_execution_price():
         "profit_reentry_rise_pct": 0.3,
     }
     _, profit_points, meta = compute_grid_profit_view(state, cfg, price=2100.0)
-    assert meta.get("avg_sell_grid") == 2123.4407
+    assert meta.get("avg_sell_grid") == 2121.7136
     assert len(profit_points) == 1
     assert profit_points[0]["type"] == "reentry"
-    assert profit_points[0]["average_cost"] == 2123.4407
-    assert profit_points[0]["trigger_price"] == round(2123.4407 * 0.99, 4)
+    assert profit_points[0]["average_cost"] == 2121.7136
+    assert profit_points[0]["trigger_price"] == round(2121.7136 * 0.99, 4)

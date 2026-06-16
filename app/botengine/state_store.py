@@ -408,14 +408,27 @@ def list_events(
     bot_id: int,
     limit: int = 200,
     after_id: Optional[int] = None,
+    since_id: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
-    """Last N events, optionally after_id."""
+    """Last N events, optionally after_id and/or since_id (oturum başlangıcı)."""
+    sid = int(since_id or 0)
     if after_id is not None:
         q = text("""
             SELECT id, ts, event_type, message, meta_json FROM bot_engine_events
-            WHERE bot_id = :bid AND id > :aid ORDER BY id DESC LIMIT :lim
+            WHERE bot_id = :bid AND id > :aid
+              AND (:sid <= 0 OR id >= :sid)
+            ORDER BY id DESC LIMIT :lim
         """)
-        rows = db.execute(q, {"bid": bot_id, "aid": after_id, "lim": limit}).fetchall()
+        rows = db.execute(
+            q, {"bid": bot_id, "aid": after_id, "sid": sid, "lim": limit}
+        ).fetchall()
+    elif sid > 0:
+        q = text("""
+            SELECT id, ts, event_type, message, meta_json FROM bot_engine_events
+            WHERE bot_id = :bid AND id >= :sid
+            ORDER BY id DESC LIMIT :lim
+        """)
+        rows = db.execute(q, {"bid": bot_id, "sid": sid, "lim": limit}).fetchall()
     else:
         q = text("""
             SELECT id, ts, event_type, message, meta_json FROM bot_engine_events

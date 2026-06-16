@@ -361,7 +361,8 @@ def try_auto_resume_paused_bots(db: "Session", account_id: int) -> int:
     for bot in bots:
         state = load_state(db, bot.id) or {}
         err = (state.get("last_error_code") or "").strip()
-        if err not in _AUTO_RESUME_ERROR_CODES:
+        # Boş kod: bağlantı hatası state'ten silinmiş ama bot paused_error'da kalmış olabilir.
+        if err and err not in _AUTO_RESUME_ERROR_CODES:
             continue
         last_ar = float(state.get("_connectivity_auto_resume_at") or 0)
         if time.time() - last_ar < 90.0:

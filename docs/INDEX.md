@@ -13,6 +13,7 @@
 | [engine/BOTENGINE_RUNBOOK.md](engine/BOTENGINE_RUNBOOK.md) | Engine operasyon |
 | [engine/BOTENGINE_STATE_MODEL.md](engine/BOTENGINE_STATE_MODEL.md) | Durum modeli |
 | [AI_GRID_ENGINE_REFERENCE.md](AI_GRID_ENGINE_REFERENCE.md) | **AI referans:** DCA grid alış/satış, outage, cycle_grid_side, paralel grid, health |
+| [DYNAMIC_MODE_TECHNICAL.md](DYNAMIC_MODE_TECHNICAL.md) | **Dinamik mod:** mimari, snapshot, rejim, risk, UI, eksikler/fazlalar |
 | [api/](api/) | API sözleşmeleri |
 
 **Spec (kök):** [TRADE_TRAILING_MASTER_SPEC.md](../TRADE_TRAILING_MASTER_SPEC.md)

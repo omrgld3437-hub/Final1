@@ -21,11 +21,12 @@ python -m app.botengine.worker_main
 | `scheduler.py` | v5 heap (`BOT_ENGINE_V5_SCHEDULER=1`) |
 | `execution.py` | `run_actions` → Binance; `EXEC_ORDER_TIMEOUT_SEC=15`; 401 → `paused_error`; SELL LOT_SIZE preflight; `RUN_ACTION_EXCEPTION` → resilience log |
 | `health_watch.py` | `evaluate_bot_health`, `emit_resilience_continue`, `emit_loop_auto_restart`; worker ~60s emit |
-| `bot_session.py` | `bot_run_started_at` oturum saati; connectivity START sıfırlamaz; event heal |
+| `bot_session.py` | `bot_run_started_at` oturum saati; `resolve_bot_session_start_event_id`; connectivity START sıfırlamaz; event heal |
 | `orchestrator.py` | Tick hatalarında running kalır; emilen TRDCA/tick → INFO worker log; döngü crash → auto-restart; `ensure_running_bots` |
 | `engine_log_ack.py` | Reset/ack sonrası motor log event filtreleme |
 | `order_qty.py` | Decimal `stepSize` floor + `validate_market_sell_qty` |
 | `health_watch.py` | Sağlık uyarıları (otomatik durdurmaz) |
+| `dynamic/` | Dinamik mod: features → regime → strategy → risk → snapshot (`cycle_manager`); `safety_gate` prereq + emergency; bkz. `docs/DYNAMIC_MODE_TECHNICAL.md` |
 | `intent_ledger.py` | Exactly-once intent |
 | `locks.py` | Hesap kilidi, lease 10s |
 | `reconcile.py` | Binance truth |

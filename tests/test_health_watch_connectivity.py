@@ -126,3 +126,26 @@ def test_connectivity_state_error_emits_without_recent_error_log():
     assert emitted == 1
     append_event.assert_called_once()
     save_state.assert_called_once()
+
+
+def test_auto_resume_paused_bot_when_error_code_cleared():
+    """paused_error + boş last_error_code: Binance OK iken devam etmeli."""
+    from unittest.mock import MagicMock
+
+    from app.services.binance_connectivity import try_auto_resume_paused_bots
+
+    bot = SimpleNamespace(
+        id=13, account_id=3, status="paused_error", symbol="SOLUSDT", started_at=None
+    )
+    db = MagicMock()
+    db.query.return_value.filter.return_value.all.return_value = [bot]
+    with (
+        patch("app.botengine.state_store.load_state", return_value={"cycle_id": 1}),
+        patch("app.botengine.state_store.save_state"),
+        patch("app.services.binance_connectivity._recent_connectivity_recovered", return_value=False),
+        patch("app.services.binance_connectivity.mark_pending_connectivity_stable"),
+        patch("app.services.binance_connectivity._queue_connectivity_resume_start"),
+    ):
+        n = try_auto_resume_paused_bots(db, 3)
+    assert n == 1
+    assert bot.status == "running"

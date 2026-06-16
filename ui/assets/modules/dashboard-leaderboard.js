@@ -208,7 +208,10 @@ function scheduleLeaderboardSyncFromBots() {
         var filtered = filterLeaderboardItemsForDisplay(State.leaderboardItems);
         if (filtered.length < State.leaderboardItems.length && typeof loadGlobalLeaderboard === 'function') {
             loadGlobalLeaderboard(false);
+            return;
         }
+        State.leaderboardItems = enrichLeaderboardItemsDynamicMode(State.leaderboardItems);
+        patchGlobalLeaderboardMetrics(State.leaderboardItems);
     }, 350);
 }
 
@@ -306,6 +309,254 @@ function closeParametrelerModal() {
     var modal = document.getElementById('parametrelerModal');
     if (modal) modal.style.display = 'none';
     document.body.style.overflow = '';
+    _leaderboardParamActiveTab = 'genel';
+}
+
+var _leaderboardParamGenelHtml = '';
+var _leaderboardParamDynHtml = '';
+var _leaderboardParamActiveTab = 'genel';
+
+function getLeaderboardItemBotConfig(bot) {
+    var cfg = (bot && bot.config) ? bot.config : {};
+    if ((!cfg || !Object.keys(cfg).length) && bot && bot.config_json) {
+        try {
+            cfg = typeof bot.config_json === 'string' ? JSON.parse(bot.config_json) : (bot.config_json || {});
+        } catch (e) {
+            cfg = {};
+        }
+    }
+    return cfg || {};
+}
+
+function findLocalBotForLeaderboardItem(item) {
+    if (!item || !State.bots || !State.bots.length) return null;
+    var sym = String(item.symbol || (item.params && item.params.symbol) || '').toUpperCase().replace(/\s/g, '');
+    if (!sym) return null;
+    var itemPct = item.profit_pct != null ? Number(item.profit_pct) : null;
+    var matches = [];
+    for (var i = 0; i < State.bots.length; i++) {
+        var b = State.bots[i];
+        if (String(b.symbol || '').toUpperCase().replace(/\s/g, '') !== sym) continue;
+        if (String(b.status || '').toLowerCase() !== 'running') continue;
+        matches.push({ bot: b, cfg: getLeaderboardItemBotConfig(b) });
+    }
+    if (!matches.length) return null;
+    if (matches.length === 1) return matches[0];
+    if (itemPct != null && Number.isFinite(itemPct) && typeof resolveBotHeroKz === 'function') {
+        for (var j = 0; j < matches.length; j++) {
+            var kz = resolveBotHeroKz(matches[j].bot);
+            if (kz && kz.pct != null && Number.isFinite(Number(kz.pct)) && Math.abs(Number(kz.pct) - itemPct) < 0.2) {
+                return matches[j];
+            }
+        }
+    }
+    return matches[0];
+}
+
+/** API dynamic_mode + hesaptaki eşleşen bot (Mevcut Botlar ile aynı mantık). */
+function resolveLeaderboardItemDynamicMode(item) {
+    var dyn = (item && item.dynamic_mode) ? Object.assign({}, item.dynamic_mode) : {};
+    if (window.DynModeParamsView && window.DynModeParamsView.isLeaderboardDynamicBadgeVisible(dyn)) {
+        var localEarly = findLocalBotForLeaderboardItem(item);
+        if (localEarly && localEarly.bot && localEarly.bot.dynamic_mode && localEarly.bot.dynamic_mode.snapshot) {
+            return Object.assign({}, localEarly.bot.dynamic_mode, dyn, {
+                enabled: true,
+                active: dyn.active !== false
+            });
+        }
+        return dyn;
+    }
+    var local = findLocalBotForLeaderboardItem(item);
+    if (!local) return dyn;
+    var b = local.bot;
+    var cfg = local.cfg;
+    if (window.DynModeParamsView && window.DynModeParamsView.isDynamicModeActiveForList(b.dynamic_mode || {}, cfg, b.status)) {
+        return Object.assign({}, b.dynamic_mode || {}, dyn, { enabled: true, active: dyn.active !== false });
+    }
+    if (cfg.dynamic_mode) {
+        return Object.assign({}, dyn, { enabled: true, active: true });
+    }
+    return dyn;
+}
+
+function enrichLeaderboardItemsDynamicMode(items) {
+    if (!Array.isArray(items)) return items;
+    return items.map(function (item) {
+        var resolved = resolveLeaderboardItemDynamicMode(item);
+        if (!window.DynModeParamsView || !window.DynModeParamsView.isLeaderboardDynamicBadgeVisible(resolved)) {
+            return item;
+        }
+        return Object.assign({}, item, { dynamic_mode: resolved });
+    });
+}
+
+function patchLeaderboardRowDynamicUi(row, item) {
+    if (!row || !item || !window.DynModeParamsView) return;
+    var dyn = resolveLeaderboardItemDynamicMode(item);
+    var params = stripLeaderboardBudgetFromParams(normalizeLeaderboardParamsToFormConfig(item.params || {}));
+    var dynVisible = window.DynModeParamsView.isLeaderboardDynamicBadgeVisible(dyn);
+    var dynTip = window.DynModeParamsView.dynamicModeLogoTipShort(dyn, params);
+    var symWrap = row.querySelector('.global-leaderboard-symbol-wrap');
+    if (symWrap) {
+        var logoWrap = symWrap.querySelector('.dyn-mode-logo-wrap');
+        var logoEl = symWrap.querySelector('.global-leaderboard-symbol-logo, .global-leaderboard-symbol-initials');
+        if (dynVisible) {
+            if (logoWrap) {
+                logoWrap.setAttribute('data-dyn-tip', window.DynModeParamsView.attrEsc(dynTip));
+            } else if (logoEl) {
+                logoEl.outerHTML = window.DynModeParamsView.wrapLogoForDynamicMode(logoEl.outerHTML, true, dynTip);
+            }
+        } else if (logoWrap) {
+            logoWrap.outerHTML = logoWrap.innerHTML;
+        }
+    }
+    symWrap = row.querySelector('.global-leaderboard-symbol-wrap');
+    if (symWrap) {
+        var strayBadge = symWrap.querySelector('.dyn-mode-list-badge');
+        if (strayBadge) strayBadge.remove();
+    }
+    var metaLeft = row.querySelector('.global-leaderboard-item-meta-left');
+    var metaEl = row.querySelector('.global-leaderboard-item-meta');
+    if (metaEl) {
+        metaEl.querySelectorAll('.dyn-mode-list-badge').forEach(function (b) {
+            if (!metaLeft || !metaLeft.contains(b)) b.remove();
+        });
+    }
+    var badge = metaLeft ? metaLeft.querySelector('.dyn-mode-list-badge') : null;
+    if (dynVisible) {
+        var badgeHtml = window.DynModeParamsView.renderDynamicBadgeHtml(
+            window.DynModeParamsView.dynamicModeHoverTitle(dyn, params)
+        );
+        if (badge) {
+            if (badge.outerHTML !== badgeHtml) badge.outerHTML = badgeHtml;
+        } else if (metaLeft) {
+            var cyclesEl = metaLeft.querySelector('.global-leaderboard-item-cycles');
+            if (cyclesEl) cyclesEl.insertAdjacentHTML('afterend', badgeHtml);
+            else metaLeft.insertAdjacentHTML('beforeend', badgeHtml);
+        }
+    } else if (badge) {
+        badge.remove();
+    }
+    row.setAttribute('data-dyn-visible', dynVisible ? '1' : '0');
+}
+
+function leaderboardItemDynamicVisible(item) {
+    if (!item || !window.DynModeParamsView) return false;
+    return window.DynModeParamsView.isLeaderboardDynamicBadgeVisible(resolveLeaderboardItemDynamicMode(item));
+}
+
+function bindLeaderboardParamTabHandlers() {
+    var host = document.getElementById('paramTabsHost');
+    if (!host || host.dataset.bound === '1') return;
+    host.dataset.bound = '1';
+    host.addEventListener('click', function (e) {
+        var btn = e.target.closest('[data-param-tab]');
+        if (!btn || !host.contains(btn)) return;
+        var tab = btn.getAttribute('data-param-tab') || 'genel';
+        if (tab === _leaderboardParamActiveTab) return;
+        _leaderboardParamActiveTab = tab;
+        refreshLeaderboardParamModalView();
+    });
+}
+
+function refreshLeaderboardParamModalView() {
+    var host = document.getElementById('paramTabsHost');
+    var bodyEl = document.getElementById('configGrid');
+    var showDyn = _leaderboardParamDynHtml && window.DynModeParamsView;
+    if (host) {
+        host.innerHTML = showDyn
+            ? window.DynModeParamsView.renderParamModalTabsHtml(_leaderboardParamActiveTab)
+            : '';
+    }
+    if (!bodyEl) return;
+    if (_leaderboardParamActiveTab === 'dinamik' && showDyn) {
+        bodyEl.innerHTML = _leaderboardParamDynHtml;
+    } else {
+        _leaderboardParamActiveTab = 'genel';
+        bodyEl.innerHTML = _leaderboardParamGenelHtml || '<p class="param-hint">Parametre yok.</p>';
+    }
+}
+
+function closeLeaderboardApplyModal() {
+    var modal = document.getElementById('leaderboardApplyModal');
+    if (modal) modal.style.display = 'none';
+    document.body.style.overflow = '';
+    _leaderboardApplyCallback = null;
+}
+
+var _leaderboardApplyCallback = null;
+
+function initLeaderboardApplyModalHandlers() {
+    if (initLeaderboardApplyModalHandlers._done) return;
+    initLeaderboardApplyModalHandlers._done = true;
+    var modal = document.getElementById('leaderboardApplyModal');
+    var closeBtn = document.getElementById('leaderboardApplyModalClose');
+    var cancelBtn = document.getElementById('leaderboardApplyCancelBtn');
+    var tplBtn = document.getElementById('leaderboardApplyTemplateBtn');
+    var dynBtn = document.getElementById('leaderboardApplyDynamicBtn');
+    if (closeBtn) closeBtn.onclick = closeLeaderboardApplyModal;
+    if (cancelBtn) cancelBtn.onclick = closeLeaderboardApplyModal;
+    if (modal) {
+        modal.onclick = function (e) {
+            if (e.target === modal) closeLeaderboardApplyModal();
+        };
+    }
+    if (tplBtn) {
+        tplBtn.onclick = function () {
+            var cb = _leaderboardApplyCallback;
+            closeLeaderboardApplyModal();
+            if (cb) cb({ useDynamicApplied: false, enableDynamicMode: false });
+        };
+    }
+    if (dynBtn) {
+        dynBtn.onclick = function () {
+            if (dynBtn.disabled) return;
+            var cb = _leaderboardApplyCallback;
+            closeLeaderboardApplyModal();
+            if (cb) cb({ useDynamicApplied: true, enableDynamicMode: true });
+        };
+    }
+}
+
+function confirmLeaderboardApplyMode(itemIndex, onChoose) {
+    initLeaderboardApplyModalHandlers();
+    var idx = itemIndex != null && itemIndex !== '' ? parseInt(itemIndex, 10) : NaN;
+    var item = Number.isFinite(idx) && State.leaderboardItems ? State.leaderboardItems[idx] : null;
+    var dyn = item ? resolveLeaderboardItemDynamicMode(item) : null;
+    if (!leaderboardItemDynamicVisible(item)) {
+        if (typeof onChoose === 'function') onChoose({ useDynamicApplied: false, enableDynamicMode: false });
+        return;
+    }
+    var hasApplied = !!(dyn && dyn.snapshot && dyn.snapshot.applied);
+    var modal = document.getElementById('leaderboardApplyModal');
+    var textEl = document.getElementById('leaderboardApplyModalText');
+    var tplBtn = document.getElementById('leaderboardApplyTemplateBtn');
+    var dynBtn = document.getElementById('leaderboardApplyDynamicBtn');
+    var symLabel = item && item.symbol ? String(item.symbol) : 'Bu bot';
+    if (textEl) {
+        textEl.textContent = symLabel + ' dinamik modda. Başlangıç değerlerini mi referans almak istiyorsunuz, yoksa son güncel dinamik değerleri mi? Seçiminiz bot oluşturma formuna aktarılır.';
+    }
+    if (tplBtn) {
+        tplBtn.textContent = 'Başlangıç değerleri';
+        tplBtn.disabled = false;
+    }
+    if (dynBtn) {
+        dynBtn.textContent = 'Son güncel dinamik değerler';
+        dynBtn.disabled = !hasApplied;
+        dynBtn.title = hasApplied ? '' : 'Bu bot için henüz dinamik tur snapshot\'ı yok';
+    }
+    _leaderboardApplyCallback = function (opts) {
+        if (typeof onChoose === 'function') {
+            onChoose({
+                useDynamicApplied: !!(opts && opts.useDynamicApplied && hasApplied),
+                enableDynamicMode: !!(opts && opts.enableDynamicMode)
+            });
+        }
+    };
+    if (modal) {
+        modal.style.display = 'flex';
+        document.body.style.overflow = 'hidden';
+    }
 }
 
 function initParametrelerModalHandlers() {
@@ -323,12 +574,16 @@ function initParametrelerModalHandlers() {
     }
 }
 
-async function openLeaderboardParamsModal(rank, structureName, params, createdAtIso, referencePrice, itemIndex) {
+async function openLeaderboardParamsModal(rank, structureName, params, createdAtIso, referencePrice, itemIndex, opts) {
     initParametrelerModalHandlers();
+    bindLeaderboardParamTabHandlers();
+    opts = opts || {};
     var modal = document.getElementById('parametrelerModal');
     var bodyEl = document.getElementById('configGrid');
     if (!modal || !bodyEl) return;
     bodyEl.innerHTML = '<p class="param-hint">Yükleniyor…</p>';
+    var tabsHost = document.getElementById('paramTabsHost');
+    if (tabsHost) tabsHost.innerHTML = '';
     modal.style.display = 'flex';
     document.body.style.overflow = 'hidden';
 
@@ -344,7 +599,19 @@ async function openLeaderboardParamsModal(rank, structureName, params, createdAt
         ref = Number(resolved.reference_price);
     }
 
-    bodyEl.innerHTML = renderBotParamsConfig(resolved, symbol, ref, true);
+    _leaderboardParamGenelHtml = renderBotParamsConfig(resolved, symbol, ref, true);
+    _leaderboardParamDynHtml = '';
+    if (window.DynModeParamsView && item && leaderboardItemDynamicVisible(item)) {
+        _leaderboardParamDynHtml = window.DynModeParamsView.renderBotDetailDynamicTab(
+            resolveLeaderboardItemDynamicMode(item),
+            {},
+            symbol,
+            resolved,
+            { showBalances: false }
+        );
+    }
+    _leaderboardParamActiveTab = 'genel';
+    refreshLeaderboardParamModalView();
 }
 
 window.openLeaderboardParamsModal = openLeaderboardParamsModal;
@@ -370,6 +637,17 @@ function buildGlobalLeaderboardItemHtml(item, index) {
     var symbolRaw = item.symbol || params.symbol || '';
     var symbolStr = (typeof symbolRaw === 'string' ? symbolRaw : '').trim() || '—';
     var symbolLogoHtml = buildLeaderboardSymbolLogoHtml(symbolStr);
+    var dyn = resolveLeaderboardItemDynamicMode(item);
+    var dynVisible = window.DynModeParamsView && window.DynModeParamsView.isLeaderboardDynamicBadgeVisible(dyn);
+    var dynTip = window.DynModeParamsView ? window.DynModeParamsView.dynamicModeLogoTipShort(dyn, params) : 'Dinamik mod aktif';
+    if (window.DynModeParamsView && dynVisible) {
+        symbolLogoHtml = window.DynModeParamsView.wrapLogoForDynamicMode(symbolLogoHtml, true, dynTip);
+    }
+    var dynBadgeHtml = (window.DynModeParamsView && dynVisible)
+        ? window.DynModeParamsView.renderDynamicBadgeHtml(
+            window.DynModeParamsView.dynamicModeHoverTitle(dyn, params)
+        )
+        : '';
     var runningSinceNorm = normalizeRunningSinceIso(item.running_since_iso || '');
     var runningStr = formatLeaderboardRunningDuration(runningSinceNorm);
     var paramsJsonAttr = JSON.stringify(params).replace(/"/g, '&quot;');
@@ -388,9 +666,12 @@ function buildGlobalLeaderboardItemHtml(item, index) {
         '<span class="global-leaderboard-pct" style="color:' + pnlMeta.color + '">' + pnlMeta.text + '</span>' +
         '</div>' +
         '<div class="global-leaderboard-item-meta">' +
+        '<div class="global-leaderboard-item-meta-left">' +
         '<span class="global-leaderboard-item-duration">Çalışma süresi: ' + runningStr + '</span>' +
         '<span class="global-leaderboard-item-sep" aria-hidden="true">·</span>' +
         '<span class="global-leaderboard-item-cycles">' + cyclesLabel + '</span>' +
+        dynBadgeHtml +
+        '</div>' +
         '</div>' +
         '</div>' +
         '<div class="global-leaderboard-item-actions">' + viewParamsBtnHtml + applyBtnHtml + '</div>' +
@@ -419,13 +700,26 @@ function bindGlobalLeaderboardItemActions(listEl) {
             e.preventDefault();
             var sid = applyBtn.getAttribute('data-structure-id');
             var paramsJson = applyBtn.getAttribute('data-params');
-            if (!sid || !paramsJson) return;
-            var params = parseLeaderboardParamsFromAttr(paramsJson);
-            if (!params) return;
-            var structure = typeof BOT_STRUCTURES !== 'undefined' ? BOT_STRUCTURES.find(function (s) { return s.id === sid; }) : null;
+            if (!sid) return;
             var itemRow = applyBtn.closest('.global-leaderboard-item');
             var itemIdx = itemRow ? itemRow.getAttribute('data-item-index') : null;
-            if (structure && typeof applyLeaderboardParams === 'function') applyLeaderboardParams(structure, params, itemIdx);
+            var params = null;
+            if (itemIdx != null && itemIdx !== '' && State.leaderboardItems) {
+                var lbIdx = parseInt(itemIdx, 10);
+                if (Number.isFinite(lbIdx) && State.leaderboardItems[lbIdx]) {
+                    params = stripLeaderboardBudgetFromParams(
+                        normalizeLeaderboardParamsToFormConfig(State.leaderboardItems[lbIdx].params || {})
+                    );
+                }
+            }
+            if (!params && paramsJson) params = parseLeaderboardParamsFromAttr(paramsJson);
+            if (!params) return;
+            var structure = typeof BOT_STRUCTURES !== 'undefined' ? BOT_STRUCTURES.find(function (s) { return s.id === sid; }) : null;
+            if (structure && typeof applyLeaderboardParams === 'function') {
+                confirmLeaderboardApplyMode(itemIdx, function (applyOpts) {
+                    applyLeaderboardParams(structure, params, itemIdx, applyOpts);
+                });
+            }
             return;
         }
         var viewBtn = e.target.closest('.global-leaderboard-view-params-btn');
@@ -436,11 +730,19 @@ function bindGlobalLeaderboardItemActions(listEl) {
         var rank = viewBtn.getAttribute('data-rank') || '';
         var refRaw = viewBtn.getAttribute('data-reference-price');
         var refPrice = refRaw !== '' && refRaw != null ? Number(refRaw) : null;
-        if (!paramsJson) return;
-        var params = parseLeaderboardParamsFromAttr(paramsJson);
-        if (!params) return;
         var itemRow = viewBtn.closest('.global-leaderboard-item');
         var itemIdx = itemRow ? itemRow.getAttribute('data-item-index') : null;
+        var params = null;
+        if (itemIdx != null && itemIdx !== '' && State.leaderboardItems) {
+            var viewIdx = parseInt(itemIdx, 10);
+            if (Number.isFinite(viewIdx) && State.leaderboardItems[viewIdx]) {
+                params = stripLeaderboardBudgetFromParams(
+                    normalizeLeaderboardParamsToFormConfig(State.leaderboardItems[viewIdx].params || {})
+                );
+            }
+        }
+        if (!params && paramsJson) params = parseLeaderboardParamsFromAttr(paramsJson);
+        if (!params) return;
         params = resolveLeaderboardItemParams(params, itemIdx);
         var lbItem = (itemIdx != null && itemIdx !== '' && State.leaderboardItems)
             ? State.leaderboardItems[parseInt(itemIdx, 10)]
@@ -448,7 +750,7 @@ function bindGlobalLeaderboardItemActions(listEl) {
         if (refPrice == null && lbItem && lbItem.reference_price != null) refPrice = Number(lbItem.reference_price);
         if (refPrice == null && params.reference_price != null) refPrice = Number(params.reference_price);
         if (typeof openLeaderboardParamsModal === 'function') {
-            openLeaderboardParamsModal(rank, structureName, params, null, refPrice, itemIdx);
+            openLeaderboardParamsModal(rank, structureName, params, null, refPrice, itemIdx, {});
         }
     });
 }
@@ -505,6 +807,7 @@ function patchGlobalLeaderboardMetrics(items) {
         row.querySelectorAll('.global-leaderboard-apply-btn, .global-leaderboard-view-params-btn').forEach(function (btn) {
             btn.setAttribute('data-params', paramsJson);
         });
+        patchLeaderboardRowDynamicUi(row, item);
     });
     });
 }
@@ -547,6 +850,7 @@ async function loadGlobalLeaderboard(patchOnly) {
             : (res && res.data && Array.isArray(res.data.items)) ? res.data.items
             : [];
         items = filterLeaderboardItemsForDisplay(items);
+        items = enrichLeaderboardItemsDynamicMode(items);
         if (!items.length) {
             setGlobalLeaderboardEmpty(
                 State.leaderboardLastState === 'loading' ? LEADERBOARD_NO_PROFIT_HTML : LEADERBOARD_EMPTY_HTML,
@@ -600,3 +904,5 @@ async function loadGlobalLeaderboard(patchOnly) {
     }
 }
 window.loadGlobalLeaderboard = loadGlobalLeaderboard;
+initLeaderboardApplyModalHandlers();
+window.resolveLeaderboardItemDynamicMode = resolveLeaderboardItemDynamicMode;

@@ -247,6 +247,78 @@ def _heal_cycle_grid_side(state: Dict[str, Any]) -> None:
     )
 
 
+def _heal_stale_cycle_close_flags(state: Dict[str, Any]) -> None:
+    """
+    Kar satışı/kar alımı emri verildi ama fill gelmeden kopma olursa
+    _profit_exit_done / _cycle_complete takılı kalabilir; grid alış varken kar satışı devre dışı kalır.
+    """
+    if not state.get("initial_allocation_done"):
+        return
+    mode = state.get("mode") or BotEngineMode.IDLE.value
+    if mode in (
+        BotEngineMode.TRAIL_PROFIT_SELL.value,
+        BotEngineMode.TRAIL_REENTRY_BUY.value,
+    ):
+        return
+
+    profit_done = bool(state.get("_profit_exit_done"))
+    reentry_done = bool(state.get("_reentry_done"))
+    cycle_complete = bool(state.get("_cycle_complete"))
+    if not (profit_done or reentry_done or cycle_complete):
+        return
+
+    ledger = state.get("cycle_ledger_current") or {}
+    sell_qty_ledger = _f(ledger.get("sell_qty_total")) or 0.0
+    buy_qty_ledger = _f(ledger.get("buy_qty_total")) or 0.0
+    cycle_side = state.get("cycle_grid_side")
+    stale = False
+    reason = ""
+
+    def _non_grid_sell() -> bool:
+        return any(
+            isinstance(x, dict) and x.get("grid_index") is None
+            for x in (state.get("sell_history") or [])
+        )
+
+    def _non_grid_buy() -> bool:
+        return any(
+            isinstance(x, dict) and x.get("grid_index") is None
+            for x in (state.get("buy_history") or [])
+        )
+
+    if cycle_side == "BUY" and (profit_done or cycle_complete):
+        has_basis = bool(state.get("buy_history")) or buy_qty_ledger > 0
+        if has_basis and sell_qty_ledger <= 0 and not _non_grid_sell():
+            stale = True
+            reason = "profit_exit_pending_no_sell_fill"
+    elif cycle_side == "SELL" and (reentry_done or cycle_complete):
+        has_basis = bool(state.get("sell_history")) or sell_qty_ledger > 0
+        if has_basis and buy_qty_ledger <= 0 and not _non_grid_buy():
+            stale = True
+            reason = "reentry_pending_no_buy_fill"
+    elif cycle_complete and not profit_done and not reentry_done:
+        stale = True
+        reason = "orphan_cycle_complete"
+
+    if not stale:
+        return
+
+    state.pop("_profit_exit_done", None)
+    state.pop("_reentry_done", None)
+    state.pop("_cycle_complete", None)
+    state.pop("_profit_exit_breakeven", None)
+    state.pop("_profit_exit_trigger_price", None)
+    state.pop("_reentry_avg_sell", None)
+    state.pop("_reentry_max_buy_price", None)
+    logger.info(
+        "BOT_CYCLE_CLOSE_FLAGS_HEALED bot_id=%s cycle_id=%s reason=%s side=%s",
+        state.get("bot_id"),
+        state.get("cycle_id"),
+        reason,
+        cycle_side,
+    )
+
+
 def _try_trigger_sell_grid(
     state: Dict[str, Any],
     idx: int,
@@ -374,6 +446,7 @@ def tick_dca_grid_trailing(
     """
     _ensure_sell_buy_lists(state, config)
     _heal_cycle_grid_side(state)
+    _heal_stale_cycle_close_flags(state)
     P = _f(price)
     if P is None or P <= 0:
         logger.warning(
@@ -1473,6 +1546,9 @@ def cycle_reset_after_fill(
     state.pop("_profit_exit_done", None)
     state.pop("_cycle_complete", None)
     state.pop("cycle_grid_side", None)
+    # Dynamic Mode: yeni cycle başladı, orchestrator bir sonraki tick'te
+    # snapshot'ı yeniden hesaplasın. Manuel modda bayrak görmezden gelinir.
+    state["_dynamic_recompute_needed"] = True
     if symbol:
         from datetime import datetime, timezone
         from app.botengine.cycle_ledger import build_cycle_ledger_empty

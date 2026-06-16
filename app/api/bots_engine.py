@@ -155,6 +155,7 @@ from app.services.price_hub import price_hub
 from app.services.perf_chart_state import (
     seed_perf_chart_state_on_bot_start,
     compute_trdca_parite_pct,
+    build_bot_alpha_performance,
 )
 
 router = APIRouter()
@@ -1716,8 +1717,10 @@ def _merge_anchor_events(
     return merged
 
 
-def _fetch_lifecycle_anchor_events(db: Session, bot_id: int) -> List[Dict[str, Any]]:
-    """Bot başlangıç satırları — son N limit penceresinin dışında kalsa da tabloda kalsın."""
+def _fetch_lifecycle_anchor_events(
+    db: Session, bot_id: int, session_start_id: int = 0
+) -> List[Dict[str, Any]]:
+    """Bot başlangıç + tur satırları — limit penceresinin dışında kalsa da tabloda kalsın."""
     anchors: List[Dict[str, Any]] = []
     seen: set = set()
 
@@ -1730,7 +1733,49 @@ def _fetch_lifecycle_anchor_events(db: Session, bot_id: int) -> List[Dict[str, A
         seen.add(key)
         anchors.append(ev)
 
+    sid = int(session_start_id or 0)
     try:
+        if sid > 0:
+            start_rows = db.execute(
+                text("""
+                    SELECT id, ts, event_type, message, meta_json FROM bot_engine_events
+                    WHERE bot_id = :bid AND id = :sid
+                    LIMIT 1
+                """),
+                {"bid": bot_id, "sid": sid},
+            ).fetchall()
+            for row in start_rows:
+                _add(_row_to_engine_event(row), "bot_start")
+            fill_row = db.execute(
+                text("""
+                    SELECT id, ts, event_type, message, meta_json FROM bot_engine_events
+                    WHERE bot_id = :bid AND id >= :sid AND event_type = 'ORDER_FILLED'
+                      AND (message LIKE '%initial_allocation%' OR meta_json LIKE '%initial_allocation%')
+                    ORDER BY id ASC LIMIT 1
+                """),
+                {"bid": bot_id, "sid": sid},
+            ).fetchone()
+            if fill_row:
+                _add(_row_to_engine_event(fill_row), "initial_fill")
+            cycle_rows = db.execute(
+                text("""
+                    SELECT id, ts, event_type, message, meta_json FROM bot_engine_events
+                    WHERE bot_id = :bid AND id >= :sid
+                      AND event_type IN ('CYCLE_START', 'CYCLE_END')
+                    ORDER BY id ASC LIMIT 240
+                """),
+                {"bid": bot_id, "sid": sid},
+            ).fetchall()
+            for row in cycle_rows:
+                ev = _row_to_engine_event(row)
+                try:
+                    cid = int((ev.get("meta") or {}).get("cycle_id") or 0)
+                except (TypeError, ValueError):
+                    cid = 0
+                if cid >= 1:
+                    _add(ev, f"{ev.get('type') or 'EV'}:{cid}")
+            return anchors
+
         start_rows = db.execute(
             text("""
                 SELECT id, ts, event_type, message, meta_json FROM bot_engine_events
@@ -1988,6 +2033,27 @@ async def bots_create(
                     "INVALID_CONFIG_JSON", "config_json geçerli JSON olmalı", rid
                 ),
             )
+    # Dynamic Mode prerequisite gate (parity with update-config and the
+    # documented contract). Backend default-injection in config_from_ui_payload
+    # normally satisfies this, so it only fires for genuinely invalid configs.
+    try:
+        _probe = config_from_ui_payload(raw)
+    except MaxBuyLevelsError:
+        _probe = None  # surfaced consistently by create_bot_engine_core below
+    if _probe is not None and bool(getattr(_probe, "dynamic_mode", False)):
+        from app.botengine.dynamic import safety_gate as _dyn_gate
+
+        _g = _dyn_gate.check_prerequisites(_probe.to_dict())
+        if not _g.ok:
+            raise HTTPException(
+                status_code=400,
+                detail=_detail_err(
+                    "DYNAMIC_MODE_PREREQS_MISSING",
+                    "Dynamic Mode açılabilmesi için zorunlu koruma katmanları eksik: "
+                    + "; ".join(_g.violations),
+                    rid,
+                ),
+            )
     try:
         result = create_bot_engine_core(body.account_id, raw, db)
     except MaxBuyLevelsError as e:
@@ -2017,6 +2083,49 @@ def _config_for_grid_view(raw: Dict[str, Any]) -> Dict[str, Any]:
         return cfg.to_dict()
     except Exception:
         return raw
+
+
+# Fields the dynamic snapshot may override for grid-view display purposes.
+_DYN_GRID_OVERLAY_FIELDS = (
+    "base_alloc_pct",
+    "quote_alloc_pct",
+    "sell_grids",
+    "buy_grids",
+    "sell_trigger_trailing_pct",
+    "buy_trigger_trailing_pct",
+    "profit_exit_rise_pct",
+    "profit_exit_drop_pct",
+    "profit_reentry_drop_pct",
+    "profit_reentry_rise_pct",
+)
+
+
+def _effective_grid_config(
+    raw: Dict[str, Any], state: Optional[Dict[str, Any]]
+) -> Dict[str, Any]:
+    """
+    Config dict for grid_view. When Dynamic Mode is active and a snapshot exists,
+    overlay the snapshot's APPLIED values so the UI shows the SAME numbers the bot
+    actually ran on this cycle (grid %s, trailing, profit triggers). Otherwise
+    returns the manual config unchanged (manual mode behaviour is byte-identical).
+    """
+    cfg = _config_for_grid_view(raw)
+    try:
+        if not (raw or {}).get("dynamic_mode"):
+            return cfg
+        snap = (state or {}).get("dynamic_snapshot") or {}
+        applied = snap.get("applied") or {}
+        if not applied:
+            return cfg
+        merged = dict(cfg)
+        for k in _DYN_GRID_OVERLAY_FIELDS:
+            if applied.get(k) is not None:
+                merged[k] = applied[k]
+        merged["_dynamic_applied"] = True
+        merged["_dynamic_regime"] = snap.get("regime")
+        return merged
+    except Exception:
+        return cfg
 
 
 @router.get("/{bot_id}")
@@ -2097,7 +2206,7 @@ async def bots_detail(
     else:
         daily_pnl_pct = float(daily_pnl_pct)
 
-    config_for_grid = _config_for_grid_view(raw)
+    config_for_grid = _effective_grid_config(raw, state)
     grid_points: List[Dict[str, Any]] = []
     profit_points: List[Dict[str, Any]] = []
     reference_display: Optional[float] = None
@@ -2633,6 +2742,41 @@ async def bots_detail(
                 result["state"] = {**result["state"], "last_tick_at": lt_norm}
         except Exception as e:
             logger.debug("bots_detail live_snap merge failed bot_id=%s: %s", bot.id, e)
+
+    # ---- Dynamic Mode snapshot (only present if dynamic_mode active) ----
+    try:
+        from app.botengine.dynamic import safety_gate as _dyn_gate
+
+        _gate_chk = _dyn_gate.check_prerequisites(raw or {})
+        _dyn_snap = (state or {}).get("dynamic_snapshot")
+        result["dynamic_mode"] = {
+            "enabled": bool((raw or {}).get("dynamic_mode")),
+            "active": _dyn_gate.is_dynamic_mode_active(raw or {}),
+            "safety_gate": {
+                "ok": _gate_chk.ok,
+                "violations": _gate_chk.violations,
+                "injected_defaults": _gate_chk.injected_defaults,
+            },
+            "snapshot": _dyn_snap if isinstance(_dyn_snap, dict) else None,
+            "emergency": (state or {}).get("_dyn_emergency"),
+        }
+    except Exception as e:
+        logger.debug("bots_detail dynamic_mode block failed bot_id=%s: %s", bot.id, e)
+
+    try:
+        alpha_perf = build_bot_alpha_performance(
+            db,
+            bot,
+            state,
+            current_usd=current_usd,
+            current_price=live_price if live_price > 0 else None,
+            pnl_data=pnl_data,
+        )
+        if alpha_perf:
+            result["bot_alpha_performance"] = alpha_perf
+            result["real_performance_pct"] = alpha_perf.get("alpha_pct")
+    except Exception as e:
+        logger.debug("bots_detail alpha_perf failed bot_id=%s: %s", bot.id, e)
 
     return result
 
@@ -3595,7 +3739,7 @@ async def bots_grid_points(
 
     live_price = _resolve_bot_live_price(sym, state)
 
-    config_for_grid = _config_for_grid_view(raw)
+    config_for_grid = _effective_grid_config(raw, state)
     grid_points: List[Dict[str, Any]] = []
     profit_points: List[Dict[str, Any]] = []
     meta: Dict[str, Any] = {}
@@ -4131,17 +4275,38 @@ def append_perf_chart_sample(db: Session, bot_id: int) -> None:
             or raw.get("bot_budget_quote")
             or 0
         )
-        bot_pct = (
-            (current_usd - initial_capital) / initial_capital * 100.0
-            if initial_capital > 0
-            else None
-        )
-
         payload = _load_perf_chart_payload(db, bot_id)
         baseline = payload.get("baseline") or {}
 
+        live_price = float(pnl_data.get("current_price") or 0)
+        if live_price <= 0:
+            try:
+                hub_p = price_hub.get_price(bot.symbol or "")
+                if hub_p is not None and float(hub_p) > 0:
+                    live_price = float(hub_p)
+            except Exception:
+                pass
+        if live_price <= 0:
+            live_price = float((state or {}).get("reference_price") or 0)
+
+        alpha_sample = build_bot_alpha_performance(
+            db,
+            bot,
+            state,
+            current_usd=current_usd,
+            current_price=live_price if live_price > 0 else None,
+            chart_payload=payload,
+            pnl_data=pnl_data,
+        )
+        bot_pct = None
         parite_pct = None
-        if is_trdca:
+        if alpha_sample:
+            bot_pct = alpha_sample.get("balance_pct")
+            parite_pct = alpha_sample.get("coin_pct")
+        elif initial_capital > 0:
+            bot_pct = (current_usd - initial_capital) / initial_capital * 100.0
+
+        if parite_pct is None and is_trdca:
             initial_prices = baseline.get("initial_prices")
             coin_weights = baseline.get("coin_weights")
             if not initial_prices or not coin_weights:
@@ -4179,16 +4344,8 @@ def append_perf_chart_sample(db: Session, bot_id: int) -> None:
                 parite_pct = compute_trdca_parite_pct(
                     initial_prices, coin_weights, current_prices, quote_asset
                 )
-        else:
-            live_price = float(pnl_data.get("current_price") or 0)
-            if live_price <= 0:
-                try:
-                    hub_p = price_hub.get_price(bot.symbol or "")
-                    if hub_p is not None and float(hub_p) > 0:
-                        live_price = float(hub_p)
-                except Exception:
-                    pass
-            config_for_grid = _config_for_grid_view(raw)
+        elif parite_pct is None:
+            config_for_grid = _effective_grid_config(raw, state)
             reference_display = None
             try:
                 view_price = (
@@ -4234,7 +4391,17 @@ def append_perf_chart_sample(db: Session, bot_id: int) -> None:
             started_ts = int(started_dt.timestamp())
             samples[:] = [s for s in samples if (s.get("ts") or 0) >= started_ts]
             if baseline and (baseline.get("ts0") or 0) < started_ts:
-                baseline = {"bot0": 0.0, "parite0": 0.0, "ts0": started_ts}
+                preserved = {
+                    k: baseline[k]
+                    for k in (
+                        "start_balance_usd",
+                        "start_coin_price",
+                        "initial_prices",
+                        "coin_weights",
+                    )
+                    if baseline.get(k) is not None
+                }
+                baseline = {"bot0": 0.0, "parite0": 0.0, "ts0": started_ts, **preserved}
                 payload["baseline"] = baseline
         payload["samples"] = samples
         payload["range"] = (
@@ -4852,6 +5019,30 @@ async def bots_update_config(
         raise HTTPException(
             status_code=400, detail=_detail_err("MAX_BUY_LEVELS_INVALID", str(e), rid)
         )
+    # Dynamic Mode safety gate: if dynamic_mode is being turned on, all four
+    # safety layers must be satisfied (max_buy_levels + daily_loss_limit_usd;
+    # stop-loss + emergency-close are auto-injected). Reject otherwise.
+    if bool(getattr(cfg, "dynamic_mode", False)):
+        try:
+            from app.botengine.dynamic import safety_gate as _dyn_gate
+
+            _g = _dyn_gate.check_prerequisites(cfg.to_dict())
+            if not _g.ok:
+                raise HTTPException(
+                    status_code=400,
+                    detail=_detail_err(
+                        "DYNAMIC_MODE_PREREQS_MISSING",
+                        "Dynamic Mode açılabilmesi için zorunlu koruma katmanları eksik: "
+                        + "; ".join(_g.violations),
+                        rid,
+                    ),
+                )
+        except HTTPException:
+            raise
+        except Exception as _gex:
+            logger.warning(
+                "bots_update_config dynamic gate failed bot_id=%s err=%s", bot.id, _gex
+            )
     bot.config_json = json.dumps(cfg.to_dict(), ensure_ascii=False)
     bot.max_buy_levels = cfg.max_buy_levels
     db.commit()
@@ -4948,6 +5139,15 @@ async def bots_health_ack(
 ):
     """Operator acknowledged health banner: clear last_error_code and stamp health_ack_at."""
     rid = _request_id(request)
+    if not current.get("is_admin"):
+        raise HTTPException(
+            status_code=403,
+            detail=_detail_err(
+                "FORBIDDEN",
+                "Bot motor logları yalnızca admin kullanıcılar içindir",
+                rid,
+            ),
+        )
     resolved_account_id = _resolve_account_id(account_id, account_code, db)
     bot = _resolve_bot(bot_id, resolved_account_id, current, db)
     if not bot:
@@ -4982,7 +5182,7 @@ async def bots_health_ack(
 async def bots_events(
     request: Request,
     bot_id: int,
-    limit: int = Query(100, le=500),
+    limit: int = Query(100, ge=1, le=500),
     after_id: Optional[int] = Query(None),
     account_id: Optional[int] = Query(None),
     account_code: Optional[str] = Query(None),
@@ -4991,6 +5191,15 @@ async def bots_events(
 ):
     """List bot engine events."""
     rid = _request_id(request)
+    if not current.get("is_admin"):
+        raise HTTPException(
+            status_code=403,
+            detail=_detail_err(
+                "FORBIDDEN",
+                "Bot motor logları yalnızca admin kullanıcılar içindir",
+                rid,
+            ),
+        )
     resolved_account_id = _resolve_account_id(account_id, account_code, db)
     bot = _resolve_bot(bot_id, resolved_account_id, current, db)
     if not bot:
@@ -5009,8 +5218,31 @@ async def bots_events(
         )
     except Exception as e:
         logger.debug("bots_events connectivity probe bot_id=%s: %s", bot.id, e)
-    events = list_events(db, bot.id, limit=limit, after_id=after_id)
     state = load_state(db, bot.id)
+    session_start_id = 0
+    session_limit = 5000
+    try:
+        from app.botengine.bot_session import resolve_bot_session_start_event_id
+
+        session_start_id = resolve_bot_session_start_event_id(db, bot.id, state or {})
+    except Exception as sess_ex:
+        logger.debug("bots_events session_start bot_id=%s: %s", bot.id, sess_ex)
+    fetch_limit = limit
+    since_id: Optional[int] = None
+    if session_start_id > 0:
+        since_id = session_start_id
+        if after_id is None:
+            # Oturum tam yüklemesi: istemci limit=500 gönderse bile tüm oturum (≤5000).
+            fetch_limit = session_limit
+        else:
+            fetch_limit = min(limit, 100)
+    events = list_events(
+        db,
+        bot.id,
+        limit=fetch_limit,
+        after_id=after_id,
+        since_id=since_id,
+    )
     if after_id is None:
         dismiss_before = int((state or {}).get("engine_log_dismiss_before_id") or 0)
         if dismiss_before > 0:
@@ -5018,7 +5250,9 @@ async def bots_events(
 
             events = filter_events_for_dismiss(events, dismiss_before)
         try:
-            anchors = _fetch_lifecycle_anchor_events(db, bot.id)
+            anchors = _fetch_lifecycle_anchor_events(
+                db, bot.id, session_start_id=session_start_id
+            )
             if dismiss_before > 0:
                 anchors = filter_events_for_dismiss(anchors, dismiss_before)
             events = _merge_anchor_events(events, anchors)
@@ -5039,7 +5273,7 @@ async def bots_events(
             events = _merge_synthetic_tur_after_initial_fill(events, state)
             _enrich_cycle_start_events_meta(events, state)
             events = _dedupe_cycle_end_events(events)
-            events = _dedupe_cycle_start_events(events)[:limit]
+            events = _dedupe_cycle_start_events(events)[:fetch_limit]
         else:
             # Incremental poll: sentetik backfill yeni event üretmez; yalnız meta-enrich yeterli.
             events = _enrich_command_start_events(events, bot, state)
@@ -5052,7 +5286,7 @@ async def bots_events(
             after_id,
             enrich_ex,
         )
-        events = _sort_engine_events_desc(list(events or []))[:limit]
+        events = _sort_engine_events_desc(list(events or []))[:fetch_limit]
     conn_fail = None
     connectivity_ok = True
     try:
@@ -5070,6 +5304,7 @@ async def bots_events(
         pass
     return {
         "events": events,
+        "session_start_event_id": session_start_id,
         "connectivity_failure": conn_fail,
         "connectivity_ok": connectivity_ok,
         "request_id": rid,
@@ -6418,9 +6653,11 @@ async def bots_performance(
                     pass
     if not is_trailing_dual_dca:
         pnl_pct = (pnl_usd / initial_for_pnl * 100.0) if initial_for_pnl > 0 else 0.0
-    real_performance_pct = (
-        pnl_pct if is_trailing_dual_dca or initial_for_pnl > 0 else 0.0
-    )
+
+    alpha_perf: Optional[Dict[str, Any]] = None
+    balance_change_pct: Optional[float] = None
+    price_change_pct: Optional[float] = None
+    real_performance_pct = 0.0
 
     # Aktif tur: state + ledger birleşimi (/cycles ile aynı kaynak)
     merged_cycles = _merge_bot_cycle_ids(db, bot.id, bot.account_id)
@@ -6741,6 +6978,23 @@ async def bots_performance(
     if current_price_out is not None and current_price_out <= 0:
         current_price_out = None
 
+    try:
+        alpha_perf = build_bot_alpha_performance(
+            db,
+            bot,
+            state_for_pnl,
+            current_usd=total_usd,
+            current_price=current_price_out,
+            chart_payload=_load_perf_chart_payload(db, bot.id),
+            pnl_data=pnl_data,
+        )
+        if alpha_perf:
+            real_performance_pct = float(alpha_perf.get("alpha_pct") or 0.0)
+            balance_change_pct = alpha_perf.get("balance_pct")
+            price_change_pct = alpha_perf.get("coin_pct")
+    except Exception as e:
+        logger.debug("bots_performance alpha_perf bot_id=%s: %s", bot.id, e)
+
     # Rapor için: botun config'taki bütçesi (Başlangıç bakiyesi = kullanıcının belirlediği bütçe)
     config_budget_usd = round(config_initial, 2) if config_initial > 0 else None
 
@@ -6789,6 +7043,8 @@ async def bots_performance(
         "pnl_usd": round(pnl_usd, 2),
         "pnl_pct": round(pnl_pct, 2),
         "real_performance_pct": round(real_performance_pct, 2),
+        "balance_change_pct": balance_change_pct,
+        "price_change_pct": price_change_pct,
         "trades_count": trades_count,
         "cycles_count": cycles_count,
         "current_cycle_id": current_cycle_id,
@@ -6819,6 +7075,8 @@ async def bots_performance(
     }
     if dual_perf is not None:
         result["dual_perf"] = dual_perf
+    if alpha_perf is not None:
+        result["bot_alpha_performance"] = alpha_perf
 
     strategy_id = (cfg_perf.get("strategy_id") or "").strip().lower()
     if strategy_id == "trdca_pro":

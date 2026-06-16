@@ -67,16 +67,32 @@ function escapeHtml(s) {
     return div.innerHTML;
 }
 
-function applyLeaderboardParams(structure, params, itemIndex) {
+function applyLeaderboardParams(structure, params, itemIndex, opts) {
+    opts = opts || {};
     closeBotStructureModal();
     if (!structure) return;
+    var idx = itemIndex != null && itemIndex !== '' ? parseInt(itemIndex, 10) : NaN;
+    var item = Number.isFinite(idx) && State.leaderboardItems ? State.leaderboardItems[idx] : null;
+    var dyn = item && typeof resolveLeaderboardItemDynamicMode === 'function'
+        ? resolveLeaderboardItemDynamicMode(item)
+        : (item && item.dynamic_mode);
     var normalized = normalizeLeaderboardParamsToFormConfig(resolveLeaderboardItemParams(params, itemIndex));
+    if (opts.useDynamicApplied && dyn && dyn.snapshot && dyn.snapshot.applied) {
+        normalized = mergeLeaderboardParamsWithApplied(normalized, dyn.snapshot.applied);
+    }
+    if (item && item.symbol && !normalized.symbol) normalized.symbol = item.symbol;
+    var enableDynamic = opts.enableDynamicMode === true;
     var synthetic = { id: structure.id, name: structure.name || structure.id, defaultConfig: normalized, fromLeaderboardApply: true };
     currentSelectedTemplate = structure;
     fillModalWithTemplate(synthetic);
     openCreateBotModal(null, null, true, 'fBudget');
     setTimeout(function () {
         applyTrailingDcaConfigToForm(normalized, { clearBudget: true, symbolReadOnly: false });
+        var dynEl = document.getElementById('fDynamicMode');
+        if (dynEl) {
+            dynEl.checked = enableDynamic;
+            dynEl.dispatchEvent(new Event('change', { bubbles: true }));
+        }
         var focusEl = document.getElementById('fBudget');
         if (focusEl) focusEl.focus();
     }, 130);
@@ -853,3 +869,5 @@ function dashboardValidatePassword(password, name, surname) {
     if (obvious.some(seq => passLower.includes(seq))) return { valid: false, msg: 'Şifre çok belirgin sıralı karakterler içeremez' };
     return { valid: true, msg: '✓ Şifre güçlü görünüyor' };
 }
+
+window.applyLeaderboardParams = applyLeaderboardParams;

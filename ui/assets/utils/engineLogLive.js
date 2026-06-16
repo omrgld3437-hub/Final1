@@ -5,7 +5,8 @@
     'use strict';
 
     var POLL_MS = 4000;
-    var MAX_EVENTS = 500;
+    var MAX_EVENTS = 5000;
+    var API_EVENTS_LIMIT = 500;
     var FULL_REFRESH_MS = 90000;
 
     function maxEventId(events) {
@@ -40,13 +41,18 @@
         return 'anon:' + (e.type || '') + ':' + (e.ts || '') + ':' + (e.message || '').slice(0, 40);
     }
 
-    function mergeEvents(existing, incoming, limit) {
+    function mergeEvents(existing, incoming, limit, sessionStartId) {
+        var sid = Number(sessionStartId || 0);
         var byKey = {};
         (existing || []).forEach(function (e) {
+            var id = e && e.id != null ? Number(e.id) : 0;
+            if (sid > 0 && id > 0 && id < sid) return;
             var k = eventMergeKey(e);
             if (k) byKey[k] = e;
         });
         (incoming || []).forEach(function (e) {
+            var id = e && e.id != null ? Number(e.id) : 0;
+            if (sid > 0 && id > 0 && id < sid) return;
             var k = eventMergeKey(e);
             if (k) byKey[k] = e;
         });
@@ -108,8 +114,15 @@
         }).join('\n');
     }
 
-    function trimEventsForDisplay(events, limit) {
+    function trimEventsForDisplay(events, limit, sessionStartId) {
         var sorted = sortEventsForDisplay(events || []);
+        var sid = Number(sessionStartId || 0);
+        if (sid > 0) {
+            sorted = sorted.filter(function (e) {
+                var id = e && e.id != null ? Number(e.id) : 0;
+                return id <= 0 || id >= sid;
+            });
+        }
         if (sorted.length > limit) return sorted.slice(0, limit);
         return sorted;
     }
@@ -407,7 +420,7 @@
             opts._logForceTop = true;
             opts._logPinTop = true;
             url = '/api/bots-engine/' + opts.botId + '/events' + qBase +
-                (qBase ? '&' : '?') + 'limit=' + MAX_EVENTS;
+                (qBase ? '&' : '?') + 'limit=' + API_EVENTS_LIMIT;
         }
         var reqOpts = { timeout: opts.fetchTimeoutMs || 35000 };
         return opts.apiClient.get(url, reqOpts).then(function (res) {
@@ -418,21 +431,29 @@
                 if (staleFetch) staleFetch.remove();
             }
             opts.connectivityFailure = (res && res.connectivity_failure) ? res.connectivity_failure : null;
+            if (res && res.session_start_event_id != null) {
+                opts.sessionStartEventId = Number(res.session_start_event_id) || 0;
+            }
             if (typeof global !== 'undefined') {
                 global._lastConnectivityProbeOk = !!(res && res.connectivity_ok !== false && !res.connectivity_failure);
                 global._lastConnectivityFailure = opts.connectivityFailure || null;
             }
             var incoming = (res && res.events) ? res.events : [];
+            var sessionStartId = opts.sessionStartEventId || 0;
             var didMerge = false;
             if (incremental && state.lastId > 0) {
                 if (incoming.length) {
-                    state.events = mergeEvents(state.events, incoming, MAX_EVENTS);
+                    state.events = mergeEvents(state.events, incoming, MAX_EVENTS, sessionStartId);
                     state.lastId = maxEventId(state.events);
                     archiveIngest(opts, state.events, incoming);
                     didMerge = true;
                 }
             } else {
-                state.events = trimEventsForDisplay(incoming, MAX_EVENTS);
+                if (state.events && state.events.length && incoming.length) {
+                    state.events = mergeEvents(state.events, incoming, MAX_EVENTS, sessionStartId);
+                } else {
+                    state.events = trimEventsForDisplay(incoming, MAX_EVENTS, sessionStartId);
+                }
                 state.lastId = maxEventId(state.events);
                 archiveIngest(opts, state.events, incoming);
                 didMerge = true;

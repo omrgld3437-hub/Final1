@@ -89,7 +89,7 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
     <link rel="stylesheet" href="/ui/assets/theme.css?v=clean1">
     <link rel="stylesheet" href="/ui/assets/ui.css?v=footer-sticky1">
     <link rel="stylesheet" href="/ui/assets/design.css?v=footer-sticky2">
-    <link rel="stylesheet" href="/ui/assets/dashboard.css?v=bot-row-alert-static1">
+    <link rel="stylesheet" href="/ui/assets/dashboard.css?v=leaderboard-dyn-meta2">
     <link rel="stylesheet" href="/ui/assets/binance-colors.css?v=bin1">
     <link rel="stylesheet" href="/ui/assets/blink.css?v=1">
     <link rel="stylesheet" href="/ui/assets/dashboard-login-theme.css?v=spot-modal-chart1">
@@ -1143,12 +1143,30 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
     </div>
 
     <!-- Parametreler modal — bot detay #parametrelerModal ile aynı yapı ve render -->
+    <div id="leaderboardApplyModal" class="modal-overlay" style="display: none;">
+        <div class="modal-panel parametreler-modal-panel" style="max-width: 440px;">
+            <div class="modal-panel-head">
+                <h3 class="modal-title">Parametreleri uygula</h3>
+                <button type="button" class="parametreler-modal-close" id="leaderboardApplyModalClose" aria-label="Kapat">&times;</button>
+            </div>
+            <p id="leaderboardApplyModalText" class="param-hint" style="padding: 0 0 0.75rem; margin: 0;">Bu bot dinamik modda. Başlangıç değerlerini mi referans almak istiyorsunuz, yoksa son güncel dinamik değerleri mi?</p>
+            <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+                <button type="button" class="btn btn-ghost" id="leaderboardApplyTemplateBtn">Başlangıç değerleri</button>
+                <button type="button" class="btn btn-primary-gold" id="leaderboardApplyDynamicBtn">Son güncel dinamik değerler</button>
+            </div>
+            <div class="modal-actions" style="margin-top: 1rem;">
+                <button type="button" class="btn btn-ghost" id="leaderboardApplyCancelBtn">Vazgeç</button>
+            </div>
+        </div>
+    </div>
+
     <div id="parametrelerModal" class="modal-overlay" style="display: none;">
         <div class="modal-panel parametreler-modal-panel">
             <div class="modal-panel-head">
                 <h3 class="modal-title">Parametreler</h3>
                 <button type="button" class="parametreler-modal-close" id="parametrelerModalClose" aria-label="Kapat">&times;</button>
             </div>
+            <div id="paramTabsHost"></div>
             <div id="configGrid" class="parametreler-body"></div>
             <div class="modal-actions" style="margin-top: 1rem;">
                 <button type="button" class="btn btn-ghost" id="parametrelerModalKapat">Kapat</button>
@@ -1198,6 +1216,33 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
                 </div>
                 <!-- Step 1: General -->
                 <div class="dm-step" data-step="1">
+                    <!-- Dynamic Mode: tek ON/OFF butonu, kullanıcıdan ekstra parametre istemez -->
+                    <div id="dmDynamicModeCard" style="border: 1px solid var(--ds-border, #2a2f3a); border-radius: 12px; padding: 0.85rem 1rem; margin-bottom: 0.9rem; background: rgba(60, 100, 180, 0.06);">
+                        <div style="display: flex; align-items: center; justify-content: space-between; gap: 0.75rem;">
+                            <div style="flex: 1; min-width: 0;">
+                                <div style="font-weight: 600; font-size: 0.95rem;">
+                                    Dinamik Strateji
+                                    <span id="dmDynModeBadge" style="font-size: 0.7rem; padding: 0.1rem 0.45rem; border-radius: 999px; background: #444; margin-left: 0.4rem; vertical-align: middle;">KAPALI</span>
+                                </div>
+                                <div style="font-size: 0.78rem; color: var(--ds-text-secondary, #9aa3b2); margin-top: 0.25rem; line-height: 1.4;">
+                                    Açıldığında bot; coin'in volatilite, trend, hacim ve fiyat hareketini analiz edip
+                                    grid tetik/dağılımı, trailing, base/quote oranı ve kâr tetiklerini her tur başında
+                                    otomatik ayarlar. <b>Ek ayar gerekmez.</b>
+                                </div>
+                            </div>
+                            <label style="display: inline-flex; align-items: center; cursor: pointer; user-select: none; flex-shrink: 0;">
+                                <input type="checkbox" id="fDynamicMode" style="display: none;">
+                                <span id="dmDynModeSwitch" style="width: 46px; height: 26px; background: #555; border-radius: 999px; position: relative; transition: background 0.2s; display: inline-block;">
+                                    <span id="dmDynModeKnob" style="position: absolute; top: 2px; left: 2px; width: 22px; height: 22px; border-radius: 50%; background: #fff; transition: left 0.2s;"></span>
+                                </span>
+                            </label>
+                        </div>
+                        <div id="dmDynModeHint" style="display: none; font-size: 0.75rem; color: #80cbc4; margin-top: 0.5rem; line-height: 1.4;">
+                            ⓘ Dinamik mod açık. Aşağıdaki parametre değerleri başlangıç şablonu olarak kullanılır;
+                            bot çalıştığında her tur başında otomatik olarak yeniden hesaplanır.
+                            Tur içinde değişmez (mevcut açık emirler ve trailing state bozulmaz).
+                        </div>
+                    </div>
                     <div class="section-title">Genel</div>
                     <div class="grid-2">
                         <div class="form-group">
@@ -2062,23 +2107,24 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
     <!-- Flash Home (Patch H). Deploy ui/assets/ so storageCache, renderHome, homeFlash exist (else 404). -->
     <script src="/ui/assets/storageCache.js?v=flash1"></script>
     <script src="/ui/assets/renderHome.js?v=wallet-stable6"></script>
-    <script src="/ui/assets/homeFlash.js?v=wallet-inflight-poll1"></script>
+    <script src="/ui/assets/homeFlash.js?v=wallet-badge-noflicker2"></script>
     <!-- [1] Önce: State/DOM bağımsız format/utility fonksiyonları -->
     <script src="/ui/assets/modules/dashboard-format.js?v=1"></script>
     <!-- [2] Ana dashboard: State, assetsState, normalizeAndApplyWallet vb. tanımlar -->
-    <script src="/ui/assets/dashboard.js?v=wallet-live-refresh-manager5"></script>
+    <script src="/ui/assets/dashboard.js?v=wallet-badge-noflicker2"></script>
     <!-- [3] Sonra: State'e runtime erişen modüller (DOMContentLoaded öncesi hazır olurlar) -->
     <script src="/ui/assets/modules/dashboard-appbar.js?v=1"></script>
-    <script src="/ui/assets/modules/dashboard-wallet-state.js?v=1"></script>
-    <script src="/ui/assets/modules/dashboard-leaderboard.js?v=1"></script>
-    <script src="/ui/assets/modules/dashboard-bot-perf.js?v=1"></script>
+    <script src="/ui/assets/modules/dashboard-wallet-state.js?v=wallet-badge-noflicker2"></script>
+    <script src="/ui/assets/utils/dynamicModeParamsView.js?v=7"></script>
+    <script src="/ui/assets/modules/dashboard-bot-perf.js?v=4"></script>
+    <script src="/ui/assets/modules/dashboard-leaderboard.js?v=12"></script>
     <script src="/ui/assets/modules/dashboard-tx-history.js?v=1"></script>
     <script src="/ui/assets/modules/dashboard-bots.js?v=1"></script>
-    <script src="/ui/assets/modules/dashboard-bot-create.js?v=1"></script>
+    <script src="/ui/assets/modules/dashboard-bot-create.js?v=4"></script>
     <script src="/ui/assets/modules/dashboard-tabs.js?v=1"></script>
-    <script src="/ui/assets/modules/dashboard-create-modal.js?v=1"></script>
+    <script src="/ui/assets/modules/dashboard-create-modal.js?v=2"></script>
     <script src="/ui/assets/modules/dashboard-spot-trade.js?v=2"></script>
-    <script src="/ui/assets/modules/dashboard-finance.js?v=4"></script>
+    <script src="/ui/assets/modules/dashboard-finance.js?v=7"></script>
     <script src="/ui/assets/ticker.js?v=chg-pct1" defer></script>
 </body>
 </html>

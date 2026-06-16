@@ -887,10 +887,173 @@ async def _bot_loop(bot_id: int) -> None:
 
                 try:
                     strategy = get_strategy_safe(raw)
+                    # ============================================================
+                    # Dynamic Mode hook (gated). Runs ONLY when dynamic_mode=True
+                    # and safety prerequisites are met. Manuel mod = no-op.
+                    # ============================================================
+                    try:
+                        from app.botengine.dynamic import (
+                            cycle_manager as dyn_cm,
+                            safety_gate as dyn_gate,
+                        )
+
+                        _cfg_dict_for_dyn = cfg.to_dict() if hasattr(cfg, "to_dict") else {}
+                        if dyn_gate.is_dynamic_mode_active(_cfg_dict_for_dyn):
+                            if dyn_cm.need_recompute(state):
+                                # Dynamic suggestions MUST derive from the user's
+                                # MANUAL config every cycle. `cfg` is cached and
+                                # mutated in-place by apply_overlay, so cfg.to_dict()
+                                # carries the PREVIOUS cycle's overlay and would let
+                                # the base drift cycle-over-cycle. Re-derive a clean
+                                # manual base from config_json (never overlaid).
+                                try:
+                                    _dyn_base = DcaGridTrailingConfig(raw).to_dict()
+                                except Exception:
+                                    _dyn_base = _cfg_dict_for_dyn
+                                _new_snap = await dyn_cm.build_snapshot(
+                                    state, _dyn_base, float(price or 0.0)
+                                )
+                                state["dynamic_snapshot"] = _new_snap
+                                _diffs = dyn_cm.apply_overlay(cfg, _new_snap)
+                                logger.info(
+                                    "DYN_SNAPSHOT_BUILT bot_id=%s cycle=%s regime=%s data_fresh=%s clamps=%s fallbacks=%s diffs=%s",
+                                    bot_id,
+                                    _new_snap.get("cycle_id"),
+                                    _new_snap.get("regime"),
+                                    _new_snap.get("data_fresh"),
+                                    len(_new_snap.get("clamps") or []),
+                                    len(_new_snap.get("fallbacks") or []),
+                                    list((_diffs or {}).keys()),
+                                )
+                                logger.debug(
+                                    "DYN_SNAPSHOT_DETAIL bot_id=%s reasons=%s clamps=%s diffs=%s",
+                                    bot_id,
+                                    _new_snap.get("reasons"),
+                                    _new_snap.get("clamps"),
+                                    _diffs,
+                                )
+                                # Bot-detay event'i: kullanıcı UI'da görsün
+                                try:
+                                    from app.botengine.state_store import (
+                                        queue_engine_event,
+                                    )
+
+                                    queue_engine_event(
+                                        state,
+                                        "DYN_SNAPSHOT",
+                                        f"Dynamic snapshot built: regime={_new_snap.get('regime')} "
+                                        f"fresh={_new_snap.get('data_fresh')} "
+                                        f"clamps={len(_new_snap.get('clamps') or [])}",
+                                        {
+                                            "cycle_id": _new_snap.get("cycle_id"),
+                                            "regime": _new_snap.get("regime"),
+                                            "data_fresh": _new_snap.get("data_fresh"),
+                                            "applied": _new_snap.get("applied"),
+                                            "reasons": (_new_snap.get("reasons") or [])[:8],
+                                            "clamps": (_new_snap.get("clamps") or [])[:8],
+                                            "fallbacks": _new_snap.get("fallbacks") or [],
+                                        },
+                                    )
+                                except Exception as _ev_err:
+                                    logger.debug(
+                                        "DYN_SNAPSHOT event_queue failed bot_id=%s err=%s",
+                                        bot_id,
+                                        _ev_err,
+                                    )
+                            else:
+                                # Snapshot still valid: re-apply overlay (in case cfg was
+                                # rebuilt from raw dict this tick).
+                                _existing = state.get("dynamic_snapshot") or {}
+                                if _existing:
+                                    dyn_cm.apply_overlay(cfg, _existing)
+                                    logger.debug(
+                                        "DYN_SNAPSHOT_REUSED bot_id=%s cycle=%s regime=%s",
+                                        bot_id,
+                                        _existing.get("cycle_id"),
+                                        _existing.get("regime"),
+                                    )
+                        else:
+                            # dynamic_mode False (or prerequisites missing) → strip any
+                            # stale snapshot so the UI does not show outdated data.
+                            if state.get("dynamic_snapshot"):
+                                logger.debug(
+                                    "DYN_DEACTIVATED bot_id=%s cycle=%s — clearing snapshot",
+                                    bot_id,
+                                    state.get("cycle_id"),
+                                )
+                                state.pop("dynamic_snapshot", None)
+                    except Exception as dyn_err:
+                        logger.warning(
+                            "DYN_HOOK_EXCEPTION bot_id=%s err=%s — falling back to manual cfg",
+                            bot_id,
+                            dyn_err,
+                        )
+                    # ============================================================
                     t0 = time.perf_counter()
                     actions, next_wake = strategy.tick(
                         state, cfg, price, base_balance, quote_balance
                     )
+                    # ============================================================
+                    # Dynamic emergency check (cycle + portfolio circuit breaker).
+                    # Only active when dynamic_mode=True. PROTECTIVE PAUSE only:
+                    # sets paused_error + alerts operator; position is RETAINED,
+                    # nothing is auto-liquidated (same pattern as daily_loss_limit).
+                    # ============================================================
+                    try:
+                        from app.botengine.dynamic import safety_gate as _sg
+
+                        _cfg_for_emg = cfg.to_dict() if hasattr(cfg, "to_dict") else {}
+                        if _sg.is_dynamic_mode_active(_cfg_for_emg) and state.get(
+                            "initial_allocation_done"
+                        ):
+                            _equity_now = float(base_balance) * float(price or 0) + float(
+                                quote_balance
+                            )
+                            _emg = _sg.emergency_check(state, _cfg_for_emg, _equity_now)
+                            if _emg["action"] != "NONE":
+                                logger.warning(
+                                    "DYN_EMERGENCY bot_id=%s action=%s reason=%s metrics=%s",
+                                    bot_id,
+                                    _emg["action"],
+                                    _emg["reason"],
+                                    _emg.get("metrics"),
+                                )
+                                try:
+                                    flush_queued_events(db, bot_id, account_id, state)
+                                    row.status = "paused_error"
+                                    state["last_error_code"] = "DYN_" + _emg["action"]
+                                    state["_dyn_emergency"] = {
+                                        "action": _emg["action"],
+                                        "reason": _emg["reason"],
+                                        "metrics": _emg.get("metrics"),
+                                        "ts": int(time.time() * 1000),
+                                    }
+                                    save_state(db, bot_id, account_id, state)
+                                    db.commit()
+                                    append_event(
+                                        db,
+                                        bot_id,
+                                        account_id,
+                                        "ERROR",
+                                        f"DYN {_emg['action']}: {_emg['reason']}",
+                                        {
+                                            "error_code": "DYN_" + _emg["action"],
+                                            **(_emg.get("metrics") or {}),
+                                        },
+                                    )
+                                except Exception as _emg_ex:
+                                    logger.debug(
+                                        "DYN_EMERGENCY persist failed bot_id=%s err=%s",
+                                        bot_id,
+                                        _emg_ex,
+                                    )
+                                # Don't issue actions this tick
+                                await asyncio.sleep(next_wake)
+                                continue
+                    except Exception as _emg_err:
+                        logger.debug(
+                            "DYN_EMERGENCY_CHECK_FAIL bot_id=%s err=%s", bot_id, _emg_err
+                        )
                     # Günlük kayıp limiti aşıldıysa botu durdur
                     if state.get("_daily_loss_limit_hit"):
                         try:

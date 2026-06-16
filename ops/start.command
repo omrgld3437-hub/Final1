@@ -16,13 +16,30 @@ PY="$ROOT/.venv/bin/python"
 
 STARTED=()
 
+_port_open() {
+  command -v nc >/dev/null 2>&1 && nc -z 127.0.0.1 "$1" 2>/dev/null
+}
+
+_kill_stale_pid() {
+  local pidfile="$1"
+  [ -f "$pidfile" ] || return 0
+  local pid
+  pid="$(cat "$pidfile" 2>/dev/null)"
+  [ -n "$pid" ] || return 0
+  kill -TERM "$pid" 2>/dev/null || true
+  sleep 1
+  kill -KILL "$pid" 2>/dev/null || true
+  rm -f "$pidfile"
+}
+
 # Manager (7999)
 MANAGER_PID="$ROOT/.run/manager.pid"
 MANAGER_LOG="$ROOT/logs/manager.log"
-if [ -f "$MANAGER_PID" ] && kill -0 "$(cat "$MANAGER_PID")" 2>/dev/null; then
-  STARTED+=("Manager (7999): zaten calisiyor, PID=$(cat "$MANAGER_PID")")
+if _port_open 7999; then
+  STARTED+=("Manager (7999): zaten calisiyor (port acik)")
 else
-  rm -f "$MANAGER_PID"
+  _kill_stale_pid "$MANAGER_PID"
+  P=$(lsof -ti:7999 2>/dev/null); [ -n "$P" ] && echo "$P" | xargs kill -KILL 2>/dev/null || true
   nohup "$PY" -m manager_server >> "$MANAGER_LOG" 2>&1 &
   echo $! > "$MANAGER_PID"
   STARTED+=("Manager (7999): baslatildi, PID=$!")
@@ -32,14 +49,15 @@ fi
 # Web (8000)
 WEB_PID="$ROOT/.run/web.pid"
 WEB_LOG="$ROOT/logs/web.log"
-if [ -f "$WEB_PID" ] && kill -0 "$(cat "$WEB_PID")" 2>/dev/null; then
-  STARTED+=("Web (8000): zaten calisiyor, PID=$(cat "$WEB_PID")")
+if _port_open 8000; then
+  STARTED+=("Web (8000): zaten calisiyor (port acik)")
 else
-  rm -f "$WEB_PID"
+  _kill_stale_pid "$WEB_PID"
+  P=$(lsof -ti:8000 2>/dev/null); [ -n "$P" ] && echo "$P" | xargs kill -KILL 2>/dev/null || true
   nohup "$PY" -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 2 --loop uvloop --http httptools --log-level warning --no-access-log >> "$WEB_LOG" 2>&1 &
   echo $! > "$WEB_PID"
   STARTED+=("Web (8000): baslatildi, PID=$!")
-  sleep 1
+  sleep 2
 fi
 
 # Engine (worker)
@@ -98,5 +116,20 @@ echo "  Manager:  http://127.0.0.1:7999"
 echo "  Web:      http://127.0.0.1:8000"
 echo "  HTML:     http://127.0.0.1:8080  (omeraltin.com icerigi)"
 echo "========================================="
+echo "  Giris:    http://127.0.0.1:8000/ui/login.html"
+echo "========================================="
 echo "Linux sunucuda: site icin http://SUNUCU_IP:8080 acin; domain (omeraltin.com) icin nginx reverse proxy gerekir."
 echo "HTML acilmazsa: logs/html.log dosyasini kontrol edin."
+
+WEB_URL="http://127.0.0.1:8000/ui/login.html"
+if _port_open 8000; then
+  if [ "$(uname -s)" = "Darwin" ] && command -v open >/dev/null 2>&1; then
+    open "$WEB_URL" 2>/dev/null || true
+    echo "Tarayici acildi: $WEB_URL"
+  fi
+else
+  echo ""
+  echo "  [HATA] Web (8000) acilamadi. Son satirlar:"
+  tail -n 8 "$WEB_LOG" 2>/dev/null || true
+  echo "  Tam log: $ROOT/logs/web.log"
+fi

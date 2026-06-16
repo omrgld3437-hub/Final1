@@ -2283,15 +2283,40 @@ function renderFinanceBots(bots, opts) {
         };
     });
     const sorted = normalized.slice().sort(compareFinanceBotsForSort);
-    var getLogoHtml = function (base) {
+    var getLogoHtml = function (base, logoOpts) {
+        logoOpts = logoOpts || {};
         var sz = 36;
         if (!base || typeof getCoinLogoUrl !== 'function') return '<span class="mevcut-bot-logo-placeholder" style="width:' + sz + 'px;height:' + sz + 'px;display:inline-block;"></span>';
         var url = getCoinLogoUrl(base);
         var initials = (base || '').substring(0, 2).toUpperCase();
-        var wrapStyle = 'position:relative;width:' + sz + 'px;height:' + sz + 'px;border-radius:50%;background:var(--ds-bg-tertiary);display:inline-flex;align-items:center;justify-content:center;overflow:hidden;flex-shrink:0;';
-        return url
-            ? '<span class="mevcut-bot-logo-wrap" style="' + wrapStyle + '"><img decoding="async" loading="lazy" fetchpriority="low" src="' + url + '" alt="' + (base || '') + '" class="mevcut-bot-logo" style="width:100%;height:100%;object-fit:cover;" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'inline-flex\'" /><span class="mevcut-bot-logo-initials" style="display:none;position:absolute;width:' + sz + 'px;height:' + sz + 'px;border-radius:50%;align-items:center;justify-content:center;font-size:0.8rem;font-weight:600;background:var(--ds-bg-tertiary);color:var(--ds-text-secondary);">' + initials + '</span></span>'
-            : '<span class="mevcut-bot-logo-initials" style="width:' + sz + 'px;height:' + sz + 'px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:0.8rem;font-weight:600;background:var(--ds-bg-tertiary);color:var(--ds-text-secondary);">' + initials + '</span>';
+        var dynClass = logoOpts.dynamicActive ? ' mevcut-bot-logo-wrap--dynamic' : '';
+        var dynAttrs = '';
+        if (logoOpts.dynamicActive && logoOpts.dynTip) {
+            var tipAttr = window.DynModeParamsView && window.DynModeParamsView.attrEsc
+                ? window.DynModeParamsView.attrEsc(logoOpts.dynTip)
+                : String(logoOpts.dynTip).replace(/"/g, '&quot;');
+            dynAttrs = ' data-dyn-tip="' + tipAttr + '"';
+        }
+        var wrapStyle = 'position:relative;width:' + sz + 'px;height:' + sz + 'px;border-radius:50%;background:var(--ds-bg-tertiary);display:inline-flex;align-items:center;justify-content:center;overflow:visible;flex-shrink:0;';
+        var inner = url
+            ? '<span class="mevcut-bot-logo-wrap' + dynClass + '"' + dynAttrs + ' style="' + wrapStyle + '"><img decoding="async" loading="lazy" fetchpriority="low" src="' + url + '" alt="' + (base || '') + '" class="mevcut-bot-logo" style="width:100%;height:100%;object-fit:cover;border-radius:50%;" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'inline-flex\'" /><span class="mevcut-bot-logo-initials" style="display:none;position:absolute;width:' + sz + 'px;height:' + sz + 'px;border-radius:50%;align-items:center;justify-content:center;font-size:0.8rem;font-weight:600;background:var(--ds-bg-tertiary);color:var(--ds-text-secondary);">' + initials + '</span></span>'
+            : '<span class="mevcut-bot-logo-initials' + dynClass + '"' + dynAttrs + ' style="width:' + sz + 'px;height:' + sz + 'px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:0.8rem;font-weight:600;background:var(--ds-bg-tertiary);color:var(--ds-text-secondary);">' + initials + '</span>';
+        return inner;
+    };
+    var financeBotDynamicModeActive = function (bot) {
+        var cfg = getBotConfig(bot);
+        var dyn = bot.dynamic_mode || {};
+        if (window.DynModeParamsView) {
+            return window.DynModeParamsView.isDynamicModeActiveForList(dyn, cfg, bot.status);
+        }
+        return !!(cfg.dynamic_mode && String(bot.status || '').toLowerCase() === 'running');
+    };
+    var financeBotDynamicTip = function (bot) {
+        var cfg = getBotConfig(bot);
+        if (window.DynModeParamsView) {
+            return window.DynModeParamsView.dynamicModeLogoTipShort(bot.dynamic_mode || {}, cfg);
+        }
+        return 'Dinamik mod aktif';
     };
     var getBotConfig = function (bot) {
         var c = bot.config || {};
@@ -2365,7 +2390,9 @@ function renderFinanceBots(bots, opts) {
         const detailPage = isMulti ? '/ui/bot_multi.html' : '/ui/bot.html';
         const base = parseBaseQuote(sym).base || sym.replace(/USDT|FDUSD|BUSD$/i, '') || sym;
         const multiCoins = isMulti ? getMultiBotCoins(bot) : [];
-        const logoHtml = isMulti && multiCoins.length > 0 ? getMultiLogoHtml(multiCoins) : getLogoHtml(base);
+        const dynActive = financeBotDynamicModeActive(bot);
+        const dynTip = financeBotDynamicTip(bot);
+        const logoHtml = isMulti && multiCoins.length > 0 ? getMultiLogoHtml(multiCoins) : getLogoHtml(base, { dynamicActive: dynActive, dynTip: dynTip });
         const q = State.accountCode ? 'account_code=' + encodeURIComponent(State.accountCode) : 'account_id=' + (State.accountId || '');
         const href = detailPage + '?bot_id=' + botId + '&symbol=' + encodeURIComponent(sym) + '&' + q;
         const statusMeta = getFinanceBotStatusMeta(bot);
@@ -2405,7 +2432,9 @@ function renderFinanceBots(bots, opts) {
         const detailPage = isMulti ? '/ui/bot_multi.html' : '/ui/bot.html';
         const base = parseBaseQuote(sym).base || sym.replace(/USDT|FDUSD|BUSD$/i, '') || sym;
         const multiCoins = isMulti ? getMultiBotCoins(bot) : [];
-        const logoHtml = isMulti && multiCoins.length > 0 ? getMultiLogoHtml(multiCoins) : getLogoHtml(base);
+        const dynActive = financeBotDynamicModeActive(bot);
+        const dynTip = financeBotDynamicTip(bot);
+        const logoHtml = isMulti && multiCoins.length > 0 ? getMultiLogoHtml(multiCoins) : getLogoHtml(base, { dynamicActive: dynActive, dynTip: dynTip });
         const q = State.accountCode ? 'account_code=' + encodeURIComponent(State.accountCode) : 'account_id=' + (State.accountId || '');
         const href = detailPage + '?bot_id=' + botId + '&symbol=' + encodeURIComponent(sym) + '&' + q;
         const statusMeta = getFinanceBotStatusMeta(bot);

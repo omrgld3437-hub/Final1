@@ -128,6 +128,12 @@ function applyLastCreateParamsToForm() {
         if (rebuyTrail && profit.rebuy_trail_pct != null) rebuyTrail.value = profit.rebuy_trail_pct;
         if (resellT && (profit.resell_trigger_pct != null || profit.resell_trigger_pct === 0)) resellT.value = profit.resell_trigger_pct;
         if (resellTrail && profit.resell_trail_pct != null) resellTrail.value = profit.resell_trail_pct;
+        // Dynamic Mode bayrağını restore et (önceki bottan hatırlat)
+        var dynEl = document.getElementById("fDynamicMode");
+        if (dynEl) {
+            dynEl.checked = !!p.dynamic_mode;
+            try { dynEl.dispatchEvent(new Event("change")); } catch (e) {}
+        }
         if (p.symbol && typeof updateCreateBotModalPairStrip === "function") updateCreateBotModalPairStrip(p.symbol);
     } catch (e) { console.debug("applyLastCreateParamsToForm", e); }
 }
@@ -313,6 +319,44 @@ function bindCreateBotModal() {
             if (v && v.indexOf(",") !== -1) this.value = v.replace(",", ".");
         });
     });
+
+    // Bot oluşturma modalı: number input üzerinde scroll → değer değişmesin, modal kaydırılsın.
+    (function normalizeWheelOnNumberInputs() {
+        var modal = document.getElementById("dmModal");
+        if (!modal) return;
+        modal.addEventListener("wheel", function (e) {
+            var t = e.target;
+            if (t && t.tagName === "INPUT" && t.type === "number" && document.activeElement === t) {
+                t.blur();
+            }
+        }, { passive: true });
+    })();
+
+    // ---------------- Dynamic Mode toggle (bot oluşturma ekranı) ----------------
+    // Tek ON/OFF butonu. Açıkken ek parametre istenmez; submit'te payload'a
+    // dynamic_mode=true + auto daily_loss_limit_usd default eklenir.
+    // NOT: <label> içindeki gizli checkbox tıklanınca zaten otomatik toggle
+    // olur; ayrı bir click handler EKLEMEYIZ (aksi halde çift toggle = no-op).
+    (function bindDynamicModeToggle() {
+        var inputEl = document.getElementById("fDynamicMode");
+        if (!inputEl) return;
+        function applyVisual(on) {
+            var swEl = document.getElementById("dmDynModeSwitch");
+            if (swEl) swEl.style.background = on ? "#4caf50" : "#555";
+            var knob = document.getElementById("dmDynModeKnob");
+            if (knob) knob.style.left = on ? "22px" : "2px";
+            var badge = document.getElementById("dmDynModeBadge");
+            if (badge) {
+                badge.textContent = on ? "AÇIK" : "KAPALI";
+                badge.style.background = on ? "#4caf50" : "#444";
+            }
+            var hint = document.getElementById("dmDynModeHint");
+            if (hint) hint.style.display = on ? "block" : "none";
+        }
+        inputEl.addEventListener("change", function () { applyVisual(!!inputEl.checked); });
+        // Modal her açıldığında bayrağı görsel olarak senkronla
+        applyVisual(!!inputEl.checked);
+    })();
 
     // ESC key - close active modal
     document.addEventListener("keydown", (e) => {
@@ -578,20 +622,6 @@ function bindCreateBotModal() {
     // Submit: openCreateBotModal sets dmSubmitBtn.onclick → createAndStartBot (do not add createBot listener — it skips engine start)
 }
 
-function _gridInputWheelHandler(e) {
-    e.preventDefault();
-    var step = parseFloat(this.dataset.wheelStep) || 0.5;
-    var cur = parseFloat(this.value) || 0;
-    var delta = e.deltaY < 0 ? step : -step;
-    var min = this.min !== '' ? parseFloat(this.min) : -Infinity;
-    var max = this.max !== '' ? parseFloat(this.max) : Infinity;
-    var next = Math.round((cur + delta) * 1000) / 1000;
-    if (next < min) next = min;
-    if (next > max) next = max;
-    this.value = next;
-    this.dispatchEvent(new Event('input', { bubbles: true }));
-}
-
 function buildGridRows(containerId, count, mode) {
     const container = document.getElementById(containerId);
     if (!container) return;
@@ -620,7 +650,7 @@ function buildGridRows(containerId, count, mode) {
                         <span class="tooltip-icon">ℹ</span>
                         <span class="tooltip-text">${triggerTooltip}</span>
                     </label>
-                    <input type="number" id="${mode}Grid_${i}_trigger" class="form-input" step="0.5" min="0.1" data-wheel-step="0.5" placeholder="${defaultTrigger}" />
+                    <input type="number" id="${mode}Grid_${i}_trigger" class="form-input" step="0.5" min="0.1" placeholder="${defaultTrigger}" />
                 </div>
                 <div class="form-group">
                     <label class="label-with-tooltip">
@@ -628,7 +658,7 @@ function buildGridRows(containerId, count, mode) {
                         <span class="tooltip-icon">ℹ</span>
                         <span class="tooltip-text">${qtyTooltip}</span>
                     </label>
-                    <input type="number" id="${mode}Grid_${i}_qty" class="form-input" step="0.5" min="0.1" max="100" data-wheel-step="0.5" placeholder="${defaultQty}" />
+                    <input type="number" id="${mode}Grid_${i}_qty" class="form-input" step="0.5" min="0.1" max="100" placeholder="${defaultQty}" />
                 </div>
             </div>
         `;
@@ -638,12 +668,6 @@ function buildGridRows(containerId, count, mode) {
     // Önceki değerleri geri yaz
     container.querySelectorAll('input[id]').forEach(function(el) {
         if (prev[el.id] != null && prev[el.id] !== '') el.value = prev[el.id];
-    });
-
-    // Scroll (wheel) ile 0.5 adımlı artış
-    container.querySelectorAll('input[data-wheel-step]').forEach(function(el) {
-        el.removeEventListener('wheel', _gridInputWheelHandler);
-        el.addEventListener('wheel', _gridInputWheelHandler, { passive: false });
     });
 
     // Qty değişince toplamı göster
@@ -1365,6 +1389,14 @@ function collectForm() {
     const resellTrigger = parseDecimal(document.getElementById("fResellTrigger")?.value, 1.5);
     const resellTrail = parseDecimal(document.getElementById("fResellTrail")?.value, 0.5);
     
+    // Dynamic Mode: toggle açıksa payload'a bayrak ekle. Safety gate ön koşulu
+    // olarak daily_loss_limit_usd zorunlu — kullanıcıdan ek girdi istemiyoruz,
+    // bu yüzden bütçenin %5'ini otomatik default olarak enjekte ediyoruz
+    // (kullanıcı sonradan bot detayından değiştirebilir).
+    var dynModeEl = document.getElementById("fDynamicMode");
+    var dynModeOn = !!(dynModeEl && dynModeEl.checked);
+    var dailyLossDefault = dynModeOn ? Math.max(5, Math.round(budget * 0.05 * 100) / 100) : 0;
+
     return {
         account_id: State.accountId,
         symbol: symbol,
@@ -1380,7 +1412,9 @@ function collectForm() {
             rebuy_trail_pct: rebuyTrail,
             resell_trigger_pct: resellTrigger,
             resell_trail_pct: resellTrail
-        }
+        },
+        dynamic_mode: dynModeOn,
+        daily_loss_limit_usd: dailyLossDefault
     };
 }
 

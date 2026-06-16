@@ -121,6 +121,7 @@
         .health-warn-page-frame.is-visible {
             opacity: 1;
         }
+        body:not(.engine-log-admin) #engineLogPanel { display: none !important; visibility: hidden; }
         #engineLogPanel.panel-health-log-active {
             outline: 1px solid rgba(240, 185, 11, 0.15);
             border-radius: 8px;
@@ -549,6 +550,20 @@
         .param-table th { color: var(--ds-text-secondary); font-weight: 500; }
         .param-table .num { text-align: right; }
         .param-hint { font-size: 0.78rem; color: var(--ds-text-secondary); margin-top: 0.5rem; line-height: 1.4; }
+        .param-tabs-wrap { display: flex; gap: 0.35rem; margin-bottom: 0.75rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--ds-border, #2b3139); }
+        .param-tab { flex: 1; padding: 0.45rem 0.75rem; border: 1px solid var(--ds-border, #2b3139); border-radius: 6px; background: transparent; color: var(--ds-text-secondary); font-size: 0.82rem; font-weight: 500; cursor: pointer; }
+        .param-tab.active { background: rgba(240, 185, 11, 0.12); border-color: rgba(240, 185, 11, 0.45); color: var(--ds-text-primary); }
+        .dyn-param-leaderboard-banner { margin-bottom: 1.25rem; padding: 0.85rem 1rem; border-radius: 8px; border: 1px solid var(--ds-border, #2b3139); background: rgba(14, 203, 129, 0.06); }
+        .dyn-param-leaderboard-banner.dyn-param-status--off { background: rgba(128, 137, 160, 0.08); }
+        .dyn-param-leaderboard-banner.dyn-param-status--warn { background: rgba(240, 185, 11, 0.08); border-color: rgba(240, 185, 11, 0.35); }
+        .dyn-param-leaderboard-head { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; margin-bottom: 0.5rem; }
+        .dyn-param-leaderboard-title { font-weight: 600; color: var(--ds-text-primary); }
+        .dyn-param-status-badge { font-size: 0.72rem; font-weight: 600; padding: 0.15rem 0.5rem; border-radius: 999px; background: rgba(14, 203, 129, 0.15); color: #0ecb81; }
+        .dyn-param-status--off .dyn-param-status-badge { background: rgba(128, 137, 160, 0.15); color: var(--ds-text-secondary); }
+        .dyn-param-status--warn .dyn-param-status-badge { background: rgba(240, 185, 11, 0.15); color: #f0b90b; }
+        .dyn-param-leaderboard-meta { font-size: 0.78rem; color: var(--ds-text-secondary); margin: 0 0 0.75rem; }
+        .dyn-param-list { margin: 0.35rem 0 0; padding-left: 1.1rem; color: var(--ds-text-secondary); font-size: 0.78rem; line-height: 1.45; }
+        .dyn-param-emergency { border: 1px solid rgba(246, 70, 93, 0.35); border-radius: 8px; padding: 0.5rem 0.75rem; background: rgba(246, 70, 93, 0.06); }
         .bot-top-strip { display: flex; align-items: center; flex-wrap: nowrap; gap: 0.65rem 1rem; padding: 1rem 0; border-bottom: 1px solid var(--ds-border, #2b3139); margin-bottom: 1rem; min-width: 0; }
         .bot-top-strip #botLogoWrap { flex-shrink: 0; }
         .bot-top-strip .bot-logo { width: 44px; height: 44px; border-radius: 50%; object-fit: cover; flex-shrink: 0; }
@@ -568,6 +583,7 @@
         .bot-top-strip .strip-right { margin-left: auto; display: flex; align-items: center; gap: 0.5rem; flex-wrap: nowrap; flex-shrink: 0; }
         .bot-top-strip .strip-right .btn,
         .bot-top-strip .strip-right .status-badge,
+        .bot-top-strip .strip-right .dyn-mode-top-badge,
         .bot-top-strip .strip-right .btn-row .btn { min-height: 36px; flex-shrink: 0; white-space: nowrap; }
         .bot-top-strip .strip-right .btn { padding: 8px 12px; font-size: 0.85rem; }
         .state-hero { background: var(--ds-bg-panel, #242932); border-radius: 8px; padding: 1.5rem; margin-bottom: 1rem; border: 1px solid var(--ds-border-light, rgba(255,255,255,0.14)); box-shadow: var(--ds-shadow-panel, 0 2px 14px rgba(0, 0, 0, 0.28)); display: flex; flex-direction: column; min-height: 200px; }
@@ -575,6 +591,11 @@
         .state-hero-title-row { display: flex; align-items: center; justify-content: center; gap: 0.5rem; margin-bottom: 0.25rem; flex-shrink: 0; flex-wrap: wrap; }
         .state-hero-title-row .state-hero-title { margin-bottom: 0; }
         .state-hero-title-row .state-hero-ws-indicator { flex-shrink: 0; }
+        .dyn-mode-top-badge {
+            display: none;
+            white-space: nowrap;
+            flex-shrink: 0;
+        }
         .state-hero-meta { font-size: 0.65rem; color: var(--ds-text-muted, var(--ds-text-secondary)); text-align: center; margin-bottom: 1rem; display: flex; justify-content: center; align-items: center; flex-wrap: wrap; gap: 0.5rem; }
         .state-hero-meta-dur { display: inline-flex; align-items: baseline; gap: 0.25em; flex-shrink: 0; }
         .state-hero-meta-dur-label { flex-shrink: 0; }
@@ -838,9 +859,14 @@
         }
         #gridPointsPanel .grid-section-title.first { margin-top: 0; }
         .perf-genel-block { background: linear-gradient(135deg, var(--ds-bg-tertiary, #2b3139) 0%, rgba(0,0,0,0.3) 100%); border-radius: 12px; padding: 1.5rem 2rem; margin-bottom: 1.25rem; border: 1px solid var(--ds-border, #2b3139); text-align: center; }
-        .perf-genel-block .perf-genel-title { font-size: 0.8rem; font-weight: 600; color: var(--ds-text-secondary); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.5rem; }
+        .perf-genel-block .perf-genel-head { display: inline-flex; align-items: center; justify-content: center; gap: 0.35rem; margin-bottom: 0.5rem; }
+        .perf-genel-block .perf-genel-title { font-size: 0.8rem; font-weight: 600; color: var(--ds-text-secondary); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0; }
+        .perf-genel-block .perf-genel-ghost { display: inline-flex; align-items: center; justify-content: center; width: 1.1rem; height: 1.1rem; border-radius: 50%; font-size: 0.72rem; line-height: 1; color: var(--ds-text-tertiary, #848e9c); border: 1px solid rgba(132, 142, 156, 0.35); cursor: help; opacity: 0.72; transition: opacity 0.15s, color 0.15s, border-color 0.15s; }
+        .perf-genel-block .perf-genel-ghost:hover, .perf-genel-block .perf-genel-ghost:focus-visible { opacity: 1; color: var(--ds-text-secondary); border-color: rgba(132, 142, 156, 0.65); outline: none; }
+        #dynModeGhostTip.dyn-mode-ghost-tip { position: fixed; z-index: 10050; pointer-events: none; max-width: 300px; padding: 0.45rem 0.65rem; border-radius: 6px; background: rgba(36, 41, 50, 0.97); border: 1px solid rgba(128, 137, 160, 0.4); color: var(--ds-text-secondary, #b7bdc6); font-size: 0.75rem; font-weight: 500; line-height: 1.45; white-space: normal; text-align: left; box-shadow: 0 4px 18px rgba(0, 0, 0, 0.4); transform: translate(-50%, -100%); }
+        #dynModeGhostTip.dyn-mode-ghost-tip[hidden] { display: none !important; }
         .perf-genel-block .perf-genel-value { font-size: 2.25rem; font-weight: 700; line-height: 1.2; }
-        .perf-genel-block .perf-genel-hint { font-size: 0.78rem; color: var(--ds-text-tertiary); margin-top: 0.5rem; }
+        .perf-dual-pnl-wrap { background: var(--ds-bg-tertiary, #2b3139); border-radius: 12px; padding: 1rem 1.25rem; margin-bottom: 1.25rem; border: 1px solid var(--ds-border, #2b3139); }
         .perf-metric-card { background: var(--ds-bg-tertiary, #2b3139); border-radius: 8px; padding: 1rem; min-width: 120px; flex: 1 1 120px; }
         .perf-metric-label { font-size: 0.75rem; color: var(--ds-text-secondary); text-transform: uppercase; margin-bottom: 0.25rem; }
         .perf-metric-value { font-size: 1.1rem; font-weight: 600; }
@@ -1071,6 +1097,7 @@
                     <span id="healthCriticalBadge" class="health-alert-badge health-alert-critical" style="display: none;" title="">Kritik</span>
                 </div>
                 <div class="strip-right">
+                    <span id="dynModeStripBadge" class="status-badge status-running dyn-mode-top-badge" hidden title="Dinamik strateji modu aktif">Dinamik ✓</span>
                     <span id="statusBadge" class="status-badge status-stopped">—</span>
                     <button id="btnParametreler" class="btn btn-ghost" type="button">Parametreler</button>
                     <button id="btnStopAndDelete" class="btn btn-danger">Sonlandır</button>
@@ -1081,6 +1108,17 @@
         <div class="panel" id="gridPointsPanel" style="display: none;">
             <h2 id="gridPointsPanelTitle">Grid alım satım noktaları</h2>
             <p id="gridPointsRefPrice" class="muted poll-note grid-points-ref-price" style="font-size: 0.85rem; margin-top: -0.35rem; margin-bottom: 0.75rem;"></p>
+            <!-- Dynamic Mode banner: aktifse bu turun otomatik belirlenen eşikleri -->
+            <div id="dynModeGridBanner" style="display:none; border:1px solid rgba(76,175,80,0.4); background:rgba(76,175,80,0.08); border-radius:10px; padding:0.7rem 0.9rem; margin-bottom:0.85rem;">
+                <div style="display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap;">
+                    <span style="font-size:0.7rem; font-weight:700; color:#4caf50; padding:0.12rem 0.5rem; border:1px solid #4caf50; border-radius:999px;">⚡ DİNAMİK MOD AKTİF</span>
+                    <span id="dynModeGridRegime" style="font-size:0.78rem; color:var(--ds-text-secondary,#9aa3b2);"></span>
+                </div>
+                <div id="dynModeGridThresholds" style="font-size:0.76rem; color:var(--ds-text-secondary,#b6bccd); margin-top:0.5rem; line-height:1.7;"></div>
+                <div style="font-size:0.7rem; color:var(--ds-text-tertiary,#8089a0); margin-top:0.4rem;">
+                    Bu eşikler her tur başında coin'in volatilite/trend/hacim durumuna göre otomatik hesaplanır ve tur boyunca sabit kalır.
+                </div>
+            </div>
             <div id="gridSellSection">
             <div class="grid-section-title grid-section-title first">Satış gridleri</div>
             <div class="grid-tables-wrap">
@@ -1126,10 +1164,13 @@
         <div class="panel" id="perfPanel" style="display: none;">
             <h2>Bot Performansı</h2>
             <div class="perf-genel-block" id="perfGenelBlock" style="display: none;">
-                <div class="perf-genel-title">Bot Performansı</div>
+                <div class="perf-genel-head">
+                    <span class="perf-genel-title">Bot Performansı</span>
+                    <span class="perf-genel-ghost" data-dyn-tip="Botu açtığınız andaki coin fiyatı ve bakiyeniz referans alınır. Coin yükselse bile bakiyeniz aynı oranda artmışsa burada 0 görürsünüz. Bot al-sat yaparak size ekstra kazanç sağladıysa artı, zarar ettirdiyse eksi yazılır." role="img" aria-label="Bot performansı açıklaması" tabindex="0">ⓘ</span>
+                </div>
                 <div class="perf-genel-value" id="perfGenelValue">—</div>
-                <div class="perf-genel-hint" style="display:none;"></div>
             </div>
+            <div class="perf-dual-pnl-wrap" id="perfDualPnlBlock" style="display: none;"></div>
             <div class="perf-chart-wrap" id="perfChartWrap" title="Grafiği büyütmek için tıklayın">
                 <div class="perf-chart-title">Parite % &amp; Bot bakiyesi % (başlangıçtan itibaren) <span class="perf-chart-open-hint">Grafiği aç</span></div>
                 <div class="perf-chart-svg-wrap" id="perfChartSvgWrap">
@@ -1219,6 +1260,7 @@
                     <h3 class="modal-title">Parametreler</h3>
                     <button type="button" class="parametreler-modal-close" id="parametrelerModalClose" aria-label="Kapat">&times;</button>
                 </div>
+                <div id="paramTabsHost"></div>
                 <div id="configGrid" class="parametreler-body"></div>
                 <div class="modal-actions" style="margin-top: 1rem;">
                     <button type="button" class="btn btn-ghost" id="parametrelerModalKapat">Kapat</button>
@@ -1255,10 +1297,12 @@
     <script src="/ui/assets/utils/coinLogo.js?v=1"></script>
     <script src="/ui/assets/core/apiClient.js?v=refactor1"></script>
     <script src="/ui/assets/utils/gridTrailEnvelope.js?v=2"></script>
+    <script src="/ui/assets/utils/engineLogAccess.js?v=1"></script>
     <script src="/ui/assets/utils/engineLogArchive.js?v=1"></script>
-    <script src="/ui/assets/utils/botHealthAlerts.js?v=34"></script>
+    <script src="/ui/assets/utils/botHealthAlerts.js?v=35"></script>
+    <script src="/ui/assets/utils/dynamicModeParamsView.js?v=2"></script>
 <script src="/ui/assets/utils/engineLogFormat.js?v=69"></script>
-<script src="/ui/assets/utils/engineLogLive.js?v=35"></script>
+<script src="/ui/assets/utils/engineLogLive.js?v=37"></script>
     <script src="/ui/assets/core/intervalRegistry.js?v=1"></script>
     <script src="/ui/assets/botPageAppbar.js?v=1"></script>
     <script src="/ui/vendor/lightweight-charts.standalone.production.js"></script>
@@ -1397,7 +1441,7 @@
             if (profitPointsPanel && o.profitPanelDisplay) profitPointsPanel.style.display = o.profitPanelDisplay;
             if (tradesPanel && o.tradesPanelDisplay) tradesPanel.style.display = o.tradesPanelDisplay;
             if (perfPanel && o.perfPanelDisplay) perfPanel.style.display = o.perfPanelDisplay;
-            if (engineLogPanel && o.engineLogPanelDisplay) engineLogPanel.style.display = o.engineLogPanelDisplay;
+            if (engineLogPanel && o.engineLogPanelDisplay && canViewEngineLogs()) engineLogPanel.style.display = o.engineLogPanelDisplay;
             if (gridSellBody && o.gridSellHtml != null) gridSellBody.innerHTML = o.gridSellHtml;
             if (gridBuyBody && o.gridBuyHtml != null) gridBuyBody.innerHTML = o.gridBuyHtml;
             if ((gridSellBody && gridSellBody.rows.length) || (gridBuyBody && gridBuyBody.rows.length)) {
@@ -1410,18 +1454,30 @@
             if (profitPointsBody && o.profitHtml != null) profitPointsBody.innerHTML = o.profitHtml;
             if (perfMetrics && o.perfMetricsHtml) perfMetrics.innerHTML = o.perfMetricsHtml;
             var cycleReportEl = document.getElementById('cycleReport');
-            if (cycleReportEl) cycleReportEl.style.display = 'none';
+            var turBtns = document.getElementById('cycleTradesTurButtons');
+            if (cycleReportEl) {
+                if (o.cycleReportHtml) {
+                    cycleReportEl.innerHTML = o.cycleReportHtml;
+                    cycleReportEl.style.display = o.cycleReportDisplay || 'block';
+                } else {
+                    cycleReportEl.style.display = 'none';
+                }
+            }
             if (o.cycleReportStartedAt) {
                 window._cycleReportStartedAt = o.cycleReportStartedAt;
                 window._cycleReportDurationCycleId = o.cycleReportDurationCycleId != null ? Number(o.cycleReportDurationCycleId) : window._cycleReportDurationCycleId;
             }
-            if (cycleTradesList) {
-                cycleTradesList.innerHTML = cycleTradesListPlaceholder('Yükleniyor…');
+            if (turBtns) {
+                if (o.cycleTurBtnsHtml) turBtns.innerHTML = o.cycleTurBtnsHtml;
+                else turBtns.innerHTML = '';
             }
-            var turBtns = document.getElementById('cycleTradesTurButtons');
-            if (turBtns) turBtns.innerHTML = '';
-            var cycleReportSkip = document.getElementById('cycleReport');
-            if (cycleReportSkip) cycleReportSkip.style.display = 'none';
+            if (cycleTradesList) {
+                if (o.cycleTradesHtml && o.cycleTradesHtml.indexOf('cycle-trade-row') >= 0) {
+                    cycleTradesList.innerHTML = o.cycleTradesHtml;
+                } else {
+                    cycleTradesList.innerHTML = cycleTradesListPlaceholder('Yükleniyor…');
+                }
+            }
             if (engineLogList && o.engineLogHtml) engineLogList.innerHTML = o.engineLogHtml;
             if (o.gridRefText) {
                 var refEl = document.getElementById('gridPointsRefPrice');
@@ -2687,7 +2743,6 @@
         }
 
         function renderConfig(cfg, symbol, referencePrice) {
-            if (!configGrid) return;
             cfg = cfg || {};
             var alloc = cfg.allocation || {};
             var up = cfg.up || {};
@@ -2751,7 +2806,75 @@
             html += row('Kar satış trailing %', exTrl != null ? exTrl + '%' : '—');
             html += '<p class="param-hint">Kar alım: fiyat düşünce tekrar alım. Kar satış: fiyat yükselince kar realizasyonu satışı.</p>';
             html += '</div>';
-            configGrid.innerHTML = html;
+            return html;
+        }
+
+        var _paramModalGenelHtml = '';
+        var _paramModalDynHtml = '';
+        var _paramModalActiveTab = 'genel';
+
+        function buildParamModalDynHtml(detail) {
+            detail = detail || lastBotDetail || {};
+            if (!window.DynModeParamsView) return '';
+            return window.DynModeParamsView.renderBotDetailDynamicTab(
+                detail.dynamic_mode || {},
+                detail.state || {},
+                detail.symbol || (botSymbolEl && botSymbolEl.textContent) || '',
+                detail.config || {}
+            );
+        }
+
+        function paramModalShowsDynamicTab(detail) {
+            detail = detail || lastBotDetail || {};
+            if (!window.DynModeParamsView) return false;
+            return window.DynModeParamsView.isDynamicModeUiActive(
+                detail.dynamic_mode || {},
+                detail.config || {}
+            );
+        }
+
+        function bindParamModalTabHandlers() {
+            var host = document.getElementById('paramTabsHost');
+            if (!host || host.dataset.bound === '1') return;
+            host.dataset.bound = '1';
+            host.addEventListener('click', function (e) {
+                var btn = e.target.closest('[data-param-tab]');
+                if (!btn || !host.contains(btn)) return;
+                var tab = btn.getAttribute('data-param-tab') || 'genel';
+                if (tab === _paramModalActiveTab) return;
+                _paramModalActiveTab = tab;
+                refreshParamModalView();
+            });
+        }
+
+        function refreshParamModalView() {
+            var host = document.getElementById('paramTabsHost');
+            var showDyn = paramModalShowsDynamicTab();
+            if (host) {
+                host.innerHTML = showDyn
+                    ? (window.DynModeParamsView ? window.DynModeParamsView.renderParamModalTabsHtml(_paramModalActiveTab) : '')
+                    : '';
+            }
+            if (!configGrid) return;
+            if (_paramModalActiveTab === 'dinamik' && showDyn) {
+                configGrid.innerHTML = _paramModalDynHtml || buildParamModalDynHtml();
+            } else {
+                _paramModalActiveTab = 'genel';
+                configGrid.innerHTML = _paramModalGenelHtml || '<p class="param-hint" style="padding: 1rem;">Parametreler yükleniyor…</p>';
+            }
+        }
+
+        function cacheParamModalHtml(cfg, symbol, ref) {
+            _paramModalGenelHtml = renderConfig(cfg, symbol, ref);
+            _paramModalDynHtml = buildParamModalDynHtml({
+                config: cfg,
+                symbol: symbol,
+                dynamic_mode: lastBotDetail && lastBotDetail.dynamic_mode,
+                state: lastBotDetail && lastBotDetail.state
+            });
+            if (parametrelerModal && parametrelerModal.style.display === 'flex') {
+                refreshParamModalView();
+            }
         }
 
         function baseFromSymbol(sym) {
@@ -3010,7 +3133,12 @@
             }
         };
 
+        function canViewEngineLogs() {
+            return !!(window.EngineLogAccess && window.EngineLogAccess.canView && window.EngineLogAccess.canView());
+        }
+
         function loadEngineEvents(bid, incremental) {
+            if (!canViewEngineLogs()) return Promise.resolve([]);
             if (!bid || !window.EngineLogLive) return;
             _engineLogLiveOpts.botId = bid;
             _engineLogLiveOpts.container = engineLogList;
@@ -3020,6 +3148,7 @@
         var _engineLogPollingOn = false;
 
         function startEngineLogLive(preserveDisplay) {
+            if (!canViewEngineLogs()) return;
             if (!window.EngineLogLive || !botId) return;
             var hasCachedTable = preserveDisplay && engineLogList && engineLogList.querySelector('table.engine-log-table');
             if (hasCachedTable) {
@@ -3179,6 +3308,7 @@
         function clearBotBlockingStatus() {
             window._botBlockingStatus = null;
         }
+        window.clearBotBlockingStatus = clearBotBlockingStatus;
 
         function activeBotBlockingStatus() {
             var b = window._botBlockingStatus;
@@ -3199,7 +3329,9 @@
             var health = window._lastHealthData || null;
             if (!health) return { active: false };
             if (window.BotHealthAlerts && typeof window.BotHealthAlerts.classifyRowAlerts === 'function') {
-                var classified = window.BotHealthAlerts.classifyRowAlerts(botId, health, isBotRunning());
+                var classified = window.BotHealthAlerts.classifyRowAlerts(
+                    botId, health, isBotRunning(), window._lastEngineEvents || []
+                );
                 var level = classified && String(classified.level || '').toLowerCase();
                 if (level !== 'critical' && level !== 'both') return { active: false };
             }
@@ -4035,8 +4167,87 @@
                 refEl.textContent = 'Tur ' + ctx.cycleNum + ' referans fiyatı: —';
             }
         }
+        function isDynModeUiActive(data) {
+            var dyn = (data && data.dynamic_mode) || (lastBotDetail && lastBotDetail.dynamic_mode) || {};
+            if (dyn.active === true) return true;
+            if (dyn.enabled === true && dyn.safety_gate && dyn.safety_gate.ok === true) return true;
+            var cfg = (data && data.config) || (lastBotDetail && lastBotDetail.config) || {};
+            return !!(cfg.dynamic_mode && dyn.enabled !== false && (!dyn.safety_gate || dyn.safety_gate.ok !== false));
+        }
+
+        function syncDynModeTopBadge(data) {
+            var active = isDynModeUiActive(data);
+            var dyn = (data && data.dynamic_mode) || (lastBotDetail && lastBotDetail.dynamic_mode) || {};
+            var title = 'Dinamik strateji modu aktif — parametreler her tur başında otomatik hesaplanır';
+            if (dyn.snapshot && dyn.snapshot.regime) {
+                title += ' · Rejim: ' + dyn.snapshot.regime;
+            }
+            ['dynModeStripBadge'].forEach(function (id) {
+                var el = document.getElementById(id);
+                if (!el) return;
+                if (active) {
+                    el.hidden = false;
+                    el.style.display = 'inline-flex';
+                    el.title = title;
+                } else {
+                    el.hidden = true;
+                    el.style.display = 'none';
+                    el.title = '';
+                }
+            });
+        }
+
+        function renderDynModeGridBanner(data) {
+            syncDynModeTopBadge(data);
+            var banner = document.getElementById('dynModeGridBanner');
+            if (!banner) return;
+            var dyn = (data && data.dynamic_mode) || (lastBotDetail && lastBotDetail.dynamic_mode) || {};
+            var snap = dyn && dyn.snapshot;
+            if (!dyn.active || !snap || !snap.applied) {
+                banner.style.display = 'none';
+                return;
+            }
+            banner.style.display = 'block';
+            var ap = snap.applied || {};
+            var feats = snap.features || {};
+            var regimeMap = {
+                LOW_VOL_RANGING: 'Düşük volatilite / yatay',
+                HIGH_VOL_RANGING: 'Yüksek volatilite / yatay (chop)',
+                TRENDING_UP: 'Yukarı trend',
+                TRENDING_DOWN: 'Aşağı trend (savunma)',
+                SQUEEZE: 'Sıkışma (squeeze)',
+                BREAKOUT: 'Kırılım (breakout)',
+                DUMP_RISK: 'Dump riski',
+                UNKNOWN: 'Belirsiz'
+            };
+            var regEl = document.getElementById('dynModeGridRegime');
+            if (regEl) {
+                var regTxt = regimeMap[snap.regime] || snap.regime || '—';
+                regEl.textContent = 'Rejim: ' + regTxt + ' · Tur #' + (snap.cycle_id != null ? snap.cycle_id : '?')
+                    + (snap.data_fresh === false ? ' · ⚠ veri eski (önceki tur değerleri)' : '');
+            }
+            function pf(v) { return (v == null || isNaN(Number(v))) ? '—' : Number(v).toFixed(2) + '%'; }
+            function firstG(arr, k) { return (arr && arr[0] && arr[0][k] != null) ? Number(arr[0][k]).toFixed(2) + '%' : '—'; }
+            function lastG(arr, k) { return (arr && arr.length && arr[arr.length-1][k] != null) ? Number(arr[arr.length-1][k]).toFixed(2) + '%' : '—'; }
+            var lines = [];
+            lines.push('<b>Base / Quote:</b> ' + pf(ap.base_alloc_pct) + ' / ' + pf(ap.quote_alloc_pct));
+            lines.push('<b>Satış grid tetik:</b> ' + firstG(ap.sell_grids, 'sell_grid_pct') + ' → ' + lastG(ap.sell_grids, 'sell_grid_pct'));
+            lines.push('<b>Alış grid tetik:</b> ' + firstG(ap.buy_grids, 'buy_grid_pct') + ' → ' + lastG(ap.buy_grids, 'buy_grid_pct'));
+            lines.push('<b>Trailing (satış/alış):</b> ' + pf(ap.sell_trigger_trailing_pct) + ' / ' + pf(ap.buy_trigger_trailing_pct));
+            lines.push('<b>Kâr al / Re-entry:</b> ' + pf(ap.profit_exit_rise_pct) + ' / ' + pf(ap.profit_reentry_drop_pct));
+            var metaBits = [];
+            if (feats.atr_pct_5m != null) metaBits.push('ATR% ' + Number(feats.atr_pct_5m).toFixed(2));
+            if (feats.adx_1h != null) metaBits.push('ADX ' + Number(feats.adx_1h).toFixed(0));
+            if (feats.bbw_1h != null) metaBits.push('BBW ' + Number(feats.bbw_1h).toFixed(1));
+            var bodyEl = document.getElementById('dynModeGridThresholds');
+            if (bodyEl) {
+                bodyEl.innerHTML = lines.join(' &nbsp;·&nbsp; ')
+                    + (metaBits.length ? '<br><span style="color:var(--ds-text-tertiary,#8089a0);">Sinyaller: ' + metaBits.join(' · ') + '</span>' : '');
+            }
+        }
         function renderGridPointsPanel(data, opts) {
             if (!gridSellBody || !gridBuyBody) return;
+            try { renderDynModeGridBanner(data); } catch (e) { console && console.debug && console.debug('dynBanner', e); }
             opts = opts || {};
             var gps = data.grid_points || [];
             var sellPoints = gps.filter(function(p) { return p.type === 'sell'; });
@@ -4534,7 +4745,6 @@
             }
 
             var refPrice = data.reference_display != null && !isNaN(data.reference_display) ? Number(data.reference_display) : (data.state && data.state.reference_price != null ? Number(data.state.reference_price) : null);
-            renderConfig(data.config || {}, symbol, refPrice);
 
             renderGridPointsPanel(data, { applyLive: false });
             renderProfitPointsPanel(data, { applyLive: false });
@@ -4543,11 +4753,14 @@
             _lastGridDisplayFp = gridDisplayFingerprint(data);
             lastBotDetail.state = st;
             lastBotDetail.config = data.config || {};
+            if (data.dynamic_mode !== undefined) lastBotDetail.dynamic_mode = data.dynamic_mode;
+            syncDynModeTopBadge(data);
             lastBotDetail.grid_points = data.grid_points || [];
             lastBotDetail.profit_points = data.profit_points || [];
             lastBotDetail.grid_meta = data.grid_meta || data.meta || lastBotDetail.grid_meta || null;
             lastBotDetail.reference_display = data.reference_display;
             lastBotDetail.status = data.status || '';
+            cacheParamModalHtml(data.config || {}, symbol, refPrice);
             syncGridPointsPoll();
             syncGridWarmupPoll();
             syncTradesPanelPoll();
@@ -5023,60 +5236,29 @@
 
             lastRefPriceForPerf = refPrice != null ? refPrice : null;
             initialCapForPerf = initialCapital > 0 ? initialCapital : null;
+            var alphaPerf = data.bot_alpha_performance || null;
+            var runStartBal = alphaPerf && alphaPerf.start_balance_usd != null ? Number(alphaPerf.start_balance_usd) : initialCapForPerf;
+            var runStartPrice = alphaPerf && alphaPerf.start_coin_price != null ? Number(alphaPerf.start_coin_price) : lastRefPriceForPerf;
             if (perfReport) {
-                var refPStr = (lastRefPriceForPerf != null ? lastRefPriceForPerf.toFixed(4) : '—');
-                var startBalStr = (initialCapForPerf != null ? fmtUsd(initialCapForPerf) : '—');
+                var refPStr = (runStartPrice != null ? runStartPrice.toFixed(4) : '—');
+                var startBalStr = (runStartBal != null ? fmtUsd(runStartBal) : '—');
                 perfReport.innerHTML =
                     '<p><strong>Başlangıç bakiyesi:</strong> <span id="perfReportStartBakiye">' + startBalStr + '</span></p>' +
                     '<p><strong>Güncel bakiye:</strong> <span id="perfReportGuncelBakiye">' + (botBalanceUsd || '—') + '</span></p>' +
                     '<p><strong>Bakiye Değişimi:</strong> <span id="perfReportBakiyeDegisim" style="color:' + totalKzCl + '">' + totalKzStr + (initialCapital > 0 && totalPnlUsd != null ? ' ' + (totalPnlUsd >= 0 ? '+' : '') + (initialCapital > 0 ? (totalPnlUsd / initialCapital * 100).toFixed(2) : '0') + '%' : '') + '</span></p>' +
-                    '<p style="margin-top:1rem;"><strong>Parite Başlangıç Fiyatı (referans):</strong> <span id="perfReportRefPrice">' + refPStr + '</span></p>' +
+                    '<p style="margin-top:1rem;"><strong>Parite Başlangıç Fiyatı (bot start):</strong> <span id="perfReportRefPrice">' + refPStr + '</span></p>' +
                     '<p><strong>Parite Güncel Fiyatı:</strong> <span id="perfReportPariteGuncel">' + (priceForBot != null ? priceForBot.toFixed(4) : '—') + '</span></p>' +
-                    '<p><strong>Parite Değişimi:</strong> <span id="perfReportPariteDegisim">' + (lastRefPriceForPerf != null && priceForBot != null ? (priceForBot - lastRefPriceForPerf >= 0 ? '+' : '') + (priceForBot - lastRefPriceForPerf).toFixed(4) + ' ' + (priceForBot >= lastRefPriceForPerf ? '+' : '') + ((priceForBot - lastRefPriceForPerf) / lastRefPriceForPerf * 100).toFixed(2) + '%' : '—') + '</span></p>' +
+                    '<p><strong>Parite Değişimi:</strong> <span id="perfReportPariteDegisim">' + (runStartPrice != null && priceForBot != null ? (priceForBot - runStartPrice >= 0 ? '+' : '') + (priceForBot - runStartPrice).toFixed(4) + ' ' + (priceForBot >= runStartPrice ? '+' : '') + ((priceForBot - runStartPrice) / runStartPrice * 100).toFixed(2) + '%' : '—') + '</span></p>' +
                     '<p><strong>Gerçek performans</strong> (Bakiye % − Parite %): <span id="perfReportGercekPerf" style="font-weight:600">—</span></p>';
-                var bakiyePct0 = initialCapForPerf > 0 && currentUsdNum != null ? (currentUsdNum - initialCapForPerf) / initialCapForPerf * 100 : null;
-                var paritePct0 = lastRefPriceForPerf != null && lastRefPriceForPerf > 0 && priceForBot != null ? (priceForBot - lastRefPriceForPerf) / lastRefPriceForPerf * 100 : null;
-                var realPct0 = (bakiyePct0 != null && paritePct0 != null) ? (bakiyePct0 - paritePct0) : null;
-                var genelBlock = document.getElementById('perfGenelBlock');
-                var genelValueEl = document.getElementById('perfGenelValue');
-                if (genelBlock) genelBlock.style.display = 'block';
-                var dual = data.dual_pnl;
-                if (dual && dual.aggregates) {
-                    var ag = dual.aggregates;
-                    var cur = dual.current_cycle || {};
-                    var cashTotal = ag.cash_pnl_usdt_total != null ? Number(ag.cash_pnl_usdt_total) : 0;
-                    var cashFeesTotal = ag.cash_fees_usdt_total != null ? Number(ag.cash_fees_usdt_total) : 0;
-                    var invQtyTotal = ag.inventory_coin_adv_qty_total != null ? Number(ag.inventory_coin_adv_qty_total) : 0;
-                    var invFeesTotal = ag.inventory_fees_usdt_total != null ? Number(ag.inventory_fees_usdt_total) : 0;
-                    var invUsdtEquiv = ag.inventory_usdt_equiv_total != null ? Number(ag.inventory_usdt_equiv_total) : (invQtyTotal * (priceForBot || 0) - invFeesTotal);
-                    var baseA = perfBaseAssetLabel(symbol);
-                    var cashStr = (cashTotal >= 0 ? '+' : '') + fmtUsd(cashTotal) + '  |  Komisyon: ' + fmtUsd(cashFeesTotal);
-                    var invQtyStr = (invQtyTotal >= 0 ? '+' : '') + fmtNum(invQtyTotal, 8) + ' ' + baseA + '  |  Komisyon: ' + fmtUsd(invFeesTotal);
-                    var invUsdtStr = (invUsdtEquiv >= 0 ? '+' : '') + fmtUsd(invUsdtEquiv) + ' (≈ @ güncel fiyat)';
-                    var openCycleHtml = '';
-                    if (cur.fills_count != null && cur.fills_count === 0) {
-                        openCycleHtml = '<p class="perf-dual-open-cycle muted">Açık tur (Cycle #' + (cur.cycle_id || '—') + '): Bu turda henüz işlem yok.</p>';
-                    } else if (cur.cash_pnl_usdt != null || cur.inventory_coin_adv_qty != null) {
-                        var ocCash = (cur.cash_pnl_usdt != null ? (cur.cash_pnl_usdt >= 0 ? '+' : '') + fmtUsd(cur.cash_pnl_usdt) : '—');
-                        var ocInv = (cur.inventory_coin_adv_qty != null ? (cur.inventory_coin_adv_qty >= 0 ? '+' : '') + fmtNum(cur.inventory_coin_adv_qty, 8) + ' ' + baseA : '—');
-                        openCycleHtml = '<p class="perf-dual-open-cycle"><strong>Açık tur (Cycle #' + (cur.cycle_id || '—') + '):</strong> Nakit ' + ocCash + '  |  Envanter ' + ocInv + '</p>';
-                    }
-                    genelBlock.innerHTML = '<div class="perf-genel-title">Genel PNL</div>' +
-                        '<div class="perf-dual-pnl">' +
-                        '<div class="perf-dual-line"><span class="perf-dual-label">CASH PNL (USDT):</span> <span class="perf-dual-value" style="color:' + (cashTotal >= 0 ? '#0ecb81' : '#f6465d') + '">' + cashStr + '</span></div>' +
-                        '<div class="perf-dual-line"><span class="perf-dual-label">INVENTORY PNL (COIN):</span> <span class="perf-dual-value" style="color:' + (invQtyTotal >= 0 ? '#0ecb81' : '#f6465d') + '">' + invQtyStr + '</span></div>' +
-                        '<div class="perf-dual-line perf-dual-line-secondary"><span class="perf-dual-label">INVENTORY (USDT eşdeğer):</span> <span class="perf-dual-value" style="color:' + (invUsdtEquiv >= 0 ? '#0ecb81' : '#f6465d') + '">' + invUsdtStr + '</span></div>' +
-                        openCycleHtml +
-                        '</div>';
-                } else {
-                    if (genelValueEl && realPct0 != null) {
-                        genelValueEl.textContent = (realPct0 >= 0 ? '+' : '') + realPct0.toFixed(2) + '%';
-                        genelValueEl.style.color = realPct0 >= 0 ? '#0ecb81' : '#f6465d';
-                    }
-                }
+                var bakiyePct0 = alphaPerf && alphaPerf.balance_pct != null ? Number(alphaPerf.balance_pct) : (runStartBal > 0 && currentUsdNum != null ? (currentUsdNum - runStartBal) / runStartBal * 100 : null);
+                var paritePct0 = alphaPerf && alphaPerf.coin_pct != null ? Number(alphaPerf.coin_pct) : (runStartPrice != null && runStartPrice > 0 && priceForBot != null ? (priceForBot - runStartPrice) / runStartPrice * 100 : null);
+                var realPct0 = resolveBotAlphaPct(data);
+                if (realPct0 == null && bakiyePct0 != null && paritePct0 != null) realPct0 = bakiyePct0 - paritePct0;
+                updatePerfGenelAlpha(data);
+                renderPerfDualPnlSummary(data.dual_pnl, priceForBot, symbol);
                 var perfReportGercekPerf = document.getElementById('perfReportGercekPerf');
                 if (perfReportGercekPerf && realPct0 != null) {
-                    perfReportGercekPerf.textContent = (realPct0 >= 0 ? '+' : '') + realPct0.toFixed(2) + '%';
+                    perfReportGercekPerf.textContent = formatSignedPct2(realPct0);
                     perfReportGercekPerf.style.color = realPct0 >= 0 ? '#0ecb81' : '#f6465d';
                 }
                 if (window.PerfChartTV && typeof window.PerfChartTV.init === 'function') {
@@ -5085,7 +5267,11 @@
                 }
             }
             perfPanel.style.display = 'block';
-            if (window.innerWidth > 768) { engineLogPanel.style.display = 'block'; } else { engineLogPanel.style.display = 'none'; }
+            if (canViewEngineLogs() && window.innerWidth > 768 && engineLogPanel) {
+                engineLogPanel.style.display = 'block';
+            } else if (engineLogPanel) {
+                engineLogPanel.style.display = 'none';
+            }
             if (window.EngineLogFormat && window.EngineLogFormat.setLogContext) {
                 window.EngineLogFormat.setLogContext({
                     botId: botId,
@@ -5175,6 +5361,8 @@
                 _engineLogLiveOpts.cycleOpenTrades = st.cycle_open_trades || _engineLogLiveOpts.cycleOpenTrades || [];
             }
             applyLive(liveStateFromDetail(data));
+            if (data.dynamic_mode !== undefined) lastBotDetail.dynamic_mode = data.dynamic_mode;
+            syncDynModeTopBadge(data);
             if (lastBotDetail.symbol) applyLiveHeroBalances(st, lastBotDetail.symbol);
             if (st.cycle_id != null && Number(st.cycle_id) === Number(window._botDetailSelectedCycleId)) {
                 var openedPatch = resolveOpenCycleStartedAt(null, Number(st.cycle_id));
@@ -5212,10 +5400,14 @@
                 refreshGridPointsLivePrice(data.current_price != null ? Number(data.current_price) : null);
             }
             syncGridWarmupPoll();
+            if (data.bot_alpha_performance || data.real_performance_pct != null) {
+                updatePerfGenelAlpha(data);
+                var pfb = data.current_price != null ? Number(data.current_price) : null;
+                renderPerfDualPnlSummary(data.dual_pnl || lastBotDetail.dual_pnl, pfb, data.symbol || lastBotDetail.symbol);
+            }
             var sel = window._botDetailSelectedCycleId;
             if (typeof window._botDetailLoadCycleTrades === 'function' && sel != null && !_tradesPanelBootTimer) {
-                _lastTradesPanelFingerprint = '';
-                window._botDetailLoadCycleTrades(Number(sel), { silent: false });
+                window._botDetailLoadCycleTrades(Number(sel), { silent: true });
             }
             var trailNow = botDetailGridTrailActive(lastBotDetail);
             if (_lastGridTrailActive !== trailNow) {
@@ -5291,6 +5483,75 @@
             return true;
         }
 
+        function resolveBotAlphaPct(data) {
+            if (!data) return null;
+            if (data.bot_alpha_performance && data.bot_alpha_performance.alpha_pct != null) {
+                return Number(data.bot_alpha_performance.alpha_pct);
+            }
+            if (data.real_performance_pct != null && !isNaN(data.real_performance_pct)) {
+                return Number(data.real_performance_pct);
+            }
+            return null;
+        }
+
+        function formatSignedPct2(pct) {
+            if (pct == null || isNaN(pct)) return '—';
+            return (pct >= 0 ? '+' : '') + Number(pct).toFixed(2) + '%';
+        }
+
+        function updatePerfGenelAlpha(data) {
+            var genelBlock = document.getElementById('perfGenelBlock');
+            var genelValueEl = document.getElementById('perfGenelValue');
+            if (!genelBlock || !genelValueEl) return;
+            var alpha = resolveBotAlphaPct(data);
+            genelBlock.style.display = 'block';
+            if (alpha != null) {
+                genelValueEl.textContent = formatSignedPct2(alpha);
+                genelValueEl.style.color = alpha >= 0 ? '#0ecb81' : '#f6465d';
+            } else {
+                genelValueEl.textContent = '—';
+                genelValueEl.style.color = '';
+            }
+        }
+
+        function renderPerfDualPnlSummary(dual, priceForBot, symbol) {
+            var dualBlock = document.getElementById('perfDualPnlBlock');
+            if (!dualBlock) return;
+            if (!dual || !dual.aggregates) {
+                dualBlock.style.display = 'none';
+                dualBlock.innerHTML = '';
+                return;
+            }
+            var ag = dual.aggregates;
+            var cur = dual.current_cycle || {};
+            var cashTotal = ag.cash_pnl_usdt_total != null ? Number(ag.cash_pnl_usdt_total) : 0;
+            var cashFeesTotal = ag.cash_fees_usdt_total != null ? Number(ag.cash_fees_usdt_total) : 0;
+            var invQtyTotal = ag.inventory_coin_adv_qty_total != null ? Number(ag.inventory_coin_adv_qty_total) : 0;
+            var invFeesTotal = ag.inventory_fees_usdt_total != null ? Number(ag.inventory_fees_usdt_total) : 0;
+            var invUsdtEquiv = ag.inventory_usdt_equiv_total != null ? Number(ag.inventory_usdt_equiv_total) : (invQtyTotal * (priceForBot || 0) - invFeesTotal);
+            var baseA = perfBaseAssetLabel(symbol);
+            var cashStr = (cashTotal >= 0 ? '+' : '') + fmtUsd(cashTotal) + '  |  Komisyon: ' + fmtUsd(cashFeesTotal);
+            var invQtyStr = (invQtyTotal >= 0 ? '+' : '') + fmtNum(invQtyTotal, 8) + ' ' + baseA + '  |  Komisyon: ' + fmtUsd(invFeesTotal);
+            var invUsdtStr = (invUsdtEquiv >= 0 ? '+' : '') + fmtUsd(invUsdtEquiv) + ' (≈ @ güncel fiyat)';
+            var openCycleHtml = '';
+            if (cur.fills_count != null && cur.fills_count === 0) {
+                openCycleHtml = '<p class="perf-dual-open-cycle muted">Açık tur (Cycle #' + (cur.cycle_id || '—') + '): Bu turda henüz işlem yok.</p>';
+            } else if (cur.cash_pnl_usdt != null || cur.inventory_coin_adv_qty != null) {
+                var ocCash = (cur.cash_pnl_usdt != null ? (cur.cash_pnl_usdt >= 0 ? '+' : '') + fmtUsd(cur.cash_pnl_usdt) : '—');
+                var ocInv = (cur.inventory_coin_adv_qty != null ? (cur.inventory_coin_adv_qty >= 0 ? '+' : '') + fmtNum(cur.inventory_coin_adv_qty, 8) + ' ' + baseA : '—');
+                openCycleHtml = '<p class="perf-dual-open-cycle"><strong>Açık tur (Cycle #' + (cur.cycle_id || '—') + '):</strong> Nakit ' + ocCash + '  |  Envanter ' + ocInv + '</p>';
+            }
+            dualBlock.innerHTML =
+                '<div class="perf-genel-title">Genel PNL</div>' +
+                '<div class="perf-dual-pnl">' +
+                '<div class="perf-dual-line"><span class="perf-dual-label">CASH PNL (USDT):</span> <span class="perf-dual-value" style="color:' + (cashTotal >= 0 ? '#0ecb81' : '#f6465d') + '">' + cashStr + '</span></div>' +
+                '<div class="perf-dual-line"><span class="perf-dual-label">INVENTORY PNL (COIN):</span> <span class="perf-dual-value" style="color:' + (invQtyTotal >= 0 ? '#0ecb81' : '#f6465d') + '">' + invQtyStr + '</span></div>' +
+                '<div class="perf-dual-line perf-dual-line-secondary"><span class="perf-dual-label">INVENTORY (USDT eşdeğer):</span> <span class="perf-dual-value" style="color:' + (invUsdtEquiv >= 0 ? '#0ecb81' : '#f6465d') + '">' + invUsdtStr + '</span></div>' +
+                openCycleHtml +
+                '</div>';
+            dualBlock.style.display = 'block';
+        }
+
         function renderDualPerfMetrics(res) {
             if (!perfMetrics) return;
             var dp = res.dual_perf;
@@ -5362,6 +5623,8 @@
             var q = 'account_id=' + (accountId || '') + '&period=' + encodeURIComponent(period);
             window.apiClient.get('/api/bots-engine/' + botId + '/performance?' + q)
                 .then(function(res) {
+                    updatePerfGenelAlpha(res);
+                    updatePerfReportFromApi(res);
                     var fp = perfMetricsFingerprint(res);
                     if (!(_botDetailHydrated && fp === _lastPerfRenderFp && patchDualPerfMetricsInPlace(res))) {
                         renderDualPerfMetrics(res);
@@ -5519,12 +5782,12 @@
 
         function updatePerfReportFromApi(res) {
             if (!perfReport) return;
-            var refP = res.reference_price != null ? Number(res.reference_price) : null;
-            var curP = res.current_price != null ? Number(res.current_price) : null;
-            var pricePct = res.price_change_pct != null ? Number(res.price_change_pct) : ((refP != null && curP != null && refP > 0) ? ((curP - refP) / refP * 100) : null);
-            var realPct = res.real_performance_pct != null ? Number(res.real_performance_pct) : null;
-            // Başlangıç bakiyesi: botun config'taki bütçesi (kullanıcının belirlediği); yoksa period initial
-            var startUsd = (res.config_budget_usd != null && res.config_budget_usd > 0) ? Number(res.config_budget_usd) : (res.initial_usd != null ? Number(res.initial_usd) : (res.balance_start_usd != null ? Number(res.balance_start_usd) : null));
+            var alpha = res.bot_alpha_performance || null;
+            var refP = alpha && alpha.start_coin_price != null ? Number(alpha.start_coin_price) : (res.reference_price != null ? Number(res.reference_price) : null);
+            var curP = res.current_price != null ? Number(res.current_price) : (alpha && alpha.current_coin_price != null ? Number(alpha.current_coin_price) : null);
+            var pricePct = res.price_change_pct != null ? Number(res.price_change_pct) : (alpha && alpha.coin_pct != null ? Number(alpha.coin_pct) : ((refP != null && curP != null && refP > 0) ? ((curP - refP) / refP * 100) : null));
+            var realPct = resolveBotAlphaPct(res);
+            var startUsd = alpha && alpha.start_balance_usd != null ? Number(alpha.start_balance_usd) : ((res.config_budget_usd != null && res.config_budget_usd > 0) ? Number(res.config_budget_usd) : (res.initial_usd != null ? Number(res.initial_usd) : (res.balance_start_usd != null ? Number(res.balance_start_usd) : null)));
             var endUsd = res.total_usd != null ? Number(res.total_usd) : (res.balance_end_usd != null ? Number(res.balance_end_usd) : null);
             var pnlUsd = res.pnl_usd != null ? Number(res.pnl_usd) : (endUsd != null && startUsd != null ? endUsd - startUsd : null);
             var pnlPct = res.pnl_pct != null ? Number(res.pnl_pct) : null;
@@ -5543,10 +5806,11 @@
                 '<p><strong>Parite Güncel Fiyatı:</strong> <span id="perfReportPariteGuncel">' + (curP != null ? curP.toFixed(4) : '—') + '</span></p>' +
                 (priceDiffUsd != null && pricePct != null ? '<p><strong>Parite Değişimi:</strong> <span id="perfReportPariteDegisim" style="color:' + priceColor + '">' + (priceDiffUsd >= 0 ? '+' : '') + priceDiffUsd.toFixed(4) + ' ' + (pricePct >= 0 ? '+' : '') + pricePct.toFixed(2) + '%</span></p>' : '<p><strong>Parite Değişimi:</strong> <span id="perfReportPariteDegisim">—</span></p>');
             if (realPct != null) {
-                html += '<p><strong>Gerçek performans</strong> (Bakiye % − Parite %): <span style="color:' + realColor + '; font-weight:600">' + (realPct >= 0 ? '+' : '') + realPct.toFixed(2) + '%</span></p>';
+                html += '<p><strong>Gerçek performans</strong> (Bakiye % − Parite %): <span style="color:' + realColor + '; font-weight:600">' + formatSignedPct2(realPct) + '</span></p>';
             }
-            html += '<p class="muted" style="font-size:0.85rem; margin-top:1rem;">Parite fiyatı bot açılışından bu yana değişir; bot bakiyesi değişimi ile karşılaştırılarak botun eklediği değer (gerçek performans) hesaplanır.</p>';
+            html += '<p class="muted" style="font-size:0.85rem; margin-top:1rem;">Bot performansı, bot başlatıldığı andaki bakiye ve coin fiyatına göre hesaplanır: bakiye % değişimi − coin % değişimi.</p>';
             perfReport.innerHTML = html;
+            updatePerfGenelAlpha(res);
         }
 
         if (perfPeriodBtns) {
@@ -5938,6 +6202,30 @@
             }
         }
 
+        window.onBotHealthAutoCleared = function () {
+            if (_engineLogLiveOpts) {
+                _engineLogLiveOpts._lastLogRenderSig = null;
+                _engineLogLiveOpts._connectivitySynthetic = null;
+            }
+            if (window.EngineLogLive && _engineLogLiveOpts) {
+                window.EngineLogLive.renderDisplayEvents(_engineLogLiveOpts);
+            }
+        };
+
+        window.scheduleAutoHealthAck = function (ackBotId) {
+            if (!window.apiClient || !ackBotId || String(ackBotId) !== String(botId)) return;
+            var q = accountCode ? '?account_code=' + encodeURIComponent(accountCode) : '?account_id=' + (accountId || '');
+            window.apiClient.post('/api/bots-engine/' + ackBotId + '/health/ack' + q, {})
+                .then(function (res) {
+                    if (res && res.engine_log_dismiss_before_id != null) {
+                        window._lastHealthData = window._lastHealthData || {};
+                        window._lastHealthData.engine_log_dismiss_before_id = res.engine_log_dismiss_before_id;
+                    }
+                    if (typeof fetchBotHealth === 'function') fetchBotHealth();
+                })
+                .catch(function () {});
+        };
+
         var btnEngineLogReset = document.getElementById('btnEngineLogReset');
         if (btnEngineLogReset) btnEngineLogReset.addEventListener('click', resetHealthAlerts);
         var btnEngineLogExport = document.getElementById('btnEngineLogExport');
@@ -5971,19 +6259,25 @@
         }
         function openParametrelerModal() {
             if (!parametrelerModal) return;
+            bindParamModalTabHandlers();
             var cfg = (lastBotDetail && lastBotDetail.config) || {};
             var symbol = (lastBotDetail && lastBotDetail.symbol) || (botSymbolEl && botSymbolEl.textContent) || '';
             var ref = resolveBotStartReferencePrice();
-            if (configGrid) {
-                if (botDetailConfigReady(cfg)) {
-                    renderConfig(cfg, symbol, ref);
-                } else {
-                    configGrid.innerHTML = '<p class="param-hint" style="padding: 1rem;">Parametreler yükleniyor…</p>';
-                }
+            if (botDetailConfigReady(cfg)) {
+                cacheParamModalHtml(cfg, symbol, ref);
+            } else if (configGrid) {
+                _paramModalGenelHtml = '';
+                _paramModalDynHtml = '';
+                configGrid.innerHTML = '<p class="param-hint" style="padding: 1rem;">Parametreler yükleniyor…</p>';
+                var host = document.getElementById('paramTabsHost');
+                if (host) host.innerHTML = '';
             }
+            _paramModalActiveTab = 'genel';
+            refreshParamModalView();
             parametrelerModal.style.display = 'flex';
             lockBodyScroll();
         }
+
         function closeParametrelerModal() {
             if (parametrelerModal) parametrelerModal.style.display = 'none';
             unlockBodyScroll();
@@ -6441,7 +6735,12 @@
             document.body.style.top = '';
             _bodyScrollLockCount = 0;
             applyBotLogoCacheOnBoot();
-            loadDetail();
+            var boot = function () { loadDetail(); };
+            if (window.EngineLogAccess && typeof window.EngineLogAccess.resolve === 'function') {
+                window.EngineLogAccess.resolve().finally(boot);
+            } else {
+                boot();
+            }
         }
 
         if (accountCode && !accountId && window.apiClient) {

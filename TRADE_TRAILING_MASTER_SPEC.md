@@ -1134,7 +1134,7 @@ Snapshot wallet is cache-only; "[snapshot] wallet timeout" no longer occurs. Liv
 | POST | /api/accounts/{id}/delete | Yes | Yes | No | Hesap sil (body: password). Şifre zorunlu; log/işlem geçmişi silinmez; aynı tel ile yeniden kayıt sıfırdan yeni hesap açar. |
 | GET | /api/accounts/{id}/bot-performance | Yes | Yes | No | Hesap ham tur dosyası + kapanan tur USDT toplamı; `bot_daily_pnl` yedek; haftalık+ cache |
 | GET | /api/leaderboard/structures/{structure_id}/top | Yes | Yes | No | Copy Trading: structure bazlı top 5 (profit_pct + `params`; stale cache varsa `config_json`'dan re-sanitize; username/bakiye yok) |
-| GET | /api/leaderboard/global/top | Yes | Yes | No | Global En İyi Bot (limit varsayılan 5): çalışan botlar, canlı K/Z ≥ 0 (`compute_bot_equity_usd` − bütçe; cache satırı negatif olsa bile elenir); `structure_id`, `profit_pct`, `total_pnl_usd`, `running_since_iso` (UTC Z; **`bot_run_started_at_iso`** — bot detay `stateHeroMetaDur` ile aynı; `bots.started_at` değil), `reference_price`, `params`; username/bot_id/bakiye yok. UI: K/Z 5s poll + süre 1s yerel tick; **Parametreleri görüntüle** / **Uygula** aynı önceki davranış. |
+| GET | /api/leaderboard/global/top | Yes | Yes | No | Global En İyi Bot (limit varsayılan 5): çalışan botlar, canlı K/Z ≥ 0 (`compute_bot_equity_usd` − bütçe; cache satırı negatif olsa bile elenir); `structure_id`, `profit_pct`, `total_pnl_usd`, `running_since_iso` (UTC Z; **`bot_run_started_at_iso`** — bot detay `stateHeroMetaDur` ile aynı; `bots.started_at` değil), `reference_price`, `params`, **`dynamic_mode`** (enabled/active, snapshot `applied` + rejim, `position` seviye sayıları — bakiye yok); username/bot_id/bakiye yok. UI: K/Z 5s poll + süre 1s yerel tick; **Parametreleri görüntüle** (Genel \| Dinamik sekmeler, dinamik botlarda) / **Uygula** (dinamik satırda başlangıç vs son tur seçimi); tüm leaderboard listelerinde. |
 | GET | /api/bots-engine | Yes | Yes | No | List bots |
 | POST | /api/bots-engine | Yes | Yes | No | Create bot |
 | POST | /api/bots-engine/{id}/start | Yes | Yes | No | Insert START command |
@@ -1991,7 +1991,7 @@ tail -5 logs/ram_snapshots.log | jq -c '{ts, component, rss_mb, tracemalloc_peak
 | GET /api/bots-engine/{id} | GET | require_auth, get_account_or_403 | Bot, state, PnlService, grid_view, Binance | Sayfa yükleme; poll | 8s (UI) |
 | GET /api/bots/{id}/detail | GET | require_auth | dashboard_bot_detail wrapper | Dashboard "Düzenle" | 8s |
 | GET /api/dashboard/bot_detail | GET | require_auth | Bot, Ledger, PnlService, Trade | Legacy | 8s |
-| GET /api/bots-engine/{id}/events | GET | require_auth | bot_engine_events, binance_connectivity probe | Events sekmesi; limit=500; ilk yüklemede Binance probe → ERROR/HEALTH_CRITICAL yazar | — |
+| GET /api/bots-engine/{id}/events | GET | require_auth | bot_engine_events, binance_connectivity probe | Bot detay logları; oturum kapsamı (son STOP sonrası soğuk START → manuel STOP); tam yüklemede ≤5000 event + `session_start_event_id`; lifecycle anchor (tüm tur START/END); incremental `after_id` | 4s poll |
 | GET /api/bots-engine/{id}/health | GET | require_auth | evaluate_bot_health, state, binance_connectivity probe | Sağlık uyarıları; `/health` ve `/events` görüntülemede Binance probe (30s throttle) | 8s poll |
 | POST /api/bots-engine/{id}/health/ack | POST | require_auth | state_store | Uyarı sıfırla: `last_error_code` temizlenir, `health_ack_at` yazılır | — |
 | GET /api/bots-engine/{id}/trades | GET | require_auth | Ledger.get_trades_dict | İşlemler sekmesi | — |
@@ -2014,8 +2014,21 @@ tail -5 logs/ram_snapshots.log | jq -c '{ts, component, rss_mb, tracemalloc_peak
 
 - Üst banner **yok**; kritik/uyarı `#statusBadge` yanında rozet (`#healthCriticalBadge`, `#healthWarnBadge`).
 - Sayfa çerçevesi: yalnız kritik → kırmızı yanıp sönme; yalnız uyarı → sarı; ikisi birden → kırmızı çerçeve + her iki rozet yanıp söner.
-- Tüm **aktif** uyarı-kritik satırları motor log tablosunda (`#engineLogList`); aynı `health_code` için tek satır (registry dedupe). Koşul düzelince veya Resetle sonrası satır logdan kalkar (eski DB `HEALTH_*` satırları da gizlenir).
+- Tüm **aktif** uyarı-kritik satırları motor log tablosunda (`#engineLogList`); aynı `health_code` için tek satır (registry dedupe). Koşul düzelince satır logdan kalkar; **sorun çözüldüğünde** çerçeve/rozet otomatik kalkar (`autoClearResolvedHealthState` — dismiss anchor + isteğe bağlı `POST /health/ack`). Resetle ile aynı etki, manuel tık gerekmez.
 - **Resetle** (`#btnEngineLogReset`): çerçeve/rozet sıfır, registry temiz, dismiss anchor (`maxEventId` + `perCodeMaxEventId` + sunucu `engine_log_dismiss_before_id` state’te); sayfa yenilemesinde eski satırlar API’den filtrelenir (`engine_log_ack.py`). `POST /health/ack` anchor yazar. Resetlenebilir loglar: `HEALTH_*`, dayanıklılık, bağlantı `ERROR`/`INFO`, emir `SKIP_REASON`, **`RUN_ACTION_EXCEPTION`** ve diğer kurtarılabilir döngü `ERROR`’ları, **`OUTAGE_RECOVERY`** / kopma sonrası grid `INFO` (meta `health_code` veya mesaj kalıbı).
+
+### Bot detay — Dinamik mod rozeti (`ui/bot.html`)
+
+- `dynamic_mode.active=true` iken üst strip (`statusBadge` yanı) **Dinamik ✓** rozeti (`dynModeStripBadge`). Dashboard **En İyi 5 Bot** satırında aynı balon; **Mevcut Botlar** tablosunda dinamik bot logosu yeşil parlak çerçeve + hover ipucu (`dynamicModeParamsView.js`).
+- Grid panel banner (`dynModeGridBanner`): tur eşikleri + rejim detayı.
+- Toggle yalnız dashboard bot oluşturma modalında; detay parametreler modalında yok.
+- Teknik referans: [docs/DYNAMIC_MODE_TECHNICAL.md](docs/DYNAMIC_MODE_TECHNICAL.md).
+
+### Bot detay — motor logları (admin-only)
+
+- `#engineLogPanel` (Bot Logları tablosu, Resetle, Dışarı aktar) yalnızca `is_admin=true` oturumda görünür (`engineLogAccess.js` + `body.engine-log-admin`).
+- `GET /api/bots-engine/{id}/events` ve `POST /api/bots-engine/{id}/health/ack` (log reset) → **403** normal kullanıcı.
+- Sağlık rozeti/çerçeve (`/health` poll) kullanıcıda çalışmaya devam eder; log satırları yok.
 
 ### Bot detay — grid / tur panel yenileme (`ui/bot.html`, `ui/bot_multi.html`)
 
@@ -2213,7 +2226,10 @@ TRDCA Pro+ (trdca_pro) kaldırıldı; yeni bot oluşturulamaz. UI: yalnızca `tr
 |------|-----|--------|----------|
 | pnl_usd | float | state.cycle_pnls veya CYCLE_END events | Toplam gerçekleşen kar (USDT) |
 | pnl_pct | float | pnl_usd / initial * 100 | Kar yüzdesi |
-| real_performance_pct | float | pnl_pct (TRDCA: bakiye % − parite %) | Gerçek performans |
+| real_performance_pct | float | bot_alpha: balance_pct − coin_pct (run-start baseline) | Bot performansı (alpha) |
+| balance_change_pct | float | bot_alpha.balance_pct | Bakiye % (bot start → now) |
+| price_change_pct | float | bot_alpha.coin_pct | Coin/parite % (bot start → now) |
+| bot_alpha_performance | object | bot_perf_chart_state.baseline + live equity/price | start_balance_usd, start_coin_price, balance_pct, coin_pct, alpha_pct |
 | trades_count | int | Trade tablosu | Dönem içi işlem sayısı |
 | fees_usd | float | Trade.fee toplamı | Dönem içi komisyon |
 | cycles_count | int | Ledger.get_cycle_ids | Tamamlanan tur sayısı |
@@ -2343,9 +2359,10 @@ TRDCA Pro+ (trdca_pro) kaldırıldı; yeni bot oluşturulamaz. UI: yalnızca `tr
 | Adım | İşlem |
 |------|-------|
 | 1 | Bot start → seed_perf_chart_state_on_bot_start |
-| 2 | baseline = {bot0: 0, parite0: 0, ts0: now} |
-| 3 | TRDCA: initial_prices = DataHub fiyatları; coin_weights = config |
-| 4 | INSERT/UPDATE bot_perf_chart_state; samples = [] |
+| 2 | baseline = {bot0: 0, parite0: 0, ts0: now, start_balance_usd, start_coin_price} |
+| 3 | start_balance_usd = equity at start (fallback config initial); start_coin_price = hub/reference (tek sembol) |
+| 4 | TRDCA: initial_prices = DataHub fiyatları; coin_weights = config |
+| 5 | INSERT/UPDATE bot_perf_chart_state; samples = [] |
 
 ## Mevcut — Range Butonları (perf_chart_tv)
 

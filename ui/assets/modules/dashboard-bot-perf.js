@@ -281,29 +281,88 @@ function formatLeaderboardTotalPnl(item) {
     };
 }
 
+function roundPct2(v) {
+    if (v == null || v === '' || isNaN(Number(v))) return v;
+    return Math.round(Number(v) * 100) / 100;
+}
+
+function fmtPctDisplay(v) {
+    if (v == null || isNaN(Number(v))) return '—';
+    return Number(v).toFixed(2);
+}
+
+function roundLeaderboardPctFields(p) {
+    if (!p || typeof p !== 'object') return p;
+    p = Object.assign({}, p);
+    [
+        'base_alloc_pct', 'quote_alloc_pct',
+        'sell_trigger_trailing_pct', 'buy_trigger_trailing_pct',
+        'profit_reentry_drop_pct', 'profit_reentry_rise_pct',
+        'profit_exit_rise_pct', 'profit_exit_drop_pct'
+    ].forEach(function (k) {
+        if (p[k] != null) p[k] = roundPct2(p[k]);
+    });
+    if (Array.isArray(p.sell_grids)) {
+        p.sell_grids = p.sell_grids.map(function (g) {
+            return {
+                sell_grid_pct: roundPct2(g.sell_grid_pct != null ? g.sell_grid_pct : g.trigger_pct),
+                sell_qty_pct_of_base: roundPct2(g.sell_qty_pct_of_base != null ? g.sell_qty_pct_of_base : g.qty_pct)
+            };
+        });
+    }
+    if (Array.isArray(p.buy_grids)) {
+        p.buy_grids = p.buy_grids.map(function (g) {
+            return {
+                buy_grid_pct: roundPct2(g.buy_grid_pct != null ? g.buy_grid_pct : g.trigger_pct),
+                buy_qty_pct_of_quote: roundPct2(g.buy_qty_pct_of_quote != null ? g.buy_qty_pct_of_quote : g.qty_pct)
+            };
+        });
+    }
+    return p;
+}
+
 function normalizeLeaderboardParamsToFormConfig(params) {
     if (!params || typeof params !== 'object') return {};
     var p = Object.assign({}, params);
-    if ((p.sell_grids || p.buy_grids) && !p.up) {
-        p.up = {
-            trail_pct: p.sell_trigger_trailing_pct,
-            grids: (p.sell_grids || []).map(function (g) {
+
+    function mapSellGrids(grids) {
+        return (grids || []).map(function (g) {
                 return {
-                    trigger_pct: g.sell_grid_pct != null ? g.sell_grid_pct : g.trigger_pct,
-                    qty_pct: g.sell_qty_pct_of_base != null ? g.sell_qty_pct_of_base : g.qty_pct
+                    trigger_pct: roundPct2(g.sell_grid_pct != null ? g.sell_grid_pct : g.trigger_pct),
+                    qty_pct: roundPct2(g.sell_qty_pct_of_base != null ? g.sell_qty_pct_of_base : g.qty_pct)
                 };
-            })
+        });
+    }
+    function mapBuyGrids(grids) {
+        return (grids || []).map(function (g) {
+                return {
+                    trigger_pct: roundPct2(g.buy_grid_pct != null ? g.buy_grid_pct : g.trigger_pct),
+                    qty_pct: roundPct2(g.buy_qty_pct_of_quote != null ? g.buy_qty_pct_of_quote : g.qty_pct)
+                };
+        });
+    }
+
+    // sell_grids / buy_grids authoritative (dynamic snapshot merge); stale up/down must not win.
+    if (Array.isArray(p.sell_grids) && p.sell_grids.length) {
+        p.up = {
+            trail_pct: roundPct2(p.sell_trigger_trailing_pct != null ? p.sell_trigger_trailing_pct : (p.up && p.up.trail_pct)),
+            grids: mapSellGrids(p.sell_grids)
+        };
+    } else if ((p.sell_grids || p.buy_grids) && !p.up) {
+        p.up = {
+            trail_pct: roundPct2(p.sell_trigger_trailing_pct),
+            grids: mapSellGrids(p.sell_grids)
         };
     }
-    if (p.buy_grids && !p.down) {
+    if (Array.isArray(p.buy_grids) && p.buy_grids.length) {
         p.down = {
-            trail_pct: p.buy_trigger_trailing_pct,
-            grids: (p.buy_grids || []).map(function (g) {
-                return {
-                    trigger_pct: g.buy_grid_pct != null ? g.buy_grid_pct : g.trigger_pct,
-                    qty_pct: g.buy_qty_pct_of_quote != null ? g.buy_qty_pct_of_quote : g.qty_pct
-                };
-            })
+            trail_pct: roundPct2(p.buy_trigger_trailing_pct != null ? p.buy_trigger_trailing_pct : (p.down && p.down.trail_pct)),
+            grids: mapBuyGrids(p.buy_grids)
+        };
+    } else if (p.buy_grids && !p.down) {
+        p.down = {
+            trail_pct: roundPct2(p.buy_trigger_trailing_pct),
+            grids: mapBuyGrids(p.buy_grids)
         };
     }
     if (p.up && !p.sell_grids && p.up.grids) {
@@ -318,18 +377,42 @@ function normalizeLeaderboardParamsToFormConfig(params) {
         });
         if (p.down.trail_pct != null) p.buy_trigger_trailing_pct = p.down.trail_pct;
     }
-    if ((p.profit_reentry_drop_pct != null || p.profit_exit_rise_pct != null) && !p.profit) {
+    if (p.profit_reentry_drop_pct != null || p.profit_reentry_rise_pct != null
+        || p.profit_exit_rise_pct != null || p.profit_exit_drop_pct != null) {
         p.profit = {
-            rebuy_trigger_pct: p.profit_reentry_drop_pct,
-            rebuy_trail_pct: p.profit_reentry_rise_pct,
-            resell_trigger_pct: p.profit_exit_rise_pct,
-            resell_trail_pct: p.profit_exit_drop_pct
+            rebuy_trigger_pct: roundPct2(p.profit_reentry_drop_pct != null ? p.profit_reentry_drop_pct : (p.profit && p.profit.rebuy_trigger_pct)),
+            rebuy_trail_pct: roundPct2(p.profit_reentry_rise_pct != null ? p.profit_reentry_rise_pct : (p.profit && p.profit.rebuy_trail_pct)),
+            resell_trigger_pct: roundPct2(p.profit_exit_rise_pct != null ? p.profit_exit_rise_pct : (p.profit && p.profit.resell_trigger_pct)),
+            resell_trail_pct: roundPct2(p.profit_exit_drop_pct != null ? p.profit_exit_drop_pct : (p.profit && p.profit.resell_trail_pct))
         };
     }
-    if (p.base_alloc_pct != null && !p.allocation) {
-        p.allocation = { base_pct: p.base_alloc_pct, quote_pct: p.quote_alloc_pct };
+    if (p.base_alloc_pct != null || p.quote_alloc_pct != null) {
+        p.allocation = {
+            base_pct: roundPct2(p.base_alloc_pct != null ? p.base_alloc_pct : (p.allocation && p.allocation.base_pct)),
+            quote_pct: roundPct2(p.quote_alloc_pct != null ? p.quote_alloc_pct : (p.allocation && p.allocation.quote_pct))
+        };
     }
     return p;
+}
+
+function mergeLeaderboardParamsWithApplied(params, applied) {
+    if (!applied || typeof applied !== 'object') {
+        return normalizeLeaderboardParamsToFormConfig(params || {});
+    }
+    var base = normalizeLeaderboardParamsToFormConfig(params || {});
+    var merged = Object.assign({}, base, {
+        base_alloc_pct: applied.base_alloc_pct != null ? applied.base_alloc_pct : base.base_alloc_pct,
+        quote_alloc_pct: applied.quote_alloc_pct != null ? applied.quote_alloc_pct : base.quote_alloc_pct,
+        sell_trigger_trailing_pct: applied.sell_trigger_trailing_pct != null ? applied.sell_trigger_trailing_pct : base.sell_trigger_trailing_pct,
+        buy_trigger_trailing_pct: applied.buy_trigger_trailing_pct != null ? applied.buy_trigger_trailing_pct : base.buy_trigger_trailing_pct,
+        profit_reentry_drop_pct: applied.profit_reentry_drop_pct != null ? applied.profit_reentry_drop_pct : base.profit_reentry_drop_pct,
+        profit_reentry_rise_pct: applied.profit_reentry_rise_pct != null ? applied.profit_reentry_rise_pct : base.profit_reentry_rise_pct,
+        profit_exit_rise_pct: applied.profit_exit_rise_pct != null ? applied.profit_exit_rise_pct : base.profit_exit_rise_pct,
+        profit_exit_drop_pct: applied.profit_exit_drop_pct != null ? applied.profit_exit_drop_pct : base.profit_exit_drop_pct,
+        sell_grids: Array.isArray(applied.sell_grids) && applied.sell_grids.length ? applied.sell_grids : base.sell_grids,
+        buy_grids: Array.isArray(applied.buy_grids) && applied.buy_grids.length ? applied.buy_grids : base.buy_grids
+    });
+    return normalizeLeaderboardParamsToFormConfig(roundLeaderboardPctFields(merged));
 }
 
 function resolveLeaderboardItemParams(params, itemIndex) {
@@ -375,18 +458,18 @@ function renderBotParamsConfig(cfg, symbol, referencePrice, hideBudget) {
     html += row('Sembol', symbol || cfg.symbol || '—');
     if (!hideBudget) html += row('Bütçe (USDT)', fmtUsd(budget));
     html += row('Başlangıç fiyatı (referans)', refPriceVal);
-    html += row('Base dağılım (%)', basePct != null ? basePct + '%' : '—');
-    html += row('Quote dağılım (%)', quotePct != null ? quotePct + '%' : '—');
+    html += row('Base dağılım (%)', basePct != null ? fmtPctDisplay(basePct) + '%' : '—');
+    html += row('Quote dağılım (%)', quotePct != null ? fmtPctDisplay(quotePct) + '%' : '—');
     html += '</div>';
     html += '<div class="param-block"><div class="param-block-title">Satış gridleri</div>';
     html += row('Grid sayısı', sellGrids.length || cfg.sell_grids_count || 0, 'param-sell');
-    html += row('Trailing % (tetik sonrası gerçekleşme)', sellTrail != null ? sellTrail + '%' : '—', 'param-sell');
+    html += row('Trailing % (tetik sonrası gerçekleşme)', sellTrail != null ? fmtPctDisplay(sellTrail) + '%' : '—', 'param-sell');
     if (sellGrids.length) {
         html += '<table class="param-table"><thead><tr><th>Seviye</th><th class="num">Tetik %</th><th class="num">Miktar (base %)</th></tr></thead><tbody>';
         sellGrids.forEach(function (g, i) {
             var pct = g.sell_grid_pct != null ? g.sell_grid_pct : g.trigger_pct;
             var qty = g.sell_qty_pct_of_base != null ? g.sell_qty_pct_of_base : g.qty_pct;
-            html += '<tr><td>#' + (i + 1) + '</td><td class="num">+' + (pct != null ? pct : '—') + '%</td><td class="num">' + (qty != null ? qty : '—') + '%</td></tr>';
+            html += '<tr><td>#' + (i + 1) + '</td><td class="num">+' + fmtPctDisplay(pct) + '%</td><td class="num">' + fmtPctDisplay(qty) + '%</td></tr>';
         });
         html += '</tbody></table>';
     } else {
@@ -395,13 +478,13 @@ function renderBotParamsConfig(cfg, symbol, referencePrice, hideBudget) {
     html += '</div>';
     html += '<div class="param-block"><div class="param-block-title">Alım gridleri</div>';
     html += row('Grid sayısı', buyGrids.length || cfg.buy_grids_count || 0, 'param-buy');
-    html += row('Trailing % (tetik sonrası gerçekleşme)', buyTrail != null ? buyTrail + '%' : '—', 'param-buy');
+    html += row('Trailing % (tetik sonrası gerçekleşme)', buyTrail != null ? fmtPctDisplay(buyTrail) + '%' : '—', 'param-buy');
     if (buyGrids.length) {
         html += '<table class="param-table"><thead><tr><th>Seviye</th><th class="num">Tetik %</th><th class="num">Miktar (quote %)</th></tr></thead><tbody>';
         buyGrids.forEach(function (g, i) {
             var pct = g.buy_grid_pct != null ? g.buy_grid_pct : g.trigger_pct;
             var qty = g.buy_qty_pct_of_quote != null ? g.buy_qty_pct_of_quote : g.qty_pct;
-            html += '<tr><td>#' + (i + 1) + '</td><td class="num">-' + (pct != null ? pct : '—') + '%</td><td class="num">' + (qty != null ? qty : '—') + '%</td></tr>';
+            html += '<tr><td>#' + (i + 1) + '</td><td class="num">-' + fmtPctDisplay(pct) + '%</td><td class="num">' + fmtPctDisplay(qty) + '%</td></tr>';
         });
         html += '</tbody></table>';
     } else {
@@ -409,10 +492,10 @@ function renderBotParamsConfig(cfg, symbol, referencePrice, hideBudget) {
     }
     html += '</div>';
     html += '<div class="param-block"><div class="param-block-title">Kar alım / kar satış</div>';
-    html += row('Kar alım tetik %', reTr != null ? reTr + '%' : '—');
-    html += row('Kar alım trailing %', reTrl != null ? reTrl + '%' : '—');
-    html += row('Kar satış tetik %', exTr != null ? exTr + '%' : '—');
-    html += row('Kar satış trailing %', exTrl != null ? exTrl + '%' : '—');
+    html += row('Kar alım tetik %', reTr != null ? fmtPctDisplay(reTr) + '%' : '—');
+    html += row('Kar alım trailing %', reTrl != null ? fmtPctDisplay(reTrl) + '%' : '—');
+    html += row('Kar satış tetik %', exTr != null ? fmtPctDisplay(exTr) + '%' : '—');
+    html += row('Kar satış trailing %', exTrl != null ? fmtPctDisplay(exTrl) + '%' : '—');
     html += '<p class="param-hint">Kar alım: fiyat düşünce tekrar alım. Kar satış: fiyat yükselince kar realizasyonu satışı.</p>';
     html += '</div>';
     return html;
@@ -432,8 +515,14 @@ function applyTrailingDcaConfigToForm(p, opts) {
     }
     if (budgetEl) budgetEl.value = opts.clearBudget ? '' : (p.budget_usd != null ? p.budget_usd : (p.initial_capital_usdt != null ? p.initial_capital_usdt : budgetEl.value));
     var alloc = p.allocation || {};
-    if (basePctEl && (alloc.base_pct != null || alloc.base_pct === 0)) basePctEl.value = alloc.base_pct;
-    if (quotePctEl && (alloc.quote_pct != null || alloc.quote_pct === 0)) quotePctEl.value = alloc.quote_pct;
+    if (basePctEl) {
+        var basePct = p.base_alloc_pct != null ? p.base_alloc_pct : alloc.base_pct;
+        if (basePct != null || basePct === 0) basePctEl.value = roundPct2(basePct);
+    }
+    if (quotePctEl) {
+        var quotePct = p.quote_alloc_pct != null ? p.quote_alloc_pct : alloc.quote_pct;
+        if (quotePct != null || quotePct === 0) quotePctEl.value = roundPct2(quotePct);
+    }
     var up = p.up || {};
     var down = p.down || {};
     var profit = p.profit || {};
@@ -445,28 +534,28 @@ function applyTrailingDcaConfigToForm(p, opts) {
     if (downCountEl && downGrids.length > 0) { downCountEl.value = downGrids.length; buildGridRows('downGridRows', downGrids.length, 'down'); }
     var upTrailEl = document.getElementById('fUpTrail');
     var downTrailEl = document.getElementById('fDownTrail');
-    if (upTrailEl && (up.trail_pct != null || up.trail_pct === 0)) upTrailEl.value = up.trail_pct;
-    if (downTrailEl && (down.trail_pct != null || down.trail_pct === 0)) downTrailEl.value = down.trail_pct;
+    if (upTrailEl && (up.trail_pct != null || up.trail_pct === 0)) upTrailEl.value = roundPct2(up.trail_pct);
+    if (downTrailEl && (down.trail_pct != null || down.trail_pct === 0)) downTrailEl.value = roundPct2(down.trail_pct);
     for (var i = 0; i < upGrids.length; i++) {
         var tEl = document.getElementById('upGrid_' + i + '_trigger');
         var qEl = document.getElementById('upGrid_' + i + '_qty');
-        if (tEl && upGrids[i].trigger_pct != null) tEl.value = upGrids[i].trigger_pct;
-        if (qEl && upGrids[i].qty_pct != null) qEl.value = upGrids[i].qty_pct;
+        if (tEl && upGrids[i].trigger_pct != null) tEl.value = roundPct2(upGrids[i].trigger_pct);
+        if (qEl && upGrids[i].qty_pct != null) qEl.value = roundPct2(upGrids[i].qty_pct);
     }
     for (var j = 0; j < downGrids.length; j++) {
         var t2 = document.getElementById('downGrid_' + j + '_trigger');
         var q2 = document.getElementById('downGrid_' + j + '_qty');
-        if (t2 && downGrids[j].trigger_pct != null) t2.value = downGrids[j].trigger_pct;
-        if (q2 && downGrids[j].qty_pct != null) q2.value = downGrids[j].qty_pct;
+        if (t2 && downGrids[j].trigger_pct != null) t2.value = roundPct2(downGrids[j].trigger_pct);
+        if (q2 && downGrids[j].qty_pct != null) q2.value = roundPct2(downGrids[j].qty_pct);
     }
     var rebuyT = document.getElementById('fRebuyTrigger');
     var rebuyTrail = document.getElementById('fRebuyTrail');
     var resellT = document.getElementById('fResellTrigger');
     var resellTrail = document.getElementById('fResellTrail');
-    if (rebuyT && (profit.rebuy_trigger_pct != null || profit.rebuy_trigger_pct === 0)) rebuyT.value = profit.rebuy_trigger_pct;
-    if (rebuyTrail && profit.rebuy_trail_pct != null) rebuyTrail.value = profit.rebuy_trail_pct;
-    if (resellT && (profit.resell_trigger_pct != null || profit.resell_trigger_pct === 0)) resellT.value = profit.resell_trigger_pct;
-    if (resellTrail && profit.resell_trail_pct != null) resellTrail.value = profit.resell_trail_pct;
+    if (rebuyT && (profit.rebuy_trigger_pct != null || profit.rebuy_trigger_pct === 0)) rebuyT.value = roundPct2(profit.rebuy_trigger_pct);
+    if (rebuyTrail && profit.rebuy_trail_pct != null) rebuyTrail.value = roundPct2(profit.rebuy_trail_pct);
+    if (resellT && (profit.resell_trigger_pct != null || profit.resell_trigger_pct === 0)) resellT.value = roundPct2(profit.resell_trigger_pct);
+    if (resellTrail && profit.resell_trail_pct != null) resellTrail.value = roundPct2(profit.resell_trail_pct);
     if (p.symbol && typeof updateCreateBotModalPairStrip === 'function') updateCreateBotModalPairStrip(p.symbol);
 }
 

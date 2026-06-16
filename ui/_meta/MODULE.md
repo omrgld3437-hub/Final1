@@ -9,7 +9,7 @@ Web panel — HTML + vanilla JS (FastAPI `/ui` mount).
 | Dosya | Kullanım |
 |-------|----------|
 | `dashboard.html` | Ana panel, bot listesi |
-| `bot.html` | Üst appbar: WS + TraderTrailing (`botPageAppbar.js`); tur işlemleri tek kaynak: `mergeTradesForCyclePanel` → API + `dedupeTradesForPanel`; grid etiketi `grid_detail.display_label` (API enrich); `cycleSideFromDualSnapshot`; grid satış tablosu fiyatları `fmtGridPrice` (= `#botPriceEl` ondalığı), miktar `fmtGridBaseQty` |
+| `bot.html` | Üst appbar: WS + TraderTrailing (`botPageAppbar.js`); dinamik mod rozeti üst strip (**Dinamik ✓**, `dynModeStripBadge`); tur işlemleri tek kaynak: `mergeTradesForCyclePanel` → API + `dedupeTradesForPanel`; grid etiketi `grid_detail.display_label` (API enrich); `cycleSideFromDualSnapshot`; grid satış tablosu fiyatları `fmtGridPrice` (= `#botPriceEl` ondalığı), miktar `fmtGridBaseQty` |
 | `bot_multi.html` | TRDCA / multi — aynı grid warmup + display fingerprint yenileme |
 | `admin.html` | Admin — anında önbellek (inline + localStorage), boot-id bloklamaz |
 | `login.html` | Giriş |
@@ -21,7 +21,7 @@ Web panel — HTML + vanilla JS (FastAPI `/ui` mount).
 | `core/` | apiClient (HTTP 429: `extractHttpDetailMessage` + 30s toast debounce; `suppressRateLimitToast` sessiz poll), appBoot, intervalRegistry |
 | `stores/` | dashboardStore, financeStore |
 | `services/` | marketData, finance |
-| `utils/` | trTime, coinLogo, botHealthAlerts (aktif uyarı log; Binance çözümü yeşil — `SERVER_UNREACHABLE` sentetik stabil değil; 45 sn dedupe; dashboard satır uyarısı `classifyRowAlerts`; bot sayfası kritik çerçeve), engineLogLive (bootstrap yükleme; sentetik bağlantı logu), engineLogFormat (`CONNECTIVITY_STABLE` yetim satır gizleme + tekilleştirme) |
+| `utils/` | trTime, coinLogo, **dynamicModeParamsView** (Parametreler modal dinamik sekme/leaderboard özeti), **engineLogAccess** (bot log paneli admin-only), botHealthAlerts (aktif uyarı log; sorun çözülünce otomatik kalkar + isteğe bağlı health/ack; Binance çözümü yeşil — `SERVER_UNREACHABLE` sentetik stabil değil; 45 sn dedupe; dashboard satır uyarısı `classifyRowAlerts`; bot sayfası kritik çerçeve), engineLogLive (bootstrap yükleme; sentetik bağlantı logu), engineLogFormat (`CONNECTIVITY_STABLE` yetim satır gizleme + tekilleştirme) |
 | *(kök)* | dashboard.js (**Botlar sekmesi** `activateBotsTab` + `financeBotsDom_v1_*` HTML önbelleği — bot detaydan dönüşte tablo yeniden çizilmez; `bot.html` `bot_detail_ui_v2_*` + `pagehide` persist; dashboard: `isBenignDashboardFetchError`, KPI/cüzdan Canlı/Güncel değil, bot satırı health blink), `botPageAppbar.js` (bot detay WS göstergesi), admin.js, chart.js, **scrollRestore.js** (yenilemede kaydırma — yalnızca tam scope anahtarı), scrollAutoHide.js + scroll-auto-hide.css |
 
 ## Bot oluşturma
