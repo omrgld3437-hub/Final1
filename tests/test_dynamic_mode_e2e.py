@@ -138,7 +138,9 @@ def _base_cfg():
 
 def _run_pipeline(features, base_cfg, prev_applied=None, prev_regime_state=None):
     regime_result = reg.classify(features, prev_regime_state)
-    suggestion = se.suggest(features, regime_result, base_cfg, {"buy_levels_fired": 0, "max_buy_levels": 3})
+    suggestion = se.suggest(
+        features, regime_result, base_cfg, {"buy_levels_fired": 0, "max_buy_levels": 3}
+    )
     suggestion = se.smooth_against_prev(suggestion, prev_applied, alpha=0.5)
     clamped = risk.apply_safety(suggestion, base_cfg, prev_applied)
     return regime_result, clamped
@@ -147,18 +149,32 @@ def _run_pipeline(features, base_cfg, prev_applied=None, prev_regime_state=None)
 def _assert_invariants(clamped):
     a = clamped.to_dict()
     # 1. bounds
-    assert BOUNDS["base_alloc_pct"][0] <= a["base_alloc_pct"] <= BOUNDS["base_alloc_pct"][1]
-    assert BOUNDS["trailing_pct"][0] <= a["sell_trigger_trailing_pct"] <= BOUNDS["trailing_pct"][1]
+    assert (
+        BOUNDS["base_alloc_pct"][0]
+        <= a["base_alloc_pct"]
+        <= BOUNDS["base_alloc_pct"][1]
+    )
+    assert (
+        BOUNDS["trailing_pct"][0]
+        <= a["sell_trigger_trailing_pct"]
+        <= BOUNDS["trailing_pct"][1]
+    )
     # 2. allocation sums to 100
     assert abs(a["base_alloc_pct"] + a["quote_alloc_pct"] - 100.0) < 1e-6
     # 3. grid triggers monotone increasing
-    for grids, key in ((a["sell_grids"], "sell_grid_pct"), (a["buy_grids"], "buy_grid_pct")):
+    for grids, key in (
+        (a["sell_grids"], "sell_grid_pct"),
+        (a["buy_grids"], "buy_grid_pct"),
+    ):
         vals = [g[key] for g in grids]
         assert vals == sorted(vals), f"{key} not monotone: {vals}"
         for v in vals:
             assert BOUNDS["grid_step_pct"][0] <= v <= BOUNDS["grid_step_pct"][1]
     # 4. anti-martingale on qty distribution
-    for grids, key in ((a["sell_grids"], "sell_qty_pct_of_base"), (a["buy_grids"], "buy_qty_pct_of_quote")):
+    for grids, key in (
+        (a["sell_grids"], "sell_qty_pct_of_base"),
+        (a["buy_grids"], "buy_qty_pct_of_quote"),
+    ):
         for i in range(1, len(grids)):
             prev = grids[i - 1][key]
             if prev > 0:
@@ -183,8 +199,12 @@ def test_defensive_regime_keeps_more_quote_than_bullish():
     base = _base_cfg()
     # Force regimes directly to isolate allocation logic
     f = MarketFeatures(symbol="T", price=1000.0, atr_pct_5m=1.0, data_fresh=True)
-    up = se.suggest(f, reg.RegimeResult(reg.TRENDING_UP, reg.TRENDING_UP, 0.8, {}), base)
-    down = se.suggest(f, reg.RegimeResult(reg.TRENDING_DOWN, reg.TRENDING_DOWN, 0.8, {}), base)
+    up = se.suggest(
+        f, reg.RegimeResult(reg.TRENDING_UP, reg.TRENDING_UP, 0.8, {}), base
+    )
+    down = se.suggest(
+        f, reg.RegimeResult(reg.TRENDING_DOWN, reg.TRENDING_DOWN, 0.8, {}), base
+    )
     dump = se.suggest(f, reg.RegimeResult(reg.DUMP_RISK, reg.DUMP_RISK, 0.9, {}), base)
     up_c = risk.apply_safety(up, base).to_dict()
     down_c = risk.apply_safety(down, base).to_dict()
@@ -202,7 +222,9 @@ def test_higher_vol_widens_grid_step():
     low_c = risk.apply_safety(se.suggest(low, rr, base), base).to_dict()
     high_c = risk.apply_safety(se.suggest(high, rr, base), base).to_dict()
     # First buy grid step is wider under higher volatility
-    assert high_c["buy_grids"][0]["buy_grid_pct"] > low_c["buy_grids"][0]["buy_grid_pct"]
+    assert (
+        high_c["buy_grids"][0]["buy_grid_pct"] > low_c["buy_grids"][0]["buy_grid_pct"]
+    )
 
 
 def test_rate_limiter_prevents_violent_jumps_across_cycles():
@@ -246,8 +268,11 @@ def test_snapshot_recompute_flag_forces_rebuild():
 
 def test_build_snapshot_stale_falls_back(monkeypatch):
     """When features are stale, snapshot reuses prev applied and never crashes."""
+
     async def fake_collect(symbol, price):
-        return MarketFeatures(symbol=symbol, price=price, data_fresh=False, error="no_5m_klines")
+        return MarketFeatures(
+            symbol=symbol, price=price, data_fresh=False, error="no_5m_klines"
+        )
 
     monkeypatch.setattr(cm, "collect_features", fake_collect)
     base = _base_cfg()
@@ -266,7 +291,11 @@ def test_build_snapshot_stale_falls_back(monkeypatch):
     state = {
         "cycle_id": 2,
         "bot_id": 1,
-        "dynamic_snapshot": {"cycle_id": 1, "applied": prev_applied, "regime": "LOW_VOL_RANGING"},
+        "dynamic_snapshot": {
+            "cycle_id": 1,
+            "applied": prev_applied,
+            "regime": "LOW_VOL_RANGING",
+        },
     }
     snap = asyncio.get_event_loop().run_until_complete(
         cm.build_snapshot(state, base, 1000.0)

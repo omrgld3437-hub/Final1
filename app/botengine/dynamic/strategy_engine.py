@@ -41,8 +41,8 @@ from app.botengine.dynamic import regime as reg
 class ParamSuggestion:
     base_alloc_pct: float
     quote_alloc_pct: float
-    sell_grids: List[Dict[str, float]]   # [{sell_grid_pct, sell_qty_pct_of_base}, ...]
-    buy_grids: List[Dict[str, float]]    # [{buy_grid_pct, buy_qty_pct_of_quote}, ...]
+    sell_grids: List[Dict[str, float]]  # [{sell_grid_pct, sell_qty_pct_of_base}, ...]
+    buy_grids: List[Dict[str, float]]  # [{buy_grid_pct, buy_qty_pct_of_quote}, ...]
     sell_trigger_trailing_pct: float
     buy_trigger_trailing_pct: float
     profit_exit_rise_pct: float
@@ -59,31 +59,31 @@ class ParamSuggestion:
 # Coefficient constants (system-defined, NOT user-tunable)
 # -----------------------------------------------------------------------------
 
-K_ATR_GRID_STEP = 0.7    # grid step% ≈ K_ATR × ATR%
-K_ATR_TRAIL = 1.0        # trailing% ≈ K_ATR_TRAIL × ATR%
+K_ATR_GRID_STEP = 0.7  # grid step% ≈ K_ATR × ATR%
+K_ATR_TRAIL = 1.0  # trailing% ≈ K_ATR_TRAIL × ATR%
 DEFAULT_GRID_COUNT_RANGING = None  # use whatever base_cfg has
-ATR_FLOOR_PCT = 0.15     # tiny coin guard
-ATR_CEIL_PCT = 6.0       # cap insane vol
+ATR_FLOOR_PCT = 0.15  # tiny coin guard
+ATR_CEIL_PCT = 6.0  # cap insane vol
 
 # Per-regime tuning multipliers
 REGIME_TUNING = {
     reg.LOW_VOL_RANGING: {
-        "step_mult": 0.8,        # tighter grid in calm conditions
+        "step_mult": 0.8,  # tighter grid in calm conditions
         "trail_mult": 0.8,
-        "base_pct_target": 50.0, # balanced
+        "base_pct_target": 50.0,  # balanced
         "tp_rise_mult": 0.9,
         "buy_levels_mult": 1.0,
     },
     reg.HIGH_VOL_RANGING: {
         "step_mult": 1.4,
         "trail_mult": 1.3,
-        "base_pct_target": 40.0, # less base, more cash
+        "base_pct_target": 40.0,  # less base, more cash
         "tp_rise_mult": 1.1,
         "buy_levels_mult": 0.7,
     },
     reg.TRENDING_UP: {
         "step_mult": 1.2,
-        "trail_mult": 1.4,       # ride the trend
+        "trail_mult": 1.4,  # ride the trend
         "base_pct_target": 60.0,
         "tp_rise_mult": 1.6,
         "buy_levels_mult": 0.8,  # don't keep adding into a runup
@@ -91,7 +91,7 @@ REGIME_TUNING = {
     reg.TRENDING_DOWN: {
         "step_mult": 1.5,
         "trail_mult": 1.2,
-        "base_pct_target": 25.0, # PROTECT CASH — falling knife protection
+        "base_pct_target": 25.0,  # PROTECT CASH — falling knife protection
         "tp_rise_mult": 1.3,
         "buy_levels_mult": 0.5,  # very few new buys
     },
@@ -112,7 +112,7 @@ REGIME_TUNING = {
     reg.DUMP_RISK: {
         "step_mult": 2.0,
         "trail_mult": 1.0,
-        "base_pct_target": 15.0, # mostly quote
+        "base_pct_target": 15.0,  # mostly quote
         "tp_rise_mult": 1.0,
         "buy_levels_mult": 0.3,
     },
@@ -185,7 +185,7 @@ def _build_grid_levels(
     # vol-scaled). This is safer than purely geometric trigger % (which can
     # explode for vol-heavy coins).
     # Quantity: geometric with `distribution_growth`, scaled to `manual_total`.
-    weights = [distribution_growth ** i for i in range(n)]
+    weights = [distribution_growth**i for i in range(n)]
     wsum = sum(weights)
     for i in range(n):
         levels.append(
@@ -240,12 +240,8 @@ def suggest(
         step_mult=tuning["step_mult"],
         distribution_growth=1.20,
     )
-    reasons.append(
-        f"sell_grids n={len(sell_grids)} step_mult={tuning['step_mult']}"
-    )
-    reasons.append(
-        f"buy_grids n={len(buy_grids)} step_mult={tuning['step_mult']}"
-    )
+    reasons.append(f"sell_grids n={len(sell_grids)} step_mult={tuning['step_mult']}")
+    reasons.append(f"buy_grids n={len(buy_grids)} step_mult={tuning['step_mult']}")
 
     # ---- Trailing %s ----
     trail_raw = K_ATR_TRAIL * atr_clamped * tuning["trail_mult"]

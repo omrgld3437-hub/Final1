@@ -127,7 +127,9 @@ def _last_stop_event_id(db: "Session", bot_id: int) -> int:
     return int(row[0]) if row else 0
 
 
-def _first_cold_start_after_stop(db: "Session", bot_id: int, last_stop_id: int) -> Optional[Dict[str, Any]]:
+def _first_cold_start_after_stop(
+    db: "Session", bot_id: int, last_stop_id: int
+) -> Optional[Dict[str, Any]]:
     from sqlalchemy import text
 
     from app.botengine.state_store import normalize_event_ts_iso_z

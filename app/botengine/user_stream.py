@@ -99,7 +99,10 @@ class UserStreamClient:
     def _network_block_log_payload(self) -> tuple[bool, int]:
         now = time.time()
         elapsed = now - self._last_network_block_warn_at
-        if self._last_network_block_warn_at <= 0 or elapsed >= _NETWORK_BLOCK_LOG_INTERVAL_SEC:
+        if (
+            self._last_network_block_warn_at <= 0
+            or elapsed >= _NETWORK_BLOCK_LOG_INTERVAL_SEC
+        ):
             suppressed = self._network_block_suppressed
             self._last_network_block_warn_at = now
             self._network_block_suppressed = 0

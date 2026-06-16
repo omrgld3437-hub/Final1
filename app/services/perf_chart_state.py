@@ -233,7 +233,11 @@ def build_bot_alpha_performance(
             chart_payload = {}
 
     baseline = (chart_payload or {}).get("baseline") or {}
-    run_base = state.get("perf_run_baseline") if isinstance(state.get("perf_run_baseline"), dict) else {}
+    run_base = (
+        state.get("perf_run_baseline")
+        if isinstance(state.get("perf_run_baseline"), dict)
+        else {}
+    )
 
     start_balance = baseline.get("start_balance_usd")
     if start_balance is None and run_base.get("usd") is not None:
@@ -250,7 +254,9 @@ def build_bot_alpha_performance(
         initial_prices = baseline.get("initial_prices") or {}
         coin_weights = baseline.get("coin_weights") or {}
         if initial_prices and coin_weights:
-            current_prices = _fetch_prices_for_assets(list(coin_weights.keys()), quote_asset)
+            current_prices = _fetch_prices_for_assets(
+                list(coin_weights.keys()), quote_asset
+            )
             coin_pct = compute_trdca_parite_pct(
                 initial_prices, coin_weights, current_prices, quote_asset
             )
@@ -318,7 +324,9 @@ def _capture_run_baseline_values(
     equity = compute_bot_equity_usd(
         db, bot, state, pnl_data, initial_usd=initial_capital
     )
-    start_balance = equity if equity > 0 else (initial_capital if initial_capital > 0 else None)
+    start_balance = (
+        equity if equity > 0 else (initial_capital if initial_capital > 0 else None)
+    )
 
     start_price = None
     if not is_trdca:

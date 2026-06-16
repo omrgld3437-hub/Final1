@@ -179,8 +179,16 @@ def _public_dynamic_mode_for_leaderboard(
             state = load_state(db, bot_id) or {}
             raw_snap = state.get("dynamic_snapshot")
             if isinstance(raw_snap, dict):
-                applied = raw_snap.get("applied") if isinstance(raw_snap.get("applied"), dict) else {}
-                feats = raw_snap.get("features") if isinstance(raw_snap.get("features"), dict) else {}
+                applied = (
+                    raw_snap.get("applied")
+                    if isinstance(raw_snap.get("applied"), dict)
+                    else {}
+                )
+                feats = (
+                    raw_snap.get("features")
+                    if isinstance(raw_snap.get("features"), dict)
+                    else {}
+                )
                 snap_out = {
                     "cycle_id": raw_snap.get("cycle_id"),
                     "regime": raw_snap.get("regime"),
@@ -189,7 +197,13 @@ def _public_dynamic_mode_for_leaderboard(
                     "applied": applied,
                     "features": {
                         k: feats.get(k)
-                        for k in ("atr_pct_5m", "adx_1h", "bbw_1h", "rsi_5m", "spread_bps")
+                        for k in (
+                            "atr_pct_5m",
+                            "adx_1h",
+                            "bbw_1h",
+                            "rsi_5m",
+                            "spread_bps",
+                        )
                         if feats.get(k) is not None
                     },
                 }

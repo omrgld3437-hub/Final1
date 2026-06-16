@@ -443,9 +443,7 @@ def config_from_ui_payload(payload: Dict[str, Any]) -> DcaGridTrailingConfig:
     # is self-sufficient and the safety gate is always satisfiable.
     dynamic_on = bool(payload.get("dynamic_mode") or False)
     daily_loss = payload.get("daily_loss_limit_usd")
-    if dynamic_on and (
-        daily_loss in (None, "", 0) or _float_or(daily_loss, 0.0) <= 0
-    ):
+    if dynamic_on and (daily_loss in (None, "", 0) or _float_or(daily_loss, 0.0) <= 0):
         budget_for_dll = _float_or(
             payload.get("budget_usd")
             or payload.get("initial_capital_usdt")

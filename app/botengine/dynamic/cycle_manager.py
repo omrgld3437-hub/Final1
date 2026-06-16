@@ -120,12 +120,15 @@ async def build_snapshot(
             ],
             "clamps": [],
             "fallbacks": ["data_stale_fallback"],
-            "history": _push_history(prev_snap.get("history") or [], {
-                "cycle_id": cycle_id,
-                "regime": prev_snap.get("regime") or reg.UNKNOWN,
-                "stale": True,
-                "ts": int(time.time() * 1000),
-            }),
+            "history": _push_history(
+                prev_snap.get("history") or [],
+                {
+                    "cycle_id": cycle_id,
+                    "regime": prev_snap.get("regime") or reg.UNKNOWN,
+                    "stale": True,
+                    "ts": int(time.time() * 1000),
+                },
+            ),
         }
         return snap
 
@@ -156,20 +159,25 @@ async def build_snapshot(
         "reasons": suggestion.reasons,
         "clamps": clamped.clamps,
         "fallbacks": clamped.fallbacks,
-        "history": _push_history(prev_snap.get("history") or [], {
-            "cycle_id": cycle_id,
-            "regime": regime_result.regime,
-            "regime_confidence": regime_result.confidence,
-            "atr_pct_5m": features.atr_pct_5m,
-            "adx_1h": features.adx_1h,
-            "applied_base_alloc_pct": clamped.base_alloc_pct,
-            "applied_trail_pct": clamped.sell_trigger_trailing_pct,
-            "applied_grid_step_first": (
-                clamped.buy_grids[0].get("buy_grid_pct") if clamped.buy_grids else None
-            ),
-            "stale": False,
-            "ts": int(time.time() * 1000),
-        }),
+        "history": _push_history(
+            prev_snap.get("history") or [],
+            {
+                "cycle_id": cycle_id,
+                "regime": regime_result.regime,
+                "regime_confidence": regime_result.confidence,
+                "atr_pct_5m": features.atr_pct_5m,
+                "adx_1h": features.adx_1h,
+                "applied_base_alloc_pct": clamped.base_alloc_pct,
+                "applied_trail_pct": clamped.sell_trigger_trailing_pct,
+                "applied_grid_step_first": (
+                    clamped.buy_grids[0].get("buy_grid_pct")
+                    if clamped.buy_grids
+                    else None
+                ),
+                "stale": False,
+                "ts": int(time.time() * 1000),
+            },
+        ),
     }
     return snap
 

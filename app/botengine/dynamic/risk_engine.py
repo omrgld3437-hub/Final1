@@ -28,8 +28,8 @@ from app.botengine.dynamic.strategy_engine import ParamSuggestion
 BOUNDS = {
     "base_alloc_pct": (10.0, 80.0),
     "quote_alloc_pct": (20.0, 90.0),
-    "grid_step_pct": (0.10, 8.0),     # individual sell_grid_pct / buy_grid_pct
-    "grid_qty_pct": (1.0, 100.0),     # individual qty distribution
+    "grid_step_pct": (0.10, 8.0),  # individual sell_grid_pct / buy_grid_pct
+    "grid_qty_pct": (1.0, 100.0),  # individual qty distribution
     "trailing_pct": (0.15, 5.0),
     "profit_exit_rise_pct": (0.30, 15.0),
     "profit_exit_drop_pct": (0.10, 5.0),
@@ -166,7 +166,7 @@ def _clamp_grids(
         if prev_qty > 0 and cur_qty / prev_qty > GRID_GROWTH_R_MAX:
             capped = round(prev_qty * GRID_GROWTH_R_MAX, 4)
             clamps.append(
-                f"{side}_grids[{i}].{qty_key} growth ratio {cur_qty/prev_qty:.2f}>cap "
+                f"{side}_grids[{i}].{qty_key} growth ratio {cur_qty / prev_qty:.2f}>cap "
                 f"{GRID_GROWTH_R_MAX} → {capped}"
             )
             out[i][qty_key] = capped
@@ -213,7 +213,9 @@ def apply_safety(
     quote = round(100.0 - base, 4)
     # Sanity: also ensure quote within its own bound (typically true given base bound)
     if quote < BOUNDS["quote_alloc_pct"][0]:
-        clamps.append(f"quote_alloc_pct {quote} < {BOUNDS['quote_alloc_pct'][0]} → adjusted")
+        clamps.append(
+            f"quote_alloc_pct {quote} < {BOUNDS['quote_alloc_pct'][0]} → adjusted"
+        )
         quote = BOUNDS["quote_alloc_pct"][0]
         base = round(100.0 - quote, 4)
 

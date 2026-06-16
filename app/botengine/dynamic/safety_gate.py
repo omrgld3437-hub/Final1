@@ -39,8 +39,34 @@ from typing import Any, Dict, List
 
 # System-defaults injected by Dynamic Mode when active.
 # These are CEILINGS — they cap how bad a single cycle / portfolio can get.
-DYN_STOP_LOSS_PCT = 8.0        # cycle equity stop: -8% from cycle start equity
-DYN_EMERGENCY_CLOSE_PCT = 15.0 # portfolio drop circuit breaker: -15% from initial
+DYN_STOP_LOSS_PCT = 8.0  # cycle equity stop: -8% from cycle start equity
+DYN_EMERGENCY_CLOSE_PCT = 15.0  # portfolio drop circuit breaker: -15% from initial
+
+# DCA-depth guard: the emergency circuit breaker must never fire while price is
+# still inside the user's configured buy-grid range — otherwise it would halt
+# the bot BEFORE its own deepest buy grid can execute, which directly
+# contradicts the DCA plan. The breaker only engages once price has fallen this
+# many extra % BEYOND the deepest configured buy grid (i.e. the market went
+# past the entire plan). Example: deepest buy grid at -20% + 5% buffer → the
+# breaker can only fire once price is ≤ -25% from the cycle reference.
+DYN_GRID_DEPTH_BUFFER_PCT = 5.0
+
+
+def _deepest_buy_grid_pct(cfg_dict: Dict[str, Any]) -> float:
+    """Largest buy_grid_pct (% below reference) across the EFFECTIVE buy grids.
+
+    In dynamic mode cfg_dict already carries the overlaid grids, so this is the
+    deepest level the bot will actually buy at THIS cycle. Returns 0.0 if none.
+    """
+    deepest = 0.0
+    for g in cfg_dict.get("buy_grids") or []:
+        try:
+            v = float(g.get("buy_grid_pct") or g.get("trigger_pct") or 0.0)
+        except (TypeError, ValueError):
+            v = 0.0
+        if v > deepest:
+            deepest = v
+    return deepest
 
 
 @dataclass
@@ -65,9 +91,7 @@ def check_prerequisites(cfg_dict: Dict[str, Any]) -> GateResult:
     except (TypeError, ValueError):
         mbl_i = 0
     if mbl_i < 1:
-        violations.append(
-            "max_buy_levels is missing or <1 — required as DCA hard cap"
-        )
+        violations.append("max_buy_levels is missing or <1 — required as DCA hard cap")
 
     # Layer 2: daily_loss_limit_usd must be > 0
     dll = cfg_dict.get("daily_loss_limit_usd")
@@ -106,7 +130,12 @@ def is_dynamic_mode_active(cfg_dict: Dict[str, Any]) -> bool:
     return check_prerequisites(cfg_dict).ok
 
 
-def emergency_check(state: Dict[str, Any], cfg_dict: Dict[str, Any], equity: float) -> Dict[str, Any]:
+def emergency_check(
+    state: Dict[str, Any],
+    cfg_dict: Dict[str, Any],
+    equity: float,
+    price: float = None,
+) -> Dict[str, Any]:
     """
     Run the runtime emergency checks. Returns a dict with:
         {"action": "NONE" | "STOP_LOSS" | "EMERGENCY_CLOSE", "reason": str, "metrics": {...}}
@@ -117,6 +146,19 @@ def emergency_check(state: Dict[str, Any], cfg_dict: Dict[str, Any], equity: flo
     STOP_LOSS = single-cycle equity drop, EMERGENCY_CLOSE = portfolio-level drop
     from initial capital (catches a slow bleed across many cycles).
 
+    DCA-DEPTH GUARD (critical): the breaker must let the bot execute its FULL
+    configured DCA plan. While price is still within the deepest buy grid (plus
+    DYN_GRID_DEPTH_BUFFER_PCT) of the cycle reference, this returns NONE no
+    matter how far equity has dropped — otherwise the breaker could halt the bot
+    before its own -X% buy grid ever fires, contradicting the strategy. The
+    equity/portfolio thresholds below only apply once price is BEYOND the plan.
+    (`price` is the current price; when omitted the guard is skipped and the
+    legacy equity-only behaviour applies — kept for unit tests / safety.)
+
+    The user-set daily_loss_limit_usd is a SEPARATE, ungated capital floor
+    (checked by the orchestrator), so capital protection still exists even while
+    this breaker is held back inside the grid plan.
+
     These checks ONLY trigger when dynamic_mode is active (caller responsibility
     to gate the call). The thresholds are system defaults; we don't reach into
     user config for them. This means the bot still gets protection even if the
@@ -125,6 +167,21 @@ def emergency_check(state: Dict[str, Any], cfg_dict: Dict[str, Any], equity: flo
     out = {"action": "NONE", "reason": "", "metrics": {}}
     if not is_dynamic_mode_active(cfg_dict):
         return out
+
+    # ---- DCA-depth guard: never halt while still inside the configured plan ----
+    ref_price = float(state.get("reference_price") or 0.0)
+    deepest_buy_pct = _deepest_buy_grid_pct(cfg_dict)
+    if price is not None and float(price) > 0 and ref_price > 0 and deepest_buy_pct > 0:
+        price_drop_pct = (ref_price - float(price)) / ref_price * 100.0
+        guard_pct = deepest_buy_pct + DYN_GRID_DEPTH_BUFFER_PCT
+        if price_drop_pct < guard_pct:
+            out["metrics"] = {
+                "within_grid_plan": True,
+                "price_drop_pct": round(price_drop_pct, 4),
+                "deepest_buy_grid_pct": deepest_buy_pct,
+                "guard_pct": round(guard_pct, 4),
+            }
+            return out
 
     cycle_start = float(state.get("cycle_start_equity") or 0.0)
     init_capital = float(cfg_dict.get("initial_capital_usdt") or 0.0)

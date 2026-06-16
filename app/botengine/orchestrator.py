@@ -897,7 +897,9 @@ async def _bot_loop(bot_id: int) -> None:
                             safety_gate as dyn_gate,
                         )
 
-                        _cfg_dict_for_dyn = cfg.to_dict() if hasattr(cfg, "to_dict") else {}
+                        _cfg_dict_for_dyn = (
+                            cfg.to_dict() if hasattr(cfg, "to_dict") else {}
+                        )
                         if dyn_gate.is_dynamic_mode_active(_cfg_dict_for_dyn):
                             if dyn_cm.need_recompute(state):
                                 # Dynamic suggestions MUST derive from the user's
@@ -949,9 +951,14 @@ async def _bot_loop(bot_id: int) -> None:
                                             "regime": _new_snap.get("regime"),
                                             "data_fresh": _new_snap.get("data_fresh"),
                                             "applied": _new_snap.get("applied"),
-                                            "reasons": (_new_snap.get("reasons") or [])[:8],
-                                            "clamps": (_new_snap.get("clamps") or [])[:8],
-                                            "fallbacks": _new_snap.get("fallbacks") or [],
+                                            "reasons": (_new_snap.get("reasons") or [])[
+                                                :8
+                                            ],
+                                            "clamps": (_new_snap.get("clamps") or [])[
+                                                :8
+                                            ],
+                                            "fallbacks": _new_snap.get("fallbacks")
+                                            or [],
                                         },
                                     )
                                 except Exception as _ev_err:
@@ -1006,10 +1013,15 @@ async def _bot_loop(bot_id: int) -> None:
                         if _sg.is_dynamic_mode_active(_cfg_for_emg) and state.get(
                             "initial_allocation_done"
                         ):
-                            _equity_now = float(base_balance) * float(price or 0) + float(
-                                quote_balance
+                            _equity_now = float(base_balance) * float(
+                                price or 0
+                            ) + float(quote_balance)
+                            _emg = _sg.emergency_check(
+                                state,
+                                _cfg_for_emg,
+                                _equity_now,
+                                price=float(price or 0),
                             )
-                            _emg = _sg.emergency_check(state, _cfg_for_emg, _equity_now)
                             if _emg["action"] != "NONE":
                                 logger.warning(
                                     "DYN_EMERGENCY bot_id=%s action=%s reason=%s metrics=%s",
@@ -1052,7 +1064,9 @@ async def _bot_loop(bot_id: int) -> None:
                                 continue
                     except Exception as _emg_err:
                         logger.debug(
-                            "DYN_EMERGENCY_CHECK_FAIL bot_id=%s err=%s", bot_id, _emg_err
+                            "DYN_EMERGENCY_CHECK_FAIL bot_id=%s err=%s",
+                            bot_id,
+                            _emg_err,
                         )
                     # Günlük kayıp limiti aşıldıysa botu durdur
                     if state.get("_daily_loss_limit_hit"):

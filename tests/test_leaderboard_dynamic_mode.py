@@ -1,4 +1,5 @@
 """Leaderboard dynamic_mode public block."""
+
 from __future__ import annotations
 
 import json

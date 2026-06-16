@@ -56,14 +56,14 @@ MIN_DWELL_CYCLES = 1
 
 # ---- Thresholds (system-defined, NOT user-tunable) -------------------------
 ADX_TRENDING = 25.0  # ADX above this → trend
-ADX_RANGING = 20.0   # ADX below this → ranging
-ATR_HIGH_PCT = 1.5   # ATR% above this → "high vol"
-ATR_LOW_PCT = 0.4    # ATR% below this → "low vol"
-BBW_SQUEEZE = 2.5    # BBW below this on 1h → squeeze
-VOLUME_Z_SPIKE = 2.0 # vol z-score above this → volume spike
-EMA_TREND_UP = 0.4   # EMA slope% above this → up bias
+ADX_RANGING = 20.0  # ADX below this → ranging
+ATR_HIGH_PCT = 1.5  # ATR% above this → "high vol"
+ATR_LOW_PCT = 0.4  # ATR% below this → "low vol"
+BBW_SQUEEZE = 2.5  # BBW below this on 1h → squeeze
+VOLUME_Z_SPIKE = 2.0  # vol z-score above this → volume spike
+EMA_TREND_UP = 0.4  # EMA slope% above this → up bias
 EMA_TREND_DOWN = -0.4  # EMA slope% below this → down bias
-DUMP_DROP_PCT = -2.0 # last-bar drop% threshold for DUMP_RISK
+DUMP_DROP_PCT = -2.0  # last-bar drop% threshold for DUMP_RISK
 
 
 @dataclass

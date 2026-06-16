@@ -121,7 +121,9 @@ def test_heal_stale_profit_exit_flags_when_sell_fill_missing():
 
     state = _base_state()
     state["cycle_grid_side"] = "BUY"
-    state["buy_history"] = [{"grid_index": 0, "qty": 0.1, "price": 99.0, "execution_price": 99.0}]
+    state["buy_history"] = [
+        {"grid_index": 0, "qty": 0.1, "price": 99.0, "execution_price": 99.0}
+    ]
     state["_profit_exit_done"] = True
     state["_cycle_complete"] = True
     state["cycle_ledger_current"] = {

@@ -142,7 +142,10 @@ def test_auto_resume_paused_bot_when_error_code_cleared():
     with (
         patch("app.botengine.state_store.load_state", return_value={"cycle_id": 1}),
         patch("app.botengine.state_store.save_state"),
-        patch("app.services.binance_connectivity._recent_connectivity_recovered", return_value=False),
+        patch(
+            "app.services.binance_connectivity._recent_connectivity_recovered",
+            return_value=False,
+        ),
         patch("app.services.binance_connectivity.mark_pending_connectivity_stable"),
         patch("app.services.binance_connectivity._queue_connectivity_resume_start"),
     ):

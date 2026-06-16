@@ -29,7 +29,9 @@ from app.botengine.models import DcaGridTrailingConfig
 def _candles(closes):
     out = []
     for i, c in enumerate(closes):
-        out.append({"t": i * 1000, "o": c, "h": c * 1.005, "l": c * 0.995, "c": c, "v": 100.0})
+        out.append(
+            {"t": i * 1000, "o": c, "h": c * 1.005, "l": c * 0.995, "c": c, "v": 100.0}
+        )
     return out
 
 
@@ -142,7 +144,10 @@ def test_risk_engine_anti_martingale_grid_growth():
         ]
     )
     out = risk.apply_safety(s, _base_cfg(), prev_applied=None)
-    ratio = out.buy_grids[1]["buy_qty_pct_of_quote"] / out.buy_grids[0]["buy_qty_pct_of_quote"]
+    ratio = (
+        out.buy_grids[1]["buy_qty_pct_of_quote"]
+        / out.buy_grids[0]["buy_qty_pct_of_quote"]
+    )
     assert ratio <= risk.GRID_GROWTH_R_MAX + 1e-6
 
 
@@ -258,6 +263,55 @@ def test_emergency_actions_are_protective_pause_not_liquidation():
 
 
 # ---------------------------------------------------------------------------
+# DCA-depth guard: emergency must not fire before configured buy grids execute
+# ---------------------------------------------------------------------------
+
+
+def _deep_grid_cfg():
+    return {
+        "max_buy_levels": 4,
+        "daily_loss_limit_usd": 25.0,
+        "dynamic_mode": True,
+        "initial_capital_usdt": 1000.0,
+        "buy_grids": [
+            {"buy_grid_pct": 5.0},
+            {"buy_grid_pct": 10.0},
+            {"buy_grid_pct": 15.0},
+            {"buy_grid_pct": 20.0},  # deepest configured buy grid: -20%
+        ],
+    }
+
+
+def test_emergency_held_back_while_inside_grid_plan():
+    """Price -12% (within deepest grid -20% + 5% buffer): even though equity is
+    down -15% (which would normally trip both thresholds), the breaker stays
+    silent so the bot can still execute its -20% buy grid."""
+    cfg = _deep_grid_cfg()
+    state = {"cycle_start_equity": 1000.0, "reference_price": 100.0}
+    out = sg.emergency_check(state, cfg, equity=850.0, price=88.0)
+    assert out["action"] == "NONE"
+    assert out["metrics"].get("within_grid_plan") is True
+
+
+def test_emergency_fires_beyond_grid_plan():
+    """Price -30% (beyond -20% + 5% buffer): the market went past the entire
+    plan, so the breaker engages."""
+    cfg = _deep_grid_cfg()
+    state = {"cycle_start_equity": 1000.0, "reference_price": 100.0}
+    out = sg.emergency_check(state, cfg, equity=850.0, price=70.0)
+    assert out["action"] in ("STOP_LOSS", "EMERGENCY_CLOSE")
+
+
+def test_depth_guard_skipped_when_reference_unknown():
+    """If reference price can't be resolved the guard is skipped (fail-safe):
+    the legacy equity stop still protects the bot."""
+    cfg = _deep_grid_cfg()
+    state = {"cycle_start_equity": 1000.0}  # no reference_price
+    out = sg.emergency_check(state, cfg, equity=850.0, price=88.0)
+    assert out["action"] == "STOP_LOSS"
+
+
+# ---------------------------------------------------------------------------
 # Suggestion → risk pipeline (full path)
 # ---------------------------------------------------------------------------
 
@@ -279,11 +333,16 @@ def test_smoothing_blends_with_prev_applied():
     prev_applied = {"sell_trigger_trailing_pct": 0.10}
     blended = smooth_against_prev(new, prev_applied, alpha=0.5)
     assert blended.sell_trigger_trailing_pct >= 0.10  # moved towards new value
-    assert blended.sell_trigger_trailing_pct <= max(new.sell_trigger_trailing_pct, 0.10) + 0.01
+    assert (
+        blended.sell_trigger_trailing_pct
+        <= max(new.sell_trigger_trailing_pct, 0.10) + 0.01
+    )
 
 
 def test_full_pipeline_with_trending_down_keeps_more_quote():
-    features = MarketFeatures(symbol="BTCUSDT", price=50000.0, atr_pct_5m=1.0, data_fresh=True)
+    features = MarketFeatures(
+        symbol="BTCUSDT", price=50000.0, atr_pct_5m=1.0, data_fresh=True
+    )
     regime_result = reg.RegimeResult(reg.TRENDING_DOWN, reg.TRENDING_DOWN, 0.8, {})
     s = suggest(features, regime_result, _base_cfg())
     out = risk.apply_safety(s, _base_cfg(), prev_applied=None)
@@ -304,7 +363,9 @@ def test_config_dynamic_mode_default_false():
 
 
 def test_config_dynamic_mode_true_preserved():
-    cfg = DcaGridTrailingConfig({"symbol": "BTCUSDT", "max_buy_levels": 2, "dynamic_mode": True})
+    cfg = DcaGridTrailingConfig(
+        {"symbol": "BTCUSDT", "max_buy_levels": 2, "dynamic_mode": True}
+    )
     assert cfg.dynamic_mode is True
     assert cfg.to_dict()["dynamic_mode"] is True
 
@@ -315,7 +376,11 @@ def test_config_dynamic_mode_true_preserved():
 
 
 def test_regime_hysteresis_does_not_flip_on_single_change():
-    prev = {"current": reg.LOW_VOL_RANGING, "candidate": reg.LOW_VOL_RANGING, "candidate_streak": 0}
+    prev = {
+        "current": reg.LOW_VOL_RANGING,
+        "candidate": reg.LOW_VOL_RANGING,
+        "candidate_streak": 0,
+    }
     # First switch to TRENDING_UP needs >= MIN_DWELL_CYCLES cycles
     # With MIN_DWELL_CYCLES=1, one consecutive vote suffices, but we also test the candidate persistence.
     new_state = reg.update_regime_state(
@@ -354,7 +419,9 @@ def _multi_grid_cfg(sell_total_parts, buy_total_parts):
 def test_grid_qty_distribution_preserves_manual_total():
     # Manual template deploys 45% per side (10+15+20), intentionally NOT 100.
     base = _multi_grid_cfg([10.0, 15.0, 20.0], [10.0, 15.0, 20.0])
-    features = MarketFeatures(symbol="BTCUSDT", price=1000.0, atr_pct_5m=1.0, data_fresh=True)
+    features = MarketFeatures(
+        symbol="BTCUSDT", price=1000.0, atr_pct_5m=1.0, data_fresh=True
+    )
     rr = reg.RegimeResult(reg.LOW_VOL_RANGING, reg.LOW_VOL_RANGING, 0.7, {})
     s = suggest(features, rr, base)
     sell_total = sum(g["sell_qty_pct_of_base"] for g in s.sell_grids)
@@ -367,7 +434,9 @@ def test_grid_qty_distribution_preserves_manual_total():
 def test_grid_qty_distribution_defaults_to_100_when_no_manual_qty():
     # If the template carries no usable qty figures we fall back to full deploy.
     base = _multi_grid_cfg([0.0, 0.0], [0.0, 0.0])
-    features = MarketFeatures(symbol="BTCUSDT", price=1000.0, atr_pct_5m=1.0, data_fresh=True)
+    features = MarketFeatures(
+        symbol="BTCUSDT", price=1000.0, atr_pct_5m=1.0, data_fresh=True
+    )
     rr = reg.RegimeResult(reg.LOW_VOL_RANGING, reg.LOW_VOL_RANGING, 0.7, {})
     s = suggest(features, rr, base)
     buy_total = sum(g["buy_qty_pct_of_quote"] for g in s.buy_grids)
