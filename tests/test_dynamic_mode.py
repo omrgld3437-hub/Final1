@@ -19,6 +19,7 @@ from app.botengine.dynamic.strategy_engine import (
     smooth_against_prev,
 )
 from app.botengine.models import DcaGridTrailingConfig
+from app.botengine.strategies.dca_grid_trailing import tick_dca_grid_trailing
 
 
 # ---------------------------------------------------------------------------
@@ -180,18 +181,18 @@ def test_safety_gate_missing_max_buy_levels_blocks():
     assert any("max_buy_levels" in v for v in r.violations)
 
 
-def test_safety_gate_missing_daily_loss_blocks():
+def test_safety_gate_daily_loss_not_required_when_disabled():
     cfg = {"max_buy_levels": 2, "daily_loss_limit_usd": 0.0, "dynamic_mode": True}
     r = sg.check_prerequisites(cfg)
-    assert not r.ok
-    assert any("daily_loss_limit_usd" in v for v in r.violations)
+    assert r.ok
+    assert not any("daily_loss_limit_usd" in v for v in r.violations)
 
 
 def test_safety_gate_passes_when_complete():
     cfg = {"max_buy_levels": 3, "daily_loss_limit_usd": 25.0, "dynamic_mode": True}
     r = sg.check_prerequisites(cfg)
     assert r.ok
-    assert r.injected_defaults["stop_loss_pct"] > 0
+    assert r.injected_defaults == {}
 
 
 def test_is_dynamic_mode_active_false_when_flag_off():
@@ -204,14 +205,14 @@ def test_is_dynamic_mode_active_false_when_prereqs_break():
     assert not sg.is_dynamic_mode_active(cfg)
 
 
-def test_emergency_check_stop_loss_fires():
+def test_emergency_check_stop_loss_disabled():
     cfg = {"max_buy_levels": 3, "daily_loss_limit_usd": 25.0, "dynamic_mode": True}
     state = {"cycle_start_equity": 1000.0}
     out = sg.emergency_check(state, cfg, equity=900.0)  # -10% > 8%
-    assert out["action"] == "STOP_LOSS"
+    assert out["action"] == "NONE"
 
 
-def test_emergency_check_emergency_close_fires():
+def test_emergency_check_emergency_close_disabled():
     cfg = {
         "max_buy_levels": 3,
         "daily_loss_limit_usd": 25.0,
@@ -220,11 +221,10 @@ def test_emergency_check_emergency_close_fires():
     }
     state = {"cycle_start_equity": 1000.0}
     out = sg.emergency_check(state, cfg, equity=820.0)  # -18% > 15%
-    assert out["action"] in ("STOP_LOSS", "EMERGENCY_CLOSE")  # SL fires first by design
-    # Force SL to NOT trigger by setting cycle_start_equity to current equity
+    assert out["action"] == "NONE"
     state2 = {"cycle_start_equity": 820.0}
     out2 = sg.emergency_check(state2, cfg, equity=820.0)
-    assert out2["action"] == "EMERGENCY_CLOSE"
+    assert out2["action"] == "NONE"
 
 
 def test_emergency_check_inactive_when_flag_off():
@@ -239,10 +239,7 @@ def test_emergency_check_inactive_when_flag_off():
     assert out["action"] == "NONE"
 
 
-def test_emergency_actions_are_protective_pause_not_liquidation():
-    """Both emergency actions are circuit-breaker PAUSES; the reason must make
-    explicit that the position is retained (no auto-liquidation). Action keys
-    stay stable (STOP_LOSS / EMERGENCY_CLOSE) as error-code identifiers."""
+def test_emergency_actions_are_disabled_not_pauses():
     cfg = {
         "max_buy_levels": 3,
         "daily_loss_limit_usd": 25.0,
@@ -250,16 +247,12 @@ def test_emergency_actions_are_protective_pause_not_liquidation():
         "initial_capital_usdt": 1000.0,
     }
     sl = sg.emergency_check({"cycle_start_equity": 1000.0}, cfg, equity=900.0)
-    assert sl["action"] == "STOP_LOSS"
-    assert "paused" in sl["reason"].lower()
-    assert "retained" in sl["reason"].lower()
-    assert "close" not in sl["reason"].lower()  # no misleading liquidation wording
+    assert sl["action"] == "NONE"
+    assert sl["reason"] == ""
 
     ec = sg.emergency_check({"cycle_start_equity": 820.0}, cfg, equity=820.0)
-    assert ec["action"] == "EMERGENCY_CLOSE"
-    assert "paused" in ec["reason"].lower()
-    assert "retained" in ec["reason"].lower()
-    assert "close" not in ec["reason"].lower()
+    assert ec["action"] == "NONE"
+    assert ec["reason"] == ""
 
 
 # ---------------------------------------------------------------------------
@@ -290,25 +283,23 @@ def test_emergency_held_back_while_inside_grid_plan():
     state = {"cycle_start_equity": 1000.0, "reference_price": 100.0}
     out = sg.emergency_check(state, cfg, equity=850.0, price=88.0)
     assert out["action"] == "NONE"
-    assert out["metrics"].get("within_grid_plan") is True
+    assert out["metrics"] == {}
 
 
 def test_emergency_fires_beyond_grid_plan():
-    """Price -30% (beyond -20% + 5% buffer): the market went past the entire
-    plan, so the breaker engages."""
+    """Breaker is disabled, so even beyond the grid plan it does not engage."""
     cfg = _deep_grid_cfg()
     state = {"cycle_start_equity": 1000.0, "reference_price": 100.0}
     out = sg.emergency_check(state, cfg, equity=850.0, price=70.0)
-    assert out["action"] in ("STOP_LOSS", "EMERGENCY_CLOSE")
+    assert out["action"] == "NONE"
 
 
 def test_depth_guard_skipped_when_reference_unknown():
-    """If reference price can't be resolved the guard is skipped (fail-safe):
-    the legacy equity stop still protects the bot."""
+    """Breaker is disabled, so missing reference does not matter."""
     cfg = _deep_grid_cfg()
     state = {"cycle_start_equity": 1000.0}  # no reference_price
     out = sg.emergency_check(state, cfg, equity=850.0, price=88.0)
-    assert out["action"] == "STOP_LOSS"
+    assert out["action"] == "NONE"
 
 
 # ---------------------------------------------------------------------------
@@ -426,9 +417,57 @@ def test_grid_qty_distribution_preserves_manual_total():
     s = suggest(features, rr, base)
     sell_total = sum(g["sell_qty_pct_of_base"] for g in s.sell_grids)
     buy_total = sum(g["buy_qty_pct_of_quote"] for g in s.buy_grids)
-    # Total deployment preserved (not forced to 100), distribution reshaped.
+    # Total and per-level percentages are preserved (not forced to 100).
     assert sell_total == pytest.approx(45.0, abs=0.1)
     assert buy_total == pytest.approx(45.0, abs=0.1)
+
+
+def test_dynamic_grid_triggers_never_tighten_below_manual_template():
+    base = {
+        "base_alloc_pct": 50.0,
+        "quote_alloc_pct": 50.0,
+        "sell_grids": [
+            {"sell_grid_pct": 2.0, "sell_qty_pct_of_base": 50.0},
+            {"sell_grid_pct": 4.0, "sell_qty_pct_of_base": 50.0},
+        ],
+        "buy_grids": [
+            {"buy_grid_pct": 2.0, "buy_qty_pct_of_quote": 50.0},
+            {"buy_grid_pct": 4.0, "buy_qty_pct_of_quote": 50.0},
+        ],
+        "sell_trigger_trailing_pct": 0.3,
+        "buy_trigger_trailing_pct": 0.3,
+        "profit_exit_rise_pct": 1.0,
+        "profit_exit_drop_pct": 0.3,
+        "profit_reentry_drop_pct": 1.0,
+        "profit_reentry_rise_pct": 0.3,
+    }
+    features = MarketFeatures(
+        symbol="SOLUSDT", price=75.0, atr_pct_5m=0.3, data_fresh=True
+    )
+    rr = reg.RegimeResult(reg.TRENDING_UP, reg.TRENDING_UP, 0.8, {})
+    s = suggest(features, rr, base)
+
+    assert [g["sell_grid_pct"] for g in s.sell_grids] == pytest.approx([2.0, 4.0])
+    assert [g["buy_grid_pct"] for g in s.buy_grids] == pytest.approx([2.0, 4.0])
+    assert [g["sell_qty_pct_of_base"] for g in s.sell_grids] == pytest.approx([50.0, 50.0])
+    assert [g["buy_qty_pct_of_quote"] for g in s.buy_grids] == pytest.approx([50.0, 50.0])
+
+
+def test_position_state_does_not_reshape_manual_grid_quantities():
+    base = _multi_grid_cfg([50.0, 50.0], [50.0, 50.0])
+    features = MarketFeatures(
+        symbol="SOLUSDT", price=75.0, atr_pct_5m=1.0, data_fresh=True
+    )
+    rr = reg.RegimeResult(reg.DUMP_RISK, reg.DUMP_RISK, 0.9, {})
+    s = suggest(
+        features,
+        rr,
+        base,
+        {"buy_levels_fired": 2, "max_buy_levels": 2},
+    )
+
+    assert [g["sell_qty_pct_of_base"] for g in s.sell_grids] == pytest.approx([50.0, 50.0])
+    assert [g["buy_qty_pct_of_quote"] for g in s.buy_grids] == pytest.approx([50.0, 50.0])
 
 
 def test_grid_qty_distribution_defaults_to_100_when_no_manual_qty():
@@ -444,11 +483,11 @@ def test_grid_qty_distribution_defaults_to_100_when_no_manual_qty():
 
 
 # ---------------------------------------------------------------------------
-# Safety prerequisite: backend injects default daily_loss_limit_usd
+# Safety prerequisite: backend does not inject daily_loss_limit_usd
 # ---------------------------------------------------------------------------
 
 
-def test_dynamic_mode_injects_default_daily_loss_limit():
+def test_dynamic_mode_does_not_inject_default_daily_loss_limit():
     from app.botengine.models import config_from_ui_payload
 
     payload = {
@@ -459,8 +498,7 @@ def test_dynamic_mode_injects_default_daily_loss_limit():
         "dynamic_mode": True,
     }
     cfg = config_from_ui_payload(payload)
-    # 5% of 1000 = 50, and the safety gate must now pass.
-    assert cfg.daily_loss_limit_usd == pytest.approx(50.0)
+    assert cfg.daily_loss_limit_usd == 0.0
     assert sg.check_prerequisites(cfg.to_dict()).ok
 
 
@@ -491,3 +529,35 @@ def test_explicit_daily_loss_limit_is_preserved():
     }
     cfg = config_from_ui_payload(payload)
     assert cfg.daily_loss_limit_usd == pytest.approx(123.0)
+
+
+def test_daily_loss_runtime_disabled_clears_stale_hit_and_does_not_stop_tick():
+    cfg = DcaGridTrailingConfig(
+        {
+            "symbol": "BTCUSDT",
+            "max_buy_levels": 1,
+            "daily_loss_limit_usd": 1.0,
+            "sell_grids": [{"sell_grid_pct": 20.0, "sell_qty_pct_of_base": 100.0}],
+            "buy_grids": [{"buy_grid_pct": 20.0, "buy_qty_pct_of_quote": 100.0}],
+            "tick_interval_ms": 2000,
+        }
+    )
+    state = {
+        "bot_id": 1,
+        "cycle_id": 1,
+        "mode": "IDLE",
+        "initial_allocation_done": True,
+        "initial_alloc_base_qty": 1.0,
+        "reference_price": 100.0,
+        "_dll_ref_date": "2099-01-01",
+        "_dll_ref_usd": 1000.0,
+        "_daily_loss_limit_hit": True,
+    }
+
+    actions, next_wake = tick_dca_grid_trailing(
+        state, cfg, price=100.0, base_balance=1.0, quote_balance=0.0
+    )
+
+    assert actions == []
+    assert next_wake == pytest.approx(2.0)
+    assert "_daily_loss_limit_hit" not in state

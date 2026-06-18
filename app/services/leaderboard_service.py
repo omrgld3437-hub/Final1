@@ -135,12 +135,11 @@ def _strip_budget_from_public_params(params: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _cfg_dynamic_enabled(cfg: Dict[str, Any]) -> bool:
-    v = (cfg or {}).get("dynamic_mode")
-    if v is None:
-        return False
-    if isinstance(v, str):
-        return v.strip().lower() in ("1", "true", "yes", "on")
-    return bool(v)
+    # Shared, robust parse (string "false"/"0"/"off" → False). Kept as a thin
+    # wrapper so existing call sites / tests stay intact.
+    from app.utils.parse_utils import parse_bool
+
+    return parse_bool((cfg or {}).get("dynamic_mode"))
 
 
 def _public_dynamic_mode_for_leaderboard(

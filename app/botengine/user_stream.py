@@ -17,8 +17,10 @@ import json
 import logging
 import os
 import random
+import threading
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, Optional
 
 import httpx
@@ -28,12 +30,139 @@ logger = logging.getLogger(__name__)
 
 OrderUpdateCallback = Callable[[int, Dict[str, Any]], Awaitable[None]]
 
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_RUN_DIR = _PROJECT_ROOT / ".run"
+_NETWORK_BLOCK_LOG_FILE = _RUN_DIR / "user_stream_network_block_log.json"
+_network_block_persist_lock = threading.Lock()
+
+
+class UserStreamNetworkBlockError(Exception):
+    """Binance'e ulaşılamadan HTML/proxy yanıtı (geo/ISP/firewall). API key hatası değil."""
+
+    def __init__(self, status_code: int = 0) -> None:
+        self.status_code = int(status_code or 0)
+        super().__init__(f"user stream network block status={self.status_code}")
+
+
 # listenKey süresi dolunca Binance 410 döner — yeniden bağlan
 _LISTEN_KEY_EXPIRED_STATUS = 410
 # Keepalive aralığı: Binance listenKey 60 dak dolsa da 30'da bir yenile
 _KEEPALIVE_INTERVAL_SEC = 25 * 60  # 25 dakika (güvenlik payı)
-# Ağ/proxy engeli devam ederken aynı uyarıyı her reconnect denemesinde yazma.
-_NETWORK_BLOCK_LOG_INTERVAL_SEC = 60 * 60
+def _env_float(name: str, default: float, *, min_value: float = 0.0) -> float:
+    try:
+        value = float(os.getenv(name, "").strip())
+        if value >= min_value:
+            return value
+    except Exception:
+        pass
+    return float(default)
+
+
+# Ağ/proxy/geo engeli devam ederken aynı uyarıyı her reconnect denemesinde yazma.
+# Bu hata API key hatası değil; REST polling/reconcile çalışmaya devam ettiği için
+# varsayılanı gürültüsüz tutuyoruz. Canlıda gerekirse env ile sıklaştırılabilir.
+_NETWORK_BLOCK_LOG_INTERVAL_SEC = _env_float(
+    "BINANCE_USER_STREAM_NETWORK_BLOCK_WARN_INTERVAL_SEC",
+    24 * 60 * 60,
+    min_value=60.0,
+)
+_NETWORK_BLOCK_BACKOFF_BASE_SEC = _env_float(
+    "BINANCE_USER_STREAM_NETWORK_BLOCK_BACKOFF_BASE_SEC",
+    60 * 60,
+    min_value=60.0,
+)
+_NETWORK_BLOCK_BACKOFF_MAX_SEC = max(
+    _NETWORK_BLOCK_BACKOFF_BASE_SEC,
+    _env_float(
+        "BINANCE_USER_STREAM_NETWORK_BLOCK_BACKOFF_MAX_SEC",
+        6 * 60 * 60,
+        min_value=60.0,
+    ),
+)
+
+
+def _response_looks_like_html_block(response: httpx.Response) -> bool:
+    raw = (response.text or "")[:300]
+    return bool(raw.lstrip().startswith("<"))
+
+
+def _network_block_log_key(account_id: int, market: str) -> str:
+    return f"{int(account_id)}:{(market or 'spot').strip().lower()}"
+
+
+def _load_network_block_log_state() -> Dict[str, float]:
+    try:
+        if not _NETWORK_BLOCK_LOG_FILE.is_file():
+            return {}
+        raw = json.loads(_NETWORK_BLOCK_LOG_FILE.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            return {}
+        out: Dict[str, float] = {}
+        for k, v in raw.items():
+            try:
+                ts = float(v)
+            except (TypeError, ValueError):
+                continue
+            if ts > 0:
+                out[str(k)] = ts
+        return out
+    except Exception:
+        return {}
+
+
+def _save_network_block_log_state(state: Dict[str, float]) -> None:
+    try:
+        _RUN_DIR.mkdir(parents=True, exist_ok=True)
+        tmp = _NETWORK_BLOCK_LOG_FILE.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(_NETWORK_BLOCK_LOG_FILE)
+    except Exception as e:
+        logger.debug("user_stream network_block log persist failed: %s", e)
+
+
+def get_persisted_network_block_warn_at(account_id: int, market: str) -> float:
+    key = _network_block_log_key(account_id, market)
+    with _network_block_persist_lock:
+        return float(_load_network_block_log_state().get(key) or 0.0)
+
+
+def set_persisted_network_block_warn_at(
+    account_id: int, market: str, ts: float
+) -> None:
+    if ts <= 0:
+        return
+    key = _network_block_log_key(account_id, market)
+    with _network_block_persist_lock:
+        state = _load_network_block_log_state()
+        state[key] = float(ts)
+        _save_network_block_log_state(state)
+
+
+def clear_persisted_network_block_warn_at(account_id: int, market: str) -> None:
+    key = _network_block_log_key(account_id, market)
+    with _network_block_persist_lock:
+        state = _load_network_block_log_state()
+        if key not in state:
+            return
+        del state[key]
+        _save_network_block_log_state(state)
+
+
+def should_emit_network_block_warning(
+    account_id: int,
+    market: str,
+    last_warn_at: float,
+    *,
+    now: Optional[float] = None,
+) -> tuple[bool, float, int]:
+    """Cross-process throttle: worker yeniden başlatılsa da env eşiğine kadar sessiz."""
+    now_ts = float(now if now is not None else time.time())
+    persisted = get_persisted_network_block_warn_at(account_id, market)
+    effective_last = max(float(last_warn_at or 0.0), persisted)
+    elapsed = now_ts - effective_last if effective_last > 0 else _NETWORK_BLOCK_LOG_INTERVAL_SEC
+    if effective_last <= 0 or elapsed >= _NETWORK_BLOCK_LOG_INTERVAL_SEC:
+        return True, effective_last, 0
+    return False, effective_last, 0
 
 
 @dataclass
@@ -50,6 +179,14 @@ class UserStreamClient:
     _force_reconnect: bool = field(default=False, repr=False)
     _last_network_block_warn_at: float = field(default=0.0, repr=False)
     _network_block_suppressed: int = field(default=0, repr=False)
+    _network_block_backoff: float = field(
+        default=_NETWORK_BLOCK_BACKOFF_BASE_SEC, repr=False
+    )
+
+    def __post_init__(self) -> None:
+        persisted = get_persisted_network_block_warn_at(self.account_id, self.market)
+        if persisted > self._last_network_block_warn_at:
+            self._last_network_block_warn_at = persisted
 
     def _log_id(self) -> str:
         """Log için hesap tanımlayıcı: 'AdSoyad #ABC123 (id=3)'"""
@@ -98,17 +235,59 @@ class UserStreamClient:
 
     def _network_block_log_payload(self) -> tuple[bool, int]:
         now = time.time()
-        elapsed = now - self._last_network_block_warn_at
-        if (
-            self._last_network_block_warn_at <= 0
-            or elapsed >= _NETWORK_BLOCK_LOG_INTERVAL_SEC
-        ):
+        should_warn, _, _ = should_emit_network_block_warning(
+            self.account_id,
+            self.market,
+            self._last_network_block_warn_at,
+            now=now,
+        )
+        if should_warn:
             suppressed = self._network_block_suppressed
             self._last_network_block_warn_at = now
             self._network_block_suppressed = 0
+            set_persisted_network_block_warn_at(self.account_id, self.market, now)
             return True, suppressed
         self._network_block_suppressed += 1
         return False, self._network_block_suppressed
+
+    def _log_network_block_warning(self, status_code: int) -> None:
+        should_warn, suppressed = self._network_block_log_payload()
+        if should_warn:
+            suffix = (
+                f" Önceki {int(_NETWORK_BLOCK_LOG_INTERVAL_SEC // 3600)} saat içinde "
+                f"{suppressed} aynı uyarı bastırıldı."
+                if suppressed
+                else ""
+            )
+            logger.warning(
+                "USER_STREAM_NETWORK_BLOCK %s market=%s status=%s — "
+                "Binance API'ye ulaşılamıyor: yanıt HTML (proxy/güvenlik duvarı/ISP engeli). "
+                "Bot REST ile çalışır; stream seyrek yeniden denenecek. "
+                "Yerel geliştirmede BINANCE_USER_STREAM_ENABLED=0 kullanılabilir.%s",
+                self._log_id(),
+                self.market,
+                status_code,
+                suffix,
+            )
+        else:
+            logger.debug(
+                "USER_STREAM_NETWORK_BLOCK_SUPPRESSED %s market=%s status=%s suppressed=%s "
+                "(son WARNING %.0f sn önce; worker yeniden başlatma dahil)",
+                self._log_id(),
+                self.market,
+                status_code,
+                suppressed,
+                max(
+                    0.0,
+                    time.time()
+                    - max(
+                        self._last_network_block_warn_at,
+                        get_persisted_network_block_warn_at(
+                            self.account_id, self.market
+                        ),
+                    ),
+                ),
+            )
 
     async def _create_listen_key(self) -> str:
         url = self._http_base() + self._listen_key_path()
@@ -117,8 +296,8 @@ class UserStreamClient:
             res = await client.post(url, headers=headers)
             if not res.is_success:
                 # JSON mu HTML mi? HTML → ağ/proxy engeli; JSON → Binance API hatası
+                is_html = _response_looks_like_html_block(res)
                 raw_text = res.text[:300] if res.text else ""
-                is_html = raw_text.lstrip().startswith("<")
                 try:
                     err_body = res.json() if not is_html else {}
                     binance_code = err_body.get("code")
@@ -127,42 +306,19 @@ class UserStreamClient:
                     binance_code, binance_msg = None, raw_text
 
                 if is_html:
-                    # HTML yanıt = istek Binance'e ulaşmadı (proxy/güvenlik duvarı/ISP engeli)
-                    should_warn, suppressed = self._network_block_log_payload()
-                    if should_warn:
-                        suffix = (
-                            f" Önceki saat içinde {suppressed} aynı uyarı bastırıldı."
-                            if suppressed
-                            else ""
-                        )
-                        logger.warning(
-                            "USER_STREAM_NETWORK_BLOCK %s market=%s status=%s — "
-                            "Binance API'ye ulaşılamıyor: yanıt HTML (proxy/güvenlik duvarı/ISP engeli). "
-                            "VPN, DNS veya ağ ayarları kontrol edilmeli.%s",
-                            self._log_id(),
-                            self.market,
-                            res.status_code,
-                            suffix,
-                        )
-                    else:
-                        logger.debug(
-                            "USER_STREAM_NETWORK_BLOCK_SUPPRESSED %s market=%s status=%s suppressed=%s",
-                            self._log_id(),
-                            self.market,
-                            res.status_code,
-                            suppressed,
-                        )
-                else:
-                    logger.warning(
-                        "USER_STREAM_CREATE_410 %s market=%s status=%s — "
-                        "Binance listenKey oluşturma reddedildi. "
-                        "Binance code=%s msg=%s. API key izni veya IP kısıtlaması kontrol edin.",
-                        self._log_id(),
-                        self.market,
-                        res.status_code,
-                        binance_code,
-                        binance_msg,
-                    )
+                    self._log_network_block_warning(res.status_code)
+                    raise UserStreamNetworkBlockError(res.status_code)
+
+                logger.warning(
+                    "USER_STREAM_CREATE_410 %s market=%s status=%s — "
+                    "Binance listenKey oluşturma reddedildi. "
+                    "Binance code=%s msg=%s. API key izni veya IP kısıtlaması kontrol edin.",
+                    self._log_id(),
+                    self.market,
+                    res.status_code,
+                    binance_code,
+                    binance_msg,
+                )
             res.raise_for_status()
             data = res.json()
         listen_key = data.get("listenKey")
@@ -221,6 +377,13 @@ class UserStreamClient:
                 )
             except httpx.HTTPStatusError as exc:
                 status = exc.response.status_code if exc.response is not None else 0
+                if exc.response is not None and _response_looks_like_html_block(
+                    exc.response
+                ):
+                    self._log_network_block_warning(status)
+                    self.listen_key = None
+                    self._force_reconnect = True
+                    break
                 if status == _LISTEN_KEY_EXPIRED_STATUS:
                     # 410: listenKey süresi doldu → yeni key ile yeniden bağlan
                     logger.info(
@@ -272,6 +435,8 @@ class UserStreamClient:
                 backoff = 1.0
                 self._last_network_block_warn_at = 0.0
                 self._network_block_suppressed = 0
+                self._network_block_backoff = _NETWORK_BLOCK_BACKOFF_BASE_SEC
+                clear_persisted_network_block_warn_at(self.account_id, self.market)
 
                 # Keepalive'ı başlat (önceki varsa durdur)
                 if self.keepalive_task and not self.keepalive_task.done():
@@ -325,7 +490,58 @@ class UserStreamClient:
 
             except asyncio.CancelledError:
                 break
+            except UserStreamNetworkBlockError as exc:
+                mark_stream_down(self.account_id)
+                if self.stop_event.is_set():
+                    break
+                self._network_block_backoff = min(
+                    _NETWORK_BLOCK_BACKOFF_MAX_SEC,
+                    max(
+                        _NETWORK_BLOCK_BACKOFF_BASE_SEC,
+                        self._network_block_backoff * 1.25,
+                    ),
+                )
+                delay = self._network_block_backoff + random.uniform(0, 30.0)
+                logger.debug(
+                    "USER_STREAM_NETWORK_BLOCK_RETRY %s market=%s status=%s backoff=%.0fs",
+                    self._log_id(),
+                    self.market,
+                    exc.status_code,
+                    delay,
+                )
+                try:
+                    await asyncio.wait_for(self.stop_event.wait(), timeout=delay)
+                except asyncio.TimeoutError:
+                    pass
+                continue
             except httpx.HTTPStatusError as exc:
+                status = exc.response.status_code if exc.response is not None else 0
+                if exc.response is not None and _response_looks_like_html_block(
+                    exc.response
+                ):
+                    self._log_network_block_warning(status)
+                    if self.stop_event.is_set():
+                        break
+                    self._network_block_backoff = min(
+                        _NETWORK_BLOCK_BACKOFF_MAX_SEC,
+                        max(
+                            _NETWORK_BLOCK_BACKOFF_BASE_SEC,
+                            self._network_block_backoff * 1.25,
+                        ),
+                    )
+                    delay = self._network_block_backoff + random.uniform(0, 30.0)
+                    logger.debug(
+                        "USER_STREAM_NETWORK_BLOCK_RETRY %s market=%s status=%s backoff=%.0fs",
+                        self._log_id(),
+                        self.market,
+                        status,
+                        delay,
+                    )
+                    try:
+                        await asyncio.wait_for(self.stop_event.wait(), timeout=delay)
+                    except asyncio.TimeoutError:
+                        pass
+                    continue
                 status = exc.response.status_code if exc.response is not None else 0
                 _consecutive_create_failures += 1
                 mark_stream_down(self.account_id)

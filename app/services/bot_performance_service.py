@@ -47,15 +47,17 @@ def normalize_perf_period(period: str) -> str:
 
 
 def performance_period_start_ts(period: str) -> Optional[datetime]:
+    """Dönem başlangıcı (UTC). Günlük/haftalık/aylık = TR takvim günü (dual PNL ile aynı)."""
     p = normalize_perf_period(period)
-    now = datetime.now(timezone.utc)
-    if p == "day":
-        return now - timedelta(days=1)
-    if p == "week":
-        return now - timedelta(days=7)
-    if p == "month":
-        return now - timedelta(days=30)
-    return None
+    if p == "all":
+        return None
+    date_from, _, _ = period_calendar_range(period)
+    if not date_from:
+        return None
+    start_tr = datetime.strptime(date_from, "%Y-%m-%d").replace(
+        hour=0, minute=0, second=0, microsecond=0, tzinfo=TR_TZ
+    )
+    return start_tr.astimezone(timezone.utc)
 
 
 def _parse_ts_utc(ts: Any) -> Optional[datetime]:

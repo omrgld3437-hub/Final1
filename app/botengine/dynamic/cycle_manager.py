@@ -3,7 +3,8 @@ Dynamic Mode Cycle Manager — builds and applies the per-cycle snapshot.
 
 Flow per cycle (called from orchestrator BEFORE strategy.tick()):
 
-    1. need_recompute(state)  -> True if first cycle, or _dynamic_recompute_needed flag set
+    1. dynamic_overlay_allowed(state) -> False on cycle 1 (first tur manual)
+    2. need_recompute(state)  -> True if no snapshot, or _dynamic_recompute_needed flag set
     2. build_snapshot(adapter, state, cfg)
          a. collect features (klines/spread)
          b. classify regime (hysteresis vs prev snapshot)
@@ -48,6 +49,16 @@ from app.botengine.dynamic.features import collect_features, MarketFeatures
 logger = logging.getLogger(__name__)
 
 HISTORY_MAX = 20
+FIRST_DYNAMIC_CYCLE_ID = 2
+
+
+def dynamic_overlay_allowed(state: Dict[str, Any]) -> bool:
+    """Dynamic overlay starts after the first manual cycle is complete."""
+    try:
+        cycle_id = int(state.get("cycle_id") or 1)
+    except (TypeError, ValueError):
+        cycle_id = 1
+    return cycle_id >= FIRST_DYNAMIC_CYCLE_ID
 
 
 def need_recompute(state: Dict[str, Any]) -> bool:
@@ -140,8 +151,11 @@ async def build_snapshot(
     pos = _position_state(state, cfg_dict)
     suggestion = se.suggest(features, regime_result, cfg_dict, pos)
 
-    # 5. Smooth vs prev applied (EMA blend on scalars)
-    suggestion = se.smooth_against_prev(suggestion, prev_applied, alpha=0.5)
+    # 5. Smooth vs prev applied (EMA blend on scalars). Alpha scales with regime
+    #    confidence: low confidence → stickier (stay near prev), avoiding large
+    #    swings driven by an uncertain regime call. (0.5 at confidence 0.5.)
+    _alpha = se.alpha_for_confidence(regime_result.confidence)
+    suggestion = se.smooth_against_prev(suggestion, prev_applied, alpha=_alpha)
 
     # 6. Risk engine (clamps + rate limiter)
     clamped = risk.apply_safety(suggestion, cfg_dict, prev_applied)

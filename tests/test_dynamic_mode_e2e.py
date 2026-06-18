@@ -217,7 +217,7 @@ def test_defensive_regime_keeps_more_quote_than_bullish():
 def test_higher_vol_widens_grid_step():
     base = _base_cfg()
     low = MarketFeatures(symbol="T", price=1000.0, atr_pct_5m=0.3, data_fresh=True)
-    high = MarketFeatures(symbol="T", price=1000.0, atr_pct_5m=3.0, data_fresh=True)
+    high = MarketFeatures(symbol="T", price=1000.0, atr_pct_5m=6.0, data_fresh=True)
     rr = reg.RegimeResult(reg.LOW_VOL_RANGING, reg.LOW_VOL_RANGING, 0.7, {})
     low_c = risk.apply_safety(se.suggest(low, rr, base), base).to_dict()
     high_c = risk.apply_safety(se.suggest(high, rr, base), base).to_dict()
@@ -264,6 +264,11 @@ def test_snapshot_recompute_flag_forces_rebuild():
     assert cm.need_recompute(state) is True
     # flag is consumed
     assert "_dynamic_recompute_needed" not in state
+
+
+def test_dynamic_overlay_starts_after_first_manual_cycle():
+    assert cm.dynamic_overlay_allowed({"cycle_id": 1}) is False
+    assert cm.dynamic_overlay_allowed({"cycle_id": 2}) is True
 
 
 def test_build_snapshot_stale_falls_back(monkeypatch):

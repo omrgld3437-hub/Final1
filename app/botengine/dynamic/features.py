@@ -53,6 +53,7 @@ class MarketFeatures:
     bbw_5m: Optional[float] = None
     bbw_1h: Optional[float] = None
     realized_vol_5m: Optional[float] = None
+    ret_5m_last: Optional[float] = None  # last CLOSED 5m return % (fast-drop signal)
     # Trend
     adx_1h: Optional[float] = None
     ema_slope_1h_pct: Optional[float] = None
@@ -60,6 +61,7 @@ class MarketFeatures:
     rsi_5m: Optional[float] = None
     # Microstructure / volume
     spread_pct: Optional[float] = None
+    spread_bps: Optional[float] = None  # spread_pct × 100 (leaderboard/UI key)
     volume_24h_usdt: Optional[float] = None
     volume_zscore_5m: Optional[float] = None
     wick_body_ratio_5m: Optional[float] = None
@@ -181,21 +183,34 @@ async def collect_features(symbol: str, last_price: float) -> MarketFeatures:
     f.sources["k5_len"] = len(k5)
     f.sources["k1h_len"] = len(k1h) if k1h else 0
 
+    # OHLC-based indicators run on CLOSED candles only — the last kline from
+    # Binance is the still-forming interval; including it injects intra-candle
+    # noise into ATR/RSI/BBW/ADX and can flip a regime on a transient spike.
+    # volume_zscore has its own forming-candle exclusion, so it keeps the full
+    # series.
+    k5c = k5[:-1] if len(k5) > 1 else k5
+
     # Volatility
-    f.atr_pct_5m = ind.atr_pct(k5, 14)
-    f.bbw_5m = ind.bollinger_band_width(k5, 20, 2.0)
-    f.realized_vol_5m = ind.realized_vol_pct(k5, 30)
-    f.wick_body_ratio_5m = ind.avg_wick_body_ratio(k5, 10)
-    f.rsi_5m = ind.rsi(k5, 14)
+    f.atr_pct_5m = ind.atr_pct(k5c, 14)
+    f.bbw_5m = ind.bollinger_band_width(k5c, 20, 2.0)
+    f.realized_vol_5m = ind.realized_vol_pct(k5c, 30)
+    f.wick_body_ratio_5m = ind.avg_wick_body_ratio(k5c, 10)
+    f.rsi_5m = ind.rsi(k5c, 14)
     f.volume_zscore_5m = ind.volume_zscore(k5, 20)
 
+    # Last CLOSED 5m return % — single-bar fast-drop signal (DUMP detection).
+    closes_5c = [float(c["c"]) for c in k5c]
+    if len(closes_5c) >= 2 and closes_5c[-2] > 0:
+        f.ret_5m_last = (closes_5c[-1] / closes_5c[-2] - 1.0) * 100.0
+
     if k1h and len(k1h) >= 40:
-        f.atr_pct_1h = ind.atr_pct(k1h, 14)
-        f.bbw_1h = ind.bollinger_band_width(k1h, 20, 2.0)
-        f.adx_1h = ind.adx(k1h, 14)
-        closes_1h = [float(c["c"]) for c in k1h]
+        k1hc = k1h[:-1] if len(k1h) > 1 else k1h
+        f.atr_pct_1h = ind.atr_pct(k1hc, 14)
+        f.bbw_1h = ind.bollinger_band_width(k1hc, 20, 2.0)
+        f.adx_1h = ind.adx(k1hc, 14)
+        closes_1h = [float(c["c"]) for c in k1hc]
         f.ema_slope_1h_pct = ind.ema_slope_pct(closes_1h, 20, 5)
-        f.rsi_1h = ind.rsi(k1h, 14)
+        f.rsi_1h = ind.rsi(k1hc, 14)
 
     # 24h volume + spread proxy
     bid = _safe_float(ticker.get("bidPrice")) or _safe_float(ticker.get("bid"))
@@ -204,6 +219,7 @@ async def collect_features(symbol: str, last_price: float) -> MarketFeatures:
         mid = (ask + bid) / 2.0
         if mid > 0:
             f.spread_pct = (ask - bid) / mid * 100.0
+            f.spread_bps = f.spread_pct * 100.0
     quote_vol = _safe_float(ticker.get("quoteVolume")) or _safe_float(
         ticker.get("volume_quote")
     )

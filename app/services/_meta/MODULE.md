@@ -74,6 +74,7 @@ transaction_history_service.py
 transaction_history_file_store.py
 bot_perf_file_store.py
 bot_performance_service.py
+bot_perf_narrative.py
 wallet_pricing.py → market_data.get_price_map_flat
 ```
 

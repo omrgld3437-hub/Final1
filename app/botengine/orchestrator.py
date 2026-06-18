@@ -334,7 +334,23 @@ async def _bot_loop(bot_id: int) -> None:
                 logger.warning("bot_engine loop bot_id=%s not found", bot_id)
                 return
             account_id = bot.account_id
-            symbol = (bot.symbol or "").upper()
+            from app.botengine.symbols import normalize_bot_trading_symbol
+
+            raw_sym = (bot.symbol or "").upper()
+            symbol = normalize_bot_trading_symbol(raw_sym)
+            if symbol != raw_sym:
+                logger.info(
+                    "BOT_SYMBOL_HEAL bot_id=%s %s -> %s", bot_id, raw_sym, symbol
+                )
+                bot.symbol = symbol
+                try:
+                    cfg_raw = json.loads(bot.config_json or "{}")
+                    if cfg_raw.get("symbol"):
+                        cfg_raw["symbol"] = symbol
+                        bot.config_json = json.dumps(cfg_raw, ensure_ascii=False)
+                except Exception:
+                    pass
+                db.commit()
             ensure_state_row(db, bot_id, account_id, symbol)
             if bot_id not in _bot_diag_logged:
                 _bot_diag_logged.add(bot_id)
@@ -901,7 +917,18 @@ async def _bot_loop(bot_id: int) -> None:
                             cfg.to_dict() if hasattr(cfg, "to_dict") else {}
                         )
                         if dyn_gate.is_dynamic_mode_active(_cfg_dict_for_dyn):
-                            if dyn_cm.need_recompute(state):
+                            if not dyn_cm.dynamic_overlay_allowed(state):
+                                if state.get("dynamic_snapshot"):
+                                    state.pop("dynamic_snapshot", None)
+                                state["_dynamic_first_cycle_manual"] = True
+                                logger.debug(
+                                    "DYN_FIRST_CYCLE_MANUAL bot_id=%s cycle=%s — using manual cfg",
+                                    bot_id,
+                                    state.get("cycle_id") or 1,
+                                )
+                            else:
+                                state.pop("_dynamic_first_cycle_manual", None)
+                            if dyn_cm.dynamic_overlay_allowed(state) and dyn_cm.need_recompute(state):
                                 # Dynamic suggestions MUST derive from the user's
                                 # MANUAL config every cycle. `cfg` is cached and
                                 # mutated in-place by apply_overlay, so cfg.to_dict()
@@ -1002,16 +1029,23 @@ async def _bot_loop(bot_id: int) -> None:
                     )
                     # ============================================================
                     # Dynamic emergency check (cycle + portfolio circuit breaker).
-                    # Only active when dynamic_mode=True. PROTECTIVE PAUSE only:
-                    # sets paused_error + alerts operator; position is RETAINED,
-                    # nothing is auto-liquidated (same pattern as daily_loss_limit).
+                    # Current operator policy disables this brake; keep the old
+                    # logic behind the safety_gate flag and clear stale state.
                     # ============================================================
                     try:
                         from app.botengine.dynamic import safety_gate as _sg
 
                         _cfg_for_emg = cfg.to_dict() if hasattr(cfg, "to_dict") else {}
-                        if _sg.is_dynamic_mode_active(_cfg_for_emg) and state.get(
-                            "initial_allocation_done"
+                        _dyn_active_for_emg = _sg.is_dynamic_mode_active(_cfg_for_emg)
+                        if (
+                            not _sg.EMERGENCY_CHECKS_ENABLED
+                            and state.get("_dyn_emergency")
+                        ):
+                            state.pop("_dyn_emergency", None)
+                        if (
+                            _sg.EMERGENCY_CHECKS_ENABLED
+                            and _dyn_active_for_emg
+                            and state.get("initial_allocation_done")
                         ):
                             _equity_now = float(base_balance) * float(
                                 price or 0
@@ -1068,8 +1102,18 @@ async def _bot_loop(bot_id: int) -> None:
                             bot_id,
                             _emg_err,
                         )
+                    # Günlük kayıp limiti devre dışı bırakıldıysa eski state
+                    # bayrağı da botu durdurmasın.
+                    try:
+                        from app.botengine.dynamic.safety_gate import (
+                            DAILY_LOSS_RUNTIME_ENABLED as _dll_runtime_enabled,
+                        )
+                    except Exception:
+                        _dll_runtime_enabled = False
+                    if not _dll_runtime_enabled and state.get("_daily_loss_limit_hit"):
+                        state.pop("_daily_loss_limit_hit", None)
                     # Günlük kayıp limiti aşıldıysa botu durdur
-                    if state.get("_daily_loss_limit_hit"):
+                    if _dll_runtime_enabled and state.get("_daily_loss_limit_hit"):
                         try:
                             flush_queued_events(db, bot_id, account_id, state)
                             row.status = "paused_error"

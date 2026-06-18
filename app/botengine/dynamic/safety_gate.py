@@ -1,35 +1,14 @@
 """
 Dynamic Mode Safety Gate.
 
-A bot may only operate in Dynamic Mode while ALL FOUR safety layers are present:
+Current operator policy:
+  * max_buy_levels remains mandatory and structural.
+  * daily_loss_limit_usd prerequisite/enforcement is disabled.
+  * Dynamic stop-loss %8 and emergency-close %15 circuit breakers are disabled.
 
-  1. max_buy_levels      (DCA hard cap; already in project)
-  2. daily_loss_limit_usd (max drawdown proxy; already in project)
-  3. stop_loss_pct        (cycle-level protective PAUSE; INJECTED by Dynamic Mode)
-  4. emergency_close_pct  (portfolio-level protective PAUSE; INJECTED)
-
-Layers 3 and 4 are not user-tunable: when dynamic_mode is True they are AUTO
-applied with system defaults that the user cannot disable from the UI. This
-matches the design rule that Dynamic Mode does not relax safety — it can only
-make it stricter or leave it alone.
-
-IMPORTANT — what "emergency" does (and does NOT) do:
-  These thresholds are *circuit breakers*: when hit, the bot is PAUSED
-  (status=paused_error) and the operator is alerted. The position is RETAINED —
-  nothing is auto-liquidated. This is intentional and matches every other risk
-  event in the project (daily_loss_limit, missing API keys, … all pause; only an
-  explicit bot *delete* flattens the position). For a DCA / grid mean-reversion
-  strategy this is the correct behaviour: force-selling base at a drawdown low
-  would lock in the maximum loss and destroy the recovery path the strategy is
-  built on. "STOP_LOSS"/"EMERGENCY_CLOSE" are kept as stable internal action
-  keys (error codes DYN_STOP_LOSS / DYN_EMERGENCY_CLOSE) — they mean "halt
-  trading", not "sell the position".
-
-The gate runs:
-  * at config save (update-config / create) — refused if invalid
-  * at orchestrator hook (every cycle start) — if a violation slips in, dynamic
-    mode is SILENTLY DEACTIVATED for that cycle and the bot falls back to
-    manual cfg (never crashes).
+The disabled logic is kept below behind flags so it can be restored without a
+schema migration. While disabled, Dynamic Mode is allowed as long as
+max_buy_levels is valid; emergency_check always returns action=NONE.
 """
 
 from __future__ import annotations
@@ -41,6 +20,18 @@ from typing import Any, Dict, List
 # These are CEILINGS — they cap how bad a single cycle / portfolio can get.
 DYN_STOP_LOSS_PCT = 8.0  # cycle equity stop: -8% from cycle start equity
 DYN_EMERGENCY_CLOSE_PCT = 15.0  # portfolio drop circuit breaker: -15% from initial
+
+# -----------------------------------------------------------------------------
+# RISK-BRAKE TOGGLES — DISABLED by configuration (operator request: run without
+# the system stop-loss / emergency-close circuit breaker and without the
+# daily-loss prerequisite, in BOTH dynamic and manual mode). The logic below is
+# kept intact and inert; flip a flag back to True to restore that protection.
+# NOTE: `max_buy_levels` (the DCA hard cap) is NOT a toggle — it is structural
+# and always enforced.
+# -----------------------------------------------------------------------------
+EMERGENCY_CHECKS_ENABLED = False   # stop-loss %8 + emergency-close %15 breaker
+DAILY_LOSS_PREREQ_ENABLED = False  # require daily_loss_limit_usd>0 for dynamic mode
+DAILY_LOSS_RUNTIME_ENABLED = False  # enforce daily_loss_limit_usd in manual/dynamic mode
 
 # DCA-depth guard: the emergency circuit breaker must never fire while price is
 # still inside the user's configured buy-grid range — otherwise it would halt
@@ -93,23 +84,28 @@ def check_prerequisites(cfg_dict: Dict[str, Any]) -> GateResult:
     if mbl_i < 1:
         violations.append("max_buy_levels is missing or <1 — required as DCA hard cap")
 
-    # Layer 2: daily_loss_limit_usd must be > 0
-    dll = cfg_dict.get("daily_loss_limit_usd")
-    try:
-        dll_f = float(dll or 0.0)
-    except (TypeError, ValueError):
-        dll_f = 0.0
-    if dll_f <= 0:
-        violations.append(
-            "daily_loss_limit_usd is missing or <=0 — required as max-drawdown proxy"
-        )
+    # Layer 2: daily_loss_limit_usd must be > 0 — DISABLED (see toggle above).
+    if DAILY_LOSS_PREREQ_ENABLED:
+        dll = cfg_dict.get("daily_loss_limit_usd")
+        try:
+            dll_f = float(dll or 0.0)
+        except (TypeError, ValueError):
+            dll_f = 0.0
+        if dll_f <= 0:
+            violations.append(
+                "daily_loss_limit_usd is missing or <=0 — required as max-drawdown proxy"
+            )
 
-    # Layers 3 & 4 are injected automatically — they always 'pass' since we
-    # supply them. We just report what we'll inject for transparency.
-    injected = {
-        "stop_loss_pct": DYN_STOP_LOSS_PCT,
-        "emergency_close_pct": DYN_EMERGENCY_CLOSE_PCT,
-    }
+    # Layers 3 & 4 (stop-loss / emergency-close) only exist while the breaker is
+    # enabled. When disabled we report nothing injected (honest UI/state).
+    injected = (
+        {
+            "stop_loss_pct": DYN_STOP_LOSS_PCT,
+            "emergency_close_pct": DYN_EMERGENCY_CLOSE_PCT,
+        }
+        if EMERGENCY_CHECKS_ENABLED
+        else {}
+    )
 
     return GateResult(
         ok=(not violations),
@@ -120,12 +116,13 @@ def check_prerequisites(cfg_dict: Dict[str, Any]) -> GateResult:
 
 def is_dynamic_mode_active(cfg_dict: Dict[str, Any]) -> bool:
     """
-    Final gate consulted by the orchestrator: dynamic_mode flag PLUS
-    prerequisites still met. If the flag is True but a prerequisite was
-    removed (e.g. daily_loss_limit_usd zeroed out via update-config), we
-    treat the bot as if dynamic_mode were False — safe degradation.
+    Final gate consulted by the orchestrator: dynamic_mode flag PLUS active
+    prerequisites. Current policy only requires max_buy_levels; daily-loss and
+    emergency brakes are disabled behind flags.
     """
-    if not bool(cfg_dict.get("dynamic_mode")):
+    from app.utils.parse_utils import parse_bool
+
+    if not parse_bool(cfg_dict.get("dynamic_mode")):
         return False
     return check_prerequisites(cfg_dict).ok
 
@@ -140,11 +137,10 @@ def emergency_check(
     Run the runtime emergency checks. Returns a dict with:
         {"action": "NONE" | "STOP_LOSS" | "EMERGENCY_CLOSE", "reason": str, "metrics": {...}}
 
-    Both non-NONE actions mean the SAME thing operationally: PAUSE the bot
-    (circuit breaker) and alert the operator. Neither liquidates the position —
-    see the module docstring. The two actions differ only in WHAT tripped:
-    STOP_LOSS = single-cycle equity drop, EMERGENCY_CLOSE = portfolio-level drop
-    from initial capital (catches a slow bleed across many cycles).
+    When EMERGENCY_CHECKS_ENABLED is False, this always returns action=NONE.
+    If re-enabled later, both non-NONE actions mean the SAME thing
+    operationally: PAUSE the bot and alert the operator; neither liquidates the
+    position.
 
     DCA-DEPTH GUARD (critical): the breaker must let the bot execute its FULL
     configured DCA plan. While price is still within the deepest buy grid (plus
@@ -155,16 +151,19 @@ def emergency_check(
     (`price` is the current price; when omitted the guard is skipped and the
     legacy equity-only behaviour applies — kept for unit tests / safety.)
 
-    The user-set daily_loss_limit_usd is a SEPARATE, ungated capital floor
-    (checked by the orchestrator), so capital protection still exists even while
-    this breaker is held back inside the grid plan.
+    daily_loss_limit_usd enforcement is controlled separately by
+    DAILY_LOSS_RUNTIME_ENABLED and is currently disabled for both manual and
+    dynamic mode.
 
-    These checks ONLY trigger when dynamic_mode is active (caller responsibility
-    to gate the call). The thresholds are system defaults; we don't reach into
-    user config for them. This means the bot still gets protection even if the
-    user forgot to set them in manual mode — but ONLY while dynamic_mode is on.
+    If re-enabled later, these checks ONLY trigger when dynamic_mode is active
+    (caller responsibility to gate the call). The thresholds are system
+    defaults; we don't reach into user config for them.
     """
     out = {"action": "NONE", "reason": "", "metrics": {}}
+    # Circuit breaker disabled by configuration → never halt (logic below kept
+    # intact and reversible via EMERGENCY_CHECKS_ENABLED).
+    if not EMERGENCY_CHECKS_ENABLED:
+        return out
     if not is_dynamic_mode_active(cfg_dict):
         return out
 

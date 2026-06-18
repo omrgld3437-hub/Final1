@@ -37,11 +37,27 @@ def _grid_buy_short(g: Dict[str, Any], idx: int) -> str:
     return f"A#{idx + 1} {p}% {q}"
 
 
+def _dynamic_mode_block_reason_tr(violations: List[str]) -> str:
+    if not violations:
+        return "önkoşul eksik"
+    v = violations[0]
+    if "max_buy_levels" in v:
+        return "max alım seviyesi tanımlı değil"
+    if "daily_loss_limit_usd" in v:
+        return "günlük kayıp limiti tanımlı değil"
+    return v
+
+
 def build_cold_start_brief_meta(raw_cfg: Dict[str, Any]) -> Dict[str, Any]:
     """Kısa kodlar: alloc %, grid adetleri, seviye satırları."""
+    from app.botengine.dynamic.safety_gate import check_prerequisites
+    from app.utils.parse_utils import parse_bool
+
     raw_cfg = raw_cfg or {}
     sell: List[Dict[str, Any]] = list(raw_cfg.get("sell_grids") or [])
     buy: List[Dict[str, Any]] = list(raw_cfg.get("buy_grids") or [])
+    enabled = parse_bool(raw_cfg.get("dynamic_mode"))
+    gate = check_prerequisites(raw_cfg) if enabled else None
     out: Dict[str, Any] = {
         "cold_start_config": True,
         "base_alloc_pct": round(float(raw_cfg.get("base_alloc_pct", 50) or 50), 1),
@@ -50,7 +66,11 @@ def build_cold_start_brief_meta(raw_cfg: Dict[str, Any]) -> Dict[str, Any]:
         "buy_grid_count": len(buy),
         "sell_grids_brief": [_grid_sell_short(g, i) for i, g in enumerate(sell[:16])],
         "buy_grids_brief": [_grid_buy_short(g, i) for i, g in enumerate(buy[:16])],
+        "dynamic_mode_enabled": enabled,
+        "dynamic_mode_ok": bool(enabled and gate and gate.ok),
     }
+    if enabled and gate and not gate.ok:
+        out["dynamic_mode_block_reason"] = _dynamic_mode_block_reason_tr(gate.violations)
     st = raw_cfg.get("sell_trigger_trailing_pct")
     bt = raw_cfg.get("buy_trigger_trailing_pct")
     if st is not None:

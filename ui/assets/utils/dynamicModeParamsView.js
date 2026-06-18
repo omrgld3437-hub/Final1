@@ -161,6 +161,7 @@
     function dynamicModeStatusLabel(dyn) {
         dyn = dyn || {};
         if (!dyn.enabled) return { text: 'Kapalı', cls: 'dyn-param-status--off' };
+        if (dyn.first_cycle_manual) return { text: 'İlk tur manuel', cls: 'dyn-param-status--warn' };
         if (dyn.active) return { text: 'Aktif', cls: 'dyn-param-status--on' };
         if (dyn.safety_gate && dyn.safety_gate.ok === false) {
             return { text: 'Etkin değil (güvenlik ön koşulları)', cls: 'dyn-param-status--warn' };
@@ -264,6 +265,11 @@
             return html;
         }
 
+        if (dyn.first_cycle_manual) {
+            html += '<p class="param-hint">İlk tur manuel başlangıç değerleriyle çalışıyor; dinamik değerler tur 2 başında hesaplanacak.</p></div>';
+            return html;
+        }
+
         if (!dyn.active) {
             html += '<p class="param-hint">Dinamik mod yapılandırılmış ancak şu an aktif değil. Aşağıdaki değerler başlangıç şablonudur.</p></div>';
             return html;
@@ -306,6 +312,11 @@
 
         if (!dyn.enabled) {
             html += '<p class="param-hint">Bu bot dinamik modda değil. Oluşturma anında seçilen statik parametreler geçerlidir.</p>';
+            return html;
+        }
+
+        if (dyn.first_cycle_manual) {
+            html += '<p class="param-hint">İlk tur manuel başlangıç değerleriyle çalışıyor. Dinamik parametreler tur 2 başında hesaplanacak ve bu sekmede görünecek.</p>';
             return html;
         }
 
@@ -397,6 +408,205 @@
         return arr.reduce(function (n, x) { return n + (x ? 1 : 0); }, 0);
     }
 
+    /** Rejim başına varsayılan strateji aksiyonları (yüzdesiz, operatör dili). */
+    var REGIME_ACTIONS = {
+        LOW_VOL_RANGING: 'Sakin piyasa — gridler daraltıldı, dengeli dağılım',
+        HIGH_VOL_RANGING: 'Dalgalı yatay piyasa — gridler genişletildi, alım hacmi kısıldı',
+        TRENDING_UP: 'Yukarı trend — base ağırlığı artırıldı, alım temposu düşürüldü, kâr hedefi genişletildi',
+        TRENDING_DOWN: 'Aşağı trend — nakit korundu, alım merdiveni daraltıldı, savunma modu',
+        SQUEEZE: 'Sıkışma — orta grid aralığı, dengeli pozisyon',
+        BREAKOUT: 'Kırılım — geniş grid ve yüksek trailing uygulandı',
+        DUMP_RISK: 'Dump riski — minimum alım, maksimum nakit tutuldu',
+        UNKNOWN: 'Belirsiz rejim — manuel ayarlara yakın güvenli mod'
+    };
+
+    function _humanizeDynReason(raw) {
+        if (!raw || typeof raw !== 'string') return null;
+        var r = raw.trim();
+        if (/^regime=/i.test(r)) return null;
+        if (/^atr_pct/i.test(r)) return null;
+        if (/^grid_step raw/i.test(r)) return 'Grid aralıkları volatiliteye göre ayarlandı';
+        if (/^grid_qty:\s*manual/i.test(r)) return 'Grid miktar oranları manuel şablondan korundu';
+        if (/^sell_grids n=/i.test(r)) return null;
+        if (/^trailing_raw/i.test(r)) return 'Trailing mesafesi volatilite ve rejime göre ayarlandı';
+        if (/^base\/quote target/i.test(r)) return 'Base / quote dağılımı rejime göre kaydırıldı';
+        if (/^profit_exit/i.test(r)) return 'Kâr al ve re-entry eşikleri volatiliteye göre ayarlandı';
+        if (/DEFENSIVE.*halved/i.test(r)) return 'Alış seviyeleri dolmak üzere — alım dağılımı yarıya indirildi';
+        if (/overbought.*buy/i.test(r)) return 'RSI aşırı alım — yeni alımlar azaltıldı';
+        if (/oversold.*sell/i.test(r)) return 'RSI aşırı satım — satış baskısı hafifletildi';
+        if (/spread.*buy/i.test(r)) return 'Geniş spread — alımlar azaltıldı';
+        if (/illiquid.*buy/i.test(r)) return 'Düşük 24s hacim — alımlar azaltıldı';
+        if (/^deployment buy_mult/i.test(r)) {
+            var m = r.match(/buy_mult=([\d.]+)/);
+            var mult = m ? parseFloat(m[1]) : 1;
+            if (mult <= 0.35) return 'Rejim riski — alım hacmi minimuma indirildi';
+            if (mult <= 0.55) return 'Rejim riski — alım hacmi ciddi şekilde kısıldı';
+            if (mult < 0.9) return 'Rejim riski — alım hacmi kısmen kısıldı';
+            return null;
+        }
+        if (/smoothing:\s*no prev/i.test(r)) return 'İlk tur snapshot — doğrudan hesaplama uygulandı';
+        if (/smoothing:\s*alpha/i.test(r)) return 'Önceki tur ile yumuşatılarak uygulandı';
+        if (/DATA_STALE/i.test(r)) return 'Piyasa verisi eski — önceki tur parametreleri korundu';
+        return null;
+    }
+
+    function _humanizeDynClamp(raw) {
+        if (!raw || typeof raw !== 'string') return null;
+        var r = raw.trim();
+        if (/grid_step_pct|sell_grids\[|buy_grids\[/i.test(r)) return 'Grid adımı güvenlik sınırına çekildi';
+        if (/base_alloc_pct|quote_alloc_pct/i.test(r)) return 'Dağılım güvenlik sınırına çekildi';
+        if (/trigger_trailing|profit_exit|profit_reentry/i.test(r)) return 'Trailing / kâr eşiği güvenlik sınırına çekildi';
+        if (/rate_limit/i.test(r)) return 'Tur içi değişim hızı sınırlandı';
+        return 'Risk motoru güvenlik sınırı uygulandı';
+    }
+
+    function _humanizeDynFallback(raw) {
+        if (!raw || typeof raw !== 'string') return null;
+        if (/data_stale/i.test(raw)) return 'Veri eski — önceki tur değerleri kullanıldı';
+        if (/no_prev_snapshot/i.test(raw)) return 'Önceki snapshot yok — manuel şablon kullanıldı';
+        if (/manual fallback/i.test(raw)) return 'Boş grid — manuel şablona dönüldü';
+        return null;
+    }
+
+    /**
+     * Grid panel banner için: rejim + yapılan aksiyonlar (yüzdesiz, kısa cümleler).
+     * Returns { regimeLabel, cycleId, actions: string[], stale: bool }
+     */
+    function summarizeDynSnapshotActions(snap) {
+        snap = snap || {};
+        var regime = snap.regime || 'UNKNOWN';
+        var out = [];
+        var seen = {};
+        function push(msg) {
+            if (!msg || seen[msg]) return;
+            seen[msg] = true;
+            out.push(msg);
+        }
+        if (REGIME_ACTIONS[regime]) push(REGIME_ACTIONS[regime]);
+        (snap.reasons || []).forEach(function (r) { push(_humanizeDynReason(r)); });
+        var clamps = (snap.applied && snap.applied.clamps) || snap.clamps || [];
+        clamps.forEach(function (c) { push(_humanizeDynClamp(c)); });
+        var fallbacks = (snap.applied && snap.applied.fallbacks) || snap.fallbacks || [];
+        fallbacks.forEach(function (f) { push(_humanizeDynFallback(f)); });
+        if (!out.length) push('Manuel parametreler rejime göre ayarlandı');
+        return {
+            regimeLabel: REGIME_LABELS[regime] || regime || '—',
+            cycleId: snap.cycle_id,
+            actions: out,
+            stale: snap.data_fresh === false
+        };
+    }
+
+    /**
+     * Snapshot: API dynamic_mode.snapshot veya state.dynamic_snapshot yedek.
+     */
+    function resolveDynSnapshot(dyn, state) {
+        dyn = dyn || {};
+        state = state || {};
+        var snap = dyn.snapshot;
+        if (typeof snap !== 'object' || snap === null) {
+            snap = state.dynamic_snapshot;
+        }
+        return (typeof snap === 'object' && snap !== null) ? snap : null;
+    }
+
+    /**
+     * Grid panel banner HTML — rejim + gösterge satırı veya tur-1 manuel mesajı.
+     */
+    function buildDynGridBannerHtml(dyn, snap, esc) {
+        esc = esc || function (s) { return String(s == null ? '' : s); };
+        var badge = '<span class="status-badge status-running">Dinamik ✓</span>';
+        dyn = dyn || {};
+
+        if (dyn.first_cycle_manual) {
+            return {
+                html: badge + '<span class="dyn-mode-grid-note__line1"><span class="dyn-mode-grid-note__strong">İlk tur</span>'
+                    + '<span class="dyn-mode-grid-note__hint"> · manuel parametreler</span></span>',
+                title: 'İlk tur manuel parametrelerle çalışıyor'
+            };
+        }
+
+        if (!snap || (!snap.applied && !snap.regime)) {
+            if (dyn.active === true) {
+                return {
+                    html: badge + '<span class="dyn-mode-grid-note__line1"><span class="dyn-mode-grid-note__hint">tur snapshot bekleniyor…</span></span>',
+                    title: 'Dinamik mod aktif; engine bir sonraki tick\'te snapshot üretir'
+                };
+            }
+            if (dyn.enabled === true) {
+                return {
+                    html: badge + '<span class="dyn-mode-grid-note__line1"><span class="dyn-mode-grid-note__hint">açık — overlay henüz yok</span></span>',
+                    title: 'Dinamik mod yapılandırıldı'
+                };
+            }
+            return { html: '', title: '', hide: true };
+        }
+
+        var regimeLabel = REGIME_LABELS[snap.regime] || snap.regime || '—';
+        var staleHint = snap.data_fresh === false ? ' <span class="dyn-mode-grid-note__hint">(veri eski)</span>' : '';
+        var indLine = formatDynRegimeIndicatorLine(snap);
+        var indHtml = indLine ? ' <span class="dyn-mode-grid-note__inds">· ' + esc(indLine) + '</span>' : '';
+        return {
+            html: badge + '<span class="dyn-mode-grid-note__line1"><span class="dyn-mode-grid-note__strong">'
+                + esc(regimeLabel) + '</span>' + indHtml + staleHint + '</span>',
+            title: indLine ? (regimeLabel + ' — ' + indLine) : regimeLabel
+        };
+    }
+
+    /**
+     * Rejim sınıflandırmasında kullanılan gösterge değerleri — grid banner için kısa satır.
+     */
+    function formatDynRegimeIndicatorLine(snap) {
+        snap = snap || {};
+        var f = snap.features || {};
+        var regime = snap.regime || '';
+        var parts = [];
+
+        function add(label, raw, fmt) {
+            if (raw == null || raw === '' || isNaN(Number(raw))) return;
+            parts.push(label + ' ' + (fmt ? fmt(Number(raw)) : String(raw)));
+        }
+        function pct(v, d) {
+            d = d == null ? 2 : d;
+            return (v >= 0 ? '+' : '') + v.toFixed(d) + '%';
+        }
+
+        var conf = null;
+        (snap.reasons || []).some(function (r) {
+            var m = String(r).match(/confidence=([\d.]+)/);
+            if (m) { conf = parseFloat(m[1]); return true; }
+            return false;
+        });
+
+        if (regime === 'TRENDING_UP' || regime === 'TRENDING_DOWN') {
+            add('ADX', f.adx_1h, function (v) { return fmtNumLocal(v, 0) + ' (≥25 trend)'; });
+            add('EMA eğim', f.ema_slope_1h_pct, function (v) { return pct(v, 2); });
+        } else if (regime === 'HIGH_VOL_RANGING' || regime === 'LOW_VOL_RANGING') {
+            add('ATR', f.atr_pct_5m, function (v) { return v.toFixed(2) + '%'; });
+            add('ADX', f.adx_1h, function (v) { return fmtNumLocal(v, 0) + ' (≤20 yatay)'; });
+        } else if (regime === 'SQUEEZE') {
+            add('BBW', f.bbw_1h != null ? f.bbw_1h : f.bbw_5m, function (v) { return fmtNumLocal(v, 1) + ' (dar bant)'; });
+            add('ATR', f.atr_pct_5m, function (v) { return v.toFixed(2) + '%'; });
+        } else if (regime === 'BREAKOUT') {
+            add('BBW', f.bbw_1h != null ? f.bbw_1h : f.bbw_5m, function (v) { return fmtNumLocal(v, 1); });
+            add('Hacim z', f.volume_zscore_5m, function (v) { return fmtNumLocal(v, 1) + ' (≥2 spike)'; });
+            add('EMA eğim', f.ema_slope_1h_pct, function (v) { return pct(v, 2); });
+        } else if (regime === 'DUMP_RISK') {
+            add('5m düşüş', f.ret_5m_last, function (v) { return pct(v, 2); });
+            add('EMA eğim', f.ema_slope_1h_pct, function (v) { return pct(v, 2); });
+            add('Hacim z', f.volume_zscore_5m, function (v) { return fmtNumLocal(v, 1); });
+        } else {
+            add('ADX', f.adx_1h, function (v) { return fmtNumLocal(v, 0); });
+            add('ATR', f.atr_pct_5m, function (v) { return v.toFixed(2) + '%'; });
+        }
+
+        if (conf != null && !isNaN(conf)) {
+            parts.push('Güven %' + Math.round(Math.max(0, Math.min(1, conf)) * 100));
+        }
+
+        return parts.join(' · ');
+    }
+
     function renderParamModalTabsHtml(activeTab) {
         activeTab = activeTab || 'genel';
         return '<div class="param-tabs-wrap" role="tablist">' +
@@ -418,6 +628,10 @@
         renderLeaderboardDynamicSection: renderLeaderboardDynamicSection,
         renderBotDetailDynamicTab: renderBotDetailDynamicTab,
         renderParamModalTabsHtml: renderParamModalTabsHtml,
+        summarizeDynSnapshotActions: summarizeDynSnapshotActions,
+        formatDynRegimeIndicatorLine: formatDynRegimeIndicatorLine,
+        resolveDynSnapshot: resolveDynSnapshot,
+        buildDynGridBannerHtml: buildDynGridBannerHtml,
         bindDynModeLogoTips: bindDynModeLogoTips,
         attrEsc: attrEsc
     };

@@ -15,6 +15,9 @@
         if (panel && !_isAdmin) {
             panel.style.display = 'none';
         }
+        if (typeof global.syncEngineLogPanelVisibility === 'function') {
+            global.syncEngineLogPanelVisibility();
+        }
     }
 
     function resolve() {

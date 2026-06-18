@@ -9,6 +9,7 @@ import logging
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.botengine.models import BotEngineMode, DcaGridTrailingConfig
+from app.botengine.dynamic.safety_gate import DAILY_LOSS_RUNTIME_ENABLED
 from app.botengine.strategies.base import Strategy
 from app.botengine.strategies.grid_outage_recovery import (
     apply_grid_outage_recovery,
@@ -512,8 +513,12 @@ def tick_dca_grid_trailing(
     next_wake = config.tick_interval_ms / 1000.0
 
     # ---- Günlük kayıp limiti (daily_loss_limit_usd) ----
+    # Disabled by operator policy in BOTH manual and dynamic mode. Keep the old
+    # logic behind DAILY_LOSS_RUNTIME_ENABLED so this can be restored cleanly.
+    if not DAILY_LOSS_RUNTIME_ENABLED:
+        state.pop("_daily_loss_limit_hit", None)
     _dll = _f(getattr(config, "daily_loss_limit_usd", 0.0)) or 0.0
-    if _dll > 0 and initial_done:
+    if DAILY_LOSS_RUNTIME_ENABLED and _dll > 0 and initial_done:
         _current_equity = base_balance * P + quote_balance
         # Günlük referans: bugünkü TR günü başı equity; yoksa initial_capital
         _today_tr = None

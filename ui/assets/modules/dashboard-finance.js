@@ -13,6 +13,91 @@ let financeState = {
     goldPriceTRY: null // Gram altın fiyatı (TL)
 };
 
+const SETTINGS_SERVER_PUBLIC_IP_CHECK_MS = 5 * 60 * 1000;
+
+function normalizeSettingsServerPublicIp(ip) {
+    var s = (ip == null ? "" : String(ip)).trim();
+    if (!s || s === "—" || s.toLowerCase() === "null" || s.toLowerCase() === "undefined") return "";
+    return s;
+}
+
+function settingsServerPublicIpStorageKey(accountId) {
+    var id = accountId != null && accountId !== "" ? String(accountId) : "global";
+    return "settingsServerPublicIpLastSeen_" + id;
+}
+
+function readSettingsServerPublicIpNote(accountId) {
+    try {
+        var raw = localStorage.getItem(settingsServerPublicIpStorageKey(accountId));
+        if (!raw) return null;
+        var parsed = JSON.parse(raw);
+        return parsed && typeof parsed === "object" ? parsed : null;
+    } catch (e) {
+        return null;
+    }
+}
+
+function writeSettingsServerPublicIpNote(accountId, ip, previousIp) {
+    try {
+        localStorage.setItem(settingsServerPublicIpStorageKey(accountId), JSON.stringify({
+            account_id: accountId || null,
+            ip: normalizeSettingsServerPublicIp(ip),
+            previous_ip: normalizeSettingsServerPublicIp(previousIp),
+            changed_at: new Date().toISOString()
+        }));
+    } catch (e) {}
+}
+
+function notifySettingsServerPublicIpChanged(oldIp, newIp) {
+    var msg = "Sunucu dış IP değişti: " + oldIp + " → " + newIp + ". Binance API beyaz liste ayarını kontrol edin.";
+    if (window.Toast && typeof window.Toast.warning === "function") {
+        window.Toast.warning(msg, 18000);
+    } else if (window.Toast && typeof window.Toast.warn === "function") {
+        window.Toast.warn(msg);
+    } else {
+        alert(msg);
+    }
+}
+
+function noteSettingsServerPublicIp(ip, opts) {
+    opts = opts || {};
+    var cleanIp = normalizeSettingsServerPublicIp(ip);
+    if (!cleanIp) return;
+    var accountId = (typeof State !== "undefined" && State) ? State.accountId : null;
+    var previous = readSettingsServerPublicIpNote(accountId);
+    var previousIp = normalizeSettingsServerPublicIp(previous && previous.ip);
+    if (!previousIp) {
+        writeSettingsServerPublicIpNote(accountId, cleanIp, "");
+        return;
+    }
+    if (previousIp !== cleanIp) {
+        writeSettingsServerPublicIpNote(accountId, cleanIp, previousIp);
+        if (opts.notify !== false) notifySettingsServerPublicIpChanged(previousIp, cleanIp);
+        return;
+    }
+    writeSettingsServerPublicIpNote(accountId, cleanIp, previous && previous.previous_ip);
+}
+
+async function loadSettingsServerPublicIp(serverPublicIpEl, opts) {
+    opts = opts || {};
+    if (!State.accountId) return "";
+    try {
+        const data = await window.apiClient.get(`/api/accounts/${State.accountId}/settings`);
+        const ip = normalizeSettingsServerPublicIp(data.server_public_ip);
+        if (serverPublicIpEl) {
+            serverPublicIpEl.value = ip || "—";
+            serverPublicIpEl.placeholder = ip ? "" : "Alınamadı";
+            serverPublicIpEl.title = ip ? ("Sunucu dış IP: " + ip) : "Sunucu dış IP alınamadı";
+        }
+        noteSettingsServerPublicIp(ip, { notify: opts.notify !== false });
+        return ip;
+    } catch (e) {
+        console.warn("[settings] Failed to load server public IP:", e);
+        if (serverPublicIpEl) { serverPublicIpEl.value = ""; serverPublicIpEl.placeholder = "Alınamadı"; }
+        return "";
+    }
+}
+
 // Ticker verilerini al (gram altın ve USDTRY)
 async function getTickerData() {
     try {
@@ -672,20 +757,13 @@ function initSettingsTab() {
         }
     })();
     
-    // Sunucu dış IP (otomatik, salt okunur) – GET /settings server_public_ip döndürür
-    (async () => {
-        try {
-            const data = await window.apiClient.get(`/api/accounts/${State.accountId}/settings`);
-            if (serverPublicIpEl) {
-                const ip = (data.server_public_ip && typeof data.server_public_ip === "string") ? data.server_public_ip.trim() : "";
-                serverPublicIpEl.value = ip || "—";
-                serverPublicIpEl.placeholder = ip ? "" : "Alınamadı";
-            }
-        } catch (e) {
-            console.warn("[settings] Failed to load server public IP:", e);
-            if (serverPublicIpEl) { serverPublicIpEl.value = ""; serverPublicIpEl.placeholder = "Alınamadı"; }
-        }
-    })();
+    // Sunucu dış IP (otomatik, salt okunur) – ilk değer not edilir; değişirse kullanıcı uyarılır.
+    loadSettingsServerPublicIp(serverPublicIpEl, { notify: true });
+    if (window.intervalRegistry) {
+        window.intervalRegistry.start('settings.serverPublicIp', function () {
+            loadSettingsServerPublicIp(serverPublicIpEl, { notify: true });
+        }, SETTINGS_SERVER_PUBLIC_IP_CHECK_MS, 'tab.settings');
+    }
     
     if (apiKeyBtn) {
         apiKeyBtn.onclick = null;
@@ -1646,8 +1724,35 @@ function resetFinanceBotsLiveCache(bots) {
     _financeBotsLivePollPromise = null;
 }
 
-function resolveBotLivePrice(sym) {
-    return resolveMarketLivePrice(sym);
+function resolveFinanceBotDisplayPrice(botId, sym) {
+    var mp = resolveMarketLivePrice(sym);
+    if (mp != null) return mp;
+    if (botId != null && State.botLiveEquity) {
+        var row = State.botLiveEquity[String(botId)];
+        if (row && row.last_price != null && Number.isFinite(row.last_price) && row.last_price > 0) {
+            return row.last_price;
+        }
+    }
+    return null;
+}
+
+function resolveBotLivePrice(sym, botId) {
+    return resolveFinanceBotDisplayPrice(botId, sym);
+}
+
+function seedMarketStorePriceFromBotLive(botId, live) {
+    if (!live || live.last_price == null || !Number.isFinite(Number(live.last_price)) || Number(live.last_price) <= 0) return;
+    if (!State.bots || !window.marketStore) return;
+    var sym = null;
+    State.bots.some(function (b) {
+        if (String(b.bot_id || b.id || '') !== String(botId)) return false;
+        sym = (b.symbol || '').toUpperCase();
+        return !!sym && sym !== 'MULTI';
+    });
+    if (!sym) return;
+    var p = Number(live.last_price);
+    if (typeof window.marketStore.updatePrice === 'function') window.marketStore.updatePrice(sym, p);
+    if (typeof window.marketStore.updateMini === 'function') window.marketStore.updateMini(sym, { last: p });
 }
 
 function botNeedsLiveEquity(bot) {
@@ -1771,6 +1876,7 @@ function applyFinanceBotsLiveEquityToDom() {
         }
     }
     if (typeof scheduleLeaderboardSyncFromBots === 'function') scheduleLeaderboardSyncFromBots();
+    if (typeof updateFinanceBotsLivePrices === 'function') updateFinanceBotsLivePrices();
 }
 
 function applyFinanceBotLiveSnapshot(botId, live) {
@@ -1790,6 +1896,7 @@ function applyFinanceBotLiveSnapshot(botId, live) {
         last_price: live.last_price != null && !isNaN(live.last_price) ? Number(live.last_price) : null,
         ts: Date.now()
     };
+    seedMarketStorePriceFromBotLive(botId, live);
 }
 
 async function pollFinanceBotsLiveEquity() {
@@ -1829,6 +1936,7 @@ async function pollFinanceBotsLiveEquity() {
     }
     _financeBotsLiveHydrated = true;
     applyFinanceBotsLiveEquityToDom();
+    if (typeof updateFinanceBotsLivePrices === 'function') updateFinanceBotsLivePrices();
     persistFinanceBotsSessionCache(State.bots);
 }
 
@@ -2365,9 +2473,6 @@ function renderFinanceBots(bots, opts) {
                 : '<span class="mevcut-bot-logo-initials" style="' + style + 'display:inline-flex;align-items:center;justify-content:center;font-size:' + fs + ';font-weight:600;background:var(--ds-bg-tertiary);color:var(--ds-text-secondary);">' + initials + '</span>';
         }).join('') + '</span>';
     };
-    var getLivePrice = function (sym) {
-        return resolveMarketLivePrice(sym);
-    };
     var colgroup = '<colgroup>' +
         '<col class="mevcut-botlar-col-symbol"><col class="mevcut-botlar-col-price"><col class="mevcut-botlar-col-status"><col class="mevcut-botlar-col-budget">' +
         '<col class="mevcut-botlar-col-balance"><col class="mevcut-botlar-col-pnl"><col class="mevcut-botlar-col-tur"><col class="mevcut-botlar-col-action">' +
@@ -2404,11 +2509,10 @@ function renderFinanceBots(bots, opts) {
         const rowPnl = kz.usd;
         const rowPnlPct = kz.pct;
         const sc = rowPnl != null && rowPnl >= 0 ? '#0ecb81' : (rowPnl != null ? '#f6465d' : 'var(--ds-text-secondary)');
-        var liveRow = getBotLiveRow(bot);
         var symbolCell = isMulti && multiCoins.length > 0
             ? '<a href="' + href + '" class="mevcut-bot-symbol-link"><span class="mevcut-bot-symbol-logo-slot mevcut-bot-symbol-logo-slot--multi">' + getMultiLogoHtml(multiCoins) + '</span></a>'
             : '<a href="' + href + '" class="mevcut-bot-symbol-link"><span class="mevcut-bot-symbol-logo-slot">' + logoHtml + '</span><span class="mevcut-bot-symbol-text">' + (bot.symbol || 'N/A') + '</span></a>';
-        var livePrice = isMulti ? null : (liveRow && liveRow.last_price != null ? liveRow.last_price : getLivePrice(sym));
+        var livePrice = isMulti ? null : resolveFinanceBotDisplayPrice(botId, sym);
         var priceCell = isMulti
             ? '<span class="mevcut-bot-portfolio-balance" title="Çoklu sembol">—</span>'
             : '<span class="finance-bot-live-price mevcut-bot-portfolio-balance" data-symbol="' + sym + '" data-bot-id="' + botId + '" title="Sembol canlı fiyatı (bot detay /live)">' + (livePrice != null ? fmtCoinPrice(livePrice) : '—') + '</span>';
@@ -2446,9 +2550,8 @@ function renderFinanceBots(bots, opts) {
         const rowPnl = kzM.usd;
         const rowPnlPct = kzM.pct;
         const sc = rowPnl != null && rowPnl >= 0 ? '#0ecb81' : (rowPnl != null ? '#f6465d' : 'var(--ds-text-secondary)');
-        var liveRowM = getBotLiveRow(bot);
         // Mobil: tek sembolde FİYAT = canlı sembol fiyatı; çoklu botta —
-        var mobLp = liveRowM && liveRowM.last_price != null ? liveRowM.last_price : getLivePrice(sym);
+        var mobLp = resolveFinanceBotDisplayPrice(botId, sym);
         var mobilePriceDisplay = isMulti ? '—' : (mobLp != null ? fmtCoinPrice(mobLp) : '—');
         var mobilePriceSpan = isMulti
             ? '<span class="mevcut-botlar-mobile-price" title="Çoklu sembol">—</span>'
@@ -2477,6 +2580,7 @@ function renderFinanceBots(bots, opts) {
     updateFinanceBotsSortButtonUi(sortBy);
     _bindFinanceBotsSortButtons();
     updateFinanceBotsLivePrices();
+    ensureDashboardMarketPriceSubscriber();
     ensureFinanceBotsLiveEquity();
     ensureFinanceBotsHealthPolling();
     applyFinanceBotsHealthAlertsToDom();
@@ -2541,7 +2645,7 @@ function updateFinanceBotsLivePrices() {
     var now = Date.now();
     Object.keys(grouped).forEach(function (botId) {
         var entry = grouped[botId];
-        var price = resolveBotLivePrice(entry.sym);
+        var price = resolveFinanceBotDisplayPrice(botId, entry.sym);
         if (price == null) return;
         var newText = fmtCoinPrice(price);
         var prev = financeBotLastPrices[botId];

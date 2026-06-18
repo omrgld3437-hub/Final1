@@ -67,6 +67,14 @@ function escapeHtml(s) {
     return div.innerHTML;
 }
 
+function formatCreateModalDecimalDisplay(value, fallback) {
+    var v = value;
+    if (v === undefined || v === null || v === '') v = fallback;
+    var n = Number(v);
+    if (!Number.isFinite(n)) return String(v || '').replace('.', ',');
+    return n.toFixed(2).replace(/\.?0+$/, '').replace('.', ',');
+}
+
 function applyLeaderboardParams(structure, params, itemIndex, opts) {
     opts = opts || {};
     closeBotStructureModal();
@@ -202,6 +210,8 @@ function setCreateBotModalWizard(templateId) {
     }
     if (dca) dca.style.display = "block";
     if (multi) multi.style.display = "none";
+    var assistantBtn = document.getElementById("dmParamAssistantBtn");
+    if (assistantBtn) assistantBtn.style.display = "inline-flex";
     hideMultiSymbolSearchDropdown();
     if (pairStrip) pairStrip.style.display = "none";
     if (tahminStrip) tahminStrip.style.display = "none";
@@ -308,24 +318,24 @@ function fillModalWithTemplate(template) {
     
     // Up grid (varsayılan 0.5)
     const upTrailEl = document.getElementById("fUpTrail");
-    if (upTrailEl) upTrailEl.value = config.up?.trail_pct ?? 0.5;
+    if (upTrailEl) upTrailEl.value = formatCreateModalDecimalDisplay(config.up?.trail_pct, 0.5);
     
     // Down grid (varsayılan 0.5)
     const downTrailEl = document.getElementById("fDownTrail");
-    if (downTrailEl) downTrailEl.value = config.down?.trail_pct ?? 0.5;
+    if (downTrailEl) downTrailEl.value = formatCreateModalDecimalDisplay(config.down?.trail_pct, 0.5);
     
     // Profit config (varsayılan tetik 1.5, trail 0.5)
     const rebuyTriggerEl = document.getElementById("fRebuyTrigger");
-    if (rebuyTriggerEl) rebuyTriggerEl.value = config.profit?.rebuy_trigger_pct ?? 1.5;
+    if (rebuyTriggerEl) rebuyTriggerEl.value = formatCreateModalDecimalDisplay(config.profit?.rebuy_trigger_pct, 1.5);
     
     const rebuyTrailEl = document.getElementById("fRebuyTrail");
-    if (rebuyTrailEl) rebuyTrailEl.value = config.profit?.rebuy_trail_pct ?? 0.30;
+    if (rebuyTrailEl) rebuyTrailEl.value = formatCreateModalDecimalDisplay(config.profit?.rebuy_trail_pct, 0.30);
     
     const resellTriggerEl = document.getElementById("fResellTrigger");
-    if (resellTriggerEl) resellTriggerEl.value = config.profit?.resell_trigger_pct ?? 1.5;
+    if (resellTriggerEl) resellTriggerEl.value = formatCreateModalDecimalDisplay(config.profit?.resell_trigger_pct, 1.5);
     
     const resellTrailEl = document.getElementById("fResellTrail");
-    if (resellTrailEl) resellTrailEl.value = config.profit?.resell_trail_pct ?? 0.5;
+    if (resellTrailEl) resellTrailEl.value = formatCreateModalDecimalDisplay(config.profit?.resell_trail_pct, 0.5);
     
     // Reset grid counts
     const upCountEl = document.getElementById("fUpCount");
@@ -416,7 +426,11 @@ async function createAndStartBot(template) {
         if (window.Toast) {
             window.Toast.success('Bot ' + createLabel + ' oluşturuldu');
         }
-        try { localStorage.setItem(DASHBOARD_LAST_CREATE_BOT_PARAMS, JSON.stringify(payload)); } catch (e) {}
+        try {
+            if (typeof saveLastCreateBotParams === "function") {
+                saveLastCreateBotParams(State.accountId, payload);
+            }
+        } catch (e) {}
         
         // Start bot immediately (bots-engine inserts command for worker)
         try {
@@ -790,7 +804,7 @@ function fillCreateModalWithBotConfig(botId, accountId, botDetail, config) {
     
     const upTrailEl = document.getElementById("fUpTrail");
     if (upTrailEl) {
-        upTrailEl.value = upCfg.trail_pct ?? botDetail.up_trail_pct ?? 0.5;
+        upTrailEl.value = formatCreateModalDecimalDisplay(upCfg.trail_pct ?? botDetail.up_trail_pct, 0.5);
         upTrailEl.readOnly = true;
     }
     
@@ -805,7 +819,7 @@ function fillCreateModalWithBotConfig(botId, accountId, botDetail, config) {
     
     const downTrailEl = document.getElementById("fDownTrail");
     if (downTrailEl) {
-        downTrailEl.value = downCfg.trail_pct ?? botDetail.down_trail_pct ?? 0.5;
+        downTrailEl.value = formatCreateModalDecimalDisplay(downCfg.trail_pct ?? botDetail.down_trail_pct, 0.5);
         downTrailEl.readOnly = true;
     }
     
@@ -813,25 +827,25 @@ function fillCreateModalWithBotConfig(botId, accountId, botDetail, config) {
     const profitCfg = config.profit || {};
     const rebuyTriggerEl = document.getElementById("fRebuyTrigger");
     if (rebuyTriggerEl) {
-        rebuyTriggerEl.value = profitCfg.rebuy_trigger_pct ?? botDetail.rebuy_trigger_pct ?? 1.5;
+        rebuyTriggerEl.value = formatCreateModalDecimalDisplay(profitCfg.rebuy_trigger_pct ?? botDetail.rebuy_trigger_pct, 1.5);
         rebuyTriggerEl.readOnly = true;
     }
     
     const rebuyTrailEl = document.getElementById("fRebuyTrail");
     if (rebuyTrailEl) {
-        rebuyTrailEl.value = profitCfg.rebuy_trail_pct ?? botDetail.rebuy_trail_pct ?? 0.30;
+        rebuyTrailEl.value = formatCreateModalDecimalDisplay(profitCfg.rebuy_trail_pct ?? botDetail.rebuy_trail_pct, 0.30);
         rebuyTrailEl.readOnly = true;
     }
     
     const resellTriggerEl = document.getElementById("fResellTrigger");
     if (resellTriggerEl) {
-        resellTriggerEl.value = profitCfg.resell_trigger_pct ?? botDetail.resell_trigger_pct ?? 1.5;
+        resellTriggerEl.value = formatCreateModalDecimalDisplay(profitCfg.resell_trigger_pct ?? botDetail.resell_trigger_pct, 1.5);
         resellTriggerEl.readOnly = true;
     }
     
     const resellTrailEl = document.getElementById("fResellTrail");
     if (resellTrailEl) {
-        resellTrailEl.value = profitCfg.resell_trail_pct ?? botDetail.resell_trail_pct ?? 0.5;
+        resellTrailEl.value = formatCreateModalDecimalDisplay(profitCfg.resell_trail_pct ?? botDetail.resell_trail_pct, 0.5);
         resellTrailEl.readOnly = true;
     }
     

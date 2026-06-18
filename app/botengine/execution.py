@@ -227,6 +227,62 @@ def _build_cycle_start_meta(
     return meta
 
 
+# Sanal vs borsa bakiye doğrulama eşikleri (grid: locked emirler free'ye düşer)
+BALANCE_DRIFT_BASE_WARN_PCT = 15.0
+BALANCE_DRIFT_QUOTE_WARN_USD = 10.0
+BALANCE_DRIFT_WORKER_LOG_COOLDOWN_SEC = 3600.0
+_LAST_BALANCE_DRIFT_WORKER_LOG: Dict[int, Tuple[str, float]] = {}
+
+
+def _asset_total_balance(balances: Dict[str, Any], asset: str) -> float:
+    """free + locked — grid açık emirlerindeki kilitli miktar dahil."""
+    row = balances.get(asset) or {}
+    if not isinstance(row, dict):
+        return 0.0
+    return float(row.get("free") or 0) + float(row.get("locked") or 0)
+
+
+def _compute_balance_drift_metrics(
+    virt_base: float,
+    virt_quote: float,
+    real_base: float,
+    real_quote: float,
+) -> Tuple[float, float]:
+    """Base sapma % ve quote mutlak sapma (USDT)."""
+    ref_base = max(abs(virt_base), abs(real_base), 1e-8)
+    base_drift_pct = (
+        abs(real_base - virt_base) / ref_base * 100.0 if ref_base > 0 else 0.0
+    )
+    quote_drift = abs(real_quote - virt_quote)
+    return base_drift_pct, quote_drift
+
+
+def _balance_drift_severity(base_drift_pct: float, quote_drift: float) -> str:
+    if (
+        base_drift_pct > BALANCE_DRIFT_BASE_WARN_PCT
+        or quote_drift > BALANCE_DRIFT_QUOTE_WARN_USD
+    ):
+        return "WARN"
+    return "INFO"
+
+
+def _should_log_balance_drift_worker(
+    bot_id: int, base_drift_pct: float, quote_drift: float
+) -> bool:
+    """Aynı sapma profili için worker.log WARNING en fazla saatte bir."""
+    key = f"{round(base_drift_pct, 1)}:{round(quote_drift, 2)}"
+    now = time.time()
+    prev = _LAST_BALANCE_DRIFT_WORKER_LOG.get(int(bot_id))
+    if (
+        prev
+        and prev[0] == key
+        and (now - prev[1]) < BALANCE_DRIFT_WORKER_LOG_COOLDOWN_SEC
+    ):
+        return False
+    _LAST_BALANCE_DRIFT_WORKER_LOG[int(bot_id)] = (key, now)
+    return True
+
+
 async def _emit_balance_sync_check(
     adapter: Any,
     db: Any,
@@ -238,7 +294,8 @@ async def _emit_balance_sync_check(
 ) -> None:
     """
     Periyodik sanal vs gerçek Binance bakiye doğrulaması.
-    Sanal bakiye ile gerçek Binance bakiyesi arasında ciddi sapma varsa WARN loglar.
+    Gerçek bakiye = free+locked (grid açık emirleri dahil).
+    WARN eşiği: base >15% veya USDT >$10; aynı profil en fazla saatte bir.
     Her 50 tick'te bir çağrılır (live botlarda).
     """
     try:
@@ -248,19 +305,19 @@ async def _emit_balance_sync_check(
     base_asset = (symbol or "BTCUSDT").replace("USDT", "").replace(
         "BUSD", ""
     ).strip() or "BTC"
-    real_base = float((balances.get(base_asset) or {}).get("free", 0) or 0)
-    real_quote = float((balances.get("USDT") or {}).get("free", 0) or 0)
+    real_base = _asset_total_balance(balances, base_asset)
+    real_quote = _asset_total_balance(balances, "USDT")
     virt_base = float(state.get("base_balance") or 0)
     virt_quote = float(state.get("quote_balance") or 0)
-    # Sapma eşiği: base %2 veya quote $1
-    base_drift_pct = (
-        abs(real_base - virt_base) / max(virt_base, 0.000001) * 100
-        if virt_base > 0
-        else 0
+    base_drift_pct, quote_drift = _compute_balance_drift_metrics(
+        virt_base, virt_quote, real_base, real_quote
     )
-    quote_drift = abs(real_quote - virt_quote)
-    if base_drift_pct > 5.0 or quote_drift > 5.0:
-        severity = "WARN"
+    severity = _balance_drift_severity(base_drift_pct, quote_drift)
+    if severity == "WARN" and not _should_log_balance_drift_worker(
+        bot_id, base_drift_pct, quote_drift
+    ):
+        return
+    if severity == "WARN":
         msg = (
             f"Bakiye sapması tespit edildi · "
             f"Sanal {base_asset}: {virt_base:.6f} / Gerçek: {real_base:.6f} "
@@ -611,9 +668,19 @@ async def _write_fill_snapshot_to_state(
     try:
         balances = await adapter.get_account_balances()
     except Exception as e:
-        logger.warning(
-            "write_fill_snapshot get_account_balances failed: %s (using virtual)", e
-        )
+        err_s = str(e)
+        # Emir öncesi bakiye kontrolü ile aynı 8s pencerede ikinci /account çağrısı
+        # throttle'a takılır; apply_fill_to_state zaten state'i güncelledi.
+        if "REST blocked: throttle" in err_s:
+            logger.info(
+                "write_fill_snapshot account throttled (%s) — using post-fill state balances",
+                err_s,
+            )
+        else:
+            logger.warning(
+                "write_fill_snapshot get_account_balances failed: %s (using post-fill state)",
+                e,
+            )
         balances = None
     quote_asset = "USDT"
     if balances and quote_asset in balances:
@@ -2729,15 +2796,14 @@ async def run_actions(
                             )
                     n = len(config.sell_grids)
                     m = len(config.buy_grids)
+                    enriched_end_meta = _build_cycle_end_meta(
+                        state, config, ledger, meta
+                    )
                     cycle_reset_after_fill(state, fill_price, n, m, symbol=symbol)
                     if db is not None:
                         try:
                             cycle_end_ts = fill_ts_utc + timedelta(milliseconds=100)
                             cycle_start_ts = fill_ts_utc + timedelta(milliseconds=200)
-                            # CYCLE_END — zenginleştirilmiş meta (grid dolum, süre, fiyat aralığı, kümülatif K/Z)
-                            enriched_end_meta = _build_cycle_end_meta(
-                                state, config, ledger, meta
-                            )
                             append_event(
                                 db,
                                 bot_id,
@@ -2931,17 +2997,8 @@ async def run_actions(
                             bot_id,
                             ex,
                         )
-                    # Fill sonrası account balance cache'ini temizle: _write_fill_snapshot_to_state
-                    # ve sonraki tick'teki pre-flight kontrolü taze Binance bakiyesi görür.
-                    if not adapter.paper_mode and adapter.keys:
-                        try:
-                            from app.services.binance_spot import (
-                                invalidate_account_cache_for_keys,
-                            )
-
-                            await invalidate_account_cache_for_keys(adapter.keys)
-                        except Exception:
-                            pass
+                    # Önce snapshot (cache hâlâ geçerliyse kullanılır); sonra cache temizle —
+                    # invalidate→fetch sırası throttle'a takılıp gereksiz WARNING üretiyordu.
                     try:
                         await _write_fill_snapshot_to_state(
                             state, adapter, config, symbol
@@ -2952,6 +3009,15 @@ async def run_actions(
                             bot_id,
                             snap_err,
                         )
+                    if not adapter.paper_mode and adapter.keys:
+                        try:
+                            from app.services.binance_spot import (
+                                invalidate_account_cache_for_keys,
+                            )
+
+                            await invalidate_account_cache_for_keys(adapter.keys)
+                        except Exception:
+                            pass
                 trigger_price = _num(a.get("trigger_price"))
                 if trigger_price and trigger_price > 0 and db is not None:
                     max_slip = float(getattr(config, "max_slippage_pct", 0.5) or 0.5)

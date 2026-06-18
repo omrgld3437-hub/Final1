@@ -747,7 +747,10 @@
             .cycle-pnl-item { padding: 0.65rem 0.75rem; min-height: 44px; }
 
             /* Performans: periyot butonları 4 eşit, metrik kartları 2 sütun eşit */
-            .perf-genel-block { padding: 1.25rem; margin-bottom: 1rem; text-align: center; border-radius: 12px; }
+            .perf-genel-block { margin-bottom: 0.85rem; border-radius: 10px; }
+            .perf-genel-body { flex-wrap: wrap; align-items: center; gap: 0.65rem; padding: 0.95rem 1rem; }
+            .perf-genel-main { flex: 1 1 auto; min-width: 0; }
+            .perf-genel-actions { margin-left: auto; }
             .perf-genel-block .perf-genel-value { font-size: 1.75rem; }
             .perf-chart-wrap { padding: 1rem; margin: 1rem 0; border-radius: 12px; }
             .perf-chart-wrap .perf-chart-title { font-size: 0.7rem; flex-wrap: wrap; gap: 0.35rem; }
@@ -801,11 +804,13 @@
             /* Modaller: aksiyon butonları eşit 50-50 */
             .modal-overlay { padding: 1rem; align-items: flex-end; }
             .modal-panel { max-width: 100%; width: 100%; margin: 0; border-radius: 16px 16px 0 0; padding: 1.25rem 1rem; max-height: 90vh; overflow-y: auto; }
+            .modal-panel.perf-summary-modal-panel { overflow: hidden; max-height: 88vh; }
             .stop-delete-option .option-card { padding: 1rem 1.25rem; min-height: 56px; border-radius: 10px; }
             .modal-actions { display: flex; gap: 0.75rem; margin-top: 1.25rem; }
             .modal-actions .btn { min-height: 48px; height: 48px; flex: 1; min-width: 0; border-radius: 10px; }
             .parametreler-modal-panel { max-width: 100%; width: 100%; max-height: 88vh; border-radius: 16px 16px 0 0; padding: 1.25rem 1rem; }
             .parametreler-modal-panel .parametreler-body { padding-bottom: 2rem; }
+            .perf-summary-modal-panel { max-width: 100%; width: 100%; max-height: 88vh; overflow: hidden; }
             .param-row { padding: 0.75rem 0; min-height: 44px; align-items: center; }
             .perf-chart-modal-overlay { padding: 0.5rem; align-items: flex-end; }
             .perf-chart-modal { width: 100%; max-width: 100%; border-radius: 16px 16px 0 0; max-height: 92vh; }
@@ -858,15 +863,328 @@
             border-bottom: 1px solid var(--ds-border, #2b3139);
         }
         #gridPointsPanel .grid-section-title.first { margin-top: 0; }
-        .perf-genel-block { background: linear-gradient(135deg, var(--ds-bg-tertiary, #2b3139) 0%, rgba(0,0,0,0.3) 100%); border-radius: 12px; padding: 1.5rem 2rem; margin-bottom: 1.25rem; border: 1px solid var(--ds-border, #2b3139); text-align: center; }
-        .perf-genel-block .perf-genel-head { display: inline-flex; align-items: center; justify-content: center; gap: 0.35rem; margin-bottom: 0.5rem; }
-        .perf-genel-block .perf-genel-title { font-size: 0.8rem; font-weight: 600; color: var(--ds-text-secondary); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0; }
-        .perf-genel-block .perf-genel-ghost { display: inline-flex; align-items: center; justify-content: center; width: 1.1rem; height: 1.1rem; border-radius: 50%; font-size: 0.72rem; line-height: 1; color: var(--ds-text-tertiary, #848e9c); border: 1px solid rgba(132, 142, 156, 0.35); cursor: help; opacity: 0.72; transition: opacity 0.15s, color 0.15s, border-color 0.15s; }
-        .perf-genel-block .perf-genel-ghost:hover, .perf-genel-block .perf-genel-ghost:focus-visible { opacity: 1; color: var(--ds-text-secondary); border-color: rgba(132, 142, 156, 0.65); outline: none; }
+        /* Dinamik mod — grid panel (poll-note ile aynı dil) */
+        .dyn-mode-grid-note {
+            display: none;
+            font-size: 0.85rem;
+            margin-top: -0.35rem;
+            margin-bottom: 0.75rem;
+            padding: 0.45rem 0.6rem;
+            border-radius: 6px;
+            border: 1px solid var(--ds-border-light, rgba(255, 255, 255, 0.1));
+            background: rgba(0, 0, 0, 0.1);
+            color: var(--ds-text-secondary, #848e9c);
+            line-height: 1.55;
+        }
+        .dyn-mode-grid-note .status-badge {
+            display: inline-flex;
+            vertical-align: middle;
+            margin-right: 0.4rem;
+            min-height: 24px;
+            padding: 0 8px;
+            font-size: 0.72rem;
+        }
+        .dyn-mode-grid-note__text { vertical-align: middle; }
+        .dyn-mode-grid-note__line1 { display: inline; vertical-align: middle; }
+        .dyn-mode-grid-note__inds { color: var(--ds-text-secondary, #848e9c); font-size: 0.8rem; }
+        .dyn-mode-grid-note__strong { color: var(--ds-text-primary, #eaecef); font-weight: 600; }
+        .dyn-mode-grid-note__hint { color: var(--ds-text-tertiary, #8089a0); font-size: 0.8rem; }
+        .perf-genel-block {
+            display: flex;
+            align-items: stretch;
+            margin-bottom: 1rem;
+            border-radius: 12px;
+            background: var(--ds-bg-tertiary, #2b3139);
+            border: 1px solid var(--ds-border, #363c45);
+            overflow: hidden;
+            transition: border-color 0.2s ease;
+        }
+        .perf-genel-block.perf-genel-block--up { border-color: rgba(14, 203, 129, 0.28); }
+        .perf-genel-block.perf-genel-block--down { border-color: rgba(246, 70, 93, 0.28); }
+        .perf-genel-accent {
+            width: 3px;
+            flex-shrink: 0;
+            background: rgba(132, 142, 156, 0.45);
+        }
+        .perf-genel-block.perf-genel-block--up .perf-genel-accent { background: #0ecb81; }
+        .perf-genel-block.perf-genel-block--down .perf-genel-accent { background: #f6465d; }
+        .perf-genel-body {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: flex-start;
+            gap: 1rem;
+            padding: 1.05rem 1.15rem;
+            min-width: 0;
+        }
+        .perf-genel-main {
+            display: flex;
+            align-items: baseline;
+            gap: 0.65rem;
+            min-width: 0;
+            flex: 0 1 auto;
+        }
+        .perf-genel-block .perf-genel-value {
+            font-size: 2rem;
+            font-weight: 800;
+            line-height: 1;
+            letter-spacing: -0.02em;
+            font-variant-numeric: tabular-nums;
+            color: var(--ds-text-primary, #eaecef);
+            flex-shrink: 0;
+        }
+        .perf-genel-block.perf-genel-block--up .perf-genel-value { color: #0ecb81; }
+        .perf-genel-block.perf-genel-block--down .perf-genel-value { color: #f6465d; }
+        .perf-genel-label {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+            flex-shrink: 0;
+        }
+        .perf-genel-actions {
+            flex-shrink: 0;
+            margin-left: auto;
+            display: flex;
+            align-items: center;
+        }
+        .perf-genel-block .perf-genel-title {
+            font-size: 0.72rem;
+            font-weight: 600;
+            color: var(--ds-text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        .perf-genel-block .perf-genel-ghost {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 1rem;
+            height: 1rem;
+            border-radius: 50%;
+            font-size: 0.62rem;
+            line-height: 1;
+            color: var(--ds-text-tertiary, #848e9c);
+            border: 1px solid rgba(132, 142, 156, 0.35);
+            cursor: help;
+            opacity: 0.85;
+            transition: opacity 0.15s, border-color 0.15s;
+        }
+        .perf-genel-block .perf-genel-ghost:hover,
+        .perf-genel-block .perf-genel-ghost:focus-visible {
+            opacity: 1;
+            border-color: rgba(132, 142, 156, 0.55);
+            outline: none;
+        }
+        .perf-summary-btn {
+            min-height: 36px;
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 0.78rem;
+            font-weight: 600;
+            white-space: nowrap;
+            box-sizing: border-box;
+        }
+        .perf-summary-btn-wrap {
+            position: relative;
+            display: inline-flex;
+            vertical-align: middle;
+            padding: 5px 6px;
+            margin: -5px -6px;
+        }
+        .perf-summary-btn-wrap::after {
+            content: '';
+            position: absolute;
+            inset: 0;
+            border-radius: 8px;
+            background: radial-gradient(ellipse 80% 100% at 50% 50%, rgba(240, 185, 11, 0.07), transparent 72%);
+            pointer-events: none;
+            z-index: 0;
+        }
+        .perf-summary-spark {
+            position: absolute;
+            width: 8px;
+            height: 8px;
+            pointer-events: none;
+            z-index: 2;
+            opacity: 0;
+            animation: perf-summary-spark-pulse 3.6s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+        }
+        .perf-summary-spark::before,
+        .perf-summary-spark::after {
+            content: '';
+            position: absolute;
+            left: 50%;
+            top: 50%;
+            background: rgba(255, 245, 210, 0.95);
+            border-radius: 1px;
+            box-shadow: 0 0 8px rgba(240, 185, 11, 0.55);
+            transform: translate(-50%, -50%);
+        }
+        .perf-summary-spark::before { width: 1px; height: 100%; }
+        .perf-summary-spark::after { width: 100%; height: 1px; }
+        .perf-summary-spark-1 { top: 2px; left: 14%; animation-delay: 0s; }
+        .perf-summary-spark-2 { top: 4px; right: 10%; width: 6px; height: 6px; animation-delay: 0.9s; animation-duration: 3s; }
+        .perf-summary-spark-3 { top: 50%; right: 2px; margin-top: -4px; width: 7px; height: 7px; animation-delay: 1.8s; animation-duration: 3.8s; }
+        .perf-summary-spark-4 { bottom: 2px; left: 26%; width: 6px; height: 6px; animation-delay: 2.4s; animation-duration: 3.2s; }
+        .perf-summary-spark-5 { bottom: 3px; right: 22%; animation-delay: 1.2s; animation-duration: 4s; }
+        .perf-summary-spark-6 { top: 50%; left: 2px; margin-top: -4px; width: 5px; height: 5px; animation-delay: 3s; animation-duration: 3.4s; }
+        @keyframes perf-summary-spark-pulse {
+            0%, 100% { opacity: 0; transform: scale(0.4); }
+            12% { opacity: 0.95; transform: scale(1); }
+            28% { opacity: 0; transform: scale(0.55); }
+        }
+        .perf-summary-btn-wrap .perf-summary-btn,
+        #btnPerfSummary.perf-summary-btn {
+            position: relative;
+            z-index: 1;
+            border: 1px solid rgba(240, 185, 11, 0.34) !important;
+            background: var(--ds-bg-tertiary, #2b3139) !important;
+            color: var(--ds-text-primary, #eaecef) !important;
+            box-shadow: none;
+            transition: border-color 0.15s ease, opacity 0.15s ease;
+        }
+        .perf-summary-btn-wrap:hover .perf-summary-btn,
+        #btnPerfSummary.perf-summary-btn:hover {
+            border-color: rgba(240, 185, 11, 0.5) !important;
+            opacity: 0.88;
+            color: var(--ds-text-primary, #eaecef) !important;
+        }
+        .perf-summary-btn-wrap:hover .perf-summary-spark {
+            animation-duration: 2.6s;
+        }
+        .perf-summary-btn-wrap:focus-within .perf-summary-btn,
+        #btnPerfSummary.perf-summary-btn:focus-visible {
+            outline: 2px solid rgba(240, 185, 11, 0.45);
+            outline-offset: 3px;
+        }
+        @media (prefers-reduced-motion: reduce) {
+            .perf-summary-spark {
+                animation: none;
+                opacity: 0.45;
+            }
+            .perf-summary-btn-wrap:hover .perf-summary-btn,
+            #btnPerfSummary.perf-summary-btn:hover {
+                transform: none;
+            }
+        }
+        .perf-summary-intro-spark-wrap {
+            position: relative;
+            padding: 1rem 1.15rem;
+            border-radius: 12px;
+            margin-bottom: 1.15rem;
+            background: var(--ds-bg-tertiary, #2b3139);
+            border: 1px solid rgba(240, 185, 11, 0.32);
+            overflow: visible;
+        }
+        .perf-summary-intro-spark-wrap::after {
+            content: '';
+            position: absolute;
+            inset: 0;
+            border-radius: inherit;
+            background: radial-gradient(ellipse 90% 80% at 50% 0%, rgba(240, 185, 11, 0.07), transparent 72%);
+            pointer-events: none;
+            z-index: 0;
+        }
+        .perf-summary-assistant-intro-inner {
+            position: relative;
+            z-index: 1;
+        }
+        .perf-summary-intro-spark-1 { top: 8px; left: 16px; animation-delay: 0s; }
+        .perf-summary-intro-spark-2 { top: 10px; right: 20px; width: 6px; height: 6px; animation-delay: 0.75s; animation-duration: 3.1s; }
+        .perf-summary-intro-spark-3 { top: 50%; right: 6px; margin-top: -4px; width: 7px; height: 7px; animation-delay: 1.5s; animation-duration: 3.6s; }
+        .perf-summary-intro-spark-4 { bottom: 10px; right: 22%; width: 6px; height: 6px; animation-delay: 2.2s; animation-duration: 3.3s; }
+        .perf-summary-intro-spark-5 { bottom: 8px; left: 18%; width: 5px; height: 5px; animation-delay: 1s; animation-duration: 3.8s; }
+        .perf-summary-intro-spark-6 { top: 38%; left: 8px; margin-top: -3px; width: 5px; height: 5px; animation-delay: 2.8s; animation-duration: 3.5s; }
+        .perf-summary-modal-panel { max-width: min(900px, 94vw); }
+        #perfSummaryModal.modal-overlay { overflow: hidden; overscroll-behavior: contain; }
+        .modal-panel.perf-summary-modal-panel {
+            max-width: min(900px, 94vw);
+            max-height: min(88vh, calc(100dvh - 3rem));
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+        .modal-panel.perf-summary-modal-panel .modal-panel-head { flex-shrink: 0; margin-bottom: 0.75rem; }
+        .modal-panel.perf-summary-modal-panel .parametreler-body,
+        .modal-panel.perf-summary-modal-panel .perf-summary-modal-body {
+            flex: 1 1 auto;
+            min-height: 0;
+            overflow-y: auto;
+            overscroll-behavior: contain;
+            -webkit-overflow-scrolling: touch;
+        }
+        .modal-panel-head .modal-title { margin: 0; }
+        .perf-summary-year-filter { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 0.85rem; }
+        .perf-summary-year-filter .btn-year { padding: 0.3rem 0.65rem; font-size: 0.75rem; border-radius: 8px; border: 1px solid var(--ds-border, #2b3139); background: var(--ds-bg-tertiary, #2b3139); color: var(--ds-text-secondary); cursor: pointer; }
+        .perf-summary-year-filter .btn-year.active { background: rgba(240, 185, 11, 0.15); border-color: rgba(240, 185, 11, 0.45); color: #f0b90b; }
+        .perf-summary-month-list { display: flex; flex-direction: column; gap: 0.5rem; }
+        .perf-summary-month-row { display: block; width: 100%; text-align: left; padding: 0.85rem 1rem; border-radius: 10px; border: 1px solid var(--ds-border, #2b3139); background: var(--ds-bg-tertiary, #2b3139); color: var(--ds-text-primary); cursor: pointer; transition: border-color 0.15s, background 0.15s; }
+        .perf-summary-month-row:hover { border-color: rgba(240, 185, 11, 0.35); background: rgba(255, 255, 255, 0.03); }
+        .perf-summary-month-row.is-empty { opacity: 0.72; }
+        .perf-summary-month-label { font-weight: 600; font-size: 0.95rem; }
+        .perf-summary-detail-head { margin-bottom: 1rem; }
+        .perf-summary-detail-headline { font-size: 1rem; font-weight: 600; color: var(--ds-text-primary); line-height: 1.45; margin: 0 0 0.5rem 0; }
+        .perf-summary-back { background: none; border: none; color: var(--ds-text-secondary); cursor: pointer; font-size: 0.82rem; padding: 0; margin-bottom: 0.75rem; }
+        .perf-summary-back:hover { color: #f0b90b; }
+        .perf-summary-section { margin-bottom: 1.15rem; padding-bottom: 1rem; border-bottom: 1px solid rgba(255,255,255,0.06); }
+        .perf-summary-section:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
+        .perf-summary-section-title { font-size: 0.72rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ds-text-secondary); margin-bottom: 0.5rem; }
+        .perf-summary-section p { margin: 0 0 0.55rem 0; font-size: 0.88rem; line-height: 1.6; color: var(--ds-text-secondary); }
+        .perf-summary-section p:last-child { margin-bottom: 0; }
+        .perf-summary-score { display: inline-flex; align-items: center; gap: 0.5rem; padding: 0.35rem 0.65rem; border-radius: 8px; background: rgba(255,255,255,0.04); font-size: 0.82rem; margin-bottom: 0.5rem; }
+        .perf-summary-cycle-item { padding: 0.65rem 0; border-top: 1px solid rgba(255,255,255,0.05); }
+        .perf-summary-cycle-item:first-child { border-top: none; padding-top: 0; }
+        .perf-summary-cycle-title { font-size: 0.8rem; font-weight: 600; color: var(--ds-text-primary); margin-bottom: 0.25rem; }
+        .perf-summary-cycle-text { font-size: 0.84rem; line-height: 1.55; color: var(--ds-text-secondary); }
+        .perf-summary-assistant-wrap { margin-bottom: 0.35rem; }
+        .perf-summary-assistant-label {
+            font-size: 0.68rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: #f0b90b;
+            margin-bottom: 0.45rem;
+        }
+        .perf-summary-assistant-intro {
+            margin: 0;
+            font-size: 0.92rem;
+            line-height: 1.58;
+            color: var(--ds-text-primary);
+            min-height: 1.58em;
+        }
+        .perf-summary-stream-cursor {
+            display: inline-block;
+            width: 2px;
+            height: 1.05em;
+            margin-left: 3px;
+            vertical-align: text-bottom;
+            background: #f0b90b;
+            animation: perf-summary-cursor-blink 0.85s step-end infinite;
+        }
+        .perf-summary-stream-cursor.is-hidden { display: none; }
+        @keyframes perf-summary-cursor-blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0; }
+        }
+        .perf-summary-stream-content {
+            opacity: 0;
+            transform: translateY(10px);
+            transition: opacity 0.4s ease, transform 0.4s ease;
+        }
+        .perf-summary-stream-content.is-visible {
+            opacity: 1;
+            transform: translateY(0);
+        }
+        .perf-summary-section.perf-summary-section-pending { opacity: 0; }
+        .perf-summary-section.perf-summary-section-active,
+        .perf-summary-section.perf-summary-section-done { opacity: 1; }
+        .perf-summary-cycle-item.perf-summary-cycle-pending { display: none; }
+        .perf-summary-cycle-item.perf-summary-cycle-active,
+        .perf-summary-cycle-item.perf-summary-cycle-done { display: block; }
+        .perf-summary-detail-headline:empty { display: none; }
+        .perf-summary-detail-headline:not(:empty) { display: block; }
         #dynModeGhostTip.dyn-mode-ghost-tip { position: fixed; z-index: 10050; pointer-events: none; max-width: 300px; padding: 0.45rem 0.65rem; border-radius: 6px; background: rgba(36, 41, 50, 0.97); border: 1px solid rgba(128, 137, 160, 0.4); color: var(--ds-text-secondary, #b7bdc6); font-size: 0.75rem; font-weight: 500; line-height: 1.45; white-space: normal; text-align: left; box-shadow: 0 4px 18px rgba(0, 0, 0, 0.4); transform: translate(-50%, -100%); }
         #dynModeGhostTip.dyn-mode-ghost-tip[hidden] { display: none !important; }
-        .perf-genel-block .perf-genel-value { font-size: 2.25rem; font-weight: 700; line-height: 1.2; }
-        .perf-dual-pnl-wrap { background: var(--ds-bg-tertiary, #2b3139); border-radius: 12px; padding: 1rem 1.25rem; margin-bottom: 1.25rem; border: 1px solid var(--ds-border, #2b3139); }
         .perf-metric-card { background: var(--ds-bg-tertiary, #2b3139); border-radius: 8px; padding: 1rem; min-width: 120px; flex: 1 1 120px; }
         .perf-metric-label { font-size: 0.75rem; color: var(--ds-text-secondary); text-transform: uppercase; margin-bottom: 0.25rem; }
         .perf-metric-value { font-size: 1.1rem; font-weight: 600; }
@@ -886,6 +1204,7 @@
         }
         .modal-overlay .parametreler-modal-panel { touch-action: pan-y; max-height: 85vh; }
         .modal-panel { background: var(--ds-bg-secondary, #1e2329); border-radius: 12px; padding: 1.5rem 1.75rem; max-width: 440px; width: 100%; border: 1px solid var(--ds-border, #2b3139); box-shadow: 0 12px 40px rgba(0,0,0,0.4); }
+        .modal-panel.perf-summary-modal-panel { max-width: min(900px, 94vw); }
         .modal-title { margin: 0 0 0.5rem 0; font-size: 1.15rem; font-weight: 600; color: var(--ds-text-primary); }
         .modal-desc { color: var(--ds-text-secondary); font-size: 0.9rem; margin-bottom: 1.25rem; line-height: 1.45; }
         .stop-delete-options { display: flex; flex-direction: column; gap: 0.75rem; margin-bottom: 1.5rem; }
@@ -1108,17 +1427,7 @@
         <div class="panel" id="gridPointsPanel" style="display: none;">
             <h2 id="gridPointsPanelTitle">Grid alım satım noktaları</h2>
             <p id="gridPointsRefPrice" class="muted poll-note grid-points-ref-price" style="font-size: 0.85rem; margin-top: -0.35rem; margin-bottom: 0.75rem;"></p>
-            <!-- Dynamic Mode banner: aktifse bu turun otomatik belirlenen eşikleri -->
-            <div id="dynModeGridBanner" style="display:none; border:1px solid rgba(76,175,80,0.4); background:rgba(76,175,80,0.08); border-radius:10px; padding:0.7rem 0.9rem; margin-bottom:0.85rem;">
-                <div style="display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap;">
-                    <span style="font-size:0.7rem; font-weight:700; color:#4caf50; padding:0.12rem 0.5rem; border:1px solid #4caf50; border-radius:999px;">⚡ DİNAMİK MOD AKTİF</span>
-                    <span id="dynModeGridRegime" style="font-size:0.78rem; color:var(--ds-text-secondary,#9aa3b2);"></span>
-                </div>
-                <div id="dynModeGridThresholds" style="font-size:0.76rem; color:var(--ds-text-secondary,#b6bccd); margin-top:0.5rem; line-height:1.7;"></div>
-                <div style="font-size:0.7rem; color:var(--ds-text-tertiary,#8089a0); margin-top:0.4rem;">
-                    Bu eşikler her tur başında coin'in volatilite/trend/hacim durumuna göre otomatik hesaplanır ve tur boyunca sabit kalır.
-                </div>
-            </div>
+            <div id="dynModeGridBanner" class="dyn-mode-grid-note poll-note" style="display:none;" title="Bu turun dinamik eşikleri"></div>
             <div id="gridSellSection">
             <div class="grid-section-title grid-section-title first">Satış gridleri</div>
             <div class="grid-tables-wrap">
@@ -1139,7 +1448,7 @@
                 </table>
             </div>
             </div>
-            <p id="gridPointsProfitHint" class="muted poll-note" style="font-size: 0.85rem; margin-top: 1rem; margin-bottom: 0;">İlk başarılı grid işleminden sonra kar alım tablosu gösterilir.</p>
+            <p id="gridPointsProfitHint" class="muted poll-note" style="font-size: 0.85rem; margin-top: 1rem; margin-bottom: 0;">İlk başarılı grid işleminden sonra kar tablosu gösterilir.</p>
         </div>
 
         <div class="panel" id="profitPointsPanel" style="display: none;">
@@ -1163,14 +1472,29 @@
 
         <div class="panel" id="perfPanel" style="display: none;">
             <h2>Bot Performansı</h2>
-            <div class="perf-genel-block" id="perfGenelBlock" style="display: none;">
-                <div class="perf-genel-head">
-                    <span class="perf-genel-title">Bot Performansı</span>
-                    <span class="perf-genel-ghost" data-dyn-tip="Botu açtığınız andaki coin fiyatı ve bakiyeniz referans alınır. Coin yükselse bile bakiyeniz aynı oranda artmışsa burada 0 görürsünüz. Bot al-sat yaparak size ekstra kazanç sağladıysa artı, zarar ettirdiyse eksi yazılır." role="img" aria-label="Bot performansı açıklaması" tabindex="0">ⓘ</span>
+            <div class="perf-genel-block perf-genel-block--neutral" id="perfGenelBlock" style="display: none;">
+                <div class="perf-genel-accent" aria-hidden="true"></div>
+                <div class="perf-genel-body">
+                    <div class="perf-genel-main">
+                        <div class="perf-genel-value" id="perfGenelValue">—</div>
+                        <div class="perf-genel-label">
+                            <span class="perf-genel-title">Alpha performansı</span>
+                            <span class="perf-genel-ghost" data-dyn-tip="Botu açtığınız andaki coin fiyatı ve bakiyeniz referans alınır. Coin yükselse bile bakiyeniz aynı oranda artmışsa burada 0 görürsünüz. Bot al-sat yaparak size ekstra kazanç sağladıysa artı, zarar ettirdiyse eksi yazılır." role="img" aria-label="Bot performansı açıklaması" tabindex="0">ⓘ</span>
+                        </div>
+                    </div>
+                    <div class="perf-genel-actions">
+                        <span class="perf-summary-btn-wrap">
+                            <span class="perf-summary-spark perf-summary-spark-1" aria-hidden="true"></span>
+                            <span class="perf-summary-spark perf-summary-spark-2" aria-hidden="true"></span>
+                            <span class="perf-summary-spark perf-summary-spark-3" aria-hidden="true"></span>
+                            <span class="perf-summary-spark perf-summary-spark-4" aria-hidden="true"></span>
+                            <span class="perf-summary-spark perf-summary-spark-5" aria-hidden="true"></span>
+                            <span class="perf-summary-spark perf-summary-spark-6" aria-hidden="true"></span>
+                            <button type="button" class="btn btn-sm btn-secondary perf-summary-btn" id="btnPerfSummary" title="Aylık performans analizi — asistan yorumu">Analiz Asistanı</button>
+                        </span>
+                    </div>
                 </div>
-                <div class="perf-genel-value" id="perfGenelValue">—</div>
             </div>
-            <div class="perf-dual-pnl-wrap" id="perfDualPnlBlock" style="display: none;"></div>
             <div class="perf-chart-wrap" id="perfChartWrap" title="Grafiği büyütmek için tıklayın">
                 <div class="perf-chart-title">Parite % &amp; Bot bakiyesi % (başlangıçtan itibaren) <span class="perf-chart-open-hint">Grafiği aç</span></div>
                 <div class="perf-chart-svg-wrap" id="perfChartSvgWrap">
@@ -1226,6 +1550,23 @@
 
         <div id="loadingEl" class="loading">Bot bilgisi yükleniyor…</div>
         <div id="errorEl" class="error-box" style="display: none;"></div>
+
+        <div id="perfSummaryModal" class="modal-overlay" style="display: none;" aria-hidden="true">
+            <div class="modal-panel parametreler-modal-panel perf-summary-modal-panel">
+                <div class="modal-panel-head">
+                    <h3 class="modal-title" id="perfSummaryModalTitle">Performans özeti</h3>
+                    <button type="button" class="parametreler-modal-close" id="perfSummaryModalClose" aria-label="Kapat">&times;</button>
+                </div>
+                <div class="parametreler-body perf-summary-modal-body">
+                    <p id="perfSummaryModalDesc" class="modal-desc" style="margin-top: 0;">Bot başlangıcından bu yana aylık performans özetleri. Detaylar için bir ay seçin.</p>
+                    <div id="perfSummaryYearFilter" class="perf-summary-year-filter" style="display: none;"></div>
+                    <div id="perfSummaryListView">
+                        <div id="perfSummaryMonthList" class="perf-summary-month-list"></div>
+                    </div>
+                    <div id="perfSummaryDetailView" style="display: none;"></div>
+                </div>
+            </div>
+        </div>
 
         <div id="stopAndDeleteModal" class="modal-overlay" style="display: none;">
             <div class="modal-panel stop-delete-modal">
@@ -1297,11 +1638,12 @@
     <script src="/ui/assets/utils/coinLogo.js?v=1"></script>
     <script src="/ui/assets/core/apiClient.js?v=refactor1"></script>
     <script src="/ui/assets/utils/gridTrailEnvelope.js?v=2"></script>
-    <script src="/ui/assets/utils/engineLogAccess.js?v=1"></script>
+    <script src="/ui/assets/utils/engineLogAccess.js?v=2"></script>
     <script src="/ui/assets/utils/engineLogArchive.js?v=1"></script>
     <script src="/ui/assets/utils/botHealthAlerts.js?v=35"></script>
-    <script src="/ui/assets/utils/dynamicModeParamsView.js?v=2"></script>
-<script src="/ui/assets/utils/engineLogFormat.js?v=69"></script>
+    <script src="/ui/assets/utils/dynamicModeParamsView.js?v=6"></script>
+<script src="/ui/assets/utils/engineLogFormat.js?v=70"></script>
+<script src="/ui/assets/utils/perfSummaryIntros.js?v=1"></script>
 <script src="/ui/assets/utils/engineLogLive.js?v=37"></script>
     <script src="/ui/assets/core/intervalRegistry.js?v=1"></script>
     <script src="/ui/assets/botPageAppbar.js?v=1"></script>
@@ -1314,6 +1656,7 @@
         var accountId = qs.get('account_id');
         var accountCode = qs.get('account_code');
         var _showDetailGen = 0;
+        var _sessionAlphaSnapshot = null;
         var _lastTradesPanelFingerprint = '';
         var _cycleTradesCache = {};
         var _tradesLoadGen = 0;
@@ -1424,6 +1767,8 @@
         var _botDetailMissing = false;
         var BOT_DETAIL_UI_CACHE_PREFIX = 'bot_detail_ui_v2_';
         var BOT_DETAIL_LIVE_POLL_MS = 3000;
+        var SESSION_ALPHA_POLL_MS = 60000;
+        var _sessionAlphaFetchInFlight = false;
         var BOT_DETAIL_HEALTH_POLL_MS = 10000;
         var _lastPerfRenderFp = '';
 
@@ -1441,7 +1786,7 @@
             if (profitPointsPanel && o.profitPanelDisplay) profitPointsPanel.style.display = o.profitPanelDisplay;
             if (tradesPanel && o.tradesPanelDisplay) tradesPanel.style.display = o.tradesPanelDisplay;
             if (perfPanel && o.perfPanelDisplay) perfPanel.style.display = o.perfPanelDisplay;
-            if (engineLogPanel && o.engineLogPanelDisplay && canViewEngineLogs()) engineLogPanel.style.display = o.engineLogPanelDisplay;
+            syncEngineLogPanelVisibility();
             if (gridSellBody && o.gridSellHtml != null) gridSellBody.innerHTML = o.gridSellHtml;
             if (gridBuyBody && o.gridBuyHtml != null) gridBuyBody.innerHTML = o.gridBuyHtml;
             if ((gridSellBody && gridSellBody.rows.length) || (gridBuyBody && gridBuyBody.rows.length)) {
@@ -1539,7 +1884,8 @@
                         return el && el.querySelector('svg') ? el.innerHTML : '';
                     })(),
                     botConfig: (lastBotDetail && lastBotDetail.config) ? lastBotDetail.config : null,
-                    botRefPrice: (lastBotDetail && lastBotDetail.reference_display != null) ? lastBotDetail.reference_display : null
+                    botRefPrice: (lastBotDetail && lastBotDetail.reference_display != null) ? lastBotDetail.reference_display : null,
+                    dynamicMode: (lastBotDetail && lastBotDetail.dynamic_mode) ? lastBotDetail.dynamic_mode : null
                 };
                 var key = BOT_DETAIL_UI_CACHE_PREFIX + id;
                 sessionStorage.setItem(key, JSON.stringify(payload));
@@ -1583,6 +1929,9 @@
                         lastBotDetail.reference_display = Number(o.botRefPrice);
                     }
                 }
+                if (o.dynamicMode && typeof o.dynamicMode === 'object') {
+                    lastBotDetail.dynamic_mode = o.dynamicMode;
+                }
                 if (lastBotDetail.symbol) {
                     var stateBaseCached = document.getElementById('stateBaseValue');
                     if (stateBaseCached && / —$/.test(stateBaseCached.textContent)) {
@@ -1603,6 +1952,12 @@
                     _botDetailHydrated = true;
                     _lastGridStructureFp = o.gridStructureFp || _lastGridStructureFp;
                     _lastGridDisplayFp = o.gridDisplayFp || _lastGridDisplayFp;
+                    try {
+                        renderDynModeGridBanner({
+                            dynamic_mode: lastBotDetail.dynamic_mode,
+                            config: lastBotDetail.config
+                        });
+                    } catch (e) { /* cache flash */ }
                     _lastPerfRenderFp = o.perfFp || _lastPerfRenderFp;
                     if (o.selectedCycleId != null) window._botDetailSelectedCycleId = o.selectedCycleId;
                     if (o.lastKnownCycleId != null) lastKnownCycleId = Number(o.lastKnownCycleId);
@@ -1612,6 +1967,14 @@
                         if (typeof syncCycleReportDurationPoll === 'function') syncCycleReportDurationPoll();
                     }
                     if (o.engineLogSig && _engineLogLiveOpts) _engineLogLiveOpts._lastLogRenderSig = o.engineLogSig;
+                    if (perfPanel && perfPanel.style.display !== 'none') {
+                        refreshSessionAlphaHero();
+                        syncSessionAlphaPoll();
+                    }
+                    syncEngineLogPanelVisibility();
+                    if (canViewEngineLogs() && engineLogPanel && engineLogPanel.style.display !== 'none') {
+                        startEngineLogLive(true);
+                    }
                 }
                 if (loadingEl) loadingEl.style.display = 'none';
                 restoreStripMiniChartFromUiCache(o);
@@ -1706,8 +2069,12 @@
                 } catch (e) {}
             }
             var stCycle = (lastBotDetail && lastBotDetail.state) ? lastBotDetail.state : {};
-            if (stCycle.cycle_opened_at) {
-                var openedCycle = resolveOpenCycleStartedAt({ started_at: stCycle.cycle_opened_at }, cid) || stCycle.cycle_opened_at;
+            var openedHint = stCycle.cycle_opened_at
+                || (prevLiveState && Number(prevLiveState.cycle_id) === cid ? prevLiveState.cycle_opened_at : null);
+            if (prevCid != null && cid > prevCid) {
+                ensureOpenCycleDurationAnchor(cid, openedHint);
+            } else if (openedHint) {
+                var openedCycle = resolveOpenCycleStartedAt({ started_at: openedHint }, cid) || openedHint;
                 anchorCycleStartedAt(openedCycle, cid, { force: true });
             }
             window._botDetailSelectedCycleId = cid;
@@ -2282,6 +2649,20 @@
             window._cycleReportStartedAt = merged;
             writeCycleStartedAtPersisted(cid, merged);
         }
+        /** Açık tur süresi: API/state yoksa client anchor; her yeni turda sıfırdan başlar. */
+        function ensureOpenCycleDurationAnchor(cycleNum, hintIso) {
+            var cid = cycleNum != null ? Number(cycleNum) : null;
+            if (cid == null || isNaN(cid)) return null;
+            var hint = hintIso ? String(hintIso).trim() : null;
+            var started = hint || resolveOpenCycleStartedAt(hint ? { started_at: hint } : null, cid);
+            if (started) {
+                anchorCycleStartedAt(started, cid, { force: !!hint });
+                return started;
+            }
+            var nowIso = new Date().toISOString();
+            anchorCycleStartedAt(nowIso, cid, { force: true });
+            return nowIso;
+        }
         function setCycleReportStartedAt(iso, cycleNum) {
             var cid = cycleNum != null ? Number(cycleNum) : (window._botDetailSelectedCycleId != null ? Number(window._botDetailSelectedCycleId) : null);
             if (cid == null || isNaN(cid) || !iso) return;
@@ -2308,7 +2689,9 @@
         function resolveOpenCycleStartedAt(summary, cycleNum) {
             var cid = cycleNum != null ? Number(cycleNum) : null;
             if (cid == null || isNaN(cid)) return null;
-            var curCid = (lastBotDetail && lastBotDetail.currentCycleId != null) ? Number(lastBotDetail.currentCycleId) : null;
+            var curCid = (lastBotDetail && lastBotDetail.currentCycleId != null)
+                ? Number(lastBotDetail.currentCycleId)
+                : (lastKnownCycleId != null ? Number(lastKnownCycleId) : null);
             var st = (lastBotDetail && lastBotDetail.state) ? lastBotDetail.state : {};
             var candidates = [];
             if (curCid != null && cid === curCid) {
@@ -2316,6 +2699,9 @@
                 if (cot && (cot.ts || cot.started_at)) return String(cot.ts || cot.started_at).trim();
                 if (summary && summary.started_at) candidates.push(String(summary.started_at).trim());
                 if (st.cycle_opened_at) candidates.push(String(st.cycle_opened_at).trim());
+                if (prevLiveState && Number(prevLiveState.cycle_id) === cid && prevLiveState.cycle_opened_at) {
+                    candidates.push(String(prevLiveState.cycle_opened_at).trim());
+                }
                 var ledger = st.cycle_ledger_current;
                 if (ledger && Number(ledger.cycle_id) === cid && ledger.started_at) {
                     candidates.push(String(ledger.started_at).trim());
@@ -2354,12 +2740,13 @@
             var cur = (lastBotDetail && lastBotDetail.currentCycleId != null) ? lastBotDetail.currentCycleId : lastKnownCycleId;
             if (sel == null || cur == null || Number(sel) !== Number(cur)) return;
             var cacheSum = _cycleTradesCache[String(sel)] && _cycleTradesCache[String(sel)].summary;
+            var hintIso = (cacheSum && cacheSum.started_at) || window._cycleReportStartedAt || null;
             var startedAt = resolveOpenCycleStartedAt(cacheSum || null, sel) || window._cycleReportStartedAt;
             if (startedAt) applyCycleReportStartedFromApi({ started_at: startedAt }, sel);
-            else startedAt = window._cycleReportStartedAt;
+            else startedAt = ensureOpenCycleDurationAnchor(sel, hintIso);
             var v = formatDurationFromStartedAt(startedAt);
             if (!v && cacheSum && cacheSum.duration_sec != null) v = formatDurationSec(cacheSum.duration_sec);
-            if (!v && startedAt) v = '0sn';
+            if (!v && startedAt) v = formatDurationSec(0);
             if (v) durEl.textContent = v;
         }
         function syncCycleReportDurationPoll() {
@@ -3137,6 +3524,16 @@
             return !!(window.EngineLogAccess && window.EngineLogAccess.canView && window.EngineLogAccess.canView());
         }
 
+        function syncEngineLogPanelVisibility() {
+            if (!engineLogPanel) return;
+            if (canViewEngineLogs() && window.innerWidth > 768) {
+                engineLogPanel.style.display = 'block';
+            } else {
+                engineLogPanel.style.display = 'none';
+            }
+        }
+        window.syncEngineLogPanelVisibility = syncEngineLogPanelVisibility;
+
         function loadEngineEvents(bid, incremental) {
             if (!canViewEngineLogs()) return Promise.resolve([]);
             if (!bid || !window.EngineLogLive) return;
@@ -3205,6 +3602,12 @@
             _engineLogLiveOpts._logBootstrapping = true;
             _engineLogLiveOpts._lastLogRenderSig = null;
             _lastHealthLogRenderKey = '';
+            _perfSummaryCache = null;
+            _perfSummaryPrefetchPromise = null;
+            _perfSummaryDetailCache = {};
+            _perfSummaryDetailFetch = {};
+            _perfSummaryListFp = '';
+            _perfSummaryStreamedMonths = {};
             window._lastEngineEvents = [];
             lastBotDetail = { symbol: '', baseBalance: 0, quoteAsset: 'USDT' };
             prevLiveState = null;
@@ -4201,49 +4604,33 @@
             syncDynModeTopBadge(data);
             var banner = document.getElementById('dynModeGridBanner');
             if (!banner) return;
-            var dyn = (data && data.dynamic_mode) || (lastBotDetail && lastBotDetail.dynamic_mode) || {};
-            var snap = dyn && dyn.snapshot;
-            if (!dyn.active || !snap || !snap.applied) {
+            if (!isDynModeUiActive(data)) {
+                banner.style.display = 'none';
+                return;
+            }
+            var dyn = Object.assign(
+                {},
+                (lastBotDetail && lastBotDetail.dynamic_mode) || {},
+                (data && data.dynamic_mode) || {}
+            );
+            var st = (data && data.state) || (lastBotDetail && lastBotDetail.state) || {};
+            // Eski UI cache first_cycle_manual taşımıyorsa Tur 1 + enabled/no-active → ilk tur manuel
+            if (!dyn.first_cycle_manual && dyn.enabled && dyn.active !== true) {
+                var cid = parseInt(st.cycle_id, 10);
+                if (cid === 1 || isNaN(cid)) dyn.first_cycle_manual = true;
+            }
+            var D = window.DynModeParamsView;
+            var snap = D && D.resolveDynSnapshot ? D.resolveDynSnapshot(dyn, st) : (dyn.snapshot || null);
+            var built = D && D.buildDynGridBannerHtml
+                ? D.buildDynGridBannerHtml(dyn, snap, escapeHtml)
+                : null;
+            if (!built || built.hide) {
                 banner.style.display = 'none';
                 return;
             }
             banner.style.display = 'block';
-            var ap = snap.applied || {};
-            var feats = snap.features || {};
-            var regimeMap = {
-                LOW_VOL_RANGING: 'Düşük volatilite / yatay',
-                HIGH_VOL_RANGING: 'Yüksek volatilite / yatay (chop)',
-                TRENDING_UP: 'Yukarı trend',
-                TRENDING_DOWN: 'Aşağı trend (savunma)',
-                SQUEEZE: 'Sıkışma (squeeze)',
-                BREAKOUT: 'Kırılım (breakout)',
-                DUMP_RISK: 'Dump riski',
-                UNKNOWN: 'Belirsiz'
-            };
-            var regEl = document.getElementById('dynModeGridRegime');
-            if (regEl) {
-                var regTxt = regimeMap[snap.regime] || snap.regime || '—';
-                regEl.textContent = 'Rejim: ' + regTxt + ' · Tur #' + (snap.cycle_id != null ? snap.cycle_id : '?')
-                    + (snap.data_fresh === false ? ' · ⚠ veri eski (önceki tur değerleri)' : '');
-            }
-            function pf(v) { return (v == null || isNaN(Number(v))) ? '—' : Number(v).toFixed(2) + '%'; }
-            function firstG(arr, k) { return (arr && arr[0] && arr[0][k] != null) ? Number(arr[0][k]).toFixed(2) + '%' : '—'; }
-            function lastG(arr, k) { return (arr && arr.length && arr[arr.length-1][k] != null) ? Number(arr[arr.length-1][k]).toFixed(2) + '%' : '—'; }
-            var lines = [];
-            lines.push('<b>Base / Quote:</b> ' + pf(ap.base_alloc_pct) + ' / ' + pf(ap.quote_alloc_pct));
-            lines.push('<b>Satış grid tetik:</b> ' + firstG(ap.sell_grids, 'sell_grid_pct') + ' → ' + lastG(ap.sell_grids, 'sell_grid_pct'));
-            lines.push('<b>Alış grid tetik:</b> ' + firstG(ap.buy_grids, 'buy_grid_pct') + ' → ' + lastG(ap.buy_grids, 'buy_grid_pct'));
-            lines.push('<b>Trailing (satış/alış):</b> ' + pf(ap.sell_trigger_trailing_pct) + ' / ' + pf(ap.buy_trigger_trailing_pct));
-            lines.push('<b>Kâr al / Re-entry:</b> ' + pf(ap.profit_exit_rise_pct) + ' / ' + pf(ap.profit_reentry_drop_pct));
-            var metaBits = [];
-            if (feats.atr_pct_5m != null) metaBits.push('ATR% ' + Number(feats.atr_pct_5m).toFixed(2));
-            if (feats.adx_1h != null) metaBits.push('ADX ' + Number(feats.adx_1h).toFixed(0));
-            if (feats.bbw_1h != null) metaBits.push('BBW ' + Number(feats.bbw_1h).toFixed(1));
-            var bodyEl = document.getElementById('dynModeGridThresholds');
-            if (bodyEl) {
-                bodyEl.innerHTML = lines.join(' &nbsp;·&nbsp; ')
-                    + (metaBits.length ? '<br><span style="color:var(--ds-text-tertiary,#8089a0);">Sinyaller: ' + metaBits.join(' · ') + '</span>' : '');
-            }
+            banner.innerHTML = built.html;
+            banner.title = built.title || 'Dinamik mod';
         }
         function renderGridPointsPanel(data, opts) {
             if (!gridSellBody || !gridBuyBody) return;
@@ -4740,8 +5127,7 @@
                 syncStateHeroDurationPoll(botStatus === 'running' && !!lastBotStartedAt);
             }
             if (st.cycle_id != null) {
-                var openedShow = resolveOpenCycleStartedAt(null, Number(st.cycle_id));
-                if (openedShow) anchorCycleStartedAt(openedShow, Number(st.cycle_id), { force: true });
+                ensureOpenCycleDurationAnchor(Number(st.cycle_id), resolveOpenCycleStartedAt(null, Number(st.cycle_id)));
             }
 
             var refPrice = data.reference_display != null && !isNaN(data.reference_display) ? Number(data.reference_display) : (data.state && data.state.reference_price != null ? Number(data.state.reference_price) : null);
@@ -4775,6 +5161,8 @@
                 lastBotDetail.config = data.config || lastBotDetail.config || {};
                 lastBotDetail.reference_display = data.reference_display;
                 lastBotDetail.status = data.status || lastBotDetail.status || '';
+                if (data.dynamic_mode !== undefined) lastBotDetail.dynamic_mode = data.dynamic_mode;
+                try { renderDynModeGridBanner(data); } catch (e) { /* partial showDetail */ }
                 _cycleTradesCache = {};
                 _lastTradesPanelFingerprint = '';
                 syncTradesPanelPoll();
@@ -4990,13 +5378,10 @@
                 }
                 var dur = '—';
                 if (isOpenCycle) {
-                    var startedAt = resolveOpenCycleStartedAt(summary, cycleNum);
+                    var startedAt = ensureOpenCycleDurationAnchor(cycleNum, summary && summary.started_at);
                     if (startedAt) applyCycleReportStartedFromApi({ started_at: startedAt }, cycleNum);
-                    if (startedAt) {
-                        dur = formatDurationFromStartedAt(startedAt);
-                    } else if (summary && summary.duration_sec != null) {
-                        dur = formatDurationSec(summary.duration_sec);
-                    }
+                    dur = formatDurationFromStartedAt(startedAt)
+                        || (summary && summary.duration_sec != null ? formatDurationSec(summary.duration_sec) : formatDurationSec(0));
                 } else {
                     if (window.intervalRegistry) window.intervalRegistry.stop('bot-cycle-report-duration');
                     dur = formatDurationSec(summary && summary.duration_sec != null ? summary.duration_sec : null);
@@ -5048,11 +5433,8 @@
                     renderCycleReport(entry.summary || {}, cycleId);
                     _lastTradesPanelFingerprint = entry.fingerprint || '';
                     if (Number(cycleId) === Number(currentCycleFromState)) {
-                        var opened = resolveOpenCycleStartedAt(entry.summary, cycleId);
-                        if (opened) {
-                            anchorCycleStartedAt(opened, cycleId, { force: true });
-                            updateCycleReportDurationLive();
-                        }
+                        ensureOpenCycleDurationAnchor(cycleId, (entry.summary && entry.summary.started_at) || null);
+                        updateCycleReportDurationLive();
                     }
                     return true;
                 } catch (e) {
@@ -5135,11 +5517,8 @@
                             renderCycleReport(summary, cycleId);
                             if (typeof fetchGridPointsLive === 'function') fetchGridPointsLive();
                             if (Number(cycleId) === Number(currentCycleFromState)) {
-                                var opened = resolveOpenCycleStartedAt(summary, cycleId);
-                                if (opened) {
-                                    anchorCycleStartedAt(opened, cycleId, { force: true });
-                                    updateCycleReportDurationLive();
-                                }
+                                ensureOpenCycleDurationAnchor(cycleId, (summary && summary.started_at) || null);
+                                updateCycleReportDurationLive();
                             }
                         } catch (uiErr) {
                             console.warn('loadCycleTrades render', uiErr);
@@ -5239,6 +5618,16 @@
             var alphaPerf = data.bot_alpha_performance || null;
             var runStartBal = alphaPerf && alphaPerf.start_balance_usd != null ? Number(alphaPerf.start_balance_usd) : initialCapForPerf;
             var runStartPrice = alphaPerf && alphaPerf.start_coin_price != null ? Number(alphaPerf.start_coin_price) : lastRefPriceForPerf;
+            var bakiyePct0 = alphaPerf && alphaPerf.balance_pct != null ? Number(alphaPerf.balance_pct) : (runStartBal > 0 && currentUsdNum != null ? (currentUsdNum - runStartBal) / runStartBal * 100 : null);
+            var paritePct0 = alphaPerf && alphaPerf.coin_pct != null ? Number(alphaPerf.coin_pct) : (runStartPrice != null && runStartPrice > 0 && priceForBot != null ? (priceForBot - runStartPrice) / runStartPrice * 100 : null);
+            var realPct0 = resolveBotAlphaPct(data);
+            if (realPct0 == null && bakiyePct0 != null && paritePct0 != null) realPct0 = bakiyePct0 - paritePct0;
+            setSessionAlphaSnapshot(data, realPct0);
+            refreshSessionAlphaHero();
+            if (window.PerfChartTV && typeof window.PerfChartTV.init === 'function') {
+                var chartBotId = data.bot_id != null ? String(data.bot_id) : (botId != null ? String(botId) : '');
+                try { window.PerfChartTV.init(chartBotId, accountId, accountCode); } catch (err) { console.warn('PerfChartTV.init', err); }
+            }
             if (perfReport) {
                 var refPStr = (runStartPrice != null ? runStartPrice.toFixed(4) : '—');
                 var startBalStr = (runStartBal != null ? fmtUsd(runStartBal) : '—');
@@ -5250,28 +5639,14 @@
                     '<p><strong>Parite Güncel Fiyatı:</strong> <span id="perfReportPariteGuncel">' + (priceForBot != null ? priceForBot.toFixed(4) : '—') + '</span></p>' +
                     '<p><strong>Parite Değişimi:</strong> <span id="perfReportPariteDegisim">' + (runStartPrice != null && priceForBot != null ? (priceForBot - runStartPrice >= 0 ? '+' : '') + (priceForBot - runStartPrice).toFixed(4) + ' ' + (priceForBot >= runStartPrice ? '+' : '') + ((priceForBot - runStartPrice) / runStartPrice * 100).toFixed(2) + '%' : '—') + '</span></p>' +
                     '<p><strong>Gerçek performans</strong> (Bakiye % − Parite %): <span id="perfReportGercekPerf" style="font-weight:600">—</span></p>';
-                var bakiyePct0 = alphaPerf && alphaPerf.balance_pct != null ? Number(alphaPerf.balance_pct) : (runStartBal > 0 && currentUsdNum != null ? (currentUsdNum - runStartBal) / runStartBal * 100 : null);
-                var paritePct0 = alphaPerf && alphaPerf.coin_pct != null ? Number(alphaPerf.coin_pct) : (runStartPrice != null && runStartPrice > 0 && priceForBot != null ? (priceForBot - runStartPrice) / runStartPrice * 100 : null);
-                var realPct0 = resolveBotAlphaPct(data);
-                if (realPct0 == null && bakiyePct0 != null && paritePct0 != null) realPct0 = bakiyePct0 - paritePct0;
-                updatePerfGenelAlpha(data);
-                renderPerfDualPnlSummary(data.dual_pnl, priceForBot, symbol);
                 var perfReportGercekPerf = document.getElementById('perfReportGercekPerf');
                 if (perfReportGercekPerf && realPct0 != null) {
                     perfReportGercekPerf.textContent = formatSignedPct2(realPct0);
                     perfReportGercekPerf.style.color = realPct0 >= 0 ? '#0ecb81' : '#f6465d';
                 }
-                if (window.PerfChartTV && typeof window.PerfChartTV.init === 'function') {
-                    var chartBotId = data.bot_id != null ? String(data.bot_id) : (botId != null ? String(botId) : '');
-                    try { window.PerfChartTV.init(chartBotId, accountId, accountCode); } catch (err) { console.warn('PerfChartTV.init', err); }
-                }
             }
             perfPanel.style.display = 'block';
-            if (canViewEngineLogs() && window.innerWidth > 768 && engineLogPanel) {
-                engineLogPanel.style.display = 'block';
-            } else if (engineLogPanel) {
-                engineLogPanel.style.display = 'none';
-            }
+            syncEngineLogPanelVisibility();
             if (window.EngineLogFormat && window.EngineLogFormat.setLogContext) {
                 window.EngineLogFormat.setLogContext({
                     botId: botId,
@@ -5293,7 +5668,10 @@
             _engineLogLiveOpts.cycleOpenTrades = st.cycle_open_trades || [];
             startEngineLogLive();
             loadPerfMetrics();
+            syncSessionAlphaPoll();
+            fetchSessionAlphaLive();
             _botDetailHydrated = true;
+            prefetchPerfSummaryIndex();
             persistBotDetailUiCache(botId);
         }
 
@@ -5363,6 +5741,7 @@
             applyLive(liveStateFromDetail(data));
             if (data.dynamic_mode !== undefined) lastBotDetail.dynamic_mode = data.dynamic_mode;
             syncDynModeTopBadge(data);
+            try { renderDynModeGridBanner(data); } catch (e) { console && console.debug && console.debug('dynBanner', e); }
             if (lastBotDetail.symbol) applyLiveHeroBalances(st, lastBotDetail.symbol);
             if (st.cycle_id != null && Number(st.cycle_id) === Number(window._botDetailSelectedCycleId)) {
                 var openedPatch = resolveOpenCycleStartedAt(null, Number(st.cycle_id));
@@ -5400,10 +5779,11 @@
                 refreshGridPointsLivePrice(data.current_price != null ? Number(data.current_price) : null);
             }
             syncGridWarmupPoll();
-            if (data.bot_alpha_performance || data.real_performance_pct != null) {
-                updatePerfGenelAlpha(data);
-                var pfb = data.current_price != null ? Number(data.current_price) : null;
-                renderPerfDualPnlSummary(data.dual_pnl || lastBotDetail.dual_pnl, pfb, data.symbol || lastBotDetail.symbol);
+            if (perfPanel && perfPanel.style.display !== 'none') {
+                if (data.bot_alpha_performance || data.session_alpha_performance || data.real_performance_pct != null) {
+                    setSessionAlphaSnapshot(data);
+                }
+                refreshSessionAlphaHero();
             }
             var sel = window._botDetailSelectedCycleId;
             if (typeof window._botDetailLoadCycleTrades === 'function' && sel != null && !_tradesPanelBootTimer) {
@@ -5417,6 +5797,11 @@
             _lastGridTrailActive = trailNow;
             loadPerfMetrics({ silent: true });
             ensureStripMiniChart(data.symbol || lastBotDetail.symbol);
+            syncEngineLogPanelVisibility();
+            if (canViewEngineLogs() && engineLogPanel && engineLogPanel.style.display !== 'none') {
+                startEngineLogLive(true);
+            }
+            prefetchPerfSummaryIndex();
             persistBotDetailUiCache(botId);
         }
 
@@ -5445,10 +5830,6 @@
 
         function patchDualPerfMetricsInPlace(res) {
             if (!perfMetrics || !res || !res.dual_perf || !res.dual_perf.aggregates) return false;
-            var dp0 = res.dual_perf;
-            var cashClosed0 = dp0.cash_closed_cycles != null ? Number(dp0.cash_closed_cycles) : 0;
-            var invClosed0 = dp0.inventory_closed_cycles != null ? Number(dp0.inventory_closed_cycles) : 0;
-            if (cashClosed0 === 0 && invClosed0 === 0) return false; // renderDualPerfMetrics boş durum göstersin
             var dp = res.dual_perf;
             var ag = dp.aggregates;
             var baseAsset = perfBaseAssetLabel();
@@ -5485,13 +5866,132 @@
 
         function resolveBotAlphaPct(data) {
             if (!data) return null;
-            if (data.bot_alpha_performance && data.bot_alpha_performance.alpha_pct != null) {
-                return Number(data.bot_alpha_performance.alpha_pct);
+            var alphaObj = data.session_alpha_performance || data.bot_alpha_performance;
+            if (alphaObj && alphaObj.alpha_pct != null && !isNaN(alphaObj.alpha_pct)) {
+                return Number(alphaObj.alpha_pct);
             }
             if (data.real_performance_pct != null && !isNaN(data.real_performance_pct)) {
                 return Number(data.real_performance_pct);
             }
             return null;
+        }
+
+        function buildSessionAlphaPayload(data, fallbackPct) {
+            if (!data) return null;
+            var alphaObj = data.session_alpha_performance || data.bot_alpha_performance || null;
+            if (alphaObj && alphaObj.alpha_pct != null && !isNaN(alphaObj.alpha_pct)) {
+                return {
+                    session_alpha_performance: alphaObj,
+                    bot_alpha_performance: alphaObj,
+                    real_performance_pct: Number(alphaObj.alpha_pct)
+                };
+            }
+            var pct = resolveBotAlphaPct(data);
+            if ((pct == null || isNaN(pct)) && fallbackPct != null && !isNaN(fallbackPct)) {
+                pct = Number(fallbackPct);
+            }
+            if (pct != null && !isNaN(pct)) {
+                return { real_performance_pct: Number(pct) };
+            }
+            return null;
+        }
+
+        function setSessionAlphaSnapshot(data, fallbackPct) {
+            var payload = buildSessionAlphaPayload(data, fallbackPct);
+            if (payload) {
+                _sessionAlphaSnapshot = payload;
+                if (payload.session_alpha_performance) {
+                    lastBotDetail.session_alpha_performance = payload.session_alpha_performance;
+                    lastBotDetail.bot_alpha_performance = payload.session_alpha_performance;
+                }
+            }
+        }
+
+        function getSessionAlphaPayload() {
+            return _sessionAlphaSnapshot || null;
+        }
+
+        function sessionAlphaBaseline() {
+            var snap = getSessionAlphaPayload();
+            var alphaObj = snap && (snap.session_alpha_performance || snap.bot_alpha_performance);
+            if (alphaObj && Number(alphaObj.start_balance_usd) > 0) return alphaObj;
+            if (lastBotDetail) {
+                var fromDetail = lastBotDetail.session_alpha_performance || lastBotDetail.bot_alpha_performance;
+                if (fromDetail && Number(fromDetail.start_balance_usd) > 0) return fromDetail;
+            }
+            return alphaObj || null;
+        }
+
+        function computeLiveSessionAlphaPayload(liveState) {
+            if (!liveState || liveState.equity_unavailable === true) return null;
+            var baseline = sessionAlphaBaseline();
+            if (!baseline) return null;
+            var startBal = Number(baseline.start_balance_usd);
+            var startPrice = Number(baseline.start_coin_price);
+            if (!(startBal > 0) || !(startPrice > 0)) return null;
+            var eq = liveState.equity != null ? Number(liveState.equity) : NaN;
+            var px = liveState.last_price != null ? Number(liveState.last_price) : NaN;
+            if (isNaN(eq) || isNaN(px) || px <= 0) return null;
+            var balancePct = (eq - startBal) / startBal * 100;
+            var coinPct = (px - startPrice) / startPrice * 100;
+            var alphaPct = balancePct - coinPct;
+            var alphaObj = {
+                start_balance_usd: startBal,
+                start_coin_price: startPrice,
+                current_balance_usd: Math.round(eq * 100) / 100,
+                current_coin_price: Math.round(px * 1e8) / 1e8,
+                balance_pct: Math.round(balancePct * 100) / 100,
+                coin_pct: Math.round(coinPct * 100) / 100,
+                alpha_pct: Math.round(alphaPct * 100) / 100
+            };
+            return {
+                session_alpha_performance: alphaObj,
+                bot_alpha_performance: alphaObj,
+                real_performance_pct: alphaObj.alpha_pct
+            };
+        }
+
+        function refreshSessionAlphaFromLive(liveState) {
+            if (!perfPanel || perfPanel.style.display === 'none') return;
+            var computed = computeLiveSessionAlphaPayload(liveState);
+            if (!computed) return;
+            _sessionAlphaSnapshot = computed;
+            updatePerfGenelAlpha(computed);
+        }
+
+        function refreshSessionAlphaHero() {
+            var payload = getSessionAlphaPayload();
+            if (!payload && lastBotDetail && lastBotDetail.bot_id != null) {
+                payload = buildSessionAlphaPayload(lastBotDetail);
+                if (payload) _sessionAlphaSnapshot = payload;
+            }
+            if (payload) updatePerfGenelAlpha(payload);
+        }
+
+        function fetchSessionAlphaLive() {
+            if (_botDetailMissing || document.hidden || !botId || !window.apiClient) return;
+            if (!perfPanel || perfPanel.style.display === 'none') return;
+            if (_sessionAlphaFetchInFlight) return;
+            _sessionAlphaFetchInFlight = true;
+            var q = '?account_id=' + (accountId || '');
+            window.apiClient.get('/api/bots-engine/' + botId + '/session-alpha' + q)
+                .then(function(res) {
+                    if (!res) return;
+                    setSessionAlphaSnapshot(res);
+                    refreshSessionAlphaHero();
+                })
+                .catch(function() { /* sessiz — bir sonraki dakikada tekrar */ })
+                .finally(function() { _sessionAlphaFetchInFlight = false; });
+        }
+
+        function syncSessionAlphaPoll() {
+            if (!window.intervalRegistry || _botDetailMissing || !botId) return;
+            var active = perfPanel && perfPanel.style.display !== 'none' && _botDetailHydrated && !document.hidden;
+            if (active) {
+                window.intervalRegistry.start('bot-detail-session-alpha', fetchSessionAlphaLive, SESSION_ALPHA_POLL_MS, 'bot-detail');
+            } else {
+                window.intervalRegistry.stop('bot-detail-session-alpha');
+            }
         }
 
         function formatSignedPct2(pct) {
@@ -5505,51 +6005,21 @@
             if (!genelBlock || !genelValueEl) return;
             var alpha = resolveBotAlphaPct(data);
             genelBlock.style.display = 'block';
+            genelBlock.classList.remove('perf-genel-block--up', 'perf-genel-block--down', 'perf-genel-block--neutral');
             if (alpha != null) {
-                genelValueEl.textContent = formatSignedPct2(alpha);
-                genelValueEl.style.color = alpha >= 0 ? '#0ecb81' : '#f6465d';
+                var nextText = formatSignedPct2(alpha);
+                if (genelValueEl.textContent !== nextText) genelValueEl.textContent = nextText;
+                if (alpha > 0.005) {
+                    genelBlock.classList.add('perf-genel-block--up');
+                } else if (alpha < -0.005) {
+                    genelBlock.classList.add('perf-genel-block--down');
+                } else {
+                    genelBlock.classList.add('perf-genel-block--neutral');
+                }
             } else {
                 genelValueEl.textContent = '—';
-                genelValueEl.style.color = '';
+                genelBlock.classList.add('perf-genel-block--neutral');
             }
-        }
-
-        function renderPerfDualPnlSummary(dual, priceForBot, symbol) {
-            var dualBlock = document.getElementById('perfDualPnlBlock');
-            if (!dualBlock) return;
-            if (!dual || !dual.aggregates) {
-                dualBlock.style.display = 'none';
-                dualBlock.innerHTML = '';
-                return;
-            }
-            var ag = dual.aggregates;
-            var cur = dual.current_cycle || {};
-            var cashTotal = ag.cash_pnl_usdt_total != null ? Number(ag.cash_pnl_usdt_total) : 0;
-            var cashFeesTotal = ag.cash_fees_usdt_total != null ? Number(ag.cash_fees_usdt_total) : 0;
-            var invQtyTotal = ag.inventory_coin_adv_qty_total != null ? Number(ag.inventory_coin_adv_qty_total) : 0;
-            var invFeesTotal = ag.inventory_fees_usdt_total != null ? Number(ag.inventory_fees_usdt_total) : 0;
-            var invUsdtEquiv = ag.inventory_usdt_equiv_total != null ? Number(ag.inventory_usdt_equiv_total) : (invQtyTotal * (priceForBot || 0) - invFeesTotal);
-            var baseA = perfBaseAssetLabel(symbol);
-            var cashStr = (cashTotal >= 0 ? '+' : '') + fmtUsd(cashTotal) + '  |  Komisyon: ' + fmtUsd(cashFeesTotal);
-            var invQtyStr = (invQtyTotal >= 0 ? '+' : '') + fmtNum(invQtyTotal, 8) + ' ' + baseA + '  |  Komisyon: ' + fmtUsd(invFeesTotal);
-            var invUsdtStr = (invUsdtEquiv >= 0 ? '+' : '') + fmtUsd(invUsdtEquiv) + ' (≈ @ güncel fiyat)';
-            var openCycleHtml = '';
-            if (cur.fills_count != null && cur.fills_count === 0) {
-                openCycleHtml = '<p class="perf-dual-open-cycle muted">Açık tur (Cycle #' + (cur.cycle_id || '—') + '): Bu turda henüz işlem yok.</p>';
-            } else if (cur.cash_pnl_usdt != null || cur.inventory_coin_adv_qty != null) {
-                var ocCash = (cur.cash_pnl_usdt != null ? (cur.cash_pnl_usdt >= 0 ? '+' : '') + fmtUsd(cur.cash_pnl_usdt) : '—');
-                var ocInv = (cur.inventory_coin_adv_qty != null ? (cur.inventory_coin_adv_qty >= 0 ? '+' : '') + fmtNum(cur.inventory_coin_adv_qty, 8) + ' ' + baseA : '—');
-                openCycleHtml = '<p class="perf-dual-open-cycle"><strong>Açık tur (Cycle #' + (cur.cycle_id || '—') + '):</strong> Nakit ' + ocCash + '  |  Envanter ' + ocInv + '</p>';
-            }
-            dualBlock.innerHTML =
-                '<div class="perf-genel-title">Genel PNL</div>' +
-                '<div class="perf-dual-pnl">' +
-                '<div class="perf-dual-line"><span class="perf-dual-label">CASH PNL (USDT):</span> <span class="perf-dual-value" style="color:' + (cashTotal >= 0 ? '#0ecb81' : '#f6465d') + '">' + cashStr + '</span></div>' +
-                '<div class="perf-dual-line"><span class="perf-dual-label">INVENTORY PNL (COIN):</span> <span class="perf-dual-value" style="color:' + (invQtyTotal >= 0 ? '#0ecb81' : '#f6465d') + '">' + invQtyStr + '</span></div>' +
-                '<div class="perf-dual-line perf-dual-line-secondary"><span class="perf-dual-label">INVENTORY (USDT eşdeğer):</span> <span class="perf-dual-value" style="color:' + (invUsdtEquiv >= 0 ? '#0ecb81' : '#f6465d') + '">' + invUsdtStr + '</span></div>' +
-                openCycleHtml +
-                '</div>';
-            dualBlock.style.display = 'block';
         }
 
         function renderDualPerfMetrics(res) {
@@ -5567,21 +6037,13 @@
                 var invFees = dp.inventory_fees_usdt != null ? Number(dp.inventory_fees_usdt) : 0;
                 var invClosed = dp.inventory_closed_cycles != null ? Number(dp.inventory_closed_cycles) : 0;
 
-                // Hiç tamamlanan tur yoksa (yeni başlatılmış / dönem içi sıfır aktivite) boş durum göster
-                if (cashClosed === 0 && invClosed === 0) {
-                    perfMetrics.innerHTML =
-                        '<p class="muted" style="font-size:0.85rem;padding:0.75rem 0;text-align:center;">' +
-                        'Bu dönemde henüz tamamlanan tur yok.</p>';
-                    _lastPerfRenderFp = perfMetricsFingerprint(res);
-                    return;
-                }
+                if (cashPct == null || isNaN(cashPct)) cashPct = 0;
+                if (invPct == null || isNaN(invPct)) invPct = 0;
 
                 var cashColor = cashPnl >= 0 ? '#0ecb81' : '#f6465d';
                 var cashSign = cashPnl >= 0 ? '+' : '';
                 var cashStr = '<span style="color:' + cashColor + '">' + cashSign + cashPnl.toFixed(2) + ' USDT</span>';
-                if (cashPct != null && !isNaN(cashPct)) {
-                    cashStr += ' <span class="perf-pnl-pct">(' + (cashPct >= 0 ? '+' : '') + cashPct.toFixed(2) + '%)</span>';
-                }
+                cashStr += ' <span class="perf-pnl-pct">(' + (cashPct >= 0 ? '+' : '') + cashPct.toFixed(2) + '%)</span>';
 
                 var invStr = formatPerfInventoryPnlHtml(invPnl, invPct, null, res);
 
@@ -5607,7 +6069,7 @@
             var pnlColor = pnlUsd >= 0 ? '#0ecb81' : '#f6465d';
             var pnlSign = pnlUsd >= 0 ? '+' : '';
             var pnlStr = '<span style="color:' + pnlColor + '">' + pnlSign + pnlUsd.toFixed(2) + ' USDT</span>';
-            var pctStr = (pnlPct != null && !isNaN(pnlPct)) ? ((pnlPct >= 0 ? '+' : '') + pnlPct.toFixed(2) + '%') : '—%';
+            var pctStr = (pnlPct != null && !isNaN(pnlPct)) ? ((pnlPct >= 0 ? '+' : '') + pnlPct.toFixed(2) + '%') : '+0.00%';
             pnlStr += ' <span class="perf-pnl-pct">(' + pctStr + ')</span>';
             perfMetrics.innerHTML =
                 '<div class="perf-metrics-row">' +
@@ -5623,7 +6085,6 @@
             var q = 'account_id=' + (accountId || '') + '&period=' + encodeURIComponent(period);
             window.apiClient.get('/api/bots-engine/' + botId + '/performance?' + q)
                 .then(function(res) {
-                    updatePerfGenelAlpha(res);
                     updatePerfReportFromApi(res);
                     var fp = perfMetricsFingerprint(res);
                     if (!(_botDetailHydrated && fp === _lastPerfRenderFp && patchDualPerfMetricsInPlace(res))) {
@@ -5782,11 +6243,12 @@
 
         function updatePerfReportFromApi(res) {
             if (!perfReport) return;
-            var alpha = res.bot_alpha_performance || null;
+            var sessionAlpha = getSessionAlphaPayload();
+            var alpha = (sessionAlpha && (sessionAlpha.session_alpha_performance || sessionAlpha.bot_alpha_performance)) || res.bot_alpha_performance || res.session_alpha_performance || null;
             var refP = alpha && alpha.start_coin_price != null ? Number(alpha.start_coin_price) : (res.reference_price != null ? Number(res.reference_price) : null);
             var curP = res.current_price != null ? Number(res.current_price) : (alpha && alpha.current_coin_price != null ? Number(alpha.current_coin_price) : null);
-            var pricePct = res.price_change_pct != null ? Number(res.price_change_pct) : (alpha && alpha.coin_pct != null ? Number(alpha.coin_pct) : ((refP != null && curP != null && refP > 0) ? ((curP - refP) / refP * 100) : null));
-            var realPct = resolveBotAlphaPct(res);
+            var pricePct = alpha && alpha.coin_pct != null ? Number(alpha.coin_pct) : (res.price_change_pct != null ? Number(res.price_change_pct) : ((refP != null && curP != null && refP > 0) ? ((curP - refP) / refP * 100) : null));
+            var realPct = resolveBotAlphaPct(sessionAlpha || res);
             var startUsd = alpha && alpha.start_balance_usd != null ? Number(alpha.start_balance_usd) : ((res.config_budget_usd != null && res.config_budget_usd > 0) ? Number(res.config_budget_usd) : (res.initial_usd != null ? Number(res.initial_usd) : (res.balance_start_usd != null ? Number(res.balance_start_usd) : null)));
             var endUsd = res.total_usd != null ? Number(res.total_usd) : (res.balance_end_usd != null ? Number(res.balance_end_usd) : null);
             var pnlUsd = res.pnl_usd != null ? Number(res.pnl_usd) : (endUsd != null && startUsd != null ? endUsd - startUsd : null);
@@ -5810,7 +6272,938 @@
             }
             html += '<p class="muted" style="font-size:0.85rem; margin-top:1rem;">Bot performansı, bot başlatıldığı andaki bakiye ve coin fiyatına göre hesaplanır: bakiye % değişimi − coin % değişimi.</p>';
             perfReport.innerHTML = html;
-            updatePerfGenelAlpha(res);
+        }
+
+        var _perfSummaryCache = null;
+        var _perfSummaryYearFilter = null;
+        var _perfSummaryPrefetchPromise = null;
+        var _perfSummaryDetailCache = {};
+        var _perfSummaryDetailFetch = {};
+        var _perfSummaryListFp = '';
+        var _perfSummaryStreamToken = 0;
+        var _perfSummaryStreamedMonths = {};
+        var _perfSummaryStreamFollow = true;
+
+        function resetPerfSummaryStreamScrollFollow() {
+            _perfSummaryStreamFollow = true;
+        }
+
+        function resetPerfSummaryModalScrollTop() {
+            _perfSummaryStreamFollow = false;
+            var scroller = document.querySelector('#perfSummaryModal .perf-summary-modal-body');
+            if (!scroller) return;
+            function snapTop() {
+                scroller.scrollTop = 0;
+            }
+            snapTop();
+            requestAnimationFrame(function () {
+                snapTop();
+                requestAnimationFrame(snapTop);
+            });
+        }
+
+        function scrollPerfSummaryModalBody(force) {
+            if (!force && !_perfSummaryStreamFollow) return;
+            var scroller = document.querySelector('#perfSummaryModal .perf-summary-modal-body');
+            if (scroller) scroller.scrollTop = scroller.scrollHeight;
+        }
+
+        function perfSummaryStreamedStorageKey() {
+            return 'perf_summary_streamed_v4_' + (botId || '');
+        }
+
+        function perfSummaryDetailFingerprint(detail) {
+            if (!detail) return '';
+            var chunks = [String(detail.month_key || '')];
+            var m = detail.metrics || {};
+            chunks.push(JSON.stringify({
+                total_cycles: m.total_cycles,
+                cash_closed_cycles: m.cash_closed_cycles,
+                inventory_closed_cycles: m.inventory_closed_cycles,
+                cash_pnl_usdt: m.cash_pnl_usdt,
+                cash_fees_usdt: m.cash_fees_usdt,
+                net_cash_usdt: m.net_cash_usdt,
+                inventory_pnl_coin: m.inventory_pnl_coin,
+                inventory_fees_usdt: m.inventory_fees_usdt,
+                price_change_pct: m.price_change_pct,
+                market_regime: m.market_regime
+            }));
+            (detail.sections || []).forEach(function (sec) {
+                if (sec.id !== 'cycles' || !sec.items || !sec.items.length) return;
+                sec.items.forEach(function (item) {
+                    chunks.push(String(item.cycle_id || ''));
+                    chunks.push(String(item.direction_label || ''));
+                    chunks.push(String(item.narrative || ''));
+                });
+            });
+            return chunks.join('\x1e');
+        }
+
+        function readPerfSummaryStreamedStore() {
+            var key = perfSummaryStreamedStorageKey();
+            try {
+                var raw = localStorage.getItem(key);
+                if (!raw && botId) {
+                    raw = localStorage.getItem('perf_summary_streamed_v3_' + botId)
+                        || sessionStorage.getItem('perf_summary_streamed_v2_' + botId);
+                }
+                return raw ? (JSON.parse(raw) || {}) : {};
+            } catch (e) {
+                return {};
+            }
+        }
+
+        function writePerfSummaryStreamedStore(o) {
+            try {
+                localStorage.setItem(perfSummaryStreamedStorageKey(), JSON.stringify(o || {}));
+            } catch (e) { /* ignore */ }
+        }
+
+        function normalizePerfSummaryStreamEntry(v) {
+            if (!v) return null;
+            if (typeof v === 'string') return { fp: v, update: false, updateVariant: null, firstVariant: null };
+            if (typeof v === 'object' && v.fp) {
+                return {
+                    fp: String(v.fp),
+                    update: !!v.update,
+                    updateVariant: v.updateVariant != null && !isNaN(Number(v.updateVariant))
+                        ? Number(v.updateVariant) : null,
+                    firstVariant: v.firstVariant != null && !isNaN(Number(v.firstVariant))
+                        ? Number(v.firstVariant) : null
+                };
+            }
+            return null;
+        }
+
+        function getPerfSummaryStreamedEntry(monthKey) {
+            if (!monthKey) return null;
+            var mem = _perfSummaryStreamedMonths[monthKey];
+            var entry = normalizePerfSummaryStreamEntry(mem);
+            if (entry) return entry;
+            try {
+                var o = readPerfSummaryStreamedStore();
+                entry = normalizePerfSummaryStreamEntry(o[monthKey]);
+                if (entry) {
+                    _perfSummaryStreamedMonths[monthKey] = entry;
+                    return entry;
+                }
+            } catch (e) { /* ignore */ }
+            return null;
+        }
+
+        function resolvePerfSummaryDisplayMode(detail) {
+            var monthKey = detail && detail.month_key;
+            var fp = perfSummaryDetailFingerprint(detail);
+            var stored = getPerfSummaryStreamedEntry(monthKey);
+            if (stored && stored.fp === fp) {
+                return { stream: false, isUpdateIntro: !!stored.update };
+            }
+            var hadPrevious = !!(stored && stored.fp);
+            return { stream: true, isUpdateIntro: hadPrevious };
+        }
+
+        function perfSummaryShouldShowInstant(detail) {
+            return !resolvePerfSummaryDisplayMode(detail).stream;
+        }
+
+        function perfSummaryFirstIntroCount() {
+            return (typeof PERF_SUMMARY_FIRST_INTROS !== 'undefined' && PERF_SUMMARY_FIRST_INTROS.length)
+                ? PERF_SUMMARY_FIRST_INTROS.length : 50;
+        }
+
+        function resolvePerfSummaryFirstVariant(monthKey) {
+            var n = perfSummaryFirstIntroCount();
+            var stored = getPerfSummaryStreamedEntry(monthKey);
+            if (stored && stored.firstVariant != null && !isNaN(stored.firstVariant)) {
+                return Number(stored.firstVariant) % n;
+            }
+            return Math.floor(Math.random() * n);
+        }
+
+        function resolvePerfSummaryFirstVariantStable(monthKey) {
+            var n = perfSummaryFirstIntroCount();
+            var stored = getPerfSummaryStreamedEntry(monthKey);
+            if (stored && stored.firstVariant != null && !isNaN(stored.firstVariant)) {
+                return Number(stored.firstVariant) % n;
+            }
+            var seed = String(botId || '') + '\x1f' + String(monthKey || '');
+            var h = 0;
+            for (var i = 0; i < seed.length; i++) {
+                h = ((h << 5) - h + seed.charCodeAt(i)) | 0;
+            }
+            return Math.abs(h) % n;
+        }
+
+        function markPerfSummaryMonthStreamed(monthKey, detail, isUpdate, updateVariant, firstVariant) {
+            if (!monthKey || !detail) return;
+            var prev = getPerfSummaryStreamedEntry(monthKey);
+            var entry = { fp: perfSummaryDetailFingerprint(detail), update: !!isUpdate };
+            if (isUpdate && updateVariant != null && !isNaN(Number(updateVariant))) {
+                entry.updateVariant = Number(updateVariant) % PERF_SUMMARY_UPDATE_INTROS.length;
+            }
+            var fv = firstVariant != null && !isNaN(Number(firstVariant))
+                ? Number(firstVariant)
+                : (prev && prev.firstVariant != null ? prev.firstVariant : null);
+            if (fv != null) {
+                entry.firstVariant = fv % perfSummaryFirstIntroCount();
+            }
+            _perfSummaryStreamedMonths[monthKey] = entry;
+            try {
+                var o = readPerfSummaryStreamedStore();
+                o[monthKey] = entry;
+                writePerfSummaryStreamedStore(o);
+            } catch (e) { /* ignore */ }
+        }
+
+        function cancelPerfSummaryStream() {
+            _perfSummaryStreamToken++;
+        }
+
+        function resolvePerfSummaryUserFirstName() {
+            var displayName = '';
+            try {
+                if (accountId) {
+                    var locked = localStorage.getItem('appbarDisplayName_' + accountId);
+                    if (locked && locked !== '—') displayName = locked;
+                }
+                if (!displayName && accountId) {
+                    var cachedRaw = sessionStorage.getItem('dashboardAppbar_' + accountId)
+                        || localStorage.getItem('dashboardAppbar_ls_' + accountId);
+                    if (cachedRaw) {
+                        var cached = JSON.parse(cachedRaw);
+                        if (cached && cached.displayName && cached.displayName !== '—') displayName = cached.displayName;
+                    }
+                }
+                if (!displayName) {
+                    var userStr = sessionStorage.getItem('user') || localStorage.getItem('user');
+                    if (userStr) {
+                        var user = JSON.parse(userStr);
+                        var userName = [user.name, user.surname].filter(Boolean).map(function (s) {
+                            return String(s).trim();
+                        }).join(' ').trim();
+                        if (userName && (!accountId || String(user.account_id) === String(accountId))) {
+                            displayName = userName;
+                        } else if (user.username) {
+                            displayName = String(user.username).trim();
+                        }
+                    }
+                }
+            } catch (e) { /* ignore */ }
+            displayName = String(displayName || '').trim();
+            if (!displayName) return '';
+            return displayName.split(/\s+/)[0] || displayName;
+        }
+
+        function formatPerfSummaryParagraphHtml(p) {
+            return escapeHtml(p).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+        }
+
+        function streamPerfSummaryPlainText(el, text, token, delayMs) {
+            delayMs = delayMs == null ? 10 : delayMs;
+            text = String(text || '');
+            return new Promise(function (resolve) {
+                if (token !== _perfSummaryStreamToken) {
+                    resolve(false);
+                    return;
+                }
+                if (!el || !text) {
+                    if (el) el.textContent = '';
+                    resolve(true);
+                    return;
+                }
+                el.textContent = '';
+                var i = 0;
+                function tick() {
+                    if (token !== _perfSummaryStreamToken) {
+                        resolve(false);
+                        return;
+                    }
+                    if (i >= text.length) {
+                        resolve(true);
+                        return;
+                    }
+                    var step = 1;
+                    if (text.charAt(i) === ' ') step = 2;
+                    else if (delayMs <= 12) step = 2;
+                    i = Math.min(text.length, i + step);
+                    el.textContent = text.slice(0, i);
+                    scrollPerfSummaryModalBody();
+                    var ch = text.charAt(i - 1);
+                    var pause = /[.!?]/.test(ch) ? 65 : (/[,;:]/.test(ch) ? 32 : 0);
+                    setTimeout(tick, delayMs + pause);
+                }
+                tick();
+            });
+        }
+
+        function streamPerfSummaryParagraph(el, text, token) {
+            return streamPerfSummaryPlainText(el, text, token, 9).then(function (ok) {
+                if (ok && el && text) el.innerHTML = formatPerfSummaryParagraphHtml(text);
+                return ok;
+            });
+        }
+
+        function perfSummaryPairLabel(detail) {
+            var sym = (detail && detail.symbol) || (lastBotDetail && lastBotDetail.symbol) || '';
+            sym = String(sym).trim().toUpperCase();
+            return sym || 'ilgili';
+        }
+
+        var PERF_SUMMARY_UPDATE_INTROS = [
+            function (name, pair) {
+                var g = name ? ('Merhaba ' + name) : 'Merhaba';
+                return g + ', ben senin analiz asistanınım. ' + pair + ' paritesi için bu ayki raporda yeni tur verileri geldi; güncel yorumları aşağıya yazıyorum.';
+            },
+            function (name, pair) {
+                var g = name ? ('Selam ' + name) : 'Selam';
+                return g + ' — analiz asistanın burada. ' + pair + ' özetini yeni kapanışlarla yeniledim, revize metinler sırayla aşağıda.';
+            },
+            function (name, pair) {
+                var g = name ? ('Merhaba ' + name) : 'Merhaba';
+                return g + ', yine ben, analiz asistanın. ' + pair + ' paritesinde bu ay için önceki yorumuma ekleme yaptım; güncel hali aşağıda akıyor.';
+            },
+            function (name, pair) {
+                var g = name ? ('Merhaba ' + name) : 'Merhaba';
+                return g + '. ' + pair + ' tarafında bu ay yeni veriler düştü; analizimi buna göre tazeledim ve aşağıya not ettim.';
+            },
+            function (name, pair) {
+                var g = name ? ('Selam ' + name) : 'Selam';
+                return g + ', analiz asistanın konuşuyor. ' + pair + ' için hazırladığım aylık değerlendirmeyi son tur hareketlerine göre güncelledim — detaylar aşağıda.';
+            },
+            function (name, pair) {
+                var g = name ? ('Merhaba ' + name) : 'Merhaba';
+                return g + ', ben senin analiz asistanınım. Bu ay ' + pair + ' performansına dair tabloda değişiklik var; yeni okumamı aşağıya bırakıyorum.';
+            },
+            function (name, pair) {
+                var g = name ? ('Merhaba ' + name) : 'Merhaba';
+                return g + '. Önceki ' + pair + ' analizime yeni kapanmış turlar eklendi; güncellenmiş yorumları satır satır aşağıya yazıyorum.';
+            },
+            function (name, pair) {
+                var g = name ? ('Selam ' + name) : 'Selam';
+                return g + ' — bu ayki ' + pair + ' raporunu tekrar taradım, veri seti genişledi. Taze analiz metinlerim aşağıda.';
+            },
+            function (name, pair) {
+                var g = name ? ('Merhaba ' + name) : 'Merhaba';
+                return g + ', analiz asistanın devrede. ' + pair + ' paritesi için önce paylaştığım özeti revize ettim; güncel sürüm aşağıya iniyor.';
+            },
+            function (name, pair) {
+                var g = name ? ('Merhaba ' + name) : 'Merhaba';
+                return g + '. ' + pair + ' aylık tablosunda yeni satırlar oluştu; yorumlarımı buna göre yeniledim ve aşağıya aktarıyorum.';
+            },
+            function (name, pair) {
+                var g = name ? ('Selam ' + name) : 'Selam';
+                return g + ', ben analiz asistanın. ' + pair + ' için bu ay daha önce yazdıklarımın üzerine yeni tur çıkarımları ekledim — aşağıda okuyabilirsin.';
+            },
+            function (name, pair) {
+                var g = name ? ('Merhaba ' + name) : 'Merhaba';
+                return g + ', tekrar merhaba. ' + pair + ' paritesindeki ay analizimde veri güncellendi; revize değerlendirmemi aşağıya yazıyorum.';
+            },
+            function (name, pair) {
+                var g = name ? ('Merhaba ' + name) : 'Merhaba';
+                return g + '. Analiz asistanın olarak ' + pair + ' özetini son kapanışlarla yeniden hesapladım; güncel metinler aşağıda.';
+            },
+            function (name, pair) {
+                var g = name ? ('Selam ' + name) : 'Selam';
+                return g + ' — ' + pair + ' için bu ayki raporda yeni hareketler var. Önceki yorumumu güncelledim, aşağıya bırakıyorum.';
+            },
+            function (name, pair) {
+                var g = name ? ('Merhaba ' + name) : 'Merhaba';
+                return g + ', ben senin analiz asistanınım. ' + pair + ' tarafında tur verisi değişti; analiz metnimi tazeleyip aşağıya yazıyorum.';
+            },
+            function (name, pair) {
+                var g = name ? ('Merhaba ' + name) : 'Merhaba';
+                return g + '. Bu ay ' + pair + ' performansına dair önceki notlarım artık eksik; yeni kapanışlarla birlikte güncel yorumu aşağıya aktarıyorum.';
+            },
+            function (name, pair) {
+                var g = name ? ('Selam ' + name) : 'Selam';
+                return g + ', analiz asistanın burada. ' + pair + ' paritesi için hazırladığım aylık tabloya yeni tur eklendi — revize analiz aşağıda.';
+            },
+            function (name, pair) {
+                var g = name ? ('Merhaba ' + name) : 'Merhaba';
+                return g + ', yine ben. ' + pair + ' özetinde veri seti genişledi; önceki analizimi güncelledim ve aşağıya yazıyorum.';
+            },
+            function (name, pair) {
+                var g = name ? ('Merhaba ' + name) : 'Merhaba';
+                return g + '. ' + pair + ' için bu ay daha önce yazdığım değerlendirmeyi yeni tur sonuçlarıyla yeniledim; metin aşağıda akıyor.';
+            },
+            function (name, pair) {
+                var g = name ? ('Selam ' + name) : 'Selam';
+                return g + ' — analiz asistanın. ' + pair + ' paritesinde kapanan yeni turlar rapora yansıdı; güncel yorumlarım sırayla aşağıda.';
+            },
+            function (name, pair) {
+                var g = name ? ('Merhaba ' + name) : 'Merhaba';
+                return g + ', ben senin analiz asistanınım. ' + pair + ' aylık raporunda değişiklik algıladım; taze analiz metinlerini aşağıya bırakıyorum.';
+            },
+            function (name, pair) {
+                var g = name ? ('Merhaba ' + name) : 'Merhaba';
+                return g + '. Önceki ' + pair + ' okumam güncel değil artık — yeni tur verileriyle revize ettim, aşağıya yazıyorum.';
+            },
+            function (name, pair) {
+                var g = name ? ('Selam ' + name) : 'Selam';
+                return g + ', analiz asistanın konuşuyor. Bu ay ' + pair + ' tarafında tablo hareketlendi; güncellenmiş değerlendirmem aşağıda.';
+            },
+            function (name, pair) {
+                var g = name ? ('Merhaba ' + name) : 'Merhaba';
+                return g + ', tekrar selam. ' + pair + ' paritesi için analizimi son kapanışlara göre yeniledim; yeni metinler aşağıya iniyor.';
+            },
+            function (name, pair) {
+                var g = name ? ('Merhaba ' + name) : 'Merhaba';
+                return g + '. ' + pair + ' özetine yeni tur satırları eklendi; yorumlarımı buna göre güncelledim ve aşağıya aktarıyorum.';
+            },
+            function (name, pair) {
+                var g = name ? ('Selam ' + name) : 'Selam';
+                return g + ' — ben analiz asistanın. ' + pair + ' için bu ayki raporu tekrar işledim, revize çıkarımlarım aşağıda.';
+            },
+            function (name, pair) {
+                var g = name ? ('Merhaba ' + name) : 'Merhaba';
+                return g + ', ben senin analiz asistanınım. ' + pair + ' paritesinde veri akışı değişti; güncel analizimi aşağıya yazıyorum.';
+            },
+            function (name, pair) {
+                var g = name ? ('Merhaba ' + name) : 'Merhaba';
+                return g + '. Analiz asistanın olarak ' + pair + ' aylık tablosunu yeniden taradım — önceki metnin güncel hali aşağıda.';
+            },
+            function (name, pair) {
+                var g = name ? ('Selam ' + name) : 'Selam';
+                return g + ', analiz asistanın devrede. ' + pair + ' için bu ay yeni kapanışlar geldi; revize yorumları satır satır aşağıya bırakıyorum.';
+            },
+            function (name, pair) {
+                var g = name ? ('Merhaba ' + name) : 'Merhaba';
+                return g + ', yine ben, analiz asistanın. ' + pair + ' paritesi özetini son verilerle tazeledim; güncel analizler aşağıda akıyor.';
+            }
+        ];
+
+        function resolveNextPerfSummaryUpdateVariant(monthKey) {
+            var stored = getPerfSummaryStreamedEntry(monthKey);
+            if (stored && stored.update && stored.updateVariant != null && !isNaN(stored.updateVariant)) {
+                return (Number(stored.updateVariant) + 1) % PERF_SUMMARY_UPDATE_INTROS.length;
+            }
+            return 0;
+        }
+
+        function buildPerfSummaryAssistantIntro(opts) {
+            opts = opts || {};
+            var firstName = resolvePerfSummaryUserFirstName();
+            var closing = ' Allah bol kazanç versin İnşallah. Amin.';
+            if (opts.isUpdate) {
+                var pair = perfSummaryPairLabel(opts.detail);
+                var variant = opts.updateVariant != null ? Number(opts.updateVariant) : 0;
+                if (isNaN(variant) || variant < 0) variant = 0;
+                variant = variant % PERF_SUMMARY_UPDATE_INTROS.length;
+                return PERF_SUMMARY_UPDATE_INTROS[variant](firstName, pair) + closing;
+            }
+            var n = perfSummaryFirstIntroCount();
+            var variant = opts.firstVariant != null ? Number(opts.firstVariant) : 0;
+            if (isNaN(variant) || variant < 0) variant = 0;
+            variant = variant % n;
+            var introFn = (typeof PERF_SUMMARY_FIRST_INTROS !== 'undefined' && PERF_SUMMARY_FIRST_INTROS[variant])
+                ? PERF_SUMMARY_FIRST_INTROS[variant]
+                : function (name) {
+                    var g = name ? ('Merhaba ' + name) : 'Merhaba';
+                    return g + ', ben senin analiz asistanınım. Detaylı analizlerimi aşağıya yazıyorum.';
+                };
+            return introFn(firstName) + closing;
+        }
+
+        function buildPerfSummaryAssistantIntroBlockHtml(opts) {
+            opts = opts || {};
+            var introInner = opts.introInner != null ? opts.introInner : '';
+            var showCursor = opts.showCursor !== false;
+            var html = '<div class="perf-summary-assistant-intro-block perf-summary-intro-spark-wrap">';
+            var si;
+            for (si = 1; si <= 6; si++) {
+                html += '<span class="perf-summary-spark perf-summary-intro-spark perf-summary-intro-spark-' + si + '" aria-hidden="true"></span>';
+            }
+            html += '<div class="perf-summary-assistant-intro-inner">';
+            html += '<div class="perf-summary-assistant-label">Analiz asistanı</div>';
+            html += '<p class="perf-summary-assistant-intro"><span id="perfSummaryAssistantIntro">' + introInner + '</span>';
+            html += '<span class="perf-summary-stream-cursor' + (showCursor ? '' : ' is-hidden') + '" id="perfSummaryStreamCursor" aria-hidden="true"></span></p>';
+            html += '</div></div>';
+            return html;
+        }
+
+        function buildPerfSummaryDetailShell(detail) {
+            var html = '<button type="button" class="perf-summary-back" id="perfSummaryBackBtn">← Aylara dön</button>';
+            html += '<div class="perf-summary-assistant-wrap">';
+            html += buildPerfSummaryAssistantIntroBlockHtml({ showCursor: true });
+            html += '<div id="perfSummaryStreamContent" class="perf-summary-stream-content">';
+            html += '<div class="perf-summary-detail-head"><p class="perf-summary-detail-headline" data-stream="headline"></p></div>';
+            (detail.sections || []).forEach(function (sec, si) {
+                html += '<div class="perf-summary-section perf-summary-section-pending" data-section-idx="' + si + '">';
+                html += '<div class="perf-summary-section-title"></div>';
+                if (sec.id === 'sustainability' && sec.score != null) {
+                    html += '<div class="perf-summary-score"><span class="perf-summary-score-text"></span></div>';
+                }
+                if (sec.items && sec.items.length) {
+                    sec.items.forEach(function (item, ii) {
+                        html += '<div class="perf-summary-cycle-item perf-summary-cycle-pending" data-item-idx="' + ii + '">';
+                        html += '<div class="perf-summary-cycle-title"></div>';
+                        html += '<div class="perf-summary-cycle-text"></div>';
+                        html += '</div>';
+                    });
+                }
+                (sec.paragraphs || []).forEach(function (_, pi) {
+                    html += '<p data-paragraph-idx="' + pi + '"></p>';
+                });
+                html += '</div>';
+            });
+            html += '</div></div>';
+            return html;
+        }
+
+        function buildPerfSummaryDetailHtmlInstant(detail) {
+            var displayMode = resolvePerfSummaryDisplayMode(detail);
+            var stored = getPerfSummaryStreamedEntry(detail.month_key || '');
+            var introText = buildPerfSummaryAssistantIntro({
+                detail: detail,
+                isUpdate: displayMode.isUpdateIntro,
+                updateVariant: stored && stored.updateVariant != null ? stored.updateVariant : 0,
+                firstVariant: stored && stored.firstVariant != null
+                    ? stored.firstVariant
+                    : resolvePerfSummaryFirstVariantStable(detail.month_key || '')
+            });
+            var html = '<button type="button" class="perf-summary-back" id="perfSummaryBackBtn">← Aylara dön</button>';
+            html += '<div class="perf-summary-assistant-wrap">';
+            html += buildPerfSummaryAssistantIntroBlockHtml({
+                introInner: escapeHtml(introText),
+                showCursor: false
+            });
+            html += '<div id="perfSummaryStreamContent" class="perf-summary-stream-content is-visible">';
+            if (detail.headline) {
+                html += '<div class="perf-summary-detail-head"><p class="perf-summary-detail-headline">';
+                html += escapeHtml(detail.headline);
+                html += '</p></div>';
+            }
+            (detail.sections || []).forEach(function (sec) {
+                html += '<div class="perf-summary-section perf-summary-section-done">';
+                html += '<div class="perf-summary-section-title">' + escapeHtml(sec.title || '') + '</div>';
+                if (sec.id === 'sustainability' && sec.score != null) {
+                    html += '<div class="perf-summary-score"><span class="perf-summary-score-text">Sürdürülebilirlik: '
+                        + escapeHtml(String(sec.score)) + '/100 (' + escapeHtml(sec.label || '') + ')</span></div>';
+                }
+                if (sec.items && sec.items.length) {
+                    sec.items.forEach(function (item) {
+                        html += '<div class="perf-summary-cycle-item perf-summary-cycle-done">';
+                        html += '<div class="perf-summary-cycle-title">';
+                        html += escapeHtml(item.direction_label || ('Tur #' + item.cycle_id));
+                        html += '</div><div class="perf-summary-cycle-text">';
+                        html += escapeHtml(item.narrative || '');
+                        html += '</div></div>';
+                    });
+                }
+                (sec.paragraphs || []).forEach(function (p) {
+                    html += '<p>' + formatPerfSummaryParagraphHtml(p) + '</p>';
+                });
+                html += '</div>';
+            });
+            html += '</div></div>';
+            return html;
+        }
+
+        function streamPerfSummarySectionItems(secEl, sec, token) {
+            var items = sec.items || [];
+            if (!items.length) return Promise.resolve(true);
+            var chain = Promise.resolve(true);
+            items.forEach(function (item, ii) {
+                chain = chain.then(function (ok) {
+                    if (!ok || token !== _perfSummaryStreamToken) return false;
+                    var itemEl = secEl.querySelector('.perf-summary-cycle-item[data-item-idx="' + ii + '"]');
+                    if (!itemEl) return true;
+                    itemEl.classList.remove('perf-summary-cycle-pending');
+                    itemEl.classList.add('perf-summary-cycle-active');
+                    scrollPerfSummaryModalBody();
+                    var titleEl = itemEl.querySelector('.perf-summary-cycle-title');
+                    var textEl = itemEl.querySelector('.perf-summary-cycle-text');
+                    var titleText = item.direction_label || ('Tur #' + item.cycle_id);
+                    return streamPerfSummaryPlainText(titleEl, titleText, token, 7).then(function (ok2) {
+                        if (!ok2) return false;
+                        return streamPerfSummaryPlainText(textEl, item.narrative || '', token, 8).then(function (ok3) {
+                            if (ok3) itemEl.classList.add('perf-summary-cycle-done');
+                            return ok3;
+                        });
+                    });
+                });
+            });
+            return chain;
+        }
+
+        function streamPerfSummarySectionParagraphs(secEl, sec, token) {
+            var paragraphs = sec.paragraphs || [];
+            if (!paragraphs.length) return Promise.resolve(true);
+            var chain = Promise.resolve(true);
+            paragraphs.forEach(function (p, pi) {
+                chain = chain.then(function (ok) {
+                    if (!ok || token !== _perfSummaryStreamToken) return false;
+                    var pEl = secEl.querySelector('[data-paragraph-idx="' + pi + '"]');
+                    return streamPerfSummaryParagraph(pEl, p, token);
+                });
+            });
+            return chain;
+        }
+
+        function streamPerfSummarySections(contentEl, sections, si, token) {
+            if (si >= (sections || []).length) return Promise.resolve(true);
+            if (token !== _perfSummaryStreamToken) return Promise.resolve(false);
+            var sec = sections[si];
+            var secEl = contentEl.querySelector('[data-section-idx="' + si + '"]');
+            if (!secEl) return streamPerfSummarySections(contentEl, sections, si + 1, token);
+            secEl.classList.remove('perf-summary-section-pending');
+            secEl.classList.add('perf-summary-section-active');
+            scrollPerfSummaryModalBody();
+            var titleEl = secEl.querySelector('.perf-summary-section-title');
+            var chain = streamPerfSummaryPlainText(titleEl, sec.title || '', token, 5);
+            if (sec.id === 'sustainability' && sec.score != null) {
+                chain = chain.then(function (ok) {
+                    if (!ok) return false;
+                    var scoreEl = secEl.querySelector('.perf-summary-score-text');
+                    var scoreText = 'Sürdürülebilirlik: ' + sec.score + '/100 (' + (sec.label || '') + ')';
+                    return streamPerfSummaryPlainText(scoreEl, scoreText, token, 8);
+                });
+            }
+            chain = chain.then(function (ok) {
+                if (!ok) return false;
+                return streamPerfSummarySectionItems(secEl, sec, token);
+            });
+            chain = chain.then(function (ok) {
+                if (!ok) return false;
+                return streamPerfSummarySectionParagraphs(secEl, sec, token);
+            });
+            return chain.then(function (ok) {
+                if (ok) {
+                    secEl.classList.remove('perf-summary-section-active');
+                    secEl.classList.add('perf-summary-section-done');
+                }
+                if (!ok) return false;
+                return streamPerfSummarySections(contentEl, sections, si + 1, token);
+            });
+        }
+
+        function runPerfSummaryDetailStream(detailView, detail, token, monthKey, isUpdate, updateVariant, firstVariant) {
+            var introEl = detailView.querySelector('#perfSummaryAssistantIntro');
+            var cursorEl = detailView.querySelector('#perfSummaryStreamCursor');
+            var contentEl = detailView.querySelector('#perfSummaryStreamContent');
+            var headlineEl = contentEl && contentEl.querySelector('[data-stream="headline"]');
+            var introText = buildPerfSummaryAssistantIntro({
+                detail: detail,
+                isUpdate: !!isUpdate,
+                updateVariant: updateVariant,
+                firstVariant: firstVariant
+            });
+
+            if (monthKey && token === _perfSummaryStreamToken) {
+                markPerfSummaryMonthStreamed(monthKey, detail, !!isUpdate, updateVariant, firstVariant);
+            }
+
+            streamPerfSummaryPlainText(introEl, introText, token, 13).then(function (ok) {
+                if (!ok || token !== _perfSummaryStreamToken) return false;
+                if (cursorEl) cursorEl.classList.add('is-hidden');
+                if (contentEl) contentEl.classList.add('is-visible');
+                scrollPerfSummaryModalBody();
+                if (!detail.headline) {
+                    return streamPerfSummarySections(contentEl, detail.sections || [], 0, token);
+                }
+                return streamPerfSummaryPlainText(headlineEl, detail.headline, token, 8).then(function (ok2) {
+                    if (!ok2 || token !== _perfSummaryStreamToken) return false;
+                    return streamPerfSummarySections(contentEl, detail.sections || [], 0, token);
+                });
+            });
+        }
+
+        function perfSummaryIndexFp(data) {
+            if (!data || !data.months) return '';
+            return (data.months || []).map(function (m) {
+                return String(m.month_key || '') + ':' + (m.has_activity ? '1' : '0');
+            }).join('|');
+        }
+
+        function setPerfSummaryModalDesc(visible) {
+            var el = document.getElementById('perfSummaryModalDesc');
+            if (!el) return;
+            el.style.display = visible ? 'block' : 'none';
+        }
+
+        function prefetchVisiblePerfSummaryDetails(months) {
+            (months || []).forEach(function (m) {
+                if (m && m.month_key && m.has_activity !== false) {
+                    prefetchPerfSummaryMonthDetail(m.month_key);
+                }
+            });
+        }
+
+        function prefetchPerfSummaryIndex() {
+            if (!botId || !window.apiClient) return Promise.resolve(_perfSummaryCache);
+            if (_perfSummaryPrefetchPromise) return _perfSummaryPrefetchPromise;
+            var q = '?account_id=' + (accountId || '');
+            _perfSummaryPrefetchPromise = window.apiClient.get('/api/bots-engine/' + botId + '/perf-narrative' + q)
+                .then(function (res) {
+                    _perfSummaryCache = res;
+                    _perfSummaryPrefetchPromise = null;
+                    if (res && res.months) prefetchVisiblePerfSummaryDetails(res.months);
+                    return res;
+                })
+                .catch(function () {
+                    _perfSummaryPrefetchPromise = null;
+                    return null;
+                });
+            return _perfSummaryPrefetchPromise;
+        }
+
+        function bindPerfSummaryScrollTrap() {
+            var modal = document.getElementById('perfSummaryModal');
+            if (!modal || modal._perfSummaryScrollTrap) return;
+            modal._perfSummaryScrollTrap = true;
+            modal.addEventListener('touchmove', function (e) {
+                var scroller = modal.querySelector('.perf-summary-modal-body');
+                if (!scroller || !scroller.contains(e.target)) e.preventDefault();
+            }, { passive: false });
+            var scroller = modal.querySelector('.perf-summary-modal-body');
+            if (!scroller) return;
+            if (!scroller._perfSummaryStreamFollowBound) {
+                scroller._perfSummaryStreamFollowBound = true;
+                scroller.addEventListener('scroll', function () {
+                    var nearBottom = scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 56;
+                    _perfSummaryStreamFollow = nearBottom;
+                }, { passive: true });
+            }
+            scroller.addEventListener('wheel', function (e) {
+                if (e.deltaY < 0) _perfSummaryStreamFollow = false;
+                var delta = e.deltaY;
+                var atTop = scroller.scrollTop <= 0;
+                var atBottom = scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 1;
+                if (scroller.scrollHeight <= scroller.clientHeight) {
+                    e.preventDefault();
+                    return;
+                }
+                if ((delta < 0 && atTop) || (delta > 0 && atBottom)) e.preventDefault();
+            }, { passive: false });
+        }
+
+        function closePerfSummaryModal() {
+            cancelPerfSummaryStream();
+            var modal = document.getElementById('perfSummaryModal');
+            if (!modal) return;
+            modal.style.display = 'none';
+            modal.setAttribute('aria-hidden', 'true');
+            if (typeof unlockBodyScroll === 'function') unlockBodyScroll();
+        }
+
+        function showPerfSummaryListView() {
+            cancelPerfSummaryStream();
+            var listView = document.getElementById('perfSummaryListView');
+            var detailView = document.getElementById('perfSummaryDetailView');
+            var titleEl = document.getElementById('perfSummaryModalTitle');
+            if (listView) listView.style.display = 'block';
+            if (detailView) { detailView.style.display = 'none'; detailView.innerHTML = ''; }
+            if (titleEl) titleEl.textContent = 'Performans özeti';
+            setPerfSummaryModalDesc(true);
+            resetPerfSummaryModalScrollTop();
+        }
+
+        function renderPerfSummaryMonthList(data, opts) {
+            opts = opts || {};
+            var listEl = document.getElementById('perfSummaryMonthList');
+            var yearEl = document.getElementById('perfSummaryYearFilter');
+            if (!listEl || !data) return;
+            _perfSummaryCache = data;
+            var months = data.months || [];
+            if (yearEl && data.show_year_filter && (data.years || []).length > 1) {
+                yearEl.style.display = 'flex';
+                var years = data.years;
+                if (_perfSummaryYearFilter == null) _perfSummaryYearFilter = years[0];
+                yearEl.innerHTML = years.map(function(y) {
+                    return '<button type="button" class="btn-year' + (y === _perfSummaryYearFilter ? ' active' : '') + '" data-year="' + y + '">' + y + '</button>';
+                }).join('');
+                yearEl.querySelectorAll('.btn-year').forEach(function(btn) {
+                    btn.addEventListener('click', function() {
+                        _perfSummaryYearFilter = Number(btn.getAttribute('data-year'));
+                        renderPerfSummaryMonthList(_perfSummaryCache, { force: true });
+                    });
+                });
+                months = months.filter(function(m) { return m.year === _perfSummaryYearFilter; });
+            } else if (yearEl) {
+                yearEl.style.display = 'none';
+                yearEl.innerHTML = '';
+            }
+            var fp = perfSummaryIndexFp({ months: months }) + '|y:' + (_perfSummaryYearFilter != null ? _perfSummaryYearFilter : '');
+            if (!opts.force && fp === _perfSummaryListFp && listEl.querySelector('.perf-summary-month-row')) return;
+            _perfSummaryListFp = fp;
+            if (!months.length) {
+                listEl.innerHTML = '<p class="muted" style="text-align:center;padding:1rem 0;">Listelenecek ay yok.</p>';
+                return;
+            }
+            listEl.innerHTML = months.map(function(m) {
+                return '<button type="button" class="perf-summary-month-row' + (m.has_activity ? '' : ' is-empty') + '" data-month-key="' + escapeHtml(m.month_key) + '">' +
+                    '<span class="perf-summary-month-label">' + escapeHtml(m.month_label) + '</span></button>';
+            }).join('');
+            listEl.querySelectorAll('.perf-summary-month-row').forEach(function(row) {
+                var monthKey = row.getAttribute('data-month-key');
+                row.addEventListener('click', function() {
+                    loadPerfSummaryMonthDetail(monthKey);
+                });
+                row.addEventListener('mouseenter', function() {
+                    prefetchPerfSummaryMonthDetail(monthKey);
+                });
+            });
+        }
+
+        function prefetchPerfSummaryMonthDetail(monthKey) {
+            if (!botId || !monthKey || !window.apiClient) {
+                return Promise.resolve(_perfSummaryDetailCache[monthKey] || null);
+            }
+            if (_perfSummaryDetailCache[monthKey]) {
+                return Promise.resolve(_perfSummaryDetailCache[monthKey]);
+            }
+            if (_perfSummaryDetailFetch[monthKey]) return _perfSummaryDetailFetch[monthKey];
+            var q = '?account_id=' + (accountId || '') + '&month=' + encodeURIComponent(monthKey);
+            _perfSummaryDetailFetch[monthKey] = window.apiClient.get('/api/bots-engine/' + botId + '/perf-narrative' + q)
+                .then(function (res) {
+                    delete _perfSummaryDetailFetch[monthKey];
+                    if (res && res.month_key) _perfSummaryDetailCache[res.month_key] = res;
+                    return res;
+                })
+                .catch(function () {
+                    delete _perfSummaryDetailFetch[monthKey];
+                    return null;
+                });
+            return _perfSummaryDetailFetch[monthKey];
+        }
+
+        function renderPerfSummaryDetail(detail) {
+            var detailView = document.getElementById('perfSummaryDetailView');
+            var listView = document.getElementById('perfSummaryListView');
+            var titleEl = document.getElementById('perfSummaryModalTitle');
+            if (!detailView || !detail) return;
+            cancelPerfSummaryStream();
+            var streamToken = ++_perfSummaryStreamToken;
+            var monthKey = detail.month_key || '';
+            var displayMode = resolvePerfSummaryDisplayMode(detail);
+            var showInstant = !displayMode.stream;
+            var isUpdateIntro = displayMode.isUpdateIntro;
+            var storedEntry = getPerfSummaryStreamedEntry(monthKey);
+            var updateVariant = null;
+            var firstVariant = null;
+            if (isUpdateIntro) {
+                if (showInstant) {
+                    updateVariant = storedEntry && storedEntry.updateVariant != null ? storedEntry.updateVariant : 0;
+                } else {
+                    updateVariant = resolveNextPerfSummaryUpdateVariant(monthKey);
+                }
+                if (storedEntry && storedEntry.firstVariant != null) {
+                    firstVariant = storedEntry.firstVariant;
+                }
+            } else if (showInstant) {
+                firstVariant = storedEntry && storedEntry.firstVariant != null
+                    ? storedEntry.firstVariant
+                    : resolvePerfSummaryFirstVariantStable(monthKey);
+            } else {
+                firstVariant = resolvePerfSummaryFirstVariant(monthKey);
+            }
+            if (detail.month_key) _perfSummaryDetailCache[detail.month_key] = detail;
+            if (listView) listView.style.display = 'none';
+            detailView.style.display = 'block';
+            if (titleEl) titleEl.textContent = detail.month_label || 'Ay detayı';
+            setPerfSummaryModalDesc(false);
+            detailView.innerHTML = showInstant
+                ? buildPerfSummaryDetailHtmlInstant(detail)
+                : buildPerfSummaryDetailShell(detail);
+            var backBtn = document.getElementById('perfSummaryBackBtn');
+            if (backBtn) backBtn.addEventListener('click', showPerfSummaryListView);
+            resetPerfSummaryModalScrollTop();
+            if (!showInstant) {
+                runPerfSummaryDetailStream(detailView, detail, streamToken, monthKey, isUpdateIntro, updateVariant, firstVariant);
+            }
+        }
+
+        function maybeRefreshPerfSummaryDetail(monthKey, previousDetail, freshDetail) {
+            if (!freshDetail || !monthKey) return;
+            _perfSummaryDetailCache[monthKey] = freshDetail;
+            if (!previousDetail) return;
+            if (perfSummaryDetailFingerprint(previousDetail) === perfSummaryDetailFingerprint(freshDetail)) return;
+            var detailView = document.getElementById('perfSummaryDetailView');
+            if (!detailView || detailView.style.display === 'none') return;
+            renderPerfSummaryDetail(freshDetail);
+        }
+
+        function loadPerfSummaryMonthDetail(monthKey) {
+            if (!botId || !window.apiClient || !monthKey) return;
+            var detailView = document.getElementById('perfSummaryDetailView');
+            var cached = _perfSummaryDetailCache[monthKey];
+            if (cached) {
+                renderPerfSummaryDetail(cached);
+                prefetchPerfSummaryMonthDetail(monthKey).then(function (res) {
+                    maybeRefreshPerfSummaryDetail(monthKey, cached, res);
+                });
+                return;
+            }
+            prefetchPerfSummaryMonthDetail(monthKey).then(function (res) {
+                if (res) {
+                    renderPerfSummaryDetail(res);
+                    return;
+                }
+                if (detailView) {
+                    var listView = document.getElementById('perfSummaryListView');
+                    if (listView) listView.style.display = 'none';
+                    detailView.style.display = 'block';
+                    setPerfSummaryModalDesc(false);
+                    detailView.innerHTML = '<button type="button" class="perf-summary-back" id="perfSummaryBackBtn">← Aylara dön</button>' +
+                        '<p class="muted" style="padding:1rem 0;text-align:center;">Özet yüklenemedi.</p>';
+                    var backBtn = document.getElementById('perfSummaryBackBtn');
+                    if (backBtn) backBtn.addEventListener('click', showPerfSummaryListView);
+                }
+            });
+        }
+
+        function openPerfSummaryModal() {
+            if (!botId || !window.apiClient) return;
+            var modal = document.getElementById('perfSummaryModal');
+            if (!modal) return;
+            showPerfSummaryListView();
+            _perfSummaryYearFilter = null;
+            _perfSummaryListFp = '';
+
+            function revealModal() {
+                modal.style.display = 'flex';
+                modal.setAttribute('aria-hidden', 'false');
+                if (typeof lockBodyScroll === 'function') lockBodyScroll();
+            }
+
+            function applyIndex(res) {
+                if (res) renderPerfSummaryMonthList(res, { force: true });
+                else {
+                    var listEl = document.getElementById('perfSummaryMonthList');
+                    if (listEl) listEl.innerHTML = '<p class="muted" style="text-align:center;padding:1rem 0;">Özet yüklenemedi.</p>';
+                }
+            }
+
+            if (_perfSummaryCache && (_perfSummaryCache.months || []).length) {
+                renderPerfSummaryMonthList(_perfSummaryCache, { force: true });
+                revealModal();
+                var cachedFp = perfSummaryIndexFp(_perfSummaryCache);
+                prefetchPerfSummaryIndex().then(function (res) {
+                    if (!res) return;
+                    _perfSummaryCache = res;
+                    if (perfSummaryIndexFp(res) !== cachedFp) {
+                        renderPerfSummaryMonthList(res, { force: true });
+                    }
+                });
+                return;
+            }
+
+            prefetchPerfSummaryIndex().then(function (res) {
+                applyIndex(res);
+                revealModal();
+            });
+        }
+
+        var btnPerfSummary = document.getElementById('btnPerfSummary');
+        if (btnPerfSummary) btnPerfSummary.addEventListener('click', openPerfSummaryModal);
+        var perfSummaryModalClose = document.getElementById('perfSummaryModalClose');
+        if (perfSummaryModalClose) perfSummaryModalClose.addEventListener('click', closePerfSummaryModal);
+        var perfSummaryModal = document.getElementById('perfSummaryModal');
+        if (perfSummaryModal) {
+            bindPerfSummaryScrollTrap();
+            perfSummaryModal.addEventListener('click', function(e) {
+                if (e.target === perfSummaryModal) closePerfSummaryModal();
+            });
         }
 
         if (perfPeriodBtns) {
@@ -5896,6 +7289,7 @@
             var urlSymBoot = getBotDetailUrlSymbol();
             if (urlSymBoot) syncBotStripSymbol(urlSymBoot, { forceChart: false });
             var restoredFromCache = restoreBotDetailUiCache(botId);
+            if (restoredFromCache) prefetchPerfSummaryIndex();
             if (restoredFromCache && window.TtScrollRestore && window.TtScrollRestore.forceUnlock) {
                 window.TtScrollRestore.forceUnlock();
             }
@@ -5937,6 +7331,7 @@
                     if (window.intervalRegistry) {
                         window.intervalRegistry.start('bot-detail-live', fetchLive, BOT_DETAIL_LIVE_POLL_MS, 'bot-detail');
                         window.intervalRegistry.start('bot-detail-health', fetchBotHealth, BOT_DETAIL_HEALTH_POLL_MS, 'bot-detail');
+                        syncSessionAlphaPoll();
                     }
                     if (lastBotDetail.symbol && lastBotDetail.symbol !== 'MULTI' && accountId && window.intervalRegistry) {
                         window.intervalRegistry.start('bot-detail-strip-24h', fetchBot24h, 5000, 'bot-detail');
@@ -5992,11 +7387,18 @@
             if (newState && newState.cycle_id != null && !isNaN(newState.cycle_id)) {
                 onBotCycleChanged(Number(newState.cycle_id));
             }
+            if (newState && newState.cycle_opened_at && lastBotDetail && lastBotDetail.state) {
+                lastBotDetail.state.cycle_opened_at = newState.cycle_opened_at;
+            }
             ensureTradesPanelCyclesMatchState();
             var pollStatusEarly = (newState && newState.status || lastBotDetail.status || 'stopped').toLowerCase();
             syncStateHeroDurationPoll(pollStatusEarly === 'running' && !!lastBotStartedAt);
             if (shallowEqualLive(prevLiveState, newState)) {
                 tickStateHeroMetaDuration();
+                if (newState && newState.cycle_id != null
+                    && Number(newState.cycle_id) === Number(window._botDetailSelectedCycleId)) {
+                    updateCycleReportDurationLive();
+                }
                 return;
             }
             var oldLive = prevLiveState;
@@ -6079,11 +7481,12 @@
             }
             if (newState.cycle_id != null
                 && Number(newState.cycle_id) === Number(window._botDetailSelectedCycleId)) {
-                var openedLive = resolveOpenCycleStartedAt(null, Number(newState.cycle_id));
-                if (openedLive) anchorCycleStartedAt(openedLive, Number(newState.cycle_id), { force: true });
+                var liveHint = newState.cycle_opened_at || null;
+                ensureOpenCycleDurationAnchor(Number(newState.cycle_id), liveHint);
                 updateCycleReportDurationLive();
                 syncCycleReportDurationPoll();
             }
+            refreshSessionAlphaFromLive(newState);
         }
         function fetchLive() {
             if (_botDetailMissing || document.hidden || !botId || !window.apiClient) return;
@@ -6755,6 +8158,9 @@
         } else {
             run();
         }
+        window.addEventListener('resize', function () {
+            if (typeof syncEngineLogPanelVisibility === 'function') syncEngineLogPanelVisibility();
+        });
         if (window.intervalRegistry) {
             window.intervalRegistry.start('bot-detail-klines', function () {
                 if (document.hidden || !lastBotDetail.symbol) return;
@@ -6776,10 +8182,14 @@
             }
             if (e.persisted && botId) {
                 if (_botDetailHydrated) {
+                    syncEngineLogPanelVisibility();
                     fetchLive();
                     fetchBotHealth();
                     loadPerfMetrics({ silent: true });
                     if (lastBotDetail.symbol) ensureStripMiniChart(lastBotDetail.symbol);
+                    if (canViewEngineLogs() && engineLogPanel && engineLogPanel.style.display !== 'none') {
+                        startEngineLogLive(true);
+                    }
                 } else {
                     loadDetail();
                 }
@@ -6798,12 +8208,18 @@
                     syncStateHeroDurationPoll((lastBotDetail.status || '').toLowerCase() === 'running' && !!lastBotStartedAt);
                 }
                 if (_botDetailHydrated) {
+                    syncEngineLogPanelVisibility();
                     fetchLive();
                     fetchBotHealth();
                     tickStateHeroMetaDuration();
                     if (botDetailGridTrailActive(lastBotDetail)) fetchGridPointsLive();
                     refreshTradesPanelPoll();
                     loadPerfMetrics({ silent: true });
+                    fetchSessionAlphaLive();
+                    syncSessionAlphaPoll();
+                    if (canViewEngineLogs() && engineLogPanel && engineLogPanel.style.display !== 'none') {
+                        startEngineLogLive(true);
+                    }
                 } else {
                     refreshAll();
                     fetchLive();

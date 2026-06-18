@@ -4496,9 +4496,14 @@ async function initDashboard() {
                 }
             }, 400);
         } else {
-            var savedParamScreen = sessionStorage.getItem('createBotParamScreen');
-            if (savedParamScreen && typeof BOT_STRUCTURES !== 'undefined') {
-                sessionStorage.removeItem('createBotParamScreen');
+            var paramScreenKey = (typeof createBotParamScreenStorageKey === "function" && State.accountId)
+                ? createBotParamScreenStorageKey(State.accountId)
+                : "createBotParamScreen";
+            var savedParamScreen = sessionStorage.getItem(paramScreenKey)
+                || sessionStorage.getItem("createBotParamScreen");
+            if (savedParamScreen && typeof BOT_STRUCTURES !== "undefined") {
+                sessionStorage.removeItem(paramScreenKey);
+                sessionStorage.removeItem("createBotParamScreen");
                 var template = BOT_STRUCTURES.find(function (s) { return s.id === savedParamScreen; });
                 if (template) {
                     currentSelectedTemplate = template;

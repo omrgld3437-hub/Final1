@@ -89,7 +89,7 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
     <link rel="stylesheet" href="/ui/assets/theme.css?v=clean1">
     <link rel="stylesheet" href="/ui/assets/ui.css?v=footer-sticky1">
     <link rel="stylesheet" href="/ui/assets/design.css?v=footer-sticky2">
-    <link rel="stylesheet" href="/ui/assets/dashboard.css?v=leaderboard-dyn-meta2">
+    <link rel="stylesheet" href="/ui/assets/dashboard.css?v=param-assistant8">
     <link rel="stylesheet" href="/ui/assets/binance-colors.css?v=bin1">
     <link rel="stylesheet" href="/ui/assets/blink.css?v=1">
     <link rel="stylesheet" href="/ui/assets/dashboard-login-theme.css?v=spot-modal-chart1">
@@ -1309,7 +1309,7 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
                                 <span class="tooltip-text">Fiyat yükselirken en yüksek noktayı takip etme yüzdesi. Örn: 0.30% = fiyat %0.30 geri çekilirse satış yapılır.</span>
                                 <span class="tooltip-icon">ℹ</span>
                             </label>
-                            <input id="fUpTrail" type="number" min="0" step="0.01" placeholder="0,5 veya 0.5" value="0.5" lang="tr" inputmode="decimal" />
+                            <input id="fUpTrail" type="text" placeholder="0,5 veya 0.5" value="0,5" lang="tr" inputmode="decimal" />
                         </div>
                     </div>
                     <div id="upGridRows" class="rows"></div>
@@ -1333,7 +1333,7 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
                                 <span class="tooltip-icon">ℹ</span>
                                 <span class="tooltip-text">Fiyat düşerken en düşük noktayı takip etme yüzdesi. Örn: 0.30% = fiyat %0.30 yükselirse alış yapılır.</span>
                             </label>
-                            <input id="fDownTrail" type="number" min="0" step="0.01" placeholder="0,5 veya 0.5" value="0.5" lang="tr" inputmode="decimal" />
+                            <input id="fDownTrail" type="text" placeholder="0,5 veya 0.5" value="0,5" lang="tr" inputmode="decimal" />
                         </div>
 
                     </div>
@@ -1350,7 +1350,7 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
                                 <span class="tooltip-icon">ℹ</span>
                                 <span class="tooltip-text">Ortalama fiyatın altına %X düşerse kar alımı (rebuy) moduna geçer. Örn: 1.0% = ortalama fiyatın %1 altına düşerse.</span>
                             </label>
-                            <input id="fRebuyTrigger" type="number" step="0.01" placeholder="1,5 veya 1.5" value="1.5" lang="tr" inputmode="decimal" />
+                            <input id="fRebuyTrigger" type="text" placeholder="1,5 veya 1.5" value="1,5" lang="tr" inputmode="decimal" />
                         </div>
                         <div class="form-group">
                             <label class="label-with-tooltip">
@@ -1358,7 +1358,7 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
                                 <span class="tooltip-icon">ℹ</span>
                                 <span class="tooltip-text">Kar alımı modunda en düşük noktayı takip etme yüzdesi. Fiyat %X yükselirse alış yapılır.</span>
                             </label>
-                            <input id="fRebuyTrail" type="number" step="0.01" placeholder="0.30" value="0.30" />
+                            <input id="fRebuyTrail" type="text" placeholder="0,30" value="0,30" lang="tr" inputmode="decimal" />
                         </div>
                         <div class="form-group">
                             <label class="label-with-tooltip">
@@ -1366,7 +1366,7 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
                                 <span class="tooltip-icon">ℹ</span>
                                 <span class="tooltip-text">Ortalama fiyatın üstüne %X çıkarsa kar satışı (resell) moduna geçer. Örn: 1.0% = ortalama fiyatın %1 üstüne çıkarsa.</span>
                             </label>
-                            <input id="fResellTrigger" type="number" step="0.01" placeholder="1,5 veya 1.5" value="1.5" lang="tr" inputmode="decimal" />
+                            <input id="fResellTrigger" type="text" placeholder="1,5 veya 1.5" value="1,5" lang="tr" inputmode="decimal" />
                         </div>
                         <div class="form-group">
                             <label class="label-with-tooltip">
@@ -1374,7 +1374,7 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
                                 <span class="tooltip-icon">ℹ</span>
                                 <span class="tooltip-text">Kar satışı modunda en yüksek noktayı takip etme yüzdesi. Fiyat %X düşerse satış yapılır.</span>
                             </label>
-                            <input id="fResellTrail" type="number" step="0.01" placeholder="0,5 veya 0.5" value="0.5" lang="tr" inputmode="decimal" />
+                            <input id="fResellTrail" type="text" placeholder="0,5 veya 0.5" value="0,5" lang="tr" inputmode="decimal" />
                         </div>
                     </div>
                 </div>
@@ -1384,8 +1384,59 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
             </div>
 
             <div class="dm-modal__foot">
-                <button id="dmSubmitBtn" class="btn btn-primary-gold">Oluştur</button>
-                <button id="dmCancelBtn" class="btn btn-ghost">İptal</button>
+                <div class="dm-modal__foot-left">
+                    <span class="perf-summary-btn-wrap dm-param-assistant-btn-wrap">
+                        <span class="perf-summary-spark perf-summary-spark-1" aria-hidden="true"></span>
+                        <span class="perf-summary-spark perf-summary-spark-2" aria-hidden="true"></span>
+                        <span class="perf-summary-spark perf-summary-spark-3" aria-hidden="true"></span>
+                        <span class="perf-summary-spark perf-summary-spark-4" aria-hidden="true"></span>
+                        <span class="perf-summary-spark perf-summary-spark-5" aria-hidden="true"></span>
+                        <span class="perf-summary-spark perf-summary-spark-6" aria-hidden="true"></span>
+                        <button id="dmParamAssistantBtn" class="btn btn-sm btn-secondary perf-summary-btn dm-param-assistant-btn" type="button" title="Parite verilerine göre parametre önerisi">
+                            Parametre Asistanı
+                        </button>
+                    </span>
+                </div>
+                <div class="dm-modal__foot-right">
+                    <button id="dmSubmitBtn" class="btn btn-primary-gold">Oluştur</button>
+                    <button id="dmCancelBtn" class="btn btn-ghost">İptal</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="dmParamAssistantBackdrop" class="dm-param-assistant-backdrop" aria-hidden="true" style="display: none;"></div>
+    <div id="dmParamAssistantModal" class="modal-overlay dm-param-assistant-modal" aria-hidden="true" role="dialog" aria-labelledby="dmParamAssistantTitle" style="display: none;">
+        <div class="modal-panel parametreler-modal-panel perf-summary-modal-panel dm-param-assistant-panel">
+            <div class="modal-panel-head dm-param-assistant-head">
+                <h3 class="modal-title" id="dmParamAssistantTitle">Parametre Asistanı</h3>
+                <button type="button" class="parametreler-modal-close" id="dmParamAssistantCloseBtn" aria-label="Kapat">&times;</button>
+            </div>
+            <div class="parametreler-body perf-summary-modal-body dm-param-assistant-body">
+                <div class="perf-summary-assistant-wrap">
+                    <div class="perf-summary-assistant-intro-block perf-summary-intro-spark-wrap">
+                        <span class="perf-summary-spark perf-summary-intro-spark perf-summary-intro-spark-1" aria-hidden="true"></span>
+                        <span class="perf-summary-spark perf-summary-intro-spark perf-summary-intro-spark-2" aria-hidden="true"></span>
+                        <span class="perf-summary-spark perf-summary-intro-spark perf-summary-intro-spark-3" aria-hidden="true"></span>
+                        <span class="perf-summary-spark perf-summary-intro-spark perf-summary-intro-spark-4" aria-hidden="true"></span>
+                        <span class="perf-summary-spark perf-summary-intro-spark perf-summary-intro-spark-5" aria-hidden="true"></span>
+                        <span class="perf-summary-spark perf-summary-intro-spark perf-summary-intro-spark-6" aria-hidden="true"></span>
+                        <div class="perf-summary-assistant-intro-inner">
+                            <div class="perf-summary-assistant-label">Parametre asistanı</div>
+                            <p class="perf-summary-assistant-intro">
+                                <span id="dmParamAssistantStatus">Parite verileri okunuyor</span>
+                                <span class="perf-summary-stream-cursor" id="dmParamAssistantCursor" aria-hidden="true"></span>
+                            </p>
+                        </div>
+                    </div>
+                </div>
+                <div id="dmParamAssistantChips" class="dm-param-assistant-chips"></div>
+                <div id="dmParamAssistantOutput" class="perf-summary-stream-content dm-param-assistant-output"></div>
+                <div id="dmParamAssistantSummary" class="dm-param-assistant-summary" style="display: none;"></div>
+                <div id="dmParamAssistantChoice" class="dm-param-assistant-choice" style="display: none;">
+                    <button id="dmParamAssistantUseBtn" class="btn btn-primary-gold" type="button">Kullanmak istiyorum</button>
+                    <button id="dmParamAssistantSkipBtn" class="btn btn-ghost" type="button">İstemiyorum</button>
+                </div>
             </div>
         </div>
     </div>
@@ -2120,11 +2171,11 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
     <script src="/ui/assets/modules/dashboard-leaderboard.js?v=12"></script>
     <script src="/ui/assets/modules/dashboard-tx-history.js?v=1"></script>
     <script src="/ui/assets/modules/dashboard-bots.js?v=1"></script>
-    <script src="/ui/assets/modules/dashboard-bot-create.js?v=4"></script>
+    <script src="/ui/assets/modules/dashboard-bot-create.js?v=param-assistant3"></script>
     <script src="/ui/assets/modules/dashboard-tabs.js?v=1"></script>
-    <script src="/ui/assets/modules/dashboard-create-modal.js?v=2"></script>
+    <script src="/ui/assets/modules/dashboard-create-modal.js?v=param-assistant10"></script>
     <script src="/ui/assets/modules/dashboard-spot-trade.js?v=2"></script>
-    <script src="/ui/assets/modules/dashboard-finance.js?v=7"></script>
+    <script src="/ui/assets/modules/dashboard-finance.js?v=8"></script>
     <script src="/ui/assets/ticker.js?v=chg-pct1" defer></script>
 </body>
 </html>

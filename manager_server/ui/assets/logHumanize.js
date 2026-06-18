@@ -231,6 +231,24 @@
       }
     },
     {
+      test: function (msg) { return /BOT_BALANCE_DRIFT/i.test(msg); },
+      apply: function (ctx) {
+        var m = ctx.message || ctx.raw || '';
+        var sol = (m.match(/sol_drift=([\d.]+)/i) || [])[1];
+        var usdt = (m.match(/usdt_drift=([\d.]+)/i) || [])[1];
+        var detail = [];
+        if (sol) detail.push('SOL sapması %' + sol);
+        if (usdt) detail.push('USDT sapması $' + usdt);
+        return {
+          konu: 'Sanal / borsa bakiye sapması (periyodik kontrol)',
+          sebep: 'Bot state\'indeki sanal bakiye ile Binance hesabı (free+locked) karşılaştırıldı; eşik aşıldı.'
+            + (detail.length ? ' ' + detail.join(', ') + '.' : ''),
+          etki: 'USDT sapması düşükse çoğunlukla grid emirlerinde kilitli coin veya paylaşımlı hesap etkisi; bot çalışmaya devam eder.',
+          oneri: 'Tek seferlik ve USDT sapması <$10 ise izleyin. Tekrarlı ve yüksek sapmada bot detaydan bakiyeleri ve açık emirleri Binance ile karşılaştırın.'
+        };
+      }
+    },
+    {
       test: function (msg) { return /BOT_EXECUTION_SKIP/i.test(msg); },
       apply: function (ctx) {
         var p = ctx.params || {};
@@ -1464,10 +1482,10 @@
 
         if (isNetworkBlock) {
           return {
-            konu: 'Binance API\'ye ulaşılamıyor — ağ engeli',
-            sebep: 'Sunucu Binance API\'ye bağlanmaya çalışırken HTML yanıt aldı. Bu, isteğin Binance\'e ulaşmadan bir proxy, güvenlik duvarı veya ISP tarafından kesildiğini gösteriyor. API key ile ilgisi yok.',
-            etki: 'User data stream açılamıyor; ORDER_TRADE_UPDATE eventleri alınamaz. Bot REST polling ile çalışmaya devam eder.',
-            oneri: '1) Sunucu ağ bağlantısını kontrol edin: ping api.binance.com. 2) ISP/firewall Binance\'i engelliyor olabilir — DNS değiştirmeyi veya VPN kullanmayı deneyin. 3) Sunucu güvenlik duvarında api.binance.com:443 çıkış izni var mı kontrol edin.'
+            konu: 'Binance user stream — ağ/geo engeli (HTML yanıt)',
+            sebep: 'Sunucu listenKey isteğinde HTML yanıt aldı (proxy, ISP veya bölgesel engel). Bu API anahtarı hatası değildir; gerçek Binance JSON hatası değil.',
+            etki: 'User data stream bağlanamaz; bot emirleri REST polling ve reconcile ile çalışmaya devam eder.',
+            oneri: 'Yerel geliştirmede .env içinde BINANCE_USER_STREAM_ENABLED=0 ile stream kapatılabilir. Canlı ortamda VPN/DNS veya api.binance.com:443 çıkışını kontrol edin. Aynı hesap için bu uyarı en fazla 6 saatte bir loglanır (worker yeniden başlatılsa bile).'
           };
         }
 

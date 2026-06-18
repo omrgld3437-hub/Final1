@@ -21,6 +21,9 @@ Design rules (production-safe):
     set produces a safe overlay close to manual.
   * Asymmetric defensive bias: in TRENDING_DOWN / DUMP_RISK we lean conservative
     (more quote, narrower base, wider grid, tighter trailing).
+  * Manual grid intent is a floor, not a suggestion to discard: Dynamic Mode may
+    widen trigger levels, but it does not tighten them below the user's template
+    and it preserves the user's grid quantity percentages.
   * EMA-smoothing with previous snapshot (if any) — see `smooth_against_prev`.
 """
 
@@ -65,6 +68,16 @@ DEFAULT_GRID_COUNT_RANGING = None  # use whatever base_cfg has
 ATR_FLOOR_PCT = 0.15  # tiny coin guard
 ATR_CEIL_PCT = 6.0  # cap insane vol
 
+# Mirror of risk_engine.BOUNDS["grid_step_pct"][1]; kept local to avoid a
+# circular import (risk_engine imports this module). MUST stay in sync.
+MAX_GRID_STEP_PCT = 8.0
+
+# Economic floor: a grid round-trip must clear fees + min net profit, otherwise
+# the grid just churns fees. step_floor ≈ FEE_FLOOR_K × (buy_fee + sell_fee +
+# min_net_profit) (as %). Also kept ≥ spread (can't profit inside the spread).
+FEE_FLOOR_K = 1.0
+SPREAD_FLOOR_MULT = 2.0  # min grid step ≥ this × spread%
+
 # Per-regime tuning multipliers
 REGIME_TUNING = {
     reg.LOW_VOL_RANGING: {
@@ -72,56 +85,48 @@ REGIME_TUNING = {
         "trail_mult": 0.8,
         "base_pct_target": 50.0,  # balanced
         "tp_rise_mult": 0.9,
-        "buy_levels_mult": 1.0,
     },
     reg.HIGH_VOL_RANGING: {
         "step_mult": 1.4,
         "trail_mult": 1.3,
         "base_pct_target": 40.0,  # less base, more cash
         "tp_rise_mult": 1.1,
-        "buy_levels_mult": 0.7,
     },
     reg.TRENDING_UP: {
         "step_mult": 1.2,
         "trail_mult": 1.4,  # ride the trend
         "base_pct_target": 60.0,
         "tp_rise_mult": 1.6,
-        "buy_levels_mult": 0.8,  # don't keep adding into a runup
     },
     reg.TRENDING_DOWN: {
         "step_mult": 1.5,
         "trail_mult": 1.2,
         "base_pct_target": 25.0,  # PROTECT CASH — falling knife protection
         "tp_rise_mult": 1.3,
-        "buy_levels_mult": 0.5,  # very few new buys
     },
     reg.SQUEEZE: {
         "step_mult": 0.9,
         "trail_mult": 1.0,
         "base_pct_target": 45.0,
         "tp_rise_mult": 1.0,
-        "buy_levels_mult": 0.9,
     },
     reg.BREAKOUT: {
         "step_mult": 1.6,
         "trail_mult": 1.5,
         "base_pct_target": 50.0,
         "tp_rise_mult": 1.5,
-        "buy_levels_mult": 0.6,
     },
     reg.DUMP_RISK: {
         "step_mult": 2.0,
         "trail_mult": 1.0,
         "base_pct_target": 15.0,  # mostly quote
         "tp_rise_mult": 1.0,
-        "buy_levels_mult": 0.3,
     },
     reg.UNKNOWN: {
         "step_mult": 1.0,
         "trail_mult": 1.0,
         "base_pct_target": 50.0,
         "tp_rise_mult": 1.0,
-        "buy_levels_mult": 1.0,
     },
 }
 
@@ -138,63 +143,106 @@ def _base_grid_step_pct(features: MarketFeatures) -> float:
     return K_ATR_GRID_STEP * atr_v
 
 
+def _fee_aware_min_step(base_cfg: Dict[str, Any], features: MarketFeatures) -> float:
+    """Minimum economically-sensible grid step %: must clear fees + min net
+    profit, and never be tighter than the spread."""
+    buy_fee = float(base_cfg.get("buy_fee_rate") or base_cfg.get("fee_rate") or 0.001)
+    sell_fee = float(base_cfg.get("sell_fee_rate") or base_cfg.get("fee_rate") or 0.001)
+    min_profit = float(base_cfg.get("min_net_profit_rate") or 0.0)
+    floor = (buy_fee + sell_fee + min_profit) * 100.0 * FEE_FLOOR_K
+    sp = features.spread_pct
+    if sp is not None and sp > 0:
+        floor = max(floor, sp * SPREAD_FLOOR_MULT)
+    return max(0.05, round(floor, 4))
+
+
+def _resolve_grid_step(raw_step: float, n: int, fee_floor: float) -> float:
+    """Final per-level step %: clamp the raw ATR-derived step between the
+    economic floor and a depth cap so the deepest level (step×n) stays under the
+    hard bound — this prevents the degenerate "all levels collapse to 8%" case
+    that the risk-engine clamp would otherwise produce for high-ATR coins."""
+    if n <= 0:
+        return max(0.05, round(raw_step, 4))
+    cap = MAX_GRID_STEP_PCT / n  # deepest level = step×n ≤ MAX_GRID_STEP_PCT
+    floor_eff = min(max(0.05, fee_floor), cap)
+    return round(min(max(raw_step, floor_eff), cap), 4)
+
+
+def _manual_grid_pct(g: Dict[str, Any], field_pct: str) -> float:
+    v = g.get(field_pct)
+    if v is None:
+        v = g.get("trigger_pct")
+    try:
+        vf = float(v)
+    except (TypeError, ValueError):
+        return 0.0
+    return vf if vf > 0 else 0.0
+
+
+def _manual_grid_qty(g: Dict[str, Any], field_qty: str) -> float:
+    v = g.get(field_qty)
+    if v is None:
+        v = g.get("qty_pct")
+    try:
+        vf = float(v)
+    except (TypeError, ValueError):
+        return 0.0
+    return vf if vf > 0 else 0.0
+
+
 def _build_grid_levels(
-    base_step_pct: float,
+    step_pct: float,
     base_grids: List[Dict[str, Any]],
     field_pct: str,
     field_qty: str,
-    *,
-    step_mult: float,
-    distribution_growth: float = 1.15,
 ) -> List[Dict[str, float]]:
     """
-    Build grid levels: trigger percentages are geometric in `base_step_pct`,
-    qty distribution is geometric in `distribution_growth` (r<=1.5 hard guard
-    enforced upstream by risk engine).
+    Build grid levels from a PRE-RESOLVED per-level `step_pct` (already fee-/
+    depth-bounded by the caller). Trigger % of level i is at least the user's
+    manual trigger for that level; Dynamic Mode may widen a level, but never
+    pulls it closer to the reference than the template the user opened the bot
+    with.
 
     Returns same length as `base_grids` so existing UI / state shapes stay
     intact — we only swap the numbers, not the count.
 
-    Capital deployment: we preserve the manual template's TOTAL qty% (the sum of
-    the user's per-grid qty figures) and only re-shape how it is distributed.
-    Manual configs deliberately rarely sum to 100 (the user keeps a reserve);
-    forcing the sum to 100 here would silently deploy far more capital than the
-    user asked for. We fall back to 100 only when the template carries no usable
-    qty numbers at all.
+    Capital deployment: we preserve the user's per-grid qty percentages exactly.
+    The create UI requires side totals to be understandable (usually 100%);
+    reshaping them into values like 47.6/52.4 or 36.4/43.6 makes the running
+    bot look incompatible with the configuration the user chose. Falls back to
+    an even 100% split only when the template has no usable qty numbers.
     """
     n = max(0, len(base_grids))
     if n == 0:
         return []
-    step = max(0.05, base_step_pct * step_mult)
-    # Total qty% the user intended to deploy across this side's ladder.
-    manual_total = 0.0
-    for g in base_grids:
-        q = g.get(field_qty)
-        if q is None:
-            q = g.get("qty_pct")
-        try:
-            qf = float(q)
-        except (TypeError, ValueError):
-            qf = 0.0
-        if qf > 0:
-            manual_total += qf
-    if manual_total <= 0:
-        manual_total = 100.0
+    step = max(0.05, step_pct)
+    manual_qtys = [_manual_grid_qty(g, field_qty) for g in base_grids]
+    has_manual_qty = any(q > 0 for q in manual_qtys)
     levels: List[Dict[str, float]] = []
-    # Trigger %: level i = step * (i+1) (linear in count, but step itself is
-    # vol-scaled). This is safer than purely geometric trigger % (which can
-    # explode for vol-heavy coins).
-    # Quantity: geometric with `distribution_growth`, scaled to `manual_total`.
-    weights = [distribution_growth**i for i in range(n)]
-    wsum = sum(weights)
     for i in range(n):
+        dynamic_pct = step * (i + 1)
+        manual_pct = _manual_grid_pct(base_grids[i], field_pct)
+        qty = manual_qtys[i] if has_manual_qty else (100.0 / n)
         levels.append(
             {
-                field_pct: round(step * (i + 1), 4),
-                field_qty: round((weights[i] / wsum) * manual_total, 4),
+                field_pct: round(max(dynamic_pct, manual_pct), 4),
+                field_qty: round(qty, 4),
             }
         )
     return levels
+
+
+def alpha_for_confidence(confidence: float) -> float:
+    """Smoothing alpha (weight on the NEW suggestion) scaled by regime
+    confidence: low confidence → small alpha → stay closer to the previous
+    applied snapshot (less aggressive regime-driven swings). At confidence 0.5
+    this returns 0.5 (the previous fixed default), so behaviour is unchanged for
+    mid-confidence regimes."""
+    try:
+        c = max(0.0, min(1.0, float(confidence)))
+    except (TypeError, ValueError):
+        c = 0.5
+    return round(0.3 + 0.4 * c, 4)
 
 
 def suggest(
@@ -223,25 +271,31 @@ def suggest(
     base_sell_grids = list(base_cfg.get("sell_grids") or [])
     base_buy_grids = list(base_cfg.get("buy_grids") or [])
 
+    # Resolve per-level step: ATR×regime, then bounded by the economic floor
+    # (fees/spread) and a depth cap (prevents degenerate collapse at high ATR).
+    fee_floor = _fee_aware_min_step(base_cfg, features)
+    raw_step = base_step * tuning["step_mult"]
+    sell_step = _resolve_grid_step(raw_step, len(base_sell_grids), fee_floor)
+    buy_step = _resolve_grid_step(raw_step, len(base_buy_grids), fee_floor)
+    reasons.append(
+        f"grid_step raw={raw_step:.3f} fee_floor={fee_floor:.3f} → sell={sell_step:.3f} buy={buy_step:.3f}"
+    )
+
+    reasons.append("grid_qty: manual percentages preserved")
+
     sell_grids = _build_grid_levels(
-        base_step,
+        sell_step,
         base_sell_grids,
         "sell_grid_pct",
         "sell_qty_pct_of_base",
-        step_mult=tuning["step_mult"],
-        distribution_growth=1.10,  # sells: gentler, sell-into-strength
     )
-    # Buys: distribution growth slightly higher (cost averaging) but ≤1.3
     buy_grids = _build_grid_levels(
-        base_step,
+        buy_step,
         base_buy_grids,
         "buy_grid_pct",
         "buy_qty_pct_of_quote",
-        step_mult=tuning["step_mult"],
-        distribution_growth=1.20,
     )
-    reasons.append(f"sell_grids n={len(sell_grids)} step_mult={tuning['step_mult']}")
-    reasons.append(f"buy_grids n={len(buy_grids)} step_mult={tuning['step_mult']}")
+    reasons.append(f"sell_grids n={len(sell_grids)} buy_grids n={len(buy_grids)}")
 
     # ---- Trailing %s ----
     trail_raw = K_ATR_TRAIL * atr_clamped * tuning["trail_mult"]
@@ -269,18 +323,9 @@ def suggest(
         f"profit_exit rise={tp_rise:.3f} drop={tp_drop:.3f} | reentry drop={re_drop:.3f} rise={re_rise:.3f}"
     )
 
-    # ---- Position-state defensive overrides ----
-    if position_state:
-        fired = int(position_state.get("buy_levels_fired") or 0)
-        mbl = max(1, int(position_state.get("max_buy_levels") or 1))
-        used_ratio = fired / mbl
-        if used_ratio >= 0.7:
-            # Near max buy levels — go super defensive on new buys
-            for g in buy_grids:
-                g["buy_qty_pct_of_quote"] = round(g["buy_qty_pct_of_quote"] * 0.5, 4)
-            reasons.append(
-                f"DEFENSIVE: buy_levels {fired}/{mbl} → halved buy qty distribution"
-            )
+    # Position-state is intentionally not allowed to reshape grid qty
+    # percentages. The structural protection is max_buy_levels, enforced by the
+    # strategy/execution path.
 
     return ParamSuggestion(
         base_alloc_pct=round(base_pct, 4),

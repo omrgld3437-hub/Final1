@@ -8,6 +8,7 @@ from enum import Enum
 from typing import Any, Dict, List
 
 from app.botengine.dca_manager import normalize_max_buy_levels_payload
+from app.utils.parse_utils import parse_bool
 
 
 class BotEngineMode(str, Enum):
@@ -40,6 +41,12 @@ def _int_or(v: Any, default: int) -> int:
         return int(v)
     except (TypeError, ValueError):
         return default
+
+
+# Auto-inject a default daily_loss_limit_usd (budget×5%) for dynamic bots —
+# DISABLED by configuration (the daily-loss measure was turned off on operator
+# request). Set True to restore. The field itself stays in the config schema.
+_DYNAMIC_DAILY_LOSS_AUTOINJECT = False
 
 
 class DcaGridTrailingConfig:
@@ -151,7 +158,9 @@ class DcaGridTrailingConfig:
 
         # Dynamic Mode: ON/OFF, default False (mevcut manuel mod aynen çalışır).
         # Kullanıcıdan ek parametre ALINMAZ; sistem tüm dinamik değerleri otomatik üretir.
-        self.dynamic_mode: bool = bool(r.get("dynamic_mode") or False)
+        # parse_bool: string "false"/"0"/"off" gibi değerler doğru şekilde False'a iner
+        # (Python'da bool("false") == True olduğundan ham bool() güvenli değil).
+        self.dynamic_mode: bool = parse_bool(r.get("dynamic_mode"))
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -436,14 +445,15 @@ def config_from_ui_payload(payload: Dict[str, Any]) -> DcaGridTrailingConfig:
             }
         )
     profit = payload.get("profit") or {}
-    # Dynamic Mode requires a positive daily_loss_limit_usd as a safety
-    # prerequisite. The create modal injects a default (budget×5%), but
-    # API-direct create/update payloads may omit it — in that case dynamic mode
-    # would silently never activate. Mirror the UI default here so the backend
-    # is self-sufficient and the safety gate is always satisfiable.
-    dynamic_on = bool(payload.get("dynamic_mode") or False)
+    # daily_loss_limit_usd auto-injection is disabled by operator policy; the
+    # field remains in the schema, but no budget×5% default is added.
+    dynamic_on = parse_bool(payload.get("dynamic_mode"))
     daily_loss = payload.get("daily_loss_limit_usd")
-    if dynamic_on and (daily_loss in (None, "", 0) or _float_or(daily_loss, 0.0) <= 0):
+    if (
+        _DYNAMIC_DAILY_LOSS_AUTOINJECT
+        and dynamic_on
+        and (daily_loss in (None, "", 0) or _float_or(daily_loss, 0.0) <= 0)
+    ):
         budget_for_dll = _float_or(
             payload.get("budget_usd")
             or payload.get("initial_capital_usdt")

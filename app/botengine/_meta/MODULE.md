@@ -15,7 +15,7 @@ python -m app.botengine.worker_main
 | Dosya | Görev |
 |-------|--------|
 | `worker_main.py` | Komut poll, scheduler / ensure_running_bots |
-| `start_log_brief.py` | İlk START log meta — kısa grid/alloc özet |
+| `start_log_brief.py` | İlk START log meta — kısa grid/alloc + dinamik mod durumu |
 | `orchestrator.py` | Legacy `_bot_loop` |
 | `bot_run.py` | v5 tek tick |
 | `scheduler.py` | v5 heap (`BOT_ENGINE_V5_SCHEDULER=1`) |
@@ -26,12 +26,14 @@ python -m app.botengine.worker_main
 | `engine_log_ack.py` | Reset/ack sonrası motor log event filtreleme |
 | `order_qty.py` | Decimal `stepSize` floor + `validate_market_sell_qty` |
 | `health_watch.py` | Sağlık uyarıları (otomatik durdurmaz) |
-| `dynamic/` | Dinamik mod: features → regime → strategy → risk → snapshot (`cycle_manager`); `safety_gate` prereq + emergency; bkz. `docs/DYNAMIC_MODE_TECHNICAL.md` |
+| `dynamic/` | Dinamik mod: features → regime → strategy → risk → snapshot (`cycle_manager`); `safety_gate` max_buy_levels gate + kapalı fren bayrakları; bkz. `docs/DYNAMIC_MODE_TECHNICAL.md` |
 | `intent_ledger.py` | Exactly-once intent |
 | `locks.py` | Hesap kilidi, lease 10s |
 | `reconcile.py` | Binance truth |
+| `user_stream.py` | User data stream; HTML/geo engelde `USER_STREAM_NETWORK_BLOCK` (varsayılan 24 saatte bir, env ile ayarlı, `.run/user_stream_network_block_log.json` ile worker restart sonrası da); REST fallback |
 | `state_trim.py` | `save_state`/`load_state` öncesi JSON RAM sınırları |
 | `state_store.py` | Snapshot; `load_states_list_meta` / `load_states_bulk`; `save_state` → live cache invalidate; `load_state_json_extract` |
+| `symbols.py` | `normalize_bot_trading_symbol` — base-only sembol → `*USDT` (SOL → SOLUSDT); create + worker heal |
 
 ## Alt klasörler
 

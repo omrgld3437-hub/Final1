@@ -149,7 +149,7 @@ def _snapshot_applied():
 def test_effective_config_overlays_when_dynamic_active():
     raw = dict(_manual_cfg())
     raw["dynamic_mode"] = True
-    state = {"dynamic_snapshot": _snapshot_applied()}
+    state = {"cycle_id": 3, "dynamic_snapshot": _snapshot_applied()}
     eff = _effective_grid_config(raw, state)
     assert eff.get("_dynamic_applied") is True
     assert eff["sell_grids"][0]["sell_grid_pct"] == 0.31
@@ -177,12 +177,22 @@ def test_effective_config_manual_when_no_snapshot():
     assert eff["sell_grids"][0]["sell_grid_pct"] == 2.0
 
 
+def test_effective_config_manual_during_first_cycle_even_with_stale_snapshot():
+    raw = dict(_manual_cfg())
+    raw["dynamic_mode"] = True
+    state = {"cycle_id": 1, "dynamic_snapshot": _snapshot_applied()}
+    eff = _effective_grid_config(raw, state)
+    assert not eff.get("_dynamic_applied")
+    assert eff["sell_grids"][0]["sell_grid_pct"] == 2.0
+
+
 def test_full_pipeline_dynamic_display_consistent():
     """End-to-end: dynamic overlay + stored trigger → pending grid shows dynamic %."""
     ref = 1000.0
     raw = dict(_manual_cfg())
     raw["dynamic_mode"] = True
     state = {
+        "cycle_id": 3,
         "reference_price": ref,
         "dynamic_snapshot": _snapshot_applied(),
         "sell_grid_fired": [False, False],  # pending

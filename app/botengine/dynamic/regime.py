@@ -63,7 +63,8 @@ BBW_SQUEEZE = 2.5  # BBW below this on 1h → squeeze
 VOLUME_Z_SPIKE = 2.0  # vol z-score above this → volume spike
 EMA_TREND_UP = 0.4  # EMA slope% above this → up bias
 EMA_TREND_DOWN = -0.4  # EMA slope% below this → down bias
-DUMP_DROP_PCT = -2.0  # last-bar drop% threshold for DUMP_RISK
+DUMP_DROP_PCT = -2.0  # 1h EMA slope% threshold for (slow) DUMP_RISK
+DUMP_FAST_DROP_PCT = -3.0  # last CLOSED 5m bar return% → immediate flash-crash DUMP
 
 
 @dataclass
@@ -84,6 +85,7 @@ def _classify_raw(f: MarketFeatures) -> RegimeResult:
     adx = f.adx_1h
     slope = f.ema_slope_1h_pct
     vol_z = f.volume_zscore_5m
+    ret5 = f.ret_5m_last  # last CLOSED 5m return %
 
     reasons.update(
         {
@@ -92,6 +94,7 @@ def _classify_raw(f: MarketFeatures) -> RegimeResult:
             "adx_1h": adx,
             "ema_slope_1h_pct": slope,
             "volume_z_5m": vol_z,
+            "ret_5m_last": ret5,
         }
     )
 
@@ -99,9 +102,13 @@ def _classify_raw(f: MarketFeatures) -> RegimeResult:
         return RegimeResult(UNKNOWN, UNKNOWN, 0.0, reasons)
 
     # --- DUMP_RISK: takes precedence ---
-    # We don't have the last candle directly here; use slope + vol_z as proxy.
-    # If 1h EMA slope is sharply negative AND volume z-score is elevated,
-    # treat as dump risk (defensive shutdown of new buys).
+    # (a) FAST: a single closed 5m bar dropping >= DUMP_FAST_DROP_PCT is a flash
+    #     crash — fire immediately, no volume confirmation (catches the case the
+    #     slow 1h-slope path misses). OR
+    # (b) SLOW: sustained 1h EMA downtrend AND an elevated volume z-score.
+    if ret5 is not None and ret5 <= DUMP_FAST_DROP_PCT:
+        reasons["dump_signal"] = f"fast_drop_5m={ret5:.2f}"
+        return RegimeResult(DUMP_RISK, DUMP_RISK, 0.85, reasons)
     if (
         slope is not None
         and slope <= DUMP_DROP_PCT
@@ -111,15 +118,23 @@ def _classify_raw(f: MarketFeatures) -> RegimeResult:
         reasons["dump_signal"] = "slope+volz"
         return RegimeResult(DUMP_RISK, DUMP_RISK, 0.85, reasons)
 
-    # --- BREAKOUT: BBW expansion + volume spike ---
+    # --- BREAKOUT: BBW expansion + volume spike (DIRECTION-AWARE) ---
     if bbw is not None and vol_z is not None:
         if bbw >= ATR_HIGH_PCT * 4 and vol_z >= VOLUME_Z_SPIKE:
-            reasons["breakout_signal"] = "bbw+volz"
+            # A downward volatility expansion is not a bullish breakout — route
+            # it to a defensive regime instead of neutral BREAKOUT (base 50%).
+            direction = (
+                slope if slope is not None else (ret5 if ret5 is not None else 0.0)
+            )
+            if direction < 0:
+                reasons["breakout_signal"] = "bbw+volz(down→defensive)"
+                return RegimeResult(TRENDING_DOWN, TRENDING_DOWN, 0.7, reasons)
+            reasons["breakout_signal"] = "bbw+volz(up)"
             return RegimeResult(BREAKOUT, BREAKOUT, 0.7, reasons)
 
-    # --- SQUEEZE: very narrow BBW on 1h ---
-    if f.bbw_1h is not None and f.bbw_1h <= BBW_SQUEEZE:
-        reasons["squeeze_signal"] = f.bbw_1h
+    # --- SQUEEZE: very narrow BBW (1h preferred, 5m fallback — symmetric w/ BREAKOUT) ---
+    if bbw is not None and bbw <= BBW_SQUEEZE:
+        reasons["squeeze_signal"] = bbw
         return RegimeResult(SQUEEZE, SQUEEZE, 0.6, reasons)
 
     # --- TRENDING vs RANGING via ADX ---

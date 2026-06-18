@@ -49,7 +49,7 @@ Orchestrator tick (running bot)
               strategy.tick(state, cfg, price, …)
                         │
                         ▼
-              safety_gate.emergency_check()  → STOP_LOSS / EMERGENCY_CLOSE / NONE
+              safety_gate.emergency_check()  → NONE (risk brake disabled)
 ```
 
 **Modüller:**
@@ -62,7 +62,7 @@ Orchestrator tick (running bot)
 | `strategy_engine.py` | Rejim + ATR → parametre **önerisi** (`ParamSuggestion`) |
 | `risk_engine.py` | Hard bound, rate limit, grid monotonicity, anti-martingale |
 | `cycle_manager.py` | Snapshot oluşturma, overlay, history ring buffer (20 tur) |
-| `safety_gate.py` | Ön koşul kontrolü, stop-loss %8, emergency close %15 |
+| `safety_gate.py` | Ön koşul kontrolü; `max_buy_levels` aktif, günlük limit / stop-loss / emergency brake kapalı |
 
 ---
 
@@ -74,42 +74,64 @@ Orchestrator tick (running bot)
 2. `state['dynamic_snapshot']` yok
 3. `snapshot.cycle_id != state.cycle_id`
 
+**İlk tur manuel kuralı:** `cycle_id=1` boyunca dynamic overlay uygulanmaz. Bot ilk açılış turunu kullanıcının manuel başlangıç şablonuyla çalıştırır; dinamik snapshot/overlay tur 2 ve sonrasında başlar. API grid görünümü de tur 1'de eski snapshot varsa bile manuel config'i gösterir.
+
 Tur içinde aynı snapshot tekrar `apply_overlay` ile cfg'ye yazılır (cfg her tick raw dict'ten rebuild edilebilir).
 
 ---
 
-## 4. Güvenlik katmanları (Safety Gate)
+## 4. Aktif sınırlar ve kapatılan frenler (Safety Gate)
 
-Dinamik mod **yalnızca** dört katman tam ise aktif:
+Mevcut operatör kararında otomatik durdurma frenleri devre dışıdır. Dinamik modun aktif ön koşulu yalnızca yapısal DCA sınırıdır:
 
 | # | Katman | Kaynak | Not |
 |---|--------|--------|-----|
-| 1 | `max_buy_levels >= 1` | Kullanıcı config | DCA üst sınır |
-| 2 | `daily_loss_limit_usd > 0` | Kullanıcı config (dyn açılınca default: bütçe×5%) | Günlük kayıp limiti |
-| 3 | `stop_loss_pct = 8%` | Sistem enjekte | Tur equity düşüşü |
-| 4 | `emergency_close_pct = 15%` | Sistem enjekte | Portföy düşüş devre kesici |
+| 1 | `max_buy_levels >= 1` | Kullanıcı config / DB | DCA üst sınırı; korunur |
+| - | `daily_loss_limit_usd` | Config alanı | Korunur ama prerequisite ve runtime enforcement kapalı |
+| - | `stop_loss_pct = 8%` | Eski sistem freni | Enjekte edilmez, runtime'da tetiklemez |
+| - | `emergency_close_pct = 15%` | Eski sistem freni | Enjekte edilmez, runtime'da tetiklemez |
 
-- **Default enjeksiyon:** `config_from_ui_payload` (create + update), `dynamic_mode=true` & `daily_loss_limit_usd` yok/≤0 ise **backend'de** bütçe×%5 (min 5) enjekte eder. UI bağımlılığı yok; mod artık sessizce pasif kalamaz.
-- **Create gate:** `bots_create` → `dynamic_mode=true` & ön koşul eksikse `check_prerequisites()` fail → HTTP 400 (enjeksiyon sonrası pratikte yalnız geçersiz config'lerde tetiklenir).
+- **Default enjeksiyon kapalı:** `config_from_ui_payload`, `dynamic_mode=true` olsa bile bütçe×%5 `daily_loss_limit_usd` üretmez. Alan korunur; boş/0 kalabilir.
+- **Runtime daily loss kapalı:** `dca_grid_trailing.tick()` eski `_daily_loss_limit_hit` bayrağını temizler ve günlük limit aşımında tick'i durdurmaz. Orchestrator da bu bayrakla botu pause etmez.
+- **Emergency brake kapalı:** `safety_gate.emergency_check()` her zaman `action=NONE` döner. Eski `_dyn_emergency` state'i temizlenir; `DYN_STOP_LOSS` / `DYN_EMERGENCY_CLOSE` pause akışı çalışmaz.
+- **Create gate:** `bots_create` → `dynamic_mode=true` & `max_buy_levels` eksik/geçersizse `check_prerequisites()` fail → HTTP 400.
 - **Update gate:** `update-config` → aynı kontrol → HTTP 400.
 - **Runtime:** Ön koşul yine de bozulursa `is_dynamic_mode_active()` false → manuel mod gibi çalışır (güvenli düşüş).
 
-**Acil durum (`emergency_check`):** **Her tick** sonrası equity ölçülür; eşik aşılırsa bot `paused_error`, `last_error_code=DYN_STOP_LOSS` veya `DYN_EMERGENCY_CLOSE`. **Önemli:** Bu bir *devre kesicidir* — botu duraklatır, **pozisyonu otomatik likidite ETMEZ** (projedeki `daily_loss_limit` davranışıyla aynı; operatör müdahalesi gerekir).
+**Acil durum (`emergency_check`):** Kod yolu geriye dönük olarak durur fakat `EMERGENCY_CHECKS_ENABLED=False` olduğu için `NONE` döner. Eşikler tekrar açılırsa davranış duraklatma olur; likidasyon yapmaz.
 
-### 4.1 Tasarım kararı — neden "duraklat", neden "likidite değil"? (doğrulandı)
+### 4.1 Tasarım kararı — kapalı frenler neden silinmedi?
 
-Bu seçim, tüm proje ve DCA stratejisi incelenerek **bilinçli ve doğru** kabul edildi:
+Alanlar ve eski kod yolu bilinçli olarak silinmedi:
 
-- **Emir modeli:** Bot **market** emirleriyle, **tick-driven** çalışır (borsada bekleyen limit emri yok). Duraklatma = tüm trading durur; "bekleyen emir dolmaya devam eder" riski yoktur.
-- **Proje deseni:** Projedeki *her* risk olayı duraklatır — `daily_loss_limit` (paused_error), API anahtarı yok/401, vb. Pozisyonu düzleştiren (likidite eden) tek yol **botu silmektir** (`_sell_symbol_base_on_delete`); `stop` bile pozisyonu korur.
-- **Strateji tezi:** DCA/grid ortalama-düşürme stratejisi, düşüşte alıp toparlanmada satarak kâr eder. Drawdown dibinde base'i zorla satmak **maksimum zararı kilitler** ve stratejinin dayandığı toparlanma yolunu yok eder. Ayrıca çöküşte market-sell = kötü dolum (slippage). Bu yüzden likidasyon bu strateji için **yanlış** olur.
-- **Geri alınabilirlik:** Duraklatma geri alınabilir (operatör devam ettirir); likidasyon geri alınamaz. Erken tetiklenen bir duraklatmanın maliyeti yalnızca bir operatör uyarısıdır.
+- **Geri alınabilirlik:** `safety_gate.py` içindeki bayraklar `True` yapılırsa eski korumalar migration gerekmeden geri gelir.
+- **Şema uyumu:** DB/config/API alanları korunur; eski bot kayıtları ve UI payload'ları kırılmaz.
+- **Dürüst UI/state:** Bayraklar kapalıyken `injected_defaults={}` döner; API detayında sistem freni varmış gibi görünmez.
 
-Sonuç: `STOP_LOSS` (tur -%8) ve `EMERGENCY_CLOSE` (portföy -%15) **koruyucu duraklatmalardır** ("kapatma" değil). Eylem anahtarları/eşikler stabil kimlik olarak korunur; operatöre gösterilen `reason` ve UI metni dürüsttür ("bot duraklatıldı, pozisyon korunuyor"). İki eşik farklı arızayı yakalar: tur-içi sert düşüş (STOP_LOSS) vs. çok turlu yavaş erime (EMERGENCY_CLOSE, başlangıç sermayesine göre).
+Sonuç: Bu kurulumda `STOP_LOSS` (tur -%8), `EMERGENCY_CLOSE` (portföy -%15) ve günlük kayıp limiti otomatik duraklatma üretmez.
 
 ### 4.2 Tasarım kararı — tur-içi rejim savunması neden yok? (doğrulandı)
 
-Parametreler **immutable snapshot** ilkesiyle yalnız tur sınırında yenilenir; tur ortasında grid yüzdelerini değiştirmek, fired-flag / trigger-price'ları `reference_price`'a bağlı grid state-machine'ini bozardı. Tur-içi koruma **her tick çalışan `emergency_check`** ile sağlanır; aşırı maruziyet ise `max_buy_levels` ile sınırlıdır. Dolayısıyla tasarım tutarlıdır; ek tur-içi parametre mutasyonu eklenmez.
+Parametreler **immutable snapshot** ilkesiyle yalnız tur sınırında yenilenir; tur ortasında grid yüzdelerini değiştirmek, fired-flag / trigger-price'ları `reference_price`'a bağlı grid state-machine'ini bozardı. Bu kurulumda tur-içi otomatik stop freni yoktur; aşırı alım maruziyeti `max_buy_levels` ile sınırlıdır.
+
+### 4.3 DCA-derinlik koruması — devre dışı kod yolu
+
+**Sorun:** Equity tabanlı -%8 tur stop'u, fiyat **price** olarak çok daha az düştüğünde tetiklenir. Örn. 50/50 başlayan bir bot için fiyat -%16'da equity ~-%8 olur; bot düşüşte alım yaptıkça base ağırlaşır ve eşik daha da erken gelir. Sonuç: kullanıcının **-%20'ye kurduğu alım gridi hiç çalışmadan** bot durabilirdi — bu, DCA'in tüm mantığına aykırı.
+
+**Çözüm (`_deepest_buy_grid_pct` + `DYN_GRID_DEPTH_BUFFER_PCT`):** `emergency_check`, fiyat **en derin (efektif/overlay'lenmiş) alım gridinin + tampon** kadar altına inmeden **asla** tetiklenmez. Yani:
+
+```
+guard = en_derin_buy_grid_pct + DYN_GRID_DEPTH_BUFFER_PCT   (varsayılan tampon %5)
+price_drop = (reference_price - price) / reference_price × 100
+price_drop < guard  →  action = NONE  (plan içi: bot serbest çalışır, gridler çalışır)
+price_drop ≥ guard  →  equity/portföy eşikleri uygulanır (plan ötesi: devre kesici)
+```
+
+- En derin grid **-%20** ise devre kesici ancak fiyat **≤ -%25**'e inince devreye girebilir → tüm alım gridleri çalışma şansı bulur.
+- **Efektif** gridler kullanılır: dinamik modda grid %'leri ATR ile yeniden hesaplandığı için, o turda botun gerçekten kullandığı en derin seviye baz alınır.
+- Frenler ileride yeniden açılırsa `reference_price`/`price` çözülemediğinde derinlik guard'ı atlanır ve eski equity eşiği uygulanır.
+- Sığ gridli kurulumlarda davranış pratikte eskisi gibidir (örn. en derin -%3 ise guard ≈ -%8, eski eşikle örtüşür).
+- Mevcut durumda bu guard çalışmaz, çünkü `EMERGENCY_CHECKS_ENABLED=False` iken `emergency_check()` erken `NONE` döner.
 
 ---
 
@@ -144,7 +166,9 @@ Histerezis: `MIN_DWELL_CYCLES=1` — flip-flop azaltma.
 
 **Asla overlay edilmez:** `max_buy_levels`, `daily_loss_limit_usd`, `symbol`, `initial_capital_usdt`, `paper_mode`, fee, tick interval, emir limitleri.
 
-**Grid qty dağılımı — sermaye kullanımı:** Dinamik mod grid qty %'lerinin **şeklini** (geometrik dağılım) değiştirir ama kullanıcının manuel şablonundaki **toplam** qty %'sini (örn. 10+15+20=%45) korur. Yani manuel rezerv niyeti iptal edilmez; yalnızca dağılım yeniden biçimlenir. Şablonda kullanılabilir qty değeri yoksa %100'e (tam dağıtım) düşülür.
+**Grid trigger tabanı:** Dinamik mod grid tetiklerini manuel şablondan daha yakına çekmez. Her seviye için `applied_pct = max(dynamic_pct, manual_pct)` mantığı kullanılır; böylece düşük ATR manuel −%2/−%4 gridleri −%0.30/−%0.60'a düşüremez.
+
+**Grid qty dağılımı — sermaye kullanımı:** Dinamik mod grid qty %'lerini **birebir manuel şablondan korur**. Kullanıcı %50/%50 kurduysa dinamik mod bunu 47.6/52.4 veya 36.4/43.6 gibi yeniden dağıtmaz. Şablonda kullanılabilir qty değeri yoksa %100 eşit bölünür.
 
 **Manuel taban her tur temiz:** Overlay, orchestrator'daki cache'li `cfg` nesnesini yerinde değiştirir; bu yüzden dinamik motor öneriyi üretirken tabanı **her zaman `config_json`'dan (overlay'lenmemiş manuel config) yeniden türetir** — aksi halde öneriler turdan tura kayar (base drift).
 
@@ -183,7 +207,7 @@ Geçersiz/NaN değer → ilgili alan için **manuel config fallback** + `fallbac
 | Endpoint / alan | Davranış |
 |-----------------|----------|
 | `POST /api/bots-engine` (create) | `dynamic_mode` + safety gate |
-| `GET /api/bots-engine/{id}` | `dynamic_mode: { enabled, active, safety_gate, snapshot, emergency }` |
+| `GET /api/bots-engine/{id}` | `dynamic_mode: { enabled, active, safety_gate, snapshot, emergency }`; kapalı frenlerde `emergency` boş kalır |
 | `_effective_grid_config()` | Grid UI sayıları = snapshot `applied` (botun gerçekten koştuğu değerler) |
 | Orchestrator | Hook + `DYN_SNAPSHOT` engine event |
 
@@ -191,7 +215,7 @@ Geçersiz/NaN değer → ilgili alan için **manuel config fallback** + `fallbac
 
 | Yer | Davranış |
 |-----|----------|
-| Dashboard create modal | Tek ON/OFF toggle; `dynamic_mode` + default `daily_loss_limit_usd` |
+| Dashboard create modal | Tek ON/OFF toggle; `dynamic_mode`, `daily_loss_limit_usd=0` |
 | Bot detay üst bar | Yeşil **Dinamik ✓** rozeti üst strip (`dynModeStripBadge`; state hero'da yok) |
 | Dashboard Bots | En İyi 5 Bot satırında **Dinamik ✓** balon; Mevcut Botlar tablosunda dinamik bot logosu yeşil çerçeve + hover ipucu |
 | Grid panel banner | Tur eşikleri, rejim, ATR/ADX/BBW özeti |
@@ -271,8 +295,8 @@ Geçersiz/NaN değer → ilgili alan için **manuel config fallback** + `fallbac
 |------|----------|
 | **Çift banner** | Grid panelinde detaylı banner + üstte rozet — bilinçli; farklı bilgi yoğunluğu |
 | **Config şablonu hâlâ gerekli** | Kullanıcı grid **adet** ve başlangıç şablonunu girer; dinamik mod yüzdeleri ayarlar |
-| **daily_loss_limit otomatik** | Create/update'te backend bütçenin %5'ini enjekte eder; kullanıcı modalda görmeyebilir. `safety_gate.injected_defaults` detay API'de açık |
-| **stop_loss / emergency_close UI'da görünmez** | Sistem enjekte; detay API `dynamic_mode.safety_gate.injected_defaults` içinde döner ama UI banner'da gösterilmiyor (opsiyonel iyileştirme) |
+| **daily_loss_limit otomatik değil** | Create/update bütçenin %5'ini enjekte etmez; alan 0 kalabilir ve runtime enforcement kapalıdır |
+| **stop_loss / emergency_close kapalı** | Sistem enjekte etmez; `safety_gate.injected_defaults={}` döner, `emergency_check()` `NONE` döner |
 | **Regime histerezis MIN_DWELL=1** | Bilinçli: cycle-start bazlı, turlar seyrek; pratikte her tur değişebilir. `classify`/`update_regime_state` streak mantığını ayrı tutar — **ikisi senkron kalmalı** (değiştirilirse birlikte) |
 | **Klines REST yükü** | Sembol başına cache var; çok bot aynı sembolde OK, farklı sembollerde REST artar |
 
@@ -283,8 +307,8 @@ Geçersiz/NaN değer → ilgili alan için **manuel config fallback** + `fallbac
 1. `GET /api/bots-engine/{id}` → `dynamic_mode.active` true mu?
 2. `state.dynamic_snapshot.cycle_id` == `state.cycle_id` mu?
 3. `data_fresh` false ise → Binance klines / ağ; önceki tur değerleri normal
-4. `safety_gate.violations` dolu mu → prereq eksik, mod pasif
-5. Engine log → `DYN_SNAPSHOT`, `DYN_EMERGENCY` satırları
+4. `safety_gate.violations` dolu mu → `max_buy_levels` eksik/geçersiz, mod pasif
+5. Engine log → `DYN_SNAPSHOT`; `DYN_EMERGENCY` beklenmez çünkü fren kapalı
 6. Grid banner görünmüyorsa → `snapshot.applied` boş olabilir (henüz ilk tur bitmemiş)
 
 ---

@@ -11,8 +11,8 @@ Hard rules:
     catastrophically broken suggestion lands at "as if dynamic mode was off".
   * Rate-of-change limiter: across cycles, scalar params may move at most
     MAX_RELATIVE_CHANGE × prev_value. Sudden 5x jumps are clipped.
-  * Risk engine NEVER lifts or relaxes max_buy_levels, daily_loss_limit_usd,
-    stop-loss, or emergency close. Those fields are read-only from here.
+  * Risk engine NEVER lifts or relaxes structural / safety fields such as
+    max_buy_levels or daily_loss_limit_usd. Those fields are read-only here.
 """
 
 from __future__ import annotations

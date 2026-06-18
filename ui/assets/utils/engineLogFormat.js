@@ -73,7 +73,12 @@
         base_ratio_pct: 1, quote_ratio_pct: 1,
         target_base_alloc_pct: 1, target_quote_alloc_pct: 1,
         // Bakiye senkronizasyon alanları
-        drift_usdt: 1, virtual_usdt: 1, real_usdt: 1, price: 1
+        drift_usdt: 1, virtual_usdt: 1, real_usdt: 1, price: 1,
+        // Soğuk başlatma config özeti
+        cold_start_config: 1, base_alloc_pct: 1, quote_alloc_pct: 1,
+        sell_grid_count: 1, buy_grid_count: 1, sell_grids_brief: 1, buy_grids_brief: 1,
+        sell_trail_pct: 1, buy_trail_pct: 1, profit_reentry_pct: 1, profit_exit_pct: 1,
+        dynamic_mode_enabled: 1, dynamic_mode_ok: 1, dynamic_mode_block_reason: 1
     };
 
     function num(v) {
@@ -199,6 +204,25 @@
         if (meta.connectivity_stable === true) return true;
         var ec = String(meta.error_code || meta.health_code || '').toUpperCase();
         return ec === 'CONNECTIVITY_STABLE' || ec === 'CONNECTIVITY_RECOVERED';
+    }
+
+    function appendDynamicModeStartBrief(meta, parts) {
+        if (!parts) return;
+        meta = meta || {};
+        var enabled = meta.dynamic_mode_enabled;
+        var ok = meta.dynamic_mode_ok;
+        if (enabled == null && _logContext.config) {
+            enabled = !!_logContext.config.dynamic_mode;
+            if (enabled && ok == null) ok = true;
+        }
+        if (enabled == null) return;
+        if (!enabled) {
+            parts.push('Dinamik mod kapalı');
+        } else if (ok) {
+            parts.push('Dinamik mod ✓');
+        } else {
+            parts.push('Dinamik mod ✗ · ' + (meta.dynamic_mode_block_reason || 'önkoşul eksik'));
+        }
     }
 
     function appendColdStartConfigBrief(meta, parts) {
@@ -1361,6 +1385,7 @@
                 var startBalLine = formatBalanceLine(meta, startBal);
                 if (startBalLine) startParts.push(startBalLine);
             }
+            appendDynamicModeStartBrief(meta, startParts);
             return { message: joinParts(startParts), severity: 'info' };
         }
         if (meta.health_code === 'OUTAGE_RECOVERY' || /kopma sonrası grid/i.test(raw)) {
@@ -1596,10 +1621,15 @@
             // Periyodik bakiye senkronizasyon başarılı — sessiz
             return { hidden: true };
         } else if (ty === 'WARN' && meta.error_code === 'BALANCE_DRIFT_WARN') {
-            // Bakiye sapması uyarısı
             severity = 'warn';
             typeLabel = 'Uyarı';
-            message = raw || 'Bakiye sapması tespit edildi';
+            var driftBaseKey = Object.keys(meta).filter(function (k) { return /^drift_.*_pct$/.test(k); })[0];
+            var driftBasePct = driftBaseKey ? meta[driftBaseKey] : null;
+            var driftUsdt = meta.drift_usdt != null ? Number(meta.drift_usdt) : null;
+            var parts = ['Sanal bakiye ile borsa (free+locked) arasında sapma'];
+            if (driftBasePct != null && !isNaN(driftBasePct)) parts.push('coin %' + Number(driftBasePct).toFixed(1));
+            if (driftUsdt != null && !isNaN(driftUsdt)) parts.push('USDT $' + driftUsdt.toFixed(2));
+            message = raw || parts.join(' · ');
         } else if (ty === 'WARN') {
             // Genel WARN (BALANCE_SYNC_OK hariç)
             severity = 'warn';

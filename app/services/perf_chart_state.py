@@ -288,13 +288,60 @@ def build_bot_alpha_performance(
             start_price = float(ref or 0)
         except (TypeError, ValueError):
             start_price = 0.0
-    if start_price <= 0 and current_price > 0:
-        start_price = current_price
 
     if start_balance <= 0 or start_price <= 0 or current_price <= 0:
         return None
     return compute_alpha_performance_pct(
         start_balance, start_price, current_usd, current_price
+    )
+
+
+def resolve_session_alpha_performance(
+    db: Session,
+    bot: Bot,
+    state: dict | None,
+    *,
+    pnl_data: dict | None = None,
+    live_price: float | None = None,
+) -> dict | None:
+    """Oturum (bot start) alpha — equity + hub fiyat; dönem filtresinden bağımsız."""
+    from app.services.bot_equity import compute_bot_equity_usd, get_bot_last_price
+
+    state = state or {}
+    try:
+        raw = json.loads(bot.config_json or "{}")
+    except Exception:
+        raw = {}
+    initial_capital = _config_initial_capital(raw)
+    if pnl_data is None:
+        try:
+            from app.services.pnl_service import PnlService
+
+            pnl_data = PnlService.calculate_bot_pnl(db, bot.id, bot.account_id) or {}
+        except Exception:
+            pnl_data = {}
+    if pnl_data.get("error"):
+        pnl_data = {}
+
+    equity_usd = compute_bot_equity_usd(
+        db, bot, state, pnl_data, initial_usd=initial_capital
+    )
+    sym = (bot.symbol or "").strip().upper()
+    price = live_price
+    if price is None or float(price) <= 0:
+        price = get_bot_last_price(sym, state, pnl_data)
+    try:
+        price = float(price or 0)
+    except (TypeError, ValueError):
+        price = 0.0
+
+    return build_bot_alpha_performance(
+        db,
+        bot,
+        state,
+        current_usd=equity_usd,
+        current_price=price if price > 0 else None,
+        pnl_data=pnl_data,
     )
 
 
