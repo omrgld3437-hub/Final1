@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from types import SimpleNamespace
 
 import app.services.binance_connectivity as bc
 
@@ -40,6 +41,65 @@ def test_classify_unauthorized():
 
     code, msg = bc._classify_binance_error(Err())
     assert code == "API_UNAUTHORIZED"
+
+
+def test_api_unauthorized_emits_without_transient_delay(monkeypatch, tmp_path):
+    bc._by_account.clear()
+    bc._first_fail_ts_by_account.clear()
+    monkeypatch.setattr(bc, "_RUN_DIR", tmp_path)
+    emitted = []
+    monkeypatch.setattr(
+        bc, "_emit_bot_events_async", lambda *args: emitted.append(args)
+    )
+
+    bc.note_binance_failure(
+        7,
+        "API_UNAUTHORIZED",
+        "Binance API anahtarı geçersiz veya IP beyaz listesinde değil.",
+        "wallet",
+    )
+
+    assert emitted
+    assert emitted[0][0] == 7
+    assert emitted[0][1] == "API_UNAUTHORIZED"
+
+
+def test_api_unauthorized_connectivity_event_pauses_running_bot(monkeypatch):
+    bot = SimpleNamespace(id=17, account_id=3, status="running")
+    saved = {}
+    events = []
+
+    monkeypatch.setattr(bc, "_recent_connectivity_event", lambda *a, **k: False)
+    monkeypatch.setattr(bc, "emit_tur_connectivity_paused_info", lambda *a, **k: True)
+    monkeypatch.setattr("app.botengine.state_store.load_state", lambda *a, **k: {})
+    monkeypatch.setattr(
+        "app.botengine.state_store.save_state",
+        lambda db, bot_id, account_id, state: saved.update(state),
+    )
+    monkeypatch.setattr(
+        "app.botengine.state_store.append_event",
+        lambda db, bot_id, account_id, event_type, message="", meta=None, ts=None: (
+            events.append((event_type, message, meta or {}))
+        ),
+    )
+
+    ok = bc.emit_connectivity_events_for_bot(
+        object(),
+        bot,
+        "API_UNAUTHORIZED",
+        "Binance API anahtarı geçersiz veya IP beyaz listesinde değil.",
+        "health_poll",
+        force=True,
+    )
+
+    assert ok is True
+    assert bot.status == "paused_error"
+    assert saved["last_error_code"] == "API_UNAUTHORIZED"
+    assert saved["backoff_until"] > time.time()
+    assert any(
+        event_type == "ERROR" and "401/-2015" in msg
+        for event_type, msg, _ in events
+    )
 
 
 def test_queue_and_flush_skips_recent_stable(monkeypatch):

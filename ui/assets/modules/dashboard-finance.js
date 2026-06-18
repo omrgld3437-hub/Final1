@@ -1452,6 +1452,8 @@ var _financeBotsLivePollPromise = null;
 var _financeBotsLiveSig = '';
 var _financeBotsHealthCache = {};
 var _financeBotsHealthPollPromise = null;
+var _financeBotsConnectivityToastSig = '';
+var _financeBotsConnectivityToastAt = 0;
 var FINANCE_BOTS_HEALTH_POLL_MS = 15000;
 var FINANCE_BOT_ROW_ALERT_CLASSES = ['mevcut-bot-row-alert-warn', 'mevcut-bot-row-alert-crit', 'mevcut-bot-row-alert-both'];
 var FINANCE_BOTS_TAB_ALERT_CLASSES = ['bots-tab-alert-warn', 'bots-tab-alert-crit', 'bots-tab-alert-both'];
@@ -2031,6 +2033,30 @@ function classifyFinanceBotHealth(botId, healthData) {
     return { level: null };
 }
 
+function maybeToastFinanceBotsConnectivityWarning(healthData) {
+    if (isFinanceBotsTestAccountContext()) return;
+    if (!healthData || healthData.connectivity_ok !== false || !healthData.connectivity_failure) return;
+    var fail = healthData.connectivity_failure || {};
+    var code = String(fail.error_code || fail.code || '').toUpperCase();
+    if (!/API_UNAUTHORIZED|ACCOUNT_KEYS|CLOCK_DRIFT|BINANCE_UNREACHABLE|BINANCE_TIMEOUT|BINANCE_RATE_LIMIT/.test(code)) return;
+    var msg = String(fail.message || '').slice(0, 220);
+    var sig = code + '|' + msg;
+    var now = Date.now();
+    if (sig === _financeBotsConnectivityToastSig && now - _financeBotsConnectivityToastAt < 60000) return;
+    _financeBotsConnectivityToastSig = sig;
+    _financeBotsConnectivityToastAt = now;
+    var payload = {
+        error_code: code,
+        wallet_last_error_code: code,
+        message: msg
+    };
+    if (typeof window.maybeToastConnectivityWarning === 'function') {
+        window.maybeToastConnectivityWarning(payload);
+    } else if (window.Toast && window.Toast.warning) {
+        window.Toast.warning(msg || 'Binance API/IP bağlantısı doğrulanamadı. Sunucu dış IP beyaz listesini kontrol edin.');
+    }
+}
+
 function financeBotsHealthAccountKey() {
     if (State.accountCode) return 'code:' + String(State.accountCode);
     if (State.accountId) return 'id:' + String(State.accountId);
@@ -2269,6 +2295,7 @@ function pollFinanceBotsHealth() {
         if (!botId) return Promise.resolve();
         return window.apiClient.get('/api/bots-engine/' + botId + '/health' + q, { timeout: 12000 })
             .then(function (res) {
+                maybeToastFinanceBotsConnectivityWarning(res || {});
                 updates[botId] = classifyFinanceBotHealth(botId, res || {});
             })
             .catch(function (err) {

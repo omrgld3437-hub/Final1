@@ -30,6 +30,32 @@ def test_binance_unreachable_when_bot_paused():
     assert "BINANCE_UNREACHABLE" in codes
 
 
+def test_api_unauthorized_surfaces_immediately_without_transient_delay():
+    bot = SimpleNamespace(
+        id=10, account_id=46, status="running", symbol="ETHUSDT", config_json="{}"
+    )
+    state = {"last_tick_at": datetime.now(timezone.utc)}
+    fail = {
+        "error_code": "API_UNAUTHORIZED",
+        "message": "Binance API anahtarı geçersiz veya IP beyaz listesinde değil.",
+        "source": "connectivity_probe",
+    }
+    with (
+        patch("app.services.binance_connectivity.active_failure", return_value=fail),
+        patch.dict(
+            "app.services.binance_connectivity._first_fail_ts_by_account",
+            {46: datetime.now(timezone.utc).timestamp()},
+            clear=True,
+        ),
+    ):
+        alerts = evaluate_bot_health(bot, state, None)
+
+    picked = [a for a in alerts if a.get("code") == "BINANCE_UNREACHABLE"]
+    assert picked
+    assert picked[0].get("level") == "critical"
+    assert picked[0].get("meta", {}).get("error_code") == "API_UNAUTHORIZED"
+
+
 def test_running_bot_still_gets_tick_alerts():
     bot = SimpleNamespace(
         id=2,

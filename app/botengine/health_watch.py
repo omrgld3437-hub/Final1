@@ -818,6 +818,7 @@ def evaluate_bot_health(
             active_failure,
             _first_fail_ts_by_account,
             _TRANSIENT_OUTAGE_LOG_DELAY_SEC,
+            is_immediate_failure_code,
         )
 
         bfail = active_failure(bot.account_id)
@@ -828,7 +829,8 @@ def evaluate_bot_health(
                 if first_fail > 0
                 else _TRANSIENT_OUTAGE_LOG_DELAY_SEC + 1
             )
-            if fail_age >= _TRANSIENT_OUTAGE_LOG_DELAY_SEC:
+            fail_code = bfail.get("error_code") or ""
+            if is_immediate_failure_code(fail_code) or fail_age >= _TRANSIENT_OUTAGE_LOG_DELAY_SEC:
                 tmpl = _HEALTH_MESSAGES["BINANCE_UNREACHABLE"]
                 alerts.append(
                     _alert_from_tmpl(
@@ -1124,6 +1126,7 @@ def evaluate_bot_health_lite(
             from app.services.binance_connectivity import (
                 _first_fail_ts_by_account,
                 _TRANSIENT_OUTAGE_LOG_DELAY_SEC,
+                is_immediate_failure_code,
             )
 
             first_fail = _first_fail_ts_by_account.get(int(bot.account_id), 0)
@@ -1134,7 +1137,8 @@ def evaluate_bot_health_lite(
             )
         except Exception:
             fail_age = _TRANSIENT_OUTAGE_LOG_DELAY_SEC + 1
-        if fail_age >= _TRANSIENT_OUTAGE_LOG_DELAY_SEC:
+        fail_code = account_failure.get("error_code") or ""
+        if is_immediate_failure_code(fail_code) or fail_age >= _TRANSIENT_OUTAGE_LOG_DELAY_SEC:
             tmpl = _HEALTH_MESSAGES["BINANCE_UNREACHABLE"]
             alerts.append(
                 _alert_from_tmpl(

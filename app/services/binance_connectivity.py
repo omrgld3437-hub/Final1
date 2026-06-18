@@ -59,6 +59,33 @@ _CONNECTIVITY_OUTAGE_META_CODES = frozenset(
         "ACCOUNT_KEYS_MISSING",
     }
 )
+_IMMEDIATE_FAILURE_CODES = frozenset(
+    {
+        "API_UNAUTHORIZED",
+        "ACCOUNT_KEYS_EMPTY",
+        "ACCOUNT_KEYS_DECRYPT_FAIL",
+        "ACCOUNT_KEYS_MISSING",
+        "CLOCK_DRIFT",
+    }
+)
+_PAUSE_BOT_FAILURE_CODES = frozenset(
+    {
+        "API_UNAUTHORIZED",
+        "ACCOUNT_KEYS_EMPTY",
+        "ACCOUNT_KEYS_DECRYPT_FAIL",
+        "ACCOUNT_KEYS_MISSING",
+    }
+)
+
+
+def is_immediate_failure_code(error_code: str) -> bool:
+    """Kalıcı signed-API hataları geçici ağ filtresine takılmadan görünür olmalı."""
+    return (error_code or "").strip().upper() in _IMMEDIATE_FAILURE_CODES
+
+
+def should_pause_bot_for_connectivity_error(error_code: str) -> bool:
+    """Binance signed işlem izni yoksa bot emir denemeden güvenli beklemeye alınır."""
+    return (error_code or "").strip().upper() in _PAUSE_BOT_FAILURE_CODES
 
 
 def _fail_path(account_id: int) -> Path:
@@ -198,7 +225,7 @@ def note_binance_failure(
     # kalıcı hata olursa emit gönderilir.
     if emit_async:
         first_fail = _first_fail_ts_by_account.get(aid, now)
-        if now - first_fail >= _TRANSIENT_OUTAGE_LOG_DELAY_SEC:
+        if is_immediate_failure_code(code) or now - first_fail >= _TRANSIENT_OUTAGE_LOG_DELAY_SEC:
             _emit_bot_events_async(aid, code, msg, source)
 
 
@@ -941,6 +968,11 @@ def emit_connectivity_events_for_bot(
         "cycle_id": int((load_state(db, bot_id) or {}).get("cycle_id") or 1),
     }
     try:
+        state = load_state(db, bot_id) or {}
+        should_pause = should_pause_bot_for_connectivity_error(code)
+        if should_pause and (getattr(bot, "status", "") or "").lower() == "running":
+            bot.status = "paused_error"
+            state["backoff_until"] = now + 300.0
         emit_tur_connectivity_paused_info(db, bot_id, account_id, code)
         warn_meta = {
             **meta_base,
@@ -954,11 +986,25 @@ def emit_connectivity_events_for_bot(
             bot_id,
             account_id,
             "HEALTH_WARN",
-            f"Binance bağlantısı yok — {short_msg}",
+            (
+                "Binance API/IP yetkisi yok — bot güvenli beklemeye alındı"
+                if should_pause
+                else f"Binance bağlantısı yok — {short_msg}"
+            ),
             warn_meta,
         )
-        append_event(db, bot_id, account_id, "ERROR", log_msg, meta_base)
-        state = load_state(db, bot_id) or {}
+        append_event(
+            db,
+            bot_id,
+            account_id,
+            "ERROR",
+            (
+                "Binance 401/-2015 — API anahtarı, Spot izni veya sunucu dış IP beyaz listesini kontrol edin."
+                if should_pause
+                else log_msg
+            ),
+            meta_base,
+        )
         state["last_error_code"] = code
         state["health_error_since"] = int(now)
         save_state(db, bot_id, account_id, state)
