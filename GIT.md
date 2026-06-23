@@ -1,6 +1,6 @@
 # Git — Final1
 
-> HEAD `7c0a013` · Toplam **103** commit · branch `main`
+> HEAD `c5e0879` · Toplam **105** commit · branch `main`
 
 ## GitHub
 
@@ -11,8 +11,8 @@
 | SSH (origin) | `git@github.com:omrgld3437-hub/Final1.git` |
 | HTTPS | `https://github.com/omrgld3437-hub/Final1.git` |
 | Aktif branch | `main` |
-| HEAD (kısa) | `7c0a013` |
-| HEAD (tam) | `7c0a013d3a61760e241b4af72cd662bcb2bac7f1` |
+| HEAD (kısa) | `c5e0879` |
+| HEAD (tam) | `c5e08792c8b6d33278ab6d4132850ad44eb5201e` |
 | Remote durumu | `origin/main`'den **1** commit önde |
 
 ## Submodule: marketing
@@ -26,7 +26,38 @@
 
 En yeni commit üstte.
 
-### 1. `7c0a013` — WIP: dynamic mode, param assistant, dashboard/UI updates (pre dip-fiyat fix)
+### 1. `c5e0879` — Fix: buy-grid outage recovery firing with near-zero trailing margin
+
+- **Commit no (tam):** `c5e08792c8b6d33278ab6d4132850ad44eb5201e`
+- **Commit no (kısa):** `c5e0879`
+- **Tarih:** 2026-06-23 11:49:24 +0300
+- **Yazar:** Ömer Altın <omeraltin@Omer-MacBook-Air.local>
+- **Detay:**
+  - After a connectivity gap, _recover_buy_grid derived an unobserved trough
+  - straight from the current price P when no real intra-cycle low had been
+  - tracked yet, then immediately marked it "favorable" (instant fire) even
+  - though P never bounced buy_trigger_trailing_pct% above that trough. This
+  - collapsed the configured trailing margin to ~0, so the grid detail modal
+  - showed "Dip fiyat" and "Gerçekleşme fiyatı" almost identical regardless
+  - of the configured trailing percentage (e.g. 0.5%).
+  - Now the immediate-fire shortcut only applies when a real, previously
+  - tracked trough exists (legitimate outage catch-up); without prior trough
+  - history the grid keeps trailing normally and only fires once price truly
+  - recovers by the configured percentage, matching live-tick behavior.
+  - Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+
+---
+
+### 2. `d6995b2` — docs: sync GIT.md (git log)
+
+- **Commit no (tam):** `d6995b2d4f30667f976bc06764fdf89010859e85`
+- **Commit no (kısa):** `d6995b2`
+- **Tarih:** 2026-06-23 11:49:01 +0300
+- **Yazar:** Ömer Altın <omeraltin@Omer-MacBook-Air.local>
+
+---
+
+### 3. `7c0a013` — WIP: dynamic mode, param assistant, dashboard/UI updates (pre dip-fiyat fix)
 
 - **Commit no (tam):** `7c0a013d3a61760e241b4af72cd662bcb2bac7f1`
 - **Commit no (kısa):** `7c0a013`
@@ -39,7 +70,7 @@ En yeni commit üstte.
 
 ---
 
-### 2. `6692270` — docs: sync GIT.md (git log)
+### 4. `6692270` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `669227046f284b71b3595f8b91ac7883983af679`
 - **Commit no (kısa):** `6692270`
@@ -48,7 +79,7 @@ En yeni commit üstte.
 
 ---
 
-### 3. `1791a18` — Fix Binance whitelist connectivity alerts
+### 5. `1791a18` — Fix Binance whitelist connectivity alerts
 
 - **Commit no (tam):** `1791a187e1ef9315a692d6cee621fd2a35406a82`
 - **Commit no (kısa):** `1791a18`
@@ -57,7 +88,7 @@ En yeni commit üstte.
 
 ---
 
-### 4. `958c3b8` — docs: sync GIT.md (git log)
+### 6. `958c3b8` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `958c3b8d98ae056a4afbdebe41627d5f120f64e9`
 - **Commit no (kısa):** `958c3b8`
@@ -66,7 +97,7 @@ En yeni commit üstte.
 
 ---
 
-### 5. `af1ba2e` — Update dashboard assistant and bot safety handling
+### 7. `af1ba2e` — Update dashboard assistant and bot safety handling
 
 - **Commit no (tam):** `af1ba2e769059f32e6669601f7df6367d1fcaf47`
 - **Commit no (kısa):** `af1ba2e`
@@ -75,7 +106,7 @@ En yeni commit üstte.
 
 ---
 
-### 6. `0628f1a` — docs: sync GIT.md (git log)
+### 8. `0628f1a` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `0628f1a380375300cb32dbad04a314514b88fa29`
 - **Commit no (kısa):** `0628f1a`
@@ -84,7 +115,7 @@ En yeni commit üstte.
 
 ---
 
-### 7. `f8e66f4` — Fix CI by applying ruff format to changed Python files.
+### 9. `f8e66f4` — Fix CI by applying ruff format to changed Python files.
 
 - **Commit no (tam):** `f8e66f4b133d78df819cbc8750487782578a0c79`
 - **Commit no (kısa):** `f8e66f4`
@@ -93,7 +124,7 @@ En yeni commit üstte.
 
 ---
 
-### 8. `cf13584` — docs: sync GIT.md (git log)
+### 10. `cf13584` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `cf13584254d4a6027a97345f4e88b1cd44fbe10e`
 - **Commit no (kısa):** `cf13584`
@@ -102,7 +133,7 @@ En yeni commit üstte.
 
 ---
 
-### 9. `bca4d29` — Add dynamic mode, bot alpha performance, and dashboard UX improvements.
+### 11. `bca4d29` — Add dynamic mode, bot alpha performance, and dashboard UX improvements.
 
 - **Commit no (tam):** `bca4d295f6d82726fd084f317232709cff888f49`
 - **Commit no (kısa):** `bca4d29`
@@ -113,7 +144,7 @@ En yeni commit üstte.
 
 ---
 
-### 10. `4a6ab47` — test: use portable pytest database path
+### 12. `4a6ab47` — test: use portable pytest database path
 
 - **Commit no (tam):** `4a6ab4757d8e69a5a3cdbc75c3a616b705761104`
 - **Commit no (kısa):** `4a6ab47`
@@ -122,7 +153,7 @@ En yeni commit üstte.
 
 ---
 
-### 11. `1ab5047` — ci: expose pytest failure details
+### 13. `1ab5047` — ci: expose pytest failure details
 
 - **Commit no (tam):** `1ab50472d413f6718c79cd106ee5edcc69ec2cbc`
 - **Commit no (kısa):** `1ab5047`
@@ -131,7 +162,7 @@ En yeni commit üstte.
 
 ---
 
-### 12. `5864bcc` — ci: pin pytest for stable actions run
+### 14. `5864bcc` — ci: pin pytest for stable actions run
 
 - **Commit no (tam):** `5864bcce167b1442c890bfb33a461e94d5179841`
 - **Commit no (kısa):** `5864bcc`
@@ -140,7 +171,7 @@ En yeni commit üstte.
 
 ---
 
-### 13. `b15e563` — docs: sync GIT.md (git log)
+### 15. `b15e563` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `b15e5637aeadfd1eefe3d854a15ae9e78b43eca1`
 - **Commit no (kısa):** `b15e563`
@@ -149,7 +180,7 @@ En yeni commit üstte.
 
 ---
 
-### 14. `796a807` — ci: stabilize github actions quality job
+### 16. `796a807` — ci: stabilize github actions quality job
 
 - **Commit no (tam):** `796a807dead6b08e494e21b010f80ae698ec043d`
 - **Commit no (kısa):** `796a807`
@@ -158,7 +189,7 @@ En yeni commit üstte.
 
 ---
 
-### 15. `e4bbdda` — docs: sync GIT.md (git log)
+### 17. `e4bbdda` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `e4bbddacc9d7e0def80fb8ee1fa37a8c162156fe`
 - **Commit no (kısa):** `e4bbdda`
@@ -167,7 +198,7 @@ En yeni commit üstte.
 
 ---
 
-### 16. `d7e5bfa` — fix(test): test_parallel_grids max_buy_levels=2 eksikti
+### 18. `d7e5bfa` — fix(test): test_parallel_grids max_buy_levels=2 eksikti
 
 - **Commit no (tam):** `d7e5bfa8b53bac1a862aae0e428554c2203ab4de`
 - **Commit no (kısa):** `d7e5bfa`
@@ -182,7 +213,7 @@ En yeni commit üstte.
 
 ---
 
-### 17. `a8543b2` — docs: sync GIT.md (git log)
+### 19. `a8543b2` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `a8543b2649acc3b5abd766e41d27db4081d6a1c6`
 - **Commit no (kısa):** `a8543b2`
@@ -191,7 +222,7 @@ En yeni commit üstte.
 
 ---
 
-### 18. `cf12ad3` — ci: ruff lint+format hatalarını düzelt, ruff.toml ekle
+### 20. `cf12ad3` — ci: ruff lint+format hatalarını düzelt, ruff.toml ekle
 
 - **Commit no (tam):** `cf12ad3bf93aade3f187cd940f79e583a2f90b70`
 - **Commit no (kısa):** `cf12ad3`
@@ -208,7 +239,7 @@ En yeni commit üstte.
 
 ---
 
-### 19. `c6d5f3a` — docs: sync GIT.md (git log)
+### 21. `c6d5f3a` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `c6d5f3a3fc7cdc944d108297a1449a6116717039`
 - **Commit no (kısa):** `c6d5f3a`
@@ -217,7 +248,7 @@ En yeni commit üstte.
 
 ---
 
-### 20. `cfdec7a` — fix: bot detay start logları gizlenme hatası düzeltildi
+### 22. `cfdec7a` — fix: bot detay start logları gizlenme hatası düzeltildi
 
 - **Commit no (tam):** `cfdec7a8e894d31a4b064a3310a436f40326d8cc`
 - **Commit no (kısa):** `cfdec7a`
@@ -236,7 +267,7 @@ En yeni commit üstte.
 
 ---
 
-### 21. `c008064` — docs: sync GIT.md (git log)
+### 23. `c008064` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `c0080641b40e9e594db4c1305e4a7759d965ae74`
 - **Commit no (kısa):** `c008064`
@@ -245,7 +276,7 @@ En yeni commit üstte.
 
 ---
 
-### 22. `e7c4678` — fix: user stream yeniden başlatma sonrası hatalı ERROR seviyesi giderildi
+### 24. `e7c4678` — fix: user stream yeniden başlatma sonrası hatalı ERROR seviyesi giderildi
 
 - **Commit no (tam):** `e7c4678f8b3ecd054970abec094f7a9eca2ad2b8`
 - **Commit no (kısa):** `e7c4678`
@@ -261,7 +292,7 @@ En yeni commit üstte.
 
 ---
 
-### 23. `63078d8` — docs: sync GIT.md (git log)
+### 25. `63078d8` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `63078d8d404c7cd2d50c4b9a22263dfcd5ce21aa`
 - **Commit no (kısa):** `63078d8`
@@ -270,7 +301,7 @@ En yeni commit üstte.
 
 ---
 
-### 24. `409c88a` — fix: user stream HTML yanıt tespiti — ağ engeli ile API hatası ayırt edildi
+### 26. `409c88a` — fix: user stream HTML yanıt tespiti — ağ engeli ile API hatası ayırt edildi
 
 - **Commit no (tam):** `409c88aeb1b2f6ef832b100346b329081bce86b1`
 - **Commit no (kısa):** `409c88a`
@@ -287,7 +318,7 @@ En yeni commit üstte.
 
 ---
 
-### 25. `da9761f` — docs: sync GIT.md (git log)
+### 27. `da9761f` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `da9761feb3759f59ac1e108cbcd0281e1a82e676`
 - **Commit no (kısa):** `da9761f`
@@ -296,7 +327,7 @@ En yeni commit üstte.
 
 ---
 
-### 26. `ad0df7d` — feat: kapsamlı UI/UX ve backend iyileştirmeleri
+### 28. `ad0df7d` — feat: kapsamlı UI/UX ve backend iyileştirmeleri
 
 - **Commit no (tam):** `ad0df7dc3d1d7d92d4c2d94fdae3be661a1dbf68`
 - **Commit no (kısa):** `ad0df7d`
@@ -331,7 +362,7 @@ En yeni commit üstte.
 
 ---
 
-### 27. `a6d07e3` — docs: sync GIT.md (git log)
+### 29. `a6d07e3` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `a6d07e30e8bf9575ac02e091864ea22b38b44710`
 - **Commit no (kısa):** `a6d07e3`
@@ -340,7 +371,7 @@ En yeni commit üstte.
 
 ---
 
-### 28. `11173e6` — Display enriched CYCLE_END/START fields in bot engine log UI
+### 30. `11173e6` — Display enriched CYCLE_END/START fields in bot engine log UI
 
 - **Commit no (tam):** `11173e63fba8f62767184dc6ae7e1b5434df1313`
 - **Commit no (kısa):** `11173e6`
@@ -367,7 +398,7 @@ En yeni commit üstte.
 
 ---
 
-### 29. `223cfb3` — docs: sync GIT.md (git log)
+### 31. `223cfb3` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `223cfb3c54315a3e2bf6c6641289a74e5f133fb8`
 - **Commit no (kısa):** `223cfb3`
@@ -376,7 +407,7 @@ En yeni commit üstte.
 
 ---
 
-### 30. `abca2df` — Enrich CYCLE_END/START events: duration, grid utilization, price range, breakeven, cumulative PnL
+### 32. `abca2df` — Enrich CYCLE_END/START events: duration, grid utilization, price range, breakeven, cumulative PnL
 
 - **Commit no (tam):** `abca2df08bf227bbae7dfea58403a2673205fd8b`
 - **Commit no (kısa):** `abca2df`
@@ -412,7 +443,7 @@ En yeni commit üstte.
 
 ---
 
-### 31. `637e93f` — docs: sync GIT.md (git log)
+### 33. `637e93f` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `637e93f6178c29872e3b2881fd0b8fa166763aec`
 - **Commit no (kısa):** `637e93f`
@@ -421,7 +452,7 @@ En yeni commit üstte.
 
 ---
 
-### 32. `b6cd00c` — Production hardening and bot health fixes
+### 34. `b6cd00c` — Production hardening and bot health fixes
 
 - **Commit no (tam):** `b6cd00cdc8223edd337767d60236b3a311b8ee60`
 - **Commit no (kısa):** `b6cd00c`
@@ -430,7 +461,7 @@ En yeni commit üstte.
 
 ---
 
-### 33. `59fbd9a` — docs: sync GIT.md (git log)
+### 35. `59fbd9a` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `59fbd9a6bfc0a43e816ca2e11a522b73c346fbea`
 - **Commit no (kısa):** `59fbd9a`
@@ -439,7 +470,7 @@ En yeni commit üstte.
 
 ---
 
-### 34. `95a498b` — Fix USER_STREAM 410 Gone: auto-reconnect + account label in logs
+### 36. `95a498b` — Fix USER_STREAM 410 Gone: auto-reconnect + account label in logs
 
 - **Commit no (tam):** `95a498b320b557c546f1db6ed0d9f9664a29d857`
 - **Commit no (kısa):** `95a498b`
@@ -471,7 +502,7 @@ En yeni commit üstte.
 
 ---
 
-### 35. `d140169` — docs: sync GIT.md (git log)
+### 37. `d140169` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `d1401691e4b95e007c255fc4647a9c3329774520`
 - **Commit no (kısa):** `d140169`
@@ -480,7 +511,7 @@ En yeni commit üstte.
 
 ---
 
-### 36. `350bbdb` — Modularize dashboard.js phase 3: bot-perf, tx-history, bots, create-modal, tabs
+### 38. `350bbdb` — Modularize dashboard.js phase 3: bot-perf, tx-history, bots, create-modal, tabs
 
 - **Commit no (tam):** `350bbdbd4ee2bb5fffa4aa6ad7f686dd069f2db1`
 - **Commit no (kısa):** `350bbdb`
@@ -522,7 +553,7 @@ En yeni commit üstte.
 
 ---
 
-### 37. `791ca71` — docs: sync GIT.md (git log)
+### 39. `791ca71` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `791ca71f144f389856ce61c5e656159f210afee4`
 - **Commit no (kısa):** `791ca71`
@@ -531,7 +562,7 @@ En yeni commit üstte.
 
 ---
 
-### 38. `ccad8be` — Modularize dashboard.js phase 2: appbar, wallet-state, spot-trade, finance
+### 40. `ccad8be` — Modularize dashboard.js phase 2: appbar, wallet-state, spot-trade, finance
 
 - **Commit no (tam):** `ccad8be278c4e12920e0048b49af8f588d5d0953`
 - **Commit no (kısa):** `ccad8be`
@@ -568,7 +599,7 @@ En yeni commit üstte.
 
 ---
 
-### 39. `5c8dcee` — docs: sync GIT.md (git log)
+### 41. `5c8dcee` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `5c8dcee4f6f353fa39340b2335033ae3cf01abca`
 - **Commit no (kısa):** `5c8dcee`
@@ -577,7 +608,7 @@ En yeni commit üstte.
 
 ---
 
-### 40. `b9a042f` — Modularize dashboard.js: extract format utils + leaderboard (phase 1)
+### 42. `b9a042f` — Modularize dashboard.js: extract format utils + leaderboard (phase 1)
 
 - **Commit no (tam):** `b9a042fcd03ca42149afb8df99504e7b443cc6cf`
 - **Commit no (kısa):** `b9a042f`
@@ -608,7 +639,7 @@ En yeni commit üstte.
 
 ---
 
-### 41. `e2d8fba` — docs: sync GIT.md (git log)
+### 43. `e2d8fba` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `e2d8fba8894e8c4a42e1dca1bbfa8f74485c0855`
 - **Commit no (kısa):** `e2d8fba`
@@ -617,7 +648,7 @@ En yeni commit üstte.
 
 ---
 
-### 42. `2c6479f` — Implement CTO report items: CORS, admin security, daily loss limit, health endpoints
+### 44. `2c6479f` — Implement CTO report items: CORS, admin security, daily loss limit, health endpoints
 
 - **Commit no (tam):** `2c6479fc394ed1bc06311055880e7a1ba53e3317`
 - **Commit no (kısa):** `2c6479f`
@@ -650,7 +681,7 @@ En yeni commit üstte.
 
 ---
 
-### 43. `98e58e9` — docs: sync GIT.md (git log)
+### 45. `98e58e9` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `98e58e9fca4734490498e93478442f6d5c0e9885`
 - **Commit no (kısa):** `98e58e9`
@@ -659,7 +690,7 @@ En yeni commit üstte.
 
 ---
 
-### 44. `c05cad8` — Fix BINANCE_UNREACHABLE false-positive: suppress transient outage alerts & faster recovery
+### 46. `c05cad8` — Fix BINANCE_UNREACHABLE false-positive: suppress transient outage alerts & faster recovery
 
 - **Commit no (tam):** `c05cad8053e105e0c9bdb7b94e2814943821d748`
 - **Commit no (kısa):** `c05cad8`
@@ -686,7 +717,7 @@ En yeni commit üstte.
 
 ---
 
-### 45. `c4aecf7` — docs: sync GIT.md (git log)
+### 47. `c4aecf7` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `c4aecf7be2717610af45debf85497a57ea0e0de8`
 - **Commit no (kısa):** `c4aecf7`
@@ -695,7 +726,7 @@ En yeni commit üstte.
 
 ---
 
-### 46. `f0b7446` — Fix wallet stale flicker, bot yellow mislead, ETH synthetic balance & cycle ledger fee bug
+### 48. `f0b7446` — Fix wallet stale flicker, bot yellow mislead, ETH synthetic balance & cycle ledger fee bug
 
 - **Commit no (tam):** `f0b7446ef4b7d2aa011be6269b12e98ce2635676`
 - **Commit no (kısa):** `f0b7446`
@@ -728,7 +759,7 @@ En yeni commit üstte.
 
 ---
 
-### 47. `ec8e100` — docs: sync GIT.md (git log)
+### 49. `ec8e100` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `ec8e100add7e7f5aa7ea774bb69102d62d0cbfd2`
 - **Commit no (kısa):** `ec8e100`
@@ -737,7 +768,7 @@ En yeni commit üstte.
 
 ---
 
-### 48. `dabab68` — Speed up finance history first paint
+### 50. `dabab68` — Speed up finance history first paint
 
 - **Commit no (tam):** `dabab68b675faefb6b485a0169d8510f441722ba`
 - **Commit no (kısa):** `dabab68`
@@ -746,7 +777,7 @@ En yeni commit üstte.
 
 ---
 
-### 49. `310fb3c` — docs: sync GIT.md (git log)
+### 51. `310fb3c` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `310fb3c095fe57a81a7060a0734b86afd1d994d6`
 - **Commit no (kısa):** `310fb3c`
@@ -755,7 +786,7 @@ En yeni commit üstte.
 
 ---
 
-### 50. `1b1dc05` — Add bounded log maintenance and reduce runtime noise
+### 52. `1b1dc05` — Add bounded log maintenance and reduce runtime noise
 
 - **Commit no (tam):** `1b1dc0597a0e699652fbaa139b7cb9a5850064b5`
 - **Commit no (kısa):** `1b1dc05`
@@ -764,7 +795,7 @@ En yeni commit üstte.
 
 ---
 
-### 51. `285d08e` — docs: sync GIT.md (git log)
+### 53. `285d08e` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `285d08ed236101ca10690869ded9397764bcf58f`
 - **Commit no (kısa):** `285d08e`
@@ -773,7 +804,7 @@ En yeni commit üstte.
 
 ---
 
-### 52. `40264fc` — Stabilize dashboard runtime and UI state
+### 54. `40264fc` — Stabilize dashboard runtime and UI state
 
 - **Commit no (tam):** `40264fc7d7194184b243e8fb559ff2d592dfc3f5`
 - **Commit no (kısa):** `40264fc`
@@ -782,7 +813,7 @@ En yeni commit üstte.
 
 ---
 
-### 53. `53479f6` — docs: sync GIT.md (git log)
+### 55. `53479f6` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `53479f6121e2d9505684d544e2952f65c02664d0`
 - **Commit no (kısa):** `53479f6`
@@ -791,7 +822,7 @@ En yeni commit üstte.
 
 ---
 
-### 54. `e060cae` — Improve admin, dashboard, and bot detail UX with perf and scroll fixes.
+### 56. `e060cae` — Improve admin, dashboard, and bot detail UX with perf and scroll fixes.
 
 - **Commit no (tam):** `e060cae4ef9d0eeccc1f264d105b52804cad0acd`
 - **Commit no (kısa):** `e060cae`
@@ -802,7 +833,7 @@ En yeni commit üstte.
 
 ---
 
-### 55. `f0519b1` — docs: sync GIT.md (git log)
+### 57. `f0519b1` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `f0519b125ef97e8c19b57be4baec138c2138c8a4`
 - **Commit no (kısa):** `f0519b1`
@@ -811,7 +842,7 @@ En yeni commit üstte.
 
 ---
 
-### 56. `dfd42cc` — Expand login page with zip welcome layout and market dock.
+### 58. `dfd42cc` — Expand login page with zip welcome layout and market dock.
 
 - **Commit no (tam):** `dfd42cc04305699d9bc1e8eb9b1fa445fb849a8c`
 - **Commit no (kısa):** `dfd42cc`
@@ -822,7 +853,7 @@ En yeni commit üstte.
 
 ---
 
-### 57. `3f93c07` — docs: sync GIT.md (git log)
+### 59. `3f93c07` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `3f93c077ae45d54fff5b996e0602bef8abb566be`
 - **Commit no (kısa):** `3f93c07`
@@ -831,7 +862,7 @@ En yeni commit üstte.
 
 ---
 
-### 58. `44f08d8` — Redesign login page with zip AuthCard glass theme.
+### 60. `44f08d8` — Redesign login page with zip AuthCard glass theme.
 
 - **Commit no (tam):** `44f08d8f78a84c102c7232e161aa32d874db4c2a`
 - **Commit no (kısa):** `44f08d8`
@@ -842,7 +873,7 @@ En yeni commit üstte.
 
 ---
 
-### 59. `c69193c` — docs: sync GIT.md (git log)
+### 61. `c69193c` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `c69193c2cd55a4e4e828f0eed32c21d839f9dac8`
 - **Commit no (kısa):** `c69193c`
@@ -851,7 +882,7 @@ En yeni commit üstte.
 
 ---
 
-### 60. `5a99e35` — Fix Binance wallet errors, dashboard UX, and engine log stability.
+### 62. `5a99e35` — Fix Binance wallet errors, dashboard UX, and engine log stability.
 
 - **Commit no (tam):** `5a99e35362df096d18449012339cc29ba53622c5`
 - **Commit no (kısa):** `5a99e35`
@@ -862,7 +893,7 @@ En yeni commit üstte.
 
 ---
 
-### 61. `95318b1` — docs: sync GIT.md (git log)
+### 63. `95318b1` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `95318b1707c62e5968751185024e432c556c87c0`
 - **Commit no (kısa):** `95318b1`
@@ -871,7 +902,7 @@ En yeni commit üstte.
 
 ---
 
-### 62. `1e03319` — Fix dashboard connectivity, rate-limit toasts, and bot UX regressions.
+### 64. `1e03319` — Fix dashboard connectivity, rate-limit toasts, and bot UX regressions.
 
 - **Commit no (tam):** `1e03319ab536f6a82b8e568a04b7364245d65ed4`
 - **Commit no (kısa):** `1e03319`
@@ -882,7 +913,7 @@ En yeni commit üstte.
 
 ---
 
-### 63. `99aeb83` — docs: sync GIT.md (git log)
+### 65. `99aeb83` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `99aeb835fbad9f546efb843fbfa4db8791e4a634`
 - **Commit no (kısa):** `99aeb83`
@@ -891,7 +922,7 @@ En yeni commit üstte.
 
 ---
 
-### 64. `e17f1da` — UI: redesign admin header/KPI/tabs and improve dashboard Bots persistence.
+### 66. `e17f1da` — UI: redesign admin header/KPI/tabs and improve dashboard Bots persistence.
 
 - **Commit no (tam):** `e17f1dae027230fb7319742baf6fce22023dc97d`
 - **Commit no (kısa):** `e17f1da`
@@ -902,7 +933,7 @@ En yeni commit üstte.
 
 ---
 
-### 65. `4b8b710` — docs: sync GIT.md with Bots tab and wallet UX commit details.
+### 67. `4b8b710` — docs: sync GIT.md with Bots tab and wallet UX commit details.
 
 - **Commit no (tam):** `4b8b71092d20fb0439f90dfba8adc1a961c6e3c7`
 - **Commit no (kısa):** `4b8b710`
@@ -911,7 +942,7 @@ En yeni commit üstte.
 
 ---
 
-### 66. `3f64a0a` — docs: sync GIT.md (git log)
+### 68. `3f64a0a` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `3f64a0a781d036b147b98ecbcd4936850d4936fa`
 - **Commit no (kısa):** `3f64a0a`
@@ -920,7 +951,7 @@ En yeni commit üstte.
 
 ---
 
-### 67. `a8280fd` — Restore dashboard Bots tab and improve wallet/manager spot UX.
+### 69. `a8280fd` — Restore dashboard Bots tab and improve wallet/manager spot UX.
 
 - **Commit no (tam):** `a8280fd9ed851ed0397e939cd6677af04ca0980b`
 - **Commit no (kısa):** `a8280fd`
@@ -931,7 +962,7 @@ En yeni commit üstte.
 
 ---
 
-### 68. `a30acfa` — docs: sync GIT.md (git log)
+### 70. `a30acfa` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `a30acfa3506f5a80c21e1d1a1052808b2920207a`
 - **Commit no (kısa):** `a30acfa`
@@ -940,7 +971,7 @@ En yeni commit üstte.
 
 ---
 
-### 69. `42444b9` — Perf: batch live API, bulk state loads, and calmer UI polling.
+### 71. `42444b9` — Perf: batch live API, bulk state loads, and calmer UI polling.
 
 - **Commit no (tam):** `42444b9176ead5ceb2b896177c144ec52f0dc548`
 - **Commit no (kısa):** `42444b9`
@@ -953,7 +984,7 @@ En yeni commit üstte.
 
 ---
 
-### 70. `5dc6e2c` — docs: sync GIT.md (git log)
+### 72. `5dc6e2c` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `5dc6e2c8e1940c0681373c8e055cb0958099f298`
 - **Commit no (kısa):** `5dc6e2c`
@@ -962,7 +993,7 @@ En yeni commit üstte.
 
 ---
 
-### 71. `4857932` — UI stability, manager metrics, and test-account worker hardening.
+### 73. `4857932` — UI stability, manager metrics, and test-account worker hardening.
 
 - **Commit no (tam):** `48579320380a13930c10b4cc6e847474e734dc83`
 - **Commit no (kısa):** `4857932`
@@ -975,7 +1006,7 @@ En yeni commit üstte.
 
 ---
 
-### 72. `71e8888` — docs: sync GIT.md (git log)
+### 74. `71e8888` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `71e8888a9f2808db8762e909a17e70faff27ebe4`
 - **Commit no (kısa):** `71e8888`
@@ -984,7 +1015,7 @@ En yeni commit üstte.
 
 ---
 
-### 73. `13b5770` — Improve test paper trading realism and align test KPIs across admin and dashboard.
+### 75. `13b5770` — Improve test paper trading realism and align test KPIs across admin and dashboard.
 
 - **Commit no (tam):** `13b577044972ef0a7420114557ee449c41d22916`
 - **Commit no (kısa):** `13b5770`
@@ -995,7 +1026,7 @@ En yeni commit üstte.
 
 ---
 
-### 74. `b2ab64c` — docs: sync GIT.md (git log)
+### 76. `b2ab64c` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `b2ab64c6ed1b5c46d45b7a996cb02d5c14e4a46a`
 - **Commit no (kısa):** `b2ab64c`
@@ -1004,7 +1035,7 @@ En yeni commit üstte.
 
 ---
 
-### 75. `329f600` — Align admin active bot count and reduce Binance/asyncio log noise.
+### 77. `329f600` — Align admin active bot count and reduce Binance/asyncio log noise.
 
 - **Commit no (tam):** `329f600706905921ff79df6a8efb314602266e86`
 - **Commit no (kısa):** `329f600`
@@ -1015,7 +1046,7 @@ En yeni commit üstte.
 
 ---
 
-### 76. `385d3e9` — docs: sync GIT.md (git log)
+### 78. `385d3e9` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `385d3e9a8cc94299ac5f3dad5cfd37d973aa96ad`
 - **Commit no (kısa):** `385d3e9`
@@ -1024,7 +1055,7 @@ En yeni commit üstte.
 
 ---
 
-### 77. `2a7894d` — Fix test account wallet KPI/strip and harden upstream error handling.
+### 79. `2a7894d` — Fix test account wallet KPI/strip and harden upstream error handling.
 
 - **Commit no (tam):** `2a7894d66cf23956afc8c23effa20e16e43d2d0f`
 - **Commit no (kısa):** `2a7894d`
@@ -1035,7 +1066,7 @@ En yeni commit üstte.
 
 ---
 
-### 78. `7271b17` — docs: sync GIT.md (git log)
+### 80. `7271b17` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `7271b175296ba4871daea4a2462804918c65cb17`
 - **Commit no (kısa):** `7271b17`
@@ -1044,7 +1075,7 @@ En yeni commit üstte.
 
 ---
 
-### 79. `dc69f29` — docs: sync GIT.md (git log)
+### 81. `dc69f29` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `dc69f29cb946b242b0e49df13fb3cd69c41c012c`
 - **Commit no (kısa):** `dc69f29`
@@ -1053,7 +1084,7 @@ En yeni commit üstte.
 
 ---
 
-### 80. `9ec9b4f` — Fix bot state hero panel live updates and duration ticker.
+### 82. `9ec9b4f` — Fix bot state hero panel live updates and duration ticker.
 
 - **Commit no (tam):** `9ec9b4fff40b1bd7614b9cc1d69f11e370246598`
 - **Commit no (kısa):** `9ec9b4f`
@@ -1064,7 +1095,7 @@ En yeni commit üstte.
 
 ---
 
-### 81. `eda020a` — docs: sync GIT.md (git log)
+### 83. `eda020a` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `eda020a6c43a0925dd04761b83f62995c201849b`
 - **Commit no (kısa):** `eda020a`
@@ -1073,7 +1104,7 @@ En yeni commit üstte.
 
 ---
 
-### 82. `419defa` — docs: sync GIT.md (git log)
+### 84. `419defa` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `419defa4bebc1a450e096704125514d83beff688`
 - **Commit no (kısa):** `419defa`
@@ -1082,7 +1113,7 @@ En yeni commit üstte.
 
 ---
 
-### 83. `a09249b` — Fix manager global restart UnboundLocalError causing HTTP 500.
+### 85. `a09249b` — Fix manager global restart UnboundLocalError causing HTTP 500.
 
 - **Commit no (tam):** `a09249bba6ecb4c1564c7d5ca9427ecf6313d26f`
 - **Commit no (kısa):** `a09249b`
@@ -1093,7 +1124,7 @@ En yeni commit üstte.
 
 ---
 
-### 84. `19eea96` — docs: sync GIT.md (git log)
+### 86. `19eea96` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `19eea9641518474f96dbdf5d77fbcfd36a9a4397`
 - **Commit no (kısa):** `19eea96`
@@ -1102,7 +1133,7 @@ En yeni commit üstte.
 
 ---
 
-### 85. `1a87f0f` — docs: sync GIT.md (git log)
+### 87. `1a87f0f` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `1a87f0f15a30f1fdd29f9ca65e301596a6fabc12`
 - **Commit no (kısa):** `1a87f0f`
@@ -1111,7 +1142,7 @@ En yeni commit üstte.
 
 ---
 
-### 86. `5f6c321` — docs: sync GIT.md (git log)
+### 88. `5f6c321` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `5f6c32166a325569102ca9edf3b7c5b992eb4ff1`
 - **Commit no (kısa):** `5f6c321`
@@ -1120,7 +1151,7 @@ En yeni commit üstte.
 
 ---
 
-### 87. `80e39e9` — Bot UI/engine reliability: daily K/Z, cycle timer, logs, and manager global actions.
+### 89. `80e39e9` — Bot UI/engine reliability: daily K/Z, cycle timer, logs, and manager global actions.
 
 - **Commit no (tam):** `80e39e95f5a748ce69d0226ab07bf0e34efc2ffd`
 - **Commit no (kısa):** `80e39e9`
@@ -1131,7 +1162,7 @@ En yeni commit üstte.
 
 ---
 
-### 88. `4245e01` — docs: sync GIT.md (git log)
+### 90. `4245e01` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `4245e0136ec7eb389893587970b5c58b29b1deb7`
 - **Commit no (kısa):** `4245e01`
@@ -1140,7 +1171,7 @@ En yeni commit üstte.
 
 ---
 
-### 89. `1db1ee5` — docs: sync GIT.md (git log)
+### 91. `1db1ee5` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `1db1ee532490656f75dd5569ce0a828f050353d1`
 - **Commit no (kısa):** `1db1ee5`
@@ -1149,7 +1180,7 @@ En yeni commit üstte.
 
 ---
 
-### 90. `c2c6cae` — docs: sync GIT.md (git log)
+### 92. `c2c6cae` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `c2c6caea7f337e796cc42a06e5ea8b5a4d31f803`
 - **Commit no (kısa):** `c2c6cae`
@@ -1158,7 +1189,7 @@ En yeni commit üstte.
 
 ---
 
-### 91. `9987ecb` — docs: sync GIT.md (git log)
+### 93. `9987ecb` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `9987ecb1ec1b7c75a7f9f9314a14f3560b66920d`
 - **Commit no (kısa):** `9987ecb`
@@ -1167,7 +1198,7 @@ En yeni commit üstte.
 
 ---
 
-### 92. `379bb3c` — Bot session tenure, connectivity restore, synthetic cycle logs, and wallet KPI alignment.
+### 94. `379bb3c` — Bot session tenure, connectivity restore, synthetic cycle logs, and wallet KPI alignment.
 
 - **Commit no (tam):** `379bb3c7985a0eb0171935e072cdf72b6c2a7462`
 - **Commit no (kısa):** `379bb3c`
@@ -1178,7 +1209,7 @@ En yeni commit üstte.
 
 ---
 
-### 93. `2498bb1` — Dashboard, manager, and engine hardening across bot perf, leaderboard, and ops.
+### 95. `2498bb1` — Dashboard, manager, and engine hardening across bot perf, leaderboard, and ops.
 
 - **Commit no (tam):** `2498bb1472406a809a10701ac9d28265f4905581`
 - **Commit no (kısa):** `2498bb1`
@@ -1189,7 +1220,7 @@ En yeni commit üstte.
 
 ---
 
-### 94. `7756f7c` — docs: sync GIT.md (git log)
+### 96. `7756f7c` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `7756f7c2c37b81d2b9fdce38cb0652adc5afa94f`
 - **Commit no (kısa):** `7756f7c`
@@ -1198,7 +1229,7 @@ En yeni commit üstte.
 
 ---
 
-### 95. `5a163ba` — Bot health resilience, grid/profit UI polish, and engine hardening.
+### 97. `5a163ba` — Bot health resilience, grid/profit UI polish, and engine hardening.
 
 - **Commit no (tam):** `5a163bad0b2e2b69d3af469b6e840434752e60a1`
 - **Commit no (kısa):** `5a163ba`
@@ -1213,7 +1244,7 @@ En yeni commit üstte.
 
 ---
 
-### 96. `9634309` — docs: sync GIT.md (git log)
+### 98. `9634309` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `9634309f7ab5f16c16d459f9d0f402201b075d9f`
 - **Commit no (kısa):** `9634309`
@@ -1222,7 +1253,7 @@ En yeni commit üstte.
 
 ---
 
-### 97. `3531540` — Grid trailing, Binance connectivity, and dashboard KPI hardening.
+### 99. `3531540` — Grid trailing, Binance connectivity, and dashboard KPI hardening.
 
 - **Commit no (tam):** `35315408f3bd82aded9d3df80cf6b027e6b76573`
 - **Commit no (kısa):** `3531540`
@@ -1233,7 +1264,7 @@ En yeni commit üstte.
 
 ---
 
-### 98. `5481c74` — docs: sync GIT.md (git log)
+### 100. `5481c74` — docs: sync GIT.md (git log)
 
 - **Commit no (tam):** `5481c74e66082622c262039d66ec4cac9b573dd1`
 - **Commit no (kısa):** `5481c74`
@@ -1242,7 +1273,7 @@ En yeni commit üstte.
 
 ---
 
-### 99. `1974512` — Add grid trade modal, manager log UX, and bot detail sync fixes.
+### 101. `1974512` — Add grid trade modal, manager log UX, and bot detail sync fixes.
 
 - **Commit no (tam):** `1974512fc9fe7d150259efa996c9b896f1539378`
 - **Commit no (kısa):** `1974512`
@@ -1253,7 +1284,7 @@ En yeni commit üstte.
 
 ---
 
-### 100. `1cd3a5e` — Update marketing submodule to latest landing and deploy changes.
+### 102. `1cd3a5e` — Update marketing submodule to latest landing and deploy changes.
 
 - **Commit no (tam):** `1cd3a5e224209e06c5c011eb6141344835a084af`
 - **Commit no (kısa):** `1cd3a5e`
@@ -1262,7 +1293,7 @@ En yeni commit üstte.
 
 ---
 
-### 101. `805594b` — Engine log UX, health alerts, grid trailing hardening, and tur trade fixes.
+### 103. `805594b` — Engine log UX, health alerts, grid trailing hardening, and tur trade fixes.
 
 - **Commit no (tam):** `805594bc839e196b860244c6371b7274e6461657`
 - **Commit no (kısa):** `805594b`
@@ -1273,7 +1304,7 @@ En yeni commit üstte.
 
 ---
 
-### 102. `4ba8f8c` — Checkpoint: pre profit-exit trigger fix (REST SSOT, UI, ops reorg).
+### 104. `4ba8f8c` — Checkpoint: pre profit-exit trigger fix (REST SSOT, UI, ops reorg).
 
 - **Commit no (tam):** `4ba8f8cfcfc455dcbc77824fad6ac13308da29b6`
 - **Commit no (kısa):** `4ba8f8c`
@@ -1284,7 +1315,7 @@ En yeni commit üstte.
 
 ---
 
-### 103. `8c5aa65` — chore: history — 2026-05-06 öncesi tüm commitler squash edildi
+### 105. `8c5aa65` — chore: history — 2026-05-06 öncesi tüm commitler squash edildi
 
 - **Commit no (tam):** `8c5aa654d9814442341b28a89bdc694fa54f775b`
 - **Commit no (kısa):** `8c5aa65`
