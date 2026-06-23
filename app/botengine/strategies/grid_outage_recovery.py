@@ -90,17 +90,6 @@ def _reset_sell_grid_trigger(state: Dict[str, Any], idx: int) -> None:
     state["sell_grid_peak_price"] = peaks
 
 
-def _reset_buy_grid_trigger(state: Dict[str, Any], idx: int) -> None:
-    triggers = state.get("buy_grid_trigger_price") or []
-    troughs = state.get("buy_grid_trough_price") or []
-    if idx < len(triggers):
-        triggers[idx] = None
-    if idx < len(troughs):
-        troughs[idx] = None
-    state["buy_grid_trigger_price"] = triggers
-    state["buy_grid_trough_price"] = troughs
-
-
 def _log_note(log_notes: Optional[List[str]], text: str) -> None:
     if log_notes is not None and text:
         log_notes.append(text)
@@ -205,6 +194,7 @@ def _recover_buy_grid(
     troughs = state.get("buy_grid_trough_price") or []
     while len(troughs) <= idx:
         troughs.append(None)
+    had_real_trough = troughs[idx] is not None
     trough = _f(troughs[idx]) if troughs[idx] is not None else trigger
     trough = min(trough or trigger, trigger, P)
     exec_thr = trough * (1.0 + buy_trail_pct / 100.0)
@@ -224,6 +214,23 @@ def _recover_buy_grid(
             return
         troughs[idx] = trough
         state["buy_grid_trough_price"] = troughs
+        if not had_real_trough:
+            # Gerçek tur içi dip hiç gözlenmemiş (kopma, grid'in ilk tetiklendiği
+            # anı da kapsıyor): trough burada P'den türetildiği için P'ye eşit
+            # ya da çok yakın çıkar. Bunu hemen "favorable" sayıp ateşlemek,
+            # trailing yüzdesini fiilen sıfırlayıp Dip fiyat ≈ Gerçekleşme
+            # fiyatı sonucunu doğuruyordu. Gerçek bir geçmiş dip yokken canlı
+            # tick'teki gibi davran: yalnızca trough'tan buy_trail_pct kadar
+            # gerçek bir sıçrama gözlenince ateşle.
+            logger.info(
+                "BOT_OUTAGE_RECOVERY bot_id=%s grid=buy idx=%s action=CONTINUE_TRAIL_NO_HISTORY price=%.4f exec=%.4f trigger=%.4f",
+                state.get("bot_id"),
+                idx,
+                P,
+                exec_thr,
+                trigger,
+            )
+            return
         favorable.append(idx)
         _log_note(
             log_notes,

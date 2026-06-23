@@ -152,6 +152,22 @@ def test_buy_favorable_when_price_below_execution():
     assert 0 in st.get("_outage_favorable_buy", [])
 
 
+def test_buy_no_favorable_without_real_trough_history():
+    """Kopma, grid'in ilk tetiklendiği anı da kapsıyorsa (gerçek dip hiç
+    gözlenmemiş, trough=None) trough P'den türetilir ve P'ye eşit/çok yakın
+    çıkar. Bunu hemen favorable sayıp ateşlemek trailing yüzdesini fiilen
+    sıfırlardı (Dip fiyat ≈ Gerçekleşme fiyatı). Gerçek geçmiş dip yokken
+    tam bounce (buy_trail_pct) gözlenmeden ateşlenmemeli."""
+    cfg = _cfg()
+    st = _state_with_gap(
+        buy_grid_trigger_price=[99.0],
+        buy_grid_trough_price=[None],
+    )
+    apply_grid_outage_recovery(st, cfg, 98.39, gap_sec=60.0)
+    assert st.get("_outage_favorable_buy") == []
+    assert st["buy_grid_trough_price"][0] == pytest.approx(98.39)
+
+
 def test_buy_reanchor_does_not_raise_trigger():
     cfg = _cfg()
     st = _state_with_gap()
