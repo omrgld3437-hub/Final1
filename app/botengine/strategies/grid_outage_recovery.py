@@ -107,11 +107,31 @@ def _recover_sell_grid(
     peaks = state.get("sell_grid_peak_price") or []
     while len(peaks) <= idx:
         peaks.append(None)
+    had_real_peak = peaks[idx] is not None
     peak = _f(peaks[idx]) if peaks[idx] is not None else trigger
     peak = max(peak or trigger, trigger, P)
     exec_thr = peak * (1.0 - sell_trail_pct / 100.0)
 
     if P <= exec_thr:
+        if not had_real_peak:
+            # Gerçek tur içi tepe hiç gözlenmemiş (kopma, grid'in ilk tetiklendiği
+            # anı da kapsıyor): peak burada trigger'dan fabrike edildi (gerçek bir
+            # veri değil). Bunu hemen "favorable" sayıp satmak, hiç doğrulanmamış
+            # kurgusal bir tepeye göre erken/abartılı satışa yol açıyordu (Tepe
+            # fiyat hiç gözlenmeden satış tetikleniyordu). Gerçek bir geçmiş tepe
+            # yokken canlı tick'teki gibi davran: yalnızca peak'ten
+            # sell_trail_pct kadar gerçek bir geri çekilme gözlenince sat.
+            peaks[idx] = peak
+            state["sell_grid_peak_price"] = peaks
+            logger.info(
+                "BOT_OUTAGE_RECOVERY bot_id=%s grid=sell idx=%s action=CONTINUE_TRAIL_NO_HISTORY price=%.4f exec=%.4f trigger=%.4f",
+                state.get("bot_id"),
+                idx,
+                P,
+                exec_thr,
+                trigger,
+            )
+            return
         peaks[idx] = peak
         state["sell_grid_peak_price"] = peaks
         favorable.append(idx)

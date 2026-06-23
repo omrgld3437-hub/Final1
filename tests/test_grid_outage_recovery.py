@@ -130,6 +130,22 @@ def test_sell_grid_favorable_when_price_at_exec():
     assert 0 in st.get("_outage_favorable_sell", [])
 
 
+def test_sell_no_favorable_without_real_peak_history():
+    """Kopma, grid'in ilk tetiklendiği anı da kapsıyorsa (gerçek tepe hiç
+    gözlenmemiş, peak=None) peak trigger'dan fabrike edilir (gerçek veri
+    değil). Bunu hemen favorable sayıp satmak, hiç doğrulanmamış kurgusal
+    bir tepeye göre erken/abartılı satışa yol açardı. Gerçek geçmiş tepe
+    yokken tam geri çekilme (sell_trail_pct) gözlenmeden satılmamalı."""
+    cfg = _cfg()
+    st = _state_with_gap(
+        sell_grid_trigger_price=[100.0],
+        sell_grid_peak_price=[None],
+    )
+    apply_grid_outage_recovery(st, cfg, 95.0, gap_sec=60.0)
+    assert st.get("_outage_favorable_sell") == []
+    assert st["sell_grid_peak_price"][0] == pytest.approx(100.0)
+
+
 def test_sell_grid_stays_armed_at_new_peak():
     cfg = _cfg()
     st = _state_with_gap(
