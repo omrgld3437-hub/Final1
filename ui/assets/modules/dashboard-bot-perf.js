@@ -530,8 +530,8 @@ function applyTrailingDcaConfigToForm(p, opts) {
     var downGrids = down.grids || [];
     var upCountEl = document.getElementById('fUpCount');
     var downCountEl = document.getElementById('fDownCount');
-    if (upCountEl && upGrids.length > 0) { upCountEl.value = upGrids.length; buildGridRows('upGridRows', upGrids.length, 'up'); }
-    if (downCountEl && downGrids.length > 0) { downCountEl.value = downGrids.length; buildGridRows('downGridRows', downGrids.length, 'down'); }
+    if (upCountEl && upGrids.length > 0) { upCountEl.value = upGrids.length; buildGridRows('upGridRows', upGrids.length, 'up', upGrids); }
+    if (downCountEl && downGrids.length > 0) { downCountEl.value = downGrids.length; buildGridRows('downGridRows', downGrids.length, 'down', downGrids); }
     var upTrailEl = document.getElementById('fUpTrail');
     var downTrailEl = document.getElementById('fDownTrail');
     if (upTrailEl && (up.trail_pct != null || up.trail_pct === 0)) upTrailEl.value = roundPct2(up.trail_pct);
@@ -542,12 +542,14 @@ function applyTrailingDcaConfigToForm(p, opts) {
         if (tEl && upGrids[i].trigger_pct != null) tEl.value = roundPct2(upGrids[i].trigger_pct);
         if (qEl && upGrids[i].qty_pct != null) qEl.value = roundPct2(upGrids[i].qty_pct);
     }
+    if (upGrids.length > 0 && typeof _updateGridQtySum === 'function') _updateGridQtySum('upGridRows', 'up');
     for (var j = 0; j < downGrids.length; j++) {
         var t2 = document.getElementById('downGrid_' + j + '_trigger');
         var q2 = document.getElementById('downGrid_' + j + '_qty');
         if (t2 && downGrids[j].trigger_pct != null) t2.value = roundPct2(downGrids[j].trigger_pct);
         if (q2 && downGrids[j].qty_pct != null) q2.value = roundPct2(downGrids[j].qty_pct);
     }
+    if (downGrids.length > 0 && typeof _updateGridQtySum === 'function') _updateGridQtySum('downGridRows', 'down');
     var rebuyT = document.getElementById('fRebuyTrigger');
     var rebuyTrail = document.getElementById('fRebuyTrail');
     var resellT = document.getElementById('fResellTrigger');

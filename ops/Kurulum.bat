@@ -5,7 +5,7 @@ if not "%~1"=="--icerde" (
   cmd /k "%~f0" --icerde
   exit /b
 )
-title TraderTrailing - Kurulum
+title ayserose - Kurulum
 chcp 65001 >nul 2>&1
 setlocal
 cd /d "%~dp0.."
@@ -14,7 +14,7 @@ if "%ROOT:~-1%"=="\" set "ROOT=%ROOT:~0,-1%"
 
 echo.
 echo ========================================
-echo   TraderTrailing - Windows Kurulum
+echo   ayserose - Windows Kurulum
 echo ========================================
 echo Klasor: %ROOT%
 echo.

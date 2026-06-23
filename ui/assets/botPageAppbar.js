@@ -1,5 +1,5 @@
 /**
- * Bot detay sayfaları — üst appbar (WS göstergesi + TraderTrailing).
+ * Bot detay sayfaları — üst appbar (WS göstergesi + ayserose).
  */
 (function (global) {
     'use strict';

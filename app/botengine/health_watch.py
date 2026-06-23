@@ -1094,6 +1094,18 @@ def evaluate_bot_health(
 _UNSET = object()
 
 
+def summarize_health_alert_level(alerts: List[Dict[str, Any]]) -> Optional[str]:
+    has_crit = any((a.get("level") or "").lower() == "critical" for a in alerts or [])
+    has_warn = any((a.get("level") or "").lower() == "warn" for a in alerts or [])
+    if has_crit and has_warn:
+        return "both"
+    if has_crit:
+        return "critical"
+    if has_warn:
+        return "warn"
+    return None
+
+
 def evaluate_bot_health_lite(
     bot,
     state: Optional[Dict[str, Any]],

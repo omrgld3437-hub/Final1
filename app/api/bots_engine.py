@@ -2806,6 +2806,14 @@ async def bots_detail(
             if _dyn_gate.EMERGENCY_CHECKS_ENABLED and not _dyn_first_cycle_manual
             else None
         )
+        _dyn_hold = (
+            (state or {}).get("_dynamic_cycle_hold")
+            if not _dyn_first_cycle_manual
+            else None
+        )
+        _dyn_stance = (
+            (_dyn_snap.get("stance") if isinstance(_dyn_snap, dict) else None)
+        )
         result["dynamic_mode"] = {
             "enabled": parse_bool((raw or {}).get("dynamic_mode")),
             "active": _dyn_gate_active and not _dyn_first_cycle_manual,
@@ -2816,6 +2824,8 @@ async def bots_detail(
                 "injected_defaults": _gate_chk.injected_defaults,
             },
             "snapshot": _dyn_snap if isinstance(_dyn_snap, dict) else None,
+            "stance": _dyn_stance if isinstance(_dyn_stance, dict) else None,
+            "cycle_hold": _dyn_hold if isinstance(_dyn_hold, dict) and _dyn_hold.get("active") else None,
             "emergency": _dyn_emergency,
         }
     except Exception as e:

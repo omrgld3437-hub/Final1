@@ -169,13 +169,16 @@
     if (s == null || s === undefined) return "—";
     s = Math.max(0, Math.floor(Number(s)));
     if (chronometer) {
-      var h = Math.floor(s / 3600);
-      var m = Math.floor((s % 3600) / 60);
-      var sec = s % 60;
-      if (h > 0) {
-        return h + ":" + (m < 10 ? "0" : "") + m + ":" + (sec < 10 ? "0" : "") + sec;
-      }
-      return m + ":" + (sec < 10 ? "0" : "") + sec;
+      var totalMin = Math.floor(s / 60);
+      var totalHours = Math.floor(totalMin / 60);
+      var days = Math.floor(totalHours / 24);
+      var months = Math.floor(days / 30);
+      var remDays = days % 30;
+      var hours = totalHours % 24;
+      var mins = totalMin % 60;
+      if (months > 0) return months + " ay " + remDays + " gün " + hours + " sa";
+      if (days > 0) return days + " gün " + hours + " sa";
+      return totalHours + " sa " + (mins < 10 ? "0" : "") + mins + " dk";
     }
     if (s < 60) return s + " sn";
     var m = Math.floor(s / 60);

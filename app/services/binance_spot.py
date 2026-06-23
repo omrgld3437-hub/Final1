@@ -392,6 +392,32 @@ async def _public_get_json_impl(
     return None
 
 
+async def _guarded_wait_for(coro: Any, *, timeout: float) -> Any:
+    """asyncio.wait_for that never leaks 'Task exception was never retrieved'.
+
+    Python 3.9's wait_for, when its *surrounding* coroutine is cancelled by an
+    outer timeout at the same moment the inner task is finishing with an
+    exception (a late DNS/connect/HTTP error), takes its `except CancelledError`
+    branch and re-raises without calling `fut.result()`. The inner task is then
+    garbage-collected with an unretrieved exception, which asyncio logs at ERROR
+    level (see worker.log: Task-* coro=_signed_request_impl with
+    ConnectError / ConnectTimeout / 401). Owning the task here and retrieving
+    its exception in a done-callback clears that flag; the real error still
+    propagates to the awaiter unchanged.
+    """
+    task = asyncio.ensure_future(coro)
+
+    def _retrieve(t: "asyncio.Future") -> None:
+        if not t.cancelled():
+            try:
+                t.exception()
+            except Exception:
+                pass
+
+    task.add_done_callback(_retrieve)
+    return await asyncio.wait_for(task, timeout=timeout)
+
+
 async def public_get_json(
     path: str,
     params: Optional[Dict[str, Any]] = None,
@@ -401,7 +427,7 @@ async def public_get_json(
 ) -> Any:
     """Public GET with retry/backoff. Total timeout 4s; raises DependencyFailure on exceed."""
     try:
-        return await asyncio.wait_for(
+        return await _guarded_wait_for(
             _public_get_json_impl(path, params, testnet, client, request_id),
             timeout=BINANCE_REQUEST_TIMEOUT_SEC,
         )
@@ -486,7 +512,7 @@ async def signed_json(
 ) -> Any:
     """Signed request with retry/backoff. Total timeout 4s; raises DependencyFailure on exceed."""
     try:
-        return await asyncio.wait_for(
+        return await _guarded_wait_for(
             _signed_json_impl(method, path, keys, params, client, request_id),
             timeout=BINANCE_REQUEST_TIMEOUT_SEC,
         )
@@ -1078,7 +1104,7 @@ async def _signed_request(
 ) -> Any:
     """Signed request with timeout. Raises DependencyFailure on exceed."""
     try:
-        return await asyncio.wait_for(
+        return await _guarded_wait_for(
             _signed_request_impl(client, method, path, keys, params),
             timeout=BINANCE_REQUEST_TIMEOUT_SEC,
         )
@@ -1097,6 +1123,45 @@ _ACCOUNT_CACHE_TTL = 8.0
 _account_cache: Dict[tuple, tuple] = {}  # (testnet, api_key) -> (data, ts)
 _account_inflight: Dict[tuple, asyncio.Task] = {}
 _account_lock = asyncio.Lock()
+
+
+def _track_account_inflight_task(cache_key: tuple, task: asyncio.Task) -> None:
+    """Finalize shared account task even if the original waiter timed out.
+
+    Without this, late DNS/connect failures from the shared task can surface as
+    "Task exception was never retrieved" in worker.log.
+    """
+
+    def _done(t: asyncio.Task) -> None:
+        async def _finalize() -> None:
+            data = None
+            ok = False
+            try:
+                data = t.result()
+                ok = True
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:
+                logger.debug("ACCOUNT_CALL background task failed: %s", e)
+            try:
+                async with _account_lock:
+                    if _account_inflight.get(cache_key) is t:
+                        if ok:
+                            _account_cache[cache_key] = (data, time.time())
+                        _account_inflight.pop(cache_key, None)
+            except Exception as e:
+                logger.debug("ACCOUNT_CALL background finalize failed: %s", e)
+
+        try:
+            asyncio.get_running_loop().create_task(_finalize())
+        except RuntimeError:
+            try:
+                if not t.cancelled():
+                    t.exception()
+            except Exception:
+                pass
+
+    task.add_done_callback(_done)
 
 
 async def _fetch_account_upstream(keys: Any, tag: str = "wallet") -> Dict[str, Any]:
@@ -1142,13 +1207,17 @@ async def get_wallet(keys: Any, tag: str = "wallet") -> Dict[str, Any]:
             logger.debug("ACCOUNT_CALL tag=%s cache_hit=false in_flight_reuse", tag)
         else:
             task = asyncio.create_task(_fetch_account_upstream(keys, tag))
+            _track_account_inflight_task(cache_key, task)
             _account_inflight[cache_key] = task
             is_creator = True
             logger.debug("ACCOUNT_CALL tag=%s cache_hit=false upstream_call=true", tag)
     try:
-        data = await asyncio.wait_for(task, timeout=BINANCE_REQUEST_TIMEOUT_SEC)
+        data = await asyncio.wait_for(
+            asyncio.shield(task), timeout=BINANCE_REQUEST_TIMEOUT_SEC
+        )
     except asyncio.TimeoutError as e:
         if is_creator:
+            task.cancel()
             async with _account_lock:
                 if (
                     cache_key in _account_inflight

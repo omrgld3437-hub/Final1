@@ -739,12 +739,31 @@ def _klines_cache_ttl(interval: str) -> float:
     return float(KLINES_TTL_BY_INTERVAL.get(interval.lower(), 60))
 
 
-def _klines_stale_fallback(symbol: str, interval: str) -> list:
-    """Binance 418/429 veya ağ hatasında son bilinen mumları döndür (grafik boş kalmasın)."""
+def _klines_stale_fallback(
+    symbol: str, interval: str, limit: int, end_time: Optional[int] = None
+) -> list:
+    """Binance 418/429 veya ağ hatasında istenen pencereye uyan son bilinen mumları döndür."""
     best = None
     best_ts = 0.0
     sym = (symbol or "").upper()
     iv = (interval or "").lower()
+    if end_time is not None:
+        merged = {}
+        for key, (data, _ts) in KLINES_CACHE.items():
+            if not data or not isinstance(key, tuple) or len(key) < 2:
+                continue
+            if key[0] != sym or key[1] != iv:
+                continue
+            for candle in data:
+                try:
+                    t = int(candle.get("t"))
+                except (AttributeError, TypeError, ValueError):
+                    continue
+                if t <= int(end_time):
+                    merged[t] = candle
+        if not merged:
+            return []
+        return [merged[t] for t in sorted(merged.keys())][-max(1, int(limit or 1)) :]
     for key, (data, ts) in KLINES_CACHE.items():
         if not data or not isinstance(key, tuple) or len(key) < 2:
             continue
@@ -752,7 +771,9 @@ def _klines_stale_fallback(symbol: str, interval: str) -> list:
             if ts > best_ts:
                 best_ts = ts
                 best = data
-    return best if isinstance(best, list) else []
+    if not isinstance(best, list):
+        return []
+    return best[-max(1, int(limit or 1)) :]
 
 
 @router.get("/spot/klines")
@@ -793,7 +814,7 @@ async def get_spot_klines(
         KLINES_INFLIGHT.pop(cache_key, None)
 
     async def _fetch():
-        stale = _klines_stale_fallback(symbol, interval)
+        stale = _klines_stale_fallback(symbol, interval, limit, end_time)
         try:
             params = {"symbol": symbol, "interval": interval, "limit": limit}
             if end_time is not None:

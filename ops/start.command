@@ -1,5 +1,5 @@
 #!/bin/bash
-# TraderTrailing — tum servisleri baslatir (Manager 7999, Web 8000, Worker, opsiyonel marketing :8080).
+# ayserose — tum servisleri baslatir (Manager 7999, Web 8000, Worker, opsiyonel marketing :8080).
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 mkdir -p logs .run

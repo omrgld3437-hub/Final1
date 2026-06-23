@@ -822,7 +822,7 @@ def _get_test_account_tx_history(
                 "is_bot": bid is not None,
                 "source": "bot" if bid else "spot",
                 "source_label": source,
-                "platform": "TraderTrailing",
+                "platform": "ayserose",
                 "is_paper": True,
                 "type_label": ("Simüle Alış" if side_u == "BUY" else "Simüle Satış"),
             }
@@ -2885,6 +2885,21 @@ async def api_dashboard_summary(
     bots_array = []
     _today_start = turkey_today_start_utc()
     _today_date = _today_start.strftime("%Y-%m-%d")
+    from app.botengine.health_watch import (
+        _account_wallet_stale_alert,
+        evaluate_bot_health_lite,
+        summarize_health_alert_level,
+    )
+
+    try:
+        from app.services.binance_connectivity import active_failure
+
+        account_failure = active_failure(account_id)
+    except Exception:
+        account_failure = None
+    account_wallet_alert = (
+        None if account_failure else _account_wallet_stale_alert(db, account_id)
+    )
 
     for bot in bots:
         pnl_data = PnlService.calculate_bot_pnl(db, bot.id, account_id)
@@ -2983,6 +2998,12 @@ async def api_dashboard_summary(
             and current_usd <= 0.01
         ):
             _display_status = "starting"
+        health_alerts = evaluate_bot_health_lite(
+            bot,
+            _state,
+            account_failure=account_failure,
+            account_wallet_alert=account_wallet_alert,
+        )
         bots_array.append(
             {
                 "bot_id": bot.id,
@@ -3006,6 +3027,8 @@ async def api_dashboard_summary(
                 "last_trade_at": last_trade_at,
                 "total_cycles_completed": total_cycles_completed,
                 "cycle_id": int(_state.get("cycle_id") or total_cycles_completed or 1),
+                "health_alert_level": summarize_health_alert_level(health_alerts),
+                "health_alerts": health_alerts,
             }
         )
 

@@ -102,6 +102,33 @@ def test_api_unauthorized_connectivity_event_pauses_running_bot(monkeypatch):
     )
 
 
+def test_api_unauthorized_pauses_even_when_event_is_throttled(monkeypatch):
+    bot = SimpleNamespace(id=18, account_id=3, status="running")
+    saved = {}
+    monkeypatch.setitem(bc._last_emit_by_bot, 18, time.time())
+
+    monkeypatch.setattr(bc, "_recent_connectivity_event", lambda *a, **k: False)
+    monkeypatch.setattr("app.botengine.state_store.load_state", lambda *a, **k: {})
+    monkeypatch.setattr(
+        "app.botengine.state_store.save_state",
+        lambda db, bot_id, account_id, state: saved.update(state),
+    )
+
+    ok = bc.emit_connectivity_events_for_bot(
+        object(),
+        bot,
+        "API_UNAUTHORIZED",
+        "Binance API anahtarı geçersiz veya IP beyaz listesinde değil.",
+        "health_poll",
+        force=False,
+    )
+
+    assert ok is False
+    assert bot.status == "paused_error"
+    assert saved["last_error_code"] == "API_UNAUTHORIZED"
+    assert saved["backoff_until"] > time.time()
+
+
 def test_queue_and_flush_skips_recent_stable(monkeypatch):
     monkeypatch.setattr(
         bc, "_recent_connectivity_recovered", lambda db, bot_id, within_sec=45.0: True

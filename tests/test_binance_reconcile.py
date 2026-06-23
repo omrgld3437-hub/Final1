@@ -8,11 +8,93 @@ from app.services.binance_spot import (
     BinanceSignedError,
 )
 
+import pytest
+
 
 def test_is_order_not_found_minus_2013():
     """code -2013 => NOT_FOUND (proceed to place)."""
     assert _is_order_not_found(-2013, "Unknown order sent.") is True
     assert _is_order_not_found(-2013, "") is True
+
+
+@pytest.mark.asyncio
+async def test_get_wallet_timeout_consumes_late_inflight_exception(monkeypatch):
+    """A timed-out shared account task must not leak asyncio 'never retrieved'."""
+    import asyncio
+    from app.services import binance_spot as spot
+
+    class FakeKeys:
+        testnet = False
+        api_key = "k-test"
+        _client = None
+
+    contexts = []
+    loop = asyncio.get_running_loop()
+    old_handler = loop.get_exception_handler()
+    loop.set_exception_handler(lambda _loop, ctx: contexts.append(ctx))
+
+    async def slow_then_fail(_keys, _tag="wallet"):
+        try:
+            await asyncio.sleep(0.05)
+        except asyncio.CancelledError:
+            raise RuntimeError("late connect failure")
+
+    monkeypatch.setattr(spot, "BINANCE_REQUEST_TIMEOUT_SEC", 0.01)
+    monkeypatch.setattr(spot, "_fetch_account_upstream", slow_then_fail)
+    spot._account_cache.clear()
+    spot._account_inflight.clear()
+
+    try:
+        with pytest.raises(spot.DependencyFailure):
+            await spot.get_wallet(FakeKeys())
+        await asyncio.sleep(0.08)
+        assert spot._account_inflight == {}
+        assert contexts == []
+    finally:
+        loop.set_exception_handler(old_handler)
+        spot._account_cache.clear()
+        spot._account_inflight.clear()
+
+
+@pytest.mark.asyncio
+async def test_signed_request_outer_cancel_consumes_late_exception(monkeypatch):
+    """An outer cancel racing a late connect failure inside _signed_request must
+    not leak asyncio 'Task exception was never retrieved'.
+
+    Reproduces worker.log: Task-* coro=_signed_request_impl finishing with
+    ConnectError/401 right as an outer awaiter (e.g. a timed-out get_wallet)
+    cancels the request. wait_for's CancelledError branch would otherwise drop
+    the inner task's exception unretrieved.
+    """
+    import asyncio
+    from app.services import binance_spot as spot
+
+    contexts = []
+    loop = asyncio.get_running_loop()
+    old_handler = loop.get_exception_handler()
+    loop.set_exception_handler(lambda _loop, ctx: contexts.append(ctx))
+
+    async def slow_then_fail(*_a, **_kw):
+        try:
+            await asyncio.sleep(0.05)
+        except asyncio.CancelledError:
+            raise RuntimeError("late connect failure")
+
+    monkeypatch.setattr(spot, "_signed_request_impl", slow_then_fail)
+    # Generous inner timeout so the OUTER cancel below — not the inner wait_for —
+    # is what races the late failure.
+    monkeypatch.setattr(spot, "BINANCE_REQUEST_TIMEOUT_SEC", 5.0)
+
+    try:
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(
+                spot._signed_request(None, "GET", "/api/v3/account", object(), {}),
+                timeout=0.01,
+            )
+        await asyncio.sleep(0.08)
+        assert contexts == []
+    finally:
+        loop.set_exception_handler(old_handler)
 
 
 def test_is_order_not_found_minus_1021():

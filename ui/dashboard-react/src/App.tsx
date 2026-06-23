@@ -181,7 +181,7 @@ export default function App() {
             </div>
             <div>
               <span className="font-extrabold text-white text-base tracking-wide flex items-center gap-1.5">
-                TraderTrailing{" "}
+                <span className="ar-ayse">ayse</span><span className="ar-rose">rose</span>{" "}
                 <span className="text-[10px] text-[#f0b90b] bg-[#f0b90b]/10 border border-[#f0b90b]/25 px-1.5 py-0.5 rounded uppercase font-bold tracking-widest hidden sm:inline">
                   Bot
                 </span>
@@ -368,7 +368,7 @@ export default function App() {
       <footer className="bg-[#14151a] border-t border-neutral-900 py-12 text-center text-xs text-neutral-500">
         <div className="max-w-7xl mx-auto px-4 space-y-4">
           <p className="font-semibold text-neutral-400">
-            TraderTrailing Ömer Altın Kuruluşudur. Tüm Hakları Saklıdır © 2026
+            <span className="ar-ayse">ayse</span><span className="ar-rose">rose</span> Ömer Altın Kuruluşudur. Tüm Hakları Saklıdır © 2026
           </p>
         </div>
       </footer>

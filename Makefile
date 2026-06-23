@@ -1,4 +1,4 @@
-# TraderTrailing — Makefile
+# ayserose — Makefile
 
 .PHONY: start stop restart deploy run dev setup meta test hooks git-log logs-clean
 

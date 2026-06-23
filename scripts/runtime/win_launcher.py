@@ -282,7 +282,7 @@ def main():
     os.chdir(_ROOT)
     print("")
     print("========================================")
-    print("  TraderTrailing - Windows Baslat")
+    print("  ayserose - Windows Baslat")
     print("========================================")
     print("Kok: %s" % _ROOT)
     print("")

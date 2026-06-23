@@ -221,7 +221,7 @@ except ImportError:
     market_data_routes = None
 from app.services.data_hub import data_hub
 
-app = FastAPI(title="TraderTrailing", version="1.0.0")
+app = FastAPI(title="ayserose", version="1.0.0")
 
 
 @app.get("/api/debug/build-info")
@@ -1472,6 +1472,12 @@ app.include_router(bots_v2.router, prefix="/api")
 app.include_router(bots_engine.router, prefix="/api/bots-engine")
 app.include_router(finance.router, prefix="/api")
 app.include_router(spot_routes.router, prefix="/api")  # YENİ - Spot Engine
+try:
+    from app.api import param_assistant_routes
+
+    app.include_router(param_assistant_routes.router, prefix="/api")  # Parametre Asistanı (backtest optimizer)
+except Exception as _pa_ex:  # pragma: no cover
+    logger.warning("param_assistant_routes yüklenemedi: %s", _pa_ex)
 app.include_router(ws.router, prefix="/api/ws")
 try:
     from app.api import leaderboard
@@ -2198,7 +2204,7 @@ async def ui_dashboard():
 
 @app.get("/")
 async def root():
-    """Ana sayfa: doğrudan login (TraderTrailing giriş) sayfasına yönlendir"""
+    """Ana sayfa: doğrudan login (ayserose giriş) sayfasına yönlendir"""
     return RedirectResponse(url="/ui/login.html", status_code=302)
 
 

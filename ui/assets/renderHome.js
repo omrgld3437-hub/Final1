@@ -162,6 +162,12 @@
         badge.setAttribute('aria-hidden', show ? 'false' : 'true');
         var staleEl = document.getElementById('bnAssetsStaleBadge');
         if (staleEl && show) staleEl.hidden = true;
+        var liveEl = document.getElementById('bnWalletLiveBadge');
+        if (liveEl && show) {
+            liveEl.hidden = true;
+            liveEl.textContent = '';
+            liveEl.classList.remove('kpi-spot-status--live', 'kpi-spot-status--stale', 'kpi-spot-status--offline', 'kpi-spot-status--test');
+        }
     }
 
     return {

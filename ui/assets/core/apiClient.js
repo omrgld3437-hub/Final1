@@ -359,15 +359,6 @@ async function apiClient(endpoint, options = {}) {
     var abortController = null;
     var timeoutId = null;
     var effectiveSignal = signal;
-    if (!effectiveSignal && timeout > 0 && typeof AbortController !== 'undefined') {
-        abortController = new AbortController();
-        effectiveSignal = abortController.signal;
-        timeoutId = setTimeout(function () {
-            if (abortController) abortController.abort();
-        }, timeout);
-    } else if (!effectiveSignal && timeout > 0 && typeof AbortSignal !== 'undefined' && AbortSignal.timeout) {
-        effectiveSignal = AbortSignal.timeout(timeout);
-    }
 
     var config = {
         method: method,
@@ -376,9 +367,9 @@ async function apiClient(endpoint, options = {}) {
             { 'Content-Type': 'application/json', 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
             authHeaders,
             headers
-        ),
-        signal: effectiveSignal
+        )
     };
+    if (effectiveSignal) config.signal = effectiveSignal;
 
     if (body && method !== 'GET') {
         config.body = typeof body === 'string' ? body : JSON.stringify(body);
@@ -398,6 +389,17 @@ async function apiClient(endpoint, options = {}) {
     var requestPromise = (async function () {
         await _acquireSlot();
         try {
+            if (!effectiveSignal && timeout > 0 && typeof AbortController !== 'undefined') {
+                abortController = new AbortController();
+                effectiveSignal = abortController.signal;
+                config.signal = effectiveSignal;
+                timeoutId = setTimeout(function () {
+                    if (abortController) abortController.abort();
+                }, timeout);
+            } else if (!effectiveSignal && timeout > 0 && typeof AbortSignal !== 'undefined' && AbortSignal.timeout) {
+                effectiveSignal = AbortSignal.timeout(timeout);
+                config.signal = effectiveSignal;
+            }
             response = await fetch(url, config);
             if (timeoutId) clearTimeout(timeoutId);
             timeoutId = null;

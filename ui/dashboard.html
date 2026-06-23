@@ -84,12 +84,12 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
       });
     })();
     </script>
-    <title>Dashboard - TraderTrailing</title>
+    <title>Dashboard - ayserose</title>
     <link rel="stylesheet" href="/ui/assets/ticker.css?v=static-fx1">
     <link rel="stylesheet" href="/ui/assets/theme.css?v=clean1">
     <link rel="stylesheet" href="/ui/assets/ui.css?v=footer-sticky1">
     <link rel="stylesheet" href="/ui/assets/design.css?v=footer-sticky2">
-    <link rel="stylesheet" href="/ui/assets/dashboard.css?v=param-assistant8">
+    <link rel="stylesheet" href="/ui/assets/dashboard.css?v=pa-cancel2">
     <link rel="stylesheet" href="/ui/assets/binance-colors.css?v=bin1">
     <link rel="stylesheet" href="/ui/assets/blink.css?v=1">
     <link rel="stylesheet" href="/ui/assets/dashboard-login-theme.css?v=spot-modal-chart1">
@@ -165,7 +165,7 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
                 <span id="datahubWsIndicator" class="datahub-ws-indicator" title="Piyasa verisi WebSocket durumu" aria-label="WS durumu">
                     <span class="datahub-ws-dot"></span><span class="datahub-ws-label">WS</span>
                 </span>
-                <span class="tt-logo-text">TraderTrailing</span>
+                <span class="tt-logo-text"><span class="ar-ayse">ayse</span><span class="ar-rose">rose</span></span>
             </div>
             <div class="dashboard-appbar-right" aria-hidden="true"></div>
         </div>
@@ -888,10 +888,10 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
 
     <footer class="page-footer">
         <div class="page-footer-legal">
-            <strong>TraderTrailing</strong> Ömer Altın kuruluşudur. Tüm hakları saklıdır.
+            <strong>ayserose</strong> Ömer Altın kuruluşudur. Tüm hakları saklıdır.
         </div>
         <div class="page-footer-license">
-            Bu web platformu, TraderTrailing adına lisanslı yazılım altyapısı ile sunulmaktadır. İçerik, tasarım ve işlevler telif hakları ile korunmaktadır; izinsiz kopyalama, dağıtım veya ticari kullanım yasaktır.
+            Bu web platformu, ayserose adına lisanslı yazılım altyapısı ile sunulmaktadır. İçerik, tasarım ve işlevler telif hakları ile korunmaktadır; izinsiz kopyalama, dağıtım veya ticari kullanım yasaktır.
         </div>
     </footer>
 
@@ -1201,17 +1201,22 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
                 </div>
                 <!-- Tahmin: parite girildiğinde 24s değişim, yüksek/düşük, öneri -->
                 <div id="dmTahminStrip" class="dm-tahmin-strip" style="display: none;">
-                    <div class="dm-tahmin-row">
-                        <span class="dm-tahmin-label">24s değişim</span>
-                        <span id="dmTahminChange" class="dm-tahmin-value">—</span>
+                    <div class="dm-tahmin-head">
+                        <span class="dm-tahmin-title">24s piyasa özeti</span>
                     </div>
-                    <div class="dm-tahmin-row">
-                        <span class="dm-tahmin-label">24s yüksek</span>
-                        <span id="dmTahminHigh" class="dm-tahmin-value">—</span>
-                    </div>
-                    <div class="dm-tahmin-row">
-                        <span class="dm-tahmin-label">24s düşük</span>
-                        <span id="dmTahminLow" class="dm-tahmin-value">—</span>
+                    <div class="dm-tahmin-metrics">
+                        <div class="dm-tahmin-row">
+                            <span class="dm-tahmin-label">Değişim</span>
+                            <span id="dmTahminChange" class="dm-tahmin-value">—</span>
+                        </div>
+                        <div class="dm-tahmin-row">
+                            <span class="dm-tahmin-label">Yüksek</span>
+                            <span id="dmTahminHigh" class="dm-tahmin-value">—</span>
+                        </div>
+                        <div class="dm-tahmin-row">
+                            <span class="dm-tahmin-label">Düşük</span>
+                            <span id="dmTahminLow" class="dm-tahmin-value">—</span>
+                        </div>
                     </div>
                 </div>
                 <!-- Step 1: General -->
@@ -1435,7 +1440,6 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
                 <div id="dmParamAssistantSummary" class="dm-param-assistant-summary" style="display: none;"></div>
                 <div id="dmParamAssistantChoice" class="dm-param-assistant-choice" style="display: none;">
                     <button id="dmParamAssistantUseBtn" class="btn btn-primary-gold" type="button">Kullanmak istiyorum</button>
-                    <button id="dmParamAssistantSkipBtn" class="btn btn-ghost" type="button">İstemiyorum</button>
                 </div>
             </div>
         </div>
@@ -1544,7 +1548,7 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
                         <li>Sol üst köşedeki profil ikonuna tıklayın</li>
                         <li>"API Management" veya "API Yönetimi" seçeneğine gidin</li>
                         <li>"Create API" veya "API Oluştur" butonuna tıklayın</li>
-                        <li>API adı verin (örn: "Trader Trailing")</li>
+                        <li>API adı verin (örn: "ayserose")</li>
                         <li>API Key ve Secret Key'i kopyalayın</li>
                         <li><strong>Önemli:</strong> Secret Key'i sadece bir kez görebilirsiniz, mutlaka kaydedin!</li>
                         <li>IP kısıtlaması ekleyin (Ayarlar sekmesinden sunucu IP adresini kopyalayıp Binance'ye yapıştırın)</li>
@@ -1702,11 +1706,53 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
         var _chatWelcomeTypingShown = false;
         var _chatShowingRating = false;
         var WELCOME_CHAT_BODY = 'Merhaba, size nasıl yardımcı olabiliriz?';
+        var BOT_ERROR_CHAT_DRAFT_KEY = 'bot_error_assistant_chat_draft_v1';
+        var _chatPendingBotErrorDraftMeta = null;
         function getChatAccountId() {
             if (typeof State !== 'undefined' && State.accountId) return State.accountId;
             var p = new URLSearchParams(window.location.search);
             var id = p.get('account_id');
             return id ? parseInt(id, 10) : null;
+        }
+        function readPendingBotErrorChatDraft() {
+            try {
+                var raw = sessionStorage.getItem(BOT_ERROR_CHAT_DRAFT_KEY);
+                if (!raw) return null;
+                var data = JSON.parse(raw);
+                if (!data || data.source !== 'bot-error-assistant' || !data.body) return null;
+                if (data.ts && Date.now() - Number(data.ts) > 10 * 60 * 1000) {
+                    sessionStorage.removeItem(BOT_ERROR_CHAT_DRAFT_KEY);
+                    return null;
+                }
+                return data;
+            } catch (e) {
+                return null;
+            }
+        }
+        function consumePendingBotErrorChatDraft(inputEl) {
+            var draft = readPendingBotErrorChatDraft();
+            if (!draft || !inputEl) return false;
+            var body = String(draft.body || '').trim();
+            if (!body) return false;
+            if (typeof CHAT_MAX_LEN === 'number' && body.length > CHAT_MAX_LEN) {
+                body = body.slice(0, Math.max(0, CHAT_MAX_LEN - 1)).trim() + '…';
+            }
+            inputEl.value = body;
+            _chatPendingBotErrorDraftMeta = {
+                source: 'bot-error-assistant',
+                assistant_context: draft.assistant_context || null,
+                signature: draft.signature || ''
+            };
+            try { sessionStorage.removeItem(BOT_ERROR_CHAT_DRAFT_KEY); } catch (e) {}
+            return true;
+        }
+        function shouldAutoOpenBotErrorChatDraft() {
+            try {
+                var p = new URLSearchParams(window.location.search);
+                return p.get('chat_draft') === 'bot_error' && !!readPendingBotErrorChatDraft();
+            } catch (e) {
+                return false;
+            }
         }
         function openChatScreen() {
             _chatAccountId = getChatAccountId();
@@ -1728,7 +1774,8 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
                 modal.setAttribute('aria-hidden', 'false');
                 modal.style.display = 'flex';
                 var inp = document.getElementById('chatMessageInput');
-                if (inp) inp.value = '';
+                _chatPendingBotErrorDraftMeta = null;
+                if (inp && !consumePendingBotErrorChatDraft(inp)) inp.value = '';
                 updateChatSendState();
                 loadChat();
                 startChatPoll();
@@ -2036,7 +2083,7 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
                 if (window.Toast) window.Toast.error((e && e.message) || (e.detail && (e.detail.message || e.detail)) || 'Bağlantı hatası');
             }
         }
-        var CHAT_MAX_LEN = 500;
+        var CHAT_MAX_LEN = 2000;
         function updateChatSendState() {
             var inp = document.getElementById('chatMessageInput');
             var btn = document.querySelector('#chatForm .chat-send-btn');
@@ -2086,7 +2133,13 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
             if (!aid) return;
             if (!window.apiClient) return;
             try {
-                await window.apiClient.post('/api/auth/chat/send', { account_id: aid, message: msg });
+                var payload = { account_id: aid, message: msg };
+                if (_chatPendingBotErrorDraftMeta && _chatPendingBotErrorDraftMeta.source === 'bot-error-assistant') {
+                    payload.source = 'bot-error-assistant';
+                    payload.assistant_context = _chatPendingBotErrorDraftMeta.assistant_context || null;
+                }
+                await window.apiClient.post('/api/auth/chat/send', payload);
+                _chatPendingBotErrorDraftMeta = null;
                 input.value = '';
                 updateChatSendState();
                 appendOptimisticUserBubble(msg);
@@ -2123,6 +2176,9 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
             }
             var bd = document.getElementById('chatModalBackdrop');
             if (bd) bd.addEventListener('click', function() { closeChatScreen(); });
+            if (shouldAutoOpenBotErrorChatDraft()) {
+                setTimeout(openChatScreen, 220);
+            }
         });
         window.openChatScreen = openChatScreen;
         window.closeChatScreen = closeChatScreen;
@@ -2134,7 +2190,7 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
     <!-- Core infrastructure (must load first) -->
     <script src="/ui/assets/utils/trTime.js?v=1"></script>
     <script src="/ui/assets/js/maintenanceOverlay.js?v=1"></script>
-    <script src="/ui/assets/core/apiClient.js?v=server-down-toast-persist1"></script>
+    <script src="/ui/assets/core/apiClient.js?v=param-assistant-poll1"></script>
     <script src="/ui/assets/core/errorReporter.js?v=csrf-log-error1"></script>
     <script src="/ui/assets/core/intervalRegistry.js?v=refactor1"></script>
     <!-- Stores -->
@@ -2157,25 +2213,26 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
     <script src="/ui/assets/utils/botHealthAlerts.js?v=34"></script>
     <!-- Flash Home (Patch H). Deploy ui/assets/ so storageCache, renderHome, homeFlash exist (else 404). -->
     <script src="/ui/assets/storageCache.js?v=flash1"></script>
-    <script src="/ui/assets/renderHome.js?v=wallet-stable6"></script>
-    <script src="/ui/assets/homeFlash.js?v=wallet-badge-noflicker2"></script>
+    <script src="/ui/assets/renderHome.js?v=wallet-status-stable1"></script>
+    <script src="/ui/assets/homeFlash.js?v=wallet-stale-truth1"></script>
     <!-- [1] Önce: State/DOM bağımsız format/utility fonksiyonları -->
     <script src="/ui/assets/modules/dashboard-format.js?v=1"></script>
     <!-- [2] Ana dashboard: State, assetsState, normalizeAndApplyWallet vb. tanımlar -->
-    <script src="/ui/assets/dashboard.js?v=wallet-badge-noflicker2"></script>
+    <script src="/ui/assets/dashboard.js?v=wallet-stale-truth1"></script>
     <!-- [3] Sonra: State'e runtime erişen modüller (DOMContentLoaded öncesi hazır olurlar) -->
     <script src="/ui/assets/modules/dashboard-appbar.js?v=1"></script>
-    <script src="/ui/assets/modules/dashboard-wallet-state.js?v=wallet-badge-noflicker2"></script>
-    <script src="/ui/assets/utils/dynamicModeParamsView.js?v=7"></script>
-    <script src="/ui/assets/modules/dashboard-bot-perf.js?v=4"></script>
+    <script src="/ui/assets/modules/dashboard-wallet-state.js?v=wallet-status-stable1"></script>
+    <script src="/ui/assets/utils/dynamicModeParamsView.js?v=param-dyn-regime-dir1"></script>
+    <script src="/ui/assets/modules/dashboard-bot-perf.js?v=grid-qtysum-seed1"></script>
     <script src="/ui/assets/modules/dashboard-leaderboard.js?v=12"></script>
     <script src="/ui/assets/modules/dashboard-tx-history.js?v=1"></script>
     <script src="/ui/assets/modules/dashboard-bots.js?v=1"></script>
     <script src="/ui/assets/modules/dashboard-bot-create.js?v=param-assistant3"></script>
     <script src="/ui/assets/modules/dashboard-tabs.js?v=1"></script>
-    <script src="/ui/assets/modules/dashboard-create-modal.js?v=param-assistant10"></script>
+    <script src="/ui/assets/modules/ai-assistant-spec.js?v=20260622"></script>
+    <script src="/ui/assets/modules/dashboard-create-modal.js?v=pa-progress-stable1"></script>
     <script src="/ui/assets/modules/dashboard-spot-trade.js?v=2"></script>
-    <script src="/ui/assets/modules/dashboard-finance.js?v=9"></script>
+    <script src="/ui/assets/modules/dashboard-finance.js?v=bot-health-status1"></script>
     <script src="/ui/assets/ticker.js?v=chg-pct1" defer></script>
 </body>
 </html>

@@ -88,6 +88,33 @@ def should_pause_bot_for_connectivity_error(error_code: str) -> bool:
     return (error_code or "").strip().upper() in _PAUSE_BOT_FAILURE_CODES
 
 
+def _pause_bot_for_connectivity_error(
+    db: "Session", bot: Any, state: Dict[str, Any], error_code: str, now: float
+) -> bool:
+    """Kalıcı API/IP hatasında log throttle'a takılmadan botu güvenli hata beklemesine al."""
+    if not should_pause_bot_for_connectivity_error(error_code):
+        return False
+    changed = False
+    if (getattr(bot, "status", "") or "").lower() == "running":
+        bot.status = "paused_error"
+        changed = True
+    backoff_until = now + 300.0
+    if float(state.get("backoff_until") or 0) < backoff_until:
+        state["backoff_until"] = backoff_until
+        changed = True
+    if state.get("last_error_code") != error_code:
+        state["last_error_code"] = error_code
+        changed = True
+    if not state.get("health_error_since"):
+        state["health_error_since"] = int(now)
+        changed = True
+    if changed:
+        from app.botengine.state_store import save_state
+
+        save_state(db, int(bot.id), int(bot.account_id), state)
+    return changed
+
+
 def _fail_path(account_id: int) -> Path:
     return _RUN_DIR / f"binance_fail_{int(account_id)}.json"
 
@@ -939,6 +966,17 @@ def emit_connectivity_events_for_bot(
     account_id = int(bot.account_id)
     now = time.time()
     code = (error_code or "BINANCE_UNREACHABLE").strip()
+    state = load_state(db, bot_id) or {}
+    try:
+        _pause_bot_for_connectivity_error(db, bot, state, code, now)
+    except Exception as pause_ex:
+        logger.warning(
+            "binance_connectivity pause bot_id=%s account_id=%s code=%s: %s",
+            bot_id,
+            account_id,
+            code,
+            pause_ex,
+        )
 
     # Geçici kesintiler (< _TRANSIENT_OUTAGE_LOG_DELAY_SEC) için log yazma.
     # API_UNAUTHORIZED gibi kalıcı hatalar bu filtreden geçmez.
@@ -968,11 +1006,7 @@ def emit_connectivity_events_for_bot(
         "cycle_id": int((load_state(db, bot_id) or {}).get("cycle_id") or 1),
     }
     try:
-        state = load_state(db, bot_id) or {}
         should_pause = should_pause_bot_for_connectivity_error(code)
-        if should_pause and (getattr(bot, "status", "") or "").lower() == "running":
-            bot.status = "paused_error"
-            state["backoff_until"] = now + 300.0
         emit_tur_connectivity_paused_info(db, bot_id, account_id, code)
         warn_meta = {
             **meta_base,

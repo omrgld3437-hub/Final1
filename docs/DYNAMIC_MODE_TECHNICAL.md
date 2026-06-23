@@ -334,3 +334,76 @@ ui/bot.html                            # banner + top badge
 tests/test_dynamic_mode*.py
 tests/test_grid_view_dynamic_trigger.py
 ```
+
+---
+
+## 17. Davranış Stance + Tur-Giriş Risk Kapısı (2026-06-20)
+
+İki yeni katman eklendi. İkisi de yalnız `dynamic_mode=true` + cycle ≥ 2'de
+çalışır, hata/stale veride güvenli düşer ve manuel modu hiç etkilemez.
+
+### 17.1 Davranış Stance (sürekli pasif↔agresif duruş)
+
+`strategy_engine.compute_stance(features, regime_result) → Stance`. Ayrık
+`REGIME_TUNING` tablosunun kaba duruşunu, rejim **içinde** sürekli bir skorla
+inceltir (aynı rejimdeki iki tur farklı likidite/momentum/kaosta farklı
+agresiflik alır).
+
+```
+reward (grid-dostu) = ranging × (0.6·atr_fit + 0.4·liq)   # trend reward'ı ezer
+risk   (geniş)      = 0.45·regime_risk + 0.30·(downtrend×ADX_strength) + 0.25·chaos
+score  = clamp(reward − risk, −1, +1)   # −1 DEFENSIVE … +1 AGGRESSIVE
+```
+
+Stance **yalnız skalerleri** nudge'lar — **grid adımını ASLA** (adım saf
+ATR/rejim/fee fonksiyonu kalır, böylece "yüksek vol grid'i genişletir" + tüm
+e2e invariant'ları korunur). Etkilediği alanlar (sınırlı, risk-engine yine
+clamp'ler):
+
+- `base_alloc_pct += score × 8pp`  (agresif → daha çok base; savunmacı → nakit)
+- `sell_trail × (1 + score×0.25)`  (agresif → bırak koşsun; savunmacı → erken kilitle)
+- `tp_rise × (1 + score×0.30)`     (agresif → yüksek TP; savunmacı → erken bankla)
+
+Yön **pekiştirir, asla ters çevirmez**: savunmacı rejimler (DUMP/TRENDING_DOWN)
+zaten negatif stance üretir → daha çok quote. Snapshot'a `stance` (`raw.stance`
++ top-level), API `dynamic_mode.stance` olarak çıkar.
+
+### 17.2 Tur-Giriş Risk Kapısı — "yeni turu riskte beklet"
+
+`app/botengine/dynamic/cycle_gate.py`. Yeni bir tur (cycle ≥ 2) başlarken yakın
+vadeli **düşüş riski** yüksekse, taze alımı (yeni quote) düşen piyasaya
+sürmeyi erteler — "düşen bıçağa yeni tur açma".
+
+**Risk modeli (0..1):** ağırlıklı alt-sinyaller; yön-bağımsız vol/akış
+sinyalleri yumuşak bir `bearish` çarpanıyla kapılır (yükselişte/sakin churn
+bekletme üretmez):
+
+```
+s_fast(5m flaş düşüş) .30 | s_regime(DUMP/DOWN) .24 | s_mom(RSI düşük & slope<0) .14
+s_dvol×bearish .12 | s_volz×bearish .08 | s_spread(likidite) .07 | s_wick×bearish .05
+```
+
+**Hold durum makinesi (histerezis):**
+- risk ≥ `HOLD_ON` (0.62) → bekletmeye başla.
+- risk ≤ `HOLD_OFF` (0.42) ve `RELEASE_CONFIRM` (2) ardışık kontrol → serbest bırak.
+- `MAX_HOLD_SEC` (24sa) → asla sonsuza dek dondurma; savunmacı girişe izin ver.
+- stale veri / exception → bekletme yok (bot normal çalışır).
+
+**Ne yapar / yapmaz:** yalnız `initial_allocation` + `trail_buy_grid` (taze alım)
+withhold edilir; SELL / profit-exit / **tur-kapatan re-entry** ASLA engellenmez,
+likidasyon YOK. Immutable-snapshot ilkesine (§4.2) uyar: kapı yalnız tur
+sınırında, tur henüz **engage olmadan** (ilk taze alım geçmeden) silahlanır; bir
+alım geçtiğinde tur ENGAGE olur ve DCA planı tur sonuna dek kesintisiz koşar
+(tur-içi yeniden-bekletme yok). `cycle_reset_after_fill` engage bayrağını sıfırlar.
+
+**Entegrasyon:** orchestrator dinamik hook — yeni snapshot'ta `evaluate(...)`,
+hold aktif & engage değilken her tick `await maintain(...)` (cached features).
+`strategy.tick` sonrası `filter_actions(state, actions)` taze alımları düşürür ve
+`next_wake`'i `RECHECK_SEC` (30s) ile kısar. API `dynamic_mode.cycle_hold`;
+engine event `DYN_CYCLE_HOLD` / `DYN_CYCLE_RELEASE`.
+
+**Env (ops):** `DYN_CYCLE_HOLD_ENABLED`, `DYN_CYCLE_HOLD_ON`, `DYN_CYCLE_HOLD_OFF`,
+`DYN_CYCLE_HOLD_RELEASE_CONFIRM`, `DYN_CYCLE_HOLD_MAX_SEC`, `DYN_CYCLE_HOLD_RECHECK_SEC`.
+
+**Testler:** `tests/test_dynamic_cycle_gate.py` (risk modeli, hold makinesi,
+aksiyon filtresi, stance yönü).

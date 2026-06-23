@@ -6,7 +6,7 @@
   'use strict';
 
   var SERVICE_LABELS = {
-    web: 'TraderTrailing Web (FastAPI)',
+    web: 'ayserose Web (FastAPI)',
     engine: 'Bot Engine (botengine)',
     manager: 'Yönetici Paneli (manager)',
     html: 'Statik HTML sunucusu'
@@ -318,15 +318,22 @@
     },
     {
       test: function (msg) {
-        return /Future exception was never retrieved|Task exception was never retrieved/i.test(msg)
-          && /gaierror|nodename nor servname|ConnectError|ConnectTimeout/i.test(msg);
+        return /Future exception was never retrieved|Task exception was never retrieved/i.test(msg);
       },
-      apply: function () {
+      apply: function (ctx) {
+        var raw = String((ctx && (ctx.message || ctx.raw)) || '');
+        var isDns = /gaierror|nodename nor servname|ConnectError|ConnectTimeout|All connection attempts failed/i.test(raw);
         return {
-          konu: 'Binance WebSocket DNS geçici hatası',
-          sebep: 'Ağ/DNS anlık kesinti; arka planda Binance host adı çözülemedi (asyncio Future).',
-          etki: 'Canlı fiyat WebSocket yeniden bağlanır; REST/cache devreye girer.',
-          oneri: 'İnternet/DNS stabil ise birkaç dakika içinde düzelir; sürekli tekrarlıyorsa firewall/VPN kontrol edin.'
+          konu: isDns ? 'Binance bağlantısı geçici kesildi' : 'Arka plan görevi hata verdi',
+          sebep: isDns
+            ? 'Ağ/DNS anlık kesinti; Binance hostuna bağlanan arka plan görevi hata aldı.'
+            : 'Async arka plan görevi exception ile kapanmış; ayrıntı worker.log içinde aynı satırın hemen altındaki traceback bölümündedir.',
+          etki: isDns
+            ? 'Bakiye/emir senkronu kısa süre gecikebilir; worker çalışmaya devam eder ve sonraki döngüde tekrar dener.'
+            : 'İlgili arka plan işlemi başarısız olmuş olabilir; worker heartbeat devam ediyorsa motor tamamen düşmemiştir.',
+          oneri: isDns
+            ? 'Tekrarlıyorsa internet, DNS/VPN/firewall ve api.binance.com erişimini kontrol edin. Worker sonraki denemede toparlar.'
+            : 'Aynı zaman damgasındaki traceback satırını kontrol edin; tekrar ediyorsa worker restart ve ilgili bot sağlık durumunu izleyin.'
         };
       }
     },
@@ -1142,7 +1149,7 @@
         return {
           konu: 'Web sunucusu (uvicorn) başlatma hatası',
           sebep: 'FastAPI/uvicorn uygulaması ayağa kalkarken hata oluştu.',
-          etki: 'TraderTrailing web API çalışmaz; dashboard erişilemez.',
+          etki: 'ayserose web API çalışmaz; dashboard erişilemez.',
           oneri: 'Hemen önceki log satırlarındaki import/config/port hatasını düzeltin; web servisini yeniden başlatın.'
         };
       }
@@ -1542,6 +1549,181 @@
       }
     },
     {
+      test: function (msg) { return /DYN_HOOK_EXCEPTION/i.test(msg); },
+      apply: function (ctx) {
+        var p = ctx.params || {};
+        return {
+          konu: 'Dinamik mod kancası hatası',
+          sebep: 'Dynamic mode overlay uygulanırken istisna oluştu; bot manuel konfigürasyonla devam etti' + (p.bot_id ? ' (bot #' + p.bot_id + ')' : '') + '.',
+          etki: 'Bu tick\'te dinamik parametre güncellemesi atlandı; bot manuel ayarlarla çalışmayı sürdürür.',
+          oneri: 'Tek seferlik ve bot çalışmaya devam ediyorsa yok sayın. Tekrarlıyorsa dynamic mode konfigürasyonunu kontrol edin.'
+        };
+      }
+    },
+    {
+      test: function (msg) { return /DYN_EMERGENCY/i.test(msg); },
+      apply: function (ctx) {
+        var m = (ctx.message || ctx.raw || '').match(/action=(\S+).*reason=(\S+)/i);
+        var action = m ? m[1] : 'bilinmiyor';
+        var reason = m ? m[2] : '—';
+        return {
+          konu: 'Dinamik mod acil durum eylemi',
+          sebep: 'Dynamic mode acil güvenlik tetikleyicisi devreye girdi: action=' + action + ' reason=' + reason,
+          etki: 'Bot bu tick\'te durdurulmuş veya pause_error durumuna alınmış olabilir.',
+          oneri: 'Bot detay sayfasını ve son turu inceleyin; dinamik mod drawdown/risk ayarlarını gözden geçirin.'
+        };
+      }
+    },
+    {
+      test: function (msg) { return /BOT_DAILY_LOSS_LIMIT_HIT|BOT_DAILY_LOSS_LIMIT_PAUSED/i.test(msg); },
+      apply: function (ctx) {
+        var m = (ctx.message || ctx.raw || '').match(/daily_limit=([\d.]+).*loss=([\d.]+)/i);
+        var limit = m ? m[1] : '—';
+        var loss = m ? m[2] : '—';
+        var paused = /PAUSED/i.test(ctx.message || ctx.raw || '');
+        return {
+          konu: paused ? 'Bot günlük kayıp limiti nedeniyle duraklatıldı' : 'Günlük kayıp limitine ulaşıldı',
+          sebep: 'Bot günlük kayıp limitini aştı: limit=' + limit + ' USDT, gerçekleşen kayıp=' + loss + ' USDT.',
+          etki: paused ? 'Bot pause_error durumuna geçti; tick\'ler atlanır.' : 'Bu tick\'te işlem yapılmadı; sıfırlama bekleniyor.',
+          oneri: 'Bot detay sayfasını açın; günlük kayıp limitini ve mevcut pozisyonu inceleyin. Yeniden başlatmak için botu durdurup başlatın.'
+        };
+      }
+    },
+    {
+      test: function (msg) { return /BOT_START_DB_VERIFY_FAIL/i.test(msg); },
+      apply: function (ctx) {
+        var m = (ctx.message || ctx.raw || '').match(/status_after_commit=(\S+)/i);
+        return {
+          konu: 'Bot başlatma DB doğrulama hatası',
+          sebep: 'Bot başlatma komutundan sonra DB\'deki durum beklenen «running» değil' + (m ? ' (' + m[1] + ')' : '') + '.',
+          etki: 'Bot görünürde başlamış gibi durabilir; tick döngüsü etkilenebilir.',
+          oneri: 'Dashboard\'dan bot durumunu kontrol edin; yeniden durdurup başlatın. Eşzamanlı stop komutu varsa birkaç saniye bekleyin.'
+        };
+      }
+    },
+    {
+      test: function (msg) { return /WORKER_SECURITY.*MISMATCH/i.test(msg); },
+      apply: function () {
+        return {
+          konu: 'Worker güvenlik uyuşmazlığı',
+          sebep: 'Gelen komutun hesap_id\'si botun kayıtlı hesap_id\'siyle eşleşmiyor. Komut reddedildi.',
+          etki: 'Bot komutu işlenmedi; yetkisiz erişim girişimi veya veri tutarsızlığı olabilir.',
+          oneri: 'Birden fazla hesap kullanıyorsanız oturumu yenileyin; tekrarlıyorsa bot ve hesap eşleşmesini kontrol edin.'
+        };
+      }
+    },
+    {
+      test: function (msg) { return /WORKER_COMMAND_UNKNOWN|WORKER_COMMAND_FAILED/i.test(msg); },
+      apply: function (ctx) {
+        var failed = /FAILED/i.test(ctx.message || ctx.raw || '');
+        return {
+          konu: failed ? 'Worker komut işleme hatası' : 'Bilinmeyen worker komutu',
+          sebep: failed
+            ? 'Worker komutu yürütülürken beklenmeyen hata oluştu; komut başarısız olarak işaretlendi.'
+            : 'Worker bilinmeyen tipte bir komut aldı; komut atlandı.',
+          etki: 'İlgili bot komutu (başlatma/durdurma/yeniden başlatma) uygulanmadı.',
+          oneri: 'Lütfen işlemi tekrarlayın. Sorun sürerse Manager ve Engine servislerini yeniden başlatın.'
+        };
+      }
+    },
+    {
+      test: function (msg) { return /WORKER_RECLAIM_STALE_COMMANDS/i.test(msg); },
+      apply: function (ctx) {
+        var m = (ctx.message || ctx.raw || '').match(/count=(\d+)/i);
+        return {
+          konu: 'Eski worker komutları temizlendi',
+          sebep: (m ? m[1] + ' adet ' : '') + 'zaman aşımına uğramış komut işlem kuyruğundan silindi.',
+          etki: 'Bilgi amaçlı; servisler etkilenmez. Sayı yüksekse komutlar zamanında işlenmemiş olabilir.',
+          oneri: 'Engine worker\'ın sürekli çalıştığından ve DB bağlantısının stabil olduğundan emin olun.'
+        };
+      }
+    },
+    {
+      test: function (msg) { return /WORKER_MARKET_START failed|WORKER_MARKET_SYNC.*unreachable|WORKER_FIRST_TICK_FAILED/i.test(msg); },
+      apply: function (ctx) {
+        var isFirstTick = /WORKER_FIRST_TICK_FAILED/i.test(ctx.message || ctx.raw || '');
+        return {
+          konu: isFirstTick ? 'Worker ilk tick başarısız' : 'Worker piyasa verisi başlatma hatası',
+          sebep: isFirstTick
+            ? 'Worker ilk bot tick\'inde beklenmeyen hata oluştu; bot yeniden denenecek.'
+            : 'Piyasa fiyat verisi (DataHub/WebSocket) başlatılırken hata oluştu; WS yedek moduna geçilebilir.',
+          etki: 'Kısa süre fiyat güncellemeleri gecikebilir; bot tick\'leri yavaşlayabilir.',
+          oneri: 'Ağ ve Binance WebSocket erişimini kontrol edin. Worker otomatik yeniden dener; 1–2 dakika içinde düzelmezse engine\'i yeniden başlatın.'
+        };
+      }
+    },
+    {
+      test: function (msg) { return /BOT_STATE_SAVING.*json\.dumps failed|BOT_STATE_SAVED.*verify_failed/i.test(msg); },
+      apply: function (ctx) {
+        var isSave = /json\.dumps failed/i.test(ctx.message || ctx.raw || '');
+        return {
+          konu: isSave ? 'Bot state JSON serileştirme hatası' : 'Bot state kayıt doğrulama başarısız',
+          sebep: isSave
+            ? 'Bot state JSON\'a dönüştürülürken hata oluştu (serileştirilemez veri).'
+            : 'State kaydedildi ancak DB\'de satır bulunamadı (kayıt doğrulanamadı).',
+          etki: 'Bot durumu geçici olarak eski kalabilir; bir sonraki tick\'te yeniden denenecek.',
+          oneri: 'DB disk alanı ve kilidi kontrol edin; tekrarlıyorsa engine\'i yeniden başlatın.'
+        };
+      }
+    },
+    {
+      test: function (msg) { return /BOT_STRATEGY_IA_INVALID/i.test(msg); },
+      apply: function () {
+        return {
+          konu: 'Kritik: Geçersiz başlangıç alımı durumu',
+          sebep: 'Bot state\'inde initial_allocation_done=True ama initial_alloc_base_qty=0 görülüyor; bu imkânsız bir durum.',
+          etki: 'Strateji tick\'leri yanlış hesaplayabilir; satış emirleri hatalı olabilir.',
+          oneri: 'Botu durdurun ve yeniden başlatın. Sorun tekrarlıyorsa bot state\'ini ve son işlem geçmişini inceleyin.'
+        };
+      }
+    },
+    {
+      test: function (msg) { return /BOT_BUY_LEVEL_BLOCKED/i.test(msg); },
+      apply: function () {
+        return {
+          konu: 'Grid alış seviyesi engellendi',
+          sebep: 'Yeni alış grid emri maksimum alış seviyesi (max_buy_levels) limitine ulaşıldığı için gönderilmedi.',
+          etki: 'Bu tick\'te yeni alış pozisyonu açılmadı; mevcut grid devam eder.',
+          oneri: 'Normal davranış: grid dolmadan yeni alış yapılmaz. Sürekli bloklanıyorsa max_buy_levels ayarını veya grid aralığını genişletin.'
+        };
+      }
+    },
+    {
+      test: function (msg) { return /BOT_STRATEGY_TRAIL_BUY_SKIP/i.test(msg); },
+      apply: function () {
+        return {
+          konu: 'Takip alışı atlandı',
+          sebep: 'Trail buy fiyat eşiği henüz oluşmadı veya bakiye yetersiz; bu tick\'te alış emri verilmedi.',
+          etki: 'Tick atlandı; strateji bir sonraki tick\'te yeniden değerlendirir.',
+          oneri: 'Normal operasyonel davranış; tekrarlıyorsa grid eşiklerini ve USDT bakiyesini kontrol edin.'
+        };
+      }
+    },
+    {
+      test: function (msg) { return /health_watch.*bot_id=|health_watch run_all:/i.test(msg); },
+      apply: function (ctx) {
+        var detail = technicalDetail(ctx);
+        return {
+          konu: 'Sağlık izleme hatası',
+          sebep: 'Bot sağlık kontrolü (health_watch) çalışırken hata oluştu: ' + (detail ? detail.slice(0, 180) : 'detay Ham satırda'),
+          etki: 'Bu döngüde sağlık uyarıları oluşturulmamış olabilir; bot çalışmaya devam eder.',
+          oneri: 'DB bağlantısını ve bot state\'ini kontrol edin; tekrarlıyorsa engine\'i yeniden başlatın.'
+        };
+      }
+    },
+    {
+      test: function (msg) { return /BOT_LOOP_FATAL/i.test(msg); },
+      apply: function (ctx) {
+        var m = (ctx.message || ctx.raw || '').match(/error_id=([0-9a-f-]{36})/i);
+        return {
+          konu: 'Bot döngüsü kritik hata ile çöktü',
+          sebep: 'Bot asyncio döngüsü kurtarılamayan hatayla kapandı; otomatik yeniden başlatma denenecek.' + (m ? ' Hata ID: ' + m[1] : ''),
+          etki: 'Bot bu loop instance\'ında durdu. DB\'de status=running ise otomatik yeniden başlatma denenecek.',
+          oneri: 'Bot detay sayfasını ve engine logunu aynı zaman damgasında inceleyin; tekrarlıyorsa API anahtarı ve Binance bağlantısını kontrol edin.'
+        };
+      }
+    },
+    {
       test: function (msg) {
         if (/\[BinanceWS\]|binance_ws|user_stream|USER_STREAM/i.test(msg)) return false;
         return /Binance|binance_spot|APIError|-\d{4}\s|MIN_NOTIONAL|LOT_SIZE|insufficient balance|Account has insufficient/i.test(msg);
@@ -1604,7 +1786,8 @@
     } else if (/app\.middleware\.csrf/i.test(mod)) {
       konu = isErr ? 'CSRF güvenlik hatası' : 'CSRF güvenlik uyarısı';
     }
-    var sebep = 'Bu log satırı için özel Türkçe şablon yok; tam kaynak metin en altta (Ham satır).';
+    var msgSnip = (msg || '').slice(0, 280).trim();
+    var sebep = msgSnip ? msgSnip : 'Detay Ham satırda.';
     if (/app\.middleware\.csrf/i.test(mod)) {
       sebep = 'Çerez oturumlu istek CSRF korumasından geçemedi (token veya Origin/Referer).';
     } else if (/main\.py:\d+.*Unhandled exception/i.test(msg)) {

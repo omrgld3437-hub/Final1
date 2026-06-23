@@ -252,12 +252,8 @@
                     wallet_cached_at: data.wallet_live_at
                 });
                 if (data.stale && data.last_error_code) {
-                    var softStale = typeof window._walletHasDisplayableAssets === 'function' && window._walletHasDisplayableAssets()
-                        && typeof window._isHardWalletError === 'function'
-                        && !window._isHardWalletError(data.last_error_code);
-                    if (softStale) {
-                        if (typeof window.markWalletLiveFetchOk === 'function') window.markWalletLiveFetchOk();
-                        return;
+                    if (typeof window.markWalletCachedLiveFetchStale === 'function') {
+                        window.markWalletCachedLiveFetchStale(data.last_error_code);
                     }
                     if (typeof window.scheduleSilentWalletRecovery === 'function') {
                         window.scheduleSilentWalletRecovery();

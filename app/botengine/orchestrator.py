@@ -85,6 +85,47 @@ from app.utils.tz_utils import turkey_today_date_str
 
 logger = logging.getLogger(__name__)
 
+
+def _emit_cycle_hold_event(state: Dict[str, Any], verdict, *, holding: bool) -> None:
+    """Queue a bot-detail engine event when the cycle-entry risk gate starts or
+    releases a hold, so the operator sees "yeni tur risk nedeniyle bekletiliyor".
+    Best-effort: never raises."""
+    try:
+        from app.botengine.state_store import queue_engine_event
+
+        if holding:
+            queue_engine_event(
+                state,
+                "DYN_CYCLE_HOLD",
+                "Yeni tur risk nedeniyle bekletiliyor — "
+                f"risk={verdict.risk_score:.2f}, rejim={verdict.regime}. "
+                f"{verdict.clear_hint}",
+                {
+                    "cycle_id": state.get("cycle_id"),
+                    "risk_score": round(verdict.risk_score, 4),
+                    "regime": verdict.regime,
+                    "reasons": verdict.reasons[:6],
+                    "breakdown": verdict.breakdown,
+                    "clear_hint": verdict.clear_hint,
+                },
+            )
+        else:
+            queue_engine_event(
+                state,
+                "DYN_CYCLE_RELEASE",
+                "Risk geçti — yeni tur serbest bırakıldı "
+                f"(risk={verdict.risk_score:.2f}, sebep={verdict.released_reason}).",
+                {
+                    "cycle_id": state.get("cycle_id"),
+                    "risk_score": round(verdict.risk_score, 4),
+                    "released_reason": verdict.released_reason,
+                    "regime": verdict.regime,
+                },
+            )
+    except Exception as _ev_err:  # pragma: no cover
+        logger.debug("DYN_CYCLE_HOLD event_queue failed: %s", _ev_err)
+
+
 _tasks: Dict[int, asyncio.Task] = {}
 _stop_requested: Set[int] = set()
 _reconcile_last_ts: Dict[int, float] = {}
@@ -917,6 +958,7 @@ async def _bot_loop(bot_id: int) -> None:
                             cfg.to_dict() if hasattr(cfg, "to_dict") else {}
                         )
                         if dyn_gate.is_dynamic_mode_active(_cfg_dict_for_dyn):
+                            _dyn_snapshot_rebuilt = False
                             if not dyn_cm.dynamic_overlay_allowed(state):
                                 if state.get("dynamic_snapshot"):
                                     state.pop("dynamic_snapshot", None)
@@ -944,6 +986,7 @@ async def _bot_loop(bot_id: int) -> None:
                                 )
                                 state["dynamic_snapshot"] = _new_snap
                                 _diffs = dyn_cm.apply_overlay(cfg, _new_snap)
+                                _dyn_snapshot_rebuilt = True
                                 logger.info(
                                     "DYN_SNAPSHOT_BUILT bot_id=%s cycle=%s regime=%s data_fresh=%s clamps=%s fallbacks=%s diffs=%s",
                                     bot_id,
@@ -1006,6 +1049,76 @@ async def _bot_loop(bot_id: int) -> None:
                                         _existing.get("cycle_id"),
                                         _existing.get("regime"),
                                     )
+                            # ----------------------------------------------------
+                            # Cycle-entry risk gate (cycle >= 2): decide ENTER vs
+                            # HOLD for the NEW tur. On a fresh snapshot evaluate
+                            # from its (just-fetched) features; while a hold is
+                            # active and the cycle is still unengaged, re-check
+                            # each tick with cached features so it releases as
+                            # soon as the risk passes. Fail-safe: errors clear the
+                            # hold so the bot proceeds normally.
+                            # ----------------------------------------------------
+                            if dyn_cm.dynamic_overlay_allowed(state):
+                                try:
+                                    from app.botengine.dynamic import (
+                                        cycle_gate as _dyn_cgate,
+                                    )
+
+                                    _gate_cfg = (
+                                        cfg.to_dict()
+                                        if hasattr(cfg, "to_dict")
+                                        else _cfg_dict_for_dyn
+                                    )
+                                    _was_hold = _dyn_cgate.is_holding(state)
+                                    _gv = None
+                                    if _dyn_snapshot_rebuilt:
+                                        _snap2 = state.get("dynamic_snapshot") or {}
+                                        if _snap2.get("data_fresh"):
+                                            _gv = _dyn_cgate.evaluate(
+                                                _snap2.get("features") or {},
+                                                _snap2.get("regime"),
+                                                _snap2.get("regime_confidence") or 0.0,
+                                                state,
+                                                _gate_cfg,
+                                            )
+                                    elif _was_hold and not _dyn_cgate.cycle_engaged(
+                                        state
+                                    ):
+                                        _gv = await _dyn_cgate.maintain(
+                                            state, _gate_cfg, float(price or 0.0)
+                                        )
+                                    if _gv is not None:
+                                        _now_hold = _dyn_cgate.is_holding(state)
+                                        if _now_hold and not _was_hold:
+                                            _emit_cycle_hold_event(
+                                                state, _gv, holding=True
+                                            )
+                                            logger.info(
+                                                "DYN_CYCLE_HOLD bot_id=%s cycle=%s risk=%.2f regime=%s reasons=%s",
+                                                bot_id,
+                                                state.get("cycle_id"),
+                                                _gv.risk_score,
+                                                _gv.regime,
+                                                _gv.reasons[:4],
+                                            )
+                                        elif _was_hold and not _now_hold:
+                                            _emit_cycle_hold_event(
+                                                state, _gv, holding=False
+                                            )
+                                            logger.info(
+                                                "DYN_CYCLE_RELEASE bot_id=%s cycle=%s risk=%.2f reason=%s",
+                                                bot_id,
+                                                state.get("cycle_id"),
+                                                _gv.risk_score,
+                                                _gv.released_reason,
+                                            )
+                                except Exception as _cgate_err:
+                                    logger.debug(
+                                        "DYN_CYCLE_GATE_FAIL bot_id=%s err=%s",
+                                        bot_id,
+                                        _cgate_err,
+                                    )
+                                    state.pop("_dynamic_cycle_hold", None)
                         else:
                             # dynamic_mode False (or prerequisites missing) → strip any
                             # stale snapshot so the UI does not show outdated data.
@@ -1027,6 +1140,41 @@ async def _bot_loop(bot_id: int) -> None:
                     actions, next_wake = strategy.tick(
                         state, cfg, price, base_balance, quote_balance
                     )
+                    # ============================================================
+                    # Dynamic cycle-entry HOLD: while a hold is active and the new
+                    # tur has not engaged yet, withhold FRESH buy deployments
+                    # (initial_allocation / trail_buy_grid) — never sells, profit
+                    # exits or cycle-closing re-entries. When not holding, the
+                    # first fresh buy passing through ENGAGES the cycle (no
+                    # mid-cycle re-holding). Only touches dynamic bots (snapshot
+                    # present); manual bots are a no-op.
+                    # ============================================================
+                    if state.get("dynamic_snapshot") is not None and actions:
+                        try:
+                            from app.botengine.dynamic import cycle_gate as _dyn_cgate2
+
+                            actions, _held_blocked = _dyn_cgate2.filter_actions(
+                                state, actions
+                            )
+                            if _held_blocked:
+                                next_wake = min(
+                                    next_wake, _dyn_cgate2.RECHECK_SEC
+                                )
+                                _hold_st = state.get("_dynamic_cycle_hold") or {}
+                                logger.info(
+                                    "DYN_CYCLE_HOLD_BLOCK bot_id=%s cycle=%s blocked=%s risk=%.2f regime=%s",
+                                    bot_id,
+                                    state.get("cycle_id"),
+                                    _held_blocked,
+                                    float(_hold_st.get("risk_score") or 0.0),
+                                    _hold_st.get("regime"),
+                                )
+                        except Exception as _hold_filter_err:
+                            logger.debug(
+                                "DYN_CYCLE_HOLD_FILTER_FAIL bot_id=%s err=%s",
+                                bot_id,
+                                _hold_filter_err,
+                            )
                     # ============================================================
                     # Dynamic emergency check (cycle + portfolio circuit breaker).
                     # Current operator policy disables this brake; keep the old

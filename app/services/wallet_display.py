@@ -10,13 +10,13 @@ STABLE_ASSETS = frozenset({"USDT", "BUSD", "USDC", "FDUSD", "TUSD", "DAI"})
 
 
 def get_running_bots_equity_usd(db: Any, account_id: int) -> float:
-    """Çalışan botların güncel equity toplamı (test strip bot_locked_usd ile uyumlu)."""
+    """Sermayesi hâlâ ayrılmış botların güncel equity toplamı."""
     import json
 
     from app.db.models import Bot
     from app.botengine.state_store import load_state
     from app.services.bot_equity import compute_bot_equity_usd
-    from app.services.bot_status_utils import is_bot_running
+    from app.services.bot_status_utils import is_bot_capital_locked
     from app.services.pnl_service import PnlService
 
     total = 0.0
@@ -24,7 +24,7 @@ def get_running_bots_equity_usd(db: Any, account_id: int) -> float:
         bots = [
             b
             for b in db.query(Bot).filter(Bot.account_id == int(account_id)).all()
-            if is_bot_running(getattr(b, "status", None))
+            if is_bot_capital_locked(getattr(b, "status", None))
         ]
     except Exception:
         return 0.0
@@ -141,18 +141,18 @@ def append_bot_only_wallet_asset_rows(
 
 
 def _test_running_bots_usdt_budget(db: Any, account_id: int) -> float:
-    """Çalışan botların USDT başlangıç sermayesi (config initial_capital_usdt / budget_usd)."""
+    """Sermayesi hâlâ ayrılmış botların USDT başlangıç sermayesi."""
     import json
 
     from app.db.models import Bot
-    from app.services.bot_status_utils import is_bot_running
+    from app.services.bot_status_utils import is_bot_capital_locked
 
     total = 0.0
     try:
         bots = [
             b
             for b in db.query(Bot).filter(Bot.account_id == int(account_id)).all()
-            if is_bot_running(getattr(b, "status", None))
+            if is_bot_capital_locked(getattr(b, "status", None))
         ]
     except Exception:
         return 0.0

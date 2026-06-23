@@ -18,7 +18,7 @@ Conventions
 * Dual-leg accounting is respected everywhere: "nakit bacak" = realized USDT
   (BUY-side cycles), "envanter bacak" = extra coin quantity (SELL-side cycles).
 
-Total templates: 320+ (see `pool_size()`).
+Total templates: 690+ (see `pool_size()`).
 """
 
 from __future__ import annotations
@@ -657,6 +657,455 @@ CYCLE_DUR_LONG = [
 
 
 # =============================================================================
+# 10) Conversational AI-style expansion pack (20 categories × 15 = 300)
+# =============================================================================
+
+def _grid_templates(
+    count: int,
+    leads: List[str],
+    readings: List[str],
+    actions: List[str],
+) -> List[str]:
+    out: List[str] = []
+    for i in range(count):
+        out.append(
+            f"{leads[i % len(leads)]} "
+            f"{readings[(i // len(leads)) % len(readings)]} "
+            f"{actions[(i // (len(leads) * len(readings))) % len(actions)]}"
+        )
+    return out
+
+
+def _build_conversational_expansions() -> Dict[str, List[str]]:
+    """Extra scenario-aware templates. They are generated from small, audited
+    sentence blocks so every output remains grammatical and data-bound."""
+
+    exp: Dict[str, List[str]] = {}
+
+    exp["summary_intro"] = _grid_templates(
+        15,
+        [
+            "{symbol} için aylık tabloyu önce tur dağılımından okuyorum:",
+            "Bu raporda {symbol} tarafında ana resim şöyle kuruluyor:",
+            "{symbol} botunda ayın hikayesi {total} kapanış üzerinden şekilleniyor:",
+            "Ben bu ayı {symbol} için iki bacaklı bir performans okuması olarak ele alıyorum:",
+            "{symbol} verisine bakınca önce nakit ve envanter ayrımını netleştirmek gerekiyor:",
+        ],
+        [
+            "{cash_closed} nakit turu USDT sonucunu, {inv_closed} envanter turu coin adedi etkisini anlatıyor.",
+            "nakit taraf kasaya yazılan USDT'yi, envanter taraf elde kalan {base} miktarını büyütme/azaltma etkisini gösteriyor.",
+            "toplam {total} tur aynı ölçekte değil; biri para, diğeri coin miktarı olarak okunmalı.",
+        ],
+        [
+            "Bu yüzden sonucu tek sayıya sıkıştırmadan, her bacağı kendi mantığıyla değerlendirmek daha doğru.",
+            "Aşağıdaki yorumlarda bu iki kanal karıştırılmadan ilerleyeceğim.",
+            "Bu ayrım korunursa rapor daha gerçekçi ve takip edilebilir hale gelir.",
+        ],
+    )
+
+    exp["summary_cash"] = _grid_templates(
+        15,
+        [
+            "Nakit bacakta hesabı netleştirirsek:",
+            "USDT tarafını sadeleştirince tablo şu:",
+            "Kasaya yansıyan bölümü ayırıyorum:",
+            "Realize nakit sonucunda ana denklem değişmiyor:",
+            "Nakit kanalının gerçek sonucu komisyon sonrası okunmalı:",
+        ],
+        [
+            "brüt {gross}, komisyon {fees}, net {net}.",
+            "{gross} brüt sonuçtan {fees} maliyet çıkınca {net} kalıyor.",
+            "bot bu kanalda {gross} üretmiş, bunun {fees} kısmı işlem maliyetine gitmiş ve net {net} kalmış.",
+        ],
+        [
+            "Bu satırı kâr/zarar diye yorumlarken mutlaka net değeri esas alıyorum.",
+            "Bu yüzden değerlendirmede brüt değil net nakit sonucu öne çıkarıyorum.",
+            "Komisyon dahil edilmeden yapılan yorum bu bacağı olduğundan iyi gösterir.",
+        ],
+    )
+
+    exp["summary_inv_present"] = _grid_templates(
+        15,
+        [
+            "Envanter bacağına geçtiğimde sonuç nakit gibi okunmamalı:",
+            "{base} miktarı açısından bakınca tablo pozitif:",
+            "Yukarı yön döngüsünün katkısı coin adedi tarafında:",
+            "Bu ay envanter kanalı ayrı bir değer üretmiş:",
+            "Coin tarafındaki ek etkiyi ayırırsam:",
+        ],
+        [
+            "{inv_coin} {base} ek miktar oluşmuş ve bunun maliyeti {inv_fees}.",
+            "elde kalan {base} miktarı {inv_coin} kadar artmış; işlem maliyeti {inv_fees}.",
+            "nakit değil, {base} adedi cinsinden {inv_coin} değişim var.",
+        ],
+        [
+            "Bu, USDT kârı değil; portföyde daha fazla coin tutma etkisidir.",
+            "Bu yüzden bu bacağı kasadan ayrı, envanter kalitesi olarak okuyorum.",
+            "Raporun doğru kalması için bu değer nakit kârla toplanmamalı.",
+        ],
+    )
+
+    exp["summary_inv_neg"] = _grid_templates(
+        15,
+        [
+            "Envanter bacağında bu ay dikkatli okunması gereken bir negatiflik var:",
+            "{base} adedi tarafında sonuç zayıf:",
+            "Yukarı yön kanalında coin miktarı lehimize çalışmamış:",
+            "Bu bacakta kazanç değil, coin cinsinden kayıp görülüyor:",
+            "Envanter sonucunu ayırdığımda tablo negatif:",
+        ],
+        [
+            "net değişim {inv_coin} {base}, maliyet {inv_fees}.",
+            "{base} miktarı {inv_coin} seviyesine gerilemiş; komisyon {inv_fees}.",
+            "coin adedi {inv_coin} ile azalmış ve maliyet {inv_fees} oluşmuş.",
+        ],
+        [
+            "Bu yüzden bu satırı dezavantaj olarak ele almak gerekir.",
+            "Bu kayıp, nakit sonuçtan ayrı izlenmeli.",
+            "Kalıcılaşırsa envanter bacağının tetik ve geri alım koşulları kontrol edilmeli.",
+        ],
+    )
+
+    exp["alpha_pos"] = _grid_templates(
+        15,
+        [
+            "Alpha tarafı iyi sinyal veriyor:",
+            "Benchmark karşılaştırmasında bot öne geçmiş:",
+            "Al-tut senaryosuna göre aktif ticaret değer katmış:",
+            "Bu pencerede alpha pozitif okunuyor:",
+            "Botun göreli performansı destekleyici:",
+        ],
+        [
+            "{alpha} değeri, botun pasif coin tutma çizgisinin üzerinde kaldığını gösteriyor.",
+            "alpha {alpha}; yani bot, aynı dönemde coini yalnız tutma alternatifini geçmiş.",
+            "ölçülen fark {alpha}, aktif grid kararlarının karşılığını aldığını gösteriyor.",
+        ],
+        [
+            "Bu, mevcut ayarların piyasa rejimiyle uyumlu çalıştığına dair güçlü bir not.",
+            "Bu durumda agresif değişiklik yerine izleyerek sürdürmek daha mantıklı.",
+            "Sonraki ayda da aynı sinyal korunursa yapılandırma güven kazanır.",
+        ],
+    )
+
+    exp["alpha_neg"] = _grid_templates(
+        15,
+        [
+            "Alpha tarafında uyarı var:",
+            "Benchmark okuması bu ay botun aleyhine:",
+            "Al-tut kıyaslaması fırsat maliyetini gösteriyor:",
+            "Göreli performans negatif bölgede:",
+            "Bu ay alpha dikkat gerektiriyor:",
+        ],
+        [
+            "{alpha} değeri, coini pasif tutmanın bu pencerede daha iyi sonuç vereceğini söylüyor.",
+            "alpha {alpha}; yani realize kâr olsa bile benchmark gerisinde kalınmış.",
+            "bu bir mutlak zarar değil, al-tut benchmarkına göre fırsat maliyetidir.",
+        ],
+        [
+            "Bu yüzden sonucu yalnız net nakit üzerinden başarılı saymak eksik olur.",
+            "Özellikle yükselen piyasada gridin kârı erken alıp almadığı kontrol edilmeli.",
+            "Bu sinyal devam ederse grid aralığı ve base/quote dağılımı yeniden tartılmalı.",
+        ],
+    )
+
+    exp["alpha_flat"] = _grid_templates(
+        15,
+        [
+            "Alpha nötr bölgeye yakın:",
+            "Benchmark ile bot sonucu birbirinden fazla kopmamış:",
+            "Göreli performans bu ay dengede:",
+            "Al-tut kıyası net bir üstünlük göstermiyor:",
+            "Alpha okuması sakin:",
+        ],
+        [
+            "{alpha} değeri, aktif ticaret ile pasif tutma arasında belirgin fark olmadığını gösteriyor.",
+            "ölçülen {alpha}, stratejinin piyasaya paralel kaldığını anlatıyor.",
+            "bot ve benchmark aynı bantta seyretmiş görünüyor.",
+        ],
+        [
+            "Bu durumda acele parametre değişimi yerine bir sonraki ayı beklemek daha sağlıklı.",
+            "Nötr alpha, sistemi bozmak için tek başına gerekçe değildir.",
+            "Ek veri geldikçe yön daha netleşir.",
+        ],
+    )
+
+    exp["market_up"] = _grid_templates(
+        15,
+        [
+            "Piyasa bağlamı yukarı yönlü okunuyor:",
+            "Kapanış fiyatları yükseliş tarafını destekliyor:",
+            "{symbol} bu ay yukarı eğilim göstermiş:",
+            "Fiyat hareketi bot için yükselen piyasa senaryosu oluşturmuş:",
+            "Ayın piyasa tonu pozitif:",
+        ],
+        [
+            "kapanışlar arasında {price_abs} artış var ve rejim {regime}.",
+            "parite {price_abs} yükselmiş; bu, nakit kârın yanında alpha'yı daha önemli hale getirir.",
+            "{price_change} hareket, gridin yükselişi ne kadar yakaladığını test ediyor.",
+        ],
+        [
+            "Bu ortamda erken kâr alma bazen benchmark geriliği yaratabilir.",
+            "Yorumda net nakit kadar fırsat maliyetini de izliyorum.",
+            "Envater bacağının sessiz kalıp kalmadığı özellikle önemli.",
+        ],
+    )
+
+    exp["market_down"] = _grid_templates(
+        15,
+        [
+            "Piyasa bağlamı aşağı yönlü:",
+            "Kapanış fiyatları düşüş rejimini gösteriyor:",
+            "{symbol} bu ay baskı altında kalmış:",
+            "Ayın fiyat hareketi savunmacı bir okuma gerektiriyor:",
+            "Parite gerilerken botun koruma davranışı öne çıkıyor:",
+        ],
+        [
+            "kapanışlar arasında {price_abs} düşüş var ve rejim {regime}.",
+            "{price_change} hareket, nakit bacağın düşüşte ne kadar koruyucu çalıştığını gösteriyor.",
+            "bu zeminde pozitif nakit sonuç, al-tut'a göre önemli bir tampon olabilir.",
+        ],
+        [
+            "Bu yüzden negatif piyasa içinde nakit bacağın performansını ayrı değerlendiriyorum.",
+            "Düşüşte daha az kaybetmek de stratejik değer olabilir.",
+            "Ancak grid aralığı çok sıkıysa komisyon baskısı yine kontrol edilmeli.",
+        ],
+    )
+
+    exp["market_flat"] = _grid_templates(
+        15,
+        [
+            "Piyasa yatay/dalgalı karakterde:",
+            "Bu ay fiyat hareketi net trendden çok bant davranışı gösteriyor:",
+            "{symbol} tarafında grid için daha doğal bir zemin var:",
+            "Fiyat rejimi dengeli ve dalgalı okunuyor:",
+            "Ayın hareketi trend değil, çalışma bandı üzerinden değerlendirilir:",
+        ],
+        [
+            "hareket {price_change} ve rejim {regime}.",
+            "böyle bir piyasada tur sayısı, komisyon ve kapanış kalitesi birlikte okunmalı.",
+            "gridin amacı bu bant hareketini kontrollü nakit/envanter sonucuna çevirmek.",
+        ],
+        [
+            "Bu rejimde aşırı sık grid komisyonu artırabilir, aşırı geniş grid ise fırsat kaçırabilir.",
+            "Bu yüzden sürdürülebilirlik puanı bu ortamda özellikle anlamlı.",
+            "Dengeli iki bacak çalışması burada güçlü bir işarettir.",
+        ],
+    )
+
+    exp["strategy_cash_heavy"] = _grid_templates(
+        15,
+        [
+            "Strateji dağılımı nakit bacakta yoğunlaşıyor:",
+            "Bu ay bot daha çok aşağı/nakit döngüsü üretmiş:",
+            "Tur kompozisyonu USDT realize tarafına eğilmiş:",
+            "Nakit kanalının baskın olduğu bir ay görüyorum:",
+            "Aşağı yön gridleri bu ay daha aktif çalışmış:",
+        ],
+        [
+            "{cash_closed} nakit tura karşı {inv_closed} envanter turu var.",
+            "dağılım {cash_closed}/{inv_closed}; bu, coin biriktirme tarafının daha sessiz kaldığını gösteriyor.",
+            "USDT sonucu öne çıkarken envanter bacağı ikincil kalmış.",
+        ],
+        [
+            "Bu tek başına kötü değil, ama yükselen piyasada fırsat maliyeti yaratabilir.",
+            "Bir sonraki ayda envanter bacağının neden az tetiklendiği izlenmeli.",
+            "Denge hedefleniyorsa yukarı bacak eşikleri kontrol edilebilir.",
+        ],
+    )
+
+    exp["strategy_inv_heavy"] = _grid_templates(
+        15,
+        [
+            "Strateji dağılımı envanter tarafına kaymış:",
+            "Bu ay bot daha çok yukarı/envanter döngüsü üretmiş:",
+            "Tur kompozisyonunda coin adedi etkisi öne çıkıyor:",
+            "Envater bacağı baskın bir ay var:",
+            "Yukarı yön gridleri bu ay daha aktif kapanmış:",
+        ],
+        [
+            "{inv_closed} envanter tura karşı {cash_closed} nakit turu var.",
+            "dağılım {cash_closed}/{inv_closed}; USDT realizasyonundan çok coin adedi sonucu belirleyici.",
+            "coin miktarı tarafı raporun ana sürücüsü olmuş.",
+        ],
+        [
+            "Bu senaryoda sonucu USDT kârı gibi okumamak gerekir.",
+            "Nakit bacak sessiz kalıyorsa aşağı yön fırsatları ayrıca izlenmeli.",
+            "Denge korunursa bot iki piyasa yönünden de veri üretir.",
+        ],
+    )
+
+    exp["strategy_balanced"] = _grid_templates(
+        15,
+        [
+            "Strateji dağılımı dengeli görünüyor:",
+            "Nakit ve envanter bacakları aynı raporda birlikte çalışmış:",
+            "Çift yönlü grid yapısı bu ay anlamlı veri üretmiş:",
+            "Tur kompozisyonu tek tarafa aşırı yığılmamış:",
+            "Botun iki bacağı da sahada kalmış:",
+        ],
+        [
+            "{cash_closed} nakit ve {inv_closed} envanter turu birlikte okunuyor.",
+            "dağılım {cash_closed}/{inv_closed}; bu, çift yönlü mimarinin devrede olduğunu gösteriyor.",
+            "hem USDT hem {base} adedi tarafında sinyal var.",
+        ],
+        [
+            "Bu, sürdürülebilirlik açısından olumlu bir çalışma profilidir.",
+            "Böyle dönemlerde büyük değişiklik yerine stabil izleme daha mantıklı.",
+            "Dengenin devam edip etmediği sonraki ayda ana kontrol noktası olur.",
+        ],
+    )
+
+    exp["fees_total"] = _grid_templates(
+        15,
+        [
+            "Komisyon satırını ayrı okumak gerekiyor:",
+            "Maliyet tarafı net sonucu doğrudan etkiliyor:",
+            "İşlem maliyeti bu raporda görünür bir kalem:",
+            "Komisyonu brüt sonuçtan ayırınca tablo daha dürüst okunuyor:",
+            "Maliyet baskısını kontrol ediyorum:",
+        ],
+        [
+            "toplam komisyon {total_fees}, tur başına ortalama {fee_per_cycle}.",
+            "bu ay {total_fees} maliyet oluşmuş ve bu, her kapanışa ortalama {fee_per_cycle} yansımış.",
+            "net sonucu değerlendirirken {total_fees} toplam işlem maliyeti hesaba katılmalı.",
+        ],
+        [
+            "Bu oran yükselirse grid aralığını açmak gerekebilir.",
+            "Komisyon düşük kalırsa mevcut tempo daha sürdürülebilir olur.",
+            "Brüt kâr iyi görünse bile net kaliteyi bu satır belirler.",
+        ],
+    )
+
+    exp["sustain_net_pos"] = _grid_templates(
+        15,
+        [
+            "Sürdürülebilirlik tarafında net nakit olumlu:",
+            "Komisyon sonrası sonuç destekleyici:",
+            "Nakit kalitesi bu ay iyi sinyal veriyor:",
+            "Net USDT sonucu stratejiyi destekliyor:",
+            "Bu ay kasaya yazılan net değer pozitif:",
+        ],
+        [
+            "{net} sonuç, brüt performansın maliyetten sonra da ayakta kaldığını gösteriyor.",
+            "net {net}; bu, yalnız işlem sayısı değil sonuç kalitesi olduğunu anlatıyor.",
+            "bu değer, botun tur kapatırken maliyeti aşabildiğini gösteriyor.",
+        ],
+        [
+            "Bu yapı tekrarlanırsa güven artar.",
+            "Yine de alpha ve piyasa rejimiyle birlikte okunmalı.",
+            "Tek başına yeterli değil ama güçlü bir temel sinyal.",
+        ],
+    )
+
+    exp["sustain_net_neg"] = _grid_templates(
+        15,
+        [
+            "Sürdürülebilirlik tarafında net nakit zayıf:",
+            "Komisyon sonrası sonuç baskı altında:",
+            "Nakit kalitesi bu ay uyarı veriyor:",
+            "Net USDT sonucu stratejiyi zorlamış:",
+            "Bu ay kasaya yazılan net değer negatif:",
+        ],
+        [
+            "{net} sonuç, brüt hareketin maliyeti karşılamakta zorlandığını gösteriyor.",
+            "net {net}; bu, kapanışların kalite tarafında yeterli olmadığını anlatıyor.",
+            "bu değer, grid aralığı veya piyasa uyumunun kontrol edilmesi gerektiğini gösteriyor.",
+        ],
+        [
+            "Tek ay panik sebebi değildir, fakat tekrar ederse parametre revizyonu gerekir.",
+            "Önce komisyon oranı ve tur başına net getiri incelenmeli.",
+            "Bu sinyal, sonraki ay için yakın takip gerektirir.",
+        ],
+    )
+
+    exp["outlook_strong"] = _grid_templates(
+        15,
+        [
+            "Genel sonuç güçlü görünüyor:",
+            "Bu ayın kapanışı yapılandırmayı destekliyor:",
+            "Performans profili olumlu:",
+            "Bot bu ay sağlıklı bir çalışma çizgisi göstermiş:",
+            "Sonuçlar mevcut ayarların lehine konuşuyor:",
+        ],
+        [
+            "net sonuç, bacak dengesi ve maliyet tarafı birlikte kabul edilebilir seviyede.",
+            "sürdürülebilirlik puanı {score}/100 ve etiket {score_label}.",
+            "rapor, acele müdahale yerine kontrollü izlemeyi destekliyor.",
+        ],
+        [
+            "Bu nedenle büyük parametre değişikliği yerine mevcut kurulum korunabilir.",
+            "Bir sonraki ay aynı profil sürerse güven seviyesi artar.",
+            "Yine de piyasa rejimi değişirse ayarlar yeniden değerlendirilmelidir.",
+        ],
+    )
+
+    exp["outlook_medium"] = _grid_templates(
+        15,
+        [
+            "Genel sonuç orta bantta:",
+            "Bu ayın raporu ne tamamen güçlü ne de zayıf:",
+            "Performans karışık ama okunabilir:",
+            "Bot bu ay izlenmesi gereken dengeli bir profil çizmiş:",
+            "Sonuçlar ölçülü yorum gerektiriyor:",
+        ],
+        [
+            "sürdürülebilirlik puanı {score}/100 ve etiket {score_label}.",
+            "bazı sinyaller iyi, bazıları ise dikkat istiyor.",
+            "net sonuç, komisyon ve alpha birlikte kesin bir karar vermek için yeterince ayrışmamış.",
+        ],
+        [
+            "Bu nedenle küçük ayarlardan önce bir ay daha veri toplamak daha sağlıklı.",
+            "En iyi takip noktaları tur başına net getiri, komisyon oranı ve bacak dengesi.",
+            "Bu profil, agresif değişiklikten çok ölçülü gözlem gerektirir.",
+        ],
+    )
+
+    exp["outlook_weak"] = _grid_templates(
+        15,
+        [
+            "Genel sonuç zayıf tarafta:",
+            "Bu ayın raporu uyarı veriyor:",
+            "Performans profili savunmacı okunmalı:",
+            "Bot bu ay beklenen kaliteyi yakalayamamış:",
+            "Sonuçlar parametre kontrolü gerektiriyor:",
+        ],
+        [
+            "sürdürülebilirlik puanı {score}/100 ve etiket {score_label}.",
+            "net sonuç veya maliyet dengesi stratejiyi baskılamış.",
+            "piyasa rejimi ile grid ayarları uyumlu çalışmamış olabilir.",
+        ],
+        [
+            "Tek ay nihai karar için yeterli değildir, ama tekrar ederse müdahale gerekir.",
+            "Öncelik grid aralığı, bütçe dağılımı ve komisyon baskısını incelemek olmalı.",
+            "Bir sonraki ay aynı sinyal gelirse yapılandırma yeniden ele alınmalı.",
+        ],
+    )
+
+    exp["cycle_buy_profit"] = _grid_templates(
+        15,
+        [
+            "Tur #{cid} (aşağı yön — nakit turu) kârla kapandı:",
+            "Tur #{cid} nakit bacakta pozitif sonuç verdi:",
+            "Tur #{cid} dip alım-toparlanma döngüsünü kâra çevirdi:",
+            "Tur #{cid} aşağı yön gridlerini verimli kapattı:",
+            "Tur #{cid} nakit tarafında temiz bir kapanış üretti:",
+        ],
+        [
+            "brüt {gross_c}, komisyon {fees_c}, net {net_c}.",
+            "{gross_c} brüt sonuçtan {fees_c} maliyet çıktı ve net {net_c} kaldı.",
+            "USDT etkisi net {net_c}; brüt rakam {gross_c}, maliyet {fees_c}.",
+        ],
+        [
+            "Bu turda ana değer kasaya yazılan net sonuçtur.",
+            "Mekanizma, geri çekilmede kurulan pozisyonun dönüşte satılmasıdır.",
+            "Bu kalite tekrarlanırsa nakit bacak sürdürülebilirlik kazanır.",
+        ],
+    )
+
+    return exp
+
+
+# =============================================================================
 # Registry + selector
 # =============================================================================
 
@@ -723,6 +1172,10 @@ TEMPLATES.update(
         "cycle_dur_long": CYCLE_DUR_LONG,
     }
 )
+
+CHATGPT_STYLE_PERF_TEMPLATE_COUNT = 300
+for _cat, _pool in _build_conversational_expansions().items():
+    TEMPLATES.setdefault(_cat, []).extend(_pool)
 
 
 class _SafeDict(dict):

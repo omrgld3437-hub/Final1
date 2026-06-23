@@ -422,7 +422,12 @@ def test_grid_qty_distribution_preserves_manual_total():
     assert buy_total == pytest.approx(45.0, abs=0.1)
 
 
-def test_dynamic_grid_triggers_never_tighten_below_manual_template():
+def test_dynamic_grid_triggers_are_duration_targeted_not_welded_to_manual():
+    """Grid triggers are now sized by the cycle-duration model (vol-scaled), NOT
+    pinned to the manual template. The manual template only fixes the grid COUNT
+    and the per-level QTY distribution. The economic fee floor + depth cap are the
+    real guards; the manual trigger is no longer a floor (fixes the legacy
+    'grid welded to manual 1%' defect)."""
     base = {
         "base_alloc_pct": 50.0,
         "quote_alloc_pct": 50.0,
@@ -441,16 +446,32 @@ def test_dynamic_grid_triggers_never_tighten_below_manual_template():
         "profit_reentry_drop_pct": 1.0,
         "profit_reentry_rise_pct": 0.3,
     }
-    features = MarketFeatures(
-        symbol="SOLUSDT", price=75.0, atr_pct_5m=0.3, data_fresh=True
-    )
     rr = reg.RegimeResult(reg.TRENDING_UP, reg.TRENDING_UP, 0.8, {})
-    s = suggest(features, rr, base)
 
-    assert [g["sell_grid_pct"] for g in s.sell_grids] == pytest.approx([2.0, 4.0])
-    assert [g["buy_grid_pct"] for g in s.buy_grids] == pytest.approx([2.0, 4.0])
+    # QTY distribution is preserved regardless of vol.
+    s = suggest(
+        MarketFeatures(symbol="SOLUSDT", price=75.0, atr_pct_1h=1.0, data_fresh=True),
+        rr, base,
+    )
     assert [g["sell_qty_pct_of_base"] for g in s.sell_grids] == pytest.approx([50.0, 50.0])
     assert [g["buy_qty_pct_of_quote"] for g in s.buy_grids] == pytest.approx([50.0, 50.0])
+    # strictly increasing per-level triggers
+    sp = [g["sell_grid_pct"] for g in s.sell_grids]
+    assert sp == sorted(sp) and len(set(sp)) == len(sp)
+
+    # De-welding: under CALM volatility the step drops BELOW the manual 2% level —
+    # impossible under the old 'never tighten below manual' rule.
+    calm = suggest(
+        MarketFeatures(symbol="SOLUSDT", price=75.0, atr_pct_1h=0.3, data_fresh=True),
+        rr, base,
+    )
+    assert calm.buy_grids[0]["buy_grid_pct"] < 2.0
+    # Under WILD volatility the step rises ABOVE the manual 2% level.
+    wild = suggest(
+        MarketFeatures(symbol="SOLUSDT", price=75.0, atr_pct_1h=4.0, data_fresh=True),
+        rr, base,
+    )
+    assert wild.buy_grids[0]["buy_grid_pct"] > 2.0
 
 
 def test_position_state_does_not_reshape_manual_grid_quantities():

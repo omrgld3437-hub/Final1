@@ -13,91 +13,6 @@ let financeState = {
     goldPriceTRY: null // Gram altın fiyatı (TL)
 };
 
-const SETTINGS_SERVER_PUBLIC_IP_CHECK_MS = 5 * 60 * 1000;
-
-function normalizeSettingsServerPublicIp(ip) {
-    var s = (ip == null ? "" : String(ip)).trim();
-    if (!s || s === "—" || s.toLowerCase() === "null" || s.toLowerCase() === "undefined") return "";
-    return s;
-}
-
-function settingsServerPublicIpStorageKey(accountId) {
-    var id = accountId != null && accountId !== "" ? String(accountId) : "global";
-    return "settingsServerPublicIpLastSeen_" + id;
-}
-
-function readSettingsServerPublicIpNote(accountId) {
-    try {
-        var raw = localStorage.getItem(settingsServerPublicIpStorageKey(accountId));
-        if (!raw) return null;
-        var parsed = JSON.parse(raw);
-        return parsed && typeof parsed === "object" ? parsed : null;
-    } catch (e) {
-        return null;
-    }
-}
-
-function writeSettingsServerPublicIpNote(accountId, ip, previousIp) {
-    try {
-        localStorage.setItem(settingsServerPublicIpStorageKey(accountId), JSON.stringify({
-            account_id: accountId || null,
-            ip: normalizeSettingsServerPublicIp(ip),
-            previous_ip: normalizeSettingsServerPublicIp(previousIp),
-            changed_at: new Date().toISOString()
-        }));
-    } catch (e) {}
-}
-
-function notifySettingsServerPublicIpChanged(oldIp, newIp) {
-    var msg = "Sunucu dış IP değişti: " + oldIp + " → " + newIp + ". Binance API beyaz liste ayarını kontrol edin.";
-    if (window.Toast && typeof window.Toast.warning === "function") {
-        window.Toast.warning(msg, 18000);
-    } else if (window.Toast && typeof window.Toast.warn === "function") {
-        window.Toast.warn(msg);
-    } else {
-        alert(msg);
-    }
-}
-
-function noteSettingsServerPublicIp(ip, opts) {
-    opts = opts || {};
-    var cleanIp = normalizeSettingsServerPublicIp(ip);
-    if (!cleanIp) return;
-    var accountId = (typeof State !== "undefined" && State) ? State.accountId : null;
-    var previous = readSettingsServerPublicIpNote(accountId);
-    var previousIp = normalizeSettingsServerPublicIp(previous && previous.ip);
-    if (!previousIp) {
-        writeSettingsServerPublicIpNote(accountId, cleanIp, "");
-        return;
-    }
-    if (previousIp !== cleanIp) {
-        writeSettingsServerPublicIpNote(accountId, cleanIp, previousIp);
-        if (opts.notify !== false) notifySettingsServerPublicIpChanged(previousIp, cleanIp);
-        return;
-    }
-    writeSettingsServerPublicIpNote(accountId, cleanIp, previous && previous.previous_ip);
-}
-
-async function loadSettingsServerPublicIp(serverPublicIpEl, opts) {
-    opts = opts || {};
-    if (!State.accountId) return "";
-    try {
-        const data = await window.apiClient.get(`/api/accounts/${State.accountId}/settings`);
-        const ip = normalizeSettingsServerPublicIp(data.server_public_ip);
-        if (serverPublicIpEl) {
-            serverPublicIpEl.value = ip || "—";
-            serverPublicIpEl.placeholder = ip ? "" : "Alınamadı";
-            serverPublicIpEl.title = ip ? ("Sunucu dış IP: " + ip) : "Sunucu dış IP alınamadı";
-        }
-        noteSettingsServerPublicIp(ip, { notify: opts.notify !== false });
-        return ip;
-    } catch (e) {
-        console.warn("[settings] Failed to load server public IP:", e);
-        if (serverPublicIpEl) { serverPublicIpEl.value = ""; serverPublicIpEl.placeholder = "Alınamadı"; }
-        return "";
-    }
-}
-
 // Ticker verilerini al (gram altın ve USDTRY)
 async function getTickerData() {
     try {
@@ -757,13 +672,20 @@ function initSettingsTab() {
         }
     })();
     
-    // Sunucu dış IP (otomatik, salt okunur) – ilk değer not edilir; değişirse kullanıcı uyarılır.
-    loadSettingsServerPublicIp(serverPublicIpEl, { notify: true });
-    if (window.intervalRegistry) {
-        window.intervalRegistry.start('settings.serverPublicIp', function () {
-            loadSettingsServerPublicIp(serverPublicIpEl, { notify: true });
-        }, SETTINGS_SERVER_PUBLIC_IP_CHECK_MS, 'tab.settings');
-    }
+    // Sunucu dış IP (otomatik, salt okunur) – GET /settings server_public_ip döndürür
+    (async () => {
+        try {
+            const data = await window.apiClient.get(`/api/accounts/${State.accountId}/settings`);
+            if (serverPublicIpEl) {
+                const ip = (data.server_public_ip && typeof data.server_public_ip === "string") ? data.server_public_ip.trim() : "";
+                serverPublicIpEl.value = ip || "—";
+                serverPublicIpEl.placeholder = ip ? "" : "Alınamadı";
+            }
+        } catch (e) {
+            console.warn("[settings] Failed to load server public IP:", e);
+            if (serverPublicIpEl) { serverPublicIpEl.value = ""; serverPublicIpEl.placeholder = "Alınamadı"; }
+        }
+    })();
     
     if (apiKeyBtn) {
         apiKeyBtn.onclick = null;
@@ -1409,15 +1331,15 @@ function getFinanceBotHealthStatus(bot) {
 function getFinanceBotStatusMeta(bot) {
     if (typeof isDashboardServerUnreachable === 'function' && isDashboardServerUnreachable()
         && typeof isFinanceBotRunningForHealth === 'function' && isFinanceBotRunningForHealth(bot)) {
-        return { text: 'ÇALIŞIYOR', className: 'mevcut-botlar-status--running', title: 'Sunucuya ulaşılamıyor; botun son bilinen durumu çalışıyor. Sağlık uyarısını detaydan kontrol edin.' };
+        return { text: 'HATA', className: 'mevcut-botlar-status--error', title: 'Sunucuya ulaşılamıyor; bot durumu güvenli hata olarak izleniyor. Bağlantı düzelene kadar detay loglarını kontrol edin.' };
     }
     var health = getFinanceBotHealthStatus(bot);
     if (typeof isFinanceBotRunningForHealth === 'function' && isFinanceBotRunningForHealth(bot)
         && (health.level === 'crit' || health.level === 'both')) {
         return {
-            text: 'ÇALIŞIYOR',
-            className: 'mevcut-botlar-status--running',
-            title: health.message || 'Bot çalışıyor; kritik sağlık uyarısı var. Detay sayfasındaki logları kontrol edin.'
+            text: 'HATA',
+            className: 'mevcut-botlar-status--error',
+            title: health.message || 'Botta kritik sağlık uyarısı var. Binance/API/IP bağlantısı düzelene kadar hata durumunda izlenir.'
         };
     }
     if (isBotWaitingFirstBuy(bot)) {
@@ -1452,8 +1374,6 @@ var _financeBotsLivePollPromise = null;
 var _financeBotsLiveSig = '';
 var _financeBotsHealthCache = {};
 var _financeBotsHealthPollPromise = null;
-var _financeBotsConnectivityToastSig = '';
-var _financeBotsConnectivityToastAt = 0;
 var FINANCE_BOTS_HEALTH_POLL_MS = 15000;
 var FINANCE_BOT_ROW_ALERT_CLASSES = ['mevcut-bot-row-alert-warn', 'mevcut-bot-row-alert-crit', 'mevcut-bot-row-alert-both'];
 var FINANCE_BOTS_TAB_ALERT_CLASSES = ['bots-tab-alert-warn', 'bots-tab-alert-crit', 'bots-tab-alert-both'];
@@ -2033,30 +1953,6 @@ function classifyFinanceBotHealth(botId, healthData) {
     return { level: null };
 }
 
-function maybeToastFinanceBotsConnectivityWarning(healthData) {
-    if (isFinanceBotsTestAccountContext()) return;
-    if (!healthData || healthData.connectivity_ok !== false || !healthData.connectivity_failure) return;
-    var fail = healthData.connectivity_failure || {};
-    var code = String(fail.error_code || fail.code || '').toUpperCase();
-    if (!/API_UNAUTHORIZED|ACCOUNT_KEYS|CLOCK_DRIFT|BINANCE_UNREACHABLE|BINANCE_TIMEOUT|BINANCE_RATE_LIMIT/.test(code)) return;
-    var msg = String(fail.message || '').slice(0, 220);
-    var sig = code + '|' + msg;
-    var now = Date.now();
-    if (sig === _financeBotsConnectivityToastSig && now - _financeBotsConnectivityToastAt < 60000) return;
-    _financeBotsConnectivityToastSig = sig;
-    _financeBotsConnectivityToastAt = now;
-    var payload = {
-        error_code: code,
-        wallet_last_error_code: code,
-        message: msg
-    };
-    if (typeof window.maybeToastConnectivityWarning === 'function') {
-        window.maybeToastConnectivityWarning(payload);
-    } else if (window.Toast && window.Toast.warning) {
-        window.Toast.warning(msg || 'Binance API/IP bağlantısı doğrulanamadı. Sunucu dış IP beyaz listesini kontrol edin.');
-    }
-}
-
 function financeBotsHealthAccountKey() {
     if (State.accountCode) return 'code:' + String(State.accountCode);
     if (State.accountId) return 'id:' + String(State.accountId);
@@ -2295,7 +2191,6 @@ function pollFinanceBotsHealth() {
         if (!botId) return Promise.resolve();
         return window.apiClient.get('/api/bots-engine/' + botId + '/health' + q, { timeout: 12000 })
             .then(function (res) {
-                maybeToastFinanceBotsConnectivityWarning(res || {});
                 updates[botId] = classifyFinanceBotHealth(botId, res || {});
             })
             .catch(function (err) {

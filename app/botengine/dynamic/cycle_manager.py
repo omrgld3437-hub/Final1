@@ -80,7 +80,88 @@ def _position_state(state: Dict[str, Any], cfg_dict: Dict[str, Any]) -> Dict[str
         "base_balance": float(state.get("base_balance") or 0.0),
         "quote_balance": float(state.get("quote_balance") or 0.0),
         "initial_allocation_done": bool(state.get("initial_allocation_done")),
+        # realized durations of recent cycles (days) for the duration-feedback loop
+        "recent_cycle_days": _recent_cycle_days(state.get("dynamic_snapshot") or {}),
     }
+
+
+# Fields the param-assistant REFERENCE may override on top of the bot's live cfg.
+# Everything else (fees, symbol, max_buy_levels, safety) stays from the bot cfg.
+_REFERENCE_OVERRIDE_FIELDS = (
+    "sell_grids",
+    "buy_grids",
+    "base_alloc_pct",
+    "quote_alloc_pct",
+)
+
+
+def set_reference(
+    state: Dict[str, Any], config: Dict[str, Any], source: str = "param_assistant"
+) -> bool:
+    """Explicitly set the dynamic-mode sizing REFERENCE — e.g. when the param
+    assistant's optimized config is applied to the bot. Only the STRUCTURAL fields
+    (grid count + per-level qty distribution + alloc split) are stored; the
+    DISTANCES (grid step / take-profit / trailing) are recomputed every cycle by
+    the duration model from the current volatility. Returns True if stored."""
+    if not isinstance(config, dict):
+        return False
+    frozen = {
+        k: config.get(k) for k in _REFERENCE_OVERRIDE_FIELDS if config.get(k) is not None
+    }
+    if not frozen:
+        return False
+    frozen["_source"] = source
+    frozen["_frozen_cycle"] = int(state.get("cycle_id") or 0)
+    state["_dynamic_reference"] = frozen
+    return True
+
+
+def _reference_cfg(state: Dict[str, Any], cfg_dict: Dict[str, Any]) -> Dict[str, Any]:
+    """Resolve the sizing REFERENCE = "param asistanının yaptığı ilk kodlar".
+
+    The reference is the baseline STRUCTURE (grid count, per-level qty
+    distribution, alloc split) that every new cycle computes its duration-targeted
+    distances from. Resolution order:
+      1. An explicit reference at state['_dynamic_reference'] (set by the param
+         assistant / API) — wins and is robust to later config_json edits.
+      2. Otherwise FREEZE the pristine INITIAL config (config_json, never overlaid)
+         as the reference on the first dynamic cycle, so the "initial values" are
+         pinned even if the user edits the config mid-run.
+    Fees / symbol / safety always come from the live cfg, never the reference."""
+    ref = state.get("_dynamic_reference")
+    if not (isinstance(ref, dict) and ref):
+        # Freeze the pristine initial config as the reference (once).
+        set_reference(state, cfg_dict, source="initial_config")
+        ref = state.get("_dynamic_reference")
+        if not (isinstance(ref, dict) and ref):
+            return cfg_dict
+    merged = dict(cfg_dict)
+    for k in _REFERENCE_OVERRIDE_FIELDS:
+        v = ref.get(k)
+        if v is not None:
+            merged[k] = v
+    return merged
+
+
+def _recent_cycle_days(prev_snap: Dict[str, Any]) -> Any:
+    """Derive recent cycle durations (days) from the snapshot history timestamps.
+    Each history entry is stamped at its cycle boundary, so consecutive deltas
+    approximate cycle durations — fed to the duration controller (overrun → widen,
+    churn → lengthen). Returns the last ≤5 positive durations, or None."""
+    hist = (prev_snap or {}).get("history") or []
+    ts = [
+        h.get("ts")
+        for h in hist
+        if isinstance(h, dict) and isinstance(h.get("ts"), (int, float))
+    ]
+    if len(ts) < 2:
+        return None
+    days = []
+    for i in range(1, len(ts)):
+        d = (ts[i] - ts[i - 1]) / 86400000.0
+        if d > 0:
+            days.append(round(d, 4))
+    return days[-5:] if days else None
 
 
 async def build_snapshot(
@@ -147,9 +228,11 @@ async def build_snapshot(
     regime_result = reg.classify(features, prev_regime_state)
     new_regime_state = reg.update_regime_state(prev_regime_state, regime_result)
 
-    # 4. Suggest
+    # 4. Suggest — compute from the REFERENCE (param-assistant output if attached,
+    #    else manual cfg), targeting a 1–7 day cycle at the current volatility.
     pos = _position_state(state, cfg_dict)
-    suggestion = se.suggest(features, regime_result, cfg_dict, pos)
+    reference_cfg = _reference_cfg(state, cfg_dict)
+    suggestion = se.suggest(features, regime_result, reference_cfg, pos)
 
     # 5. Smooth vs prev applied (EMA blend on scalars). Alpha scales with regime
     #    confidence: low confidence → stickier (stay near prev), avoiding large
@@ -166,7 +249,10 @@ async def build_snapshot(
         "data_fresh": True,
         "stale_reason": None,
         "regime": regime_result.regime,
+        "regime_confidence": round(float(regime_result.confidence or 0.0), 4),
         "regime_state": new_regime_state,
+        "stance": suggestion.stance,
+        "duration": suggestion.duration,
         "features": features.to_dict(),
         "raw": suggestion.to_dict(),
         "applied": clamped.to_dict(),

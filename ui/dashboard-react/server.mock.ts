@@ -111,7 +111,7 @@ const chatHistory = {
     {
       id: 1,
       sender_type: "admin",
-      body: "TraderTrailing destek hattına hoş geldiniz. Size nasıl yardımcı olabiliriz?",
+      body: "ayserose destek hattına hoş geldiniz. Size nasıl yardımcı olabiliriz?",
       created_at: new Date(Date.now() - 600000).toISOString(),
     },
   ],

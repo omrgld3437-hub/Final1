@@ -157,6 +157,9 @@ function markWalletLiveFetchFailed(errorCode, opts) {
     var hasCache = typeof _walletHasDisplayableAssets === 'function' && _walletHasDisplayableAssets();
     var transient = !code || /BINANCE_TIMEOUT|BINANCE_UNREACHABLE|WALLET_REFRESH|WALLET_TIMEOUT|INFLIGHT/.test(code);
     if (!opts.force && transient && hasCache) {
+        _walletLiveFailedAt = Date.now();
+        if (code && typeof State !== 'undefined') State.walletLastErrorCode = code;
+        if (assetsState.wallet) assetsState.wallet.data_status = 'stale';
         scheduleSilentWalletRecovery();
         scheduleWalletPanelStaleBadgeAfterFailure();
         if (typeof updateKpiCuzdanLiveStatus === 'function') updateKpiCuzdanLiveStatus();
@@ -188,19 +191,22 @@ window._isHardWalletError = _isHardWalletError;
 function markWalletCachedLiveFetchStale(errorCode) {
     var code = errorCode ? String(errorCode).toUpperCase() : 'WALLET_STALE';
     var hard = _isHardWalletError(code);
-    if (hard) {
-        _walletLiveFailedAt = Date.now();
-        if (typeof State !== 'undefined') State.walletLastErrorCode = code;
-    }
+    _walletLiveFailedAt = Date.now();
+    if (typeof State !== 'undefined') State.walletLastErrorCode = code;
     if (assetsState.wallet) {
-        assetsState.wallet.data_status = hard ? 'stale' : 'cached';
+        assetsState.wallet.data_status = 'stale';
         if (assetsState.wallet.status !== 'error') assetsState.wallet.status = 'ready';
-        assetsState.wallet.error = null;
+        assetsState.wallet.error = hard
+            ? {
+                message: assetsState.wallet.error && assetsState.wallet.error.message
+                    ? assetsState.wallet.error.message
+                    : 'Canlı cüzdan yenilenemedi',
+                error_code: code
+            }
+            : null;
     }
-    if (hard) {
-        scheduleSilentWalletRecovery();
-        scheduleWalletPanelStaleBadgeAfterFailure();
-    }
+    scheduleSilentWalletRecovery();
+    scheduleWalletPanelStaleBadgeAfterFailure();
     if (typeof updateKpiCuzdanLiveStatus === 'function') updateKpiCuzdanLiveStatus();
     if (window.BinanceAssetsPanel && typeof window.BinanceAssetsPanel.render === 'function') window.BinanceAssetsPanel.render();
     else if (typeof renderVarliklarList === 'function') renderVarliklarList();
@@ -221,15 +227,11 @@ function isWalletDataLive() {
     if (!assetsState.wallet || assetsState.wallet.keys_configured !== true) return false;
     var code = walletErrorCode();
     if (_isHardWalletError(code)) return false;
-    if (assetsState.wallet.status === 'error' && assetsState.wallet.error && _isHardWalletError(assetsState.wallet.error.error_code)) {
-        return false;
-    }
-    if (assetsState.wallet.data_status === 'stale' && _isHardWalletError(code)) return false;
-    if (_walletLiveFailedAfterOk() && _isHardWalletError(code)) return false;
+    if (assetsState.wallet.status === 'error') return false;
+    if (assetsState.wallet.data_status === 'stale') return false;
+    if (_walletLiveFailedAfterOk()) return false;
     if (_walletLiveOkAt && (Date.now() - _walletLiveOkAt) <= WALLET_LIVE_OK_TTL_MS) return true;
     if (assetsState.wallet.data_status === 'fresh') return true;
-    var hasBal = typeof _walletHasDisplayableAssets === 'function' && _walletHasDisplayableAssets();
-    if (hasBal && !_isHardWalletError(code)) return true;
     return false;
 }
 window.isWalletDataLive = isWalletDataLive;
@@ -288,13 +290,19 @@ window.walletLastUpdatedText = walletLastUpdatedText;
 function walletStaleStatusText() {
     var code = walletErrorCode();
     if (!_isHardWalletError(code) && typeof isWalletDataLive === 'function' && isWalletDataLive()) return 'Canlı';
-    var base = 'Güncel değil';
-    if (code === 'CLOCK_DRIFT') base = 'Saat senkronu';
-    else if (code === 'API_UNAUTHORIZED' || code.indexOf('KEY') >= 0) base = 'API / IP';
     var last = walletLastUpdatedText();
-    return last ? (base + ' · Son: ' + last) : base;
+    return last ? ('Güncel değil · Son: ' + last) : 'Güncel değil';
 }
 window.walletStaleStatusText = walletStaleStatusText;
+
+function walletErrorDetailText() {
+    var code = walletErrorCode();
+    if (!code) return '';
+    if (code === 'CLOCK_DRIFT') return 'Neden: sunucu saat senkronu.';
+    if (code === 'API_UNAUTHORIZED' || code.indexOf('KEY') >= 0) return 'Neden: API anahtarı / IP yetkisi.';
+    return 'Neden: ' + code + '.';
+}
+window.walletErrorDetailText = walletErrorDetailText;
 
 /** Cüzdan durum etiketi (iç mantık; UI'da Canlı gösterilmez). */
 function walletLiveStatusLabel() {
@@ -372,8 +380,9 @@ function applyWalletStaleWarningEl(el) {
         el.classList.toggle('kpi-spot-status--test', false);
         return;
     }
-    var showStale = shouldShowWalletStaleWarning();
-    if (!showStale && _walletStaleUi.liveHoldUntil && Date.now() < _walletStaleUi.liveHoldUntil) {
+    var activeFailure = !!walletErrorCode() || _walletLiveFailedAfterOk();
+    var showStale = activeFailure || shouldShowWalletStaleWarning();
+    if (!activeFailure && !showStale && _walletStaleUi.liveHoldUntil && Date.now() < _walletStaleUi.liveHoldUntil) {
         if (warnOnly) {
             el.hidden = true;
             el.textContent = '';
@@ -404,10 +413,11 @@ function applyWalletStaleWarningEl(el) {
     el.hidden = false;
     var statusText = walletStaleStatusText();
     var lastText = walletLastUpdatedText();
+    var detailText = walletErrorDetailText();
     el.textContent = statusText;
-    el.title = lastText
+    el.title = (detailText ? (detailText + ' ') : '') + (lastText
         ? ('Son görünen bakiye korunuyor. Son başarılı cüzdan güncellemesi: ' + lastText + '. Sistem otomatik tekrar deneyecek.')
-        : 'Son görünen bakiye korunuyor; canlı Binance cüzdan yenilemesi şu anda başarısız. Sistem otomatik tekrar deneyecek.';
+        : 'Son görünen bakiye korunuyor; canlı Binance cüzdan yenilemesi şu anda başarısız. Sistem otomatik tekrar deneyecek.');
     el.classList.toggle('kpi-spot-status--stale', true);
     el.classList.toggle('kpi-spot-status--live', false);
     el.classList.toggle('kpi-spot-status--offline', false);

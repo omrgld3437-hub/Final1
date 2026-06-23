@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Dict, Optional, Tuple
 
 from sqlalchemy import text
+from app.services.bot_status_utils import is_bot_capital_locked
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -78,10 +79,10 @@ def get_bot_locked_balances_for_account(
     try:
         rows = db.execute(
             text("""
-                SELECT w.symbol, w.virtual_base, w.virtual_quote
+                SELECT w.symbol, w.virtual_base, w.virtual_quote, b.status
                 FROM bot_virtual_wallet w
                 INNER JOIN bots b ON b.id = w.bot_id
-                WHERE w.account_id = :aid AND LOWER(COALESCE(b.status, '')) = 'running'
+                WHERE w.account_id = :aid
             """),
             {"aid": account_id},
         ).fetchall()
@@ -89,6 +90,8 @@ def get_bot_locked_balances_for_account(
             sym = (row[0] or "").strip()
             vb = float(row[1] or 0)
             vq = float(row[2] or 0)
+            if not is_bot_capital_locked(row[3] if len(row) > 3 else ""):
+                continue
             if not sym:
                 continue
             base_asset, quote_asset = _symbol_to_base_quote(sym)
@@ -99,7 +102,7 @@ def get_bot_locked_balances_for_account(
     except Exception as e:
         logger.warning("get_bot_locked_balances_for_account error: %s", e)
 
-    # Tablo boşsa veya toplam 0 ise: çalışan botların state'inden bot kilitli hesapla (UI'da "Bot kilitli" doğru görünsün)
+    # Tablo boşsa veya toplam 0 ise: sermayesi hâlâ ayrılmış botların state'inden bot kilitli hesapla.
     if not out or sum(out.values()) <= 0:
         try:
             from app.db.models import Bot
@@ -107,10 +110,12 @@ def get_bot_locked_balances_for_account(
 
             bots = (
                 db.query(Bot)
-                .filter(Bot.account_id == account_id, Bot.status == "running")
+                .filter(Bot.account_id == account_id)
                 .all()
             )
             for bot in bots or []:
+                if not is_bot_capital_locked(getattr(bot, "status", None)):
+                    continue
                 sym = (bot.symbol or "").strip().upper()
                 if not sym or sym == "MULTI":
                     continue

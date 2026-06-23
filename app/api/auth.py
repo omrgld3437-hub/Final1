@@ -11,7 +11,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 from sqlalchemy import or_, func
 from pydantic import BaseModel
-from typing import Optional, List, Union
+from typing import Any, Dict, Optional, List, Union
 from datetime import datetime, timedelta
 import json
 import os
@@ -3019,9 +3019,11 @@ async def get_chat(
         thread = _get_or_create_thread_for_user(db, user.id, account_id)
     db.refresh(thread)  # güncel reopened_at için
     reopened_at = getattr(thread, "reopened_at", None)
+    visible_now = datetime.utcnow()
     msgs = (
         db.query(ChatMessage)
         .filter(ChatMessage.thread_id == thread.id)
+        .filter(or_(ChatMessage.created_at.is_(None), ChatMessage.created_at <= visible_now))
         .order_by(ChatMessage.created_at.asc())
         .all()
     )
@@ -3049,6 +3051,7 @@ async def get_chat(
         msgs = (
             db.query(ChatMessage)
             .filter(ChatMessage.thread_id == thread.id)
+            .filter(or_(ChatMessage.created_at.is_(None), ChatMessage.created_at <= visible_now))
             .order_by(ChatMessage.created_at.asc())
             .all()
         )
@@ -3085,6 +3088,8 @@ async def get_chat(
 class ChatSendRequest(BaseModel):
     account_id: int
     message: str
+    source: Optional[str] = None
+    assistant_context: Optional[Dict[str, Any]] = None
 
 
 @router.post("/auth/chat/send")
@@ -3141,10 +3146,32 @@ async def send_chat_message(
         request_id=getattr(request.state, "request_id", None),
         meta={"body_preview": body_preview},
     )
+    auto_resolver = None
+    if (req.source or "").strip().lower() == "bot-error-assistant":
+        try:
+            from app.services.error_auto_resolver import handle_error_assistant_chat
+
+            auto_resolver = await handle_error_assistant_chat(
+                db=db,
+                thread=thread,
+                user_message=m,
+                account=account,
+                message_body=req.message.strip(),
+                assistant_context=req.assistant_context,
+                request_id=getattr(request.state, "request_id", None),
+            )
+        except Exception as exc:
+            logger.warning(
+                "error_assistant_auto_resolver failed user_id=%s account_id=%s err=%s",
+                user.id,
+                req.account_id,
+                exc,
+            )
     return {
         "success": True,
         "message_id": m.id,
         "created_at": m.created_at.isoformat() if m.created_at else None,
+        "auto_resolver": auto_resolver,
     }
 
 
@@ -3734,9 +3761,11 @@ async def list_admin_chats(
         last_rating = getattr(thread, "rating", None) if thread else None
         avg_rating = _thread_avg_rating(db, thread.id, last_rating) if thread else None
         if thread:
+            visible_now = datetime.utcnow()
             last = (
                 db.query(ChatMessage)
                 .filter(ChatMessage.thread_id == thread.id)
+                .filter(or_(ChatMessage.created_at.is_(None), ChatMessage.created_at <= visible_now))
                 .order_by(ChatMessage.created_at.desc())
                 .first()
             )
@@ -3798,9 +3827,11 @@ async def get_admin_chat_messages(
         }
     locked = thread.locked_at is not None
     ended = thread.ended_at is not None
+    visible_now = datetime.utcnow()
     msgs = (
         db.query(ChatMessage)
         .filter(ChatMessage.thread_id == thread.id)
+        .filter(or_(ChatMessage.created_at.is_(None), ChatMessage.created_at <= visible_now))
         .order_by(ChatMessage.created_at.asc())
         .all()
     )

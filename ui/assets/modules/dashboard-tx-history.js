@@ -59,10 +59,11 @@ function _txIsPaperSpotTx(tx) {
 }
 function _txPlatformLabel(tx) {
     if (!tx) return 'Binance';
-    if (tx.bot_id || tx.source === 'bot') return 'TraderTrailing';
-    if (_txIsPaperSpotTx(tx)) return 'TraderTrailing';
+    if (tx.bot_id || tx.source === 'bot') return 'ayserose';
+    if (_txIsPaperSpotTx(tx)) return 'ayserose';
     var p = tx.platform && String(tx.platform);
-    if (p) return p === 'TradeTrailing' ? 'TraderTrailing' : p;
+    // Eski kayıtlardaki marka adlarını yeni markaya normalleştir (geriye dönük uyum).
+    if (p) return (p === 'TradeTrailing' || p === 'TraderTrailing') ? 'ayserose' : p;
     return 'Binance';
 }
 
@@ -168,7 +169,7 @@ function spotOrderResultToTxItem(result, symbol, side) {
         commission_asset: 'USDT',
         source: 'spot',
         source_label: 'Spot',
-        platform: r.paper ? 'TraderTrailing' : 'Binance',
+        platform: r.paper ? 'ayserose' : 'Binance',
         fills_count: 1
     };
 }

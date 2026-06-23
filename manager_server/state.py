@@ -492,38 +492,35 @@ def _reset_session_chrono() -> float:
 
 
 def _init_session_chrono_on_manager_start() -> None:
-    """Manager boot: aynı PID ile tekrar init olmadıkça mevcut session.started_at korunur."""
+    """Manager boot: proje oturumu yeni başlangıç kabul edilir."""
     _RUN_DIR.mkdir(parents=True, exist_ok=True)
-    current_pid = os.getpid()
-    keep_existing = False
-    if _MANAGER_PID_FILE.is_file() and _SESSION_STARTED_FILE.is_file():
-        try:
-            if int(_MANAGER_PID_FILE.read_text(encoding="utf-8").strip()) == current_pid:
-                keep_existing = True
-        except Exception:
-            keep_existing = False
-    if not keep_existing:
-        _reset_session_chrono()
+    _reset_session_chrono()
 
 
 def _session_uptime_s() -> int:
-    """session.started_at dosyasından geçen süre (saniye)."""
-    if not _SESSION_STARTED_FILE.is_file():
+    """Geçerli proje oturumundan geçen süre (saniye)."""
+    started = _session_started_ts()
+    if started is None:
         return 0
-    try:
-        started = float(_SESSION_STARTED_FILE.read_text(encoding="utf-8").strip())
-        return max(0, int(time.time() - started))
-    except Exception:
-        return 0
+    return max(0, int(time.time() - started))
 
 
 def _session_started_ts() -> Optional[float]:
-    if not _SESSION_STARTED_FILE.is_file():
-        return None
+    candidates: list[float] = []
     try:
-        return float(_SESSION_STARTED_FILE.read_text(encoding="utf-8").strip())
+        if _SESSION_STARTED_FILE.is_file():
+            candidates.append(float(_SESSION_STARTED_FILE.read_text(encoding="utf-8").strip()))
     except Exception:
-        return None
+        pass
+    # Proje tekrar açıldığında pratik işaret web oturumudur; manager uzun süre
+    # açık kalsa bile "Sistem Çalışması" eski günleri taşımamalı.
+    for p in (_RUN_DIR / "web.started_at", _MANAGER_STARTED_FILE):
+        try:
+            if p.is_file():
+                candidates.append(float(p.read_text(encoding="utf-8").strip()))
+        except Exception:
+            pass
+    return max(candidates) if candidates else None
 
 
 def _system_uptime_s() -> Optional[int]:
@@ -626,8 +623,9 @@ def _collect_metrics() -> None:
     manager_proc = _process_metrics(manager_pid, manager_started)
     web_proc = _process_metrics(web_pid, web_started)
     engine_proc = _process_metrics(engine_pid, engine_started)
-    html_running = _is_port_in_use(_HTML_PORT)
-    html_pid = _pid_on_port(_HTML_PORT) if html_running else _read_pid(_HTML_PID)
+    html_running, html_pid = _html_port_state()
+    if not html_pid:
+        html_pid = _read_pid(_HTML_PID)
     html_started = None
     if (_RUN_DIR / "html.started_at").exists():
         try:
@@ -910,9 +908,10 @@ def init_state() -> None:
             html_started = float((_RUN_DIR / "html.started_at").read_text().strip())
         except Exception:
             pass
+    html_running, html_pid = _html_port_state()
     status["html"] = {
-        "running": _is_port_in_use(_HTML_PORT),
-        "pid": None,
+        "running": html_running,
+        "pid": html_pid,
         "started_at": html_started,
         "locked": False,
         "restart_count": 0,
@@ -1805,8 +1804,7 @@ def get_status() -> dict:
         "restart_count": status["manager"].get("restart_count", 0),
     }
     # HTML (omeraltinhtml): calistir.bat / stop.bat ile; çalışıyor = port açık
-    html_running = _is_port_in_use(_HTML_PORT)
-    html_pid = _pid_on_port(_HTML_PORT) if html_running else None
+    html_running, html_pid = _html_port_state()
     status["html"]["running"] = html_running
     status["html"]["pid"] = html_pid
     if (_RUN_DIR / "html.started_at").exists():
@@ -1916,6 +1914,13 @@ def _pid_on_port(port: int) -> Optional[int]:
     return None
 
 
+def _html_port_state() -> tuple[bool, Optional[int]]:
+    """HTML servisini port PID yedeğiyle kontrol et; localhost connect bazen yanlış negatif dönebilir."""
+    port_pid = _pid_on_port(_HTML_PORT)
+    port_open = _is_port_in_use(_HTML_PORT)
+    return bool(port_pid or port_open), port_pid
+
+
 def _kill_port(port: int) -> None:
     """Portu dinleyen süreci durdur (omeraltinhtml stop için)."""
     if _IS_WINDOWS:
@@ -1994,6 +1999,13 @@ def _do_start_html() -> bool:
     if not _OMERALTINHTML_PATH.is_dir():
         logging.getLogger().warning("HTML server: path not a directory: %s", _OMERALTINHTML_PATH)
         return False
+    already_running, existing_pid = _html_port_state()
+    if already_running:
+        status["html"]["running"] = True
+        status["html"]["pid"] = existing_pid
+        if not (_RUN_DIR / "html.started_at").exists():
+            (_RUN_DIR / "html.started_at").write_text(str(time.time()), encoding="utf-8")
+        return True
     try:
         _RUN_DIR.mkdir(parents=True, exist_ok=True)
         if _IS_WINDOWS:
@@ -2403,7 +2415,7 @@ def _html_watchdog_loop() -> None:
                 continue
             if time.time() - started_at < 15:
                 continue
-            if _is_port_in_use(_HTML_PORT):
+            if _html_port_state()[0]:
                 continue
             log.info("HTML (omeraltin.com) port %s kapali, yeniden baslatiliyor.", _HTML_PORT)
             do_start("html")

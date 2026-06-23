@@ -6,6 +6,7 @@ CHANGE: Bot V2 API endpoints - create, start, stop, pause, state, grids, trades,
 """
 
 import json
+import os
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
@@ -28,6 +29,21 @@ from app.api.auth import require_auth, get_account_or_403, get_client_ip
 from app.bot.binance_adapter_v2 import BinanceSpotAdapterV2
 
 router = APIRouter()
+
+# Hesap başına aynı anda çalışabilecek bot üst sınırı (RUNNING/PAUSED = aktif slot).
+_MAX_ACTIVE_BOTS_PER_ACCOUNT = int(os.getenv("MAX_ACTIVE_BOTS_PER_ACCOUNT", "10"))
+_ACTIVE_BOT_STATUSES = ("RUNNING", "PAUSED")
+
+
+def _count_active_bots(db: Session, account_id: int, exclude_bot_id: Optional[int] = None) -> int:
+    """Hesabın aktif (çalışan/duraklatılmış) bot sayısı — durdurulanlar sayılmaz."""
+    q = db.query(BotV2).filter(
+        BotV2.account_id == account_id,
+        BotV2.status.in_(_ACTIVE_BOT_STATUSES),
+    )
+    if exclude_bot_id is not None:
+        q = q.filter(BotV2.id != exclude_bot_id)
+    return q.count()
 
 
 class BotCreateV2Request(BaseModel):
@@ -222,6 +238,20 @@ async def start_bot_v2(
         raise HTTPException(status_code=404, detail="Bot not found")
     get_account_or_403(current, bot.account_id, db)
     acc = db.query(Account).filter(Account.id == bot.account_id).first()
+
+    # Hesap başına aynı anda en fazla N çalışan bot — zaten çalışan/duraklatılmışsa
+    # (bu bot hariç) yeni RUNNING'e geçişe izin verme.
+    if bot.status not in _ACTIVE_BOT_STATUSES:
+        active = _count_active_bots(db, bot.account_id, exclude_bot_id=bot.id)
+        if active >= _MAX_ACTIVE_BOTS_PER_ACCOUNT:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Bu hesapta aynı anda en fazla {_MAX_ACTIVE_BOTS_PER_ACCOUNT} bot "
+                    f"çalışabilir. Yeni bir bot başlatmadan önce çalışan botlardan "
+                    f"birini durdurun."
+                ),
+            )
 
     bot.status = "RUNNING"
     bot.updated_at = datetime.utcnow()

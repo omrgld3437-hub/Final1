@@ -7,6 +7,12 @@
 
 @import url("scroll-auto-hide.css?v=10");
 
+/* --- ayserose marka tipografisi --- */
+@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,700;1,300&display=swap');
+.ar-ayse { font-family: 'Cormorant Garamond', Georgia, serif; font-weight: 700; font-style: normal; color: #c280d4; letter-spacing: 0.01em; }
+.ar-rose  { font-family: 'Cormorant Garamond', Georgia, serif; font-weight: 300; font-style: italic; color: #e896c4; letter-spacing: 0.04em; }
+.ar-inline { display: inline; white-space: nowrap; }
+
 /* ===== RETRO 90s WINDOWS THEME ===== */
 :root {
     --retro-pink: #ff6b9d;
@@ -142,7 +148,7 @@ body {
     letter-spacing: 0.02em;
 }
 
-/* TraderTrailing logo: parlama animasyonu (dashboard appbar, admin appbar) */
+/* ayserose logo: parlama animasyonu (dashboard appbar, admin appbar) */
 .tt-logo-text,
 .admin-appbar-brand {
     font-size: 1.15rem;

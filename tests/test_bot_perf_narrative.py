@@ -28,8 +28,8 @@ def test_enumerate_months_from_start():
 # ---------------------------------------------------------------------------
 
 
-def test_template_pool_has_at_least_300_templates():
-    assert pool_size() >= 300
+def test_template_pool_has_chatgpt_style_expansion_pack():
+    assert pool_size() >= 690
 
 
 def _sample_cycles():

@@ -1,4 +1,4 @@
-# TraderTrailing — final1
+# ayserose — final1
 
 Binance Spot bot platformu · DCA · Grid · Trailing · Bot Engine v5
 
@@ -8,7 +8,7 @@ Binance Spot bot platformu · DCA · Grid · Trailing · Bot Engine v5
 
 ## Bu proje nedir?
 
-TraderTrailing, Binance Spot hesaplarında otomatik alım-satım botları (DCA, grid, trailing) çalıştıran bir **web uygulaması + arka plan motoru**dur. Kullanıcı panelden bot oluşturur; emirler ayrı bir **worker** sürecinde, güvenli kuyruk ve intent ledger ile borsaya iletilir.
+ayserose, Binance Spot hesaplarında otomatik alım-satım botları (DCA, grid, trailing) çalıştıran bir **web uygulaması + arka plan motoru**dur. Kullanıcı panelden bot oluşturur; emirler ayrı bir **worker** sürecinde, güvenli kuyruk ve intent ledger ile borsaya iletilir.
 
 | Bileşen | Klasör | Port |
 |---------|--------|------|

@@ -1246,15 +1246,10 @@ function normalizeAndApplyWallet(payload, meta) {
     } else if (keysConfigured && !err && (totalUsd != null || assets.length > 0)) {
         var staleMeta = explicitStatus === 'stale' || meta.stale;
         var staleCode = meta.stale_code || payload.last_error_code || payload._error_code || '';
-        if (staleMeta && _isHardWalletError(staleCode)) {
+        if (staleMeta) {
             assetsState.wallet.data_status = 'stale';
-            markWalletLiveFetchFailed(staleCode || 'API_UNAUTHORIZED', { force: true });
-        } else if (staleMeta) {
-            assetsState.wallet.data_status = 'cached';
-            assetsState.wallet.status = 'ready';
-            assetsState.wallet.error = null;
-            markWalletLiveFetchOk();
-        } else if (_isLiveWalletSource(source) || snapshotFresh || source === 'dashboard_snapshot') {
+            markWalletCachedLiveFetchStale(staleCode || 'WALLET_STALE');
+        } else if ((_isLiveWalletSource(source) && !meta.skipped) || snapshotFresh) {
             assetsState.wallet.data_status = snapshotFresh ? 'fresh' : 'cached';
             markWalletLiveFetchOk();
         }
@@ -3250,14 +3245,6 @@ function pollWalletRefreshUntilDone(accountId) {
                 if (typeof setWalletPanelUpdating === 'function') setWalletPanelUpdating(false);
                 var errCode = d.last_error_code ? String(d.last_error_code).toUpperCase() : '';
                 if (errCode) {
-                    var softErrWithCache = typeof _walletHasDisplayableAssets === 'function' && _walletHasDisplayableAssets()
-                        && typeof _isHardWalletError === 'function'
-                        && !_isHardWalletError(errCode);
-                    if (softErrWithCache && typeof markWalletLiveFetchOk === 'function') {
-                        markWalletLiveFetchOk();
-                        if (typeof updateKpiCuzdanLiveStatus === 'function') updateKpiCuzdanLiveStatus();
-                        return;
-                    }
                     if (typeof _walletHasDisplayableAssets === 'function' && _walletHasDisplayableAssets()
                         && typeof markWalletCachedLiveFetchStale === 'function') {
                         markWalletCachedLiveFetchStale(errCode);
@@ -3267,14 +3254,6 @@ function pollWalletRefreshUntilDone(accountId) {
                     return;
                 }
                 if (d.snapshot_stale) {
-                    var softSnapshotStale = typeof _walletHasDisplayableAssets === 'function' && _walletHasDisplayableAssets()
-                        && typeof _isHardWalletError === 'function'
-                        && !_isHardWalletError(d.last_error_code);
-                    if (softSnapshotStale && typeof markWalletLiveFetchOk === 'function') {
-                        markWalletLiveFetchOk();
-                        if (typeof updateKpiCuzdanLiveStatus === 'function') updateKpiCuzdanLiveStatus();
-                        return;
-                    }
                     if (typeof _walletHasDisplayableAssets === 'function' && _walletHasDisplayableAssets()
                         && typeof markWalletCachedLiveFetchStale === 'function') {
                         markWalletCachedLiveFetchStale('WALLET_SNAPSHOT_STALE');
@@ -3363,11 +3342,7 @@ function triggerWalletRefreshForVarliklar(accountId, opts) {
                     stale_code: d.last_error_code || d.error_code || null
                 });
                 var appliedOk = !d.stale && !d.skipped;
-                var softStaleWithCache = d.stale
-                    && typeof _walletHasDisplayableAssets === 'function' && _walletHasDisplayableAssets()
-                    && typeof _isHardWalletError === 'function'
-                    && !_isHardWalletError(d.last_error_code || d.error_code);
-                if ((appliedOk || softStaleWithCache) && typeof markWalletLiveFetchOk === 'function') {
+                if (appliedOk && typeof markWalletLiveFetchOk === 'function') {
                     markWalletLiveFetchOk();
                 }
             }

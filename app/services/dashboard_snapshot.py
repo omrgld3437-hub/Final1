@@ -47,6 +47,11 @@ async def fetch_bots_and_account_kpis(account_id: int, db: Session) -> Dict[str,
         from app.services.pnl_service import PnlService
         from app.bot.ledger import Ledger
         from app.botengine.state_store import load_state
+        from app.botengine.health_watch import (
+            _account_wallet_stale_alert,
+            evaluate_bot_health_lite,
+            summarize_health_alert_level,
+        )
         from app.services.bot_equity import compute_bot_equity_usd
         from zoneinfo import ZoneInfo
         from app.utils.tz_utils import turkey_today_date_str
@@ -67,6 +72,15 @@ async def fetch_bots_and_account_kpis(account_id: int, db: Session) -> Dict[str,
         total_bot_initial_usd = 0.0
         daily_pnl_usd_acc = 0.0
         bots_array = []
+        try:
+            from app.services.binance_connectivity import active_failure
+
+            account_failure = active_failure(account_id)
+        except Exception:
+            account_failure = None
+        account_wallet_alert = (
+            None if account_failure else _account_wallet_stale_alert(db, account_id)
+        )
 
         last_trade_by_bot: Dict[int, Optional[str]] = {}
         if bots:
@@ -211,6 +225,12 @@ async def fetch_bots_and_account_kpis(account_id: int, db: Session) -> Dict[str,
                 bot_config = json.loads(bot.config_json or "{}")
             except Exception:
                 bot_config = {}
+            health_alerts = evaluate_bot_health_lite(
+                bot,
+                state_,
+                account_failure=account_failure,
+                account_wallet_alert=account_wallet_alert,
+            )
             bots_array.append(
                 {
                     "bot_id": bot.id,
@@ -234,6 +254,8 @@ async def fetch_bots_and_account_kpis(account_id: int, db: Session) -> Dict[str,
                     "account_id": account_id,
                     "last_trade_at": last_trade_at,
                     "total_cycles_completed": total_cycles_completed,
+                    "health_alert_level": summarize_health_alert_level(health_alerts),
+                    "health_alerts": health_alerts,
                 }
             )
 

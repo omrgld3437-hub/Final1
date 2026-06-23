@@ -22,7 +22,7 @@
     window.__TT_SCROLL_NO_AUTO_FINALIZE__ = true;
     </script>
     <script src="/ui/assets/scrollRestore.js?v=scroll-restore4"></script>
-    <title>Bot Detay - TraderTrailing</title>
+    <title>Bot Detay - ayserose</title>
     <link rel="stylesheet" href="/ui/assets/theme.css?v=1">
     <link rel="stylesheet" href="/ui/assets/design.css?v=design-scroll8">
     <link rel="stylesheet" href="/ui/assets/binance-colors.css?v=bin1">
@@ -31,8 +31,11 @@
     <link rel="stylesheet" href="/ui/assets/blink.css?v=1">
     <style>
         body { margin: 0; padding: 2rem; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--ds-bg-primary, #1a1d24); color: var(--ds-text-primary, #eaecef); min-height: 100vh; }
-        .container { max-width: 960px; margin: 0 auto; }
-        .panel { background: var(--ds-bg-panel, #242932); border-radius: 8px; padding: 1.5rem; margin-bottom: 1rem; border: 1px solid var(--ds-border-light, rgba(255,255,255,0.14)); }
+        .container { width: min(100%, 1280px); max-width: calc(100vw - 4rem); margin: 0 auto; box-sizing: border-box; }
+        .container > .panel,
+        .container > .state-hero,
+        .container > .bot-page-title-row { width: 100%; box-sizing: border-box; }
+        .panel { background: var(--ds-bg-panel, #242932); border-radius: 8px; padding: 1.5rem; margin-bottom: 1rem; border: 1px solid var(--ds-border-light, rgba(255,255,255,0.14)); box-sizing: border-box; }
         .panel h2 { margin: 0 0 1rem 0; font-size: 1.1rem; font-weight: 600; color: var(--ds-text-primary); }
         .muted { color: var(--ds-text-secondary); font-size: 0.9rem; }
         .grid-2 { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 1rem; }
@@ -44,6 +47,7 @@
         .status-badge { display: inline-flex; align-items: center; padding: 0 10px; min-height: 36px; border-radius: 6px; font-size: 0.8rem; font-weight: 600; box-sizing: border-box; }
         .status-running { background: rgba(14, 203, 129, 0.15); color: #0ecb81; }
         .status-stopped { background: rgba(108, 117, 125, 0.2); color: #6c757d; }
+        .status-warning { background: rgba(240, 185, 11, 0.16); color: #f0b90b; border: 1px solid rgba(240, 185, 11, 0.42); }
         .status-error { background: rgba(246, 70, 93, 0.15); color: #f6465d; animation: status-error-blink 0.85s ease-in-out infinite; }
         @keyframes status-error-blink { 0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(246, 70, 93, 0.35); } 50% { opacity: 0.45; box-shadow: 0 0 8px 2px rgba(246, 70, 93, 0.4); } }
         .health-alert-badge { display: none; align-items: center; padding: 0 10px; min-height: 36px; border-radius: 6px; font-size: 0.78rem; font-weight: 700; box-sizing: border-box; cursor: default; }
@@ -564,28 +568,42 @@
         .dyn-param-leaderboard-meta { font-size: 0.78rem; color: var(--ds-text-secondary); margin: 0 0 0.75rem; }
         .dyn-param-list { margin: 0.35rem 0 0; padding-left: 1.1rem; color: var(--ds-text-secondary); font-size: 0.78rem; line-height: 1.45; }
         .dyn-param-emergency { border: 1px solid rgba(246, 70, 93, 0.35); border-radius: 8px; padding: 0.5rem 0.75rem; background: rgba(246, 70, 93, 0.06); }
-        .bot-top-strip { display: flex; align-items: center; flex-wrap: nowrap; gap: 0.65rem 1rem; padding: 1rem 0; border-bottom: 1px solid var(--ds-border, #2b3139); margin-bottom: 1rem; min-width: 0; }
-        .bot-top-strip #botLogoWrap { flex-shrink: 0; }
+        #headerPanel { padding: 1rem 1.15rem; }
+        .bot-top-strip { display: grid; grid-template-columns: auto auto auto minmax(0, 1fr); align-items: center; gap: 0.85rem 1rem; padding: 0; min-width: 0; }
+        .bot-top-strip #botLogoWrap { min-width: 0; flex-shrink: 0; }
         .bot-top-strip .bot-logo { width: 44px; height: 44px; border-radius: 50%; object-fit: cover; flex-shrink: 0; }
         .bot-top-strip .bot-logo-initials { width: 44px; height: 44px; border-radius: 50%; background: var(--ds-bg-tertiary, #2b3139); display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 0.9rem; flex-shrink: 0; }
-        .bot-top-strip .bot-symbol { font-size: 1.2rem; font-weight: 700; color: var(--ds-text-primary); margin-right: 0.35rem; white-space: nowrap; flex-shrink: 0; }
-        .bot-top-strip .bot-price { font-size: 1.15rem; font-weight: 600; color: var(--ds-text-primary); min-width: 8ch; font-variant-numeric: tabular-nums; display: inline-block; text-align: right; white-space: nowrap; flex-shrink: 0; }
-        .bot-top-strip .bot-24h { font-size: 0.9rem; margin-left: 0.25rem; min-width: 6ch; font-variant-numeric: tabular-nums; display: inline-block; text-align: right; white-space: nowrap; flex-shrink: 0; }
+        .bot-top-strip .bot-symbol { grid-area: symbol; min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; font-size: 1.25rem; font-weight: 700; color: var(--ds-text-primary); white-space: nowrap; }
+        .bot-top-strip .bot-price { grid-area: price; min-width: 0; font-size: 1.12rem; font-weight: 600; color: var(--ds-text-primary); font-variant-numeric: tabular-nums; display: inline-block; text-align: left; white-space: nowrap; }
+        .bot-top-strip .bot-24h { grid-area: change; min-width: 0; font-size: 0.9rem; font-variant-numeric: tabular-nums; display: inline-block; text-align: left; white-space: nowrap; }
         .bot-top-strip .bot-24h.up { color: #0ecb81; }
         .bot-top-strip .bot-24h.down { color: #f6465d; }
         .bot-top-strip .bot-24h.muted { color: var(--ds-text-secondary, #848e9c); }
-        .bot-strip-price-block { display: flex; align-items: center; flex-wrap: nowrap; gap: 0.35rem 0.5rem; flex-shrink: 1; min-width: 0; }
+        .bot-strip-price-block { display: grid; grid-template-columns: auto auto auto; grid-template-areas: "symbol price change"; align-items: baseline; justify-content: start; gap: 0.55rem; min-width: 0; }
         .bot-strip-mini-chart-wrap { width: 88px; height: 34px; min-width: 88px; max-width: 88px; flex-shrink: 0; background: var(--ds-bg-tertiary, #2b3139); border-radius: 8px; border: 1px solid var(--ds-border, #2b3139); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: border-color 0.2s, box-shadow 0.2s; }
         .bot-strip-mini-chart-wrap:hover { border-color: var(--ds-accent, #f0b90b); box-shadow: 0 0 0 1px rgba(240,185,11,0.2); }
         .bot-strip-mini-chart-svg { width: 100%; height: 100%; padding: 4px; box-sizing: border-box; display: flex; align-items: center; justify-content: center; }
         .bot-strip-mini-chart-svg svg { width: 100%; height: 100%; display: block; flex-shrink: 0; }
         .bot-strip-health-badges { display: none; align-items: center; gap: 0.5rem; flex-shrink: 0; min-width: 88px; }
-        .bot-top-strip .strip-right { margin-left: auto; display: flex; align-items: center; gap: 0.5rem; flex-wrap: nowrap; flex-shrink: 0; }
+        .bot-top-strip .strip-right { display: grid; grid-template-columns: auto auto; align-items: center; justify-content: end; justify-self: end; gap: 0.55rem 0.7rem; min-width: 0; }
+        .bot-strip-status-group,
+        .bot-strip-actions { display: flex; align-items: center; justify-content: flex-end; gap: 0.45rem; min-width: 0; }
+        .bot-strip-status-group { flex-wrap: wrap; }
+        .bot-strip-actions { flex-wrap: nowrap; }
+        .bot-top-strip .bot-strip-actions .perf-summary-btn-wrap { margin: 0; padding: 0; overflow: visible; }
+        .bot-top-strip .bot-strip-actions .perf-summary-btn-wrap::after { inset: -5px -6px; }
+        .bot-top-strip .bot-strip-actions .bot-error-assistant-btn { overflow: visible; }
         .bot-top-strip .strip-right .btn,
         .bot-top-strip .strip-right .status-badge,
-        .bot-top-strip .strip-right .dyn-mode-top-badge,
-        .bot-top-strip .strip-right .btn-row .btn { min-height: 36px; flex-shrink: 0; white-space: nowrap; }
+        .bot-top-strip .strip-right .dyn-mode-top-badge { min-height: 36px; flex-shrink: 0; white-space: nowrap; }
+        .bot-top-strip #dynModeStripBadge { display: none !important; }
         .bot-top-strip .strip-right .btn { padding: 8px 12px; font-size: 0.85rem; }
+        @media (max-width: 1200px) {
+            .bot-top-strip { grid-template-columns: auto auto auto minmax(0, 1fr); }
+            .bot-top-strip .strip-right { grid-column: 1 / -1; grid-template-columns: auto auto; justify-content: end; justify-self: end; padding-top: 0.35rem; border-top: 1px solid var(--ds-border, #2b3139); }
+            .bot-strip-status-group { justify-content: flex-end; }
+            .bot-strip-actions { justify-content: flex-end; flex-wrap: wrap; }
+        }
         .state-hero { background: var(--ds-bg-panel, #242932); border-radius: 8px; padding: 1.5rem; margin-bottom: 1rem; border: 1px solid var(--ds-border-light, rgba(255,255,255,0.14)); box-shadow: var(--ds-shadow-panel, 0 2px 14px rgba(0, 0, 0, 0.28)); display: flex; flex-direction: column; min-height: 200px; }
         .state-hero-title { font-size: 0.72rem; font-weight: 600; color: var(--ds-text-secondary); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 0.25rem; text-align: center; flex-shrink: 0; }
         .state-hero-title-row { display: flex; align-items: center; justify-content: center; gap: 0.5rem; margin-bottom: 0.25rem; flex-shrink: 0; flex-wrap: wrap; }
@@ -605,6 +623,13 @@
         .state-hero-item .state-label { display: block; font-size: 0.68rem; color: var(--ds-text-tertiary); text-transform: uppercase; letter-spacing: 0.03em; margin-bottom: 0.4rem; }
         .state-hero-item .state-value { font-size: 1.1rem; font-weight: 700; color: var(--ds-text-primary); }
         .state-hero-item.state-bot-bakiye .state-value { font-size: 1.4rem; color: var(--ds-accent, #f0b90b); font-weight: 800; }
+        @media (min-width: 1120px) {
+            .state-hero { min-height: 142px; }
+            .state-hero-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); grid-template-rows: 1fr; min-height: 92px; gap: 0.85rem; }
+            .state-hero-item { min-height: 92px; padding: 0.8rem 0.65rem; }
+            .state-hero-item .state-value { font-size: 1rem; }
+            .state-hero-item.state-bot-bakiye .state-value { font-size: 1.14rem; }
+        }
         .perf-chart-wrap { min-height: 220px; background: var(--ds-bg-tertiary, #2b3139); border-radius: 12px; padding: 1rem 1.25rem; margin: 1rem 0; border: 1px solid var(--ds-border, #2b3139); cursor: pointer; transition: border-color 0.2s, box-shadow 0.2s; }
         .perf-chart-wrap:hover { border-color: var(--ds-accent, #f0b90b); box-shadow: 0 0 0 1px rgba(240,185,11,0.2); }
         .perf-chart-wrap .perf-chart-title { font-size: 0.75rem; color: var(--ds-text-tertiary); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 0.75rem; display: flex; align-items: center; justify-content: space-between; }
@@ -699,16 +724,19 @@
             .status-badge { min-height: 48px; padding: 0 1.25rem; border-radius: 10px; font-size: 0.9rem; display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box; }
 
             /* Üst strip mobil: 1. satır logo + grafik yan yana, 2. satır fiyat, 3. satır aksiyonlar */
-            .bot-top-strip { display: grid; grid-template-columns: auto 1fr; grid-template-rows: auto auto auto; gap: 0.5rem 0.75rem; padding: 0.65rem 0; align-items: center; }
+            #headerPanel { padding: 0.85rem; }
+            .bot-top-strip { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; grid-template-rows: auto auto; gap: 0.65rem 0.75rem; padding: 0; align-items: center; }
             .bot-top-strip #botLogoWrap { grid-column: 1; grid-row: 1; align-self: center; }
-            .bot-top-strip #botStripMiniChartWrap { grid-column: 2; grid-row: 1; width: 120px; min-width: 120px; max-width: 120px; height: 44px; min-height: 44px; justify-self: start; align-self: center; flex-shrink: 0; }
-            .bot-top-strip .bot-strip-price-block { grid-column: 1 / -1; grid-row: 2; display: flex; align-items: center; gap: 0.75rem; flex-wrap: nowrap; flex-shrink: 0; }
-            .bot-top-strip .strip-right { grid-column: 1 / -1; grid-row: 3; margin-left: 0; width: 100%; display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; align-items: stretch; }
-            .bot-top-strip .strip-right .status-badge { grid-column: 1 / -1; width: 100%; }
-            .bot-top-strip .strip-right .btn-row { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; margin: 0; }
-            .bot-top-strip .strip-right .btn-row .btn { flex: none; width: 100%; }
-            .bot-top-strip .strip-right .btn-row .btn:only-child { grid-column: 1 / -1; }
+            .bot-top-strip .bot-strip-price-block { grid-column: 2; grid-row: 1; grid-template-columns: auto auto auto; grid-template-areas: "symbol price change"; width: auto; max-width: 100%; overflow: hidden; }
+            .bot-top-strip #botStripMiniChartWrap { grid-column: 3; grid-row: 1; width: 92px; min-width: 92px; max-width: 92px; height: 44px; min-height: 44px; justify-self: end; align-self: center; flex-shrink: 0; }
+            .bot-top-strip .strip-right { grid-column: 1 / -1; grid-row: 2; width: 100%; display: grid; grid-template-columns: 1fr; gap: 0.55rem; align-items: stretch; padding-top: 0.55rem; border-top: 1px solid var(--ds-border, #2b3139); }
+            .bot-strip-status-group,
+            .bot-strip-actions { width: 100%; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.5rem; }
+            .bot-strip-status-group .status-badge:only-child,
+            .bot-strip-actions .perf-summary-btn-wrap:only-child { grid-column: 1 / -1; }
+            .bot-top-strip .strip-right .status-badge { width: 100%; }
             .bot-top-strip .strip-right .btn { width: 100%; }
+            .bot-top-strip .strip-right #btnStopAndDelete { grid-column: 1 / -1; }
             .bot-top-strip .bot-symbol { font-size: 1.2rem; }
             .bot-top-strip .bot-price { font-size: 1.1rem; }
             .bot-top-strip .bot-24h { font-size: 0.9rem; }
@@ -1315,6 +1343,262 @@
         .bot-page-title-row .back { grid-column: 1; justify-self: start; margin-bottom: 0; }
         .bot-type-header { display: none; grid-column: 2; margin-bottom: 0; padding: 0; text-align: center; max-width: min(100%, 42rem); }
         .bot-type-header__name { font-size: 1.35rem; font-weight: 700; color: var(--ds-text-primary, #eaecef); letter-spacing: -0.02em; }
+
+        /* ====== Hata Asistanı — Parametre Asistanı ile birebir aynı tasarım/akış ======
+           Renk ve ölçüler --ai-assistant-* + --ds-* değişkenlerinden gelir. */
+        /* Buton: Parametre Asistanı AI butonuyla aynı spark/sade gold çerçeve */
+        .page-bot .perf-summary-btn-wrap {
+            position: relative;
+            display: inline-flex;
+            vertical-align: middle;
+            padding: 5px 6px;
+            margin: -5px -6px;
+        }
+        .page-bot .perf-summary-btn-wrap::after {
+            content: '';
+            position: absolute;
+            inset: 0;
+            border-radius: 8px;
+            background: radial-gradient(ellipse 80% 100% at 50% 50%, rgba(240, 185, 11, 0.07), transparent 72%);
+            pointer-events: none;
+            z-index: 0;
+        }
+        .page-bot .bot-error-assistant-btn {
+            position: relative;
+            z-index: 1;
+            overflow: visible;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 36px;
+            border: 1px solid color-mix(in srgb, var(--ai-assistant-accent, #f0b90b) 34%, transparent) !important;
+            border-radius: var(--ai-assistant-button-radius, 8px);
+            background: var(--ai-assistant-button-bg, var(--ds-bg-tertiary, #2b3139)) !important;
+            color: var(--ds-text-primary, #eaecef) !important;
+            font-weight: 700;
+            box-shadow: none;
+            transition: border-color 0.15s ease, opacity 0.15s ease;
+        }
+        .page-bot .bot-error-assistant-btn::after {
+            display: none;
+        }
+        .page-bot .perf-summary-btn-wrap:hover .bot-error-assistant-btn,
+        .page-bot .bot-error-assistant-btn:hover {
+            border-color: color-mix(in srgb, var(--ai-assistant-accent, #f0b90b) 50%, transparent) !important;
+            opacity: 0.88;
+            color: var(--ds-text-primary, #eaecef) !important;
+        }
+        .page-bot .bot-error-assistant-btn .bea-btn-label { position: relative; z-index: 1; }
+        .page-bot .bot-error-assistant-btn .bea-btn-dot {
+            position: absolute; top: -5px; right: -5px; width: 10px; height: 10px; border-radius: 50%;
+            background: transparent; border: 2px solid var(--ds-bg-secondary, #1e2329); display: none; z-index: 2;
+        }
+        .page-bot .bot-error-assistant-btn.has-warn .bea-btn-dot { display: block; background: var(--ai-assistant-accent, #f0b90b); }
+        .page-bot .bot-error-assistant-btn.has-crit .bea-btn-dot { display: block; background: #f6465d; animation: dmAiStatusPulse 1.45s ease-out infinite; }
+
+        /* Modal kabuğu — Performans/analiz modalıyla aynı görünüm */
+        .page-bot .dm-param-assistant-modal {
+            display: none;
+        }
+        .page-bot .dm-param-assistant-modal.is-open { display: flex; }
+        .page-bot .dm-param-assistant-panel {
+            animation: dmAssistantPanelIn 0.22s ease-out;
+        }
+        .page-bot .dm-param-assistant-head {
+            gap: 16px;
+        }
+        .page-bot .dm-pa-head-left { min-width: 0; }
+        .page-bot .dm-param-assistant-kicker {
+            margin-bottom: 4px; color: var(--ai-assistant-accent, #f0b90b); font-size: 0.76rem;
+            font-weight: 800;
+        }
+        .page-bot .dm-param-assistant-title { color: var(--ds-text-primary, #eaecef); }
+        .page-bot .parametreler-modal-close {
+            background: transparent; border: none; color: var(--ds-text-secondary, #848e9c);
+            font-size: 1.6rem; line-height: 1; cursor: pointer; padding: 0 0.25rem; flex: 0 0 auto;
+        }
+        .page-bot .parametreler-modal-close:hover { color: var(--ds-text-primary, #eaecef); }
+        .page-bot .dm-param-assistant-body { -webkit-overflow-scrolling: touch; }
+
+        /* Intro spark bloğu (Parametre Asistanı ile aynı) */
+        .page-bot .perf-summary-intro-spark-wrap {
+            position: relative; padding: 1rem 1.15rem; border-radius: 12px; margin-bottom: 1.15rem;
+            background: var(--ds-bg-tertiary, #2b3139);
+            border: 1px solid color-mix(in srgb, var(--ai-assistant-accent, #f0b90b) 32%, transparent);
+            overflow: visible;
+        }
+        .page-bot .perf-summary-intro-spark-wrap::after {
+            content: ''; position: absolute; inset: 0; border-radius: inherit;
+            background: radial-gradient(ellipse 90% 80% at 50% 0%, rgba(240, 185, 11, 0.07), transparent 72%);
+            pointer-events: none; z-index: 0;
+        }
+        .page-bot .perf-summary-assistant-intro-inner { position: relative; z-index: 1; }
+        .page-bot .perf-summary-assistant-label {
+            font-size: 0.68rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em;
+            color: var(--ai-assistant-accent, #f0b90b); margin-bottom: 0.45rem;
+        }
+        .page-bot .perf-summary-assistant-intro {
+            margin: 0; font-size: 0.92rem; line-height: 1.58; color: var(--ds-text-primary, #eaecef); min-height: 1.58em;
+        }
+        .page-bot .perf-summary-btn-wrap .perf-summary-spark {
+            position: absolute;
+            width: 8px;
+            height: 8px;
+            pointer-events: none;
+            z-index: 2;
+            opacity: 0;
+            animation: perf-summary-spark-pulse 3.6s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+        }
+        .page-bot .perf-summary-btn-wrap .perf-summary-spark::before,
+        .page-bot .perf-summary-btn-wrap .perf-summary-spark::after {
+            content: '';
+            position: absolute;
+            left: 50%;
+            top: 50%;
+            background: rgba(255, 245, 210, 0.95);
+            border-radius: 1px;
+            box-shadow: 0 0 8px rgba(240, 185, 11, 0.55);
+            transform: translate(-50%, -50%);
+        }
+        .page-bot .perf-summary-btn-wrap .perf-summary-spark::before { width: 1px; height: 100%; }
+        .page-bot .perf-summary-btn-wrap .perf-summary-spark::after { width: 100%; height: 1px; }
+        .page-bot .perf-summary-btn-wrap .perf-summary-spark-1 { top: 2px; left: 14%; animation-delay: 0s; }
+        .page-bot .perf-summary-btn-wrap .perf-summary-spark-2 { top: 4px; right: 10%; width: 6px; height: 6px; animation-delay: 0.9s; animation-duration: 3s; }
+        .page-bot .perf-summary-btn-wrap .perf-summary-spark-3 { top: 50%; right: 2px; margin-top: -4px; width: 7px; height: 7px; animation-delay: 1.8s; animation-duration: 3.8s; }
+        .page-bot .perf-summary-btn-wrap .perf-summary-spark-4 { bottom: 2px; left: 26%; width: 6px; height: 6px; animation-delay: 2.4s; animation-duration: 3.2s; }
+        .page-bot .perf-summary-btn-wrap .perf-summary-spark-5 { bottom: 3px; right: 22%; animation-delay: 1.2s; animation-duration: 4s; }
+        .page-bot .perf-summary-btn-wrap .perf-summary-spark-6 { top: 50%; left: 2px; margin-top: -4px; width: 5px; height: 5px; animation-delay: 3s; animation-duration: 3.4s; }
+        .page-bot .perf-summary-btn-wrap:hover .perf-summary-spark { animation-duration: 2.6s; }
+
+        .page-bot .perf-summary-intro-spark-wrap .perf-summary-spark {
+            position: absolute; width: 5px; height: 5px; border-radius: 50%;
+            background: var(--ai-assistant-accent, #f0b90b); opacity: 0.5;
+            animation: perf-summary-spark-pulse 3.6s cubic-bezier(0.4, 0, 0.2, 1) infinite; z-index: 1;
+        }
+        .page-bot .perf-summary-intro-spark-1 { top: 8px; left: 16px; animation-delay: 0s; }
+        .page-bot .perf-summary-intro-spark-2 { top: 10px; right: 20px; width: 6px; height: 6px; animation-delay: 0.75s; animation-duration: 3.1s; }
+        .page-bot .perf-summary-intro-spark-3 { top: 50%; right: 6px; margin-top: -4px; width: 7px; height: 7px; animation-delay: 1.5s; animation-duration: 3.6s; }
+        .page-bot .perf-summary-intro-spark-4 { bottom: 10px; right: 22%; width: 6px; height: 6px; animation-delay: 2.2s; animation-duration: 3.3s; }
+        .page-bot .perf-summary-intro-spark-5 { bottom: 8px; left: 18%; width: 5px; height: 5px; animation-delay: 1s; animation-duration: 3.8s; }
+        .page-bot .perf-summary-intro-spark-6 { top: 38%; left: 8px; margin-top: -3px; width: 5px; height: 5px; animation-delay: 2.8s; animation-duration: 3.5s; }
+        .page-bot .perf-summary-stream-cursor {
+            display: inline-block; width: 2px; height: 1.05em; margin-left: 3px; vertical-align: text-bottom;
+            background: var(--ai-assistant-accent, #f0b90b); animation: perf-summary-cursor-blink 0.85s step-end infinite;
+        }
+
+        /* Chips (stagger'lı giriş, ışık süzülmesi) */
+        .page-bot .dm-param-assistant-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+        .page-bot .dm-param-assistant-chips span {
+            position: relative; display: inline-flex; align-items: center; gap: 6px; min-height: 30px;
+            padding: 6px 10px; border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: var(--ai-assistant-chip-radius, 999px); background: rgba(255, 255, 255, 0.045);
+            color: var(--ds-text-secondary, #b7bdc6); font-size: 0.82rem; overflow: hidden;
+        }
+        .page-bot .dm-param-assistant-chips span b { color: var(--ds-text-primary, #eaecef); font-weight: 800; }
+        .page-bot .dm-param-assistant-chips span.dm-param-assistant-chip-ai {
+            opacity: 0; transform: translateY(7px);
+            animation: dmAssistantChipIn 0.36s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+            animation-delay: var(--dm-chip-delay, 0ms);
+        }
+        .page-bot .dm-param-assistant-chips span.dm-param-assistant-chip-ai::after {
+            content: ''; position: absolute; inset: 0;
+            background: linear-gradient(90deg, transparent 0%, color-mix(in srgb, var(--ai-assistant-accent, #f0b90b) 16%, transparent) 46%, transparent 100%);
+            transform: translateX(-120%); animation: dmAssistantChipSweep 0.72s ease-out forwards;
+            animation-delay: calc(var(--dm-chip-delay, 0ms) + 40ms); pointer-events: none;
+        }
+        .page-bot .bea-chip-crit { border-color: color-mix(in srgb, #f6465d 45%, transparent) !important; }
+        .page-bot .bea-chip-crit b { color: #f6465d !important; }
+        .page-bot .bea-chip-warn { border-color: color-mix(in srgb, var(--ai-assistant-accent, #f0b90b) 45%, transparent) !important; }
+        .page-bot .bea-chip-warn b { color: var(--ai-assistant-accent, #f0b90b) !important; }
+        .page-bot .bea-chip-ok { border-color: color-mix(in srgb, var(--ai-assistant-success, #0ecb81) 45%, transparent) !important; }
+        .page-bot .bea-chip-ok b { color: var(--ai-assistant-success, #0ecb81) !important; }
+
+        /* Yazı akışı satırları */
+        .page-bot .dm-param-assistant-output { display: flex; flex-direction: column; gap: 0.55rem; }
+        .page-bot .dm-param-assistant-line {
+            width: 100%; max-width: 100%; margin: 0; padding: 0;
+            border: 0; border-radius: 0; background: transparent;
+            color: var(--ds-text-secondary, #b7bdc6);
+            font-size: 0.9rem; line-height: 1.6; overflow-wrap: anywhere;
+            animation: dmAssistantLineIn 0.18s ease-out;
+        }
+        .page-bot .dm-param-assistant-line.bea-line-head {
+            margin-top: 0.35rem; padding-left: 0.75rem;
+            border-left: 3px solid var(--ai-assistant-accent, #f0b90b);
+            font-weight: 700; color: var(--ds-text-primary, #eaecef);
+        }
+        .page-bot .dm-param-assistant-line.bea-line-head-crit { border-left-color: #f6465d; }
+        .page-bot .dm-param-assistant-line.bea-line-head-warn { border-left-color: var(--ai-assistant-accent, #f0b90b); }
+        .page-bot .dm-param-assistant-line.bea-line-connect {
+            padding-left: 0.75rem; border-left: 2px solid var(--ai-assistant-accent, #f0b90b);
+            color: var(--ds-text-secondary, #b7bdc6); font-size: 0.86rem;
+        }
+        .page-bot .dm-param-assistant-line.bea-line-solution { color: var(--ds-text-primary, #d6dae0); }
+        .page-bot .dm-param-assistant-line.bea-line-ok { color: var(--ds-text-primary, #d6dae0); }
+        .page-bot .dm-param-assistant-line.bea-line-check { color: var(--ds-text-secondary, #b7bdc6); font-size: 0.86rem; }
+        .page-bot .dm-param-assistant-line.bea-line-muted { color: var(--ds-text-secondary, #848e9c); font-style: italic; font-size: 0.85rem; }
+
+        /* Footer / choice (Parametre Asistanı choice ile aynı) */
+        .page-bot .dm-param-assistant-choice {
+            display: flex; flex-direction: column; gap: 12px; margin-top: 16px; padding-top: 14px;
+            border-top: 1px solid var(--ds-border, #2b3139);
+        }
+        .page-bot .bea-choice-bar { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 10px; }
+        .page-bot .dm-pa-action {
+            font-size: 0.84rem; font-weight: 600; padding: 0.5rem 0.9rem; min-height: 38px;
+            border-radius: var(--ai-assistant-button-radius, 8px); cursor: pointer;
+            border: 1px solid var(--ds-border, #2b3139); background: var(--ai-assistant-button-bg, #2b3139);
+            color: var(--ds-text-primary, #eaecef); transition: filter 0.15s ease, border-color 0.15s ease;
+        }
+        .page-bot .dm-pa-action:hover { filter: brightness(1.15); }
+        .page-bot .dm-pa-action-accent {
+            background: var(--ai-assistant-accent, #f0b90b); color: #1a1a1a; border-color: var(--ai-assistant-accent, #f0b90b);
+        }
+        .page-bot .dm-pa-action-ghost { background: transparent; }
+        .page-bot .bea-admin {
+            border: 1px dashed color-mix(in srgb, var(--ai-assistant-accent, #f0b90b) 40%, transparent);
+            border-radius: 10px; padding: 0.8rem 0.9rem;
+            background: color-mix(in srgb, var(--ai-assistant-accent, #f0b90b) 5%, transparent);
+            animation: dmAssistantLineIn 0.18s ease-out;
+        }
+        .page-bot .bea-admin-title { font-size: 0.82rem; font-weight: 700; color: var(--ai-assistant-accent, #f0b90b); margin-bottom: 0.3rem; }
+        .page-bot .bea-admin-text { margin: 0 0 0.7rem; font-size: 0.85rem; line-height: 1.5; color: var(--ds-text-primary, #d6dae0); }
+        .page-bot .bea-chat-btn { display: inline-flex; align-items: center; justify-content: center; }
+        .page-bot .bea-admin-loading {
+            border-style: solid;
+            background: rgba(255, 255, 255, 0.035);
+        }
+        .page-bot .bea-admin-loading-line {
+            display: inline-flex; align-items: center; gap: 2px;
+            color: var(--ds-text-secondary, #b7bdc6); font-size: 0.85rem; line-height: 1.5;
+        }
+        .page-bot .bea-admin-loading-dots {
+            display: inline-block; width: 1.25rem; overflow: hidden;
+            animation: beaAdminDots 1.05s steps(4, end) infinite;
+        }
+        .page-bot .bea-admin-chat-in {
+            opacity: 0; transform: translateY(6px);
+            animation: dmAssistantLineIn 0.2s ease-out forwards;
+        }
+
+        /* Animasyonlar (Parametre Asistanı ile bire bir) */
+        @keyframes dmAiButtonSweep { 0%, 42% { transform: translateX(-110%); } 70%, 100% { transform: translateX(110%); } }
+        @keyframes dmAssistantPanelIn { from { opacity: 0; transform: translateY(12px) scale(0.985); } to { opacity: 1; transform: translateY(0) scale(1); } }
+        @keyframes dmAssistantLineIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes dmAssistantChipIn { to { opacity: 1; transform: translateY(0); } }
+        @keyframes dmAssistantChipSweep { to { transform: translateX(120%); } }
+        @keyframes dmAiStatusPulse { 0% { box-shadow: 0 0 0 0 rgba(246, 70, 93, 0.45); } 80%, 100% { box-shadow: 0 0 0 7px rgba(246, 70, 93, 0); } }
+        @keyframes beaAdminDots { 0% { width: 0; } 100% { width: 1.25rem; } }
+        @keyframes perf-summary-spark-pulse {
+            0%, 100% { opacity: 0; transform: scale(0.4); }
+            12% { opacity: 0.95; transform: scale(1); }
+            28% { opacity: 0; transform: scale(0.55); }
+        }
+        @keyframes perf-summary-cursor-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+        @media (max-width: 768px) {
+            .page-bot .bot-error-assistant-btn { padding-inline: 10px; }
+        }
+
     </style>
 </head>
 <body class="binance-theme page-bot">
@@ -1322,7 +1606,7 @@
     <div class="dashboard-appbar page-bot-appbar" role="banner">
         <div class="dashboard-appbar-inner page-bot-appbar-inner">
             <div class="page-bot-appbar-center appbar-company">
-                <span class="tt-logo-text">TraderTrailing</span>
+                <span class="tt-logo-text"><span class="ar-ayse">ayse</span><span class="ar-rose">rose</span></span>
             </div>
         </div>
     </div>
@@ -1372,7 +1656,7 @@
                     if (m) m.innerHTML = o.stateHeroMetaHtml;
                 }
                 if (stateGrid && o.stateGridHtml) stateGrid.innerHTML = o.stateGridHtml;
-                if (botTopStrip && o.botTopStripDisplay) botTopStrip.style.display = o.botTopStripDisplay;
+                if (botTopStrip && o.botTopStripDisplay) botTopStrip.style.display = o.botTopStripDisplay === 'none' ? 'none' : 'grid';
                 if (botTypeHeader && o.botTypeHeaderDisplay) botTypeHeader.style.display = o.botTypeHeaderDisplay;
                 if (o.botTypeHeaderName) {
                     var n = document.getElementById('botTypeHeaderName');
@@ -1411,15 +1695,31 @@
                 <div id="botStripMiniChartWrap" class="bot-strip-mini-chart-wrap" title="Sembol grafiği (mum/çizgi) için tıklayın" role="button" tabindex="0">
                     <div id="botStripMiniChartSvg" class="bot-strip-mini-chart-svg"></div>
                 </div>
-                <div id="botStripHealthBadges" class="bot-strip-health-badges" style="display: none;" aria-live="polite">
-                    <span id="healthWarnBadge" class="health-alert-badge health-alert-warn" style="display: none;" title="">Uyarı</span>
-                    <span id="healthCriticalBadge" class="health-alert-badge health-alert-critical" style="display: none;" title="">Kritik</span>
-                </div>
                 <div class="strip-right">
-                    <span id="dynModeStripBadge" class="status-badge status-running dyn-mode-top-badge" hidden title="Dinamik strateji modu aktif">Dinamik ✓</span>
-                    <span id="statusBadge" class="status-badge status-stopped">—</span>
-                    <button id="btnParametreler" class="btn btn-ghost" type="button">Parametreler</button>
-                    <button id="btnStopAndDelete" class="btn btn-danger">Sonlandır</button>
+                    <div class="bot-strip-status-group" aria-label="Bot durumu">
+                        <div id="botStripHealthBadges" class="bot-strip-health-badges" style="display: none;" aria-live="polite">
+                            <span id="healthWarnBadge" class="health-alert-badge health-alert-warn" style="display: none;" title="">Uyarı</span>
+                            <span id="healthCriticalBadge" class="health-alert-badge health-alert-critical" style="display: none;" title="">Kritik</span>
+                        </div>
+                        <span id="dynModeStripBadge" class="status-badge status-running dyn-mode-top-badge" hidden title="Dinamik strateji modu aktif">Dinamik ✓</span>
+                        <span id="statusBadge" class="status-badge status-stopped">—</span>
+                    </div>
+                    <div class="bot-strip-actions" aria-label="Bot işlemleri">
+                        <span class="perf-summary-btn-wrap dm-param-assistant-btn-wrap">
+                            <span class="perf-summary-spark perf-summary-spark-1" aria-hidden="true"></span>
+                            <span class="perf-summary-spark perf-summary-spark-2" aria-hidden="true"></span>
+                            <span class="perf-summary-spark perf-summary-spark-3" aria-hidden="true"></span>
+                            <span class="perf-summary-spark perf-summary-spark-4" aria-hidden="true"></span>
+                            <span class="perf-summary-spark perf-summary-spark-5" aria-hidden="true"></span>
+                            <span class="perf-summary-spark perf-summary-spark-6" aria-hidden="true"></span>
+                            <button id="btnBotErrorAssistant" class="btn btn-sm btn-secondary perf-summary-btn dm-param-assistant-btn bot-error-assistant-btn" type="button" title="Bot hata asistanı — canlı tanı ve çözüm" aria-label="Bot hata asistanını aç">
+                                <span class="bea-btn-label">Hata Asistanı</span>
+                                <span class="bea-btn-dot" aria-hidden="true"></span>
+                            </button>
+                        </span>
+                        <button id="btnParametreler" class="btn btn-ghost" type="button">Parametreler</button>
+                        <button id="btnStopAndDelete" class="btn btn-danger">Sonlandır</button>
+                    </div>
                 </div>
             </div>
         </div>
@@ -1641,7 +1941,9 @@
     <script src="/ui/assets/utils/engineLogAccess.js?v=2"></script>
     <script src="/ui/assets/utils/engineLogArchive.js?v=1"></script>
     <script src="/ui/assets/utils/botHealthAlerts.js?v=35"></script>
-    <script src="/ui/assets/utils/dynamicModeParamsView.js?v=6"></script>
+    <script src="/ui/assets/modules/ai-assistant-spec.js?v=err-fast1"></script>
+    <script src="/ui/assets/modules/bot-error-assistant.js?v=healthy-quiet1"></script>
+    <script src="/ui/assets/utils/dynamicModeParamsView.js?v=param-dyn-regime-dir1"></script>
 <script src="/ui/assets/utils/engineLogFormat.js?v=70"></script>
 <script src="/ui/assets/utils/perfSummaryIntros.js?v=1"></script>
 <script src="/ui/assets/utils/engineLogLive.js?v=37"></script>
@@ -1847,7 +2149,7 @@
                     stateHeroTitle: stateHeroTitleEl ? stateHeroTitleEl.textContent : '',
                     stateHeroMetaHtml: stateHeroMetaEl ? stateHeroMetaEl.innerHTML : '',
                     stateGridHtml: stateGrid ? stateGrid.innerHTML : '',
-                    botTopStripDisplay: botTopStrip ? botTopStrip.style.display : '',
+                    botTopStripDisplay: botTopStrip && botTopStrip.style.display !== 'none' ? 'grid' : (botTopStrip ? botTopStrip.style.display : ''),
                     botTypeHeaderDisplay: document.getElementById('botTypeHeader') ? document.getElementById('botTypeHeader').style.display : '',
                     botTypeHeaderName: document.getElementById('botTypeHeaderName') ? document.getElementById('botTypeHeaderName').textContent : '',
                     botSymbol: botSymbolEl ? botSymbolEl.textContent : '',
@@ -1913,7 +2215,7 @@
                     if (lastBotStartedAt) setStateHeroMetaHtml(stateHeroMetaEl, lastBotStartedAt, (lastBotDetail.status || 'running'));
                 }
                 if (stateGrid && o.stateGridHtml) stateGrid.innerHTML = o.stateGridHtml;
-                if (botTopStrip && o.botTopStripDisplay) botTopStrip.style.display = o.botTopStripDisplay;
+                if (botTopStrip && o.botTopStripDisplay) botTopStrip.style.display = o.botTopStripDisplay === 'none' ? 'none' : 'grid';
                 var botTypeHeaderEl = document.getElementById('botTypeHeader');
                 var botTypeHeaderNameEl = document.getElementById('botTypeHeaderName');
                 if (botTypeHeaderEl && o.botTypeHeaderDisplay) botTypeHeaderEl.style.display = o.botTypeHeaderDisplay;
@@ -1934,9 +2236,12 @@
                 }
                 if (lastBotDetail.symbol) {
                     var stateBaseCached = document.getElementById('stateBaseValue');
-                    if (stateBaseCached && / —$/.test(stateBaseCached.textContent)) {
-                        var balCached = parseFloat(String(stateBaseCached.textContent).replace(/ —$/, '').trim());
-                        if (!isNaN(balCached)) stateBaseCached.textContent = formatStateBaseBalance(balCached, lastBotDetail.symbol);
+                    if (stateBaseCached) {
+                        var balCached = parseFloat(String(stateBaseCached.textContent || '').replace(/,/g, '').trim());
+                        if (!isNaN(balCached)) {
+                            stateBaseCached.textContent = formatStateBaseBalance(balCached, lastBotDetail.symbol);
+                            stateBaseCached.title = fmtBaseCompact(balCached) + (baseFromSymbol(lastBotDetail.symbol) ? ' ' + baseFromSymbol(lastBotDetail.symbol) : '');
+                        }
                     }
                     if (perfMetrics && / —/.test(perfMetrics.textContent || '')) _lastPerfRenderFp = '';
                 }
@@ -2269,6 +2574,28 @@
             var n = Number(v);
             var s = n.toFixed(8).replace(/\.?0+$/, '');
             return s;
+        }
+        function trimFixedNumber(n, decimals) {
+            var s = Number(n).toFixed(decimals);
+            return s.replace(/(\.\d*?[1-9])0+$/, '$1').replace(/\.0+$/, '');
+        }
+        function baseBalanceDisplayDecimals(n, asset) {
+            var abs = Math.abs(Number(n) || 0);
+            if (abs === 0) return 0;
+            var a = String(asset || '').toUpperCase();
+            var highValue = /^(BTC|WBTC|ETH|BNB|SOL|MKR|AAVE|TAO|BCH|LTC|AVAX)$/.test(a);
+            if (abs >= 1000) return highValue ? 3 : 2;
+            if (abs >= 100) return highValue ? 4 : 3;
+            if (abs >= 10) return highValue ? 5 : 4;
+            if (abs >= 1) return highValue ? 6 : 5;
+            if (abs >= 0.01) return 6;
+            return 8;
+        }
+        function fmtStateBaseQty(v, asset) {
+            if (v == null || v === '' || isNaN(Number(v))) return '—';
+            var n = Number(v);
+            if (!Number.isFinite(n)) return '—';
+            return trimFixedNumber(n, baseBalanceDisplayDecimals(n, asset));
         }
         function fmtSignedUsd(v) {
             if (v == null || v === '' || isNaN(v)) return '—';
@@ -2862,6 +3189,7 @@
             if (stateBaseEl && newState.base_balance != null && !isNaN(Number(newState.base_balance))) {
                 var baseStr = formatStateBaseBalance(newState.base_balance, sym);
                 if (stateBaseEl.textContent !== baseStr) stateBaseEl.textContent = baseStr;
+                stateBaseEl.title = fmtBaseCompact(newState.base_balance) + (baseFromSymbol(sym) ? ' ' + baseFromSymbol(sym) : '');
             }
             if (stateQuoteEl && newState.quote_balance != null && !isNaN(Number(newState.quote_balance))) {
                 var quoteStr = fmtUsd(newState.quote_balance);
@@ -3273,7 +3601,7 @@
         function formatStateBaseBalance(balance, symbol) {
             if (balance == null || balance === '' || isNaN(Number(balance))) return '—';
             var asset = baseFromSymbol(symbol);
-            return fmtBaseCompact(balance) + (asset ? ' ' + asset : '');
+            return fmtStateBaseQty(balance, asset) + (asset ? ' ' + asset : '');
         }
         /** Performans / tur raporu coin etiketi; '—' truthy olduğu için `|| 'BASE'` kullanılmaz. */
         function perfBaseAssetLabel(symbolHint) {
@@ -3375,13 +3703,13 @@
             if (!botId) return;
             var urlSym = getBotDetailUrlSymbol();
             if (urlSym) {
-                if (botTopStrip) botTopStrip.style.display = 'flex';
+                if (botTopStrip) botTopStrip.style.display = 'grid';
                 syncBotStripSymbol(urlSym, { forceChart: false });
                 return;
             }
             var cached = readBotLogoCache(botId);
             if (!cached || !cached.base) return;
-            if (botTopStrip) botTopStrip.style.display = 'flex';
+            if (botTopStrip) botTopStrip.style.display = 'grid';
             renderBotLogo(cached.base);
             if (cached.symbol) syncBotStripSymbol(cached.symbol, { forceChart: false });
         }
@@ -3419,6 +3747,7 @@
                 window._lastEngineEvents || []
             );
             updateBackLinkHealthParams(picked);
+            updateErrorAssistantBtn(picked);
             _syncWalletStaleBotDetailBadge();
             var healthBlock = canonicalHealthBlocking();
             if (isBotRunning() && healthBlock.active) {
@@ -3799,7 +4128,7 @@
 
         function botShowAsError(status, lastErrorCode, opts) {
             if ((status || '').toLowerCase() !== 'running') return false;
-            var err = String(lastErrorCode || '').trim();
+            var err = String(lastErrorCode || '').trim().toUpperCase();
             if (connectivityErrorCodes()[err]) {
                 var connOk = connectivityProbeLooksOk();
                 if (connOk === true) return false;
@@ -3868,17 +4197,18 @@
             } else if (st !== 'running') {
                 clearBotBlockingStatus();
             }
+            var statusIsError = st === 'error' || (st && st.indexOf('paused') === 0) || (st === 'running' && showAsError);
             var statusText = st === 'starting' ? 'Başlatılıyor'
+                : statusIsError ? 'Hata'
                 : st === 'running' ? (waitingFirstBuy ? 'Alım bekliyor' : 'Çalışıyor')
-                : st === 'error' || (st && st.indexOf('paused') === 0) ? 'Hata'
                 : st === 'stopped' ? 'Durduruldu' : 'Bekliyor';
             var badgeEl = document.getElementById('statusBadge');
             if (badgeEl) {
                 badgeEl.textContent = statusText;
-                badgeEl.className = 'status-badge ' + (st === 'error' || (st && st.indexOf('paused') === 0) ? 'status-error' : st === 'running' ? 'status-running' : 'status-stopped');
+                badgeEl.className = 'status-badge ' + (statusIsError ? 'status-error' : st === 'running' ? 'status-running' : 'status-stopped');
                 badgeEl.title = showAsError
                     ? (isConnectivityError
-                        ? 'Botun son bilinen durumu çalışıyor; Binance erişim uyarısı var. API Key, IP beyaz listesi, Spot izinleri veya ağ erişimini kontrol edin.'
+                        ? 'Binance erişimi yok; bot bağlantı geri gelene kadar hata durumunda izleniyor. API Key, IP beyaz listesi, Spot izinleri veya ağ erişimini kontrol edin.'
                         : opts.stale === true
                         ? 'Botun son bilinen durumu çalışıyor; güncel veri alınamıyor veya son tick eski.'
                         : (opts.blockingMessage || 'Bot çalışıyor; kritik sağlık uyarısı var. Logları ve bağlantı durumunu kontrol edin.'))
@@ -3887,6 +4217,7 @@
             var stateHeroTitleEl = document.getElementById('stateHeroTitle');
             if (stateHeroTitleEl) {
                 var titleText = st === 'starting' ? 'Durum · Başlatılıyor'
+                    : statusIsError ? 'Durum · Hata'
                     : st === 'running' ? (waitingFirstBuy ? 'Durum · Alım bekliyor' : 'Durum · Canlı')
                     : 'Durum · ' + statusText;
                 if (stateHeroTitleEl.textContent !== titleText) stateHeroTitleEl.textContent = titleText;
@@ -4579,24 +4910,14 @@
         }
 
         function syncDynModeTopBadge(data) {
-            var active = isDynModeUiActive(data);
-            var dyn = (data && data.dynamic_mode) || (lastBotDetail && lastBotDetail.dynamic_mode) || {};
-            var title = 'Dinamik strateji modu aktif — parametreler her tur başında otomatik hesaplanır';
-            if (dyn.snapshot && dyn.snapshot.regime) {
-                title += ' · Rejim: ' + dyn.snapshot.regime;
-            }
             ['dynModeStripBadge'].forEach(function (id) {
                 var el = document.getElementById(id);
                 if (!el) return;
-                if (active) {
-                    el.hidden = false;
-                    el.style.display = 'inline-flex';
-                    el.title = title;
-                } else {
-                    el.hidden = true;
-                    el.style.display = 'none';
-                    el.title = '';
-                }
+                el.hidden = true;
+                el.style.display = 'none';
+                el.textContent = 'Dinamik ✓';
+                el.className = 'status-badge status-running dyn-mode-top-badge';
+                el.title = '';
             });
         }
 
@@ -4998,7 +5319,7 @@
             var st = data.state || {};
 
             if (!opts.tradesOnly) {
-            botTopStrip.style.display = 'flex';
+            botTopStrip.style.display = 'grid';
             syncBotStripSymbol(symbol, { forceChart: true });
             var price = data.current_price;
             if (botPriceEl) {
@@ -5109,10 +5430,13 @@
                 : (totalPnlUsd != null ? (totalPnlUsd >= 0 ? '#0ecb81' : '#f6465d') : 'var(--ds-text-secondary)');
             var cycleVal = st.cycle_id != null ? st.cycle_id : '—';
             var baseVal = formatStateBaseBalance(st.base_balance, symbol);
+            var baseTitle = st.base_balance != null && !isNaN(Number(st.base_balance))
+                ? (fmtBaseCompact(st.base_balance) + (baseFromSymbol(symbol) ? ' ' + baseFromSymbol(symbol) : ''))
+                : '';
             var quoteVal = st.quote_balance != null ? fmtUsd(st.quote_balance) : '—';
             stateGrid.innerHTML =
                 '<div class="state-hero-item state-bot-bakiye"><span class="state-label">Bot bakiyesi (USD)</span><span class="state-value" id="stateBotBalanceValue" title="Base + Quote (USD toplam)">' + botBalanceUsd + '</span></div>' +
-                '<div class="state-hero-item"><span class="state-label">Base bakiye</span><span class="state-value" id="stateBaseValue">' + baseVal + '</span></div>' +
+                '<div class="state-hero-item"><span class="state-label">Base bakiye</span><span class="state-value" id="stateBaseValue" title="' + escapeHtml(baseTitle) + '">' + baseVal + '</span></div>' +
                 '<div class="state-hero-item"><span class="state-label">Quote bakiye</span><span class="state-value" id="stateQuoteValue">' + quoteVal + '</span></div>' +
                 '<div class="state-hero-item"><span class="state-label">Tur sayısı</span><span class="state-value" id="stateCycleValue">' + cycleVal + '</span></div>' +
                 '<div class="state-hero-item" title="Her gece 23:59\'dan sonra (TR saati) referans bakiyesine göre sıfırlanır"><span class="state-label">Günlük K/Z</span><span class="state-value" id="stateDailyKzValue" style="color:' + dailyKzCl + '">' + dailyKzStr + '</span></div>' +
@@ -8067,6 +8391,81 @@
         if (btnParametreler) {
             btnParametreler.addEventListener('click', openParametrelerModal);
         }
+
+        // ---- Hata Asistanı (canlı tanı + çözüm) ----
+        function dashboardTabUrl(tab, extra) {
+            var u = '/ui/dashboard.html?tab=' + encodeURIComponent(tab);
+            if (accountCode) u += '&account_code=' + encodeURIComponent(accountCode);
+            if (accountId) u += '&account_id=' + encodeURIComponent(accountId);
+            if (extra) {
+                Object.keys(extra).forEach(function (key) {
+                    if (extra[key] != null && extra[key] !== '') {
+                        u += '&' + encodeURIComponent(key) + '=' + encodeURIComponent(extra[key]);
+                    }
+                });
+            }
+            return u;
+        }
+        function updateErrorAssistantBtn(picked) {
+            var btn = document.getElementById('btnBotErrorAssistant');
+            if (!btn) return;
+            var crit = !!(picked && picked.criticals && picked.criticals.length);
+            var warn = !!(picked && picked.warns && picked.warns.length);
+            var server = window._serverUnreachable === true;
+            btn.classList.toggle('has-crit', crit || server);
+            btn.classList.toggle('has-warn', warn && !crit && !server);
+        }
+        if (window.BotErrorAssistant && typeof window.BotErrorAssistant.init === 'function') {
+            window.BotErrorAssistant.init({
+                botId: botId,
+                button: document.getElementById('btnBotErrorAssistant'),
+                isRunning: isBotRunning,
+                isServerUnreachable: function () { return window._serverUnreachable === true; },
+                getHealthData: function () { return window._lastHealthData || null; },
+                getUiPick: function () { return window._lastHealthUiPick || null; },
+                getEvents: function () { return window._lastEngineEvents || []; },
+                getSymbol: function () {
+                    return (lastBotDetail && lastBotDetail.symbol)
+                        || (botSymbolEl && botSymbolEl.textContent) || '';
+                },
+                getQuote: function () { return (lastBotDetail && lastBotDetail.quoteAsset) || 'USDT'; },
+                refresh: function () {
+                    if (typeof fetchBotHealth === 'function') {
+                        try { return fetchBotHealth(); } catch (e) {}
+                    }
+                    return null;
+                },
+                actions: {
+                    refresh: function () {
+                        if (typeof fetchBotHealth === 'function') {
+                            try { return fetchBotHealth(); } catch (e) {}
+                        }
+                        return null;
+                    },
+                    reset: function () {
+                        if (typeof resetHealthAlerts === 'function') resetHealthAlerts();
+                    },
+                    openParams: function () {
+                        if (typeof openParametrelerModal === 'function') openParametrelerModal();
+                    },
+                    wallet: function () { window.location.href = dashboardTabUrl('binance'); },
+                    apiKeys: function () { window.location.href = dashboardTabUrl('settings'); },
+                    contact: function () { window.location.href = dashboardTabUrl('contact', { chat_draft: 'bot_error' }); },
+                    exportLog: function () {
+                        if (typeof exportEngineLogArchive === 'function') exportEngineLogArchive();
+                    }
+                }
+            });
+        }
+        // Üst şeritteki sağlık rozetine tıklayınca da asistan açılsın.
+        ['healthWarnBadge', 'healthCriticalBadge'].forEach(function (id) {
+            var b = document.getElementById(id);
+            if (!b) return;
+            b.style.cursor = 'pointer';
+            b.addEventListener('click', function () {
+                if (window.BotErrorAssistant) window.BotErrorAssistant.open();
+            });
+        });
         if (parametrelerModalClose) parametrelerModalClose.addEventListener('click', closeParametrelerModal);
         if (parametrelerModalKapat) parametrelerModalKapat.addEventListener('click', closeParametrelerModal);
         if (parametrelerModal) {

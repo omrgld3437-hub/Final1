@@ -3165,6 +3165,7 @@ window.loadSuspendedAccounts = loadSuspendedAccounts;
 let adminChatSelected = null; // { user_id, thread_id, name, locked, ended }
 var adminChatPollTimer = null;
 var ADMIN_CHAT_POLL_MS = 2500;
+var _adminChatLastSignature = '';
 var _adminTypingHeartbeat = null;
 var _adminTypingStopTimer = null;
 var ADMIN_TYPING_HEARTBEAT_MS = 1500;
@@ -3280,20 +3281,29 @@ function onAdminChatInput() {
 
 function selectAdminChat(userId, threadId, name) {
     adminChatSelected = { user_id: userId, thread_id: threadId, name: name || 'Kullanıcı' };
+    _adminChatLastSignature = '';
     document.getElementById('adminChatNoSelection').style.display = 'none';
     const active = document.getElementById('adminChatActive');
     active.style.display = 'flex';
     document.getElementById('adminChatUserName').textContent = name || 'Kullanıcı';
     document.getElementById('adminChatInput').value = '';
-    loadAdminChatMessages();
+    loadAdminChatMessages({ forceScroll: true });
     loadAdminChats(); // refresh list selection highlight
     startAdminChatPoll();
 }
 
-async function loadAdminChatMessages() {
+function adminChatIsNearBottom(container) {
+    if (!container) return true;
+    return (container.scrollHeight - container.scrollTop - container.clientHeight) <= 48;
+}
+
+async function loadAdminChatMessages(opts) {
+    opts = opts || {};
     if (!adminChatSelected) return;
     const container = document.getElementById('adminChatMessages');
     if (!container) return;
+    const wasNearBottom = adminChatIsNearBottom(container);
+    const prevScrollTop = container.scrollTop;
     try {
         const res = await fetch(`/api/admin/chats/${adminChatSelected.user_id}/messages`, { headers: adminAuthHeaders() });
         const data = await res.json().catch(() => ({}));
@@ -3335,6 +3345,14 @@ async function loadAdminChatMessages() {
         const btnClear = document.getElementById('adminChatBtnClear');
         if (btnClear) btnClear.style.display = hasThread ? 'inline-flex' : 'none';
         const msgs = data.messages || [];
+        const signature = [
+            data.thread_id || '',
+            locked ? '1' : '0',
+            ended ? '1' : '0',
+            rating != null ? String(rating) : '',
+            msgs.map(m => [m.id || '', m.sender_type || '', m.body || '', m.created_at || '', m.read_at || ''].join('|')).join(';')
+        ].join('::');
+        if (signature === _adminChatLastSignature) return;
         let html = '';
         if (msgs.length === 0) {
             html = '<div class="empty-state" style="padding: 1.5rem;">Henüz mesaj yok</div>';
@@ -3346,7 +3364,7 @@ async function loadAdminChatMessages() {
                 const style = isAdmin ? 'align-self: flex-end; background: var(--ds-accent); color: #000; border-radius: 12px 12px 4px 12px;' : 'align-self: flex-start; background: var(--ds-bg-tertiary); color: var(--ds-text-primary); border-radius: 12px 12px 12px 4px;';
                 const body = (m.body || '').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>');
                 return `<div style="display: flex; flex-direction: column; align-items: ${isAdmin ? 'flex-end' : 'flex-start'};">
-                    <div style="max-width: 75%; padding: 0.5rem 0.75rem; word-wrap: break-word; ${style}">
+                    <div style="max-width: 90%; padding: 0.5rem 0.75rem; word-wrap: break-word; overflow-wrap: anywhere; ${style}">
                         <div style="font-size: 0.7rem; opacity: 0.85;">${isAdmin ? 'Admin' : 'Kullanıcı'}</div>
                         <div style="font-size: 0.9rem;">${body}</div>
                         <div style="font-size: 0.65rem; margin-top: 0.2rem; opacity: 0.8;">${time}${read}</div>
@@ -3359,7 +3377,12 @@ async function loadAdminChatMessages() {
             html += '<div style="display: flex; justify-content: center; padding: 0.5rem 0;"><span style="font-size: 0.85rem; color: var(--ds-text-secondary);">Kullanıcı puanı: ' + stars + ' (' + rating + '/5)</span></div>';
         }
         container.innerHTML = html;
-        container.scrollTop = container.scrollHeight;
+        _adminChatLastSignature = signature;
+        if (opts.forceScroll || wasNearBottom) {
+            container.scrollTop = container.scrollHeight;
+        } else {
+            container.scrollTop = prevScrollTop;
+        }
     } catch (e) {
         console.error('loadAdminChatMessages:', e);
         if (container) container.innerHTML = '<div class="empty-state" style="color: var(--ds-danger);">Mesajlar yüklenemedi</div>';
@@ -3382,7 +3405,7 @@ async function adminChatSend(e) {
         if (!res.ok) throw new Error(data.detail || 'Gönderilemedi');
         input.value = '';
         stopAdminTypingHeartbeat();
-        await loadAdminChatMessages();
+        await loadAdminChatMessages({ forceScroll: true });
         loadAdminChats();
     } catch (err) {
         if (window.Toast) window.Toast.error(err.message || 'Gönderilemedi');

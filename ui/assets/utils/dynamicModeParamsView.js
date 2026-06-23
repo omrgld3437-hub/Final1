@@ -178,7 +178,8 @@
             return '<p class="param-hint">Bu tur için grid tanımı yok.</p>';
         }
         var isSell = side === 'sell';
-        var html = '<table class="param-table"><thead><tr><th>Seviye</th><th class="num">Tetik %</th><th class="num">Miktar %</th></tr></thead><tbody>';
+        var qtyHead = isSell ? 'Miktar (base %)' : 'Miktar (quote %)';
+        var html = '<table class="param-table"><thead><tr><th>Seviye</th><th class="num">Tetik %</th><th class="num">' + qtyHead + '</th></tr></thead><tbody>';
         grids.forEach(function (g, i) {
             var pct = isSell
                 ? (g.sell_grid_pct != null ? g.sell_grid_pct : g.trigger_pct)
@@ -233,21 +234,39 @@
         return html;
     }
 
-    function renderAppliedParamsBlock(applied) {
+    function regimeDirectionLabel(regime) {
+        regime = String(regime || '').toUpperCase();
+        if (regime === 'TRENDING_UP') return 'Yukarı trend';
+        if (regime === 'TRENDING_DOWN') return 'Aşağı trend / savunma';
+        if (regime === 'DUMP_RISK') return 'Aşağı risk';
+        if (regime === 'BREAKOUT') return 'Kırılım yönü';
+        if (regime === 'SQUEEZE') return 'Sıkışma / nötr';
+        if (regime === 'LOW_VOL_RANGING') return 'Yatay / sakin';
+        if (regime === 'HIGH_VOL_RANGING') return 'Yatay / dalgalı';
+        return REGIME_LABELS[regime] || 'Belirsiz';
+    }
+
+    function renderAppliedParamsBlock(applied, snap) {
         applied = applied || {};
-        var html = '<div class="param-block"><div class="param-block-title">Uygulanan parametreler (bu tur)</div>';
-        html += paramRow('Satış trailing %', fmtPct(applied.sell_trigger_trailing_pct), 'param-sell');
-        html += paramRow('Alış trailing %', fmtPct(applied.buy_trigger_trailing_pct), 'param-buy');
-        html += paramRow('Kar satış tetik %', fmtPct(applied.profit_exit_rise_pct));
-        html += paramRow('Kar satış trailing %', fmtPct(applied.profit_exit_drop_pct));
-        html += paramRow('Kar alım tetik %', fmtPct(applied.profit_reentry_drop_pct));
-        html += paramRow('Kar alım trailing %', fmtPct(applied.profit_reentry_rise_pct));
-        html += '</div>';
-        html += '<div class="param-block"><div class="param-block-title">Satış gridleri (dinamik)</div>';
+        snap = snap || {};
+        var sellGrids = applied.sell_grids || [];
+        var buyGrids = applied.buy_grids || [];
+        var html = '<div class="param-block"><div class="param-block-title">Satış gridleri</div>';
+        html += paramRow('Rejim yönü', regimeDirectionLabel(snap.regime), 'param-sell');
+        html += paramRow('Grid sayısı', sellGrids.length, 'param-sell');
+        html += paramRow('Trailing % (tetik sonrası gerçekleşme)', fmtPct(applied.sell_trigger_trailing_pct), 'param-sell');
         html += renderGridTable(applied.sell_grids, 'sell');
         html += '</div>';
-        html += '<div class="param-block"><div class="param-block-title">Alım gridleri (dinamik)</div>';
+        html += '<div class="param-block"><div class="param-block-title">Alım gridleri</div>';
+        html += paramRow('Grid sayısı', buyGrids.length, 'param-buy');
+        html += paramRow('Trailing % (tetik sonrası gerçekleşme)', fmtPct(applied.buy_trigger_trailing_pct), 'param-buy');
         html += renderGridTable(applied.buy_grids, 'buy');
+        html += '</div>';
+        html += '<div class="param-block"><div class="param-block-title">Kar alım / kar satış</div>';
+        html += paramRow('Kar alım tetik %', fmtPct(applied.profit_reentry_drop_pct));
+        html += paramRow('Kar alım trailing %', fmtPct(applied.profit_reentry_rise_pct));
+        html += paramRow('Kar satış tetik %', fmtPct(applied.profit_exit_rise_pct));
+        html += paramRow('Kar satış trailing %', fmtPct(applied.profit_exit_drop_pct));
         html += '</div>';
         return html;
     }
@@ -288,7 +307,7 @@
         if (snap.data_fresh === false) html += ' · ⚠ veri eski';
         html += '</p>';
         html += renderPositionBlock(dyn.position, null, symbol, false);
-        html += renderAppliedParamsBlock(ap);
+        html += renderAppliedParamsBlock(ap, snap);
         html += '</div>';
         return html;
     }
@@ -296,98 +315,18 @@
     /** Full Dinamik tab for bot detay / leaderboard parametreler modal. opts.showBalances: bakiye satırları (leaderboard: false). */
     function renderBotDetailDynamicTab(dyn, state, symbol, cfg, opts) {
         dyn = dyn || {};
-        state = state || {};
-        cfg = cfg || {};
-        opts = opts || {};
-        var showBalances = opts.showBalances !== false;
-        var status = dynamicModeStatusLabel(dyn);
-        var html = '<div class="param-block dyn-param-detail-intro ' + status.cls + '">';
-        html += '<div class="param-block-title">Dinamik mod</div>';
-        html += paramRow('Durum', status.text);
-        if (dyn.safety_gate) {
-            html += paramRow('Güvenlik kapısı', dyn.safety_gate.ok ? 'Tamam' : 'Eksik / hatalı');
-        }
-        html += '<p class="param-hint">Parametreler her tur başında piyasa koşullarına göre hesaplanır; tur içinde sabit kalır.</p>';
-        html += '</div>';
-
         if (!dyn.enabled) {
-            html += '<p class="param-hint">Bu bot dinamik modda değil. Oluşturma anında seçilen statik parametreler geçerlidir.</p>';
-            return html;
+            return '<p class="param-hint">Bu bot statik parametrelerle çalışıyor.</p>';
         }
 
         if (dyn.first_cycle_manual) {
-            html += '<p class="param-hint">İlk tur manuel başlangıç değerleriyle çalışıyor. Dinamik parametreler tur 2 başında hesaplanacak ve bu sekmede görünecek.</p>';
-            return html;
+            return '<p class="param-hint">İlk tur manuel başlangıç değerleriyle çalışıyor; dinamik değerler tur 2 başında görünecek.</p>';
         }
 
         var snap = dyn.snapshot;
-        if (!snap) {
-            html += '<p class="param-hint">Henüz dinamik snapshot yok. Bot çalıştıkça bu sekme güncellenecek.</p>';
-            return html;
-        }
+        if (!snap || !snap.applied) return '<p class="param-hint">Henüz dinamik tur verisi yok.</p>';
 
-        var regime = REGIME_LABELS[snap.regime] || snap.regime || '—';
-        html += '<div class="param-block"><div class="param-block-title">Tur özeti</div>';
-        html += paramRow('Rejim', regime);
-        html += paramRow('Tur no', snap.cycle_id != null ? String(snap.cycle_id) : '—');
-        html += paramRow('Veri tazeliği', snap.data_fresh === false ? 'Eski (önceki tur)' : 'Güncel');
-        if (snap.stale_reason) html += paramRow('Stale nedeni', snap.stale_reason);
-        if (snap.built_at_ms) {
-            var built = new Date(Number(snap.built_at_ms));
-            html += paramRow('Snapshot zamanı', isNaN(built.getTime()) ? '—' : built.toLocaleString('tr-TR'));
-        }
-        html += '</div>';
-
-        var feats = snap.features || {};
-        if (Object.keys(feats).length) {
-            html += '<div class="param-block"><div class="param-block-title">Piyasa sinyalleri</div>';
-            if (feats.atr_pct_5m != null) html += paramRow('ATR % (5m)', fmtPct(feats.atr_pct_5m));
-            if (feats.adx_1h != null) html += paramRow('ADX (1h)', fmtNumLocal(feats.adx_1h, 0));
-            if (feats.bbw_1h != null) html += paramRow('BBW (1h)', fmtNumLocal(feats.bbw_1h, 1));
-            if (feats.rsi_5m != null) html += paramRow('RSI (5m)', fmtNumLocal(feats.rsi_5m, 1));
-            if (feats.spread_bps != null) html += paramRow('Spread (bps)', fmtNumLocal(feats.spread_bps, 1));
-            html += '</div>';
-        }
-
-        var position = dyn.position || {
-            base_alloc_pct: (snap.applied || {}).base_alloc_pct,
-            quote_alloc_pct: (snap.applied || {}).quote_alloc_pct,
-            buy_levels_fired: sumFired(state.buy_grid_fired),
-            sell_levels_fired: sumFired(state.sell_grid_fired),
-            max_buy_levels: cfg.max_buy_levels,
-            sell_grid_count: ((snap.applied || {}).sell_grids || []).length,
-            buy_grid_count: ((snap.applied || {}).buy_grids || []).length,
-            initial_allocation_done: state.initial_allocation_done
-        };
-        html += renderPositionBlock(position, state, symbol, showBalances);
-        html += renderAppliedParamsBlock(snap.applied || {});
-
-        if (Array.isArray(snap.reasons) && snap.reasons.length) {
-            html += '<div class="param-block"><div class="param-block-title">Karar gerekçeleri</div><ul class="dyn-param-list">';
-            snap.reasons.forEach(function (r) { html += '<li>' + esc(r) + '</li>'; });
-            html += '</ul></div>';
-        }
-        var applied = snap.applied || {};
-        var clamps = applied.clamps || snap.clamps || [];
-        if (Array.isArray(clamps) && clamps.length) {
-            html += '<div class="param-block"><div class="param-block-title">Risk sınırları (clamp)</div><ul class="dyn-param-list">';
-            clamps.forEach(function (r) { html += '<li>' + esc(r) + '</li>'; });
-            html += '</ul></div>';
-        }
-        var fallbacks = applied.fallbacks || snap.fallbacks || [];
-        if (Array.isArray(fallbacks) && fallbacks.length) {
-            html += '<div class="param-block"><div class="param-block-title">Fallback</div><ul class="dyn-param-list">';
-            fallbacks.forEach(function (r) { html += '<li>' + esc(r) + '</li>'; });
-            html += '</ul></div>';
-        }
-        if (Array.isArray(snap.history) && snap.history.length) {
-            html += '<div class="param-block"><div class="param-block-title">Son turlar</div>';
-            html += '<table class="param-table"><thead><tr><th>Tur</th><th>Rejim</th><th class="num">ATR%</th></tr></thead><tbody>';
-            snap.history.slice().reverse().slice(0, 10).forEach(function (h) {
-                html += '<tr><td>#' + esc(h.cycle_id != null ? h.cycle_id : '—') + '</td><td>' + esc(REGIME_LABELS[h.regime] || h.regime || '—') + '</td><td class="num">' + esc(h.atr_pct_5m != null ? fmtPct(h.atr_pct_5m) : '—') + '</td></tr>';
-            });
-            html += '</tbody></table></div>';
-        }
+        var html = renderAppliedParamsBlock(snap.applied || {}, snap);
         if (dyn.emergency) {
             var emg = dyn.emergency;
             var emgAction = emg.action || emg.code || '';

@@ -5,7 +5,7 @@
 
 ## Ne işe yarar?
 
-Runbook, yapı rehberi, API sözleşmeleri, engine dokümanları, arşiv.
+Runbook, yapı rehberi, API sözleşmeleri, AI asistan rehberi, engine dokümanları, arşiv.
 
 ## Bu klasörde ne bulursunuz?
 
@@ -13,12 +13,13 @@ Spec dışı operasyonel bilgi. Yeni geliştirici buradan başlamalı: STRUCTURE
 
 ## Önemli dosyalar
 
-STRUCTURE.md · INDEX.md · runtime.md · security_hardening.md
+STRUCTURE.md · INDEX.md · AI_ASSISTANT_README.md · runtime.md · security_hardening.md
 
 ## İçerik özeti
 
 ```
 ANA_BASLIKLAR.md
+AI_ASSISTANT_README.md
 CODE_TREE.md
 INDEX.md
 STRUCTURE.md

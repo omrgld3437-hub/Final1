@@ -10,6 +10,7 @@ from app.botengine.health_watch import (
     emit_health_alerts,
     evaluate_bot_health,
     evaluate_bot_health_lite,
+    summarize_health_alert_level,
 )
 
 
@@ -129,6 +130,29 @@ def test_connectivity_state_error_not_duplicated_when_error_log_exists():
     assert emitted == 0
     append_event.assert_not_called()
     save_state.assert_not_called()
+
+
+def test_connectivity_state_error_after_ack_stays_critical_when_newer():
+    bot = SimpleNamespace(
+        id=30, account_id=47, status="running", symbol="SOLUSDT", config_json="{}"
+    )
+    state = {
+        "last_tick_at": datetime.now(timezone.utc),
+        "last_error_code": "BINANCE_UNREACHABLE",
+        "health_ack_at": 100,
+        "health_error_since": 200,
+    }
+
+    with patch("app.services.binance_connectivity.active_failure", return_value=None):
+        alerts = evaluate_bot_health_lite(bot, state)
+
+    assert any(
+        a.get("code") == "STATE_ERROR"
+        and a.get("level") == "critical"
+        and a.get("meta", {}).get("error_code") == "BINANCE_UNREACHABLE"
+        for a in alerts
+    )
+    assert summarize_health_alert_level(alerts) == "critical"
 
 
 def test_connectivity_state_error_emits_without_recent_error_log():

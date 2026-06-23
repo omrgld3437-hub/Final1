@@ -566,6 +566,21 @@
         return Number.isFinite(n) && n > 0 ? n : 0;
     }
 
+    function isActiveConnectivitySnapshotAlert(alert, healthSnapshot) {
+        if (!alert || !healthSnapshot) return false;
+        if (healthSnapshot.connectivity_ok !== false && !healthSnapshot.connectivity_failure) return false;
+        var code = healthAlertCode(alert);
+        var meta = alert.meta || {};
+        var errCode = String(
+            meta.error_code
+            || alert.error_code
+            || (healthSnapshot.connectivity_failure && (healthSnapshot.connectivity_failure.error_code || healthSnapshot.connectivity_failure.code))
+            || ''
+        ).toUpperCase();
+        return /^(BINANCE_UNREACHABLE|API_UNAUTHORIZED|ACCOUNT_KEYS_EMPTY|ACCOUNT_KEYS_DECRYPT_FAIL|ACCOUNT_KEYS_MISSING|CLOCK_DRIFT|BINANCE_RATE_LIMIT|STATE_ERROR|CONNECTIVITY_DEGRADED)$/.test(code)
+            || /^(BINANCE_UNREACHABLE|API_UNAUTHORIZED|ACCOUNT_KEYS_EMPTY|ACCOUNT_KEYS_DECRYPT_FAIL|ACCOUNT_KEYS_MISSING|CLOCK_DRIFT|BINANCE_RATE_LIMIT)$/.test(errCode);
+    }
+
     function effectiveGlobalDismissAnchor(dismissInfo, healthData) {
         var local = dismissInfo && dismissInfo.maxEventId != null ? Number(dismissInfo.maxEventId) : 0;
         var server = getServerDismissBeforeId(healthData);
@@ -607,6 +622,7 @@
 
     function isAlertSuppressed(alert, dismissInfo, recentEvents, healthSnapshot) {
         if (!alert || !alert.code) return false;
+        if (isActiveConnectivitySnapshotAlert(alert, healthSnapshot)) return false;
         var serverBefore = getServerDismissBeforeId(healthSnapshot);
         if (serverBefore > 0 && !hasLogEventForCodeAfterId(recentEvents, alert.code, serverBefore)) {
             return true;

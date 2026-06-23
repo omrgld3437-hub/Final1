@@ -1554,6 +1554,9 @@ def cycle_reset_after_fill(
     # Dynamic Mode: yeni cycle başladı, orchestrator bir sonraki tick'te
     # snapshot'ı yeniden hesaplasın. Manuel modda bayrak görmezden gelinir.
     state["_dynamic_recompute_needed"] = True
+    # Yeni tur henüz "engage" olmadı: cycle-entry risk gate yeniden karar verebilsin
+    # (önceki turun engage bayrağı taşınmamalı). Manuel modda bu anahtar zaten yok.
+    state.pop("_dynamic_cycle_engaged", None)
     if symbol:
         from datetime import datetime, timezone
         from app.botengine.cycle_ledger import build_cycle_ledger_empty

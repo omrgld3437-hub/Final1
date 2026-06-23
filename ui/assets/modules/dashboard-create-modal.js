@@ -36,18 +36,31 @@ var _dmModalLastTickerFetchSymbol = null;
 var _dmModalTickerFetchTs = 0;
 var DM_MODAL_LIVE_PRICE_MS = 1500;
 var DM_MODAL_TAHMIN_MIN_MS = 30000;  // Tahmin (high/low) en fazla 30s'de bir yenilensin
-var DM_PARAM_ASSISTANT_TEXT_MS = 18;
-var DM_PARAM_ASSISTANT_INPUT_MS = 70;
-var DM_PARAM_ASSISTANT_FIELD_PAUSE_MS = 230;
+var AI_ASSISTANT_SPEC = window.AIAssistantSpec || {};
+var DM_PARAM_ASSISTANT_TEXT_MS = (AI_ASSISTANT_SPEC.timing && AI_ASSISTANT_SPEC.timing.textMs) || 14;
+var DM_PARAM_ASSISTANT_INPUT_MS = (AI_ASSISTANT_SPEC.timing && AI_ASSISTANT_SPEC.timing.inputMs) || 52;
+var DM_PARAM_ASSISTANT_FIELD_PAUSE_MS = (AI_ASSISTANT_SPEC.timing && AI_ASSISTANT_SPEC.timing.fieldPauseMs) || 160;
 var dmParamAssistantTimers = [];
 var dmParamAssistantRecommendation = null;
 var dmParamAssistantTyping = false;
 var dmParamAssistantAutoScroll = true;
 var dmParamAssistantLastAutoScrollAt = 0;
-var dmParamAssistantProgrammaticScrollUntil = 0;
 var dmParamAssistantHistoryCache = {};
-var DM_PARAM_ASSISTANT_HISTORY_TTL_MS = 10 * 60 * 1000;
-var DM_PARAM_ASSISTANT_HISTORY_TIMEOUT_MS = 9000;
+var dmParamAssistantBackendRunSeq = 0;
+var dmParamAssistantActiveBackendRun = 0;
+var dmParamAssistantTierSelectSeq = 0;
+var dmParamAssistantProgressState = null;
+var dmParamAssistantProgressTickTimer = null;
+var dmParamAssistantActiveJobId = '';
+var dmParamAssistantLastSnapshot = null;
+var dmParamAssistantLastTierStartFn = null;
+var dmParamAssistantApplyTimers = [];
+var dmParamAssistantApplying = false;
+var DM_PARAM_ASSISTANT_HISTORY_TTL_MS = (AI_ASSISTANT_SPEC.cache && AI_ASSISTANT_SPEC.cache.marketHistoryTtlMs) || 10 * 60 * 1000;
+var DM_PARAM_ASSISTANT_HISTORY_TIMEOUT_MS = (AI_ASSISTANT_SPEC.cache && AI_ASSISTANT_SPEC.cache.marketHistoryTimeoutMs) || 9000;
+var DM_PARAM_ASSISTANT_DAY_MS = 24 * 60 * 60 * 1000;
+var DM_PARAM_ASSISTANT_BACKEND_START_TIMEOUT_MS = 60000;
+var DM_PARAM_ASSISTANT_BACKEND_POLL_TIMEOUT_MS = 60000;
 
 function resolveDmModalChangePct(mini) {
     var raw = (mini && mini.changePct != null) ? Number(mini.changePct) : null;
@@ -160,8 +173,8 @@ function applyLastCreateParamsToForm() {
         var downCountEl = document.getElementById("fDownCount");
         var upGrids = up.grids || [];
         var downGrids = down.grids || [];
-        if (upCountEl && upGrids.length > 0) { upCountEl.value = upGrids.length; buildGridRows("upGridRows", upGrids.length, "up"); }
-        if (downCountEl && downGrids.length > 0) { downCountEl.value = downGrids.length; buildGridRows("downGridRows", downGrids.length, "down"); }
+        if (upCountEl && upGrids.length > 0) { upCountEl.value = upGrids.length; buildGridRows("upGridRows", upGrids.length, "up", upGrids); }
+        if (downCountEl && downGrids.length > 0) { downCountEl.value = downGrids.length; buildGridRows("downGridRows", downGrids.length, "down", downGrids); }
         var upTrailEl = document.getElementById("fUpTrail");
         var downTrailEl = document.getElementById("fDownTrail");
         var maxBuyEl = document.getElementById("fMaxBuyLevels");
@@ -174,12 +187,14 @@ function applyLastCreateParamsToForm() {
             if (tEl && upGrids[i].trigger_pct != null) tEl.value = dmParamAssistantInputTextTr(upGrids[i].trigger_pct, 2);
             if (qEl && upGrids[i].qty_pct != null) qEl.value = dmParamAssistantInputTextTr(upGrids[i].qty_pct, 1);
         }
+        if (upGrids.length > 0) _updateGridQtySum("upGridRows", "up");
         for (var j = 0; j < downGrids.length; j++) {
             var t2 = document.getElementById("downGrid_" + j + "_trigger");
             var q2 = document.getElementById("downGrid_" + j + "_qty");
             if (t2 && downGrids[j].trigger_pct != null) t2.value = dmParamAssistantInputTextTr(downGrids[j].trigger_pct, 2);
             if (q2 && downGrids[j].qty_pct != null) q2.value = dmParamAssistantInputTextTr(downGrids[j].qty_pct, 1);
         }
+        if (downGrids.length > 0) _updateGridQtySum("downGridRows", "down");
         var rebuyT = document.getElementById("fRebuyTrigger");
         var rebuyTrail = document.getElementById("fRebuyTrail");
         var resellT = document.getElementById("fResellTrigger");
@@ -278,6 +293,7 @@ function closeCreateBotModal() {
     const backdrop = document.getElementById("dmBackdrop");
     if (!modal || !backdrop) return;
     closeParamAssistantModal({ immediate: true });
+    dmParamAssistantClearApplyTimers();
     hideMultiSymbolSearchDropdown();
     modal.setAttribute("aria-hidden", "true");
     backdrop.setAttribute("aria-hidden", "true");
@@ -383,13 +399,12 @@ function bindCreateBotModal() {
 
     document.getElementById("dmParamAssistantBtn")?.addEventListener("click", openParamAssistantModal);
     document.getElementById("dmParamAssistantCloseBtn")?.addEventListener("click", function () { closeParamAssistantModal(); });
-    document.getElementById("dmParamAssistantSkipBtn")?.addEventListener("click", function () { closeParamAssistantModal(); });
     document.getElementById("dmParamAssistantUseBtn")?.addEventListener("click", acceptParamAssistantRecommendation);
     document.getElementById("dmParamAssistantBackdrop")?.addEventListener("click", function (e) {
-        if (e.target.id === "dmParamAssistantBackdrop") closeParamAssistantModal();
+        if (e.target.id === "dmParamAssistantBackdrop") e.preventDefault();
     });
     document.getElementById("dmParamAssistantModal")?.addEventListener("click", function (e) {
-        if (e.target.id === "dmParamAssistantModal") closeParamAssistantModal();
+        if (e.target.id === "dmParamAssistantModal") e.preventDefault();
     });
     
     // Ondalık alanlarda type=number kalmışsa virgülü noktaya çevir; text alanlarında virgül görünümü korunur.
@@ -446,7 +461,8 @@ function bindCreateBotModal() {
             const paramModal = document.getElementById("dmModal");
             const assistantModal = document.getElementById("dmParamAssistantModal");
             if (assistantModal && assistantModal.getAttribute("aria-hidden") === "false") {
-                closeParamAssistantModal();
+                e.preventDefault();
+                return;
             } else if (structureModal && structureModal.getAttribute("aria-hidden") === "false") {
                 closeBotStructureModal();
             } else if (paramModal && paramModal.getAttribute("aria-hidden") === "false") {
@@ -706,13 +722,27 @@ function bindCreateBotModal() {
     // Submit: openCreateBotModal sets dmSubmitBtn.onclick → createAndStartBot (do not add createBot listener — it skips engine start)
 }
 
-function buildGridRows(containerId, count, mode) {
+function buildGridRows(containerId, count, mode, seedGrids) {
     const container = document.getElementById(containerId);
     if (!container) return;
 
     // Mevcut değerleri koru (count azaldığında kaybetme)
     const prev = {};
     container.querySelectorAll('input[id]').forEach(function(el) { prev[el.id] = el.value; });
+    var seeds = Array.isArray(seedGrids) ? seedGrids : [];
+    function seedNumber(grid, keys) {
+        if (!grid) return null;
+        for (var ki = 0; ki < keys.length; ki++) {
+            var v = grid[keys[ki]];
+            if (v != null && v !== '' && !isNaN(Number(v))) return Number(v);
+        }
+        return null;
+    }
+    function seedDisplay(v, digits) {
+        if (v == null || isNaN(Number(v))) return '';
+        if (typeof dmParamAssistantInputTextTr === 'function') return dmParamAssistantInputTextTr(v, digits);
+        return String(Number(v).toFixed(digits)).replace('.', ',').replace(/,?0+$/, '');
+    }
 
     let html = '';
     for (let i = 0; i < count; i++) {
@@ -748,6 +778,16 @@ function buildGridRows(containerId, count, mode) {
         `;
     }
     container.innerHTML = html;
+
+    // Cache/öneri verisiyle ilk render: toplam etiketi %0 ara durumuna düşmesin.
+    seeds.forEach(function (grid, i) {
+        var trigger = seedNumber(grid, [mode === 'up' ? 'sell_grid_pct' : 'buy_grid_pct', 'trigger_pct']);
+        var qty = seedNumber(grid, [mode === 'up' ? 'sell_qty_pct_of_base' : 'buy_qty_pct_of_quote', 'qty_pct']);
+        var tEl = document.getElementById(mode + 'Grid_' + i + '_trigger');
+        var qEl = document.getElementById(mode + 'Grid_' + i + '_qty');
+        if (tEl && trigger != null) tEl.value = seedDisplay(trigger, 2);
+        if (qEl && qty != null) qEl.value = seedDisplay(qty, 1);
+    });
 
     // Önceki değerleri geri yaz
     container.querySelectorAll('input[id]').forEach(function(el) {
@@ -1031,6 +1071,30 @@ function dmParamAssistantSetTimer(fn, ms) {
 function dmParamAssistantClearTimers() {
     dmParamAssistantTimers.forEach(function (id) { clearTimeout(id); });
     dmParamAssistantTimers = [];
+    if (dmParamAssistantProgressTickTimer) {
+        clearTimeout(dmParamAssistantProgressTickTimer);
+        dmParamAssistantProgressTickTimer = null;
+    }
+}
+
+function dmParamAssistantSetApplyTimer(fn, ms) {
+    var id = setTimeout(function () {
+        dmParamAssistantApplyTimers = dmParamAssistantApplyTimers.filter(function (x) { return x !== id; });
+        fn();
+    }, ms);
+    dmParamAssistantApplyTimers.push(id);
+    return id;
+}
+
+function dmParamAssistantClearApplyTimers() {
+    dmParamAssistantApplyTimers.forEach(function (id) { clearTimeout(id); });
+    dmParamAssistantApplyTimers = [];
+    dmParamAssistantApplying = false;
+    try {
+        document.querySelectorAll('.dm-ai-input-writing').forEach(function (el) {
+            el.classList.remove('dm-ai-input-writing');
+        });
+    } catch (e) {}
 }
 
 function dmParamAssistantEscape(s) {
@@ -1061,7 +1125,7 @@ function dmParamAssistantInputTextTr(v, digits) {
 }
 
 function dmParamAssistantTextChunkSize() {
-    return document.hidden ? 18 : 4;
+    return document.hidden ? 22 : 5;
 }
 
 function dmParamAssistantInputChunkSize() {
@@ -1209,10 +1273,8 @@ function dmParamAssistantSliceDays(candles, days) {
     var list = dmParamAssistantDedupeCandles(candles || []);
     if (!list.length || !Number.isFinite(days) || days <= 0) return [];
     var last = list[list.length - 1].t;
-    var cutoff = last - days * 24 * 60 * 60 * 1000;
-    var byDate = list.filter(function (c) { return c.t >= cutoff; });
-    if (byDate.length >= Math.min(days * 0.55, list.length)) return byDate;
-    return list.slice(Math.max(0, list.length - Math.round(days)));
+    var cutoff = last - days * DM_PARAM_ASSISTANT_DAY_MS;
+    return list.filter(function (c) { return c.t >= cutoff; });
 }
 
 function dmParamAssistantCloseReturns(candles) {
@@ -1390,11 +1452,22 @@ function dmParamAssistantWindowMetrics(dailyCandles, days, label) {
     var ranges = dmParamAssistantRangePcts(candles);
     var returns = dmParamAssistantCloseReturns(candles);
     var period = Math.min(20, Math.max(5, Math.floor(candles.length / 4)));
+    var spanDays = 0;
+    if (candles.length > 1) {
+        spanDays = Math.max(1, (Number(candles[candles.length - 1].t) - Number(candles[0].t)) / DM_PARAM_ASSISTANT_DAY_MS + 1);
+    } else if (candles.length === 1) {
+        spanDays = 1;
+    }
+    var barCoverage = days > 0 ? candles.length / days : 0;
+    var timeCoverage = days > 0 ? spanDays / days : 0;
+    var coverage = dmParamAssistantClamp(Math.min(barCoverage, timeCoverage), 0, 1);
     return {
         label: label,
         days: days,
         bars: candles.length,
-        coverage: dmParamAssistantClamp(candles.length / days, 0, 1),
+        spanDays: spanDays,
+        coverage: coverage,
+        sufficient: coverage >= 0.55 && candles.length >= Math.min(days * 0.5, 30),
         returnPct: dmParamAssistantReturnPct(candles),
         atrPct: dmParamAssistantAtrPct(candles, Math.min(14, Math.max(3, candles.length - 1))),
         medianRangePct: dmParamAssistantPercentile(ranges, 0.5),
@@ -1410,12 +1483,27 @@ function dmParamAssistantWindowMetrics(dailyCandles, days, label) {
     };
 }
 
-function dmParamAssistantApiGet(path) {
-    if (window.apiClient && typeof window.apiClient.get === 'function') return window.apiClient.get(path);
-    return fetch(path, { credentials: 'same-origin' }).then(function (r) {
+function dmParamAssistantApiFetch(path, fetchOptions, timeoutMs) {
+    fetchOptions = fetchOptions || {};
+    var controller = null;
+    var timeoutId = null;
+    if (timeoutMs > 0 && typeof AbortController !== 'undefined') {
+        controller = new AbortController();
+        fetchOptions.signal = controller.signal;
+        timeoutId = setTimeout(function () { controller.abort(); }, timeoutMs);
+    }
+    return fetch(path, fetchOptions).then(function (r) {
         if (!r.ok) throw new Error('HTTP ' + r.status);
         return r.json();
+    }).finally(function () {
+        if (timeoutId) clearTimeout(timeoutId);
     });
+}
+
+function dmParamAssistantApiGet(path, options) {
+    options = options || {};
+    if (window.apiClient && typeof window.apiClient.get === 'function') return window.apiClient.get(path, options);
+    return dmParamAssistantApiFetch(path, { credentials: 'same-origin' }, options.timeout || 0);
 }
 
 async function dmParamAssistantFetchKlines(symbol, interval, limit, endTime) {
@@ -1498,6 +1586,7 @@ function dmParamAssistantBuildMarketAnalysis(snapshot, marketCtx) {
     var daily = (marketCtx && marketCtx.daily) || [];
     var hourly = (marketCtx && marketCtx.hourly) || [];
     var m5 = (marketCtx && marketCtx.m5) || [];
+    var dataIssues = [];
     var windows = {
         m1: dmParamAssistantWindowMetrics(daily, 30, '1 ay'),
         m3: dmParamAssistantWindowMetrics(daily, 90, '3 ay'),
@@ -1614,6 +1703,43 @@ function dmParamAssistantBuildMarketAnalysis(snapshot, marketCtx) {
     if ((trendScore > 0 && windows.m1.returnPct != null && windows.m1.returnPct < -4) || (trendScore < 0 && windows.m1.returnPct != null && windows.m1.returnPct > 4)) agreement -= 0.12;
     agreement = dmParamAssistantClamp(agreement, 0.35, 1);
     var confidence = Math.round(dmParamAssistantClamp(48 + coverage * 28 + agreement * 16 + opportunityScore * 12 - riskScore * 10, 45, 96));
+    var nowMs = Date.now();
+    var latestM5 = m5.length ? m5[m5.length - 1] : null;
+    var latestHourly = hourly.length ? hourly[hourly.length - 1] : null;
+    var latestDaily = daily.length ? daily[daily.length - 1] : null;
+    if (!marketCtx || !marketCtx.ticker || marketCtx.ticker.available === false) {
+        dataIssues.push('24s ticker doğrulanamadı');
+    }
+    if (latestM5 && nowMs - Number(latestM5.t) > 45 * 60 * 1000) {
+        dataIssues.push('5 dakikalık veri güncel değil');
+    }
+    if (latestHourly && nowMs - Number(latestHourly.t) > 4 * 60 * 60 * 1000) {
+        dataIssues.push('saatlik veri güncel değil');
+    }
+    if (latestDaily && nowMs - Number(latestDaily.t) > 60 * 60 * 60 * 1000) {
+        dataIssues.push('günlük veri güncel değil');
+    }
+    var latestClose = latestM5 && Number(latestM5.c) > 0 ? Number(latestM5.c) : (latestHourly && Number(latestHourly.c) > 0 ? Number(latestHourly.c) : (latestDaily && Number(latestDaily.c) > 0 ? Number(latestDaily.c) : null));
+    if (Number(snapshot.price) > 0 && latestClose > 0) {
+        var priceDiffPct = Math.abs(Number(snapshot.price) - latestClose) / Number(snapshot.price) * 100;
+        if (priceDiffPct > 3.5) dataIssues.push('canlı fiyat ile mum kapanışı uyuşmuyor');
+    }
+    if (!windows.m1.sufficient) dataIssues.push('1 ay penceresi eksik');
+    if (!windows.m3.sufficient) dataIssues.push('3 ay penceresi eksik');
+    if (!windows.y1.sufficient) dataIssues.push('1 yıl penceresi eksik');
+    if (!windows.y4.sufficient) dataIssues.push('4 yıl penceresi eksik');
+    if (marketCtx && marketCtx.localFallback) {
+        // Yerel hızlı öneri gerçek strateji backtest'i değildir; skor veri kalitesi iyi olsa bile
+        // uygulama güveni gibi okunmamalı.
+        confidence = Math.min(confidence, dataIssues.length ? 52 : 72);
+    }
+    // Geçmiş veri hiç çekilemediyse (sunucu yoğun / klines zaman aşımı) ADX/RSI/risk
+    // okumaları gerçek değil, sadece "veri yok" varsayılanı (0). Bu durumda 45 güven
+    // tabanı YANILTICI olur; güveni dürüstçe dibe çek ve aşağıda açıkça uyar.
+    var insufficientData = daily.length < 30 || !windows.m1.sufficient || !windows.m3.sufficient || (marketCtx && marketCtx.localFallback && dataIssues.length >= 3);
+    if (insufficientData) {
+        confidence = Math.min(confidence, daily.length <= 0 ? 6 : 20);
+    }
 
     return {
         windows: windows,
@@ -1633,17 +1759,20 @@ function dmParamAssistantBuildMarketAnalysis(snapshot, marketCtx) {
         volumeZ: volumeZ,
         coverage: coverage,
         confidence: confidence,
+        insufficientData: insufficientData,
+        dataIssues: dataIssues,
         dataBars: {
             daily: daily.length,
             hourly: hourly.length,
             m5: m5.length
         },
-        partial: !!(marketCtx && (marketCtx.timeout || (marketCtx.errors && marketCtx.errors.length)))
+        partial: !!(marketCtx && (marketCtx.timeout || (marketCtx.errors && marketCtx.errors.length) || dataIssues.length))
     };
 }
 
 function dmParamAssistantBuildRecommendation(snapshot, marketCtx) {
     var analysis = dmParamAssistantBuildMarketAnalysis(snapshot, marketCtx || {});
+    var windows = analysis.windows || {};
     var budget = Number(snapshot.currentBudget);
     if (!Number.isFinite(budget) || budget < 25) {
         var available = Number(snapshot.availableQuote);
@@ -1654,10 +1783,9 @@ function dmParamAssistantBuildRecommendation(snapshot, marketCtx) {
 
     var maxSafeCount = Math.floor((budget * 0.5 * 0.995) / 10.05);
     maxSafeCount = Math.max(1, Math.min(4, maxSafeCount));
-    var targetCount = 1;
-    if (analysis.volUnit >= 0.78) targetCount = 2;
-    if (analysis.volUnit >= 1.95 && budget >= 75) targetCount = 3;
-    if (analysis.volUnit >= 3.2 && budget >= 130) targetCount = 4;
+    var targetCount = maxSafeCount >= 3 ? 3 : maxSafeCount;
+    if (analysis.volUnit >= 1.65 && budget >= 75) targetCount = Math.max(targetCount, Math.min(3, maxSafeCount));
+    if (analysis.volUnit >= 2.8 && budget >= 130) targetCount = Math.max(targetCount, Math.min(4, maxSafeCount));
     if (analysis.regimeCode === 'DUMP_RISK' && targetCount > 2) targetCount = 2;
     if (analysis.regimeCode === 'TRENDING_UP' && analysis.chopScore < 0.42 && targetCount > 2) targetCount = 2;
     var count = Math.max(1, Math.min(targetCount, maxSafeCount));
@@ -1689,21 +1817,28 @@ function dmParamAssistantBuildRecommendation(snapshot, marketCtx) {
     }
 
     var feeFloorPct = 0.28;
+    var longTermMinStepPct = 1.35;
     var regimeStepMult = {
-        LOW_VOL_RANGING: 0.86,
-        HIGH_VOL_RANGING: 1.22,
-        TRENDING_UP: 1.12,
-        TRENDING_DOWN: 1.36,
-        SQUEEZE: 0.92,
-        BREAKOUT: 1.45,
-        DUMP_RISK: 1.85
+        LOW_VOL_RANGING: 1.18,
+        HIGH_VOL_RANGING: 1.55,
+        TRENDING_UP: 1.45,
+        TRENDING_DOWN: 1.75,
+        SQUEEZE: 1.25,
+        BREAKOUT: 1.85,
+        DUMP_RISK: 2.15
     };
-    var stepRaw = analysis.volUnit * (regimeStepMult[analysis.regimeCode] || 1);
-    var drawdownAdd = analysis.riskScore >= 0.6 ? 0.18 : 0;
-    var maxStepByDepth = Math.max(0.55, 8.0 / count);
-    var step = dmParamAssistantClamp(stepRaw + drawdownAdd, feeFloorPct, Math.min(5.0, maxStepByDepth));
-    if (analysis.regimeCode === 'SQUEEZE') step = dmParamAssistantClamp(step, 0.35, 1.1);
-    if (analysis.regimeCode === 'DUMP_RISK') step = Math.max(step, 1.1);
+    var longSwingAnchor = dmParamAssistantWeightedMean([
+        { value: windows.m1 && windows.m1.medianRangePct != null ? windows.m1.medianRangePct * 0.55 : null, weight: 0.8 },
+        { value: windows.m3 && windows.m3.medianRangePct != null ? windows.m3.medianRangePct * 0.58 : null, weight: 0.9 },
+        { value: windows.y1 && windows.y1.medianRangePct != null ? windows.y1.medianRangePct * 0.5 : null, weight: 0.45 },
+        { value: analysis.volUnit, weight: 0.6 }
+    ], analysis.volUnit);
+    var stepRaw = Math.max(longTermMinStepPct, longSwingAnchor * (regimeStepMult[analysis.regimeCode] || 1));
+    var drawdownAdd = analysis.riskScore >= 0.6 ? 0.35 : 0;
+    var maxStepByDepth = Math.max(longTermMinStepPct, 18.0 / Math.max(1, count));
+    var step = dmParamAssistantClamp(stepRaw + drawdownAdd, longTermMinStepPct, Math.min(7.5, maxStepByDepth));
+    if (analysis.regimeCode === 'SQUEEZE') step = dmParamAssistantClamp(step, longTermMinStepPct, 2.4);
+    if (analysis.regimeCode === 'DUMP_RISK') step = Math.max(step, 2.2);
     step = dmParamAssistantRound(step, 2);
 
     var trailRatio = {
@@ -1742,12 +1877,23 @@ function dmParamAssistantBuildRecommendation(snapshot, marketCtx) {
     var qtys = dmParamAssistantQtys(count);
     var upGrids = [];
     var downGrids = [];
+    var depthGrowth = analysis.regimeCode === 'DUMP_RISK' ? 1.55 : (analysis.regimeCode === 'TRENDING_DOWN' ? 1.42 : 1.35);
+    // Alış gridi referans fiyattan MUTLAK düşüş %'sidir; spot piyasada fiyat en
+    // fazla %100 düşer (sıfıra iner). %100+ alış tetiği matematiksel olarak imkânsız
+    // ve asla dolmayacak ölü bir seviyedir -> bu eşiği aşan alış seviyelerini at.
+    var DM_MAX_BUY_DEPTH_PCT = 92;
     for (var i = 0; i < count; i++) {
-        var depthK = 1 + i * (analysis.regimeCode === 'DUMP_RISK' ? 1.1 : 1.0);
-        var trigger = dmParamAssistantRound(step * depthK, 2);
-        upGrids.push({ trigger_pct: trigger, qty_pct: qtys[i] });
-        downGrids.push({ trigger_pct: trigger, qty_pct: qtys[i] });
+        var trigger = dmParamAssistantRound(step * Math.pow(depthGrowth, i), 2);
+        upGrids.push({ trigger_pct: trigger, qty_pct: qtys[i] });  // satış: yukarı yön, %100+ fiziksel olarak mümkün
+        if (trigger < DM_MAX_BUY_DEPTH_PCT) {
+            downGrids.push({ trigger_pct: trigger });  // qty aşağıda yeniden dağıtılır
+        }
     }
+    if (!downGrids.length) {
+        downGrids.push({ trigger_pct: dmParamAssistantRound(Math.min(step, DM_MAX_BUY_DEPTH_PCT - 0.5), 2) });
+    }
+    var downQtys = dmParamAssistantQtys(downGrids.length);
+    downGrids.forEach(function (g, j) { g.qty_pct = downQtys[j]; });
 
     var volatility = analysis.volUnit >= 2.1 ? 'yüksek' : (analysis.volUnit >= 0.85 ? 'orta' : 'sakin');
     return {
@@ -1796,6 +1942,10 @@ function dmParamAssistantMetricPct(v, digits, opts) {
 
 function dmParamAssistantWindowText(metric) {
     if (!metric || !metric.bars) return metric && metric.label ? metric.label + ': veri yok' : 'veri yok';
+    if (!metric.sufficient) {
+        var covered = metric.spanDays ? Math.round(metric.spanDays) + ' gün' : metric.bars + ' mum';
+        return metric.label + ': veri yetersiz (' + covered + ' kapsama)';
+    }
     return metric.label + ': getiri ' + dmParamAssistantMetricPct(metric.returnPct, 2) +
         ', medyan gün içi bant ' + dmParamAssistantMetricPct(metric.medianRangePct, 2, { noSign: true }) +
         ', maks. geri çekilme ' + dmParamAssistantMetricPct(metric.maxDrawdownPct, 2, { noSign: true });
@@ -1809,107 +1959,11 @@ function dmParamAssistantCoverageText(analysis) {
     return 'sınırlı';
 }
 
-var DM_PARAM_ASSISTANT_GREETING_POOL = [
-    'Selam {name}, ben parametre asistanın. {symbol} için canlı fiyatı, kısa vade mumlarını ve uzun dönem geçmişini birlikte okuyorum.',
-    'Merhaba {name}, {symbol} ekranını açtım; şimdi geçmiş pencereleri ve canlı momentumu aynı masada tartıyorum.',
-    '{name}, {symbol} için parametre masasına geçtim; fiyat, hacim, volatilite ve trend sinyalini birlikte okuyorum.',
-    'Selam {name}, {base} tarafında acele etmiyorum; önce {symbol} verisini geniş zaman pencereleriyle ölçüyorum.',
-    'Merhaba {name}, {symbol} için asistan devrede; kısa vadeyi uzun geçmişle karşılaştırıp temiz bir set çıkarıyorum.',
-    '{name}, {symbol} analizini başlatıyorum; grid mesafesini hisle değil, bant ve risk matematiğiyle kuracağım.',
-    'Selam {name}, {symbol} için canlı veriyi aldım; şimdi 1 ay, 3 ay, 1 yıl ve 4 yıl izini aynı anda okuyorum.',
-    'Merhaba {name}, {symbol} bot ayarı için önce piyasanın ritmini dinliyorum; sonra inputlara geçeceğim.',
-    '{name}, {symbol} üzerinde çalışıyorum; amacım gürültüye fazla yaklaşmadan çalışabilir bir grid seti önermek.',
-    'Selam {name}, {symbol} için fiyat davranışını, drawdown geçmişini ve volatilite yoğunluğunu birlikte hesaplıyorum.',
-    'Merhaba {name}, {symbol} parametreleri için veri masası hazır; canlı fiyatı eski döngülerle kıyaslıyorum.',
-    '{name}, {base} için aceleci bir öneri vermeyeceğim; önce {symbol} geçmişini çok pencereli okuyorum.',
-    'Selam {name}, {symbol} tarafında asistan modundayım; trend, bant ve minimum emir gerçekliğini birlikte dengeliyorum.',
-    'Merhaba {name}, {symbol} için öneri motorunu çalıştırdım; her inputu tek tek dayanaklı seçiyorum.',
-    '{name}, {symbol} verisini açtım; şimdi kâr odaklı ama ölçülü bir parametre iskeleti kuruyorum.',
-    'Selam {name}, {symbol} için kısa vade nabzı ve uzun vade karakteri aynı ekranda birleşiyor.',
-    'Merhaba {name}, {symbol} üzerinde grid için doğru mesafeyi arıyorum; bant, ATR ve rejim sinyali karar verecek.',
-    '{name}, {symbol} hesaplamasına başladım; önce piyasa yapısını, sonra bütçe taşıma kapasitesini okuyorum.',
-    'Selam {name}, {base} için parametre önerisini hazırlıyorum; {quote} bacağını da boşta bırakmayacağım.',
-    'Merhaba {name}, {symbol} için veri geliyor; öneri, tek bir fiyat hareketine değil çoklu pencereye dayanacak.',
-    '{name}, {symbol} botu için analiz masası açıldı; volatilite, trend ve risk aynı terazide.',
-    'Selam {name}, {symbol} için canlı fiyatı gördüm; şimdi geçmiş bantların nereye izin verdiğini hesaplıyorum.',
-    'Merhaba {name}, {symbol} tarafında asistan not alıyor; aşırı sıkışık veya fazla gevşek grid istemiyoruz.',
-    '{name}, {symbol} için başlıyorum; hedefim emirlerin çalışabileceği, gürültüye de yem olmayacak bir set.',
-    'Selam {name}, {base} hareketini {quote} tarafıyla birlikte okuyorum; öneriyi iki bacak dengesiyle kuracağım.',
-    'Merhaba {name}, {symbol} için piyasa hafızasını tarıyorum; son gün değil, uzun karakter de hesaba giriyor.',
-    '{name}, {symbol} analizinde ilk iş veri kalitesini ölçmek; sonra parametreleri güven skoruyla bağlayacağım.',
-    'Selam {name}, {symbol} için 24 saatlik bant tek başına yetmez; uzun dönem izini de denkleme alıyorum.',
-    'Merhaba {name}, {symbol} bot ayarında kâr ihtimalini artıracak mesafeyi matematikle seçeceğim.',
-    '{name}, {symbol} için strateji terazisi açıldı; volatilite kullanılabilir mi, trend baskısı ne kadar, bakıyorum.',
-    'Selam {name}, {symbol} için hesap başlıyor; grid, trailing ve dağılım aynı rejim kararından beslenecek.',
-    'Merhaba {name}, {symbol} üzerinde geniş pencere analizi yapıyorum; öneri aceleci değil, kontrollü olacak.',
-    '{name}, {symbol} için asistan hazırlıkta; fiyatın bugünkü sesiyle geçmiş karakterini karşılaştırıyorum.',
-    'Selam {name}, {symbol} tarafında canlı veri tamam; şimdi parametrelerin birbirini ezmemesi için hesaplıyorum.',
-    'Merhaba {name}, {base} için piyasayı okuyorum; {quote} rezervi ve base dağılımı aynı planın parçası.',
-    '{name}, {symbol} için bot kurulum zekası devrede; veri, risk ve emir minimumu birlikte değerlendiriliyor.',
-    'Selam {name}, {symbol} için doğru grid boşluğunu arıyorum; ne çok yakın, ne piyasanın dışında.',
-    'Merhaba {name}, {symbol} analizine başladım; önce rejimi netleştirip sonra inputlara dokunacağım.',
-    '{name}, {symbol} için son fiyatı geçmişin içine yerleştiriyorum; öneri bu bağlama göre şekillenecek.',
-    'Selam {name}, {symbol} için akıllı parametre hesabı açıldı; trend, sıkışma ve geri çekilme izleri taranıyor.',
-    'Merhaba {name}, {base} tarafında karar vermeden önce {symbol} geçmiş bantlarını ölçüyorum.',
-    '{name}, {symbol} için kâr odaklı ama temkinli bir set hazırlıyorum; her değer bir ölçümden gelecek.',
-    'Selam {name}, {symbol} üzerinde piyasa ritmini yakalıyorum; gridleri bu ritme göre yerleştireceğim.',
-    'Merhaba {name}, {symbol} verisini çok pencereli okuyorum; kısa gürültüyü uzun karakterden ayıracağım.',
-    '{name}, {symbol} için öneri mutfağı çalışıyor; ATR, drawdown ve trend skoru birlikte pişiyor.',
-    'Selam {name}, {symbol} için botun nefes aralığını hesaplıyorum; emirler piyasaya çok yapışmayacak.',
-    'Merhaba {name}, {symbol} parametrelerinde önce veri, sonra karar; şimdi hesaplama başlıyor.',
-    '{name}, {symbol} tarafında piyasa tonu okunuyor; öneriyi bu tona uygun ayarlayacağım.',
-    'Selam {name}, {symbol} için güncel hareketi geçmiş döngülerle eşliyorum; dengeli bir set çıkaracağım.',
-    'Merhaba {name}, {symbol} analizini açtım; hedefim gridin hem çalışması hem gereksiz tetiklenmemesi.',
-    '{name}, {symbol} için hesap kitap bende; canlı değerleri uzun dönem bağlamıyla birleştiriyorum.',
-    'Selam {name}, {symbol} tarafında veri pencereleri açıldı; şimdi rejim kararını netleştiriyorum.',
-    'Merhaba {name}, {base} için alım-satım mesafesini {quote} bütçesiyle uyumlu hale getireceğim.',
-    '{name}, {symbol} için öneri motoru bakıyor; fiyat nereye gelmiş, geçmiş ne kadar alan bırakmış.',
-    'Selam {name}, {symbol} için kısa vade sinyali tek başına konuşmayacak; uzun pencere de masada.',
-    'Merhaba {name}, {symbol} botu için temiz input seti hazırlıyorum; her bacak kendi rolünü koruyacak.',
-    '{name}, {symbol} üzerinde analiz başladı; önce risk basıncını, sonra fırsat alanını ölçüyorum.',
-    'Selam {name}, {symbol} için canlı fiyatın etrafındaki güvenli çalışma bandını hesaplıyorum.',
-    'Merhaba {name}, {symbol} tarafında asistan dikkat kesildi; parametreler rastgele değil, ölçüme dayalı gelecek.',
-    '{name}, {symbol} için piyasa haritasını çıkarıyorum; grid, trail ve kâr döngüsü aynı haritadan beslenecek.',
-    'Selam {name}, {base} hareketi için {symbol} verisini tarıyorum; öneriyi sakin ve net kuracağım.',
-    'Merhaba {name}, {symbol} için geçmiş pencereler konuşacak; ben de inputları buna göre yazacağım.',
-    '{name}, {symbol} tarafında bot ayarını inceltiyorum; hedef kontrollü, çalışabilir ve anlaşılır bir set.',
-    'Selam {name}, {symbol} için analiz başlıyor; trend varsa ona, yataylık varsa grid verimine kulak vereceğim.',
-    'Merhaba {name}, {symbol} verisi geldi; şimdi volatiliteyi kâr alanına çevirecek mesafeyi arıyorum.',
-    '{name}, {symbol} için karar motoru çalıştı; her öneri önce veri testinden geçecek.',
-    'Selam {name}, {symbol} tarafında önce piyasa karakterini okuyorum; sonra inputları tek tek yerine koyacağım.',
-    'Merhaba {name}, {base} için güvenli grid alanını bulmaya çalışıyorum; {quote} tarafı da denklemde.',
-    '{name}, {symbol} için öneri hazırlığı başladı; fiyatın hızı, bandı ve geçmiş darbeleri ölçülüyor.',
-    'Selam {name}, {symbol} için parametre denklemini kuruyorum; canlı sinyal ile uzun geçmiş aynı anda tartılıyor.',
-    'Merhaba {name}, {symbol} üzerinde kâr verimi için gereksiz yakın tetiklerden kaçınan bir set arıyorum.',
-    '{name}, {symbol} için asistan gözünü verilere çevirdi; şimdi grid mesafesi ve trailing uyumu çıkacak.',
-    'Selam {name}, {symbol} tarafında hesap ekranı açık; önce rejim, sonra dağılım, sonra grid.',
-    'Merhaba {name}, {symbol} için piyasa hafızası taranıyor; öneri bu hafızaya göre olgunlaşacak.',
-    '{name}, {symbol} üzerinde çalışıyorum; botun iki bacağının da boş kalmaması için denge kuracağım.',
-    'Selam {name}, {base} için uzun dönem nabız ve kısa dönem hız aynı anda ölçülüyor.',
-    'Merhaba {name}, {symbol} parametreleri için hesap derinleşiyor; risk ve fırsat aynı satırda okunacak.',
-    '{name}, {symbol} için öneri setini hazırlıyorum; veri kalitesi zayıfsa bunu güven skoruna yansıtacağım.',
-    'Selam {name}, {symbol} için fiyatın bugünkü alanı ve geçmişteki esneme payı birlikte okunuyor.',
-    'Merhaba {name}, {symbol} tarafında kontrollü agresiflik arıyorum; grid ne pasif ne fazla aceleci olacak.',
-    '{name}, {symbol} için asistan hesapta; ATR bileşiği ve rejim katsayısı inputların temelini atacak.',
-    'Selam {name}, {symbol} için öneri zekası açıldı; geçmiş pencere ne söylüyor, canlı fiyat ne ekliyor, bakıyorum.',
-    'Merhaba {name}, {base} tarafını {quote} bütçesiyle dengeleyeceğim; önce piyasanın alanını ölçüyorum.',
-    '{name}, {symbol} için bot kurulumu ciddiye alındı; her sayı kendi gerekçesiyle gelecek.',
-    'Selam {name}, {symbol} tarafında hesaplı bir başlangıç yapıyorum; amaç veriye yakışan grid aralığı.',
-    'Merhaba {name}, {symbol} için trendin gücünü ve yataylığın kalitesini aynı anda kontrol ediyorum.',
-    '{name}, {symbol} üzerinde öneri hazırlıyorum; kısa vadeli parazitleri uzun pencereyle süzeceğim.',
-    'Selam {name}, {symbol} için parametre pusulası açıldı; yön, volatilite ve drawdown birlikte işaret verecek.',
-    'Merhaba {name}, {symbol} tarafında kâr alanı arıyorum; risk yükselirse mesafeyi ona göre açacağım.',
-    '{name}, {symbol} için işlem çiftini ve bütçeyi birlikte okuyorum; öneri botun taşıyabileceği sınırlarda kalacak.',
-    'Selam {name}, {base} için asistan hesaplıyor; {symbol} geçmişi inputlara sessizce yön verecek.',
-    'Merhaba {name}, {symbol} analizinde canlı fiyat sadece başlangıç; asıl karar çok pencereli yapıda.',
-    '{name}, {symbol} için veri terazisi hazır; şimdi grid step, trailing ve dağılımı aynı mantıkla çıkarıyorum.',
-    'Selam {name}, {symbol} üzerinde temiz bir bot ayarı kuruyorum; her değer piyasa karakterine bağlanacak.',
-    'Merhaba {name}, {symbol} için geçmiş bantları, son hareketi ve bütçe gerçekliğini aynı plana alıyorum.',
-    '{name}, {symbol} tarafında öneri oluşuyor; acele etmeden, ölçülü ve okunabilir bir set hazırlıyorum.',
-    'Selam {name}, {symbol} için asistan notlarını açtı; fiyat, hacim ve risk profili aynı sayfada.',
-    'Merhaba {name}, {base} için grid alanı ölçülüyor; {quote} tarafında kullanılabilirlik de korunacak.',
-    '{name}, {symbol} için hesap tamamlanmak üzere; üstüne yazacağım değerler rastgele değil, pencereli analiz sonucu.',
-    'Selam {name}, {symbol} tarafında öneri üretimine geçiyorum; veri konuşsun, inputlar onu takip etsin.'
+var DM_PARAM_ASSISTANT_GREETING_POOL = (
+    AI_ASSISTANT_SPEC.paramAssistant && AI_ASSISTANT_SPEC.paramAssistant.greetingPool
+) || [
+    'Selam {name}, ben parametre asistanın. {symbol} için canlı fiyatı ve geçmiş pencereleri birlikte okuyorum.',
+    'Merhaba {name}, {symbol} için kontrollü, veriye dayalı bir parametre seti hazırlıyorum.'
 ];
 
 function dmParamAssistantCleanName(name) {
@@ -1972,7 +2026,7 @@ function dmParamAssistantCurrentUserName(snapshot) {
         var clean = dmParamAssistantCleanName(candidates[i]);
         if (clean) return clean;
     }
-    return 'dostum';
+    return (AI_ASSISTANT_SPEC.copy && AI_ASSISTANT_SPEC.copy.fallbackUserName) || 'dostum';
 }
 
 function dmParamAssistantRandomIndex(max) {
@@ -1988,8 +2042,6 @@ function dmParamAssistantRandomIndex(max) {
 }
 
 function dmParamAssistantGreetingText(snapshot, rec) {
-    var pool = DM_PARAM_ASSISTANT_GREETING_POOL;
-    var template = pool[dmParamAssistantRandomIndex(pool.length)] || pool[0];
     var pq = parseBaseQuote(snapshot.symbol || '');
     var name = dmParamAssistantCurrentUserName(snapshot);
     var values = {
@@ -1999,7 +2051,12 @@ function dmParamAssistantGreetingText(snapshot, rec) {
         quote: snapshot.quote || pq.quote || 'USDT',
         regime: rec && rec.regime ? rec.regime : 'piyasa'
     };
-    return template.replace(/\{(name|symbol|base|quote|regime)\}/g, function (_, key) {
+    if (AI_ASSISTANT_SPEC && typeof AI_ASSISTANT_SPEC.greeting === 'function') {
+        return AI_ASSISTANT_SPEC.greeting(values);
+    }
+    var pool = DM_PARAM_ASSISTANT_GREETING_POOL;
+    var template = pool[dmParamAssistantRandomIndex(pool.length)] || pool[0];
+    return String(template || '').replace(/\{(name|symbol|base|quote|regime)\}/g, function (_, key) {
         return values[key] || '';
     });
 }
@@ -2016,12 +2073,58 @@ function dmParamAssistantLines(snapshot, rec) {
     var dataText = (a.dataBars && a.dataBars.daily ? a.dataBars.daily : 0) + ' günlük, ' +
         (a.dataBars && a.dataBars.hourly ? a.dataBars.hourly : 0) + ' saatlik, ' +
         (a.dataBars && a.dataBars.m5 ? a.dataBars.m5 : 0) + ' adet 5 dakikalık mum';
+    var copySpec = AI_ASSISTANT_SPEC.copy || {};
     var partialText = a.partial
-        ? 'Bazı geçmiş pencerelerde veri sınırlı geldi; öneriyi güven skoruna indirim vererek ürettim.'
-        : 'Veri akışı yeterli; öneriyi çok pencereli hesapla üretiyorum.';
-    return [
+        ? (copySpec.dataPartial || 'Bazı geçmiş pencerelerde veri sınırlı geldi; öneriyi güven skoruna indirim vererek ürettim.')
+        : (copySpec.dataHealthy || 'Veri akışı yeterli; öneriyi çok pencereli hesapla üretiyorum.');
+    var scenarioLines = [];
+    var rationaleLines = [];
+    var aiLineValues = {
+        name: dmParamAssistantCurrentUserName(snapshot),
+        symbol: sym,
+        base: snapshot.base || 'coin',
+        quote: snapshot.quote || 'USDT',
+        price: price,
+        change: change,
+        coverage: dmParamAssistantCoverageText(a),
+        dataText: dataText,
+        regime: rec.regime,
+        volatility: rec.volatility,
+        trendScore: dmParamAssistantMetricPct((a.trendScore || 0) * 100, 0),
+        adx: a.adx == null ? '—' : dmParamAssistantInputTextTr(a.adx, 1),
+        rsi: a.rsi == null ? '—' : dmParamAssistantInputTextTr(a.rsi, 1),
+        volUnit: '%' + dmParamAssistantInputTextTr(rec.math.volUnit, 2),
+        stepPct: '%' + dmParamAssistantInputTextTr(rec.math.stepPct, 2),
+        riskScore: rec.math.riskScore,
+        opportunityScore: rec.math.opportunityScore,
+        budget: dmParamAssistantInputTextTr(rec.budget, 2),
+        basePct: dmParamAssistantInputTextTr(rec.basePct, 1),
+        quotePct: dmParamAssistantInputTextTr(rec.quotePct, 1),
+        upGridCount: rec.upGrids.length,
+        downGridCount: rec.downGrids.length,
+        upTrail: dmParamAssistantInputTextTr(rec.upTrail, 2),
+        downTrail: dmParamAssistantInputTextTr(rec.downTrail, 2),
+        rebuyTrigger: dmParamAssistantInputTextTr(rec.rebuyTrigger, 2),
+        resellTrigger: dmParamAssistantInputTextTr(rec.resellTrigger, 2),
+        sellGridText: dmParamAssistantGridText(rec.upGrids, '+'),
+        buyGridText: dmParamAssistantGridText(rec.downGrids, '-'),
+        confidence: rec.confidence
+    };
+    if (AI_ASSISTANT_SPEC && typeof AI_ASSISTANT_SPEC.paramScenarioLines === 'function') {
+        scenarioLines = AI_ASSISTANT_SPEC.paramScenarioLines(aiLineValues, 6);
+    }
+    if (AI_ASSISTANT_SPEC && typeof AI_ASSISTANT_SPEC.paramRationaleLines === 'function') {
+        rationaleLines = AI_ASSISTANT_SPEC.paramRationaleLines(aiLineValues);
+    }
+    var head = [
         'Anlık ekran: fiyat ' + price + ', 24s değişim ' + change + ', 24s yüksek ' + high + ', 24s düşük ' + low + '. Dinamik strateji şu an ' + dyn + '.',
         'Geçmiş taraması: ' + dataText + '. Kapsama kalitesi ' + dmParamAssistantCoverageText(a) + '. ' + partialText,
+    ];
+    if (a.insufficientData) {
+        var issueText = a.dataIssues && a.dataIssues.length ? ' Sorun: ' + a.dataIssues.slice(0, 4).join(', ') + '.' : '';
+        head.unshift('⛔ Geçmiş veri yeterince doğrulanamadı (' + dataText + '). Aşağıdaki rejim/ADX/RSI/risk değerleri tam güvenilir okuma değil — bu parametreleri UYGULAMA. Lütfen birkaç saniye sonra tekrar dene veya sunucu backtest analizini çalıştır.' + issueText);
+    }
+    return head.concat(scenarioLines).concat([
         dmParamAssistantWindowText(w.m1) + '.',
         dmParamAssistantWindowText(w.m3) + '.',
         dmParamAssistantWindowText(w.y1) + '.',
@@ -2034,11 +2137,15 @@ function dmParamAssistantLines(snapshot, rec) {
         'Satış gridleri: ' + dmParamAssistantGridText(rec.upGrids, '+') + '.',
         'Alış gridleri: ' + dmParamAssistantGridText(rec.downGrids, '-') + '.',
         'Trailing: satış %' + dmParamAssistantInputTextTr(rec.upTrail, 2) + ', alış %' + dmParamAssistantInputTextTr(rec.downTrail, 2) + '. Kâr döngüsü: rebuy tetik %' + dmParamAssistantInputTextTr(rec.rebuyTrigger, 2) + ' / trail %' + dmParamAssistantInputTextTr(rec.rebuyTrail, 2) + ', resell tetik %' + dmParamAssistantInputTextTr(rec.resellTrigger, 2) + ' / trail %' + dmParamAssistantInputTextTr(rec.resellTrail, 2) + '.',
-        'Güven skoru ' + rec.confidence + '/100. Bu set kâr ihtimalini artırmak için gürültüye fazla yakın durmadan, geçmiş bantlara ve güncel rejime göre kapanabilir mesafe üretmek üzere ayarlandı.'
-    ];
+        'Güven skoru ' + rec.confidence + '/100. Bu set kâr ihtimalini artırmak için gürültüye fazla yakın durmadan, geçmiş bantlara ve güncel rejime göre kapanabilir mesafe üretmek üzere ayarlandı.',
+        'Şimdi seçtiğim parametrelerin gerekçesini tek tek açıyorum; burada amaç sayıları ezbere yazmak değil, her inputun hangi risk ve fırsat mantığına bağlandığını göstermek.'
+    ]).concat(rationaleLines).concat([
+        'Son karar cümlem: bu parametreler bugünkü veriyle uyumlu bir başlangıç planı üretir; uygulandıktan sonra tur kapanış kalitesi, komisyon etkisi ve alpha sonucu birlikte izlenmelidir.'
+    ]);
 }
 
 function dmParamAssistantChipItems(snapshot, rec) {
+    if (rec && rec.backend) return dmParamAssistantBackendChipItems(snapshot, rec);
     var a = rec.analysis || {};
     var w = a.windows || {};
     return [
@@ -2069,13 +2176,14 @@ function dmParamAssistantRenderChips(snapshot, rec, opts) {
 }
 
 function dmParamAssistantSummaryRows(rec) {
+    if (rec && rec.backend) return dmParamAssistantBackendSummaryRows(rec);
     var a = rec.analysis || {};
     return [
         ['Bütçe', dmParamAssistantInputTextTr(rec.budget, 2)],
         ['Dağılım', '%' + dmParamAssistantInputTextTr(rec.basePct, 1) + ' / %' + dmParamAssistantInputTextTr(rec.quotePct, 1)],
         ['Rejim', rec.regime + ' · güven ' + rec.confidence + '/100'],
         ['Formül', 'Step %' + dmParamAssistantInputTextTr(rec.math.stepPct, 2) + ' = ATR bileşik %' + dmParamAssistantInputTextTr(rec.math.volUnit, 2) + ' + rejim/risk katsayısı'],
-        ['Skor', 'Risk ' + rec.math.riskScore + '/100 · fırsat ' + rec.math.opportunityScore + '/100 · veri kapsama %' + dmParamAssistantInputTextTr((a.coverage || 0) * 100, 0)],
+        ['Skor', 'Risk ' + rec.math.riskScore + '/100 · fırsat ' + rec.math.opportunityScore + '/100 · kapsama ' + dmParamAssistantCoverageText(a) + ' (%' + dmParamAssistantInputTextTr((a.coverage || 0) * 100, 0) + ')'],
         ['Satış grid', dmParamAssistantGridText(rec.upGrids, '+')],
         ['Alış grid', dmParamAssistantGridText(rec.downGrids, '-')],
         ['Trailing', '%' + dmParamAssistantInputTextTr(rec.upTrail, 2) + ' / %' + dmParamAssistantInputTextTr(rec.downTrail, 2)],
@@ -2111,11 +2219,7 @@ function dmParamAssistantRenderSummaryAi(rec) {
         div.appendChild(label);
         div.appendChild(value);
         el.appendChild(div);
-        if (idx === 0) {
-            dmParamAssistantScrollSummaryIntoView();
-        } else {
-            dmParamAssistantMaybeScrollToBottom();
-        }
+        dmParamAssistantMaybeScrollToBottom();
         var text = String(row[1] || '');
         var charIdx = 0;
         function typeValue() {
@@ -2142,40 +2246,38 @@ function dmParamAssistantBindBodyScroll(body) {
     }
     body.addEventListener('wheel', markManualScroll, { passive: true });
     body.addEventListener('touchstart', markManualScroll, { passive: true });
-    body.addEventListener('pointerdown', markManualScroll, { passive: true });
     body.addEventListener('scroll', function () {
-        if (Date.now() < dmParamAssistantProgrammaticScrollUntil) return;
         if (Date.now() - dmParamAssistantLastAutoScrollAt < 140) return;
         var distanceToBottom = body.scrollHeight - body.scrollTop - body.clientHeight;
         dmParamAssistantAutoScroll = distanceToBottom < 36;
     }, { passive: true });
 }
 
-function dmParamAssistantMaybeScrollToBottom() {
+function dmParamAssistantMaybeScrollToBottom(opts) {
+    opts = opts || {};
     var body = document.querySelector('#dmParamAssistantModal .dm-param-assistant-body');
-    if (!body || !dmParamAssistantAutoScroll) return;
-    var now = Date.now();
-    dmParamAssistantLastAutoScrollAt = now;
-    dmParamAssistantProgrammaticScrollUntil = now + 260;
+    if (!body || (!dmParamAssistantAutoScroll && !opts.force)) return;
+    dmParamAssistantLastAutoScrollAt = Date.now();
     body.scrollTop = body.scrollHeight;
+    if (window.requestAnimationFrame) {
+        window.requestAnimationFrame(function () {
+            if (!body || (!dmParamAssistantAutoScroll && !opts.force)) return;
+            dmParamAssistantLastAutoScrollAt = Date.now();
+            body.scrollTop = body.scrollHeight;
+        });
+    }
 }
 
 function dmParamAssistantScrollSummaryIntoView() {
     var body = document.querySelector('#dmParamAssistantModal .dm-param-assistant-body');
     var summary = document.getElementById('dmParamAssistantSummary');
-    if (!body || !summary || summary.style.display === 'none' || !dmParamAssistantAutoScroll) return;
-    var now = Date.now();
-    var top = Math.max(0, summary.offsetTop - 12);
-    dmParamAssistantLastAutoScrollAt = now;
-    dmParamAssistantProgrammaticScrollUntil = now + 420;
+    if (!body || !summary || summary.style.display === 'none') return;
+    dmParamAssistantAutoScroll = false;
+    dmParamAssistantLastAutoScrollAt = Date.now();
     try {
-        if (body.scrollTo) {
-            body.scrollTo({ top: top, behavior: 'smooth' });
-        } else {
-            body.scrollTop = top;
-        }
+        summary.scrollIntoView({ behavior: 'smooth', block: 'start' });
     } catch (e) {
-        body.scrollTop = top;
+        body.scrollTop = Math.max(0, summary.offsetTop - 12);
     }
 }
 
@@ -2246,11 +2348,962 @@ function dmParamAssistantTypeLines(lines, idx) {
     step();
 }
 
+// ===================== Backend backtest optimizer (gerçek analiz) =====================
+// Parametre asistanı, seçilen analiz seviyesinde (Soft/Orta/Yüksek) SUNUCUDAKİ gerçek
+// strateji backtest'i + Monte Carlo gelecek simülasyonunu çalıştırır (job -> poll).
+// Backend ulaşılamaz/başarısızsa AÇIKÇA etiketlenmiş yerel hızlı tahmine düşer.
+function dmParamAssistantApiCfg() {
+    return (AI_ASSISTANT_SPEC && AI_ASSISTANT_SPEC.api) ||
+        { tiers: '/api/param-assistant/tiers', optimize: '/api/param-assistant/optimize' };
+}
+
+function dmParamAssistantApiPost(path, body, options) {
+    options = options || {};
+    if (window.apiClient && typeof window.apiClient.post === 'function') return window.apiClient.post(path, body, options);
+    return dmParamAssistantApiFetch(path, {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {})
+    }, options.timeout || 0);
+}
+
+function dmParamAssistantCancelUrl(jobId) {
+    if (jobId) return '/api/param-assistant/optimize/' + encodeURIComponent(jobId) + '/cancel';
+    return '/api/param-assistant/cancel-active';
+}
+
+function dmParamAssistantCancelActiveJob() {
+    var jobId = dmParamAssistantActiveJobId || '';
+    var btn = document.getElementById('dmPaCancelBtn');
+    var status = document.getElementById('dmParamAssistantStatus');
+    var live = document.getElementById('dmPaProgLive');
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Sonlandırılıyor';
+    }
+    if (status) status.textContent = 'Analiz sonlandırılıyor…';
+    if (live) live.textContent = 'Arka plandaki analiz işi sonlandırılıyor; kayıt temizlenince yeniden seçim yapabilirsin.';
+    dmParamAssistantClearTimers();
+    dmParamAssistantStopTimeProgress();
+    dmParamAssistantActiveBackendRun = ++dmParamAssistantBackendRunSeq;
+    dmParamAssistantApiPost(dmParamAssistantCancelUrl(jobId), {}, {
+        timeout: 20000,
+        owner: 'paramAssistant',
+        trigger: 'param-assistant-cancel',
+        suppressRateLimitToast: true
+    }).then(function () {
+        dmParamAssistantActiveJobId = '';
+        dmParamAssistantProgressState = null;
+        if (status) status.textContent = 'Analiz sonlandırıldı.';
+        var prep = dmParamAssistantPrepEl();
+        if (prep) {
+            prep.style.display = 'block';
+            prep.innerHTML =
+                '<div class="dm-pa-cancelled-note" role="status" aria-live="polite">' +
+                '<div class="dm-pa-cancelled-title">Analiz sonlandırıldı</div>' +
+                '<div class="dm-pa-cancelled-copy">Arka plandaki parametre işi kapatıldı ve kayıt temizlendi. Şimdi yeniden analiz seviyesi seçebilirsin.</div>' +
+                '</div>';
+        }
+        dmParamAssistantMaybeScrollToBottom({ force: true });
+        dmParamAssistantSetTimer(function () {
+            if (dmParamAssistantLastSnapshot && typeof dmParamAssistantLastTierStartFn === 'function') {
+                dmParamAssistantShowTierSelect(dmParamAssistantLastSnapshot, dmParamAssistantLastTierStartFn);
+            }
+        }, 1200);
+    }).catch(function (err) {
+        var info = dmParamAssistantBackendErrorInfo(err);
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = 'Sonlandır';
+        }
+        if (status) status.textContent = 'Sonlandırma isteği tamamlanamadı: ' + (info.label || 'sunucu yanıt vermedi');
+    });
+}
+
+function dmParamAssistantResolveBudget(snapshot) {
+    var b = Number(snapshot.currentBudget);
+    if (Number.isFinite(b) && b >= 25) return dmParamAssistantRound(b, 2);
+    var avail = Number(snapshot.availableQuote);
+    if (Number.isFinite(avail) && avail >= 25) return dmParamAssistantRound(Math.min(avail, 100), 2);
+    return 50;
+}
+
+function dmParamAssistantFmtDuration(sec) {
+    var s = Math.max(0, Math.round(Number(sec) || 0));
+    if (s < 60) return s + ' sn';
+    if (s < 3600) { var m = Math.floor(s / 60); var r = s % 60; return m + ' dk' + (s < 600 && r ? ' ' + r + ' sn' : ''); }
+    var h = Math.floor(s / 3600); var mm = Math.round((s % 3600) / 60); return h + ' sa' + (mm ? ' ' + mm + ' dk' : '');
+}
+
+function dmParamAssistantPctTxt(v, d) {
+    var n = Number(v);
+    if (!Number.isFinite(n)) return '—';
+    return (n >= 0 ? '+' : '') + dmParamAssistantInputTextTr(n, d == null ? 1 : d) + '%';
+}
+
+function dmParamAssistantBackendErrorInfo(err) {
+    var status = Number(err && err.status);
+    var code = String((err && (err.error_code || err.code)) || '').toUpperCase();
+    var msg = String((err && err.message) || '');
+    var retryAfter = Number(err && err.retry_after);
+    var retryable = !status || code === 'TIMEOUT' || code === 'NETWORK_ERROR' || status === 429 || status === 502 || status === 503 || status === 504 || status >= 500;
+    var label = 'sunucu geçici olarak yanıt vermiyor';
+    if (status === 401 || status === 403) {
+        retryable = false;
+        label = 'oturum veya izin doğrulanamadı';
+    } else if (status === 404) {
+        retryable = false;
+        label = 'optimizasyon işi bulunamadı';
+    } else if (status === 429) {
+        label = 'sunucu yoğun, yeniden denenecek';
+    } else if (code === 'TIMEOUT' || msg.toLowerCase().indexOf('timeout') >= 0) {
+        label = 'durum isteği zaman aşımına uğradı';
+    } else if (code === 'NETWORK_ERROR') {
+        label = 'ağ bağlantısı geçici olarak kesildi';
+    } else if (status >= 500) {
+        label = 'sunucu yoğun veya geçici hata verdi';
+    } else if (msg) {
+        label = msg;
+    }
+    return { status: status || 0, code: code, message: msg, retryAfter: retryAfter, retryable: retryable, label: label };
+}
+
+// --- dinamik hazırlık paneli (tier seçimi / onay / ilerleme) ---
+function dmParamAssistantPrepEl() {
+    var el = document.getElementById('dmParamAssistantPrep');
+    if (el) return el;
+    var output = document.getElementById('dmParamAssistantOutput');
+    if (!output || !output.parentNode) return null;
+    el = document.createElement('div');
+    el.id = 'dmParamAssistantPrep';
+    el.className = 'dm-param-assistant-prep dm-pa-tier-select';
+    el.style.margin = '4px 0 12px';
+    output.parentNode.insertBefore(el, output);
+    return el;
+}
+
+function dmParamAssistantClearPrep() {
+    var el = document.getElementById('dmParamAssistantPrep');
+    if (el) { el.innerHTML = ''; el.style.display = 'none'; }
+}
+
+function dmParamAssistantShowTierSelect(snapshot, onPick) {
+    var prep = dmParamAssistantPrepEl();
+    var status = document.getElementById('dmParamAssistantStatus');
+    var selectSeq = ++dmParamAssistantTierSelectSeq;
+    if (!prep) {
+        if (status) status.textContent = 'Analiz seviyesi ekranı hazırlanamadı; lütfen modalı kapatıp yeniden aç.';
+        return;
+    }
+    if (status) status.textContent = 'Analiz derinliğini seç — ' + (snapshot.symbol || 'parite') + ' için en iyi parametreleri sunucuda GERÇEK backtest ile hesaplayacağım.';
+    prep.style.display = 'block';
+
+    var fallback = [
+        { key: 'soft', label: 'Düşük', description: 'Sunucuda gerçek strateji backtest + son dönem doğrulama. Yerel hızlı tahmin değildir.', eta_low_sec: 30, eta_high_sec: 90, requires_confirm: false },
+        { key: 'medium', label: 'Orta', description: '15dk ince veri + OOS doğrulama + Monte Carlo gelecek senaryoları.', eta_low_sec: 180, eta_high_sec: 420, requires_confirm: false },
+        { key: 'high', label: 'Yüksek', description: '5dk son yıl + tüm geçmiş + 6-fold walk-forward + ağır Monte Carlo. En az 1 saat, tavan 6 saat.', eta_low_sec: 3600, eta_high_sec: 21600, requires_confirm: true }
+    ];
+
+    function render(tiers) {
+        if (selectSeq !== dmParamAssistantTierSelectSeq) return;
+        if (!prep || prep.style.display === 'none') return;
+        prep.innerHTML = '';
+        var title = document.createElement('div');
+        title.className = 'dm-pa-tier-title';
+        title.textContent = 'Analiz seviyesi';
+        prep.appendChild(title);
+        var cards = document.createElement('div');
+        cards.className = 'dm-pa-tier-cards';
+        prep.appendChild(cards);
+        tiers.forEach(function (t) {
+            var card = document.createElement('button');
+            card.type = 'button';
+            card.className = 'dm-pa-tier-card dm-pa-tier-' + t.key;
+            var etaTxt = '~' + dmParamAssistantFmtDuration(t.eta_low_sec) +
+                (t.eta_high_sec && t.eta_high_sec !== t.eta_low_sec ? ' – ' + dmParamAssistantFmtDuration(t.eta_high_sec) : '');
+            card.innerHTML = '<div class="dm-pa-tier-card-label">' + dmParamAssistantEscape(t.label) + '</div>' +
+                '<div class="dm-pa-tier-card-desc">' + dmParamAssistantEscape(t.description || '') + '</div>' +
+                '<div class="dm-pa-tier-card-eta">tahmini süre: ' + dmParamAssistantEscape(etaTxt) + (t.cores ? ' · ' + t.cores + ' çekirdek' : '') + '</div>';
+            card.addEventListener('click', function () { dmParamAssistantPickTier(snapshot, t, onPick); });
+            cards.appendChild(card);
+        });
+        var note = document.createElement('div');
+        note.className = 'dm-pa-tier-note';
+        note.textContent = 'Hiçbir seviyede hızlı yerel tahmin gösterilmez; sonuç ancak sunucu backtest ve doğrulama tamamlanınca gelir.';
+        prep.appendChild(note);
+    }
+
+    render(fallback);
+    var api = dmParamAssistantApiCfg();
+    dmParamAssistantApiGet(api.tiers, {
+        timeout: 12000,
+        owner: 'paramAssistant',
+        trigger: 'param-assistant-tiers',
+        suppressRateLimitToast: true
+    }).then(function (resp) {
+        render(resp && resp.tiers && resp.tiers.length ? resp.tiers : fallback);
+    }).catch(function () {});
+}
+
+function dmParamAssistantPickTier(snapshot, tier, onPick) {
+    if (!tier.requires_confirm) { onPick(tier.key); return; }
+    var prep = dmParamAssistantPrepEl();
+    if (!prep) { onPick(tier.key); return; }
+    var lo = dmParamAssistantFmtDuration(tier.eta_low_sec);
+    var hi = dmParamAssistantFmtDuration(tier.eta_high_sec);
+    var accent = 'var(--ai-assistant-accent, #f0b90b)';
+    prep.style.display = 'block';
+    prep.innerHTML =
+        '<div class="dm-pa-tier-confirm" style="border:1px solid ' + accent + ';border-radius:10px;padding:12px 14px;">' +
+        '<div style="font-weight:600;margin-bottom:6px;">Yüksek analiz</div>' +
+        '<div style="font-size:0.86rem;line-height:1.5;opacity:0.92;">Tüm geçmişi, indikatörleri, gerçek strateji backtest\'ini ve <b>binlerce gelecek senaryosunu (Monte Carlo)</b> işler. İşlemci <b>tam güçte</b> kullanılır. Tahmini süre <b>~' + lo + ' – ' + hi + '</b>. En az 1 saat gerçek arama yapar; skor ancak bundan sonra gerçekten yakınsarsa erken biter.</div>' +
+        '<div style="display:flex;gap:8px;margin-top:12px;">' +
+        '<button type="button" id="dmPaConfirmYes" class="btn btn-primary-gold btn-sm">Başlat</button>' +
+        '<button type="button" id="dmPaConfirmNo" class="btn btn-ghost btn-sm">Geri</button>' +
+        '</div></div>';
+    var yes = document.getElementById('dmPaConfirmYes');
+    var no = document.getElementById('dmPaConfirmNo');
+    if (yes) yes.onclick = function () { onPick(tier.key); };
+    if (no) no.onclick = function () { dmParamAssistantShowTierSelect(snapshot, onPick); };
+}
+
+// ——— Zamana göre ilerleme (blok blok değil; gerçek kalan-zamana dayalı, akıcı) ———
+var dmParamAssistantTimeProg = null;       // {targetPct, totalSec, runId, done}
+var dmParamAssistantTimeProgTimer = null;
+
+function dmParamAssistantStopTimeProgress() {
+    if (dmParamAssistantTimeProgTimer) { clearTimeout(dmParamAssistantTimeProgTimer); dmParamAssistantTimeProgTimer = null; }
+    dmParamAssistantTimeProg = null;
+}
+
+function dmParamAssistantServerWallElapsed(job) {
+    var created = Number(job && job.created_at);
+    if (!Number.isFinite(created) || created <= 0) return 0;
+    return Math.max(0, (Date.now() / 1000) - created);
+}
+
+function dmParamAssistantVisibleTimePct(job) {
+    if (job && job.status === 'done') return 100;
+    var total = Number(job && (job.eta_total_sec || job.time_budget_sec));
+    var remain = Number(job && job.eta_remaining_sec);
+    var elapsed = Number(job && job.elapsed_sec);
+    var wallElapsed = dmParamAssistantServerWallElapsed(job);
+    if (!(total > 0) && Number.isFinite(remain) && Number.isFinite(elapsed)) total = elapsed + remain;
+    var pct = NaN;
+    if (total > 0 && Number.isFinite(remain) && remain >= 0) {
+        pct = (1 - Math.min(remain, total) / total) * 100;
+    }
+    if (total > 0) {
+        pct = Math.max(Number.isFinite(pct) ? pct : 0, (Math.max(Number.isFinite(elapsed) ? elapsed : 0, wallElapsed) / total) * 100);
+    }
+    if (!Number.isFinite(pct)) pct = Number(job && job.percent) || 1;
+    return Math.max(1, Math.min(99, pct));
+}
+
+function dmParamAssistantRenderTimePct(pct) {
+    var n = Math.max(1, Math.min(100, Number(pct) || 1));
+    var shown = Math.round(n);
+    var bar = document.getElementById('dmPaProgBar');
+    var pctEl = document.getElementById('dmPaProgPct');
+    if (bar) bar.style.width = shown + '%';
+    if (pctEl) pctEl.textContent = '%' + shown;
+    if (dmParamAssistantProgressState) dmParamAssistantProgressState.pct = n;
+}
+
+function dmParamAssistantSyncTimeProgress(job, runId) {
+    var total = Number(job && (job.eta_total_sec || job.time_budget_sec)) || 0;
+    if (!(total > 0)) total = 30;
+    dmParamAssistantTimeProg = {
+        targetPct: dmParamAssistantVisibleTimePct(job), totalSec: total,
+        runId: runId, done: job.status === 'done'
+    };
+    if (!dmParamAssistantTimeProgTimer) dmParamAssistantTimeProgressTick();
+}
+
+function dmParamAssistantTimeProgressTick() {
+    dmParamAssistantTimeProgTimer = null;
+    var tp = dmParamAssistantTimeProg;
+    if (!tp || tp.runId !== dmParamAssistantActiveBackendRun) return;
+    var cur = Number(dmParamAssistantProgressState && dmParamAssistantProgressState.pct);
+    if (!Number.isFinite(cur)) {
+        var bar = document.getElementById('dmPaProgBar');
+        cur = bar ? (parseFloat(bar.style.width) || 1) : 1;
+    }
+    var target = Math.max(1, Math.min(tp.done ? 100 : 99, Number(tp.targetPct) || 1));
+    var diff = target - cur;
+    if (diff < 0 && Math.abs(diff) < 3) target = cur;
+    if (target < cur - 8) {
+        cur = target; // eski stage yüzdesi (%86/%90) DOM'a düştüyse tek hamlede düzelt.
+    } else if (Math.abs(target - cur) > 0.15) {
+        var step = Math.max(0.18, Math.min(2.2, Math.abs(target - cur) * 0.25));
+        cur += target > cur ? step : -step;
+    } else {
+        cur = target;
+    }
+    dmParamAssistantRenderTimePct(cur);
+    dmParamAssistantTimeProgTimer = setTimeout(dmParamAssistantTimeProgressTick, 350);
+}
+
+function dmParamAssistantShowProgress() {
+    var prep = dmParamAssistantPrepEl();
+    if (!prep) return;
+    dmParamAssistantStopTimeProgress();
+    dmParamAssistantProgressState = { pct: 1, stageIndex: 0, stageKey: 'queued', runId: dmParamAssistantActiveBackendRun };
+    dmParamAssistantAutoScroll = true;
+    prep.style.display = 'block';
+    prep.innerHTML =
+        '<div class="dm-param-assistant-progress dm-pa-progress">' +
+        '<div class="dm-pa-progress-top">' +
+        '<div id="dmPaProgStep" class="dm-pa-progress-step">1 / 8</div>' +
+        '<div class="dm-pa-progress-titlebox">' +
+        '<div id="dmPaProgStage" class="dm-pa-progress-stage">Analiz hazırlanıyor</div>' +
+        '<div id="dmPaProgExplain" class="dm-pa-progress-explain">Sunucu işi oluşturuluyor; sonuç ancak backtest ve doğrulama bitince gösterilecek.</div>' +
+        '</div>' +
+        '<div id="dmPaProgEta" class="dm-pa-progress-eta"><span id="dmPaProgPct">%1</span><span id="dmPaProgSep" class="dm-pa-progress-sep" style="display:none;">·</span><span id="dmPaProgEtaTime"></span></div>' +
+        '<button type="button" id="dmPaCancelBtn" class="dm-pa-cancel-btn">Sonlandır</button>' +
+        '</div>' +
+        '<div class="dm-pa-progress-track"><div id="dmPaProgBar" class="dm-pa-progress-bar" style="width:1%;"></div></div>' +
+        '<div class="dm-pa-progress-meta">' +
+        '<div><span id="dmPaProgDataLabel">Veri</span><strong id="dmPaProgData">cache kontrolü</strong></div>' +
+        '<div><span>Skor</span><strong id="dmPaProgScore">henüz yok</strong></div>' +
+        '</div>' +
+        '<div id="dmPaProgDetail" class="dm-pa-progress-detail"></div>' +
+        '<div id="dmPaProgLive" class="dm-pa-progress-live">Kuyruk hazırlanıyor; kaynak ayrılınca geçmiş veri kontrolüne geçilecek.</div>' +
+        '</div>';
+    var cancelBtn = document.getElementById('dmPaCancelBtn');
+    if (cancelBtn) cancelBtn.onclick = dmParamAssistantCancelActiveJob;
+    dmParamAssistantMaybeScrollToBottom({ force: true });
+}
+
+function dmParamAssistantProgressMeta(job) {
+    var key = String((job && job.stage) || '').toLowerCase();
+    var pct = Number(job && job.percent);
+    if (!Number.isFinite(pct)) pct = 1;
+    var stages = [
+        { keys: ['queued'], title: 'Analiz hazırlanıyor', explain: 'Sunucu işi oluşturuluyor ve kaynaklar ayrılıyor.' },
+        { keys: ['fetch'], title: 'Geçmiş veri tamamlanıyor', explain: 'Coin mumları kalıcı cache ile karşılaştırılıyor; yalnız eksik yeni/eski aralıklar ekleniyor.' },
+        { keys: ['features'], title: 'İndikatörler hesaplanıyor', explain: 'ATR, RSI, ADX, trend, volatilite ve bant metrikleri çıkarılıyor.' },
+        { keys: ['split', 'measure'], title: 'Test pencereleri kuruluyor', explain: 'Geçmiş veri eğitim ve görülmemiş doğrulama dönemlerine ayrılıyor.' },
+        { keys: ['optimize', 'coarse'], title: 'Parametre uzayı taranıyor', explain: 'Grid, trailing, dağılım ve kâr döngüsü adayları gerçek strateji motorunda deneniyor.' },
+        { keys: ['refine', 'converged'], title: 'En iyi adaylar inceltiliyor', explain: 'Öne çıkan adaylar daha dar aralıkta tekrar hesaplanıyor; zayıf kombinasyonlar eleniyor.' },
+        { keys: ['validate'], title: 'Görülmemiş veride doğrulanıyor', explain: 'Adaylar son dönem OOS veride tekrar backtest ediliyor; kısa yol sonucu gösterilmiyor.' },
+        { keys: ['forecast'], title: 'Gelecek senaryoları sınanıyor', explain: 'Monte Carlo yolları ile ilk aylar için dayanıklılık ve düşüş riski ölçülüyor.' },
+        { keys: ['done'], title: 'Sonuç hazırlanıyor', explain: 'Tamamlanan analiz forma uygulanabilir parametre setine dönüştürülüyor.' }
+    ];
+    var idx = stages.findIndex(function (s) { return s.keys.indexOf(key) >= 0; });
+    if (idx < 0) {
+        if (pct >= 90) idx = 7;
+        else if (pct >= 86) idx = 6;
+        else if (pct >= 55) idx = 5;
+        else if (pct >= 22) idx = 4;
+        else if (pct >= 18) idx = 3;
+        else if (pct >= 14) idx = 2;
+        else if (pct >= 4) idx = 1;
+        else idx = 0;
+    }
+    return { index: idx, total: 8, title: stages[Math.min(idx, 7)].title, explain: stages[Math.min(idx, 7)].explain, key: key };
+}
+
+function dmParamAssistantJobProgressEvent(job) {
+    var meta = job && job.meta;
+    var ev = meta && meta.last_progress;
+    return ev && typeof ev === 'object' ? ev : {};
+}
+
+function dmParamAssistantFmtCount(value) {
+    var n = Number(value);
+    if (!Number.isFinite(n)) return '';
+    try { return Math.round(n).toLocaleString('tr-TR'); }
+    catch (e) { return String(Math.round(n)); }
+}
+
+function dmParamAssistantProgressDataText(job, ev) {
+    var meta = (job && job.meta) || {};
+    var stage = String((ev && ev.stage) || (job && job.stage) || '').toLowerCase();
+    var msg = String((ev && ev.message) || (job && job.message) || '').trim();
+    var candidates = dmParamAssistantFmtCount(ev && ev.candidates);
+    var candidatesDone = dmParamAssistantFmtCount(ev && ev.candidates_done);
+    var mcDone = dmParamAssistantFmtCount(ev && ev.mc_done);
+    var mcTotal = dmParamAssistantFmtCount(ev && (ev.mc_total || ev.paths));
+    var mcIdx = dmParamAssistantFmtCount(ev && ev.mc_candidate_index);
+    var mcCandTotal = dmParamAssistantFmtCount(ev && ev.mc_candidate_total);
+    if (stage === 'forecast') {
+        if (mcIdx && mcCandTotal && mcDone && mcTotal) return 'Monte Carlo: aday ' + mcIdx + ' / ' + mcCandTotal + ' · yol ' + mcDone + ' / ' + mcTotal;
+        if (msg && msg.indexOf('aday') >= 0 && msg.indexOf('yol') >= 0) return msg.charAt(0).toUpperCase() + msg.slice(1);
+        if (candidates) return 'Monte Carlo: ' + candidates + ' aday senaryoda sınanıyor';
+        return 'Monte Carlo senaryoları çalışıyor';
+    }
+    if (stage === 'validate') {
+        if (candidatesDone && candidates) return 'OOS doğrulama: ' + candidatesDone + ' / ' + candidates + ' aday';
+        if (candidates) return 'OOS doğrulama: ' + candidates + ' aday';
+        return 'OOS doğrulama çalışıyor';
+    }
+    if (stage === 'coarse') {
+        var evaluated = dmParamAssistantFmtCount(ev && ev.evaluated);
+        return evaluated ? 'Arama: ' + evaluated + ' kombinasyon denendi' : 'Parametre araması çalışıyor';
+    }
+    if (stage === 'refine' || stage === 'converged') {
+        var refined = dmParamAssistantFmtCount(ev && ev.evaluated);
+        return refined ? 'İnceltme: ' + refined + ' aday tekrar hesaplandı' : 'En iyi adaylar inceltiliyor';
+    }
+    if (stage === 'features') return 'İndikatörler ve rejim ölçüleri hesaplanıyor';
+    if (stage === 'split' || stage === 'measure' || stage === 'optimize') return 'Test pencereleri ve arama bütçesi hazırlanıyor';
+    var bars = Number(ev && ev.bars);
+    var appended = Number(ev && ev.appended);
+    if (Number.isFinite(appended) && appended > 0) {
+        return dmParamAssistantFmtCount(appended) + ' yeni mum eklendi' + (Number.isFinite(bars) ? '; toplam ' + dmParamAssistantFmtCount(bars) + ' kayıt hazır' : '');
+    }
+    if (Number.isFinite(bars) && bars > 0) {
+        return 'Kalıcı geçmişte ' + dmParamAssistantFmtCount(bars) + ' mum bulundu; eksik aralıklar tamamlanıyor';
+    }
+    var daily = Number(meta.daily_bars);
+    var backtest = Number(meta.backtest_bars);
+    var hourly = Number(meta.hourly_bars);
+    if (Number.isFinite(daily) || Number.isFinite(backtest) || Number.isFinite(hourly)) {
+        var pieces = [];
+        if (Number.isFinite(daily)) pieces.push(dmParamAssistantFmtCount(daily) + ' günlük');
+        if (Number.isFinite(backtest)) pieces.push(dmParamAssistantFmtCount(backtest) + ' backtest');
+        if (Number.isFinite(hourly)) pieces.push(dmParamAssistantFmtCount(hourly) + ' saatlik');
+        return 'Geçmiş hazır: ' + pieces.join(', ') + ' kayıt';
+    }
+    if (stage === 'fetch') return 'Geçmiş veri önbelleği ve eksik mumlar kontrol ediliyor';
+    return 'Veri hazır oldukça burada güncellenecek';
+}
+
+function dmParamAssistantStableProgressData(prevText, nextText) {
+    nextText = String(nextText || '').trim();
+    prevText = String(prevText || '').trim();
+    if (!prevText) return nextText;
+    var nextIsGeneric = nextText === 'Veri hazır oldukça burada güncellenecek' ||
+        nextText === 'Geçmiş veri önbelleği ve eksik mumlar kontrol ediliyor';
+    var prevIsReady = prevText.indexOf('Geçmiş hazır:') === 0 ||
+        prevText.indexOf('Kalıcı geçmişte') === 0 ||
+        prevText.indexOf('yeni mum eklendi') > 0;
+    if (nextIsGeneric && prevIsReady) return prevText;
+    return nextText || prevText;
+}
+
+function dmParamAssistantProgressUnit(stage, ev) {
+    stage = String(stage || '').toLowerCase();
+    ev = ev || {};
+    if (stage === 'forecast') {
+        var cTotal = Number(ev.mc_candidate_total || ev.candidates || 0);
+        var cIdx = Number(ev.mc_candidate_index || 1);
+        var pTotal = Number(ev.mc_total || ev.paths || 0);
+        var pDone = Number(ev.mc_done || 0);
+        if (Number.isFinite(cTotal) && cTotal > 0 && Number.isFinite(pTotal) && pTotal > 0) {
+            return Math.max(0, (Math.max(1, cIdx) - 1) * pTotal + Math.max(0, pDone));
+        }
+    }
+    if (stage === 'validate') {
+        var done = Number(ev.candidates_done);
+        if (Number.isFinite(done)) return done;
+    }
+    var evaluated = Number(ev.evaluated);
+    if (Number.isFinite(evaluated)) return evaluated;
+    return null;
+}
+
+function dmParamAssistantProgressScoreText(job, ev) {
+    var score = ev && ev.best_score != null ? Number(ev.best_score) : Number(job && job.best_score);
+    if (Number.isFinite(score)) return score.toFixed(4);
+    var base = ev && ev.base_score != null ? Number(ev.base_score) : NaN;
+    if (Number.isFinite(base)) return 'baz ' + base.toFixed(4);
+    return 'henüz yok';
+}
+
+function dmParamAssistantRoundedEtaSec(sec) {
+    var s = Math.max(0, Number(sec) || 0);
+    if (s >= 3600) return Math.ceil(s / 300) * 300;
+    if (s >= 600) return Math.ceil(s / 60) * 60;
+    return Math.ceil(s / 15) * 15;
+}
+
+function dmParamAssistantStableEtaText(job, state) {
+    if (!job || job.status === 'done' || job.eta_remaining_sec == null) return '';
+    var rounded = dmParamAssistantRoundedEtaSec(job.eta_remaining_sec);
+    if (state && Number.isFinite(state.etaRoundedSec)) {
+        var prev = state.etaRoundedSec;
+        if (rounded > prev && rounded - prev < 300) rounded = prev;
+    }
+    return {
+        text: 'kalan ~' + dmParamAssistantFmtDuration(rounded),
+        roundedSec: rounded
+    };
+}
+
+function dmParamAssistantProgressWorkText(job, meta, ev, pct) {
+    var stage = String((ev && ev.stage) || (job && job.stage) || meta.key || '').toLowerCase();
+    var msg = String((ev && ev.message) || (job && job.detail) || '').trim();
+    var dataText = dmParamAssistantProgressDataText(job, ev);
+    var evaluated = dmParamAssistantFmtCount(ev && ev.evaluated);
+    var best = dmParamAssistantProgressScoreText(job, ev);
+    var candidates = dmParamAssistantFmtCount(ev && ev.candidates);
+    var candidatesDone = dmParamAssistantFmtCount(ev && ev.candidates_done);
+    var mcDone = dmParamAssistantFmtCount(ev && ev.mc_done);
+    var mcTotal = dmParamAssistantFmtCount(ev && (ev.mc_total || ev.paths));
+    var mcIdx = dmParamAssistantFmtCount(ev && ev.mc_candidate_index);
+    var mcCandTotal = dmParamAssistantFmtCount(ev && ev.mc_candidate_total);
+    var radius = ev && ev.radius != null ? Number(ev.radius) : NaN;
+    var workers = dmParamAssistantFmtCount(ev && ev.workers);
+    var perEval = ev && ev.per_eval_sec != null ? Number(ev.per_eval_sec) : NaN;
+    if (stage === 'queued') return 'Kaynak ayrılıyor; analiz kuyruğu hazırlanıyor.';
+    if (stage === 'fetch') return (msg ? msg + '. ' : '') + dataText + '.';
+    if (stage === 'features') return 'ATR, RSI, ADX, trend ve volatilite ölçüleri hesaplanıyor; strateji motoru bu veriyle beslenecek.';
+    if (stage === 'split') {
+        var train = dmParamAssistantFmtCount(ev && ev.train_bars);
+        var oos = dmParamAssistantFmtCount(ev && ev.oos_bars);
+        var recent = dmParamAssistantFmtCount(ev && ev.recent_in_bars);
+        return 'Walk-forward penceresi kuruldu' + (train ? ': ' + train + ' eğitim' : '') + (oos ? ', ' + oos + ' görülmemiş test' : '') + (recent ? ', ' + recent + ' son dönem kontrol' : '') + '.';
+    }
+    if (stage === 'measure') {
+        return 'Tek strateji koşusunun maliyeti ölçülüyor' + (workers ? '; ' + workers + ' işçi planlandı' : '') + (Number.isFinite(perEval) ? '; koşu başı ~' + perEval.toFixed(3) + ' sn' : '') + '.';
+    }
+    if (stage === 'optimize') return 'Arama bütçesi, doğrulama ve Monte Carlo payları ayarlanıyor; gerçek strateji motoru başlamak üzere.';
+    if (stage === 'coarse') return (evaluated ? evaluated + ' kombinasyon gerçek strateji motorunda koştu' : 'Parametre uzayı gerçek strateji motorunda taranıyor') + '; en iyi skor ' + best + '.';
+    if (stage === 'refine' || stage === 'converged') return 'Öne çıkan adaylar daraltılıyor' + (Number.isFinite(radius) ? '; arama yarıçapı ' + radius.toFixed(2) : '') + (evaluated ? '; ' + evaluated + ' ince deneme yapıldı' : '') + '; en iyi skor ' + best + '.';
+    if (stage === 'validate') {
+        if (msg && msg.indexOf('aday') >= 0) return msg.charAt(0).toUpperCase() + msg.slice(1) + '; kısa yol sonucu gösterilmiyor.';
+        return (candidatesDone && candidates ? candidatesDone + ' / ' + candidates + ' aday' : (candidates ? candidates + ' aday' : 'Adaylar')) + ' görülmemiş veride tekrar koşturuluyor; kısa yol sonucu gösterilmiyor.';
+    }
+    if (stage === 'forecast') {
+        if (msg && msg.indexOf('aday') >= 0 && msg.indexOf('yol') >= 0) return msg.charAt(0).toUpperCase() + msg.slice(1) + '; düşüş riski ölçülüyor.';
+        return (mcIdx && mcCandTotal ? 'Aday ' + mcIdx + ' / ' + mcCandTotal + ': ' : '') + (mcDone && mcTotal ? mcDone + ' / ' + mcTotal + ' Monte Carlo yolu' : (candidates ? candidates + ' aday' : 'En iyi adaylar') + ' yüzlerce gelecek yolu') + ' sınanıyor; ilk ay dayanıklılığı ve düşüş riski ölçülüyor.';
+    }
+    if (stage === 'done') return 'Analiz tamamlandı; sonuç forma uygulanabilir parametre setine dönüştürülüyor.';
+    return meta.explain + ' İlerleme %' + Math.round(pct) + '.';
+}
+
+function dmParamAssistantSetProgressPct(targetPct, runId) {
+    var state = dmParamAssistantProgressState || { pct: 1, stageIndex: 0, runId: runId };
+    if (state.runId !== runId) return;
+    var target = Math.max(state.pct || 1, Math.min(100, Math.round(Number(targetPct) || 1)));
+    function tick() {
+        if (!dmParamAssistantProgressState || dmParamAssistantProgressState.runId !== runId) return;
+        var cur = dmParamAssistantProgressState.pct || 1;
+        var next = cur < target ? cur + 1 : target;
+        dmParamAssistantProgressState.pct = next;
+        var bar = document.getElementById('dmPaProgBar');
+        if (bar) bar.style.width = next + '%';
+        var pctEl = document.getElementById('dmPaProgPct');
+        if (pctEl) pctEl.textContent = '%' + next;
+        if (next < target) {
+            dmParamAssistantProgressTickTimer = setTimeout(tick, 18);
+        } else {
+            dmParamAssistantProgressTickTimer = null;
+        }
+    }
+    if (!dmParamAssistantProgressTickTimer) tick();
+}
+
+function dmParamAssistantUpdateProgress(job) {
+    var runId = dmParamAssistantActiveBackendRun;
+    var pct = job.percent != null ? Math.max(0, Math.min(100, job.percent)) : 0;
+    var ev = dmParamAssistantJobProgressEvent(job);
+    var meta = dmParamAssistantProgressMeta(job);
+    var state = dmParamAssistantProgressState || { pct: 1, stageIndex: 0, runId: runId };
+    var prevStageIndex = state.stageIndex || 0;
+    var incomingStageIndex = meta.index;
+    var stageRegressed = incomingStageIndex < prevStageIndex;
+    var stageIndex = Math.max(prevStageIndex, incomingStageIndex);
+    if (stageIndex !== meta.index) {
+        meta = dmParamAssistantProgressMeta({ stage: '', percent: [1, 4, 14, 18, 22, 55, 86, 90][stageIndex] || pct });
+        meta.index = stageIndex;
+    }
+    var displayEv = Object.assign({}, ev || {}, { stage: meta.key });
+    var progressUnit = dmParamAssistantProgressUnit(meta.key, displayEv);
+    var staleProgress = stageRegressed || (
+        meta.key === state.stageKey &&
+        progressUnit != null &&
+        state.progressUnit != null &&
+        progressUnit < state.progressUnit
+    );
+    var nextDataText = staleProgress ? (state.dataText || dmParamAssistantProgressDataText(job, displayEv)) : dmParamAssistantProgressDataText(job, displayEv);
+    var dataText = dmParamAssistantStableProgressData(state.dataText, nextDataText);
+    var scoreText = staleProgress ? (state.scoreText || dmParamAssistantProgressScoreText(job, displayEv)) : dmParamAssistantProgressScoreText(job, displayEv);
+    if ((scoreText === 'henüz yok' || scoreText === '0.0000') && state.scoreText) scoreText = state.scoreText;
+    var eta = staleProgress ? null : dmParamAssistantStableEtaText(job, state);
+    dmParamAssistantProgressState = {
+        pct: state.pct || 1,
+        stageIndex: stageIndex,
+        stageKey: meta.key,
+        dataText: dataText,
+        scoreText: scoreText,
+        progressUnit: staleProgress ? state.progressUnit : (progressUnit != null ? progressUnit : state.progressUnit),
+        etaRoundedSec: eta ? eta.roundedSec : state.etaRoundedSec,
+        etaText: eta ? eta.text : (state.etaText || ''),
+        runId: runId
+    };
+    // İlerleme barı: aşama bloklarına göre DEĞİL, gerçek kalan zamana göre akıcı ilerler.
+    dmParamAssistantSyncTimeProgress(job, runId);
+    var step = document.getElementById('dmPaProgStep');
+    if (step) step.textContent = (Math.min(stageIndex + 1, 8)) + ' / 8';
+    var stage = document.getElementById('dmPaProgStage');
+    if (stage) stage.textContent = meta.title;
+    var explain = document.getElementById('dmPaProgExplain');
+    if (explain) explain.textContent = meta.explain;
+    var etaTime = document.getElementById('dmPaProgEtaTime');
+    var etaText = (dmParamAssistantProgressState && dmParamAssistantProgressState.etaText) || '';
+    if (etaTime) etaTime.textContent = etaText;
+    var etaSep = document.getElementById('dmPaProgSep');
+    if (etaSep) etaSep.style.display = etaText ? '' : 'none';
+    var data = document.getElementById('dmPaProgData');
+    if (data) data.textContent = dataText;
+    var dataLabel = document.getElementById('dmPaProgDataLabel') || (data && data.parentElement ? data.parentElement.querySelector('span') : null);
+    if (dataLabel) dataLabel.textContent = (meta.key === 'fetch') ? 'Veri' : 'İşlem';
+    var score = document.getElementById('dmPaProgScore');
+    if (score) score.textContent = scoreText;
+    var detail = document.getElementById('dmPaProgDetail');
+    if (detail) {
+        detail.textContent = '';
+        detail.style.display = 'none';
+    }
+    var live = document.getElementById('dmPaProgLive');
+    if (live && !staleProgress) live.textContent = dmParamAssistantProgressWorkText(job, meta, displayEv, pct);
+    var status = document.getElementById('dmParamAssistantStatus');
+    if (status) status.textContent = (job.tier_label ? job.tier_label + ' analiz · ' : '') + meta.title;
+    dmParamAssistantMaybeScrollToBottom();
+}
+
+// Bu süre boyunca ilerleme imzası hiç değişmezse "takılmış olabilir" uyarısı göster.
+var DM_PARAM_ASSISTANT_FREEZE_MS = 45000;
+
+function dmParamAssistantSetFreezeNotice(on, secs) {
+    var el = document.getElementById('dmPaProgDetail');
+    if (!el) return;
+    if (on) {
+        el.textContent = '⚠ Analiz ' + (secs || 0) + ' sn’dir ilerlemiyor — takılmış olabilir. İzlemeye devam ediliyor; sunucu güvenlik zaman aşımına ulaşırsa neden burada gösterilecek.';
+        el.style.display = 'block';
+        el.classList.add('dm-pa-freeze');
+    } else if (el.classList.contains('dm-pa-freeze')) {
+        el.textContent = '';
+        el.style.display = 'none';
+        el.classList.remove('dm-pa-freeze');
+    }
+}
+
+// Çalışan/var olan bir analiz işine bağlan ve durumunu poll et (hem ilk başlatma
+// hem modalı kapatıp yeniden açınca yeniden-bağlanma bu fonksiyonu kullanır).
+function dmParamAssistantAttachAndPoll(jobId, opts) {
+    opts = opts || {};
+    dmParamAssistantActiveJobId = jobId || '';
+    var runId = opts.runId;
+    var level = opts.level || 'high';
+    var tb = Number(opts.timeBudgetSec) || 240;
+    var onDone = opts.onDone, onFail = opts.onFail;
+    var status = document.getElementById('dmParamAssistantStatus');
+    var failed = false;
+    function isActiveRun() { return runId === dmParamAssistantActiveBackendRun; }
+    function setStatus(t) { if (status) status.textContent = t; }
+    function fail(msg) {
+        if (failed || !isActiveRun()) return;
+        failed = true;
+        try { console.warn('[paramAssistant] backend analysis stopped:', msg); } catch (e) {}
+        dmParamAssistantSetFreezeNotice(false);
+        dmParamAssistantClearPrep();
+        if (typeof onFail === 'function') dmParamAssistantSetTimer(function () { onFail(msg); }, 350);
+    }
+    var api = dmParamAssistantApiCfg();
+    var pollMs = level === 'high' ? 1500 : 850;  // daha sık -> işlenen veri "tık tık" akar
+    var maxPolls = Math.ceil((tb + 700) / (pollMs / 1000));
+    var polls = 0;
+    var consecMiss = 0;  // ardışık poll hatası (Yüksek tier CPU'yu doldururken geçici olabilir)
+    var deadlineAt = Date.now() + (tb + (level === 'high' ? 720 : 240)) * 1000;
+    var lastSig = '';
+    var lastChangeAt = Date.now();
+    function poll() {
+        if (failed || !isActiveRun()) return;
+        dmParamAssistantApiGet(api.optimize + '/' + encodeURIComponent(jobId), {
+            timeout: DM_PARAM_ASSISTANT_BACKEND_POLL_TIMEOUT_MS,
+            owner: 'paramAssistant',
+            trigger: 'param-assistant-poll',
+            suppressRateLimitToast: true
+        }).then(function (job) {
+            if (!isActiveRun()) return;
+            polls++;
+            consecMiss = 0;  // başarılı poll: geçici tıkanma sayacını sıfırla
+            if (!job) { fail('durum alınamadı'); return; }
+            if (job.status === 'done' && job.result) {
+                dmParamAssistantActiveJobId = '';
+                dmParamAssistantSetFreezeNotice(false);
+                dmParamAssistantClearPrep();
+                if (job.result && job.result.stats && job.result.stats.degraded) {
+                    fail('analiz tüm doğrulama hesaplarını tamamlayamadı');
+                    return;
+                }
+                var ok = dmParamAssistantRenderBackendResult(dmParamAssistantCurrentSnapshot(), job.result);
+                if (ok) { if (typeof onDone === 'function') onDone(); }
+                else fail('sonuç uygulanamadı');
+                return;
+            }
+            if (job.status === 'cancelled') { fail('analiz sonlandırıldı'); return; }
+            if (job.status === 'error') { fail(job.error || 'backtest tamamlanamadı'); return; }
+            if (polls > maxPolls) { fail('optimizasyon zaman aşımına uğradı'); return; }
+            dmParamAssistantUpdateProgress(job);
+            // Donma tespiti (updateProgress dmPaProgDetail'i temizlediği için SONRA).
+            var sig = String(job.updated_at || '') + '|' + String(job.elapsed_sec || '') + '|' + String(job.percent || '') + '|' + String(job.stage || '') + '|' + String(job.message || '');
+            if (sig !== lastSig) { lastSig = sig; lastChangeAt = Date.now(); dmParamAssistantSetFreezeNotice(false); }
+            else if (Date.now() - lastChangeAt > DM_PARAM_ASSISTANT_FREEZE_MS) { dmParamAssistantSetFreezeNotice(true, Math.round((Date.now() - lastChangeAt) / 1000)); }
+            dmParamAssistantSetTimer(poll, pollMs);
+        }).catch(function (err) {
+            if (!isActiveRun()) return;
+            consecMiss++;
+            var info = dmParamAssistantBackendErrorInfo(err);
+            if (!info.retryable) { fail(info.label); return; }
+            if (Date.now() > deadlineAt) { fail('optimizasyon zaman aşımına uğradı'); return; }
+            var stageIdx = Math.max(1, Math.min(8, ((dmParamAssistantProgressState && dmParamAssistantProgressState.stageIndex) || 0) + 1));
+            var step = document.getElementById('dmPaProgStep');
+            if (step) step.textContent = stageIdx + ' / 8';
+            var stage = document.getElementById('dmPaProgStage');
+            if (stage) stage.textContent = 'Bağlantı yenileniyor';
+            var explain = document.getElementById('dmPaProgExplain');
+            if (explain) explain.textContent = 'Sunucudaki analiz işi devam ediyor; yalnızca durum bağlantısı tekrar deneniyor.';
+            var detail = document.getElementById('dmPaProgDetail');
+            if (detail) {
+                detail.textContent = info.label + (consecMiss > 1 ? ' · deneme ' + consecMiss : '');
+                detail.style.display = 'block';
+            }
+            var live = document.getElementById('dmPaProgLive');
+            if (live) live.textContent = 'Sunucudaki analiz işi devam ediyor; sadece canlı durum bilgisi yeniden isteniyor.';
+            setStatus('Derin backtest işi devam ediyor; durum bağlantısı yenileniyor…');
+            dmParamAssistantMaybeScrollToBottom();
+            var retryMs = pollMs + Math.min(8000, consecMiss * 900);
+            if (Number.isFinite(info.retryAfter) && info.retryAfter > 0) retryMs = Math.max(retryMs, Math.min(30000, info.retryAfter * 1000));
+            dmParamAssistantSetTimer(poll, retryMs);
+        });
+    }
+    dmParamAssistantSetTimer(poll, opts.firstDelayMs != null ? opts.firstDelayMs : 550);
+}
+
+function dmParamAssistantRunBackend(snapshot, level, runId, onDone, onFail) {
+    var failed = false;
+    var status = document.getElementById('dmParamAssistantStatus');
+    function isActiveRun() { return runId === dmParamAssistantActiveBackendRun; }
+    function setStatus(t) { if (status) status.textContent = t; }
+    function fail(msg) {
+        if (failed || !isActiveRun()) return;
+        failed = true;
+        try { console.warn('[paramAssistant] backend analysis stopped:', msg); } catch (e) {}
+        dmParamAssistantClearPrep();
+        if (typeof onFail === 'function') dmParamAssistantSetTimer(function () { onFail(msg); }, 350);
+    }
+    var api = dmParamAssistantApiCfg();
+    var budget = dmParamAssistantResolveBudget(snapshot);
+    dmParamAssistantShowProgress();
+    setStatus('Sunucuda geçmiş veri çekiliyor ve motor hazırlanıyor…');
+    dmParamAssistantApiPost(api.optimize, { symbol: snapshot.symbol, budget: budget, analysis_level: level }, {
+        timeout: DM_PARAM_ASSISTANT_BACKEND_START_TIMEOUT_MS,
+        owner: 'paramAssistant',
+        trigger: 'param-assistant-start',
+        suppressRateLimitToast: true
+    }).then(function (resp) {
+        if (!isActiveRun()) return;
+        if (!resp || !resp.job_id) { fail('optimizasyon başlatılamadı'); return; }
+        dmParamAssistantActiveJobId = resp.job_id;
+        if (resp.reused) {
+            var runningSymbol = resp.symbol || 'mevcut sembol';
+            setStatus('Bu hesapta zaten çalışan analiz var (' + runningSymbol + '); mevcut analize bağlanıldı.');
+        }
+        dmParamAssistantAttachAndPoll(resp.job_id, {
+            runId: runId, level: level, timeBudgetSec: resp.time_budget_sec,
+            onDone: onDone, onFail: onFail, firstDelayMs: 550
+        });
+    }).catch(function (err) {
+        if (!isActiveRun()) return;
+        var info = dmParamAssistantBackendErrorInfo(err);
+        fail(info.label || 'optimizasyon başlatılamadı');
+    });
+}
+
+function dmParamAssistantBuildBackendRec(snapshot, result) {
+    var ui = result.ui_config || {};
+    var up = ui.up || {};
+    var down = ui.down || {};
+    var profit = ui.profit || {};
+    function grids(list) {
+        return (list || []).map(function (g) { return { trigger_pct: Number(g.trigger_pct), qty_pct: Number(g.qty_pct) }; });
+    }
+    return {
+        budget: Number(ui.budget_usd != null ? ui.budget_usd : result.budget),
+        basePct: Number(ui.base_alloc_pct),
+        quotePct: Number(ui.quote_alloc_pct),
+        upGrids: grids(up.grids),
+        downGrids: grids(down.grids),
+        upTrail: Number(up.trail_pct),
+        downTrail: Number(down.trail_pct),
+        rebuyTrigger: Number(profit.rebuy_trigger_pct),
+        rebuyTrail: Number(profit.rebuy_trail_pct),
+        resellTrigger: Number(profit.resell_trigger_pct),
+        resellTrail: Number(profit.resell_trail_pct),
+        regime: (result.regime && result.regime.label) || '—',
+        confidence: result.confidence != null ? result.confidence : 0,
+        volatility: '',
+        backend: result
+    };
+}
+
+function dmParamAssistantBackendChipItems(snapshot, rec) {
+    var r = rec.backend || {};
+    var oos = r.oos || {};
+    var ins = r.in_sample || {};
+    var st = r.stats || {};
+    return [
+        ['Parite', snapshot.symbol || r.symbol || '—'],
+        ['Rejim', (r.regime && r.regime.label) || rec.regime || '—'],
+        ['Güven', (r.confidence != null ? r.confidence : '—') + '/100'],
+        ['6 ay getiri*', oos.return_pct != null ? dmParamAssistantPctTxt(oos.return_pct, 1) : '—'],
+        ['6 ay tur*', oos.cycles_closed != null ? String(oos.cycles_closed) : '—'],
+        ['Geçmiş getiri', ins.return_pct != null ? dmParamAssistantPctTxt(ins.return_pct, 1) : '—'],
+        ['Win-rate', ins.win_rate != null ? '%' + dmParamAssistantInputTextTr(ins.win_rate, 0) : '—'],
+        ['Grid', rec.upGrids.length + ' / ' + rec.downGrids.length],
+        ['Denenen set', (st.evals_total != null ? st.evals_total : '—')]
+    ];
+}
+
+function dmParamAssistantBackendSummaryRows(rec) {
+    var r = rec.backend || {};
+    var oos = r.oos || {};
+    var ins = r.in_sample || {};
+    var st = r.stats || {};
+    var fc = r.forecast || {};
+    var rows = [
+        ['Bütçe', dmParamAssistantInputTextTr(rec.budget, 2)],
+        ['Dağılım', '%' + dmParamAssistantInputTextTr(rec.basePct, 1) + ' / %' + dmParamAssistantInputTextTr(rec.quotePct, 1)],
+        ['Rejim', ((r.regime && r.regime.label) || rec.regime || '—') + ' · güven ' + (r.confidence != null ? r.confidence : '—') + '/100'],
+        ['Satış grid', dmParamAssistantGridText(rec.upGrids, '+')],
+        ['Alış grid', dmParamAssistantGridText(rec.downGrids, '-')],
+        ['Trailing', '%' + dmParamAssistantInputTextTr(rec.upTrail, 2) + ' / %' + dmParamAssistantInputTextTr(rec.downTrail, 2)],
+        ['Kâr döngüsü', 'Rebuy %' + dmParamAssistantInputTextTr(rec.rebuyTrigger, 2) + ' · Resell %' + dmParamAssistantInputTextTr(rec.resellTrigger, 2)]
+    ];
+    if (oos && oos.return_pct != null) {
+        rows.push(['Doğrulama (6 ay)*', 'getiri ' + dmParamAssistantPctTxt(oos.return_pct, 1) + ' · ' + (oos.cycles_closed || 0) + ' tur · maks. düşüş %' + dmParamAssistantInputTextTr(oos.max_drawdown_pct, 1)]);
+    }
+    if (ins && ins.return_pct != null) {
+        rows.push(['Geçmiş (in-sample)', 'getiri ' + dmParamAssistantPctTxt(ins.return_pct, 1) + ' · win %' + dmParamAssistantInputTextTr(ins.win_rate, 0) + ' · ' + (ins.cycles_closed || 0) + ' tur']);
+    }
+    if (fc && fc.median_return_pct != null) {
+        rows.push(['Gelecek (Monte Carlo)', 'medyan ' + dmParamAssistantPctTxt(fc.median_return_pct, 1) + ' · kâr olasılığı %' + dmParamAssistantInputTextTr((fc.prob_profit || 0) * 100, 0) + ' · ' + (fc.n_paths || 0) + ' senaryo']);
+    }
+    rows.push(['Hesap', (st.evals_total != null ? st.evals_total : '—') + ' kombinasyon · ' + (st.workers != null ? st.workers : '—') + ' çekirdek · ' + (st.elapsed_sec != null ? st.elapsed_sec : '—') + ' sn' + (st.degraded ? ' · kısa arama' : '')]);
+    return rows;
+}
+
+function dmParamAssistantRenderBackendResult(snapshot, result) {
+    if (!result || !result.ui_config) return false;
+    if (result.stats && result.stats.degraded) return false;
+    // KARAR KAPANIŞI: backend 'çekil' dediyse seti ÖNERME — apply sunma, dürüst verdict göster.
+    var decision = result.decision || {};
+    if (decision.decision === 'abstain') {
+        dmParamAssistantShowDecisionAbstain(snapshot, result, decision);
+        return true;
+    }
+    var rec = dmParamAssistantBuildBackendRec(snapshot, result);
+    if (!rec.upGrids.length || !rec.downGrids.length) return false;
+    rec.decision = decision;
+    rec.watchOnly = (decision.decision === 'watch_only');
+    rec.introText = dmParamAssistantGreetingText(snapshot, rec);
+    dmParamAssistantRecommendation = rec;
+    dmParamAssistantTyping = true;
+    var lines = (result.rationale && result.rationale.lines) ? result.rationale.lines.slice() : [];
+    lines.push('Not: "6 ay" satırları botun GÖRMEDİĞİ son ~6 ay üzerinde yapılan doğrulamadır (out-of-sample) — gerçeğe en yakın beklenti budur.');
+    dmParamAssistantAnimateIntroAndChips(snapshot, rec, function () {
+        dmParamAssistantTypeLines(lines, 0);
+    });
+    return true;
+}
+
+// 'Çekil' kararı: çürütülen seti apply'a sunmaz; kendi OOS kanıtına dayalı dürüst verdict.
+function dmParamAssistantShowDecisionAbstain(snapshot, result, decision) {
+    dmParamAssistantRecommendation = null;   // APPLY YOK — set canlıya önerilmez
+    dmParamAssistantTyping = false;
+    dmParamAssistantClearPrep();
+    var status = document.getElementById('dmParamAssistantStatus');
+    var output = document.getElementById('dmParamAssistantOutput');
+    var summary = document.getElementById('dmParamAssistantSummary');
+    var choice = document.getElementById('dmParamAssistantChoice');
+    var chips = document.getElementById('dmParamAssistantChips');
+    if (status) status.textContent = 'Karar: önerilmiyor — çekil';
+    if (summary) { summary.innerHTML = ''; summary.style.display = 'none'; }
+    if (choice) choice.style.display = 'none';
+    if (chips) chips.innerHTML = '';
+    if (!output) return;
+    var hb = decision.honest_benchmark || {};
+    var n1 = function (v) { return dmParamAssistantInputTextTr(v, 1); };
+    var headline = dmParamAssistantEscape(decision.headline || 'Bu set önerilmiyor.');
+    var reasons = (decision.reasons || []).map(function (r) {
+        return '<li>' + dmParamAssistantEscape(r) + '</li>';
+    }).join('');
+    var flags = (decision.red_flags || []).filter(function (f) { return f && f.severity === 'high'; })
+        .map(function (f) { return '<li>' + dmParamAssistantEscape(f.text) + '</li>'; }).join('');
+    var bench =
+        '<div class="dm-pa-error-reason"><span>Bot (OOS)</span><strong>%' + n1(hb.bot_return_pct) + '</strong></div>' +
+        '<div class="dm-pa-error-reason"><span>Hedef tahsisi PASİF tutma</span><strong>%' + n1(hb.intended_hold_return_pct) + '</strong></div>' +
+        '<div class="dm-pa-error-reason"><span>Dürüst alpha (vs pasif)</span><strong>%' + n1(hb.honest_alpha_pct) + '</strong></div>' +
+        '<div class="dm-pa-error-reason"><span>Dağıtıma değer olasılığı</span><strong>%' + dmParamAssistantInputTextTr((decision.deploy_probability || 0) * 100, 0) + '</strong></div>';
+    output.innerHTML =
+        '<div class="dm-param-assistant-error dm-pa-abstain" role="status" aria-live="polite">' +
+        '<div class="dm-pa-error-head">' +
+        '<div class="dm-pa-error-mark" aria-hidden="true">⚖</div>' +
+        '<div class="dm-pa-error-title-wrap">' +
+        '<div class="dm-pa-error-kicker">Dürüst karar</div>' +
+        '<div class="dm-pa-error-title">Önerilmiyor — çekil</div>' +
+        '</div></div>' +
+        '<div class="dm-pa-error-note">' + headline + '</div>' +
+        bench +
+        (reasons ? '<div class="dm-pa-error-note"><strong>Neden:</strong><ul>' + reasons + '</ul></div>' : '') +
+        (flags ? '<div class="dm-pa-error-note"><strong>Kırmızı bayraklar:</strong><ul>' + flags + '</ul></div>' : '') +
+        '<div class="dm-pa-error-note">Bu set canlıya UYGULANMAZ olarak işaretlendi: kendi OOS kanıtına göre hedef portföyü pasif tutmaktan iyi değil. Karar burada kapatıldı; uyarı yığıp kararı sana devretmiyoruz.</div>' +
+        '<div class="dm-pa-error-actions">' +
+        '<button type="button" id="dmPaAbstainRetry" class="btn btn-ghost btn-sm dm-pa-error-secondary">Yeni analiz</button>' +
+        '</div>' +
+        '</div>';
+    var btn = document.getElementById('dmPaAbstainRetry');
+    if (btn) btn.onclick = function () { if (typeof openParamAssistantModal === 'function') openParamAssistantModal(); };
+}
+
+function dmParamAssistantShowBackendError(reason, retryFn, tierSelectFn) {
+    dmParamAssistantRecommendation = null;
+    dmParamAssistantTyping = false;
+    dmParamAssistantClearPrep();
+    var status = document.getElementById('dmParamAssistantStatus');
+    var output = document.getElementById('dmParamAssistantOutput');
+    var summary = document.getElementById('dmParamAssistantSummary');
+    var choice = document.getElementById('dmParamAssistantChoice');
+    var chips = document.getElementById('dmParamAssistantChips');
+    if (status) status.textContent = 'Backtest tamamlanmadı — parametre gösterilmiyor';
+    if (summary) { summary.innerHTML = ''; summary.style.display = 'none'; }
+    if (choice) choice.style.display = 'none';
+    if (chips) chips.innerHTML = '';
+    if (!output) return;
+    var safeReason = dmParamAssistantEscape(reason || 'Analiz tamamlanamadı.');
+    output.innerHTML =
+        '<div class="dm-param-assistant-error" role="status" aria-live="polite">' +
+        '<div class="dm-pa-error-head">' +
+        '<div class="dm-pa-error-mark" aria-hidden="true">!</div>' +
+        '<div class="dm-pa-error-title-wrap">' +
+        '<div class="dm-pa-error-kicker">Analiz durdu</div>' +
+        '<div class="dm-pa-error-title">Backtest tamamlanmadı</div>' +
+        '</div>' +
+        '</div>' +
+        '<div class="dm-pa-error-reason"><span>Neden</span><strong>' + safeReason + '</strong></div>' +
+        '<div class="dm-pa-error-note">Parametre gösterilmedi; hızlı yerel tahmin kapalı. Bir seviye sunucuda gerçek backtest ve doğrulama ile tamamlanmadan öneri uygulanmaz.</div>' +
+        '<div class="dm-pa-error-actions">' +
+        '<button type="button" id="dmPaRetrySame" class="btn btn-primary-gold btn-sm dm-pa-error-primary">Tekrar dene</button>' +
+        '<button type="button" id="dmPaRetryTier" class="btn btn-ghost btn-sm dm-pa-error-secondary">Seviye seç</button>' +
+        '</div>' +
+        '</div>';
+    var retry = document.getElementById('dmPaRetrySame');
+    var tier = document.getElementById('dmPaRetryTier');
+    if (retry) retry.onclick = function () { if (typeof retryFn === 'function') retryFn(); };
+    if (tier) tier.onclick = function () { if (typeof tierSelectFn === 'function') tierSelectFn(); };
+}
+
 function openParamAssistantModal() {
     var modal = document.getElementById('dmParamAssistantModal');
     var backdrop = document.getElementById('dmParamAssistantBackdrop');
     if (!modal) return;
     dmParamAssistantClearTimers();
+    dmParamAssistantActiveBackendRun = ++dmParamAssistantBackendRunSeq;
+    dmParamAssistantProgressState = null;
     dmParamAssistantTyping = false;
     dmParamAssistantRecommendation = null;
     modal.classList.remove('is-closing');
@@ -2272,55 +3325,111 @@ function openParamAssistantModal() {
     }
     if (choice) choice.style.display = 'none';
     if (chips) chips.innerHTML = '';
-    if (status) status.textContent = 'Parite verileri okunuyor';
+    if (status) status.textContent = (AI_ASSISTANT_SPEC.modal && AI_ASSISTANT_SPEC.modal.initialStatus) || 'Parite verileri okunuyor';
     dmParamAssistantAutoScroll = true;
     dmParamAssistantLastAutoScrollAt = 0;
-    dmParamAssistantProgrammaticScrollUntil = 0;
     var assistantBody = document.querySelector('#dmParamAssistantModal .dm-param-assistant-body');
     dmParamAssistantBindBodyScroll(assistantBody);
     if (assistantBody) assistantBody.scrollTop = 0;
 
     var firstSnapshot = dmParamAssistantCurrentSnapshot();
+    dmParamAssistantLastSnapshot = firstSnapshot;
     if (!firstSnapshot.symbol) {
         dmParamAssistantTyping = false;
         if (status) status.textContent = 'Önce işlem çiftini ve bakiyeni seçmen gerekiyor';
         return;
     }
 
+    dmParamAssistantClearPrep();
+
     var rendered = false;
-    function renderAfterData(marketCtx) {
-        if (rendered) return;
-        rendered = true;
-        var snapshot = dmParamAssistantCurrentSnapshot();
-        var rec = dmParamAssistantBuildRecommendation(snapshot, marketCtx || {});
-        rec.introText = dmParamAssistantGreetingText(snapshot, rec);
-        dmParamAssistantRecommendation = rec;
-        dmParamAssistantTyping = true;
-        dmParamAssistantAnimateIntroAndChips(snapshot, rec, function () {
-            dmParamAssistantTypeLines(dmParamAssistantLines(snapshot, rec), 0);
-        });
+
+    function statusFn(text) {
+        if (status && !rendered) status.textContent = text;
     }
 
-    var statusFn = function (text) {
-        if (status && !rendered) status.textContent = text;
-    };
-    statusFn('Canlı veri ve geçmiş pencereler hazırlanıyor');
-    var tickerPromise = (typeof fetchCreateBotModalTicker24h === 'function')
-        ? Promise.resolve(fetchCreateBotModalTicker24h(firstSnapshot.symbol, { force: true }))
-        : Promise.resolve(null);
-    var historyPromise = dmParamAssistantLoadMarketContext(firstSnapshot.symbol, statusFn);
-    Promise.allSettled([tickerPromise, historyPromise]).then(function (results) {
-        var ctx = results && results[1] && results[1].status === 'fulfilled' ? results[1].value : {};
-        renderAfterData(ctx);
-    }).catch(function () {
-        renderAfterData({});
-    });
-    dmParamAssistantSetTimer(function () {
-        if (!rendered) {
-            statusFn('Geçmiş veri gecikti; hızlı öneri hazırlanıyor');
-            renderAfterData({ timeout: true, errors: ['Geçmiş veri zaman aşımına uğradı.'] });
+    function runBackendLevel(level) {
+        dmParamAssistantLastTierStartFn = runBackendLevel;
+        dmParamAssistantClearTimers();
+        dmParamAssistantTierSelectSeq++;
+        var runId = ++dmParamAssistantBackendRunSeq;
+        dmParamAssistantActiveBackendRun = runId;
+        dmParamAssistantProgressState = { pct: 1, stageIndex: 0, stageKey: 'queued', runId: runId };
+        rendered = false;
+        dmParamAssistantAutoScroll = true;
+        if (output) output.innerHTML = '';
+        if (summary) { summary.innerHTML = ''; summary.style.display = 'none'; }
+        if (choice) choice.style.display = 'none';
+        if (chips) chips.innerHTML = '';
+        statusFn('Sunucu analizi başlıyor — backtest, doğrulama ve seçilen seviye hesapları tamamlanmadan sonuç gösterilmeyecek…');
+        dmParamAssistantRunBackend(firstSnapshot, level, runId, function () {
+            rendered = true;
+            dmParamAssistantClearPrep();
+        }, function (reason) {
+            rendered = false;
+            dmParamAssistantShowBackendError(reason, function () {
+                runBackendLevel(level);
+            }, function () {
+                if (output) output.innerHTML = '';
+                dmParamAssistantShowTierSelect(firstSnapshot, runBackendLevel);
+            });
+        });
+    }
+    dmParamAssistantLastTierStartFn = runBackendLevel;
+
+    // Yeniden-bağlanma / tek-sefer: bu hesabın arka planda çalışan ya da yeni biten işi var mı?
+    statusFn('Önceki analiz durumu kontrol ediliyor…');
+    var paApi = dmParamAssistantApiCfg();
+    var openRunId = dmParamAssistantActiveBackendRun;
+    function showTierFlow() {
+        if (openRunId !== dmParamAssistantActiveBackendRun) return;
+        statusFn('Analiz seviyesini seç — sonuç yalnız sunucuda tamamlanan backtest sonrası gösterilecek');
+        dmParamAssistantShowTierSelect(firstSnapshot, runBackendLevel);
+    }
+    dmParamAssistantApiGet((paApi.active || '/api/param-assistant/active'), {
+        timeout: 9000, owner: 'paramAssistant', trigger: 'param-assistant-active', suppressRateLimitToast: true
+    }).then(function (res) {
+        if (openRunId !== dmParamAssistantActiveBackendRun) return; // kullanıcı bu arada seviye seçtiyse bırak
+        var st = res && res.state;
+        var job = res && res.job;
+        if (st === 'running' && job) {
+            // Modal kapatılıp yeniden açıldı: arka planda DEVAM EDEN işe yeniden bağlan (sıfırdan başlatma YOK).
+            dmParamAssistantActiveJobId = job.id || job.job_id || '';
+            dmParamAssistantProgressState = { pct: 1, stageIndex: 0, stageKey: job.stage || 'queued', runId: openRunId };
+            dmParamAssistantShowProgress();
+            dmParamAssistantUpdateProgress(job);
+            statusFn('Bu hesapta çalışan analiz var' + (job.symbol ? ' (' + job.symbol + ')' : '') + '; kaldığı yerden izleniyor.');
+            dmParamAssistantAttachAndPoll(job.job_id || job.id, {
+                runId: openRunId, level: job.tier || 'high', timeBudgetSec: job.time_budget_sec, firstDelayMs: 200,
+                onDone: function () { rendered = true; dmParamAssistantClearPrep(); },
+                onFail: function (reason) {
+                    rendered = false;
+                    dmParamAssistantShowBackendError(reason, function () { runBackendLevel(job.tier || 'high'); }, function () {
+                        if (output) output.innerHTML = '';
+                        dmParamAssistantShowTierSelect(firstSnapshot, runBackendLevel);
+                    });
+                }
+            });
+            return;
         }
-    }, DM_PARAM_ASSISTANT_HISTORY_TIMEOUT_MS + 1200);
+        if (st === 'finished' && job && job.result) {
+            // İş bittikten sonra açıldı: bitmiş öneriyi TEK SEFER göster (sunucu consumed işaretler).
+            var ok = dmParamAssistantRenderBackendResult(firstSnapshot, job.result);
+            if (ok) { rendered = true; return; }
+            showTierFlow();
+            return;
+        }
+        if (st === 'error' && job) {
+            // Son iş başarısızsa: nedenini TEK SEFER göster (tekrar dene / seviye seç).
+            rendered = false;
+            dmParamAssistantShowBackendError(job.error || 'Önceki analiz tamamlanamadı.', function () { runBackendLevel('high'); }, function () {
+                if (output) output.innerHTML = '';
+                dmParamAssistantShowTierSelect(firstSnapshot, runBackendLevel);
+            });
+            return;
+        }
+        showTierFlow(); // none -> normal seviye seçimi
+    }).catch(function () { showTierFlow(); });
 }
 
 function closeParamAssistantModal(opts) {
@@ -2329,6 +3438,12 @@ function closeParamAssistantModal(opts) {
     var backdrop = document.getElementById('dmParamAssistantBackdrop');
     if (!modal) return;
     dmParamAssistantClearTimers();
+    dmParamAssistantStopTimeProgress();
+    // NOT: Sunucudaki analiz işi İPTAL EDİLMEZ — arka planda devam eder; yalnızca
+    // istemci poll'ü durur. Modal yeniden açılınca GET /active ile bağlanılır.
+    dmParamAssistantActiveBackendRun = ++dmParamAssistantBackendRunSeq;
+    dmParamAssistantTierSelectSeq++;
+    dmParamAssistantProgressState = null;
     dmParamAssistantTyping = false;
     function hide() {
         modal.setAttribute('aria-hidden', 'true');
@@ -2371,21 +3486,23 @@ function dmParamAssistantTypeInput(task, done) {
         idx += chunk;
         dmParamAssistantDispatch(el, 'input');
         if (idx < value.length) {
-            dmParamAssistantSetTimer(step, DM_PARAM_ASSISTANT_INPUT_MS);
+            dmParamAssistantSetApplyTimer(step, DM_PARAM_ASSISTANT_INPUT_MS);
             return;
         }
         dmParamAssistantDispatch(el, 'change');
         if (task.allowReadonly) el.readOnly = oldReadonly;
         el.classList.remove('dm-ai-input-writing');
         if (typeof task.after === 'function') task.after();
-        dmParamAssistantSetTimer(done, DM_PARAM_ASSISTANT_FIELD_PAUSE_MS);
+        dmParamAssistantSetApplyTimer(done, DM_PARAM_ASSISTANT_FIELD_PAUSE_MS);
     }
     step();
 }
 
-function applyParamAssistantRecommendation(rec) {
+function applyParamAssistantRecommendation(rec, onDone) {
     if (!rec) return;
     dmParamAssistantClearTimers();
+    dmParamAssistantClearApplyTimers();
+    dmParamAssistantApplying = true;
     var submitBtn = document.getElementById('dmSubmitBtn');
     if (submitBtn) submitBtn.classList.remove('dm-ai-create-pulse');
     var tasks = [
@@ -2417,6 +3534,8 @@ function applyParamAssistantRecommendation(rec) {
                 submitBtn.setAttribute('data-ai-ready', '1');
                 try { submitBtn.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) {}
             }
+            dmParamAssistantApplying = false;
+            if (typeof onDone === 'function') onDone();
             return;
         }
         dmParamAssistantTypeInput(tasks[i], function () { run(i + 1); });
@@ -2425,9 +3544,14 @@ function applyParamAssistantRecommendation(rec) {
 }
 
 function acceptParamAssistantRecommendation() {
+    if (dmParamAssistantApplying) return;
     var rec = dmParamAssistantRecommendation;
-    closeParamAssistantModal();
-    dmParamAssistantSetTimer(function () { applyParamAssistantRecommendation(rec); }, 220);
+    var status = document.getElementById('dmParamAssistantStatus');
+    if (status) status.textContent = 'Parametreler forma işleniyor...';
+    closeParamAssistantModal({ immediate: true });
+    applyParamAssistantRecommendation(rec, function () {
+        if (status) status.textContent = 'Parametreler forma işlendi.';
+    });
 }
 
 /** Create bot modal: mini grafik yükle (dmPairChart) */

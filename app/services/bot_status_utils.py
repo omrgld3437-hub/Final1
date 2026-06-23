@@ -21,9 +21,19 @@ def is_bot_running(status: Optional[str]) -> bool:
     return normalize_bot_status(status) == "running"
 
 
+def is_bot_capital_locked(status: Optional[str]) -> bool:
+    """Bot sermayesi hâlâ kullanıcıya serbest sayılmamalı mı?"""
+    return normalize_bot_status(status) in (
+        "running",
+        "paused",
+        "paused_error",
+        "paused_insufficient_balance",
+    )
+
+
 def is_bot_active_for_admin(bot: BotLike) -> bool:
     """Admin AKTİF BOT: çalışan veya duraklatılmış (durdurulmuş değil)."""
-    return _bot_status(bot) in ("running", "paused")
+    return _bot_status(bot) in ("running", "paused", "paused_error")
 
 
 def count_running_bots(bots: Iterable[BotLike]) -> int:

@@ -1,7 +1,13 @@
 /*
- * TraderTrailing Login — Güvenlik & hız öncelikli; borsa/trading arayüzü
+ * ayserose Login — Güvenlik & hız öncelikli; borsa/trading arayüzü
  * Masaüstü: nebula (Samanyolu), hafif animasyonlar; mobil: minimum animasyon, jet hız
  */
+
+/* --- ayserose marka tipografisi --- */
+@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,700;1,300&display=swap');
+.ar-ayse { font-family: 'Cormorant Garamond', Georgia, serif; font-weight: 700; font-style: normal; color: #c280d4; letter-spacing: 0.01em; }
+.ar-rose  { font-family: 'Cormorant Garamond', Georgia, serif; font-weight: 300; font-style: italic; color: #e896c4; letter-spacing: 0.04em; }
+.ar-inline { display: inline; white-space: nowrap; }
 
 /* Sayfa gövdesi — hız: contain, izole boyama; mobilde scroll ile alttaki yazılar okunabilir */
 body.login-page {

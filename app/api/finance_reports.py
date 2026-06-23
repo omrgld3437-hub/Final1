@@ -8,7 +8,7 @@ CHANGE: Finance Reports & Analytics API endpoints
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime, timedelta, timezone
 import asyncio
 import json
@@ -95,8 +95,20 @@ def _bot_current_equity_usd(
 
 
 def _finance_bot_summary_row(
-    bot: Bot, bot_pnl_30d: Dict, current_usd: float, initial_usd: float
+    bot: Bot,
+    bot_pnl_30d: Dict,
+    current_usd: float,
+    initial_usd: float,
+    health_alerts: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict:
+    if health_alerts is None:
+        health_alerts = []
+    try:
+        from app.botengine.health_watch import summarize_health_alert_level
+
+        health_level = summarize_health_alert_level(health_alerts)
+    except Exception:
+        health_level = None
     mark_to_market_pnl = current_usd - initial_usd
     mark_to_market_pct = (
         (mark_to_market_pnl / initial_usd * 100.0) if initial_usd > 0 else 0.0
@@ -125,6 +137,8 @@ def _finance_bot_summary_row(
         "started_at": bot.started_at.isoformat()
         if hasattr(bot, "started_at") and bot.started_at
         else None,
+        "health_alert_level": health_level,
+        "health_alerts": health_alerts,
     }
 
 
@@ -219,6 +233,21 @@ async def get_finance_summary(
 
         # Bot summary (current_usd = bot detay state panel ile aynı kaynak; toplam = KPI Bot Bakiyesi)
         bots = db.query(Bot).filter(Bot.account_id == account_id).all()
+        from app.botengine.health_watch import (
+            _account_wallet_stale_alert,
+            evaluate_bot_health_lite,
+        )
+        from app.botengine.state_store import load_state
+
+        try:
+            from app.services.binance_connectivity import active_failure
+
+            account_failure = active_failure(account_id)
+        except Exception:
+            account_failure = None
+        account_wallet_alert = (
+            None if account_failure else _account_wallet_stale_alert(db, account_id)
+        )
         bot_summary = []
         total_bot_equity_usd = 0.0
         for bot in bots:
@@ -226,9 +255,22 @@ async def get_finance_summary(
                 bot.id, {"pnl": 0.0, "fees": 0.0, "count": 0}
             )
             current_usd, initial_balance = _bot_current_equity_usd(db, bot, account_id)
+            state = load_state(db, bot.id) or {}
+            health_alerts = evaluate_bot_health_lite(
+                bot,
+                state,
+                account_failure=account_failure,
+                account_wallet_alert=account_wallet_alert,
+            )
             total_bot_equity_usd += current_usd
             bot_summary.append(
-                _finance_bot_summary_row(bot, bot_pnl, current_usd, initial_balance)
+                _finance_bot_summary_row(
+                    bot,
+                    bot_pnl,
+                    current_usd,
+                    initial_balance,
+                    health_alerts=health_alerts,
+                )
             )
 
         # Günlük bot PnL = sadece o gün tamamlanan turların (cycle) kârlarının toplamı (dashboard KPI ile aynı)
@@ -1253,7 +1295,7 @@ async def _get_test_account_trades(
                 "is_bot": bid is not None,
                 "source": "bot" if bid else "spot",
                 "source_label": source,
-                "platform": "TraderTrailing",
+                "platform": "ayserose",
                 "is_paper": True,
             }
         )
@@ -1284,6 +1326,21 @@ async def get_finance_bots(
         raise HTTPException(status_code=404, detail="Account not found")
 
     bots = db.query(Bot).filter(Bot.account_id == account_id).all()
+    from app.botengine.health_watch import (
+        _account_wallet_stale_alert,
+        evaluate_bot_health_lite,
+    )
+    from app.botengine.state_store import load_state
+
+    try:
+        from app.services.binance_connectivity import active_failure
+
+        account_failure = active_failure(account_id)
+    except Exception:
+        account_failure = None
+    account_wallet_alert = (
+        None if account_failure else _account_wallet_stale_alert(db, account_id)
+    )
 
     # Get 30d PnL for all bots
     now = datetime.utcnow()
@@ -1295,8 +1352,21 @@ async def get_finance_bots(
     for bot in bots:
         bot_pnl = pnl_30d["by_bot"].get(bot.id, {"pnl": 0.0, "fees": 0.0, "count": 0})
         current_usd, initial_balance = _bot_current_equity_usd(db, bot, account_id)
+        state = load_state(db, bot.id) or {}
+        health_alerts = evaluate_bot_health_lite(
+            bot,
+            state,
+            account_failure=account_failure,
+            account_wallet_alert=account_wallet_alert,
+        )
         bot_list.append(
-            _finance_bot_summary_row(bot, bot_pnl, current_usd, initial_balance)
+            _finance_bot_summary_row(
+                bot,
+                bot_pnl,
+                current_usd,
+                initial_balance,
+                health_alerts=health_alerts,
+            )
         )
 
     return {"account_id": account_id, "bots": bot_list}

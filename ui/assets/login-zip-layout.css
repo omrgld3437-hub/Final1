@@ -115,6 +115,9 @@ body.login-page--zip .login-mobile .login-bg-nebula {
 body.login-page--zip .login-ticker,
 body.login-page--zip .login-overlay-scrim {
     display: none !important;
+    visibility: hidden !important;
+    opacity: 0 !important;
+    height: 0 !important;
 }
 
 /* —— Uygulama gövdesi: karşılama + ticker ilk ekran; dock grid/footer scroll ile —— */
@@ -192,6 +195,8 @@ body.login-page--zip .login-overlay-scrim {
     line-height: 1;
     white-space: nowrap;
     -webkit-tap-highlight-color: transparent;
+    position: relative;
+    overflow: visible;
 }
 
 .zip-nav__logo-mark {
@@ -200,19 +205,7 @@ body.login-page--zip .login-overlay-scrim {
     justify-content: center;
     flex-shrink: 0;
     line-height: 0;
-    animation: zipNavLogoShine 6s ease-in-out infinite;
-    will-change: filter, transform;
-}
-
-@keyframes zipNavLogoShine {
-    0%, 100% {
-        filter: drop-shadow(0 0 4px rgba(132, 142, 156, 0.25));
-        transform: scale(1);
-    }
-    50% {
-        filter: drop-shadow(0 0 12px rgba(240, 185, 11, 0.5));
-        transform: scale(1.04);
-    }
+    filter: drop-shadow(0 0 8px rgba(240, 185, 11, 0.28));
 }
 
 .zip-nav__logo-svg {
@@ -223,14 +216,11 @@ body.login-page--zip .login-overlay-scrim {
 
 .zip-nav__brand-text.login-brand {
     display: inline-block;
-    font-size: clamp(1.25rem, 3vw, 1.5rem);
-    font-weight: 700;
-    letter-spacing: 0.02em;
+    font-size: clamp(1.2rem, 3vw, 1.45rem);
     line-height: 1.2;
 }
 
 @media (prefers-reduced-motion: reduce) {
-    .zip-nav__logo-mark,
     .zip-nav__brand-text.login-brand {
         animation: none !important;
     }
@@ -526,6 +516,14 @@ body.login-page--zip.login-modal-open .zip-welcome-ticker {
     backdrop-filter: blur(14px);
     -webkit-backdrop-filter: blur(14px);
     box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.28);
+    transition: opacity 0.18s ease, transform 0.18s ease, visibility 0.18s ease;
+}
+
+body.login-page--zip.zip-welcome-ticker-hidden .zip-welcome-ticker {
+    opacity: 0;
+    visibility: hidden;
+    transform: translateY(100%);
+    pointer-events: none;
 }
 
 .zip-welcome-ticker .zip-ticker-wrap {
@@ -558,6 +556,59 @@ body.login-page--zip.login-modal-open .zip-welcome-ticker {
     line-height: 1.15;
     letter-spacing: -0.03em;
     text-shadow: 0 0 32px rgba(240, 185, 11, 0.2);
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    /* Sabit yükseklik: tek satır boyu garantili, içerik fazla olursa alt kayma yok */
+    min-height: 1.35em;
+    overflow: visible;
+}
+
+.zip-tw-prefix {
+    flex-shrink: 0;
+    color: #f0b90b;
+    font-family: var(--mono, 'JetBrains Mono', 'Fira Mono', monospace);
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    opacity: 0.8;
+}
+
+.zip-tw-text {
+    font-family: var(--mono, 'JetBrains Mono', 'Fira Mono', monospace);
+    font-weight: 800;
+    letter-spacing: -0.01em;
+    color: #fff;
+    /* Metin wrap olmayacak → h1 yüksekliği hiç değişmez */
+    white-space: nowrap;
+    overflow: hidden;
+    min-width: 0;
+    flex: 1 1 auto;
+}
+
+/* CSS bar imleci: font'a bağımlı değil, tam piksel kontrolü; yükseklik sabit */
+.zip-tw-cursor {
+    display: inline-block;
+    flex-shrink: 0;
+    width: 2px;
+    height: 0.9em;               /* em → parent font-size'a göre ölçeklenir */
+    background: #f0b90b;
+    border-radius: 1px;
+    margin-left: 2px;
+    vertical-align: -0.1em;      /* metin taban çizgisine hizala */
+    box-shadow: 0 0 6px rgba(240, 185, 11, 0.55);
+    will-change: opacity;        /* GPU compositor'da çalışır, layout tetiklemez */
+    animation: zipTwCursorBlink 0.9s steps(1) infinite;
+}
+
+/* Yazım sırasında imleç sabit yanar */
+.zip-welcome__title--typing .zip-tw-cursor {
+    animation-play-state: paused;
+    opacity: 1;
+}
+
+@keyframes zipTwCursorBlink {
+    0%, 49% { opacity: 1; }
+    50%, 100% { opacity: 0; }
 }
 
 .zip-welcome__lead {
@@ -1159,7 +1210,7 @@ body.login-page--zip .login-modal.login-modal--overlay .login-card--info-only .z
 }
 
 .zip-dock__grid {
-    max-width: 80rem;
+    max-width: 56rem;
     margin: 0 auto;
     padding: 2rem 1.5rem;
     display: grid;
@@ -1171,7 +1222,7 @@ body.login-page--zip .login-modal.login-modal--overlay .login-card--info-only .z
 
 @media (min-width: 1024px) {
     .zip-dock__grid {
-        grid-template-columns: 8fr 4fr;
+        grid-template-columns: 1fr;
         gap: 2rem;
         padding: 2rem 1.5rem 2.25rem;
     }
@@ -1180,9 +1231,11 @@ body.login-page--zip .login-modal.login-modal--overlay .login-card--info-only .z
 .zip-dock__label {
     display: flex;
     align-items: center;
+    justify-content: center;
     gap: 0.5rem;
     margin-bottom: 0.75rem;
     padding: 0 0.25rem;
+    text-align: center;
     font-size: 0.65rem;
     font-weight: 800;
     letter-spacing: 0.14em;
@@ -1207,8 +1260,8 @@ body.login-page--zip .zip-dock__clocks .login-clocks {
     display: grid !important;
     grid-template-columns: 1fr;
     gap: 0.75rem;
-    max-width: none;
-    margin: 0 !important;
+    max-width: 52rem;
+    margin: 0 auto !important;
     padding: 0;
     width: 100%;
 }
@@ -1221,10 +1274,12 @@ body.login-page--zip .zip-dock__clocks .login-clocks {
 
 body.login-page--zip .zip-dock__clocks .login-clock {
     display: flex !important;
-    flex-direction: row !important;
+    flex-direction: column !important;
     align-items: center;
-    gap: 0.85rem;
+    justify-content: center;
+    gap: 0.7rem;
     padding: 0.85rem 1rem;
+    min-height: 8.25rem;
     background: rgba(255, 255, 255, 0.05);
     border: 1px solid rgba(255, 255, 255, 0.06);
     border-radius: 10px;
@@ -1252,7 +1307,7 @@ body.login-page--zip .zip-dock__clocks .login-clock__city {
     font-size: 0.75rem;
     font-weight: 600;
     color: #9ca3af;
-    text-align: left;
+    text-align: center;
 }
 
 body.login-page--zip .zip-dock__clocks .login-clock__exchange {
@@ -1261,7 +1316,7 @@ body.login-page--zip .zip-dock__clocks .login-clock__exchange {
     font-size: 0.95rem;
     font-weight: 600;
     color: var(--login-accent);
-    text-align: left;
+    text-align: center;
 }
 
 body.login-page--zip .zip-dock__clocks .login-clock__ampm,
@@ -1329,9 +1384,20 @@ body.login-page--zip .zip-dock__market .login-forex__value {
 
 @media (min-width: 768px) {
     .zip-footer__inner {
-        flex-direction: row;
-        justify-content: space-between;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+        align-items: center;
         text-align: left;
+    }
+
+    .zip-footer__links {
+        grid-column: 2;
+        justify-self: center;
+    }
+
+    .zip-footer__copy {
+        justify-self: end;
+        text-align: right;
     }
 }
 

@@ -33,6 +33,7 @@ from typing import Any, Dict, List, Optional
 
 from app.botengine.dynamic.features import MarketFeatures
 from app.botengine.dynamic import regime as reg
+from app.botengine.dynamic import cycle_duration as cd
 
 
 # -----------------------------------------------------------------------------
@@ -53,9 +54,163 @@ class ParamSuggestion:
     profit_reentry_drop_pct: float
     profit_reentry_rise_pct: float
     reasons: List[str] = field(default_factory=list)
+    stance: Optional[Dict[str, Any]] = None  # Stance.to_dict() — posture transparency
+    duration: Optional[Dict[str, Any]] = None  # DurationSizing.to_dict() — cycle-time target
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
+
+
+# -----------------------------------------------------------------------------
+# Behaviour STANCE — continuous passive↔aggressive posture from a risk/reward
+# model. The discrete REGIME_TUNING table sets the coarse posture; the stance
+# refines it *continuously* within the regime so two e.g. TRENDING_UP cycles
+# with different liquidity / momentum / chaos get different aggression. The
+# stance only nudges scalars (alloc, trailing, take-profit) — never the grid
+# STEP width, which stays a pure ATR/regime/fee function — so it reinforces
+# (never reverses) the regime's defensive/bullish bias.
+# -----------------------------------------------------------------------------
+
+STANCE_DEFENSIVE = "DEFENSIVE"
+STANCE_BALANCED = "BALANCED"
+STANCE_AGGRESSIVE = "AGGRESSIVE"
+
+# How far stance is allowed to move each scalar (bounded; risk engine clamps too).
+STANCE_BASE_SWING_PP = 8.0     # ±pp on base allocation at stance ±1
+STANCE_TRAIL_SWING = 0.25      # ±25% on sell-trail at stance ±1 (ride vs lock)
+STANCE_TP_SWING = 0.30         # ±30% on TP-rise at stance ±1 (let run vs bank)
+
+# Per-regime structural risk used by the stance (broad posture, not the
+# near-term knife signal — that lives in cycle_gate).
+_REGIME_STANCE_RISK = {
+    reg.DUMP_RISK: 1.0,
+    reg.TRENDING_DOWN: 0.85,
+    reg.HIGH_VOL_RANGING: 0.45,
+    reg.BREAKOUT: 0.45,
+    reg.SQUEEZE: 0.30,
+    reg.LOW_VOL_RANGING: 0.10,
+    reg.TRENDING_UP: 0.10,
+    reg.UNKNOWN: 0.40,
+}
+
+# ATR "sweet spot" for grid trading: enough movement to fill grids, not chaos.
+_ATR_SWEET_PCT = 1.0
+_ATR_SWEET_HALFWIDTH = 1.6  # supportive band ≈ [ -0.6 .. 2.6 ]%
+
+# "Ranging-ness" used by the stance reward. The legacy hard cliff at ADX_TRENDING
+# (25) zeroed all grid reward the instant ADX nudged to 25.x — a 3-point overshoot
+# killed a perfectly good ranging tape (e.g. RSI~60, ATR 0.4%). Use a soft RAMP:
+# ranging = 1 at ADX ≤ ADX_RANGING (20), 0 at ADX ≥ _ADX_RANGE_HI (35), linear
+# between. Reward decays gracefully into a trend instead of snapping to 0.
+_ADX_RANGE_HI = 35.0
+
+# Momentum reconciliation: a TRENDING_DOWN / DUMP regime call is *contradicted* by
+# bullish momentum (RSI pressing high while the 1h slope is not strongly negative).
+# When that happens we discount the regime's defensive push instead of de-risking
+# into strength.
+_RSI_BULLISH_REF = 52.0
+_SLOPE_NOT_FALLING = -0.3
+_CONTRADICTION_RISK_MULT = 0.5
+
+
+@dataclass
+class Stance:
+    score: float          # -1 (defensive) .. +1 (aggressive)
+    label: str
+    reward_score: float   # 0..1 grid-friendliness
+    risk_score: float     # 0..1 broad downside/chaos risk
+    reasons: List[str] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "score": round(self.score, 4),
+            "label": self.label,
+            "reward_score": round(self.reward_score, 4),
+            "risk_score": round(self.risk_score, 4),
+            "reasons": list(self.reasons),
+        }
+
+
+def _c01(x: float) -> float:
+    if x != x:
+        return 0.0
+    return 0.0 if x < 0.0 else (1.0 if x > 1.0 else x)
+
+
+def _atr_fitness(atr_pct: Optional[float]) -> float:
+    """1.0 at the grid sweet spot, decaying toward 0 as ATR is too dead or too
+    chaotic (triangular kernel)."""
+    if atr_pct is None or atr_pct <= 0:
+        return 0.4
+    d = abs(float(atr_pct) - _ATR_SWEET_PCT)
+    return _c01(1.0 - d / _ATR_SWEET_HALFWIDTH)
+
+
+def compute_stance(features: MarketFeatures, regime_result: "reg.RegimeResult") -> Stance:
+    """Continuous behaviour posture from reward (grid-friendliness) minus risk
+    (downtrend strength + chaos). Pure; defensive on missing data."""
+    adx = features.adx_1h
+    atr = features.atr_pct_5m
+    spread = features.spread_pct
+    slope = features.ema_slope_1h_pct
+    rv = features.realized_vol_5m
+    regime = regime_result.regime
+    rsi_min = min(
+        [r for r in (features.rsi_1h, features.rsi_5m) if r is not None],
+        default=None,
+    )
+
+    # ---- reward (grid-friendliness) ----
+    # Grid trading earns in RANGES, not trends: a healthy ATR and tight spread
+    # only help when the market is actually ranging. ATR-fitness and liquidity
+    # are GATED by ranging-ness. The gate is a SOFT RAMP (see _ADX_RANGE_HI), not
+    # a hard cliff at ADX_TRENDING — reward decays into a trend instead of
+    # snapping to 0 the instant ADX crosses 25.
+    if adx is not None:
+        ranging = _c01((_ADX_RANGE_HI - adx) / (_ADX_RANGE_HI - reg.ADX_RANGING))
+    else:
+        ranging = 0.5
+    atr_fit = _atr_fitness(atr)
+    liq = (1.0 - _c01((spread - 0.03) / 0.40)) if spread is not None else 0.6
+    reward = _c01(ranging * (0.6 * atr_fit + 0.4 * liq))
+
+    # ---- risk: regime + (downtrend × strength) + chaos ----
+    regime_risk = _REGIME_STANCE_RISK.get(regime, 0.4)
+    # Momentum reconciliation: don't go defensive into bullish momentum. If a
+    # DOWN/DUMP regime is contradicted by RSI (high) + a non-falling slope, halve
+    # the structural regime risk it contributes.
+    contradiction = (
+        regime in (reg.TRENDING_DOWN, reg.DUMP_RISK)
+        and rsi_min is not None
+        and rsi_min > _RSI_BULLISH_REF
+        and (slope is None or slope > _SLOPE_NOT_FALLING)
+    )
+    if contradiction:
+        regime_risk *= _CONTRADICTION_RISK_MULT
+    downtrend = _c01(-slope / 1.0) if (slope is not None and slope < 0) else 0.0
+    strength = _c01((adx - reg.ADX_RANGING) / 30.0) if adx is not None else 0.3
+    chaos = _c01((rv - 1.2) / 2.5) if rv is not None else 0.0
+    risk = _c01(0.45 * regime_risk + 0.30 * (downtrend * strength) + 0.25 * chaos)
+
+    score = max(-1.0, min(1.0, reward - risk))
+    if score >= 0.25:
+        label = STANCE_AGGRESSIVE
+    elif score <= -0.25:
+        label = STANCE_DEFENSIVE
+    else:
+        label = STANCE_BALANCED
+
+    reasons = [
+        f"stance={label} score={score:+.2f} (reward={reward:.2f} − risk={risk:.2f})",
+        f"reward: ranging={ranging:.2f} atr_fit={atr_fit:.2f} liq={liq:.2f}",
+        f"risk: regime={regime_risk:.2f} downtrend×str={downtrend * strength:.2f} chaos={chaos:.2f}",
+    ]
+    if contradiction:
+        reasons.append(
+            f"momentum çelişkisi: rejim={regime} ama RSI={rsi_min:.0f} (>{_RSI_BULLISH_REF:.0f}) "
+            f"& eğim düşmüyor → savunma yarıya indirildi"
+        )
+    return Stance(score=score, label=label, reward_score=reward, risk_score=risk, reasons=reasons)
 
 
 # -----------------------------------------------------------------------------
@@ -198,19 +353,21 @@ def _build_grid_levels(
 ) -> List[Dict[str, float]]:
     """
     Build grid levels from a PRE-RESOLVED per-level `step_pct` (already fee-/
-    depth-bounded by the caller). Trigger % of level i is at least the user's
-    manual trigger for that level; Dynamic Mode may widen a level, but never
-    pulls it closer to the reference than the template the user opened the bot
-    with.
+    depth-bounded by the caller). Trigger % of level i = step × (i+1).
+
+    IMPORTANT (fixes the "grid welded to manual floor" defect): the trigger % is
+    the DYNAMIC step alone. The manual template is a *reference* for grid COUNT
+    and per-level QTY distribution only — it is NOT a floor on the step. The
+    economic fee/spread floor and the depth cap (applied by the caller in
+    `_resolve_grid_step`) are the real lower/upper guards; the manual trigger no
+    longer pins the geometry, so the grid actually breathes with vol/duration.
 
     Returns same length as `base_grids` so existing UI / state shapes stay
     intact — we only swap the numbers, not the count.
 
-    Capital deployment: we preserve the user's per-grid qty percentages exactly.
-    The create UI requires side totals to be understandable (usually 100%);
-    reshaping them into values like 47.6/52.4 or 36.4/43.6 makes the running
-    bot look incompatible with the configuration the user chose. Falls back to
-    an even 100% split only when the template has no usable qty numbers.
+    Capital deployment: we preserve the user's per-grid qty percentages exactly
+    (defensive regimes use allocation / spacing, not qty drift). Falls back to an
+    even 100% split only when the template has no usable qty numbers.
     """
     n = max(0, len(base_grids))
     if n == 0:
@@ -221,11 +378,10 @@ def _build_grid_levels(
     levels: List[Dict[str, float]] = []
     for i in range(n):
         dynamic_pct = step * (i + 1)
-        manual_pct = _manual_grid_pct(base_grids[i], field_pct)
         qty = manual_qtys[i] if has_manual_qty else (100.0 / n)
         levels.append(
             {
-                field_pct: round(max(dynamic_pct, manual_pct), 4),
+                field_pct: round(dynamic_pct, 4),
                 field_qty: round(qty, 4),
             }
         )
@@ -260,65 +416,101 @@ def suggest(
         f"regime={regime_result.regime} (confidence={regime_result.confidence:.2f})"
     ]
 
-    # ---- ATR-based grid step % ----
-    atr_clamped = _atr_clamped(features.atr_pct_5m)
-    base_step = _base_grid_step_pct(features)
-    reasons.append(
-        f"atr_pct_5m={features.atr_pct_5m} → clamped={atr_clamped:.3f} → base_step≈{base_step:.3f}%"
-    )
+    # Continuous behaviour posture (passive↔aggressive) that refines the discrete
+    # regime tuning. Only nudges scalars (alloc / trailing / TP), never grid step.
+    stance = compute_stance(features, regime_result)
+    reasons.extend(stance.reasons)
 
-    # ---- Build sell/buy grids preserving count from base_cfg ----
     base_sell_grids = list(base_cfg.get("sell_grids") or [])
     base_buy_grids = list(base_cfg.get("buy_grids") or [])
-
-    # Resolve per-level step: ATR×regime, then bounded by the economic floor
-    # (fees/spread) and a depth cap (prevents degenerate collapse at high ATR).
     fee_floor = _fee_aware_min_step(base_cfg, features)
-    raw_step = base_step * tuning["step_mult"]
-    sell_step = _resolve_grid_step(raw_step, len(base_sell_grids), fee_floor)
-    buy_step = _resolve_grid_step(raw_step, len(base_buy_grids), fee_floor)
-    reasons.append(
-        f"grid_step raw={raw_step:.3f} fee_floor={fee_floor:.3f} → sell={sell_step:.3f} buy={buy_step:.3f}"
-    )
+    atr_clamped = _atr_clamped(features.atr_pct_5m)
 
+    # ---- Cycle-duration-targeted distances (primary) ----
+    # Size grid span / take-profit / trailing / re-entry so the cycle is EXPECTED
+    # to complete within [1,7] days at the CURRENT volatility (regime-aware target).
+    # This replaces the legacy ATR×regime grid step, which was structurally welded
+    # to the manual template floor. Falls back to the ATR path only if vol is
+    # unavailable. Pure/analytic — no backtest.
+    recent_days = None
+    if position_state:
+        recent_days = position_state.get("recent_cycle_days")
+    ds = cd.compute(
+        features, regime_result.regime, regime_result.confidence, recent_days
+    )
+    reasons.extend(ds.reasons)
+
+    if ds.ok:
+        # deepest grid level = ds.grid_span_pct → per-level step = span / n, then
+        # bounded by the economic floor (fees/spread) and the depth cap.
+        n_sell = max(1, len(base_sell_grids))
+        n_buy = max(1, len(base_buy_grids))
+        sell_step = _resolve_grid_step(ds.grid_span_pct / n_sell, len(base_sell_grids), fee_floor)
+        buy_step = _resolve_grid_step(ds.grid_span_pct / n_buy, len(base_buy_grids), fee_floor)
+        tp_rise = ds.profit_exit_rise_pct * (1.0 + stance.score * STANCE_TP_SWING)
+        tp_drop = ds.profit_exit_drop_pct
+        re_drop = ds.profit_reentry_drop_pct
+        re_rise = ds.profit_reentry_rise_pct
+        # trailing anchored to the actual first grid step
+        trail_raw = max(0.15, cd.TRAIL_FRAC * buy_step)
+    else:
+        # Fallback: legacy ATR×regime sizing (vol unavailable).
+        base_step = _base_grid_step_pct(features)
+        raw_step = base_step * tuning["step_mult"]
+        sell_step = _resolve_grid_step(raw_step, len(base_sell_grids), fee_floor)
+        buy_step = _resolve_grid_step(raw_step, len(base_buy_grids), fee_floor)
+        tp_rise = max(0.5, 2.5 * atr_clamped * tuning["tp_rise_mult"] * (1.0 + stance.score * STANCE_TP_SWING))
+        tp_drop = max(0.15, 0.4 * atr_clamped)
+        re_drop = max(0.5, 2.0 * atr_clamped)
+        re_rise = max(0.15, 0.4 * atr_clamped)
+        trail_raw = K_ATR_TRAIL * atr_clamped * tuning["trail_mult"]
+        reasons.append(f"FALLBACK ATR sizing: raw_step={raw_step:.3f} fee_floor={fee_floor:.3f}")
+
+    reasons.append(
+        f"grid_step → sell={sell_step:.3f} buy={buy_step:.3f} (fee_floor={fee_floor:.3f})"
+    )
     reasons.append("grid_qty: manual percentages preserved")
 
     sell_grids = _build_grid_levels(
-        sell_step,
-        base_sell_grids,
-        "sell_grid_pct",
-        "sell_qty_pct_of_base",
+        sell_step, base_sell_grids, "sell_grid_pct", "sell_qty_pct_of_base"
     )
     buy_grids = _build_grid_levels(
-        buy_step,
-        base_buy_grids,
-        "buy_grid_pct",
-        "buy_qty_pct_of_quote",
+        buy_step, base_buy_grids, "buy_grid_pct", "buy_qty_pct_of_quote"
     )
     reasons.append(f"sell_grids n={len(sell_grids)} buy_grids n={len(buy_grids)}")
 
     # ---- Trailing %s ----
-    trail_raw = K_ATR_TRAIL * atr_clamped * tuning["trail_mult"]
-    # Floor at 0.15% (below this = noise in spot)
-    sell_trail = max(0.15, round(trail_raw, 4))
+    # Stance widens the SELL trail when aggressive (ride the move) and tightens it
+    # when defensive (lock profit faster). Buy trail stays neutral (its job is
+    # bounce-confirmation, not posture). Floor at 0.15% (below = spot noise).
+    sell_trail = max(0.15, round(trail_raw * (1.0 + stance.score * STANCE_TRAIL_SWING), 4))
     buy_trail = max(0.15, round(trail_raw, 4))
-    reasons.append(f"trailing_raw≈{trail_raw:.3f}% (atr×K×regime_mult)")
+    reasons.append(f"trailing: sell={sell_trail:.3f} buy={buy_trail:.3f}")
 
     # ---- Base / Quote allocation ----
-    target_base = tuning["base_pct_target"]
-    # If TRENDING_DOWN + low confidence → still protect cash but not as aggressively.
-    if regime_result.regime == reg.TRENDING_DOWN and regime_result.confidence < 0.6:
-        target_base = max(target_base, 35.0)
-    base_pct = max(10.0, min(80.0, target_base))
+    # Low-confidence damping (anti-whipsaw): pull the regime's base target toward
+    # neutral 50 when the regime call is uncertain, so a coin-flip regime cannot
+    # swing allocation ±15pp cycle-to-cycle. Stance (feature-driven) keeps full
+    # weight; only the discrete regime deviation is damped.
+    regime_target = tuning["base_pct_target"]
+    conf = regime_result.confidence
+    try:
+        conf_w = max(0.0, min(1.0, (float(conf) - 0.4) / 0.4))
+    except (TypeError, ValueError):
+        conf_w = 0.5
+    target_base = 50.0 + (regime_target - 50.0) * conf_w
+    base_pct = max(10.0, min(80.0, target_base + stance.score * STANCE_BASE_SWING_PP))
     quote_pct = round(100.0 - base_pct, 4)
-    reasons.append(f"base/quote target={base_pct:.1f}/{quote_pct:.1f} (regime tuning)")
+    reasons.append(
+        f"base/quote={base_pct:.1f}/{quote_pct:.1f} "
+        f"(regime target={regime_target:.0f} conf_damped→{target_base:.1f} + stance {stance.score:+.2f}×{STANCE_BASE_SWING_PP})"
+    )
 
-    # ---- TP / re-entry triggers ----
-    # TP rise = "kâr alma için fiyat ne kadar yükselsin?" — vol ölçeklendir.
-    tp_rise = max(0.5, 2.5 * atr_clamped * tuning["tp_rise_mult"])
-    tp_drop = max(0.15, 0.4 * atr_clamped)
-    re_drop = max(0.5, 2.0 * atr_clamped)
-    re_rise = max(0.15, 0.4 * atr_clamped)
+    # clamp TP/re-entry into sane positive ranges (risk engine re-clamps to bounds)
+    tp_rise = max(0.30, round(tp_rise, 4))
+    tp_drop = max(0.10, round(tp_drop, 4))
+    re_drop = max(0.30, round(re_drop, 4))
+    re_rise = max(0.10, round(re_rise, 4))
     reasons.append(
         f"profit_exit rise={tp_rise:.3f} drop={tp_drop:.3f} | reentry drop={re_drop:.3f} rise={re_rise:.3f}"
     )
@@ -339,6 +531,8 @@ def suggest(
         profit_reentry_drop_pct=round(re_drop, 4),
         profit_reentry_rise_pct=round(re_rise, 4),
         reasons=reasons,
+        stance=stance.to_dict(),
+        duration=ds.to_dict() if ds.ok else None,
     )
 
 

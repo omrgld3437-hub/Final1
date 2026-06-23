@@ -27,7 +27,7 @@ DOCS: dict[str, dict[str, str]] = {
     ".": {
         "title": "final1 — Proje kökü",
         "purpose": (
-            "TraderTrailing platformunun ana dizini. Binance Spot üzerinde DCA, grid ve trailing "
+            "ayserose platformunun ana dizini. Binance Spot üzerinde DCA, grid ve trailing "
             "botları çalıştıran FastAPI backend, web paneli, manager paneli ve Bot Engine worker "
             "buradan başlatılır."
         ),
