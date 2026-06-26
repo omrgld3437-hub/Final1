@@ -218,15 +218,15 @@
         var tickAge = Number(healthSnapshot.tick_age_s);
         var interval = Number(healthSnapshot.tick_interval_s) || 2;
         if (Number.isFinite(tickAge)) {
-            if (code === 'TICK_STALE_CRIT' && tickAge < Math.max(60, interval * 5)) return true;
-            if (code === 'TICK_STALE_WARN' && tickAge < Math.max(20, interval * 2.5)) return true;
+            if (code === 'TICK_STALE_CRIT' && tickAge < Math.max(300, interval * 12)) return true;
+            if (code === 'TICK_STALE_WARN' && tickAge < Math.max(90, interval * 5)) return true;
         }
         if (code === 'LOOP_TASK_MISSING' && isFreshLoopTaskMissingAlert(alert, healthSnapshot)) return true;
         var meta = alert.meta || {};
         var errCode = String(meta.error_code || alert.error_code || '').toUpperCase();
         if (/^(BOT_CONTINUES_ON_ERROR|STATE_ERROR_WARN)$/.test(code)
             || /^(RUN_ACTION_EXCEPTION|BOT_TICK_EXCEPTION|BOT_LOOP_TRDCA_EXCEPTION|BOT_LOOP_TOPLEVEL_EXCEPTION)$/.test(errCode)) {
-            if (Number.isFinite(tickAge) && tickAge < Math.max(20, interval * 2.5)) return true;
+            if (Number.isFinite(tickAge) && tickAge < Math.max(90, interval * 5)) return true;
         }
         return false;
     }
@@ -645,8 +645,8 @@
             return a && a.code === alert.code;
         })) {
             var tickAge = Number(healthSnapshot.tick_age_s) || 0;
-            if (alert.code === 'TICK_STALE_CRIT' && tickAge >= 60) return false;
-            if (alert.code === 'TICK_STALE_WARN' && tickAge >= 20) return false;
+            if (alert.code === 'TICK_STALE_CRIT' && tickAge >= 300) return false;
+            if (alert.code === 'TICK_STALE_WARN' && tickAge >= 90) return false;
         }
         return true;
     }

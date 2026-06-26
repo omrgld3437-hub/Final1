@@ -169,16 +169,23 @@ function formatLeaderboardCyclesLabel(item) {
 function buildLeaderboardSymbolLogoHtml(symbolStr) {
     var sym = (typeof symbolStr === 'string' ? symbolStr : '').trim() || '—';
     var logoUrl = (typeof getCoinLogoUrl === 'function' ? getCoinLogoUrl(sym) : null);
-    var initials = sym.length >= 2 ? sym.substring(0, 2) : '—';
+    var initials = (typeof getCoinLogoInitials === 'function' ? getCoinLogoInitials(sym) : (sym.length >= 1 ? sym.substring(0, 1).toUpperCase() : '—'));
     if (typeof escapeHtml === 'function') initials = escapeHtml(initials);
     if (!logoUrl) {
         return '<span class="global-leaderboard-symbol-initials">' + initials + '</span>';
     }
     var escUrl = (typeof escapeHtml === 'function' ? escapeHtml(logoUrl) : logoUrl);
-    if (window.coinLogoCache && window.coinLogoCache.get(logoUrl)) {
-        return '<img src="' + escUrl + '" alt="" class="global-leaderboard-symbol-logo" decoding="async" />';
+    var escSym = (typeof escapeHtml === 'function' ? escapeHtml(sym) : sym);
+    var onload = 'if(window.markCoinLogoLoaded)window.markCoinLogoLoaded(this)';
+    var onerr = 'if(window.handleCoinLogoError)window.handleCoinLogoError(this)';
+    var wrapStart = '<span class="global-leaderboard-symbol-logo-wrap" style="position:relative;display:inline-flex;align-items:center;justify-content:center;">';
+    var initialsSpan = '<span class="global-leaderboard-symbol-initials" style="display:none;position:absolute;inset:0;align-items:center;justify-content:center;font-size:0.65rem;font-weight:600;background:var(--ds-bg-tertiary);color:var(--ds-text-secondary);border-radius:50%;">' + initials + '</span>';
+    var eager = (typeof shouldEagerLoadLogo === 'function' && shouldEagerLoadLogo(sym)) ||
+        (window.coinLogoCache && window.coinLogoCache.get(logoUrl));
+    if (eager) {
+        return wrapStart + '<img src="' + escUrl + '" alt="' + escSym + '" data-symbol="' + escSym + '" class="global-leaderboard-symbol-logo" decoding="async" onload="' + onload + '" onerror="' + onerr + '" />' + initialsSpan + '</span>';
     }
-    return '<img class="global-leaderboard-symbol-logo lazy-coin-logo" data-src="' + escUrl + '" alt="" decoding="async" />';
+    return wrapStart + '<img class="global-leaderboard-symbol-logo lazy-coin-logo" data-src="' + escUrl + '" alt="' + escSym + '" data-symbol="' + escSym + '" decoding="async" onload="' + onload + '" onerror="' + onerr + '" />' + initialsSpan + '</span>';
 }
 
 function hydrateLeaderboardListLogos(listEl) {
@@ -186,11 +193,13 @@ function hydrateLeaderboardListLogos(listEl) {
     ensureLazyLogoObserver();
     listEl.querySelectorAll('.global-leaderboard-symbol-logo').forEach(function (img) {
         var dataSrc = img.getAttribute('data-src');
+        var sym = img.getAttribute('data-symbol') || img.getAttribute('alt') || '';
         if (!dataSrc) {
-            if (img.src && window.coinLogoCache) window.coinLogoCache.set(img.src, true);
+            if (img.src && window.coinLogoCache) window.coinLogoCache.set(img.src.split('?')[0], true);
             return;
         }
-        if (window.coinLogoCache && window.coinLogoCache.get(dataSrc)) {
+        if ((typeof shouldEagerLoadLogo === 'function' && shouldEagerLoadLogo(sym)) ||
+            (window.coinLogoCache && window.coinLogoCache.get(dataSrc))) {
             img.src = dataSrc;
             img.removeAttribute('data-src');
             img.classList.remove('lazy-coin-logo');

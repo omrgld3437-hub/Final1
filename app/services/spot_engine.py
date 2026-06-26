@@ -16,6 +16,7 @@ from dataclasses import dataclass
 import httpx
 
 from app.services.binance_assets import BinanceKeys
+from app.core.constants import DEFAULT_MIN_NOTIONAL_USDT
 from app.services.binance_spot import BINANCE_API, BINANCE_TESTNET, _signed_request
 
 logger = logging.getLogger(__name__)
@@ -182,7 +183,7 @@ class SpotEngine:
             tick_size="0.01",
             step_size="0.00001",
             min_qty="0.00001",
-            min_notional="5",
+            min_notional=str(DEFAULT_MIN_NOTIONAL_USDT),
             timestamp=time.time(),
         )
 
@@ -229,7 +230,7 @@ class SpotEngine:
             "tickSize": flt["tick_size"],
             "stepSize": flt["step_size"],
             "minQty": flt["min_qty"],
-            "minNotional": flt.get("min_notional", "5"),
+            "minNotional": flt.get("min_notional", str(DEFAULT_MIN_NOTIONAL_USDT)),
             "baseAsset": flt.get("base_asset") or sym.replace("USDT", ""),
             "quoteAsset": flt.get("quote_asset") or "USDT",
         }
@@ -305,7 +306,7 @@ class SpotEngine:
             tick_size=filters.get("tickSize", "0.01"),
             step_size=filters.get("stepSize", "0.00001"),
             min_qty=filters.get("minQty", filters.get("stepSize", "0.00001")),
-            min_notional=filters.get("minNotional", "5"),
+            min_notional=filters.get("minNotional", str(DEFAULT_MIN_NOTIONAL_USDT)),
             timestamp=time.time(),
         )
 
@@ -389,7 +390,7 @@ class SpotEngine:
             step = str(cached_ex.get("step_size_str") or "0.00001")
             tick = str(cached_ex.get("tick_size_str") or "0.01")
             min_q = str(cached_ex.get("min_qty_str") or step)
-            min_notional = str(cached_ex.get("min_notional") or 5)
+            min_notional = str(cached_ex.get("min_notional") or DEFAULT_MIN_NOTIONAL_USDT)
             out = {
                 "step_size": step,
                 "tick_size": tick,
@@ -420,7 +421,7 @@ class SpotEngine:
         step: str,
         tick: str,
         min_q: str,
-        min_notional: str = "5",
+        min_notional: str = str(DEFAULT_MIN_NOTIONAL_USDT),
         base_asset: str = "",
         quote_asset: str = "USDT",
     ) -> Dict[str, str]:
@@ -461,7 +462,7 @@ class SpotEngine:
                     str(step or "0.00001"),
                     str(tick or "0.01"),
                     str(min_q or step or "0.00001"),
-                    str(cached.get("min_notional", "5")),
+                    str(cached.get("min_notional", DEFAULT_MIN_NOTIONAL_USDT)),
                     str(cached.get("baseAsset") or symbol.replace("USDT", "")),
                     str(cached.get("quoteAsset") or "USDT"),
                 )
@@ -486,7 +487,7 @@ class SpotEngine:
                 filters.get("stepSize") or "0.00001",
                 filters.get("tickSize") or "0.01",
                 filters.get("minQty") or filters.get("stepSize") or "0.00001",
-                str(filters.get("minNotional") or "5"),
+                str(filters.get("minNotional") or DEFAULT_MIN_NOTIONAL_USDT),
                 str(filters.get("baseAsset") or symbol.replace("USDT", "")),
                 str(filters.get("quoteAsset") or "USDT"),
             )

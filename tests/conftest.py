@@ -1,38 +1,23 @@
-import asyncio
-import inspect
-import os
-import tempfile
-from pathlib import Path
+"""Shared E2E fixtures (Param Assistant black-box HTTP)."""
+
+from __future__ import annotations
+
+import pytest
+
+from tools.param_pool.param_assistant_e2e_lib import ParamAssistantHttpClient
 
 
-TEST_DB = Path(
-    os.environ.get(
-        "TRADERTRAILING_TEST_DB",
-        str(Path(tempfile.gettempdir()) / "tradertrailing_pytest.db"),
-    )
-)
-os.environ.setdefault("DATABASE_URL", f"sqlite:///{TEST_DB.as_posix()}")
-os.environ.setdefault("BREACH_SHUTDOWN", "0")
+@pytest.fixture(scope="module")
+def param_assistant_client() -> ParamAssistantHttpClient:
+    return ParamAssistantHttpClient()
 
 
-def pytest_configure(config):
-    asyncio.set_event_loop(asyncio.new_event_loop())
-    TEST_DB.parent.mkdir(parents=True, exist_ok=True)
-    from app.db.base import Base, engine
-    from app.db.schema_guard import run_schema_guard
-
-    Base.metadata.create_all(bind=engine)
-    run_schema_guard(engine)
-
-
-def pytest_pyfunc_call(pyfuncitem):
-    test_func = pyfuncitem.obj
-    if not inspect.iscoroutinefunction(test_func):
-        return None
-    fixture_names = pyfuncitem._fixtureinfo.argnames
-    kwargs = {name: pyfuncitem.funcargs[name] for name in fixture_names}
+@pytest.fixture(scope="module")
+def network_available() -> bool:
     try:
-        asyncio.run(test_func(**kwargs))
-    finally:
-        asyncio.set_event_loop(asyncio.new_event_loop())
-    return True
+        import socket
+
+        socket.create_connection(("api.binance.com", 443), timeout=3).close()
+        return True
+    except OSError:
+        return False

@@ -1,8 +1,8 @@
 """
 Parametre optimizasyonu için async job registry.
 
-3 analiz seviyesi (soft/orta/yüksek). Yüksek seviye full CPU + 1-6 saat. İş tek HTTP
-isteğine sığmadığından job modeli: POST -> job_id, GET ile ilerleme/ETA/sonuç poll.
+Tek analiz modu (professional_auto). Full CPU + 30dk-6sa (kanıt kalitesine göre).
+İş tek HTTP isteğine sığmadığından job modeli: POST -> job_id, GET ile ilerleme/ETA/sonuç poll.
 
 Yürütme:
   * status=fetching : (async) derin geçmiş çekilir (ilerleme akar)
@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from app.services.param_optimizer.cancel import ParamOptimizerCancelled
+from app.services.param_optimizer.engine import RESULT_SCHEMA_VERSION
 from app.services.param_optimizer.tiers import AnalysisTier, get_tier, estimate_seconds
 
 logger = logging.getLogger(__name__)
@@ -44,8 +45,12 @@ _JOB_STORE_DIR = Path(
         str(_PROJECT_ROOT / "data" / "param_optimizer_jobs"),
     )
 )
-# soft/orta için makul tavan; yüksek için full CPU (env override edilebilir)
-_MAX_AUTO_WORKERS = 4
+# P2: süreç izlenebilirliği — her iş için ayrı structured JSONL log. JSON sonuç
+# kaydı debug için zaten var ama "hangi aşamada ne oldu" akışını göstermiyordu.
+_JOB_LOG_DIR = Path(
+    os.getenv("PARAM_OPTIMIZER_LOG_DIR", str(_PROJECT_ROOT / "logs" / "param_assistant"))
+)
+_MAX_AUTO_WORKERS = 4  # kullanılmıyor; gerçek çekirdek politikası parallel.resolve_workers
 
 # Sert güvenlik zaman aşımları: motor kendi bütçesini aşar/takılırsa son emniyet.
 # run_optimization zaten kendi içinde time_budget_sec'i deadline ile uyguluyor;
@@ -139,7 +144,7 @@ class OptJob:
     symbol: str
     budget: float
     time_budget_sec: float
-    tier: str = "medium"
+    tier: str = "professional_auto"
     tier_label: str = ""
     cores: int = 1
     status: str = "queued"  # queued|fetching|running|done|error|cancelled
@@ -157,8 +162,10 @@ class OptJob:
     result: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
     owner_key: str = ""  # hesap/kullanıcı sahipliği: "acc:<id>" | "usr:<id>"
+    config_hash: str = ""  # request_config_hash(symbol,budget,tier): bayat-sonuç engeli
     consumed: bool = False  # bitmiş sonuç tek-sefer gösterildi mi (one-shot)
     cancel_requested: bool = False
+    completed_at: Optional[float] = None  # done/error damgası (sonuca da yansır)
     meta: Dict[str, Any] = field(default_factory=dict)
 
     def public(self) -> Dict[str, Any]:
@@ -191,6 +198,71 @@ def _persist_job(job: OptJob) -> None:
             json.dump(job.public(), fh, ensure_ascii=False, default=str)
     except Exception as e:
         logger.debug("param_optimizer job persist fail %s: %s", job.id, e)
+
+
+def _job_log_path(job_id: str) -> Path:
+    safe = "".join(ch for ch in str(job_id or "") if ch.isalnum() or ch in ("_", "-"))
+    return _JOB_LOG_DIR / f"{safe}.jsonl"
+
+
+def _append_job_log(job_id: str, record: Dict[str, Any]) -> None:
+    """Tek satır structured log ekle. Best-effort: hiçbir hata işi durdurmaz/raise etmez."""
+    try:
+        _JOB_LOG_DIR.mkdir(parents=True, exist_ok=True)
+        payload = {"ts": round(time.time(), 3), "job_id": job_id, **record}
+        with open(_job_log_path(job_id), "a") as fh:
+            fh.write(json.dumps(payload, ensure_ascii=False, default=str) + "\n")
+    except Exception as e:
+        logger.debug("param_optimizer job log append fail %s: %s", job_id, e)
+
+
+def _log_job_gate_and_final(job_id: str, result: Dict[str, Any]) -> None:
+    """P2: run_optimization tamamlanınca aday/gate/karar özetini JSONL'e yaz.
+
+    Her validasyondan geçen adayı tek tek loglamak (300-600 aday) hot-path'i
+    şişirir; bunun yerine leaderboard (top-12, her biri zaten reject_reason +
+    deployable taşır) + final deploy_gate + nihai karar tek seferde yazılır —
+    "hangi aday neden elendi, sonuç ne" sorusunu yanıtlamak için yeterli."""
+    try:
+        for entry in (result.get("leaderboard") or [])[:12]:
+            _append_job_log(job_id, {
+                "stage": "candidate",
+                "structure": entry.get("structure"),
+                "deployable": entry.get("deployable"),
+                "reject_reason": entry.get("reject_reason"),
+                "oos_return_pct": entry.get("oos_return_pct"),
+                "combined_score": entry.get("combined_score"),
+            })
+        rejected = result.get("rejected_best_candidate")
+        if rejected:
+            _append_job_log(job_id, {
+                "stage": "candidate",
+                "structure": rejected.get("structure"),
+                "deployable": False,
+                "reject_reason": rejected.get("reject_reason"),
+            })
+        gate = result.get("deploy_gate") or {}
+        _append_job_log(job_id, {
+            "stage": "gate",
+            "deploy": gate.get("deploy"),
+            "failed_checks": gate.get("reasons"),
+            "pbo": result.get("pbo"),
+            "deflated_sharpe_ok": result.get("deflated_sharpe_ok"),
+            "plateau_ok": result.get("plateau_ok"),
+            "stress_ok": result.get("stress_ok"),
+        })
+        fr = result.get("final_recommendation") or {}
+        dec = result.get("decision") or {}
+        _append_job_log(job_id, {
+            "stage": "final",
+            "result_type": result.get("result_type", "ok"),
+            "decision": fr.get("decision"),
+            "reason_code": dec.get("reason_code"),
+            "blocking_reasons": fr.get("blocking_reasons"),
+            "headline": fr.get("headline"),
+        })
+    except Exception as e:
+        logger.debug("param_optimizer job log gate/final fail %s: %s", job_id, e)
 
 
 def _load_persisted_job(job_id: str) -> Optional[OptJob]:
@@ -254,6 +326,22 @@ def _progress_from(job: OptJob, ev: Dict[str, Any]) -> None:
                 pass
         return
     else:
+        if stage != prev_stage:
+            # P2: her gerçek aşama geçişini structured log'a yaz (tek satır;
+            # aynı aşamadaki tekrarlayan ilerleme tikleri YAZILMAZ — gürültü olur).
+            _append_job_log(job.id, {
+                k: v for k, v in {
+                    "stage": stage,
+                    "elapsed": ev.get("elapsed"),
+                    "message": ev.get("message"),
+                    "train_bars": ev.get("train_bars"),
+                    "oos_bars": ev.get("oos_bars"),
+                    "recent_in_bars": ev.get("recent_in_bars"),
+                    "final_holdout_bars": ev.get("final_holdout_bars"),
+                    "regime": ev.get("regime"),
+                    "candidates": ev.get("candidates"),
+                }.items() if v is not None
+            })
         job.stage = stage
     base = _STAGE_BASE.get(stage, job.percent)
     pct = base
@@ -522,6 +610,16 @@ async def _run_job(
                 job.error = result.get("error") or "optimizasyon başarısız"
                 _touch(job)
                 return
+            # VERİ BÜTÜNLÜĞÜ: sonuca job-katmanı izlenebilirlik damgalarını ekle.
+            # config_hash/market_data_hash/schema_version engine'den gelir; burada
+            # job_id ve zaman damgalarını ekleyip config_hash'i garanti altına alırız.
+            if isinstance(result, dict):
+                result["job_id"] = job.id
+                result["created_at"] = job.created_at
+                result["completed_at"] = time.time()
+                result.setdefault("config_hash", job.config_hash)
+                _log_job_gate_and_final(job.id, result)
+            job.completed_at = time.time()
             job.result = result
             job.status = "done"
             job.percent = 100
@@ -556,7 +654,7 @@ async def create_job(
     symbol: str,
     budget: float,
     *,
-    analysis_level: str = "medium",
+    analysis_level: str = "professional_auto",
     n_workers: int = 0,
     fee: float = 0.001,
     time_budget_override: Optional[float] = None,
@@ -570,6 +668,7 @@ async def create_job(
     if time_budget_override is not None:
         tb = max(5.0, min(tier.time_budget_sec, float(time_budget_override)))
     est = estimate_seconds(tier, nw)
+    cfg_hash = request_config_hash(symbol, budget, tier.key)
     job = OptJob(
         id=uuid.uuid4().hex[:16],
         symbol=symbol,
@@ -579,6 +678,7 @@ async def create_job(
         tier_label=tier.label,
         cores=nw,
         owner_key=owner_key or "",
+        config_hash=cfg_hash,
         eta_total_sec=est["eta_high_sec"] if time_budget_override is None else tb + 10,
         eta_remaining_sec=est["eta_high_sec"]
         if time_budget_override is None
@@ -588,7 +688,9 @@ async def create_job(
         async with _JOBS_LOCK:
             await _gc()
             if owner_key:
-                existing = get_running_job_for_owner(owner_key)
+                # YALNIZ aynı config (sembol+bütçe+seviye) için reuse — aksi halde
+                # farklı bir analizi mevcut işe bağlamak bayat/yanlış sonuç gösterir.
+                existing = get_running_job_for_owner(owner_key, config_hash=cfg_hash)
                 if existing is not None:
                     return existing
             _JOBS[job.id] = job
@@ -640,13 +742,29 @@ def _latest_job_id_for_owner(
     return best_id
 
 
-def get_running_job_for_owner(owner_key: str) -> Optional[OptJob]:
-    """Sahibin halen AKTİF (çalışan) işi varsa döndür (yoksa None)."""
+def request_config_hash(symbol: str, budget: float, tier_key: str) -> str:
+    """İstek kimliği (sembol+bütçe+seviye). engine.config_hash ile AYNI değeri üretir;
+    böylece job-katmanı reuse kararı ile sonuca gömülen hash birebir tutarlıdır."""
+    from app.services.param_optimizer.engine import config_hash
+
+    return config_hash(symbol, budget, tier_key)
+
+
+def get_running_job_for_owner(
+    owner_key: str, *, config_hash: Optional[str] = None
+) -> Optional[OptJob]:
+    """Sahibin halen AKTİF (çalışan) işi varsa döndür (yoksa None).
+
+    config_hash verilirse YALNIZ aynı config'li işi döndürür: farklı sembol/bütçe/
+    seviye için çalışan bir işi reuse etmek (bayat/yanlış sonuç) engellenir.
+    """
     jid = _latest_job_id_for_owner(owner_key, statuses=set(_ACTIVE_STATUSES))
     if not jid:
         return None
     job = get_job(jid)  # disk'te bayatlamış aktif iş -> error'a çevrilir
     if job and job.status in _ACTIVE_STATUSES:
+        if config_hash is not None and getattr(job, "config_hash", "") != config_hash:
+            return None
         return job
     return None
 

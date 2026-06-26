@@ -6,7 +6,22 @@
 
     var SILENT_SKIP = {
         PRICE_STALE_OR_MISSING: 1,
-        IDEMPOTENT_LOCK: 1
+        IDEMPOTENT_LOCK: 1,
+        LOCK_BUSY: 1
+    };
+
+    var DEDUPE_DISPLAY_SKIP = {
+        MIN_NOTIONAL: 1,
+        MIN_NOTIONAL_AFTER_CAP: 1,
+        BUY_DISABLED: 1,
+        SELL_ONLY_MODE: 1,
+        MAX_BUY_LEVELS_ZERO: 1,
+        EXPOSURE_CAP: 1,
+        LOCK_LEASE_EXPIRED: 1,
+        WEIGHT_DENIED: 1,
+        INSUFFICIENT_QUOTE: 1,
+        BINANCE_FREE_QUOTE_INSUFFICIENT: 1,
+        BINANCE_FREE_BASE_INSUFFICIENT: 1
     };
 
     var REASON_TR = {
@@ -101,10 +116,32 @@
         return s.replace(/(\.\d*?[1-9])0+$/, '$1').replace(/\.0+$/, '');
     }
 
-    function fmtPrice(v) {
+    function fmtPrice(v, symbol) {
         var n = num(v);
         if (n == null) return '';
-        return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        var sym = symbol || (_logContext && _logContext.symbol) || '';
+        if (typeof CoinPriceFormat !== 'undefined' && CoinPriceFormat.fmtSymbolPrice) {
+            return CoinPriceFormat.fmtSymbolPrice(n, sym, [n]);
+        }
+        if (n >= 1000) return n.toFixed(2);
+        if (n >= 1) return n.toFixed(4);
+        if (n >= 0.01) return n.toFixed(5);
+        if (n >= 0.0001) return n.toFixed(6);
+        return n.toFixed(8);
+    }
+
+    function fmtPriceFixed(v, symbol) {
+        var n = num(v);
+        if (n == null) return '';
+        var sym = symbol || (_logContext && _logContext.symbol) || '';
+        if (typeof CoinPriceFormat !== 'undefined' && CoinPriceFormat.fmtSymbolPriceFixed) {
+            return CoinPriceFormat.fmtSymbolPriceFixed(n, sym, [n]);
+        }
+        if (n >= 1000) return n.toFixed(2);
+        if (n >= 1) return n.toFixed(4);
+        if (n >= 0.01) return n.toFixed(5);
+        if (n >= 0.0001) return n.toFixed(6);
+        return n.toFixed(8);
     }
 
     function formatCycleOpenPrice(meta) {
@@ -114,8 +151,8 @@
         if (price == null) price = num(meta.last_price);
         if (price == null || price <= 0) return null;
         var coin = coinFromSymbol(meta.symbol);
-        if (!coin) return fmtPrice(price);
-        return coin + ' ' + fmtPrice(price);
+        if (!coin) return fmtPrice(price, meta.symbol);
+        return coin + ' ' + fmtPrice(price, meta.symbol);
     }
 
     function sideTr(s) {
@@ -581,7 +618,7 @@
         // Fiyat aralığı
         var ph = num(meta.price_high), pl = num(meta.price_low);
         if (ph != null && pl != null && ph > 0 && pl > 0) {
-            parts.push('fiyat: $' + pl.toFixed(4) + '–$' + ph.toFixed(4));
+            parts.push('fiyat: $' + fmtPriceFixed(pl, meta.symbol) + '–$' + fmtPriceFixed(ph, meta.symbol));
         }
 
         // Kümülatif K/Z
@@ -1044,7 +1081,7 @@
         // Başabaş tahmini
         var breakeven = num(meta.estimated_breakeven);
         if (breakeven != null && breakeven > 0) {
-            parts.push('başabaş ~$' + breakeven.toFixed(4));
+            parts.push('başabaş ~$' + fmtPriceFixed(breakeven, meta.symbol));
         }
 
         // Grid tetikleme fiyatları
@@ -1055,14 +1092,14 @@
             var bkeys = Object.keys(buyTriggers).sort();
             bkeys.forEach(function(k) {
                 var v = num(buyTriggers[k]);
-                if (v != null) triggerParts.push(k + ': $' + v.toFixed(4));
+                if (v != null) triggerParts.push(k + ': $' + fmtPriceFixed(v, meta.symbol));
             });
         }
         if (sellTriggers && typeof sellTriggers === 'object') {
             var skeys = Object.keys(sellTriggers).sort();
             skeys.forEach(function(k) {
                 var v = num(sellTriggers[k]);
-                if (v != null) triggerParts.push(k + ': $' + v.toFixed(4));
+                if (v != null) triggerParts.push(k + ': $' + fmtPriceFixed(v, meta.symbol));
             });
         }
         if (triggerParts.length) parts.push('grid tetik: ' + triggerParts.join(' · '));
@@ -1160,6 +1197,28 @@
         if (rd) parts.push(rd);
         appendMetaExtras(meta, {}, parts);
         return joinParts(parts);
+    }
+
+    function skipDedupeKey(meta) {
+        meta = meta || {};
+        return [
+            String(meta.skip_reason || '').toUpperCase(),
+            String(meta.reason || ''),
+            String(meta.side || ''),
+            meta.grid_index != null ? String(meta.grid_index) : '',
+            meta.cycle_id != null ? String(meta.cycle_id) : ''
+        ].join('|');
+    }
+
+    function shouldHideDuplicateSkip(meta) {
+        var skip = String((meta && meta.skip_reason) || '').toUpperCase();
+        if (!DEDUPE_DISPLAY_SKIP[skip]) return false;
+        var key = skipDedupeKey(meta);
+        if (!key || key === '|||') return false;
+        if (!_logContext._seenSkipKeys) _logContext._seenSkipKeys = {};
+        if (_logContext._seenSkipKeys[key]) return true;
+        _logContext._seenSkipKeys[key] = true;
+        return false;
     }
 
     function formatSkipReason(meta, rawMsg) {
@@ -1271,6 +1330,10 @@
 
         if (meta.symbol) parts.push(meta.symbol);
         if (meta.cycle_id != null) parts.push('tur ' + meta.cycle_id);
+        if (num(meta.repeat_count) > 1) parts.push('toplam ' + meta.repeat_count + ' kez');
+        if (num(meta.suppressed_since_last) > 0) {
+            parts.push(meta.suppressed_since_last + ' benzer kayıt gizlendi');
+        }
         appendMetaExtras(meta, {}, parts);
         return { severity: severity, message: joinParts(parts) };
     }
@@ -1550,6 +1613,9 @@
 
         if (ty === 'SKIP_REASON' && SILENT_SKIP[skip]) return { hidden: true };
         if (ty === 'SKIP_REASON' && /IDEMPOTENT_LOCK/i.test(raw)) return { hidden: true };
+        if (!options.forExport && ty === 'SKIP_REASON' && shouldHideDuplicateSkip(meta)) {
+            return { hidden: true };
+        }
         // Başarılı emir gönderimi gürültü — dolunca ORDER_FILLED; hata SKIP_REASON/ERROR ile yazılır
         if (ty === 'ORDER_ATTEMPT') return { hidden: true };
         if ((ty === 'HEALTH_WARN' || ty === 'HEALTH_CRITICAL') && (meta.test === true || /^TEST_UI_/i.test(String(meta.health_code || '')))) {
@@ -1901,6 +1967,9 @@
 
     function setLogContext(ctx) {
         if (ctx && typeof ctx === 'object') {
+            if (ctx.events) {
+                ctx._seenSkipKeys = {};
+            }
             _logContext = Object.assign({}, _logContext, ctx);
             if (typeof global !== 'undefined' && global._lastHealthData) {
                 _logContext.healthData = _logContext.healthData || global._lastHealthData;

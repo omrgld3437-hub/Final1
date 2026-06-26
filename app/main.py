@@ -212,7 +212,7 @@ botengine_logger.addHandler(botengine_console)
 logger.info("Logging configured - console + file: logs/app.log")
 
 from app.api import routes, ws, admin, bots_v2, finance, spot_routes, auth, bots_engine
-from app.api import data_hub_routes, finance_reports, pricing_routes
+from app.api import data_hub_routes, finance_reports, pricing_routes, coin_logo_routes
 from app import server_state as server_state
 
 try:
@@ -309,6 +309,43 @@ async def startup_event():
             logger.warning("audit SERVER_START failed: %s", e)
 
     asyncio.create_task(_audit_server_start())
+
+    async def _warm_param_pool():
+        try:
+            def _sync():
+                from app.services.dynamic_param_score.param_pool.versioning import (
+                    load_indexed_pool,
+                    load_version_templates,
+                    resolve_pool_version,
+                )
+
+                vid = resolve_pool_version()
+                from app.services.dynamic_param_score.param_pool.versioning import (
+                    lazy_shelf_enabled,
+                )
+
+                if lazy_shelf_enabled(vid):
+                    logger.info("Param pool lazy shelf index load (%s)", vid)
+                    load_indexed_pool(vid)
+                    logger.info("Param pool lazy shelf index ready (%s)", vid)
+                    return
+
+                logger.info("Param pool warmup started (%s)", vid)
+                load_version_templates(vid)
+                load_indexed_pool(vid)
+                logger.info("Param pool warmup done (%s)", vid)
+
+            await loop.run_in_executor(None, _sync)
+        except Exception as e:
+            logger.warning("Param pool warmup failed: %s", e)
+
+    if os.environ.get("PARAM_POOL_WARMUP", "0").strip().lower() in ("1", "true", "yes"):
+        asyncio.create_task(_warm_param_pool())
+    else:
+        logger.info(
+            "Param pool warmup skipped (lazy shelf: route index only on first use). "
+            "Set PARAM_POOL_WARMUP=1 to preload index at startup."
+        )
 
     # Yerel test hesabı (test / 123) — yoksa oluştur; sadece localhost'tan giriş (girişten önce hazır olsun diye beklenir)
     async def _ensure_test_account():
@@ -411,16 +448,22 @@ async def startup_event():
             "[DataHub] REST loop skipped — another worker is REST leader (pid=%s)",
             os.getpid(),
         )
-    # Warmup: one price fetch so first snapshot request gets data (up to 5s)
-    try:
-        warmup_timeout = float(os.environ.get("DATAHUB_WARMUP_TIMEOUT_SEC", "5.0"))
-        await asyncio.wait_for(
-            data_hub.warmup(warmup_timeout), timeout=warmup_timeout + 1.0
-        )
-    except Exception as e:
-        logger.debug("[DataHub] Warmup skipped or failed: %s", e)
-    # WebSocket combined stream (fallback: REST remains active)
-    data_hub.start_ws(testnet=False)
+    # Warmup: arka planda — HTTP acilisini bloke etmez
+    async def _datahub_warmup_bg():
+        try:
+            warmup_timeout = float(os.environ.get("DATAHUB_WARMUP_TIMEOUT_SEC", "5.0"))
+            await asyncio.wait_for(
+                data_hub.warmup(warmup_timeout), timeout=warmup_timeout + 1.0
+            )
+        except Exception as e:
+            logger.debug("[DataHub] Warmup skipped or failed: %s", e)
+
+    asyncio.create_task(_datahub_warmup_bg())
+    # WebSocket yalnızca REST leader worker'da — çoklu worker'da çift WS/REST yok
+    if rest_leader:
+        data_hub.start_ws(testnet=False)
+    else:
+        logger.info("[DataHub] WebSocket skipped on non-leader worker (pid=%s)", os.getpid())
     try:
         from app.services.server_public_ip import start_server_public_ip_refresh
 
@@ -588,11 +631,15 @@ async def shutdown_event():
     logger.info("Background services stopped")
 
 
-# No-cache for UI and build-info: her commit sonrası değişiklik anında yansısın (tarayıcı/proxy önbelleği yok)
+# No-cache for UI HTML pages (not static assets like coin logos)
 @app.middleware("http")
 async def no_cache_ui_middleware(request, call_next):
     response = await call_next(request)
     path = (request.url.path or "").rstrip("/")
+    if path.startswith("/ui/assets/coins/") and path.lower().endswith(".png"):
+        return response
+    if path.startswith("/ui/assets/") and not path.endswith(".html"):
+        return response
     if path.startswith("/ui/") or path == "/api/debug/build-info":
         response.headers["Cache-Control"] = (
             "no-store, no-cache, must-revalidate, max-age=0"
@@ -1384,6 +1431,7 @@ app.include_router(finance_reports.router, prefix="/api")  # YENİ - Finance Rep
 app.include_router(
     pricing_routes.router, prefix="/api/pricing"
 )  # Üst ticker canlı fiyat
+app.include_router(coin_logo_routes.router, prefix="/api")
 app.include_router(routes.router, prefix="/api")
 _home_routes_loaded = False
 for _home_mod in ("app.api.routes.home",):
@@ -1475,9 +1523,21 @@ app.include_router(spot_routes.router, prefix="/api")  # YENİ - Spot Engine
 try:
     from app.api import param_assistant_routes
 
-    app.include_router(param_assistant_routes.router, prefix="/api")  # Parametre Asistanı (backtest optimizer)
+    app.include_router(param_assistant_routes.router, prefix="/api")  # Parametre Asistanı (DPS)
 except Exception as _pa_ex:  # pragma: no cover
     logger.warning("param_assistant_routes yüklenemedi: %s", _pa_ex)
+try:
+    from app.api import dynamic_param_score_routes
+
+    app.include_router(dynamic_param_score_routes.router, prefix="/api")
+except Exception as _dps_ex:  # pragma: no cover
+    logger.warning("dynamic_param_score_routes yüklenemedi: %s", _dps_ex)
+try:
+    from app.api import user_activity_log_routes
+
+    app.include_router(user_activity_log_routes.router, prefix="/api")
+except Exception as _ual_ex:  # pragma: no cover
+    logger.warning("user_activity_log_routes yüklenemedi: %s", _ual_ex)
 app.include_router(ws.router, prefix="/api/ws")
 try:
     from app.api import leaderboard
@@ -2116,12 +2176,18 @@ COIN_LOGO_CACHE_MAX_AGE = 31 * 24 * 60 * 60  # 31 gün saniye cinsinden
 
 @app.get("/ui/assets/coins/{filename:path}")
 async def serve_coin_logo(filename: str):
-    """Coin logo PNG dosyaları – tarayıcı cache (31 gün) ile sayfa yenilemede flicker olmaz."""
+    """Coin logo PNG — yoksa bir kez uzaktan çekip kaydeder; yine yoksa 404 (UI baş harf gösterir)."""
     if not filename or ".." in filename or not filename.endswith(".png"):
         raise HTTPException(status_code=404, detail="Not found")
     if "/" in filename:
         raise HTTPException(status_code=404, detail="Not found")
     path = COINS_DIR / filename
+    if not path.is_file():
+        from app.services.coin_logo_service import ensure_coin_logo
+
+        symbol = filename[:-4]
+        ensure_coin_logo(symbol)
+        path = COINS_DIR / filename
     if not path.is_file():
         raise HTTPException(status_code=404, detail="Not found")
     return FileResponse(

@@ -9,6 +9,8 @@ import logging
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.botengine.models import BotEngineMode, DcaGridTrailingConfig
+from app.core.constants import DEFAULT_MIN_NOTIONAL_USDT
+from app.botengine.skip_event_policy import grid_min_notional_blocked
 from app.botengine.dynamic.safety_gate import DAILY_LOSS_RUNTIME_ENABLED
 from app.botengine.strategies.base import Strategy
 from app.botengine.strategies.grid_outage_recovery import (
@@ -28,9 +30,23 @@ def _queue_grid_skip(
     config: DcaGridTrailingConfig,
     reason: str,
 ) -> None:
+    from app.botengine.skip_event_policy import (
+        grid_min_notional_blocked,
+        mark_grid_min_notional_blocked,
+    )
     from app.botengine.state_store import queue_engine_event
 
-    min_n = float(getattr(config, "min_notional_guard", 5.0) or 5.0)
+    if grid_min_notional_blocked(state, side, grid_index):
+        return
+
+    min_n = float(getattr(config, "min_notional_guard", DEFAULT_MIN_NOTIONAL_USDT) or DEFAULT_MIN_NOTIONAL_USDT)
+    mark_grid_min_notional_blocked(
+        state,
+        side,
+        grid_index,
+        notional=notional,
+        min_notional=min_n,
+    )
     queue_engine_event(
         state,
         "SKIP_REASON",
@@ -761,6 +777,8 @@ def tick_dca_grid_trailing(
             state["sell_grid_peak_price"] = peaks
             exec_thr = cur_peak * (1 - sell_trail_pct / 100.0)
             if P <= exec_thr or idx in favorable_sell:
+                if grid_min_notional_blocked(state, "SELL", idx):
+                    continue
                 avail_base = max(0.0, (_f(base_balance) or 0.0) - base_reserved)
                 qty = _sell_qty_for_grid(state, config, idx, avail_base, price=P)
                 if qty and qty > 0:
@@ -770,7 +788,7 @@ def tick_dca_grid_trailing(
                             state.get("bot_id", 0),
                             idx,
                             qty * P,
-                            getattr(config, "min_notional_guard", 5.0),
+                            getattr(config, "min_notional_guard", DEFAULT_MIN_NOTIONAL_USDT),
                         )
                         _queue_grid_skip(
                             state,
@@ -822,6 +840,8 @@ def tick_dca_grid_trailing(
             state["buy_grid_trough_price"] = troughs
             exec_thr = cur_trough * (1 + buy_trail_pct / 100.0)
             if P >= exec_thr or idx in favorable_buy:
+                if grid_min_notional_blocked(state, "BUY", idx):
+                    continue
                 # max_buy_levels: bu seviye limiti aşıyorsa hard block
                 if _buy_fired_count >= _mbl_limit:
                     logger.warning(
@@ -854,7 +874,7 @@ def tick_dca_grid_trailing(
                             state.get("bot_id", 0),
                             idx,
                             quote_q,
-                            getattr(config, "min_notional_guard", 5.0),
+                            getattr(config, "min_notional_guard", DEFAULT_MIN_NOTIONAL_USDT),
                         )
                         _queue_grid_skip(
                             state,
@@ -1089,7 +1109,7 @@ def _meets_min_notional(
     quote_qty: Optional[float] = None,
 ) -> bool:
     """Binance min notional guard — grid intent üretmeden önce kontrol."""
-    min_n = _float(getattr(config, "min_notional_guard", 5.0), 5.0)
+    min_n = _float(getattr(config, "min_notional_guard", DEFAULT_MIN_NOTIONAL_USDT), DEFAULT_MIN_NOTIONAL_USDT)
     if min_n <= 0:
         return True
     if (side or "").upper() == "BUY":
@@ -1520,6 +1540,9 @@ def cycle_reset_after_fill(
 ) -> None:
     """After re-entry or profit-exit fill: tur karı hesaplanır, cycle_id++, reference_price, grid referansları bileşik bakiyeye güncellenir."""
     old_cycle_id = int(state.get("cycle_id") or 1)
+    from app.botengine.skip_event_policy import clear_skip_runtime_state
+
+    clear_skip_runtime_state(state)
     from app.botengine.cycle_ledger import archive_cycle_ledger_fills
 
     archive_cycle_ledger_fills(state, old_cycle_id)
@@ -1555,8 +1578,14 @@ def cycle_reset_after_fill(
     # snapshot'ı yeniden hesaplasın. Manuel modda bayrak görmezden gelinir.
     state["_dynamic_recompute_needed"] = True
     # Yeni tur henüz "engage" olmadı: cycle-entry risk gate yeniden karar verebilsin
-    # (önceki turun engage bayrağı taşınmamalı). Manuel modda bu anahtar zaten yok.
-    state.pop("_dynamic_cycle_engaged", None)
+    try:
+        from app.botengine.dynamic.cycle_gate import reset_for_new_cycle
+
+        reset_for_new_cycle(state)
+    except Exception:
+        state.pop("_dynamic_cycle_engaged", None)
+        state.pop("_dynamic_cycle_hold", None)
+        state.pop("_dynamic_round_pending", None)
     if symbol:
         from datetime import datetime, timezone
         from app.botengine.cycle_ledger import build_cycle_ledger_empty

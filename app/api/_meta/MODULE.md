@@ -12,6 +12,7 @@ FastAPI router’ları — web süreci emir göndermez (worker-only).
 | `bots_engine.py` | `/api/bots-engine` — start/stop/detail, `/live` (3s TTL), `/batch/live` (max 50), `/grid-points`; liste `load_states_list_meta` |
 | `auth.py` | Login, session, CSRF |
 | `admin.py` | Admin panel |
+| `user_activity_log_routes.py` | Kullanıcı işlem geçmişi beacon + admin log API |
 | `finance.py` | Finans API |
 | `finance_reports.py` | Raporlar |
 | `spot_routes.py` | Manuel spot; `/spot/price` → DataHub only + rate limit |
@@ -42,6 +43,7 @@ FastAPI router’ları — web süreci emir göndermez (worker-only).
 ```
 __init__.py
 admin.py
+user_activity_log_routes.py
 auth.py
 bots_engine.py
 bots_v2.py

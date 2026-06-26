@@ -2,9 +2,20 @@
 shared/.env
 marketing/.git/
 marketing/**/.git/
+Kullanıcı Logları/
+Sistem Logları/
+GIT.md
+.claude/
 logs/
 data/
+audit_output/
+.param_dynamic_full_bundle_staging/
+param_dynamic_mode_full_bundle_*.zip
+data/param_pool/**/*.bak
+data/param_pool/**/*.pkl
 .run/
+rest.log
+rest.log.*
 *.db
 *.db-shm
 *.db-wal

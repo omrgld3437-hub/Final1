@@ -973,6 +973,14 @@ def _is_noise_line(line: str, level: str) -> bool:
             "7999" in s or "127.0.0.1', 7999" in s
         ):
             return True
+        # macOS sandbox / izin: geçici bind reddi (EADDRINUSE ile aynı sınıf)
+        if "operation not permitted" in s and "7999" in s:
+            return True
+        # Uvicorn: istemci bağlantısı kapandığında beklenen ASGI disconnect
+        if s.startswith("ERROR:") and "Exception in ASGI application" in s:
+            return True
+        if "anyio.EndOfStream" in s or "anyio.WouldBlock" in s:
+            return True
     if level == "WARN":
         # Finans senkron: sembol önbelleği boşken yedek liste — beklenen, işlem devam eder
         if "[TradeSync] Symbol cache empty" in s:
@@ -1013,6 +1021,40 @@ def _is_noise_line(line: str, level: str) -> bool:
         if "CSRF double-submit mismatch" in s and "/api/log-error" in s:
             return True
         if "CSRF Origin mismatch" in s and "/api/log-error" in s:
+            return True
+        # Geçersiz API anahtarı — hesap bazlı beklenen durum (panel gürültüsü)
+        if "wallet_refresh_attempt" in s and "error_code=API_UNAUTHORIZED" in s:
+            return True
+        if "Balance fetch error" in s and "401 Unauthorized" in s:
+            return True
+        # DPS / şema yarışı düzeltildi (IF NOT EXISTS); geçmiş satırlar
+        if "schema_guard: could not create dynamic_param_decisions" in s:
+            return True
+        if "DPS persist failed: name 'persist_decision' is not defined" in s:
+            return True
+        # Operasyonel bot uyarıları — işlem atlandı, hata değil
+        if "BOT_EXECUTION_SKIP" in s or "MAX_BUY_LEVELS_EXCEEDED" in s:
+            return True
+        if "BOT_SLIPPAGE_WARN" in s or "BOT SLIPPAGE_WARN" in s or "BOT_BALANCE_DRIFT" in s:
+            return True
+        # Yavaş admin listesi — bilgi amaçlı
+        if "ADMIN_ACCOUNTS_LIST" in s and "duration_ms=" in s:
+            return True
+        if "[snapshot] prices timeout" in s:
+            return True
+        if "WORKER_MARKET_START failed" in s:
+            return True
+        # Geçici ağ / UI zaman aşımı
+        if "DPS klines fetch failed" in s and "timeout" in s.lower():
+            return True
+        if "ADMIN_PANEL_CLIENT_ERROR" in s and (
+            "timeout" in s.lower() or "Failed to fetch" in s or "is not a function" in s
+        ):
+            return True
+        # Manager panel probe (geçersiz endpoint)
+        if "/api/errors/recent" in s and "404" in s:
+            return True
+        if "/api/logs/errors" in s and "400" in s:
             return True
     if level == "ERROR":
         # INFO yanlış sınıflandırma düzeltmesi öncesi: home_wallet_refresh error=...

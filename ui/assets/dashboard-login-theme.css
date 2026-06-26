@@ -240,7 +240,7 @@ body.binance-theme.page-admin {
 .page-dashboard .tt-logo-text {
     display: inline-block;
     font-weight: 700;
-    background: linear-gradient(135deg, var(--ds-text-primary) 0%, var(--ds-text-secondary) 35%, var(--ds-accent) 50%, var(--ds-text-secondary) 65%, var(--ds-text-primary) 100%);
+    background: linear-gradient(135deg, var(--ds-text-primary) 0%, #e896c4 35%, #ffd2ec 50%, #e896c4 65%, var(--ds-text-primary) 100%);
     background-size: 200% auto;
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
@@ -657,6 +657,7 @@ body.binance-theme.page-admin {
     display: flex;
     align-items: center;
     justify-content: center;
+    gap: 0.5rem;
 }
 
 .page-bot .state-hero-title-row .datahub-ws-indicator {

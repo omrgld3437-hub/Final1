@@ -1,0 +1,149 @@
+"""Dynamic Param Score Engine — shared constants."""
+
+from __future__ import annotations
+
+import os
+
+from app.core.constants import DEFAULT_MIN_NOTIONAL_USDT
+# ParamScore weights (must sum to 1.0)
+W_RANGE = 0.14
+W_VOLATILITY = 0.13
+W_LIQUIDITY = 0.12
+W_SPREAD = 0.10
+W_MEAN_REVERSION = 0.10
+W_TREND = 0.09
+W_MOMENTUM = 0.08
+W_EXPOSURE_SAFETY = 0.08
+W_FEE_EFFICIENCY = 0.07
+W_BTC_MARKET_RISK = 0.05
+W_DATA_QUALITY = 0.04
+
+# Hard risk penalties
+PENALTY_DRAWDOWN_LT_30 = 10
+PENALTY_BTC_RISK_LT_25 = 8
+PENALTY_EXPOSURE_LT_35 = 12
+PENALTY_DATA_LT_50 = 15
+
+# Score bucket boundaries (0–100 ParamScore)
+BUCKET_BLOCKED_MAX = 9
+BUCKET_EXTREME_RISK_MAX = 19
+BUCKET_VERY_DEFENSIVE_MAX = 29
+BUCKET_DEFENSIVE_LOW_MAX = 39
+BUCKET_DEFENSIVE_HIGH_MAX = 49
+BUCKET_BALANCED_LOW_MAX = 59
+BUCKET_BALANCED_HIGH_MAX = 69
+BUCKET_ACTIVE_LOW_MAX = 79
+BUCKET_ACTIVE_HIGH_MAX = 89
+
+# Global allocation caps
+MAX_BASE_ALLOC_FRAC = 0.70
+MAX_BASE_EXPOSURE_FRAC = 0.80
+TRENDING_DOWN_MAX_BASE_ALLOC = 0.30
+TRENDING_DOWN_MAX_EXPOSURE_EXTRA = 0.06
+
+# Buy distribution caps
+MAX_QUOTE_PER_BUY_FRAC = 0.35
+TRENDING_DOWN_MAX_QUOTE_PER_BUY = 0.20
+MAX_SINGLE_LEVEL_WEIGHT = 0.35
+
+# Grid spacing — DPS Engine V2 global floors (majors; altcoins use param_generator/grid_math)
+FEE_SPACING_MULTIPLIER = 3.0
+MIN_SPACING_FLOOR_PCT = 1.20
+MIN_GRID_SPACING_ABS_PCT = 1.20
+MIN_GRID_SPACING_FRICTION_MULT = 3.0
+MIN_TRAILING_FLOOR_PCT = 0.35
+TRAILING_FEE_MULTIPLIER = 2.5
+ABSOLUTE_MIN_FIRST_GRID_PCT = 1.0
+
+# DPS Engine V2 pool
+DPS_ENGINE_V2 = "DPS_ENGINE_V2"
+POOL_VERSION_V3 = "v3.0.0"
+POOL_TARGET_V3 = 200_000
+
+# DPS Engine V4 pool — 300k shelf-routed profiles
+DPS_ENGINE_V4 = "DPS_ENGINE_V4"
+POOL_VERSION_V4 = "v4.0.0"
+POOL_TARGET_V4 = 300_000
+
+# ACTIVE_GRID eligibility (ParamScore + sub-scores)
+ACTIVE_GRID_MIN_PARAM_SCORE = 70
+ACTIVE_GRID_MIN_SUB = {
+    "range_score": 65,
+    "liquidity_score": 70,
+    "spread_score": 70,
+    "fee_efficiency_score": 65,
+    "exposure_safety_score": 60,
+    "data_quality_score": 70,
+}
+
+# Safety gate thresholds
+DATA_QUALITY_BLOCKED = 40
+LIQUIDITY_BLOCKED = 30
+SPREAD_BLOCKED = 30
+DRAWDOWN_RISK_PENALTY = 30
+BTC_RISK_PENALTY = 25
+EXPOSURE_SAFETY_PENALTY = 35
+
+# Regime thresholds
+DUMP_RETURN_24H_PCT = -10.0
+ATR_PERCENTILE_HIGH = 85
+ADX_TREND_THRESHOLD = 22.0
+
+# Klines limits — 7-day windows (5m×2016 ≈ 7d, 15m×672 ≈ 7d, 1h×168 = 7d)
+KLINES_LIMIT_5M = 2016
+KLINES_LIMIT_15M = 672
+KLINES_LIMIT_1H = 168
+KLINES_LIMIT_4H = 42
+KLINES_LIMIT_1M = 240
+DATA_WINDOW_DAYS = 7
+BINANCE_KLINES_MAX_PER_REQUEST = 1000
+
+# Selector latency budget
+SELECTOR_P95_TARGET_MS = 650  # 50k templates
+SELECTOR_P95_TARGET_MS_100K = 700  # 100k memory index mode (p95 budget)
+SELECTOR_P95_TARGET_MS_200K = 300  # 200k DPS Engine V2 index pre-filter
+SELECTOR_P95_TARGET_MS_300K = 350  # 300k DPS Engine V4 route_key index
+SELECTOR_SQLITE_TARGET_MS_100K = 500  # 100k sqlite fallback
+
+# Selector fallback — nearby before relaxed auto-pick
+SELECTOR_NEARBY_SCORE_MARGIN = 10
+SELECTOR_NEARBY_MAX_SOFT_MISMATCHES = 2
+SELECTOR_RELAXED_SCORE_MARGIN = 8
+SELECTOR_RELAXED_MAX_SOFT_MISMATCHES = 4
+SELECTOR_RELAXED_MIN_SELECTION_SCORE = 48.0
+
+# Min budget
+MIN_BUDGET_USDT = 25.0
+MIN_EQUITY_NOTIONAL_MULT = 3.0
+SMALL_BUDGET_50_USDT = 50.0
+SMALL_BUDGET_75_USDT = 75.0
+SMALL_BUDGET_MAX_GRID_COUNT = 3
+MIN_GRID_COUNT_EACH_SIDE = 1
+MIN_GRID_COUNT_DEPLOYABLE = 2
+FEE_EFF_ACTIVE_FORBIDDEN = 30
+FEE_EFF_CAUTIOUS = 50
+ACTIVE_GRID_ALLOWED_RISK = frozenset({"NORMAL", "SAFE"})
+WORST_CASE_EXPOSURE_TOLERANCE = 0.005
+
+# Profile buy-ladder quote cap (fraction of available quote pool)
+# DPS Engine V2: full quote/base distributed to grids — protection via spacing, not reserve.
+BUY_BUDGET_CAP_FRAC = {
+    "DEFENSIVE_GRID_PROFILE": 1.0,
+    "ULTRA_DEFENSIVE_GRID_PROFILE": 1.0,
+    "BALANCED_GRID_PROFILE": 1.0,
+    "CAUTIOUS_BALANCED_GRID_PROFILE": 1.0,
+    "ACTIVE_RANGE_GRID_PROFILE": 1.0,
+    "HIGH_CONFIDENCE_ACTIVE_GRID_PROFILE": 1.0,
+    "ACTIVE_DEFENSIVE_GRID_PROFILE": 1.0,
+    "LOW_FEE_WIDE_GRID_PROFILE": 1.0,
+    "TREND_TRAILING_PROFILE": 1.0,
+    "SELL_MANAGEMENT_ONLY_PROFILE": 0.0,
+    "RECOVERY_SELL_PROFILE": 0.0,
+}
+
+# Log directory (relative to project root)
+LOG_DIR_NAME = "logs/dynamic_param_score"
+# Disk retention: when log dir exceeds max, prune oldest until target size
+LOG_DIR_MAX_BYTES = int(os.environ.get("DPS_LOG_DIR_MAX_BYTES", str(1024**3)))  # 1 GiB
+LOG_DIR_TARGET_BYTES = int(os.environ.get("DPS_LOG_DIR_TARGET_BYTES", str(100 * 1024**2)))  # 100 MiB
+LOG_REJECT_EXAMPLES_MAX = int(os.environ.get("DPS_LOG_REJECT_EXAMPLES_MAX", "15"))

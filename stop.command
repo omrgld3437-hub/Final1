@@ -4,6 +4,10 @@ MANAGER_PID="$ROOT/.run/manager.pid"
 WEB_PID="$ROOT/.run/web.pid"
 ENGINE_PID="$ROOT/.run/worker.pid"
 
+# Once .disabled bayraklarini yaz: supervisor.sh bunlari gorunce o servisi
+# yeniden baslatmaz (kasitli "durdur" kalici olsun).
+touch "$ROOT/.run/manager.disabled" "$ROOT/.run/web.disabled" "$ROOT/.run/worker.disabled" "$ROOT/.run/html.disabled"
+
 # Manager
 if [ -f "$MANAGER_PID" ]; then
   PID=$(cat "$MANAGER_PID")

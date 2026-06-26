@@ -17,6 +17,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
+from app.core.constants import DEFAULT_MIN_NOTIONAL_USDT
+
 logger = logging.getLogger(__name__)
 
 # Binance error log throttle: aynı (path, status/code) 5 dk içinde tekrar loglanmasın (tradeFee 400 vb. patlamayı keser)
@@ -1453,7 +1455,7 @@ def _filters_from_exchange_symbol_entry(s: Dict[str, Any]) -> Dict[str, Any]:
         "min_qty_str": "0.00001",
         "tick_size": 0.01,
         "tick_size_str": "0.01",
-        "min_notional": 5.0,
+        "min_notional": DEFAULT_MIN_NOTIONAL_USDT,
         "baseAsset": s.get("baseAsset"),
         "quoteAsset": s.get("quoteAsset"),
     }
@@ -1471,7 +1473,7 @@ def _filters_from_exchange_symbol_entry(s: Dict[str, Any]) -> Dict[str, Any]:
             out["tick_size_str"] = tick_raw
             out["tick_size"] = float(tick_raw)
         elif t in ("MIN_NOTIONAL", "NOTIONAL"):
-            out["min_notional"] = float(f.get("minNotional") or f.get("notional") or 5)
+            out["min_notional"] = float(f.get("minNotional") or f.get("notional") or DEFAULT_MIN_NOTIONAL_USDT)
     return out
 
 

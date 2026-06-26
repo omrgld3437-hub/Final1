@@ -81,6 +81,7 @@ from app.botengine.virtual_wallet import (
     sync_virtual_wallet_from_state,
 )
 from app.services.pnl_service import ensure_daily_ref_and_compute
+from app.core.constants import DEFAULT_MIN_NOTIONAL_USDT
 from app.utils.tz_utils import turkey_today_date_str
 
 logger = logging.getLogger(__name__)
@@ -167,14 +168,15 @@ async def _engine_tick_loop() -> None:
         n = len(_tasks)
         tick_count += 1
         if tick_count % 12 == 0:
+            db = None
             try:
                 db = _get_db()
-                try:
-                    await ensure_running_bots(db, recovery_source="engine_tick")
-                except Exception as tick_err:
-                    logger.debug("ENGINE_TICK ensure_running_bots: %s", tick_err)
-            except Exception:
-                pass
+                await ensure_running_bots(db, recovery_source="engine_tick")
+            except Exception as tick_err:
+                logger.debug("ENGINE_TICK ensure_running_bots: %s", tick_err)
+            finally:
+                if db is not None:
+                    db.close()
         if n > 0:
             logged_zero_once = False
             if tick_count % 12 == 0:
@@ -327,7 +329,7 @@ async def _build_trdca_snapshot(
         f = await adapter.get_symbol_filters(sym)
         step = float(f.get("step_size") or f.get("stepSize") or 0.00001)
         min_qty = float(f.get("min_qty") or f.get("minQty") or step)
-        mn = float(f.get("min_notional") or f.get("minNotional") or 5.0)
+        mn = float(f.get("min_notional") or f.get("minNotional") or DEFAULT_MIN_NOTIONAL_USDT)
         filters[sym] = {"minQty": min_qty, "stepSize": step, "minNotional": mn}
     open_orders = await adapter.get_open_orders(symbol=None)
     open_order = None
@@ -665,13 +667,15 @@ async def _bot_loop(bot_id: int) -> None:
                                     db, account_id, lock_sym, bot_id
                                 )
                                 if not lock_held:
-                                    append_event(
-                                        db,
-                                        bot_id,
-                                        account_id,
+                                    from app.botengine.skip_event_policy import evaluate_skip_log
+
+                                    evaluate_skip_log(
+                                        state,
                                         "LOCK_BUSY",
-                                        "symbol lock busy skip trade",
-                                        {"account_id": account_id, "symbol": lock_sym},
+                                        {
+                                            "symbol": lock_sym,
+                                            "cycle_id": int(state.get("cycle_id") or 1),
+                                        },
                                     )
                                 elif not lease_still_valid(
                                     db, account_id, lock_sym, bot_id
@@ -838,13 +842,18 @@ async def _bot_loop(bot_id: int) -> None:
                     price = adapter.get_price(symbol)
                     if not price or price <= 0:
                         try:
+                            from app.services.data_hub import data_hub
                             from app.services.market_data import (
                                 refresh_worker_symbol_from_web,
                             )
 
+                            data_hub.pin_symbols([symbol])
                             refetched = await refresh_worker_symbol_from_web(symbol)
                             if refetched and refetched > 0:
                                 price = refetched
+                            elif os.getenv("DATAHUB_REST_IN_WORKER", "0").strip() == "1":
+                                await data_hub.ensure_symbol_price(symbol)
+                                price = adapter.get_price(symbol)
                         except Exception:
                             pass
                     if not price or price <= 0:
@@ -1049,69 +1058,79 @@ async def _bot_loop(bot_id: int) -> None:
                                         _existing.get("cycle_id"),
                                         _existing.get("regime"),
                                     )
-                            # ----------------------------------------------------
-                            # Cycle-entry risk gate (cycle >= 2): decide ENTER vs
-                            # HOLD for the NEW tur. On a fresh snapshot evaluate
-                            # from its (just-fetched) features; while a hold is
-                            # active and the cycle is still unengaged, re-check
-                            # each tick with cached features so it releases as
-                            # soon as the risk passes. Fail-safe: errors clear the
-                            # hold so the bot proceeds normally.
-                            # ----------------------------------------------------
+                            # Cycle-entry risk gate (legacy) — V4 default OFF; no mid-turn hold.
                             if dyn_cm.dynamic_overlay_allowed(state):
                                 try:
                                     from app.botengine.dynamic import (
                                         cycle_gate as _dyn_cgate,
                                     )
 
-                                    _gate_cfg = (
-                                        cfg.to_dict()
-                                        if hasattr(cfg, "to_dict")
-                                        else _cfg_dict_for_dyn
-                                    )
-                                    _was_hold = _dyn_cgate.is_holding(state)
-                                    _gv = None
-                                    if _dyn_snapshot_rebuilt:
-                                        _snap2 = state.get("dynamic_snapshot") or {}
-                                        if _snap2.get("data_fresh"):
-                                            _gv = _dyn_cgate.evaluate(
-                                                _snap2.get("features") or {},
-                                                _snap2.get("regime"),
-                                                _snap2.get("regime_confidence") or 0.0,
-                                                state,
-                                                _gate_cfg,
-                                            )
-                                    elif _was_hold and not _dyn_cgate.cycle_engaged(
-                                        state
-                                    ):
-                                        _gv = await _dyn_cgate.maintain(
-                                            state, _gate_cfg, float(price or 0.0)
+                                    if _dyn_cgate.HOLD_ENABLED:
+                                        _gate_cfg = (
+                                            cfg.to_dict()
+                                            if hasattr(cfg, "to_dict")
+                                            else _cfg_dict_for_dyn
                                         )
-                                    if _gv is not None:
-                                        _now_hold = _dyn_cgate.is_holding(state)
-                                        if _now_hold and not _was_hold:
-                                            _emit_cycle_hold_event(
-                                                state, _gv, holding=True
+                                        _was_hold = _dyn_cgate.is_holding(state)
+                                        _gv = None
+                                        if _dyn_snapshot_rebuilt:
+                                            _snap2 = state.get("dynamic_snapshot") or {}
+                                            if _snap2.get("data_fresh"):
+                                                _gv = _dyn_cgate.evaluate(
+                                                    _snap2.get("features") or {},
+                                                    _snap2.get("regime"),
+                                                    _snap2.get("regime_confidence") or 0.0,
+                                                    state,
+                                                    _gate_cfg,
+                                                )
+                                        elif _was_hold and not _dyn_cgate.cycle_engaged(
+                                            state
+                                        ):
+                                            _hold_st = state.get("_dynamic_cycle_hold") or {}
+                                            _now_ms = int(time.time() * 1000)
+                                            _next_re = int(
+                                                _hold_st.get("next_recheck_ms") or 0
                                             )
-                                            logger.info(
-                                                "DYN_CYCLE_HOLD bot_id=%s cycle=%s risk=%.2f regime=%s reasons=%s",
-                                                bot_id,
-                                                state.get("cycle_id"),
-                                                _gv.risk_score,
-                                                _gv.regime,
-                                                _gv.reasons[:4],
-                                            )
-                                        elif _was_hold and not _now_hold:
-                                            _emit_cycle_hold_event(
-                                                state, _gv, holding=False
-                                            )
-                                            logger.info(
-                                                "DYN_CYCLE_RELEASE bot_id=%s cycle=%s risk=%.2f reason=%s",
-                                                bot_id,
-                                                state.get("cycle_id"),
-                                                _gv.risk_score,
-                                                _gv.released_reason,
-                                            )
+                                            if _next_re <= _now_ms:
+                                                _gv = await _dyn_cgate.maintain(
+                                                    state, _gate_cfg, float(price or 0.0)
+                                                )
+                                                if isinstance(
+                                                    state.get("_dynamic_cycle_hold"), dict
+                                                ):
+                                                    state["_dynamic_cycle_hold"][
+                                                        "next_recheck_ms"
+                                                    ] = _now_ms + int(
+                                                        _dyn_cgate.RECHECK_SEC * 1000
+                                                    )
+                                        if _gv is not None:
+                                            _now_hold = _dyn_cgate.is_holding(state)
+                                            if _now_hold and not _was_hold:
+                                                _emit_cycle_hold_event(
+                                                    state, _gv, holding=True
+                                                )
+                                                logger.info(
+                                                    "DYN_CYCLE_HOLD bot_id=%s cycle=%s risk=%.2f regime=%s reasons=%s",
+                                                    bot_id,
+                                                    state.get("cycle_id"),
+                                                    _gv.risk_score,
+                                                    _gv.regime,
+                                                    _gv.reasons[:4],
+                                                )
+                                            elif _was_hold and not _now_hold:
+                                                _emit_cycle_hold_event(
+                                                    state, _gv, holding=False
+                                                )
+                                                logger.info(
+                                                    "DYN_CYCLE_RELEASE bot_id=%s cycle=%s risk=%.2f reason=%s",
+                                                    bot_id,
+                                                    state.get("cycle_id"),
+                                                    _gv.risk_score,
+                                                    _gv.released_reason,
+                                                )
+                                    else:
+                                        state.pop("_dynamic_cycle_hold", None)
+                                        state.pop("_dynamic_cycle_engaged", None)
                                 except Exception as _cgate_err:
                                     logger.debug(
                                         "DYN_CYCLE_GATE_FAIL bot_id=%s err=%s",
@@ -1140,41 +1159,47 @@ async def _bot_loop(bot_id: int) -> None:
                     actions, next_wake = strategy.tick(
                         state, cfg, price, base_balance, quote_balance
                     )
-                    # ============================================================
-                    # Dynamic cycle-entry HOLD: while a hold is active and the new
-                    # tur has not engaged yet, withhold FRESH buy deployments
-                    # (initial_allocation / trail_buy_grid) — never sells, profit
-                    # exits or cycle-closing re-entries. When not holding, the
-                    # first fresh buy passing through ENGAGES the cycle (no
-                    # mid-cycle re-holding). Only touches dynamic bots (snapshot
-                    # present); manual bots are a no-op.
-                    # ============================================================
+                    # Dynamic cycle-entry HOLD filter (legacy; V4 default off).
                     if state.get("dynamic_snapshot") is not None and actions:
                         try:
                             from app.botengine.dynamic import cycle_gate as _dyn_cgate2
 
-                            actions, _held_blocked = _dyn_cgate2.filter_actions(
-                                state, actions
-                            )
-                            if _held_blocked:
-                                next_wake = min(
-                                    next_wake, _dyn_cgate2.RECHECK_SEC
+                            if _dyn_cgate2.HOLD_ENABLED:
+                                actions, _held_blocked = _dyn_cgate2.filter_actions(
+                                    state, actions
                                 )
-                                _hold_st = state.get("_dynamic_cycle_hold") or {}
-                                logger.info(
-                                    "DYN_CYCLE_HOLD_BLOCK bot_id=%s cycle=%s blocked=%s risk=%.2f regime=%s",
-                                    bot_id,
-                                    state.get("cycle_id"),
-                                    _held_blocked,
-                                    float(_hold_st.get("risk_score") or 0.0),
-                                    _hold_st.get("regime"),
-                                )
+                                if _held_blocked:
+                                    next_wake = min(
+                                        next_wake, _dyn_cgate2.RECHECK_SEC
+                                    )
+                                    _hold_st = state.get("_dynamic_cycle_hold") or {}
+                                    logger.info(
+                                        "DYN_CYCLE_HOLD_BLOCK bot_id=%s cycle=%s blocked=%s risk=%.2f regime=%s",
+                                        bot_id,
+                                        state.get("cycle_id"),
+                                        _held_blocked,
+                                        float(_hold_st.get("risk_score") or 0.0),
+                                        _hold_st.get("regime"),
+                                    )
                         except Exception as _hold_filter_err:
                             logger.debug(
                                 "DYN_CYCLE_HOLD_FILTER_FAIL bot_id=%s err=%s",
                                 bot_id,
                                 _hold_filter_err,
                             )
+                    # Pending round-start retry (hard safety / stale data): wake at 15m
+                    try:
+                        from app.botengine.dynamic import round_start_policy as _rsp
+
+                        _pend = _rsp.get_pending(state)
+                        if _pend:
+                            _now_ms2 = int(time.time() * 1000)
+                            _retry_ms = int(_pend.get("next_retry_ms") or 0)
+                            if _retry_ms > _now_ms2:
+                                _sec = max(1.0, (_retry_ms - _now_ms2) / 1000.0)
+                                next_wake = min(next_wake, _sec)
+                    except Exception:
+                        pass
                     # ============================================================
                     # Dynamic emergency check (cycle + portfolio circuit breaker).
                     # Current operator policy disables this brake; keep the old
@@ -1313,13 +1338,15 @@ async def _bot_loop(bot_id: int) -> None:
                             db, account_id, lock_sym, bot_id
                         )
                         if not lock_held:
-                            append_event(
-                                db,
-                                bot_id,
-                                account_id,
+                            from app.botengine.skip_event_policy import evaluate_skip_log
+
+                            evaluate_skip_log(
+                                state,
                                 "LOCK_BUSY",
-                                "symbol lock busy skip trade",
-                                {"account_id": account_id, "symbol": lock_sym},
+                                {
+                                    "symbol": lock_sym,
+                                    "cycle_id": int(state.get("cycle_id") or 1),
+                                },
                             )
                             logger.info(
                                 "BOT_TICK bot_id=%s LOCK_BUSY symbol=%s skip trade",
@@ -1854,7 +1881,6 @@ async def ensure_running_bots(
         )
     else:
         logger.debug("bot_engine ensure_running_bots recovered 0 bots bot_ids=[]")
-    db.close()
 
 
 async def delete_bot_fully(bot_id: int, db: Session) -> None:

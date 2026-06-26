@@ -987,6 +987,63 @@ def cleanup_old_error_logs(engine, retain_days: int = 30) -> int:
         return 0
 
 
+def ensure_dynamic_param_decisions_table(engine):
+    """Dynamic Param Score decision snapshots."""
+    with engine.connect() as conn:
+        result = conn.execute(
+            text(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='dynamic_param_decisions'"
+            )
+        )
+        if result.fetchone():
+            conn.commit()
+            return
+        try:
+            conn.execute(
+                text("""
+                CREATE TABLE IF NOT EXISTS dynamic_param_decisions (
+                    id VARCHAR(32) NOT NULL PRIMARY KEY,
+                    bot_id INTEGER,
+                    symbol VARCHAR(32) NOT NULL,
+                    run_source VARCHAR(32) NOT NULL,
+                    round_id VARCHAR(64),
+                    timestamp INTEGER NOT NULL,
+                    param_score INTEGER NOT NULL,
+                    confidence_score INTEGER NOT NULL,
+                    risk_score INTEGER NOT NULL,
+                    regime_tag VARCHAR(32) NOT NULL,
+                    risk_state VARCHAR(16) NOT NULL,
+                    final_action VARCHAR(32) NOT NULL,
+                    deployable INTEGER NOT NULL DEFAULT 0,
+                    selected_profile_name VARCHAR(64),
+                    params_json TEXT,
+                    telemetry_json TEXT,
+                    safety_gates_json TEXT,
+                    blocking_reasons_json TEXT,
+                    warnings_json TEXT,
+                    explanation TEXT,
+                    market_data_hash VARCHAR(32),
+                    portfolio_state_hash VARCHAR(32)
+                )
+            """)
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_dps_decisions_bot_ts ON dynamic_param_decisions (bot_id, timestamp)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_dps_decisions_symbol_ts ON dynamic_param_decisions (symbol, timestamp)"
+                )
+            )
+            conn.commit()
+            logger.info("schema_guard: created table dynamic_param_decisions")
+        except Exception as e:
+            logger.warning("schema_guard: could not create dynamic_param_decisions: %s", e)
+            conn.rollback()
+
+
 def run_schema_guard(engine):
     """Entry point: ensure core tables + devices columns + audit_events table + chat_threads.rating + chat_ratings + pending_registrations.password_hash + accounts.isolate_from_admin + error_logs + bot_engine_state/events. Call once at startup."""
     try:
@@ -1025,6 +1082,7 @@ def run_schema_guard(engine):
         ensure_sessions_table(engine)
         ensure_admin_popups_table(engine)
         ensure_bot_public_metrics_table(engine)
+        ensure_dynamic_param_decisions_table(engine)
     except Exception as e:
         logger.exception("schema_guard failed: %s", e)
 

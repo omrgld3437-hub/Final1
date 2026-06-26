@@ -39,6 +39,23 @@ MAX_SELL_RISE_PCT = 300.0
 # ağırlıklı olsun (eldeki coin düşüşte zarar üretir).
 DOWN_REGIME_MAX_BASE_PCT = 34.0
 
+# Envanter tavanı (max_base_exposure_frac) headroom'u REJİME göre sınırlanır —
+# düşüş/dump rejiminde botun niyet edilen tahsisin çok üzerine çıkmasına asla
+# izin verilmez (gizli long = düşüşte zarar). Birim: yüzde puanı (base_alloc_pct
+# ÜZERİNE eklenen ek pay).
+REGIME_MAX_EXPOSURE_HEADROOM_PCT = {
+    "TRENDING_DOWN": 6.0,
+    "DUMP_RISK": 3.0,
+    "HIGH_VOL_RANGING": 10.0,
+}
+REGIME_MAX_EXPOSURE_HEADROOM_DEFAULT_PCT = 12.0
+
+
+def regime_max_exposure_headroom_pct(regime_code: str) -> float:
+    return REGIME_MAX_EXPOSURE_HEADROOM_PCT.get(
+        regime_code or "", REGIME_MAX_EXPOSURE_HEADROOM_DEFAULT_PCT
+    )
+
 
 def _clamp(v: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, v))
@@ -130,6 +147,7 @@ def build_space(
     if down_regime:
         # Aşağı baskıda gerçek savunma: base'i belirgin biçimde quote'un altına çek.
         alloc_center = min(alloc_center, DOWN_REGIME_MAX_BASE_PCT)
+    regime_headroom_cap = regime_max_exposure_headroom_pct(f.regime_code)
 
     # Bacak başına değer ve min-notional'a göre maksimum seviye
     base_leg = budget * alloc_center / 100.0
@@ -192,6 +210,20 @@ def build_space(
         ),
         "exit_drop_pct": Dim(0.2, max(0.3, trail_center * 2.2), trail_center),
         "qty_front_load": Dim(0.6, 1.6, 1.0),
+        # Aşama 2: envanter tavanı — intended base_alloc_pct'in ÜZERİNDE ne kadar
+        # ek base biriktirmeye izin verilir (headroom). decode() bunu mutlak bir
+        # exposure fraksiyonuna çevirir; backtest._apply() bu tavanı sert uygular.
+        # Aşama 3: tavan artık REJİME göre sınırlanır (önceden sabit 8-35pp idi —
+        # TRENDING_DOWN'da %38 base + %30pp headroom = %68.84 tavan gibi aşırı
+        # envanter kaymalarına izin veriyordu).
+        "max_base_exposure_headroom_pct": Dim(
+            min(2.0, regime_headroom_cap),
+            regime_headroom_cap,
+            regime_headroom_cap * 0.55,
+        ),
+        # Aşama 2: düşüş barlarında (backtest içi nedensel proxy) BUY fill'lerinin
+        # ne kadar kısılacağı (0=etkisiz, bugünkü davranış; 0.85=neredeyse durdurur).
+        "downtrend_buy_throttle": Dim(0.0, 0.85, 0.30),
     }
     return ParamSpace(
         dims=dims, budget=float(budget), min_notional=float(min_notional), symbol=symbol
@@ -309,5 +341,14 @@ def decode(
         "min_net_profit_rate": 0.0015,
         "basis_mode": "grid_only",
         "min_notional_guard": mn,
+        "max_base_exposure_frac": round(
+            _clamp(
+                base_alloc / 100.0 + v["max_base_exposure_headroom_pct"] / 100.0,
+                base_alloc / 100.0,
+                1.0,
+            ),
+            4,
+        ),
+        "downtrend_buy_throttle": round(_clamp(v["downtrend_buy_throttle"], 0.0, 0.85), 3),
     }
     return params

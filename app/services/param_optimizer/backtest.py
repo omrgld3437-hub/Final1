@@ -135,6 +135,11 @@ class BacktestResult:
     expectancy_per_cycle: float = 0.0  # p*avg_win - (1-p)*avg_loss (USDT)
     exposure_frac: float = 0.0  # ortalama base ağırlığı (0..1)
     time_armed_frac: float = 0.0  # grid/trail aktif zaman oranı
+    # Aşama 2: envanter tavanı (max_base_exposure_frac) kaç BUY fill'ini kıstı/iptal
+    # etti — tavanın gerçekten devreye girdiğini kanıtlamak için teşhis sayacı.
+    exposure_cap_hits: int = 0
+    # Aşama 2: düşüş-barı throttle'ı (downtrend_buy_throttle) kaç BUY fill'ini kıstı.
+    downtrend_throttle_hits: int = 0
     ok: bool = True
     note: str = ""
     cycle_pnls: List[float] = field(default_factory=list)
@@ -290,13 +295,28 @@ def run_backtest(
     exposure_n = 0
     armed_ticks = 0
     total_ticks = 0
+    exposure_cap_hits = 0
+    # Aşama 2 madde 2: envanter tavanı — yoksa/1.0 ise bugünkü (sınırsız) davranış
+    # birebir korunur (geriye dönük kırılmaz).
+    max_exposure_frac = float(params.get("max_base_exposure_frac") or 1.0)
+
+    # Aşama 2 madde 4: düşüş barı kısıtlaması — backtest'e ÖZEL, salt geçmiş
+    # kapanışlardan (bu mumun kendi kapanışı HARİÇ) hesaplanan nedensel bir proxy.
+    # _rolling_regime_labels'taki gibi tüm-seri percentile KULLANILMAZ (gelecek
+    # sızıntısı olurdu) — sabit eşikli, basit, ispatlanabilir nedensel bir ölçü.
+    downtrend_buy_throttle = max(0.0, min(0.95, float(params.get("downtrend_buy_throttle") or 0.0)))
+    downtrend_throttle_hits = 0
+    _DOWNTREND_LOOKBACK = 24
+    _DOWNTREND_RET_THRESHOLD_PCT = -3.0
+    close_history: List[float] = []
+    bar_is_bearish = False
 
     first_open = float(candles[0].get("o") or candles[0].get("c") or 0.0)
     last_close = float(candles[-1].get("c") or 0.0)
 
     def _apply(action: Dict[str, Any], price: float) -> None:
         nonlocal base_balance, quote_balance, fills_buy, fills_sell, fees_paid, trades
-        nonlocal slip_cost
+        nonlocal slip_cost, exposure_cap_hits, downtrend_throttle_hits
         reason = (action.get("reason") or "").strip()
         side = (action.get("side") or "").upper()
 
@@ -305,6 +325,23 @@ def run_backtest(
             qv = action.get("quote_qty")
             if qv is not None:
                 Q = min(float(qv), max(0.0, quote_balance))
+                # Bootstrap (initial_allocation) ne throttle'dan ne tavandan etkilenir
+                # — kasıtlı tek seferlik kuruluş, birikim değil. Diğer tüm BUY
+                # fill'leri (trail_buy_grid, trail_reentry_buy) bu kısıtlara tabidir.
+                if reason != "initial_allocation":
+                    if bar_is_bearish and downtrend_buy_throttle > 0:
+                        Q *= (1.0 - downtrend_buy_throttle)
+                        downtrend_throttle_hits += 1
+                    if max_exposure_frac < 1.0:
+                        equity_now = quote_balance + base_balance * price
+                        if equity_now > 0:
+                            max_added_value = max(
+                                0.0, max_exposure_frac * equity_now - base_balance * price
+                            )
+                            max_Q = max_added_value * (1.0 + buy_fee)
+                            if Q > max_Q:
+                                Q = max_Q
+                                exposure_cap_hits += 1
                 if Q <= 0:
                     return
                 q = Q / (fp * (1.0 + buy_fee))
@@ -425,6 +462,15 @@ def run_backtest(
             cl = float(c.get("c") or 0.0)
             if cl <= 0:
                 continue
+            # NEDENSELLİK: bu mumun kendi kapanışı (cl) henüz close_history'ye
+            # eklenmeden bearish bayrağı hesaplanır — intrabar fill'ler bu mumun
+            # SONUCUNU bilemez, sadece ÖNCEKİ tamamlanmış mumları görebilir.
+            if len(close_history) >= 2:
+                lb = close_history[-_DOWNTREND_LOOKBACK:]
+                ref = lb[0]
+                bar_is_bearish = ref > 0 and (lb[-1] / ref - 1.0) * 100.0 <= _DOWNTREND_RET_THRESHOLD_PCT
+            else:
+                bar_is_bearish = False
             path = _subtick_path(o, h, low, cl) if intrabar else [cl]
             for px in path:
                 if px <= 0:
@@ -454,6 +500,9 @@ def run_backtest(
             if eq > 0:
                 exposure_sum += base_val / eq
                 exposure_n += 1
+            close_history.append(cl)
+            if len(close_history) > _DOWNTREND_LOOKBACK:
+                close_history.pop(0)
 
     final_equity = quote_balance + base_balance * last_close
     start_equity = float(budget)
@@ -473,6 +522,8 @@ def run_backtest(
     res.fills_sell = fills_sell
     res.fees_paid = fees_paid
     res.slippage_cost = slip_cost
+    res.exposure_cap_hits = exposure_cap_hits
+    res.downtrend_throttle_hits = downtrend_throttle_hits
     # Maliyet sürtünmesi: dar gridlerde komisyon+slipaj getirinin önemli kısmını yer.
     res.cost_drag_pct = (
         (fees_paid + slip_cost) / start_equity * 100.0 if start_equity > 0 else 0.0

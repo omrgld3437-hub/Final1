@@ -28,6 +28,8 @@ Paylaşılan iş mantığı: Binance, fiyat, PnL, şifreleme, audit.
 | `dashboard_snapshot.py` | Snapshot builder |
 | `finance_snapshot.py` | Finans snapshot |
 | `audit.py` | Audit log |
+| `user_readable_activity_logger.py` | Sade Türkçe kullanıcı işlem geçmişi (`Kullanıcı Logları/`) |
+| `user_activity_translations.py` | Event/teknik sebep → sade Türkçe çeviri |
 | `test_account.py` | Paper test hesabı |
 | `wallet_display.py` | Strip/tablo bot_locked; test paper USDT Toplam = 10k − config bütçesi (equity değil) |
 | `test_spot_paper.py` | Test hesabı manuel spot paper bakiye |
@@ -39,6 +41,8 @@ Paylaşılan iş mantığı: Binance, fiyat, PnL, şifreleme, audit.
 | `bot_perf_file_store.py` | Bot performans dosyaları; `reconcile_bot_cycles_file_with_state` (state/arşiv ↔ `bots/{id}.json`) |
 | `ip_blocklist.py` | Manager'ın yazdığı `.run/blocked_ips.json` okuma; web middleware 403 |
 | `leaderboard_service.py` | Global/structure leaderboard; `running_since_iso` = `bot_run_started_at_iso` (bot detay süre ile aynı) |
+| `dynamic_param_score/` | Merkez karar motoru: … → persistence + **log_retention** (1 GiB cap → 100 MiB prune) |
+| `param_optimizer/` | **Offline-only** araştırma/kalibrasyon (MC/backtest); canlı karar akışında kullanılmaz |
 
 ## Dosya envanteri
 
@@ -47,6 +51,8 @@ Paylaşılan iş mantığı: Binance, fiyat, PnL, şifreleme, audit.
 ```
 __init__.py
 audit.py
+user_readable_activity_logger.py
+user_activity_translations.py
 binance_assets.py
 binance_client.py
 binance_metrics.py

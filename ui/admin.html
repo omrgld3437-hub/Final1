@@ -47,11 +47,13 @@ CHANGE: Fix navigation links + route pinning - ensure admin link works, update c
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,700;1,300&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/ui/assets/ticker.css?v=adminfix1">
     <link rel="stylesheet" href="/ui/assets/theme.css?v=adminfix1">
     <link rel="stylesheet" href="/ui/assets/ui.css?v=footer-sticky1">
     <link rel="stylesheet" href="/ui/assets/design.css?v=footer-sticky2">
     <link rel="stylesheet" href="/ui/assets/dashboard-login-theme.css?v=admin-tabs-noline1">
+    <link rel="stylesheet" href="/ui/assets/brand-logo.css?v=rose4">
     <link rel="stylesheet" href="/ui/assets/admin-login-theme.css?v=footer-sticky2">
     <script src="/ui/assets/scrollAutoHide.js?v=5"></script>
 </head>
@@ -74,7 +76,7 @@ CHANGE: Fix navigation links + route pinning - ensure admin link works, update c
                 <span class="admin-appbar-role">Admin</span>
             </div>
             <div class="admin-appbar-logo" aria-label="ayserose">
-                <span class="tt-logo-text"><span class="ar-ayse">ayse</span><span class="ar-rose">rose</span></span>
+                <span class="brand-logo-mark" aria-hidden="true"></span><span class="tt-logo-text"><span class="ar-ayse">ayse</span><span class="ar-rose">rose</span></span>
             </div>
             <div class="admin-appbar-actions">
                 <button id="btnCreate" type="button" class="btn primary btn-create-account" onclick="openCreateModal()">Yeni Hesap</button>

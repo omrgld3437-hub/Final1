@@ -39,17 +39,51 @@ drift without external tooling.
 from __future__ import annotations
 import logging
 import time
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from app.botengine.dynamic import regime as reg
-from app.botengine.dynamic import strategy_engine as se
-from app.botengine.dynamic import risk_engine as risk
 from app.botengine.dynamic.features import collect_features, MarketFeatures
+from app.services.dynamic_param_score.engine import get_engine as get_dps_engine
+from app.services.dynamic_param_score.data_collector import (
+    collect_market_data,
+    default_exchange_constraints,
+    portfolio_from_bot_state,
+)
+from app.services.dynamic_param_score.safe_overlay import build_data_stale_overlay
+from app.services.dynamic_param_score.models import BotContext, MarketDataBundle, FinalAction
+from app.botengine.dynamic import round_start_policy as rsp
 
 logger = logging.getLogger(__name__)
 
 HISTORY_MAX = 20
 FIRST_DYNAMIC_CYCLE_ID = 2
+
+
+def _log_dynamic_event(
+    state: Dict[str, Any],
+    event_type: str,
+    *,
+    symbol: str = "",
+    context: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Worker: account_id üzerinden kullanıcı işlem geçmişine yazar."""
+    try:
+        account_id = int(state.get("account_id") or 0)
+        if not account_id:
+            return
+        from app.db.session import SessionLocal
+        from app.services.user_readable_activity_logger import log_for_account
+
+        ctx = dict(context or {})
+        if symbol:
+            ctx.setdefault("symbol", symbol)
+        db = SessionLocal()
+        try:
+            log_for_account(db, account_id, event_type, context=ctx)
+        finally:
+            db.close()
+    except Exception:
+        pass
 
 
 def dynamic_overlay_allowed(state: Dict[str, Any]) -> bool:
@@ -62,7 +96,14 @@ def dynamic_overlay_allowed(state: Dict[str, Any]) -> bool:
 
 
 def need_recompute(state: Dict[str, Any]) -> bool:
-    """True if no snapshot yet, or cycle changed, or explicit flag set."""
+    """True only at tur boundary: new cycle_id, explicit tur-start flag, or blocked-start retry."""
+    from app.botengine.dynamic import start_retry_policy as srp
+    from app.botengine.dynamic import round_start_policy as rsp
+
+    if srp.need_start_retry(state):
+        return True
+    if rsp.need_round_start_retry(state):
+        return True
     snap = state.get("dynamic_snapshot")
     if state.pop("_dynamic_recompute_needed", False):
         return True
@@ -143,6 +184,22 @@ def _reference_cfg(state: Dict[str, Any], cfg_dict: Dict[str, Any]) -> Dict[str,
     return merged
 
 
+def _reference_info(state: Dict[str, Any]) -> Dict[str, Any]:
+    """Snapshot'a iliştirilen sizing-referans kaynağı (P0-4).
+
+    `param_assistant` → bot, parametre asistanının optimize ettiği config ile açıldı
+    ve dinamik mod bu yapıyı referans alıyor. `initial_config` → manuel/ilk-tur
+    config'i donduruldu. Meta, asistan job_id/karar/güven gibi izlenebilirlik
+    bilgilerini taşır."""
+    ref = state.get("_dynamic_reference")
+    src = ref.get("_source") if isinstance(ref, dict) else None
+    meta = state.get("_dynamic_reference_meta")
+    return {
+        "source": src or "initial_config",
+        "meta": meta if isinstance(meta, dict) else {},
+    }
+
+
 def _recent_cycle_days(prev_snap: Dict[str, Any]) -> Any:
     """Derive recent cycle durations (days) from the snapshot history timestamps.
     Each history entry is stamped at its cycle boundary, so consecutive deltas
@@ -162,6 +219,130 @@ def _recent_cycle_days(prev_snap: Dict[str, Any]) -> Any:
         if d > 0:
             days.append(round(d, 4))
     return days[-5:] if days else None
+
+
+def _build_dps_context(
+    state: Dict[str, Any],
+    cfg_dict: Dict[str, Any],
+    cycle_id: int,
+    budget: float,
+    *,
+    allow_no_trade: bool = True,
+) -> BotContext:
+    return BotContext(
+        run_source="dynamic_round_start",
+        budget_usdt=budget,
+        is_first_start=False,
+        current_round_id=str(cycle_id),
+        previous_round_id=str(cycle_id - 1) if cycle_id > 1 else None,
+        last_rebalance_round_id=state.get("_dynamic_last_rebalance_turn"),
+        allow_live=True,
+        allow_no_trade=allow_no_trade,
+        bot_id=int(state.get("bot_id") or 0) or None,
+    )
+
+
+def _resolve_round_decision(
+    state: Dict[str, Any],
+    decision,
+    cfg_dict: Dict[str, Any],
+    *,
+    cycle_id: int,
+    market: MarketDataBundle,
+    portfolio,
+    constraints,
+    ctx: BotContext,
+) -> tuple:
+    """Map DPS decision → (applied overlay, reasons, fallbacks, pending)."""
+    from app.botengine.dynamic import churn_policy as cp
+    from app.botengine.dynamic import start_retry_policy as srp
+    from app.services.dynamic_param_score.result_type import result_type_from_decision
+
+    engine = get_dps_engine()
+    fallbacks: list = []
+    reasons: list = [decision.explain]
+    pool_meta = (decision.telemetry or {}).get("param_pool") or {}
+    sel_ctx = pool_meta.get("selection_context") or {}
+    route_key = str(sel_ctx.get("route_key") or "")
+    result_type = result_type_from_decision(decision, bot_context=ctx)
+    deployable = bool(decision.deployable and decision.params)
+
+    if deployable and result_type in ("deployable_grid", "first_start_buy_only"):
+        srp.on_successful_deploy(state)
+        rsp.on_deployable_round_start(state)
+        applied = engine.decision_to_overlay(decision) or _fallback_from_base(cfg_dict)
+        rb = (decision.telemetry or {}).get("rebalance_plan") or {}
+        if rb.get("rebalance_decision") == "EXECUTE":
+            state["_dynamic_last_rebalance_turn"] = str(cycle_id)
+        _log_dynamic_event(
+            state,
+            "DYNAMIC_TURN_STARTED",
+            symbol=str((cfg_dict.get("symbol") or "")).upper(),
+            context={"symbol": str((cfg_dict.get("symbol") or "")).upper()},
+        )
+        return applied, reasons, fallbacks, False
+
+    if rsp.is_hard_safety_block(decision):
+        codes = rsp.blocking_codes(decision)
+        srp.mark_start_blocked(
+            state,
+            cycle_id=cycle_id,
+            result_type=result_type,
+            deployable=deployable,
+            block_reasons=codes,
+            route_key=route_key,
+            risk_state=str(decision.risk_state or ""),
+        )
+        applied = engine.decision_to_overlay(decision) or _no_trade_overlay(cfg_dict, decision)
+        fallbacks = ["dps_hard_safety_pending"]
+        reasons.extend(decision.blocking_reasons or [])
+        primary = codes[0] if codes else "START_BLOCKED_RETRY_PENDING"
+        _log_dynamic_event(
+            state,
+            "DYNAMIC_TURN_BLOCKED",
+            symbol=str((cfg_dict.get("symbol") or "")).upper(),
+            context={
+                "symbol": str((cfg_dict.get("symbol") or "")).upper(),
+                "technical_reason": primary,
+            },
+        )
+        return applied, reasons, fallbacks, True
+
+    if srp.is_turn_start_blocked(result_type=result_type, deployable=deployable):
+        codes = rsp.blocking_codes(decision) + list(decision.blocking_reasons or [])
+        entry = srp.mark_start_blocked(
+            state,
+            cycle_id=cycle_id,
+            result_type=result_type,
+            deployable=deployable,
+            block_reasons=codes,
+            route_key=route_key,
+            risk_state=str(decision.risk_state or ""),
+        )
+        applied = _no_trade_overlay(cfg_dict, decision)
+        applied["buy_disabled"] = True
+        applied["intent_execution_enabled"] = False
+        fallbacks = ["start_blocked_retry_pending"]
+        reasons.append(srp.START_BLOCKED_RETRY_PENDING)
+        after_min = int((entry.get("retry_after_minutes") or 10))
+        _log_dynamic_event(
+            state,
+            "RETRY_PENDING",
+            symbol=str((cfg_dict.get("symbol") or "")).upper(),
+            context={
+                "symbol": str((cfg_dict.get("symbol") or "")).upper(),
+                "minutes": after_min,
+                "technical_reason": entry.get("last_block_reason"),
+            },
+        )
+        return applied, reasons, fallbacks, True
+
+    # Non-deployable but not blocked — show recommendation only, no auto deploy
+    applied = engine.decision_to_overlay(decision) or _no_trade_overlay(cfg_dict, decision)
+    applied["intent_execution_enabled"] = False
+    fallbacks = ["dps_non_deployable_reference"]
+    reasons.append(f"result_type={result_type}")
+    return applied, reasons, fallbacks, False
 
 
 async def build_snapshot(
@@ -189,14 +370,22 @@ async def build_snapshot(
 
     # 2. Stale path: re-use previous snapshot's applied params, just bump cycle
     if not features.data_fresh:
+        from app.services.dynamic_param_score.safe_overlay import build_data_stale_overlay
+
         logger.info(
-            "DYN_STALE bot_id=%s symbol=%s cycle=%s err=%s — falling back to prev applied",
+            "DYN_STALE bot_id=%s symbol=%s cycle=%s err=%s — 15m retry scheduled",
             state.get("bot_id"),
             symbol,
             cycle_id,
             features.error,
         )
-        applied = dict(prev_applied) if prev_applied else _fallback_from_base(cfg_dict)
+        rsp.mark_pending(
+            state,
+            cycle_id=cycle_id,
+            reason=str(features.error or "DATA_STALE"),
+            codes=["DATA_STALE"],
+        )
+        applied = build_data_stale_overlay(_fallback_from_base(cfg_dict))
         snap = {
             "cycle_id": cycle_id,
             "built_at_ms": int(time.time() * 1000),
@@ -208,10 +397,12 @@ async def build_snapshot(
             "raw": None,
             "applied": applied,
             "reasons": [
-                f"DATA_STALE: {features.error} — using {'prev applied' if prev_applied else 'manual cfg'}"
+                f"DATA_STALE: {features.error} — acil durum, {int(rsp.ROUND_START_RETRY_SEC / 60)}dk sonra yeniden denenecek"
             ],
-            "clamps": [],
-            "fallbacks": ["data_stale_fallback"],
+            "clamps": ["DATA_STALE"],
+            "fallbacks": ["data_stale_pending_retry"],
+            "round_pending": True,
+            "reference": _reference_info(state),
             "history": _push_history(
                 prev_snap.get("history") or [],
                 {
@@ -224,62 +415,214 @@ async def build_snapshot(
         }
         return snap
 
-    # 3. Regime
-    regime_result = reg.classify(features, prev_regime_state)
-    new_regime_state = reg.update_regime_state(prev_regime_state, regime_result)
+    # 3–6. Dynamic Param Score Engine (round-independent; no prev-param smoothing)
+    budget = float(cfg_dict.get("initial_capital_usdt") or cfg_dict.get("budget_usdt") or 0)
+    if budget <= 0:
+        budget = float(state.get("quote_balance") or 0) + float(state.get("base_balance") or 0) * price
 
-    # 4. Suggest — compute from the REFERENCE (param-assistant output if attached,
-    #    else manual cfg), targeting a 1–7 day cycle at the current volatility.
-    pos = _position_state(state, cfg_dict)
-    reference_cfg = _reference_cfg(state, cfg_dict)
-    suggestion = se.suggest(features, regime_result, reference_cfg, pos)
+    market: MarketDataBundle = await collect_market_data(symbol)
+    if price > 0:
+        market.ticker_price = price
 
-    # 5. Smooth vs prev applied (EMA blend on scalars). Alpha scales with regime
-    #    confidence: low confidence → stickier (stay near prev), avoiding large
-    #    swings driven by an uncertain regime call. (0.5 at confidence 0.5.)
-    _alpha = se.alpha_for_confidence(regime_result.confidence)
-    suggestion = se.smooth_against_prev(suggestion, prev_applied, alpha=_alpha)
+    portfolio = portfolio_from_bot_state(state, market.ticker_price or price)
+    if portfolio.total_equity_usdt <= 0 and budget > 0:
+        portfolio.total_equity_usdt = budget
+        portfolio.quote_value_usdt = budget
 
-    # 6. Risk engine (clamps + rate limiter)
-    clamped = risk.apply_safety(suggestion, cfg_dict, prev_applied)
+    constraints = default_exchange_constraints(symbol)
+    ctx = _build_dps_context(state, cfg_dict, cycle_id, budget or portfolio.total_equity_usdt)
+
+    decision = get_dps_engine().calculate_decision(
+        symbol=symbol,
+        market_data=market,
+        portfolio_state=portfolio,
+        exchange_constraints=constraints,
+        bot_context=ctx,
+    )
+
+    applied, reasons, fallbacks, round_pending = _resolve_round_decision(
+        state,
+        decision,
+        cfg_dict,
+        cycle_id=cycle_id,
+        market=market,
+        portfolio=portfolio,
+        constraints=constraints,
+        ctx=ctx,
+    )
+    clamps = [g.reason_code for g in decision.safety_gates if not g.passed]
+    from app.botengine.dynamic import start_retry_policy as srp
+    from app.services.dynamic_param_score.result_type import result_type_from_decision
+    from app.botengine.dynamic import churn_policy as cp
+
+    result_type = result_type_from_decision(decision, bot_context=ctx)
+    prev_applied = prev_snap.get("applied") or {}
+    rb_plan = (decision.telemetry or {}).get("rebalance_plan") or {}
+    sym = str((cfg_dict.get("symbol") or "")).upper()
+    _log_dynamic_event(
+        state,
+        "DYNAMIC_TURN_ANALYSIS",
+        symbol=sym,
+        context={"symbol": sym},
+    )
+    if rb_plan:
+        cur_b = rb_plan.get("current_base_frac")
+        tgt_b = rb_plan.get("target_base_frac")
+        cur_alloc = (
+            f"%{int(float(cur_b or 0) * 100)}/%{int((1 - float(cur_b or 0)) * 100)}"
+            if cur_b is not None
+            else ""
+        )
+        tgt_alloc = (
+            f"%{int(float(tgt_b or 0) * 100)}/%{int((1 - float(tgt_b or 0)) * 100)}"
+            if tgt_b is not None
+            else ""
+        )
+        rb_dec = str(rb_plan.get("rebalance_decision") or "SKIP").upper()
+        skip_reason = str(rb_plan.get("rebalance_skipped_reason") or "")
+        if rb_dec == "EXECUTE":
+            side = str(rb_plan.get("rebalance_side") or "SELL").upper()
+            _log_dynamic_event(
+                state,
+                "REBALANCE_EXECUTED",
+                symbol=sym,
+                context={"symbol": sym, "side": side},
+            )
+        elif rb_dec == "DEFER" or skip_reason == "REBALANCE_SAFETY_BLOCKED":
+            _log_dynamic_event(
+                state,
+                "REBALANCE_DEFERRED",
+                symbol=sym,
+                context={"symbol": sym, "technical_reason": skip_reason or "REBALANCE_SAFETY_BLOCKED"},
+            )
+        elif skip_reason == "SMALL_BASE_QUOTE_DELTA":
+            _log_dynamic_event(
+                state,
+                "REBALANCE_SKIPPED",
+                symbol=sym,
+                context={"symbol": sym, "current_alloc": cur_alloc, "target_alloc": tgt_alloc},
+            )
+        elif cur_alloc and tgt_alloc:
+            _log_dynamic_event(
+                state,
+                "REBALANCE_EVALUATED",
+                symbol=sym,
+                context={"symbol": sym, "current_alloc": cur_alloc, "target_alloc": tgt_alloc},
+            )
+    preserve, churn_reasons = cp.should_preserve_orders(
+        prev_applied,
+        applied,
+        rebalance_plan=rb_plan,
+        risk_state_changed=str(prev_snap.get("dps", {}).get("risk_state") or "") != str(decision.risk_state),
+        route_changed=str((prev_snap.get("dps") or {}).get("route_key") or "") != str(
+            ((decision.telemetry or {}).get("param_pool") or {}).get("selection_context", {}).get("route_key") or ""
+        ),
+        spread_unsafe=decision.regime_tag == "SPREAD_UNSAFE",
+        dump_risk=decision.regime_tag == "DUMP_RISK",
+        exposure_breach=bool((decision.telemetry or {}).get("exposure_hard_cap_breach")),
+    )
+    if preserve:
+        applied["cancel_existing_buy_orders"] = False
+        applied["cancel_existing_sell_orders"] = False
+
+    if decision.deployable and decision.params:
+        if decision.final_action == "SELL_MANAGEMENT_ONLY":
+            applied.setdefault("buy_grids", [])
+            applied["max_buy_levels"] = 0
+            applied["buy_disabled"] = True
+            applied["sell_only_mode"] = True
+            applied["buy_trigger_trailing_pct"] = 0.0
+            applied["profit_reentry_drop_pct"] = 0.0
+            applied["profit_reentry_rise_pct"] = 0.0
 
     snap = {
         "cycle_id": cycle_id,
         "built_at_ms": int(time.time() * 1000),
         "data_fresh": True,
         "stale_reason": None,
-        "regime": regime_result.regime,
-        "regime_confidence": round(float(regime_result.confidence or 0.0), 4),
-        "regime_state": new_regime_state,
-        "stance": suggestion.stance,
-        "duration": suggestion.duration,
+        "regime": decision.regime_tag,
+        "regime_confidence": round(decision.confidence_score / 100.0, 4),
+        "regime_state": prev_regime_state,
+        "stance": {"source": "dynamic_param_score", "final_action": decision.final_action},
+        "duration": None,
+        "dps": {
+            "decision_id": decision.decision_id,
+            "param_score": decision.param_score,
+            "risk_state": decision.risk_state,
+            "deployable": decision.deployable,
+            "result_type": result_type,
+            "profile": decision.selected_profile_name,
+            "route_key": (
+                ((decision.telemetry or {}).get("param_pool") or {}).get("selection_context") or {}
+            ).get("route_key"),
+            "telemetry": decision.telemetry,
+            "rebalance_plan": (decision.telemetry or {}).get("rebalance_plan"),
+        },
+        "start_watchlist": srp.get_watchlist(state),
+        "churn_preserve_orders": preserve,
+        "churn_reasons": churn_reasons,
         "features": features.to_dict(),
-        "raw": suggestion.to_dict(),
-        "applied": clamped.to_dict(),
-        "reasons": suggestion.reasons,
-        "clamps": clamped.clamps,
-        "fallbacks": clamped.fallbacks,
+        "raw": decision.params.to_dict() if decision.params else None,
+        "applied": applied,
+        "reasons": reasons,
+        "clamps": clamps,
+        "fallbacks": fallbacks,
+        "round_pending": round_pending,
+        "reference": _reference_info(state),
         "history": _push_history(
             prev_snap.get("history") or [],
             {
                 "cycle_id": cycle_id,
-                "regime": regime_result.regime,
-                "regime_confidence": regime_result.confidence,
-                "atr_pct_5m": features.atr_pct_5m,
-                "adx_1h": features.adx_1h,
-                "applied_base_alloc_pct": clamped.base_alloc_pct,
-                "applied_trail_pct": clamped.sell_trigger_trailing_pct,
-                "applied_grid_step_first": (
-                    clamped.buy_grids[0].get("buy_grid_pct")
-                    if clamped.buy_grids
-                    else None
-                ),
+                "regime": decision.regime_tag,
+                "param_score": decision.param_score,
+                "final_action": decision.final_action,
+                "applied_base_alloc_pct": applied.get("base_alloc_pct"),
                 "stale": False,
                 "ts": int(time.time() * 1000),
             },
         ),
     }
     return snap
+
+
+def _no_trade_overlay(cfg_dict: Dict[str, Any], decision) -> Dict[str, Any]:
+    """When DPS says NO_TRADE/WAIT: clear buy side; never preserve stale manual buy grids."""
+    base = _fallback_from_base(cfg_dict)
+    fa = str(getattr(decision, "final_action", "") or "")
+    deploy = bool(getattr(decision, "deployable", False))
+    params = getattr(decision, "params", None)
+
+    if fa in ("NO_TRADE", "WAIT") or not deploy:
+        base["buy_grids"] = []
+        base["buy_trigger_trailing_pct"] = 0.0
+        base["profit_reentry_drop_pct"] = 0.0
+        base["profit_reentry_rise_pct"] = 0.0
+        base["max_buy_levels"] = 0
+        if fa == "NO_TRADE":
+            base["sell_grids"] = []
+    elif params and getattr(params, "emergency_no_buy", False):
+        base["buy_grids"] = []
+        base["buy_trigger_trailing_pct"] = 0.0
+        base["profit_reentry_drop_pct"] = 0.0
+        base["profit_reentry_rise_pct"] = 0.0
+        base["max_buy_levels"] = max(int(getattr(params, "buy_grid_count", 0) or 0), 0)
+
+    if params:
+        if int(getattr(params, "buy_grid_count", 0) or 0) == 0:
+            base["buy_grids"] = []
+            base["max_buy_levels"] = 0
+        if int(getattr(params, "sell_grid_count", 0) or 0) == 0:
+            base["sell_grids"] = []
+        base["max_base_exposure_frac"] = round(
+            float(getattr(params, "max_base_exposure_frac", 0) or 1.0), 4
+        )
+        base["min_net_profit_rate"] = round(
+            float(getattr(params, "min_cycle_profit_after_fee_pct", 0) or 0) / 100.0, 6
+        )
+
+    base["clamps"] = list(getattr(decision, "blocking_reasons", None) or [])
+    base["fallbacks"] = ["dps_no_trade"]
+    return base
 
 
 def _push_history(existing: Any, entry: Dict[str, Any]) -> list:
@@ -331,6 +674,23 @@ _OVERLAY_FIELDS = (
     "profit_exit_drop_pct",
     "profit_reentry_drop_pct",
     "profit_reentry_rise_pct",
+    "max_base_exposure_frac",
+    "max_buy_levels",
+    "min_net_profit_rate",
+    "rebuy_enabled",
+    "resell_enabled",
+    "buy_disabled",
+    "sell_only_mode",
+    "cancel_existing_buy_orders",
+    "cancel_existing_sell_orders",
+    "selected_template_key",
+    "pool_version",
+    "final_action",
+    "management_mode",
+    "rebalance_plan",
+    "order_intent_plan",
+    "target_allocation",
+    "intent_execution_enabled",
 )
 
 

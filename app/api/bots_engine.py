@@ -162,6 +162,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 
 from app.api.auth import get_account_or_403, require_auth, get_client_ip
+from app.core.constants import DEFAULT_MIN_NOTIONAL_USDT
 from app.api.bots_engine_services import detail_err as _detail_err
 from app.botengine.models import DcaGridTrailingConfig, config_from_ui_payload
 from app.botengine.dca_manager import (
@@ -1958,7 +1959,7 @@ async def bots_list(
         if last_tick_ts is not None:
             now_ts = int(datetime.now(timezone.utc).timestamp())
             tick_age = now_ts - last_tick_ts
-            crit_thresh = max(60.0, _expected_tick_interval_sec(r) * 5.0)
+            crit_thresh = max(300.0, _expected_tick_interval_sec(r) * 12.0)
             if tick_age < crit_thresh:
                 health_alerts = [
                     a
@@ -2041,6 +2042,32 @@ def create_bot_engine_core(
     db.commit()
     db.refresh(bot)
     ensure_state_row(db, bot.id, bot.account_id, symbol)
+    # P0-4: Parametre asistanının optimize ettiği config ile açılan DİNAMİK botta,
+    # sizing referansını "param_assistant" olarak işaretle. Aksi halde dinamik mod
+    # ilk turda manuel config'i referans dondurur ve asistanın bulduğu yapı kaybolur.
+    try:
+        cfg_source = str((config_dict or {}).get("config_source") or "").strip().lower()
+        if cfg_source == "param_assistant" and bool(getattr(cfg, "dynamic_mode", False)):
+            from app.botengine.dynamic import cycle_manager as _dyn_cm
+
+            st = load_state(db, bot.id) or {}
+            if _dyn_cm.set_reference(st, cfg.to_dict(), source="param_assistant"):
+                _pa = (config_dict or {}).get("param_assistant") or {}
+                st["_dynamic_reference_meta"] = {
+                    "source": "param_assistant",
+                    "job_id": (config_dict or {}).get("param_assistant_job_id")
+                    or _pa.get("job_id"),
+                    "decision": (config_dict or {}).get("param_assistant_decision")
+                    or _pa.get("decision"),
+                    "confidence": (config_dict or {}).get("param_assistant_confidence")
+                    or _pa.get("confidence"),
+                }
+                save_state(db, bot.id, bot.account_id, st)
+                db.commit()
+    except Exception as _ref_err:
+        logger.debug(
+            "param_assistant reference wiring failed bot_id=%s: %s", bot.id, _ref_err
+        )
     return {
         "bot_id": bot.id,
         "bot_code": bot.bot_code,
@@ -2814,6 +2841,17 @@ async def bots_detail(
         _dyn_stance = (
             (_dyn_snap.get("stance") if isinstance(_dyn_snap, dict) else None)
         )
+        # P0-4: sizing referans kaynağı (snapshot oluşmadan da görünür) —
+        # "param_assistant" ise bot asistan önerisiyle açılmıştır.
+        _dyn_ref = (state or {}).get("_dynamic_reference")
+        _dyn_ref_meta = (state or {}).get("_dynamic_reference_meta")
+        _dyn_reference = {
+            "source": (
+                _dyn_ref.get("_source") if isinstance(_dyn_ref, dict) else None
+            )
+            or "initial_config",
+            "meta": _dyn_ref_meta if isinstance(_dyn_ref_meta, dict) else {},
+        }
         result["dynamic_mode"] = {
             "enabled": parse_bool((raw or {}).get("dynamic_mode")),
             "active": _dyn_gate_active and not _dyn_first_cycle_manual,
@@ -2827,6 +2865,7 @@ async def bots_detail(
             "stance": _dyn_stance if isinstance(_dyn_stance, dict) else None,
             "cycle_hold": _dyn_hold if isinstance(_dyn_hold, dict) and _dyn_hold.get("active") else None,
             "emergency": _dyn_emergency,
+            "reference": _dyn_reference,
         }
     except Exception as e:
         logger.debug("bots_detail dynamic_mode block failed bot_id=%s: %s", bot.id, e)
@@ -4822,6 +4861,15 @@ async def bots_start(
     db.commit()
     seed_perf_chart_state_on_bot_start(db, bot.id)
     invalidate_live_snapshot_cache(bot.id)
+    sym = (bot.symbol or "").upper().strip()
+    if sym and sym != "MULTI":
+        try:
+            from app.services.data_hub import data_hub
+
+            data_hub.pin_symbols([sym])
+            await data_hub.ensure_symbol_price(sym)
+        except Exception as e:
+            logger.debug("bots_start pin_price bot_id=%s sym=%s: %s", bot.id, sym, e)
     try:
         from app.api.routes import invalidate_dashboard_summary_cache
 
@@ -5015,7 +5063,7 @@ async def _sell_symbol_base_on_delete(
                 break
         if base_qty <= 0:
             return
-        min_notional = float(flt.get("min_notional") or 5)
+        min_notional = float(flt.get("min_notional") or DEFAULT_MIN_NOTIONAL_USDT)
         price = 0.0
         try:
             from app.services.market_data import get_price

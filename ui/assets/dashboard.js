@@ -190,6 +190,14 @@ function ensureLazyLogoObserver() {
             var dataSrc = img.getAttribute('data-src');
             if (!dataSrc) return;
             if (window.coinLogoCache.get(dataSrc)) { img.src = dataSrc; img.removeAttribute('data-src'); return; }
+            var sym = img.getAttribute('data-symbol') || img.getAttribute('alt') || '';
+            if (typeof shouldEagerLoadLogo === 'function' && shouldEagerLoadLogo(sym)) {
+                img.src = dataSrc;
+                img.removeAttribute('data-src');
+                return;
+            }
+            img.onload = function () { if (window.markCoinLogoLoaded) window.markCoinLogoLoaded(img); };
+            img.onerror = function () { if (window.handleCoinLogoError) window.handleCoinLogoError(img); };
             img.src = dataSrc;
             img.removeAttribute('data-src');
             window.coinLogoCache.set(dataSrc, true);

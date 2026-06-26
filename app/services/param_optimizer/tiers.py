@@ -1,9 +1,13 @@
 """
-Analiz seviyeleri: SOFT / ORTA / YÜKSEK.
+Analiz modu: tek "Profesyonel Otomatik Analiz" (professional_auto).
 
-Her seviye veri çözünürlüğü, zaman bütçesi, Monte Carlo yoğunluğu, walk-forward
-fold sayısı ve doğrulama derinliğini belirler. Yüksek seviye full CPU + uzun süre
-(1-6 saat) kullanır; yakınsama kararı en az 1 saatlik gerçek aramadan sonra verilir.
+Kullanıcıya süre/derinlik seçtirilmez (eski Düşük/Orta/Yüksek kaldırıldı — düşük
+mod güvenilir değildi, orta mod kendi içinde "MC örneklemi zayıf" diyordu, yüksek
+mod kullanıcıya seçtirmek yerine zaten tek doğru varsayılan olmalıydı). Tek mod
+geniş aday taraması, çok-dönem OOS doğrulama, walk-forward, Monte Carlo, stres
+testi ve final holdout'u otomatik çalıştırır; SÜREYE göre değil KANIT KALİTESİNE
+göre biter (yakınsarsa erken durur, kanıt karışıksa tavana — 6 saat — kadar devam
+eder). Full CPU kullanır; yakınsama kararı en az 30 dk gerçek aramadan sonra verilir.
 """
 
 from __future__ import annotations
@@ -34,90 +38,57 @@ class AnalysisTier:
     # Seçilen seti çok sayıda tarihsel OOS diliminde doğrula (tek 6-aylık OOS yerine).
     # Çapraz-dönem tutarlılık + toplam OOS tur sayısını yükseltir (n=3 -> onlarca/yüzlerce).
     walk_forward_oos_folds: int = 4
+    # MC örneklemi bu tabanın altındaysa deploy_probability yüzde olarak gösterilmez
+    # ("MC örneklemi yetersiz" yazar) ve deploy hard-reject olur.
+    mc_min_paths_for_deploy: int = 300
 
 
-TIERS: Dict[str, AnalysisTier] = {
-    "soft": AnalysisTier(
-        key="soft",
-        label="Düşük",
-        time_budget_sec=75,
-        fine_interval="1h",
-        fine_days=365,
-        coarse_interval="1d",
-        max_days=1460,
-        monte_carlo_paths=0,
-        mc_horizon_days=120,
-        mc_top_candidates=0,
-        walk_forward_folds=1,
-        validate_top=8,
-        early_stop=True,
-        requires_confirm=False,
-        description="Sunucuda gerçek strateji backtest + son dönem doğrulama. Yerel hızlı tahmin değildir. ~1 dk.",
-        walk_forward_oos_folds=3,
+PROFESSIONAL_AUTO = AnalysisTier(
+    key="professional_auto",
+    label="Profesyonel Otomatik Analiz",
+    time_budget_sec=21600,  # tavan 6 saat
+    fine_interval="5m",
+    fine_days=365,
+    coarse_interval="1h",
+    max_days=1460,
+    monte_carlo_paths=2400,
+    mc_horizon_days=180,
+    mc_top_candidates=32,
+    walk_forward_folds=8,
+    validate_top=128,
+    early_stop=True,
+    requires_confirm=False,
+    description=(
+        "En iyi parametreleri bulmak için geniş aday taraması, çoklu OOS doğrulama, "
+        "final holdout, Monte Carlo, stres testi ve canlıya uygunluk kapıları otomatik "
+        "çalışır. Uygulanabilir aday yoksa parametre önermez. Süreye göre değil kanıt "
+        "kalitesine göre biter; en az 30 dk, tavan 6 saat."
     ),
-    "medium": AnalysisTier(
-        key="medium",
-        label="Orta",
-        time_budget_sec=420,
-        fine_interval="15m",
-        fine_days=365,
-        coarse_interval="1h",
-        max_days=1460,
-        monte_carlo_paths=240,
-        mc_horizon_days=150,
-        mc_top_candidates=10,
-        walk_forward_folds=1,
-        validate_top=14,
-        early_stop=True,
-        requires_confirm=False,
-        description="15dk ince veri + OOS doğrulama + Monte Carlo gelecek simülasyonu. ~5-8 dk.",
-        walk_forward_oos_folds=4,
-    ),
-    "high": AnalysisTier(
-        key="high",
-        label="Yüksek",
-        time_budget_sec=21600,  # 6 saat tavan
-        fine_interval="5m",
-        fine_days=365,
-        coarse_interval="1h",
-        max_days=1460,
-        monte_carlo_paths=2400,
-        mc_horizon_days=180,
-        mc_top_candidates=72,
-        walk_forward_folds=6,
-        validate_top=96,
-        early_stop=True,
-        requires_confirm=True,
-        description="Derin analiz: 5dk son yıl + 1s tüm geçmiş + 6-fold walk-forward "
-        "+ ağır Monte Carlo ilk 6 ay senaryoları. Full CPU; en az 1 saat, tavan 6 saat. "
-        "Mantıksız kombinasyonlar elenir; yakınsama ancak 1 saatten sonra aramayı bitirebilir.",
-        min_runtime_sec=3600,
-        walk_forward_oos_folds=6,
-    ),
-}
+    min_runtime_sec=1800,
+    walk_forward_oos_folds=8,
+    mc_min_paths_for_deploy=600,
+)
+
+TIERS: Dict[str, AnalysisTier] = {"professional_auto": PROFESSIONAL_AUTO}
 
 
-def get_tier(key: Optional[str]) -> AnalysisTier:
-    return TIERS.get((key or "high").strip().lower(), TIERS["high"])
+def get_tier(key: Optional[str] = None) -> AnalysisTier:
+    """Geriye uyumluluk: eski soft/medium/high (ya da başka) ne gelirse gelsin
+    tek profesyonel moda eşlenir — frontend yanlışlıkla eski bir anahtar gönderse
+    bile backend her zaman professional_auto çalıştırır."""
+    return PROFESSIONAL_AUTO
 
 
 def estimate_seconds(tier: AnalysisTier, n_workers: int = 0) -> Dict[str, float]:
-    """Başlamadan önce kabaca tahmini süre aralığı (onay diyaloğu için).
+    """Başlamadan önce kabaca tahmini süre aralığı.
 
-    Çekirdek sayısı arttıkça arama hızlanır ama bütçe tavanı sabit kalır; bu yüzden
-    tahmin, "veri çekme + tipik yakınsama" temelli kaba bir aralıktır.
+    Tek mod kanıt kalitesine göre biter: erken yakınsarsa taban (~30dk) civarında,
+    karışık kanıtta tavana (6 saat) kadar sürebilir.
     """
     nw = n_workers or max(1, (os.cpu_count() or 4))
-    # veri çekme yükü (interval/gün'e göre kaba)
-    fetch = {"soft": 6, "medium": 25, "high": 70}.get(tier.key, 25)
     cap = tier.time_budget_sec
-    if tier.key == "soft":
-        low, high = fetch + 25, fetch + cap
-    elif tier.key == "medium":
-        low, high = fetch + cap * 0.45, fetch + cap
-    else:  # high: 1-6 saatlik derin otomatik profil
-        low = max(tier.min_runtime_sec, fetch + cap * 0.16)
-        high = cap
+    low = max(tier.min_runtime_sec, cap * 0.16)
+    high = cap
     return {
         "eta_low_sec": round(low, 0),
         "eta_high_sec": round(high, 0),

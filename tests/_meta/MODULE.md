@@ -24,6 +24,9 @@ pytest — güvenlik ve sözleşme testleri.
 | `test_home_fast_no_binance.py` | Home fast |
 | `test_cycle_ledger.py` | Cycle PnL |
 | `test_pnl_trailing_dca.py` | PnL |
+| `e2e/test_param_assistant_user_flow.py` | Param Assistant kullanıcı akışı E2E (HTTP) |
+| `dynamic_param_score/test_param_assistant_blackbox.py` | Param Assistant API black-box |
+| `dynamic_param_score/test_dynamic_mode_v4_final.py` | Dynamic Mode V4 rebalance/retry/invariant |
 
 ## Dosya envanteri
 

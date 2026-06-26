@@ -1,18 +1,18 @@
 """
-Parametre Asistanı API'si.
+Parametre Asistanı API'si — Dynamic Param Score Engine.
 
-Bütçe + parite alır; geçmiş + indikatörler + gerçek strateji
-backtest'i + Monte Carlo gelecek simülasyonu ile en iyi tüm bot parametrelerini
-hesaplar. Derin otomatik seviye full CPU + 1-6 saat tavanlı async job:
+Canlı karar artık ağır optimizer yerine merkezî DPS motorunu kullanır.
+Eski async optimizer endpoint'leri uyumluluk için kalır ama /optimize
+anında DPS sonucu döner (MC/backtest bekleme yok).
 
-    GET  /api/param-assistant/tiers           -> seviye listesi
-    POST /api/param-assistant/estimate        -> {tier} için tahmini süre (onay öncesi)
-    POST /api/param-assistant/optimize        -> {job_id}
-    GET  /api/param-assistant/optimize/{id}   -> ilerleme/ETA/sonuç
+    POST /api/param-assistant/calculate     -> anında DPS kararı
+    POST /api/dynamic-param-score/calculate -> aynı motor (dynamic_param_score_routes)
+    POST /api/param-assistant/optimize      -> DPS'e yönlendirilir (legacy path)
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Optional
 
@@ -20,24 +20,38 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.api.auth import require_auth
-from app.services.param_optimizer import jobs as opt_jobs
-from app.services.param_optimizer.tiers import TIERS
+from app.services.dynamic_param_score import get_engine
+from app.services.dynamic_param_score.adapters import (
+    PARAM_ASSISTANT_RESULT_SCHEMA,
+    decision_to_param_assistant_result,
+)
+from app.services.dynamic_param_score.data_collector import (
+    collect_market_data,
+    default_exchange_constraints,
+    portfolio_from_budget,
+)
+from app.services.dynamic_param_score.models import BotContext
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-_VALID_LEVELS = ("soft", "medium", "high")
+_VALID_LEVELS = ("professional_auto",)  # legacy — all map to DPS
 
 
 class OptimizeRequest(BaseModel):
     symbol: str
     budget: float
-    analysis_level: Optional[str] = "high"
+    analysis_level: Optional[str] = "professional_auto"  # ignored
+    first_start_buy_only: Optional[bool] = False
+    base_balance_usdt: Optional[float] = None
+    quote_balance_usdt: Optional[float] = None
+    base_alloc_frac: Optional[float] = None
+    dry_run: Optional[bool] = True
 
 
 class EstimateRequest(BaseModel):
-    analysis_level: Optional[str] = "high"
+    analysis_level: Optional[str] = "professional_auto"
 
 
 def _normalize_symbol(sym: str) -> str:
@@ -53,49 +67,93 @@ def _normalize_symbol(sym: str) -> str:
 
 
 def _level(v: Optional[str]) -> str:
-    lv = (v or "high").strip().lower()
-    return lv if lv in _VALID_LEVELS else "high"
+    return "professional_auto"
 
 
-def _owner_key(current: dict) -> str:
-    """Hesap başına asistan sahipliği. Hesap yoksa kullanıcıya, o da yoksa anon."""
-    aid = current.get("account_id")
-    if aid:
-        return f"acc:{aid}"
-    uid = current.get("user_id")
-    return f"usr:{uid}" if uid else "anon"
+async def _run_dps(
+    symbol: str,
+    budget: float,
+    run_source: str = "param_assistant",
+    *,
+    first_start_buy_only: bool = False,
+    base_balance_usdt: Optional[float] = None,
+    quote_balance_usdt: Optional[float] = None,
+    base_alloc_frac: Optional[float] = None,
+    dry_run: bool = True,
+):
+    from app.services.dynamic_param_score.data_collector import portfolio_from_user_scenario
+
+    market = await collect_market_data(symbol)
+    price = float(market.ticker_price or 0.0)
+    if base_balance_usdt is not None or quote_balance_usdt is not None or base_alloc_frac is not None:
+        portfolio = portfolio_from_user_scenario(
+            quote_budget_usdt=budget,
+            price=price,
+            base_balance_usdt=base_balance_usdt,
+            quote_balance_usdt=quote_balance_usdt,
+            base_alloc_frac=base_alloc_frac,
+        )
+    else:
+        portfolio = portfolio_from_budget(budget, price)
+    constraints = default_exchange_constraints(symbol)
+    ctx = BotContext(
+        run_source=run_source,
+        budget_usdt=budget,
+        is_first_start=run_source == "param_assistant" and float(portfolio.base_value_usdt or 0) <= 0,
+        first_start_buy_only=bool(first_start_buy_only),
+        allow_live=not dry_run,
+        allow_no_trade=True,
+    )
+
+    def _calc():
+        return get_engine().calculate_decision(
+            symbol=symbol,
+            market_data=market,
+            portfolio_state=portfolio,
+            exchange_constraints=constraints,
+            bot_context=ctx,
+        )
+
+    loop = asyncio.get_running_loop()
+    decision = await loop.run_in_executor(None, _calc)
+    return decision_to_param_assistant_result(decision, budget, symbol)
 
 
 @router.get("/param-assistant/tiers")
 async def list_tiers(current: dict = Depends(require_auth)):
-    """Analiz seviyeleri + her biri için tahmini süre."""
-    out = []
-    for key in _VALID_LEVELS:
-        t = TIERS[key]
-        est = opt_jobs.estimate_for(key)
-        out.append(
+    """Tek mod: Dynamic Param Score (anında hesaplama)."""
+    return {
+        "ok": True,
+        "tiers": [
             {
-                "key": t.key,
-                "label": t.label,
-                "description": t.description,
-                "requires_confirm": t.requires_confirm,
-                "eta_low_sec": est["eta_low_sec"],
-                "eta_high_sec": est["eta_high_sec"],
-                "cap_sec": est["cap_sec"],
-                "cores": est["cores"],
+                "key": "professional_auto",
+                "label": "Parametre Skoru Analizi",
+                "description": "Piyasa koşulları + portföy durumuna göre anında parametre skoru ve profil seçimi.",
+                "requires_confirm": False,
+                "eta_low_sec": 2,
+                "eta_high_sec": 15,
+                "cap_sec": 30,
+                "cores": 1,
             }
-        )
-    return {"ok": True, "tiers": out}
+        ],
+    }
 
 
 @router.post("/param-assistant/estimate")
 async def estimate(req: EstimateRequest, current: dict = Depends(require_auth)):
-    """Seçilen seviye için tahmini süre (Yüksek onay diyaloğu için)."""
-    return {"ok": True, **opt_jobs.estimate_for(_level(req.analysis_level))}
+    return {
+        "ok": True,
+        "eta_low_sec": 2,
+        "eta_high_sec": 15,
+        "cap_sec": 30,
+        "cores": 1,
+        "engine": "dynamic_param_score",
+    }
 
 
-@router.post("/param-assistant/optimize")
-async def start_optimize(req: OptimizeRequest, current: dict = Depends(require_auth)):
+@router.post("/param-assistant/calculate")
+async def calculate(req: OptimizeRequest, current: dict = Depends(require_auth)):
+    """Anında DPS kararı — önerilen yeni endpoint."""
     symbol = _normalize_symbol(req.symbol)
     if not symbol or len(symbol) < 5:
         raise HTTPException(status_code=400, detail="Geçersiz parite.")
@@ -105,64 +163,123 @@ async def start_optimize(req: OptimizeRequest, current: dict = Depends(require_a
         raise HTTPException(status_code=400, detail="Geçersiz bütçe.")
     if budget < 25:
         raise HTTPException(status_code=400, detail="Bütçe en az 25 USDT olmalı.")
+    from app.services.user_readable_activity_logger import UserReadableActivityLogger
 
-    level = _level(req.analysis_level)
-    owner = _owner_key(current)
-    existing = opt_jobs.get_running_job_for_owner(owner)
-    if existing is not None:
-        job = existing
-        reused = True
-    else:
-        job = await opt_jobs.create_job(
-            symbol, budget, analysis_level=level, owner_key=owner
+    uid = current.get("user_id")
+    if uid:
+        UserReadableActivityLogger.write_event(
+            uid,
+            "PARAM_ANALYSIS_STARTED",
+            context={"symbol": symbol, "budget": budget},
         )
-        reused = False
+    result = await _run_dps(
+        symbol,
+        budget,
+        first_start_buy_only=bool(req.first_start_buy_only),
+        base_balance_usdt=req.base_balance_usdt,
+        quote_balance_usdt=req.quote_balance_usdt,
+        base_alloc_frac=req.base_alloc_frac,
+        dry_run=bool(req.dry_run if req.dry_run is not None else True),
+    )
+    if uid:
+        rt = str(result.get("result_type") or result.get("action") or "").lower()
+        evt = "PARAM_ANALYSIS_COMPLETED"
+        if "no_trade" in rt or result.get("no_trade"):
+            evt = "PARAM_RESULT_NO_TRADE"
+        elif "deployable" in rt or result.get("deployable"):
+            evt = "PARAM_RESULT_DEPLOYABLE"
+        elif "recommended" in rt:
+            evt = "PARAM_RESULT_RECOMMENDED"
+        elif not result.get("ok", True):
+            evt = "PARAM_ANALYSIS_FAILED"
+        UserReadableActivityLogger.write_event(
+            uid, evt, context={"symbol": symbol, "budget": budget}
+        )
+    return result
+
+
+@router.post("/param-assistant/optimize")
+async def start_optimize(req: OptimizeRequest, current: dict = Depends(require_auth)):
+    """Legacy path — artık anında DPS döner (async job yok)."""
+    symbol = _normalize_symbol(req.symbol)
+    if not symbol or len(symbol) < 5:
+        raise HTTPException(status_code=400, detail="Geçersiz parite.")
+    try:
+        budget = float(req.budget)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Geçersiz bütçe.")
+    if budget < 25:
+        raise HTTPException(status_code=400, detail="Bütçe en az 25 USDT olmalı.")
+    from app.services.user_readable_activity_logger import UserReadableActivityLogger
+
+    uid = current.get("user_id")
+    if uid:
+        UserReadableActivityLogger.write_event(
+            uid,
+            "PARAM_ANALYSIS_STARTED",
+            context={"symbol": symbol, "budget": budget},
+        )
+
+    result = await _run_dps(
+        symbol,
+        budget,
+        first_start_buy_only=bool(req.first_start_buy_only),
+        base_balance_usdt=req.base_balance_usdt,
+        quote_balance_usdt=req.quote_balance_usdt,
+        base_alloc_frac=req.base_alloc_frac,
+        dry_run=bool(req.dry_run if req.dry_run is not None else True),
+    )
+    if uid:
+        rt = str(result.get("result_type") or result.get("action") or "").lower()
+        evt = "PARAM_ANALYSIS_COMPLETED"
+        if "no_trade" in rt or result.get("no_trade"):
+            evt = "PARAM_RESULT_NO_TRADE"
+        elif "deployable" in rt or result.get("deployable"):
+            evt = "PARAM_RESULT_DEPLOYABLE"
+        elif "recommended" in rt:
+            evt = "PARAM_RESULT_RECOMMENDED"
+        elif not result.get("ok", True):
+            evt = "PARAM_ANALYSIS_FAILED"
+        UserReadableActivityLogger.write_event(
+            uid, evt, context={"symbol": symbol, "budget": budget}
+        )
+    import uuid
+
+    job_id = uuid.uuid4().hex[:16]
     return {
         "ok": True,
-        "job_id": job.id,
-        "status": job.status,
-        "reused": reused,
-        "requested_symbol": symbol,
-        "symbol": job.symbol,
-        "budget": job.budget,
-        "analysis_level": job.tier,
-        "tier_label": job.tier_label,
-        "cores": job.cores,
-        "time_budget_sec": job.time_budget_sec,
-        "eta_total_sec": job.eta_total_sec,
-        "queue_position": opt_jobs.running_count(),
+        "started": True,
+        "job_id": job_id,
+        "status": "done",
+        "reused": False,
+        "instant": True,
+        "engine": "dynamic_param_score",
+        "symbol": symbol,
+        "budget": budget,
+        "analysis_level": _level(req.analysis_level),
+        "result_schema_version": PARAM_ASSISTANT_RESULT_SCHEMA,
+        "result": result,
     }
 
 
 @router.get("/param-assistant/active")
 async def active_job(current: dict = Depends(require_auth)):
-    """Modal açılışında: devam eden işe yeniden bağlan ya da bitmiş öneriyi tek-sefer ver.
-
-    state: running | finished | error | none
-    """
-    state = opt_jobs.get_owner_attach_state(_owner_key(current))
-    return {"ok": True, **state}
+    return {"ok": True, "state": "none"}
 
 
 @router.post("/param-assistant/optimize/{job_id}/cancel")
 async def cancel_optimize(job_id: str, current: dict = Depends(require_auth)):
-    res = opt_jobs.cancel_job(job_id, owner_key=_owner_key(current))
-    if res.get("forbidden"):
-        raise HTTPException(status_code=403, detail="Bu analizi sonlandırma yetkin yok.")
-    return {"ok": True, **res}
+    return {"ok": True, "cancelled": False, "note": "instant_dps_no_job"}
 
 
 @router.post("/param-assistant/cancel-active")
 async def cancel_active(current: dict = Depends(require_auth)):
-    return {"ok": True, **opt_jobs.cancel_running_jobs_for_owner(_owner_key(current))}
+    return {"ok": True, "cancelled": 0}
 
 
 @router.get("/param-assistant/optimize/{job_id}")
 async def get_optimize(job_id: str, current: dict = Depends(require_auth)):
-    job = opt_jobs.get_job(job_id)
-    if not job:
-        raise HTTPException(
-            status_code=404,
-            detail="Optimizasyon işi bulunamadı (zaman aşımına uğramış olabilir).",
-        )
-    return job.public()
+    raise HTTPException(
+        status_code=404,
+        detail="Anında DPS modunda iş kuyruğu yok. POST /param-assistant/calculate kullanın.",
+    )

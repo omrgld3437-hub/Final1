@@ -561,12 +561,13 @@ function renderMobileTradeFavorites() {
         return formatTradingPairDisplay(sym);
     };
     var getLogoHtml = function (base) {
-        if (!base || typeof getCoinLogoUrl !== "function") return '<span class="varlik-logo-initials" style="width:32px;height:32px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:0.7rem;font-weight:600;background:var(--ds-bg-tertiary);color:var(--ds-text-secondary);">' + (base || "").substring(0, 2).toUpperCase() + "</span>";
+        var initials = (typeof getCoinLogoInitials === "function" ? getCoinLogoInitials(base) : (base || "?").substring(0, 1).toUpperCase());
+        var initStyle = 'width:32px;height:32px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:0.7rem;font-weight:600;background:var(--ds-bg-tertiary);color:var(--ds-text-secondary);';
+        if (!base || typeof getCoinLogoUrl !== "function") return '<span class="varlik-logo-initials" style="' + initStyle + '">' + initials + "</span>";
         var url = getCoinLogoUrl(base);
-        var initials = (base || " ").substring(0, 2).toUpperCase();
         return url
-            ? '<img src="' + url + '" alt="' + base + '" class="mobile-trade-fav-logo" style="width:32px;height:32px;border-radius:50%;object-fit:cover;" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\'" /><span class="varlik-logo-initials" style="display:none;width:32px;height:32px;border-radius:50%;align-items:center;justify-content:center;font-size:0.7rem;font-weight:600;background:var(--ds-bg-tertiary);color:var(--ds-text-secondary);">' + initials + "</span>"
-            : '<span class="varlik-logo-initials" style="width:32px;height:32px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:0.7rem;font-weight:600;background:var(--ds-bg-tertiary);color:var(--ds-text-secondary);">' + initials + "</span>";
+            ? '<img src="' + url + '" alt="' + base + '" data-symbol="' + base + '" class="mobile-trade-fav-logo" style="width:32px;height:32px;border-radius:50%;object-fit:cover;" onerror="if(window.handleCoinLogoError)window.handleCoinLogoError(this)" /><span class="varlik-logo-initials" style="display:none;' + initStyle + '">' + initials + "</span>"
+            : '<span class="varlik-logo-initials" style="' + initStyle + '">' + initials + "</span>";
     };
     var html = favs.map(function (symbol) {
         var quote = _getMobileTradeFavQuote(symbol);

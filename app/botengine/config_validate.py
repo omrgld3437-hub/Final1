@@ -8,9 +8,10 @@ import math
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.botengine.models import DcaGridTrailingConfig, config_from_ui_payload
+from app.core.constants import DEFAULT_MIN_NOTIONAL_USDT
 
 # UI / Binance güvenli alt sınır: grid başına tahmini emir tutarı (USDT)
-MIN_GRID_NOTIONAL_USDT = 10.0
+MIN_GRID_NOTIONAL_USDT = DEFAULT_MIN_NOTIONAL_USDT
 
 
 def _num(v: Any, default: float = 0.0) -> float:
@@ -34,7 +35,7 @@ def _notional_floor(
     cfg: DcaGridTrailingConfig, min_usdt: Optional[float] = None
 ) -> float:
     floor = max(MIN_GRID_NOTIONAL_USDT, _num(min_usdt, MIN_GRID_NOTIONAL_USDT))
-    return max(floor, _num(getattr(cfg, "min_notional_guard", 5.0), 5.0))
+    return max(floor, _num(getattr(cfg, "min_notional_guard", DEFAULT_MIN_NOTIONAL_USDT), DEFAULT_MIN_NOTIONAL_USDT))
 
 
 def _buffer_factor(cfg: DcaGridTrailingConfig) -> float:

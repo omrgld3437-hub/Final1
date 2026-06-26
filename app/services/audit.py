@@ -100,6 +100,26 @@ def log_event(
         db.add(ev)
         db.commit()
         db.refresh(ev)
+        try:
+            from app.services.user_readable_activity_logger import (
+                UserReadableActivityLogger,
+                resolve_user_identity,
+            )
+
+            uid = target_user_id or actor_user_id
+            name, surname = None, None
+            if uid:
+                _, name, surname = resolve_user_identity(db, user_id=uid)
+            UserReadableActivityLogger.write_from_audit(
+                event_type,
+                actor_user_id=actor_user_id,
+                target_user_id=target_user_id,
+                user_name=name,
+                user_surname=surname,
+                meta=meta,
+            )
+        except Exception:
+            pass
         return ev.id
     except Exception as e:
         logger.warning("audit log_event failed: %s", e)

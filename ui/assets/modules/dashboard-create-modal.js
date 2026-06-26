@@ -51,11 +51,17 @@ var dmParamAssistantActiveBackendRun = 0;
 var dmParamAssistantTierSelectSeq = 0;
 var dmParamAssistantProgressState = null;
 var dmParamAssistantProgressTickTimer = null;
+var dmParamAssistantLinearProgTimer = null;
+var dmParamAssistantMicroStepTimer = null;
+var dmParamAssistantLiveTypeToken = 0;
 var dmParamAssistantActiveJobId = '';
 var dmParamAssistantLastSnapshot = null;
 var dmParamAssistantLastTierStartFn = null;
 var dmParamAssistantApplyTimers = [];
 var dmParamAssistantApplying = false;
+// P0-4: backend (param asistanı) önerisi forma uygulandıysa, oluşturma payload'una
+// config_source='param_assistant' iliştirip dinamik referansı bağlamak için saklanır.
+var dmParamAssistantAppliedSource = null;
 var DM_PARAM_ASSISTANT_HISTORY_TTL_MS = (AI_ASSISTANT_SPEC.cache && AI_ASSISTANT_SPEC.cache.marketHistoryTtlMs) || 10 * 60 * 1000;
 var DM_PARAM_ASSISTANT_HISTORY_TIMEOUT_MS = (AI_ASSISTANT_SPEC.cache && AI_ASSISTANT_SPEC.cache.marketHistoryTimeoutMs) || 9000;
 var DM_PARAM_ASSISTANT_DAY_MS = 24 * 60 * 60 * 1000;
@@ -978,9 +984,9 @@ function updateCreateBotModalPairStrip(symbol, opts) {
         if (base !== dmModalLastLogoBase) {
             dmModalLastLogoBase = base;
             const url = getCoinLogoUrl(base);
-            const initials = (base || ' ').substring(0, 2).toUpperCase();
+            const initials = (typeof getCoinLogoInitials === 'function' ? getCoinLogoInitials(base) : (base || '?').substring(0, 1).toUpperCase());
             logoEl.innerHTML = url
-                ? '<img src="' + url + '" alt="' + base + '" loading="lazy" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\';" /><span class="varlik-logo-initials" style="display:none">' + initials + '</span>'
+                ? '<img src="' + url + '" alt="' + base + '" data-symbol="' + base + '" loading="' + ((typeof shouldEagerLoadLogo === 'function' && shouldEagerLoadLogo(base)) ? 'eager' : 'lazy') + '" onload="if(window.markCoinLogoLoaded)window.markCoinLogoLoaded(this)" onerror="if(window.handleCoinLogoError)window.handleCoinLogoError(this)" /><span class="varlik-logo-initials" style="display:none">' + initials + '</span>'
                 : '<span class="varlik-logo-initials">' + initials + '</span>';
             logoEl.title = base;
         }
@@ -1075,6 +1081,102 @@ function dmParamAssistantClearTimers() {
         clearTimeout(dmParamAssistantProgressTickTimer);
         dmParamAssistantProgressTickTimer = null;
     }
+    dmParamAssistantStopLinearProgress();
+    dmParamAssistantStopMicroSteps();
+}
+
+function dmParamAssistantSetCursorVisible(on) {
+    var c = document.getElementById('dmParamAssistantCursor');
+    if (c) c.style.visibility = on ? 'visible' : 'hidden';
+}
+
+function dmParamAssistantStopLinearProgress() {
+    if (dmParamAssistantLinearProgTimer) {
+        clearInterval(dmParamAssistantLinearProgTimer);
+        dmParamAssistantLinearProgTimer = null;
+    }
+}
+
+function dmParamAssistantStartLinearProgress(runId, opts) {
+    opts = opts || {};
+    var startPct = Number(opts.startPct != null ? opts.startPct : 4);
+    var endPct = Number(opts.endPct != null ? opts.endPct : 90);
+    var durationMs = Math.max(1200, Number(opts.durationMs) || 14000);
+    var tickMs = Number(opts.tickMs) || 45;
+    var started = Date.now();
+    dmParamAssistantStopLinearProgress();
+    dmParamAssistantLinearProgTimer = setInterval(function () {
+        if (!dmParamAssistantProgressState || dmParamAssistantProgressState.runId !== runId) {
+            dmParamAssistantStopLinearProgress();
+            return;
+        }
+        var t = Math.min(1, (Date.now() - started) / durationMs);
+        var pct = startPct + (endPct - startPct) * t;
+        dmParamAssistantRenderTimePct(pct);
+        if (t >= 1) dmParamAssistantStopLinearProgress();
+    }, tickMs);
+}
+
+function dmParamAssistantStopMicroSteps() {
+    if (dmParamAssistantMicroStepTimer) {
+        clearInterval(dmParamAssistantMicroStepTimer);
+        dmParamAssistantMicroStepTimer = null;
+    }
+    dmParamAssistantLiveTypeToken++;
+}
+
+function dmParamAssistantTypeLiveLine(text, opts) {
+    opts = opts || {};
+    var live = document.getElementById('dmPaProgLive');
+    var status = document.getElementById('dmParamAssistantStatus');
+    var msg = String(text || '');
+    if (!live && !status) return;
+    if (!opts.animated) {
+        if (live) {
+            live.textContent = msg;
+            live.classList.remove('is-typing');
+        }
+        if (opts.syncStatus !== false && status) status.textContent = msg;
+        return;
+    }
+    var token = ++dmParamAssistantLiveTypeToken;
+    if (live) live.classList.add('is-typing');
+    var idx = 0;
+    var chunk = document.hidden ? 12 : 4;
+    var ms = Math.max(6, (AI_ASSISTANT_SPEC.timing && AI_ASSISTANT_SPEC.timing.textMs) || 14);
+    function step() {
+        if (token !== dmParamAssistantLiveTypeToken) return;
+        if (live) live.textContent = msg.slice(0, idx + chunk);
+        if (opts.syncStatus !== false && status) status.textContent = msg.slice(0, idx + chunk);
+        idx += chunk;
+        if (idx < msg.length) {
+            dmParamAssistantSetTimer(step, ms);
+        } else if (live) {
+            live.classList.remove('is-typing');
+        }
+    }
+    if (live) live.textContent = '';
+    step();
+}
+
+function dmParamAssistantStartMicroSteps(runId, ticks, intervalMs) {
+    dmParamAssistantStopMicroSteps();
+    var list = Array.isArray(ticks) ? ticks.filter(Boolean) : [];
+    if (!list.length) return;
+    var i = 0;
+    function showTick() {
+        dmParamAssistantTypeLiveLine(list[i], { syncStatus: false });
+    }
+    showTick();
+    dmParamAssistantMicroStepTimer = setInterval(function () {
+        if (!dmParamAssistantProgressState || dmParamAssistantProgressState.runId !== runId) {
+            dmParamAssistantStopMicroSteps();
+            return;
+        }
+        if (list.length < 2) return;
+        i = (i + 1) % list.length;
+        showTick();
+    }, Math.max(2400, intervalMs || 2800));
 }
 
 function dmParamAssistantSetApplyTimer(fn, ms) {
@@ -1148,9 +1250,27 @@ function dmParamAssistantDisplayPrice(v, quote) {
 
 function dmParamAssistantQtys(count) {
     if (count <= 1) return [100];
-    if (count === 2) return [50, 50];
-    if (count === 3) return [40, 35, 25];
-    return [30, 25, 25, 20].slice(0, count);
+    var raw;
+    if (count === 2) raw = [50, 50];
+    else if (count === 3) raw = [40, 35, 25];
+    else raw = [30, 25, 25, 20].slice(0, count);
+    return dmParamAssistantNormalizeQtys(raw);
+}
+
+function dmParamAssistantNormalizeQtys(qtys) {
+    if (!qtys || !qtys.length) return [];
+    if (qtys.length === 1) return [100];
+    var scaled = qtys.map(function (q) { return Math.round(Number(q) * 10) / 10; });
+    var sum = scaled.reduce(function (a, b) { return a + b; }, 0);
+    var drift = Math.round((100 - sum) * 10) / 10;
+    if (Math.abs(drift) >= 0.05) {
+        var idx = 0;
+        for (var i = 1; i < scaled.length; i++) {
+            if (scaled[i] > scaled[idx]) idx = i;
+        }
+        scaled[idx] = Math.round((scaled[idx] + drift) * 10) / 10;
+    }
+    return scaled;
 }
 
 function dmParamAssistantCurrentSnapshot() {
@@ -1878,15 +1998,17 @@ function dmParamAssistantBuildRecommendation(snapshot, marketCtx) {
     var upGrids = [];
     var downGrids = [];
     var depthGrowth = analysis.regimeCode === 'DUMP_RISK' ? 1.55 : (analysis.regimeCode === 'TRENDING_DOWN' ? 1.42 : 1.35);
+    var sellDepthGrowth = analysis.regimeCode === 'BREAKOUT' ? 1.38 : depthGrowth;
     // Alış gridi referans fiyattan MUTLAK düşüş %'sidir; spot piyasada fiyat en
     // fazla %100 düşer (sıfıra iner). %100+ alış tetiği matematiksel olarak imkânsız
     // ve asla dolmayacak ölü bir seviyedir -> bu eşiği aşan alış seviyelerini at.
     var DM_MAX_BUY_DEPTH_PCT = 92;
     for (var i = 0; i < count; i++) {
-        var trigger = dmParamAssistantRound(step * Math.pow(depthGrowth, i), 2);
-        upGrids.push({ trigger_pct: trigger, qty_pct: qtys[i] });  // satış: yukarı yön, %100+ fiziksel olarak mümkün
-        if (trigger < DM_MAX_BUY_DEPTH_PCT) {
-            downGrids.push({ trigger_pct: trigger });  // qty aşağıda yeniden dağıtılır
+        var sellTrigger = dmParamAssistantRound(step * Math.pow(sellDepthGrowth, i), 2);
+        var buyTrigger = dmParamAssistantRound(step * Math.pow(depthGrowth, i), 2);
+        upGrids.push({ trigger_pct: sellTrigger, qty_pct: qtys[i] });
+        if (buyTrigger < DM_MAX_BUY_DEPTH_PCT) {
+            downGrids.push({ trigger_pct: buyTrigger });
         }
     }
     if (!downGrids.length) {
@@ -1894,6 +2016,11 @@ function dmParamAssistantBuildRecommendation(snapshot, marketCtx) {
     }
     var downQtys = dmParamAssistantQtys(downGrids.length);
     downGrids.forEach(function (g, j) { g.qty_pct = downQtys[j]; });
+    upGrids = upGrids.slice(0, count);
+    if (upGrids.length) {
+        var upQtys = dmParamAssistantNormalizeQtys(upGrids.map(function (g) { return g.qty_pct; }));
+        upGrids.forEach(function (g, j) { g.qty_pct = upQtys[j]; });
+    }
 
     var volatility = analysis.volUnit >= 2.1 ? 'yüksek' : (analysis.volUnit >= 0.85 ? 'orta' : 'sakin');
     return {
@@ -2041,15 +2168,881 @@ function dmParamAssistantRandomIndex(max) {
     return Math.floor(Math.random() * max);
 }
 
+function dmParamAssistantActionLabel(code, backend) {
+    if (backend && backend.final_action_label) return backend.final_action_label;
+    var map = {
+        SELL_MANAGEMENT_ONLY: 'Sadece satış yönetimi',
+        WAIT: 'Bekle',
+        WAIT_SAFETY: 'Güvenlik bekle',
+        NO_TRADE: 'İşlem yok',
+        DEFENSIVE_GRID: 'Savunmacı grid',
+        BALANCED_GRID: 'Dengeli grid',
+        ACTIVE_GRID: 'Aktif grid',
+        ACTIVE_DEFENSIVE_GRID: 'Aktif savunmacı grid',
+        LOW_FEE_WIDE_GRID: 'Geniş aralıklı grid',
+        TREND_TRAILING: 'Trend trailing'
+    };
+    return map[String(code || '').toUpperCase()] || code || '—';
+}
+
+function dmParamAssistantGridCountLabel(rec) {
+    var buyN = rec && rec.downGrids ? rec.downGrids.length : 0;
+    var sellN = rec && rec.upGrids ? rec.upGrids.length : 0;
+    return 'Alış ' + buyN + ' · Satış ' + sellN;
+}
+
+function dmParamAssistantAttrEscape(s) {
+    return dmParamAssistantEscape(s).replace(/"/g, '&quot;');
+}
+
+var DM_PA_REGIME_TR = {
+    NO_DATA: 'Veri yetersiz',
+    NO_TRADE: 'İşlem için uygun değil',
+    DUMP_RISK: 'Sert düşüş riski',
+    TRENDING_DOWN: 'Aşağı baskılı trend',
+    HIGH_VOL_UNSTABLE: 'Yüksek volatilite / dengesiz',
+    RANGE_LOW_VOL: 'Düşük volatilite aralık',
+    RANGE_HIGH_VOL: 'Yüksek volatilite aralık',
+    BALANCED_RANGE: 'Dengeli aralık',
+    TRENDING_UP: 'Yükseliş trendi',
+    BREAKOUT_RISK: 'Kırılım riski',
+    LOW_LIQUIDITY: 'Düşük likidite',
+    SPREAD_UNSAFE: 'Güvensiz spread'
+};
+
+var DM_PA_RISK_TR = {
+    SAFE: 'Güvenli',
+    NORMAL: 'Normal',
+    CAUTION: 'Dikkatli',
+    DEFENSIVE: 'Savunmacı',
+    BLOCKED: 'Engelli'
+};
+
+var DM_PA_CHIP_TIPS = {
+    'Parite': 'Analiz edilen spot işlem çifti.',
+    'Parametre çalışma skoru': 'Piyasa verisi, likidite, spread ve grid uygunluğunun birleşik skoru (0–100).',
+    'Rejim': 'Motorun sınıflandırdığı piyasa rejimi; grid agresifliğini belirler.',
+    'Risk': 'Kısa vadeli downside risk durumu; NORMAL iken savunmacı mod zorunlu değildir.',
+    'Karar': 'Bu koşulda canlıya uygulanacak nihai aksiyon.',
+    'Piyasa güven skoru': 'Kararın veri kalitesi ve sinyal tutarlılığına dayalı güven skoru.',
+    'Seçilen profil uyum skoru': 'Seçilen profilin route ve fallback içindeki uyum skoru.',
+    'Grid': 'Önerilen alış ve satış grid kademe sayısı.',
+    'Profil': 'Parametre havuzundan seçilen profil ve şablon anahtarı.'
+};
+
+function dmParamAssistantRegimeLabel(tag) {
+    var key = String(tag || '').toUpperCase();
+    return DM_PA_REGIME_TR[key] || tag || '—';
+}
+
+function dmParamAssistantRiskLabel(risk) {
+    var key = String(risk || '').toUpperCase();
+    return DM_PA_RISK_TR[key] || risk || '—';
+}
+
+function dmParamAssistantMakeTile(label, value, tip) {
+    return { label: label, value: value, tip: tip || '' };
+}
+
+function dmParamAssistantRenderTileHtml(tile) {
+    if (!tile) return '';
+    var tipAttr = tile.tip ? ' data-dyn-tip="' + dmParamAssistantAttrEscape(tile.tip) + '"' : '';
+    return '<div class="dm-pa-tile"' + tipAttr + '><span>' + dmParamAssistantEscape(tile.label) +
+        '</span><strong>' + dmParamAssistantEscape(tile.value) + '</strong></div>';
+}
+
+function dmParamAssistantRegimeSlug(tag) {
+    return String(tag || 'unknown').toLowerCase().replace(/[^a-z0-9]+/g, '_');
+}
+
+function dmParamAssistantRenderRegimeBanner(rec) {
+    var r = rec.backend || {};
+    var ui = r.ui_config || {};
+    var label = ui.display_regime_label || r.display_regime_label || dmParamAssistantRegimeLabel(r.regime_tag || rec.regime || '');
+    var risk = dmParamAssistantRiskLabel(
+        ui.effective_risk_state || r.effective_risk_state || r.risk_state || rec.riskState
+    );
+    var conf = r.confidence != null ? r.confidence : '—';
+    var slug = dmParamAssistantRegimeSlug(r.regime_tag || rec.regime || label);
+    var tip = 'Motorun bu parite için seçtiği piyasa rejimi: ' + label + '. Grid agresifliği ve profil seçimi buna göre yapılır.';
+    if (ui.effective_route_key || r.effective_route_key) {
+        tip += ' Etkin route: ' + (ui.effective_route_key || r.effective_route_key) + '.';
+    }
+    return '<div class="dm-pa-regime-banner dm-pa-regime--' + dmParamAssistantEscape(slug) +
+        '" data-dyn-tip="' + dmParamAssistantAttrEscape(tip) + '">' +
+        '<div class="dm-pa-regime-kicker">Piyasa rejimi</div>' +
+        '<div class="dm-pa-regime-value">' + dmParamAssistantEscape(label) + '</div>' +
+        '<div class="dm-pa-regime-meta">Risk: <em>' + dmParamAssistantEscape(risk) +
+        '</em> · Güven: <em>' + dmParamAssistantEscape(String(conf)) + '/100</em></div></div>';
+}
+
+function dmParamAssistantRenderParamRowHtml(tile) {
+    if (!tile) return '';
+    var tipAttr = tile.tip ? ' data-dyn-tip="' + dmParamAssistantAttrEscape(tile.tip) + '"' : '';
+    return '<div class="dm-pa-param-row"' + tipAttr + '><span>' + dmParamAssistantEscape(tile.label) +
+        '</span><strong>' + dmParamAssistantEscape(tile.value) + '</strong></div>';
+}
+
+function dmParamAssistantRenderParamsSectionHtml(rec) {
+    var sections = dmParamAssistantBackendSummarySections(rec);
+    var html = '<div class="dm-pa-summary-wrap dm-pa-params-wrap">';
+    html += dmParamAssistantRenderRegimeBanner(rec);
+    html += '<section class="dm-pa-summary-section dm-pa-summary-params">';
+    html += '<h4 class="dm-pa-summary-section-title">' + dmParamAssistantEscape(sections.params.title) + '</h4>';
+    (sections.params.groups || []).forEach(function (group) {
+        if (!group.rows || !group.rows.length) return;
+        if (group.title) {
+            html += '<div class="dm-pa-param-group-title">' + dmParamAssistantEscape(group.title) + '</div>';
+        }
+        html += '<div class="dm-pa-param-list">';
+        group.rows.forEach(function (tile) {
+            html += dmParamAssistantRenderParamRowHtml(tile);
+        });
+        html += '</div>';
+    });
+    html += '</section></div>';
+    return html;
+}
+
+function dmParamAssistantRenderDetailsSectionsHtml(sections, rec, result) {
+    var html = '<div class="dm-pa-summary-wrap dm-pa-details-wrap">';
+    if (sections.notice) {
+        html += dmParamAssistantRenderNoticeHtml(sections.notice, rec);
+    }
+    if (sections.indicators && sections.indicators.groups && sections.indicators.groups.length) {
+        html += dmParamAssistantRenderGroupedSectionHtml(sections.indicators, 'indicators');
+    }
+    if (sections.safety && sections.safety.groups && sections.safety.groups.length) {
+        html += dmParamAssistantRenderGroupedSectionHtml(sections.safety, 'safety');
+    }
+    var debugGroups = dmParamAssistantBuildDebugParamGroups(rec).concat(
+        dmParamAssistantBuildFeeDisplayTiles(result || (rec && rec.backend) || {}),
+        dmParamAssistantBuildSelectionTraceTiles(result || (rec && rec.backend) || {})
+    );
+    if (debugGroups.length) {
+        html += '<details class="dm-pa-sub-scores dm-pa-debug-panel" open>';
+        html += '<summary>Gelişmiş teknik detaylar</summary>';
+        debugGroups.forEach(function (group) {
+            html += '<div class="dm-pa-tile-group">';
+            if (group.title) {
+                html += '<div class="dm-pa-tile-group-title">' + dmParamAssistantEscape(group.title) + '</div>';
+            }
+            html += '<div class="dm-pa-tile-grid">';
+            (group.rows || []).forEach(function (tile) {
+                html += dmParamAssistantRenderTileHtml(tile);
+            });
+            html += '</div></div>';
+        });
+        html += '</details>';
+    }
+    html += '</div>';
+    return html;
+}
+
+function dmParamAssistantClearResultPanels() {
+    ['dmParamAssistantSummary', 'dmParamAssistantOutput', 'dmParamAssistantChips', 'dmParamAssistantDetails'].forEach(function (id) {
+        var el = document.getElementById(id);
+        if (!el) return;
+        el.innerHTML = '';
+        if (id !== 'dmParamAssistantOutput') el.style.display = 'none';
+    });
+}
+
+function dmParamAssistantShowParamsFirst(rec) {
+    var el = document.getElementById('dmParamAssistantSummary');
+    if (!el || !rec || !rec.backend) return;
+    dmParamAssistantRenderParamsSectionAi(rec);
+}
+
+function dmParamAssistantRenderParamsSectionAi(rec, done) {
+    var el = document.getElementById('dmParamAssistantSummary');
+    if (!el || !rec) {
+        if (typeof done === 'function') done();
+        return;
+    }
+    el.innerHTML = dmParamAssistantRenderParamsSectionHtml(rec);
+    el.style.display = 'block';
+    if (typeof done === 'function') done();
+}
+
+function dmParamAssistantRenderDetailsAi(rec) {
+    var el = document.getElementById('dmParamAssistantDetails');
+    if (!el || !rec || !rec.backend) return;
+    var sections = dmParamAssistantBackendSummarySections(rec);
+    var html = dmParamAssistantRenderDetailsSectionsHtml(sections, rec, rec.backend);
+    el.innerHTML = html;
+    el.style.display = html.trim() ? 'block' : 'none';
+}
+
+function dmParamAssistantPresentBackendResultUi(snapshot, rec, lines) {
+    dmParamAssistantClearResultPanels();
+    dmParamAssistantTyping = false;
+    dmParamAssistantSetCursorVisible(false);
+    var status = document.getElementById('dmParamAssistantStatus');
+    var output = document.getElementById('dmParamAssistantOutput');
+    var choice = document.getElementById('dmParamAssistantChoice');
+    if (status) status.textContent = rec.introText || '';
+    dmParamAssistantRenderParamsSectionAi(rec);
+    dmParamAssistantRenderChips(snapshot, rec);
+    if (output) {
+        output.classList.add('is-visible');
+        output.innerHTML = (lines || []).map(function (line) {
+            return '<div class="dm-param-assistant-line">' + dmParamAssistantEscape(line) + '</div>';
+        }).join('');
+    }
+    dmParamAssistantRenderDetailsAi(rec);
+    if (choice) choice.style.display = 'flex';
+    dmParamAssistantMaybeScrollToBottom({ force: true });
+}
+
+function dmParamAssistantRenderGroupedSectionHtml(section, kind) {
+    if (!section || !section.groups || !section.groups.length) return '';
+    var html = '<section class="dm-pa-summary-section dm-pa-summary-' + kind + '">';
+    html += '<h4 class="dm-pa-summary-section-title">' + dmParamAssistantEscape(section.title) + '</h4>';
+    section.groups.forEach(function (group) {
+        if (!group.rows || !group.rows.length) return;
+        html += '<div class="dm-pa-tile-group">';
+        if (group.title) {
+            html += '<div class="dm-pa-tile-group-title">' + dmParamAssistantEscape(group.title) + '</div>';
+        }
+        html += '<div class="dm-pa-tile-grid">';
+        group.rows.forEach(function (tile) {
+            html += dmParamAssistantRenderTileHtml(tile);
+        });
+        html += '</div></div>';
+    });
+    html += '</section>';
+    return html;
+}
+
+function dmParamAssistantRenderNoticeHtml(notice, rec) {
+    if (!notice) return '';
+    var isRef = rec && rec.recommendationOnly;
+    var badge = isRef ? 'Referans modu' : 'Bilgi';
+    var tip = isRef
+        ? 'Canlı karar BEKLE. Aşağıdaki grid değerleri yalnızca hangi parametre setinin seçildiğini gösterir; borsaya uygulanmaz.'
+        : 'Güvenlik veya profil nedeniyle işlem davranışı kısıtlandı; detaylar aşağıdaki bölümlerde.';
+    return '<div class="dm-pa-summary-notice' + (isRef ? ' dm-pa-summary-notice--ref' : '') +
+        '" role="note" data-dyn-tip="' + dmParamAssistantAttrEscape(tip) + '">' +
+        '<div class="dm-pa-notice-badge">' + dmParamAssistantEscape(badge) + '</div>' +
+        '<p class="dm-pa-notice-text">' + dmParamAssistantEscape(notice) + '</p></div>';
+}
+
+function dmParamAssistantProfileLabel(name) {
+    var map = {
+        NO_TRADE_PROFILE: 'İşlem yok',
+        WAIT_PROFILE: 'Bekle',
+        SELL_MANAGEMENT_ONLY_PROFILE: 'Yalnızca satış yönetimi',
+        ULTRA_DEFENSIVE_GRID_PROFILE: 'Ultra savunmacı grid',
+        DEFENSIVE_GRID_PROFILE: 'Savunmacı grid',
+        CAUTIOUS_BALANCED_GRID_PROFILE: 'Temkinli dengeli grid',
+        BALANCED_GRID_PROFILE: 'Dengeli grid',
+        ACTIVE_RANGE_GRID_PROFILE: 'Aktif aralık grid',
+        HIGH_CONFIDENCE_ACTIVE_GRID_PROFILE: 'Yüksek güven aktif grid',
+        TREND_TRAILING_PROFILE: 'Trend trailing',
+        BREAKOUT_PROTECTION_PROFILE: 'Kırılım koruması',
+        RECOVERY_SELL_PROFILE: 'Toparlanma satışı',
+        LOW_FEE_WIDE_GRID_PROFILE: 'Düşük fee geniş grid',
+        HIGH_VOL_PROTECTION_PROFILE: 'Yüksek volatilite koruması',
+        LOW_LIQUIDITY_WAIT_PROFILE: 'Düşük likidite bekle',
+        INITIAL_ENTRY_PROFILE: 'İlk giriş',
+        SMALL_BUDGET_SAFE_PROFILE: 'Küçük bütçe güvenli',
+        MICRO_BUDGET_WAIT_PROFILE: 'Mikro bütçe bekle',
+        OVEREXPOSED_REDUCTION_PROFILE: 'Aşırı maruz azaltma'
+    };
+    return map[name] || name || '—';
+}
+
+var DM_PA_INDICATOR_LABELS = {
+    adx_1h: 'ADX (1h)',
+    rsi14_5m: 'RSI (5m)',
+    rsi14_1h: 'RSI (1h)',
+    atr14_pct_5m: 'ATR (5m)',
+    atr14_pct_1h: 'ATR (1h)',
+    orderbook_spread_pct: 'Spread',
+    total_friction_pct: 'Toplam fee',
+    realized_vol_24h: 'Vol 24s',
+    realized_vol_7d: 'Vol 7g',
+    volatility_percentile: 'Vol persentil',
+    return_1h_pct: 'Getiri 1s',
+    return_4h_pct: 'Getiri 4s',
+    return_24h_pct: 'Getiri 24s',
+    drawdown_7d_pct: 'DD 7g',
+    drawdown_30d_pct: 'DD 30g',
+    bb_width_5m: 'BB genişlik',
+    z_score_5m: 'Z-skor',
+    mean_reversion_ratio: 'Ort. dönüş',
+    range_stability: 'Aralık stabilite',
+    roc_5m: 'ROC (5m)',
+    quote_volume_24h: 'Hacim 24s',
+    volume_consistency: 'Hacim tutarlılık',
+    volume_spike_abnormality: 'Hacim spike',
+    zero_volume_ratio: 'Sıfır hacim',
+    btc_return_1h_pct: 'BTC 1s',
+    btc_return_4h_pct: 'BTC 4s',
+    btc_return_24h_pct: 'BTC 24s',
+    btc_crash_velocity: 'BTC crash hızı',
+    price_vs_ema200_pct: 'Fiyat vs EMA200',
+    ema20_slope_5m: 'EMA20 eğim',
+    ema50_slope_5m: 'EMA50 eğim',
+    ema20_5m: 'EMA20 (5m)',
+    ema50_5m: 'EMA50 (5m)',
+    ema200_1h: 'EMA200 (1h)',
+    data_freshness_sec: 'Veri tazeliği',
+    data_gap_max_ms: 'Veri boşluğu',
+    crash_velocity: 'Crash hızı',
+    consecutive_red_pressure: 'Kırmızı baskı',
+    high_low_range_pct: 'HL aralık',
+    price_in_bb: 'BB konumu',
+    candle_count_5m: 'Mum (5m)',
+    candle_count_15m: 'Mum (15m)',
+    candle_count_1h: 'Mum (1h)',
+    higher_highs: 'Üst tepeler',
+    lower_lows: 'Alt dipler',
+    btc_below_ema200: 'BTC EMA200 altı',
+    price_valid: 'Fiyat geçerli'
+};
+
+var DM_PA_INDICATOR_TIPS = {
+    adx_1h: '1 saatlik ADX: trend gücü. 25 üzeri güçlü trend, 20 altı yatay piyasa sinyali.',
+    rsi14_5m: '5 dakikalık RSI: kısa vadeli aşırı alım/satım baskısı.',
+    rsi14_1h: '1 saatlik RSI: orta vadeli momentum dengesi.',
+    atr14_pct_5m: '5 dakikalık ATR yüzdesi: kısa vadeli oynaklık; grid aralığı için temel girdi.',
+    atr14_pct_1h: '1 saatlik ATR yüzdesi: orta vadeli oynaklık.',
+    orderbook_spread_pct: 'Emir defteri spreadi; yüksek spread işlem maliyetini artırır.',
+    total_friction_pct: 'Tahmini toplam sürtünme (fee + slipaj); grid kârlılık tabanı.',
+    realized_vol_24h: 'Son 24 saat gerçekleşen volatilite.',
+    realized_vol_7d: 'Son 7 gün gerçekleşen volatilite.',
+    volatility_percentile: 'Volatilitenin tarihsel dağılımdaki yüzdelik dilimi.',
+    return_1h_pct: 'Son 1 saatlik fiyat değişimi.',
+    return_4h_pct: 'Son 4 saatlik fiyat değişimi.',
+    return_24h_pct: 'Son 24 saatlik fiyat değişimi.',
+    drawdown_7d_pct: 'Son 7 gündeki en derin geri çekilme.',
+    drawdown_30d_pct: 'Son 30 gündeki en derin geri çekilme.',
+    bb_width_5m: 'Bollinger bant genişliği; dar bant sıkışma, geniş bant genişleme.',
+    z_score_5m: 'Fiyatın 5 dakikalık ortalamadan sapması; aşırı sapma geri dönüş sinyali.',
+    mean_reversion_ratio: 'Ortalamaya dönüş eğilimi skoru.',
+    range_stability: 'Fiyat aralığının ne kadar stabil kaldığı.',
+    roc_5m: '5 dakikalık momentum (rate of change).',
+    quote_volume_24h: '24 saatlik USDT hacmi; likidite göstergesi.',
+    volume_consistency: 'Hacmin zamana göre tutarlılığı.',
+    volume_spike_abnormality: 'Anormal hacim artışı şiddeti.',
+    zero_volume_ratio: 'Sıfır hacimli mum oranı; veri/likidite kalitesi.',
+    btc_return_1h_pct: 'BTC son 1 saat getirisi; piyasa bağlamı.',
+    btc_return_4h_pct: 'BTC son 4 saat getirisi.',
+    btc_return_24h_pct: 'BTC son 24 saat getirisi.',
+    btc_crash_velocity: 'BTC düşüş hızı; sistemik risk göstergesi.',
+    price_vs_ema200_pct: 'Fiyatın 1 saatlik EMA200\'e göre uzaklığı.',
+    ema20_slope_5m: 'Kısa vadeli EMA20 eğimi.',
+    ema50_slope_5m: 'Orta vadeli EMA50 eğimi.',
+    ema20_5m: '5 dakikalık EMA20 seviyesi.',
+    ema50_5m: '5 dakikalık EMA50 seviyesi.',
+    ema200_1h: '1 saatlik EMA200 trend referansı.',
+    data_freshness_sec: 'Son mumun ne kadar taze olduğu (saniye).',
+    data_gap_max_ms: 'Veri dizisindeki en büyük boşluk.',
+    crash_velocity: 'Ani düşüş hızı; dump riski için kullanılır.',
+    consecutive_red_pressure: 'Ardışık kırmızı mum baskısı.',
+    high_low_range_pct: 'Mevcut mum yüksek-düşük aralığı.',
+    price_in_bb: 'Fiyatın Bollinger bandı içindeki konumu (0–1).',
+    candle_count_5m: 'Analizde kullanılan 5 dakikalık mum sayısı.',
+    candle_count_15m: 'Analizde kullanılan 15 dakikalık mum sayısı.',
+    candle_count_1h: 'Analizde kullanılan 1 saatlik mum sayısı.',
+    higher_highs: 'Üst tepeler yükseliyor mu (yükseliş yapısı).',
+    lower_lows: 'Alt dipler düşüyor mu (düşüş yapısı).',
+    btc_below_ema200: 'BTC uzun vadeli trendin altında mı.',
+    price_valid: 'Fiyat verisi geçerli ve kullanılabilir mi.'
+};
+
+var DM_PA_PARAM_TIPS = {
+    profile: 'Parametre havuzundan seçilen profil ailesi ve şablon.',
+    budget: 'Bot için ayrılan toplam USDT bütçesi.',
+    allocation: 'Base (coin) ve quote (USDT) başlangıç dağılımı.',
+    regime: 'Sınıflandırılmış piyasa rejimi ve karar güveni.',
+    sell_grid: 'Satış grid kademeleri: tetik yüzdesi ve miktar payı.',
+    buy_grid: 'Alış grid kademeleri: tetik yüzdesi ve miktar payı.',
+    grid_step: 'Alış ve satış gridleri arasındaki minimum yüzde aralığı.',
+    trailing: 'Grid tetiklendikten sonra kârı korumak için trailing yüzdeleri.',
+    rebuy: 'Kar alım tetik ve trailing değerleri.',
+    resell: 'Kar satış tetik ve trailing değerleri.',
+    profit_cycle: 'Rebuy ve resell döngüsünün birleşik özeti.',
+    take_profit: 'Tur kâr hedefi yüzdesi.',
+    max_exposure: 'İzin verilen maksimum base maruziyeti.',
+    min_profit_fee: 'Komisyon sonrası minimum tur kâr eşiği.',
+    buy_quota: 'Tek alışta harcanabilecek maksimum quote payı.',
+    stop_buys: 'Parametre skoru bu eşiğin altına düşerse yeni alış durur.',
+    trailing_mode: 'Trailing mekanizması açık mı.',
+    emergency_no_buy: 'Acil durumda yeni alışların kapalı olması.',
+    buy_mode: 'Alış tarafının güvenlik nedeniyle kapatılması.',
+    downtrend_throttle: 'Düşüş trendinde alış hızının frenlenmesi.',
+    headroom: 'Yeni alış için kalan quote headroom (USDT).',
+    min_notional: 'Borsanın kabul ettiği minimum emir tutarı.',
+    buy_ladder: 'Alış kademeleri için ayrılan toplam bütçe.',
+    worst_exposure: 'En kötü senaryoda oluşabilecek base maruziyeti.',
+    fee_floor: 'Komisyon tabanı; grid aralığı bundan dar olamaz.',
+    safety_result: 'Güvenlik kapıları sonrası nihai uygulama kararı.'
+};
+
+var DM_PA_PARAM_GROUPS = [
+    { title: 'Genel ayarlar', keys: ['profile', 'budget', 'allocation'] },
+    { title: 'Grid ve trailing', keys: ['sell_grid', 'buy_grid', 'trailing'] },
+    { title: 'Kâr döngüsü', keys: ['rebuy', 'resell'] }
+];
+
+var DM_PA_DEBUG_PARAM_GROUPS = [
+    { title: 'Limitler ve mod', keys: ['grid_step', 'take_profit', 'max_exposure', 'min_profit_fee', 'buy_quota', 'stop_buys', 'trailing_mode', 'emergency_no_buy', 'buy_mode', 'downtrend_throttle', 'profit_cycle'] }
+];
+
+var DM_PA_INDICATOR_GROUPS = [
+    {
+        title: 'Trend ve momentum',
+        keys: ['adx_1h', 'rsi14_5m', 'rsi14_1h', 'ema20_slope_5m', 'ema50_slope_5m', 'ema20_5m', 'ema50_5m', 'ema200_1h', 'price_vs_ema200_pct', 'roc_5m', 'higher_highs', 'lower_lows']
+    },
+    {
+        title: 'Volatilite ve aralık',
+        keys: ['atr14_pct_5m', 'atr14_pct_1h', 'realized_vol_24h', 'realized_vol_7d', 'volatility_percentile', 'bb_width_5m', 'price_in_bb', 'z_score_5m', 'mean_reversion_ratio', 'range_stability', 'high_low_range_pct']
+    },
+    {
+        title: 'Getiri ve risk',
+        keys: ['return_1h_pct', 'return_4h_pct', 'return_24h_pct', 'drawdown_7d_pct', 'drawdown_30d_pct', 'crash_velocity', 'consecutive_red_pressure']
+    },
+    {
+        title: 'Likidite ve ücret',
+        keys: ['orderbook_spread_pct', 'total_friction_pct', 'quote_volume_24h', 'volume_consistency', 'volume_spike_abnormality', 'zero_volume_ratio']
+    },
+    {
+        title: 'BTC bağlamı',
+        keys: ['btc_return_1h_pct', 'btc_return_4h_pct', 'btc_return_24h_pct', 'btc_crash_velocity', 'btc_below_ema200']
+    },
+    {
+        title: 'Veri kalitesi',
+        keys: ['data_freshness_sec', 'data_gap_max_ms', 'candle_count_5m', 'candle_count_15m', 'candle_count_1h', 'price_valid']
+    }
+];
+
+function dmParamAssistantFormatIndicatorValue(key, val) {
+    if (val == null || val === '') return null;
+    if (typeof val === 'boolean') return val ? 'Evet' : 'Hayır';
+    var n = Number(val);
+    if (!Number.isFinite(n)) return String(val);
+    if (key === 'orderbook_spread_pct' || key === 'total_friction_pct' || key === 'high_low_range_pct') {
+        return dmParamAssistantMetricPct(n, 2, { noSign: true });
+    }
+    if (key.indexOf('pct') >= 0 || key.indexOf('return_') === 0 || key.indexOf('drawdown') >= 0 ||
+        key === 'price_vs_ema200_pct' || key.indexOf('slope') >= 0 || key === 'roc_5m') {
+        if (Math.abs(n) < 0.005) return dmParamAssistantMetricPct(0, 2, { noSign: true });
+        return dmParamAssistantMetricPct(n, 2);
+    }
+    if (key === 'quote_volume_24h') {
+        if (n >= 1e9) return dmParamAssistantInputTextTr(n / 1e9, 1) + 'B';
+        if (n >= 1e6) return dmParamAssistantInputTextTr(n / 1e6, 1) + 'M';
+        if (n >= 1e3) return dmParamAssistantInputTextTr(n / 1e3, 1) + 'K';
+        return dmParamAssistantInputTextTr(n, 0);
+    }
+    if (key === 'data_freshness_sec') return dmParamAssistantInputTextTr(n, 0) + ' sn';
+    if (key === 'data_gap_max_ms') return dmParamAssistantInputTextTr(n / 1000, 1) + ' sn';
+    if (key === 'volatility_percentile' || key === 'price_in_bb' || key === 'mean_reversion_ratio' ||
+        key === 'range_stability' || key === 'volume_consistency' || key === 'zero_volume_ratio' ||
+        key === 'volume_spike_abnormality' || key === 'consecutive_red_pressure' || key === 'crash_velocity' ||
+        key === 'btc_crash_velocity') {
+        return dmParamAssistantInputTextTr(n, 2);
+    }
+    return dmParamAssistantInputTextTr(n, key.indexOf('adx') >= 0 || key.indexOf('rsi') >= 0 ? 1 : 2);
+}
+
+function dmParamAssistantBackendProfileText(r) {
+    var ui = r.ui_config || {};
+    if (ui.profile_display) return ui.profile_display;
+    var sel = r.selection_telemetry || (r.telemetry && r.telemetry.param_pool) || {};
+    var profile = dmParamAssistantProfileLabel(r.selected_profile || '');
+    var tmpl = sel.selected_template_key || sel.profile_subfamily || '';
+    if (profile === '—' && tmpl) return tmpl;
+    if (tmpl && tmpl !== r.selected_profile) return profile + ' · ' + tmpl;
+    return profile;
+}
+
+function dmParamAssistantBuildIndicatorGroups(ind, backend) {
+    ind = ind || {};
+    var feeDisplay = backend && backend.selection_telemetry && backend.selection_telemetry.fee_display;
+    return DM_PA_INDICATOR_GROUPS.map(function (group) {
+        var rows = [];
+        group.keys.forEach(function (key) {
+            if (!Object.prototype.hasOwnProperty.call(ind, key)) return;
+            if (key === 'total_friction_pct' && feeDisplay && feeDisplay.fee_data_available === false) {
+                rows.push(dmParamAssistantMakeTile(
+                    'Toplam fee',
+                    'veri yok',
+                    feeDisplay.display_note || 'Fee verisi okunamadı; güvenli cost floor uygulandı.'
+                ));
+                return;
+            }
+            if (key === 'orderbook_spread_pct' && feeDisplay && feeDisplay.spread_pct != null && (!ind[key] || Number(ind[key]) < 0.001)) {
+                rows.push(dmParamAssistantMakeTile(
+                    DM_PA_INDICATOR_LABELS[key] || key,
+                    dmParamAssistantMetricPct(feeDisplay.spread_pct, 2, { noSign: true }),
+                    DM_PA_INDICATOR_TIPS[key]
+                ));
+                return;
+            }
+            var txt = dmParamAssistantFormatIndicatorValue(key, ind[key]);
+            if (txt != null) {
+                rows.push(dmParamAssistantMakeTile(
+                    DM_PA_INDICATOR_LABELS[key] || key,
+                    txt,
+                    DM_PA_INDICATOR_TIPS[key]
+                ));
+            }
+        });
+        return { title: group.title, rows: rows };
+    }).filter(function (group) { return group.rows.length > 0; });
+}
+
+function dmParamAssistantBuildParamTileMap(rec) {
+    var r = rec.backend || {};
+    var tel = r.telemetry || {};
+    var ui = rec.backend && rec.backend.ui_config ? rec.backend.ui_config : {};
+    var allocDisp = rec.allocationDisplay || ui.allocation_display || {};
+    var ladderDisp = rec.ladderDisplay || ui.ladder_display || {};
+    var strat = allocDisp.strategic_target || {};
+    var p = tel.post_safety_params || tel.pre_safety_params || r.params || {};
+    var map = {};
+    map.profile = dmParamAssistantMakeTile('Profil', dmParamAssistantBackendProfileText(r), DM_PA_PARAM_TIPS.profile);
+    map.budget = dmParamAssistantMakeTile('Bütçe', dmParamAssistantInputTextTr(rec.budget, 2) + ' USDT', DM_PA_PARAM_TIPS.budget);
+    var targetBase = strat.base_pct != null ? strat.base_pct : rec.basePct;
+    var targetQuote = strat.quote_pct != null ? strat.quote_pct : rec.quotePct;
+    var allocText = 'Hedef: coin %' + dmParamAssistantInputTextTr(targetBase, 1) +
+        ' · USDT %' + dmParamAssistantInputTextTr(targetQuote, 1);
+    map.allocation = dmParamAssistantMakeTile('Dağılım', allocText, DM_PA_PARAM_TIPS.allocation);
+    var sellGrids = (ladderDisp.planned_sell_ladder && ladderDisp.planned_sell_ladder.length)
+        ? ladderDisp.planned_sell_ladder
+        : ((ladderDisp.active_sell_ladder && ladderDisp.active_sell_ladder.length)
+            ? ladderDisp.active_sell_ladder
+            : rec.upGrids);
+    map.sell_grid = dmParamAssistantMakeTile(
+        'Satış grid',
+        sellGrids.length ? dmParamAssistantGridText(sellGrids, '+') : 'Kapalı',
+        DM_PA_PARAM_TIPS.sell_grid
+    );
+    var activeBuy = ladderDisp.active_buy_ladder || rec.downGrids;
+    map.buy_grid = dmParamAssistantMakeTile(
+        'Alış grid',
+        activeBuy.length ? dmParamAssistantGridText(activeBuy, '-') : 'Kapalı',
+        DM_PA_PARAM_TIPS.buy_grid
+    );
+    map.trailing = dmParamAssistantMakeTile('Trailing', dmParamAssistantTrailingLabel(rec), DM_PA_PARAM_TIPS.trailing);
+    map.rebuy = dmParamAssistantMakeTile(
+        'Kar alım',
+        rec.downGrids.length
+            ? ('tetik %' + dmParamAssistantInputTextTr(rec.rebuyTrigger, 2) +
+                (rec.rebuyTrail > 0 ? ' · Trailing %' + dmParamAssistantInputTextTr(rec.rebuyTrail, 2) : ''))
+            : 'Kapalı',
+        DM_PA_PARAM_TIPS.rebuy
+    );
+    map.resell = dmParamAssistantMakeTile(
+        'Kar satış',
+        rec.upGrids.length
+            ? ('tetik %' + dmParamAssistantInputTextTr(rec.resellTrigger, 2) +
+                (rec.resellTrail > 0 ? ' · Trailing %' + dmParamAssistantInputTextTr(rec.resellTrail, 2) : ''))
+            : 'Kapalı',
+        DM_PA_PARAM_TIPS.resell
+    );
+    map.profit_cycle = dmParamAssistantMakeTile('Kâr döngüsü', dmParamAssistantProfitCycleLabel(rec), DM_PA_PARAM_TIPS.profit_cycle);
+    if (p.buy_grid_spacing_pct != null || p.sell_grid_spacing_pct != null) {
+        map.grid_step = dmParamAssistantMakeTile(
+            'Grid aralığı',
+            'alış %' + dmParamAssistantInputTextTr(p.buy_grid_spacing_pct || 0, 2) +
+                ' · satış %' + dmParamAssistantInputTextTr(p.sell_grid_spacing_pct || 0, 2),
+            DM_PA_PARAM_TIPS.grid_step
+        );
+    }
+    if (p.take_profit_pct != null) {
+        map.take_profit = dmParamAssistantMakeTile('Kâr hedefi', '%' + dmParamAssistantInputTextTr(p.take_profit_pct, 2), DM_PA_PARAM_TIPS.take_profit);
+    }
+    if (p.max_base_exposure_frac != null) {
+        map.max_exposure = dmParamAssistantMakeTile('Maks. maruziyet', '%' + dmParamAssistantInputTextTr(p.max_base_exposure_frac * 100, 1), DM_PA_PARAM_TIPS.max_exposure);
+    }
+    if (p.min_cycle_profit_after_fee_pct != null) {
+        map.min_profit_fee = dmParamAssistantMakeTile('Min. kâr/komisyon', '%' + dmParamAssistantInputTextTr(p.min_cycle_profit_after_fee_pct, 2), DM_PA_PARAM_TIPS.min_profit_fee);
+    }
+    if (p.max_quote_to_spend_per_buy_frac != null) {
+        map.buy_quota = dmParamAssistantMakeTile('Alış kotası', '%' + dmParamAssistantInputTextTr(p.max_quote_to_spend_per_buy_frac * 100, 1), DM_PA_PARAM_TIPS.buy_quota);
+    }
+    if (p.stop_new_buys_below_score != null) {
+        map.stop_buys = dmParamAssistantMakeTile('Alış durdur', 'skor < ' + p.stop_new_buys_below_score, DM_PA_PARAM_TIPS.stop_buys);
+    }
+    if (p.trailing_enabled != null) {
+        map.trailing_mode = dmParamAssistantMakeTile('Trailing modu', p.trailing_enabled ? 'Açık' : 'Kapalı', DM_PA_PARAM_TIPS.trailing_mode);
+    }
+    if (p.emergency_no_buy) map.emergency_no_buy = dmParamAssistantMakeTile('Acil alış', 'Kapalı', DM_PA_PARAM_TIPS.emergency_no_buy);
+    if (p.sell_only_mode || p.buy_disabled) map.buy_mode = dmParamAssistantMakeTile('Alış modu', 'Kapalı', DM_PA_PARAM_TIPS.buy_mode);
+    if (p.downtrend_buy_throttle) map.downtrend_throttle = dmParamAssistantMakeTile('Düşüş freni', 'Açık', DM_PA_PARAM_TIPS.downtrend_throttle);
+    return map;
+}
+
+function dmParamAssistantBuildParamGroups(rec) {
+    var map = dmParamAssistantBuildParamTileMap(rec);
+    return DM_PA_PARAM_GROUPS.map(function (group) {
+        var rows = [];
+        group.keys.forEach(function (key) {
+            if (map[key]) rows.push(map[key]);
+        });
+        return { title: group.title, rows: rows };
+    }).filter(function (group) { return group.rows.length > 0; });
+}
+
+function dmParamAssistantBuildDebugParamGroups(rec) {
+    var map = dmParamAssistantBuildParamTileMap(rec);
+    return DM_PA_DEBUG_PARAM_GROUPS.map(function (group) {
+        var rows = [];
+        group.keys.forEach(function (key) {
+            if (map[key]) rows.push(map[key]);
+        });
+        return { title: group.title, rows: rows };
+    }).filter(function (group) { return group.rows.length > 0; });
+}
+
+function dmParamAssistantBuildSelectionTraceTiles(result) {
+    var sel = (result && result.selection_telemetry) || {};
+    var rows = [];
+    function add(label, val) {
+        if (val == null || val === '') return;
+        rows.push(dmParamAssistantMakeTile(label, String(val), 'Seçim telemetrisi — gelişmiş debug.'));
+    }
+    add('Exact route aday', sel.exact_route_candidate_count);
+    add('Fallback route', sel.fallback_route);
+    add('Fallback aday', sel.fallback_candidate_count);
+    add('Skorlanan aday', sel.scored_candidate_count);
+    add('Profil skoru', sel.selected_profile_score != null ? sel.selected_profile_score + '/100' : null);
+    add('Fallback kullanıldı', sel.fallback_used === true ? 'evet' : (sel.fallback_used === false ? 'hayır' : null));
+    add('Route index fallback', sel.route_index_fallback_used === true ? 'evet' : null);
+    if (sel.runtime_safe_profile_generated) {
+        rows.push(dmParamAssistantMakeTile(
+            'Runtime profil',
+            'güvenli üretici devrede',
+            'Route rafı boştu; runtime safe profile generator çalıştı.'
+        ));
+    }
+    if (sel.selection_reason) {
+        rows.push(dmParamAssistantMakeTile('Seçim nedeni', sel.selection_reason, 'Profil seçim gerekçesi.'));
+    }
+    return rows.length ? [{ title: 'Seçim izi', rows: rows }] : [];
+}
+
+function dmParamAssistantBuildFeeDisplayTiles(result) {
+    var fee = (result && result.selection_telemetry && result.selection_telemetry.fee_display) || {};
+    if (!fee || (!fee.display_note && fee.fee_data_available === undefined)) return [];
+    var rows = [];
+    if (fee.display_note) {
+        rows.push(dmParamAssistantMakeTile('Fee verisi', 'yok / okunamadı', fee.display_note));
+        rows.push(dmParamAssistantMakeTile(
+            'Güvenli cost floor',
+            '%' + dmParamAssistantInputTextTr(fee.total_cost_floor_pct || 1.2, 2),
+            DM_PA_PARAM_TIPS.fee_floor
+        ));
+        return [{ title: 'Komisyon ve maliyet', rows: rows }];
+    }
+    function pct(label, val) {
+        if (val == null) return;
+        rows.push(dmParamAssistantMakeTile(label, '%' + dmParamAssistantInputTextTr(val, 2), DM_PA_PARAM_TIPS.fee_floor));
+    }
+    pct('Maker fee', fee.maker_fee_pct);
+    pct('Taker fee', fee.taker_fee_pct);
+    pct('Roundtrip fee', fee.roundtrip_fee_pct);
+    pct('Spread', fee.spread_pct);
+    pct('Slippage tahmini', fee.estimated_slippage_pct);
+    pct('Rounding', fee.rounding_cost_pct);
+    pct('Toplam cost floor', fee.total_cost_floor_pct);
+    return rows.length ? [{ title: 'Komisyon ve maliyet', rows: rows }] : [];
+}
+
+function dmParamAssistantFormatSelectionPickLine(result) {
+    var sel = result.selection_telemetry || (result.telemetry && result.telemetry.param_pool) || {};
+    var routeKey = sel.route_key || (sel.selection_context && sel.selection_context.route_key) || '';
+    var tmpl = sel.selected_template_key || result.selected_profile || '—';
+    var pickLine = routeKey
+        ? ('Route ' + routeKey + ' rafından seçilen profil: ' + tmpl)
+        : ('Seçilen profil: ' + tmpl);
+    if (sel.runtime_safe_profile_generated) {
+        pickLine += '. Exact route aday: ' + (sel.exact_route_candidate_count != null ? sel.exact_route_candidate_count : 0) +
+            ' · Runtime güvenli profil üretildi';
+        return pickLine;
+    }
+    var exact = sel.exact_route_candidate_count;
+    var scored = sel.scored_candidate_count != null ? sel.scored_candidate_count : sel.candidate_count;
+    var fbUsed = sel.fallback_used || sel.route_index_fallback_used;
+    var parts = [];
+    if (exact != null) parts.push('Exact route aday: ' + exact);
+    if (fbUsed && sel.fallback_route) {
+        parts.push('Fallback route: ' + sel.fallback_route);
+        if (sel.fallback_candidate_count != null) {
+            parts.push('Fallback aday: ' + sel.fallback_candidate_count);
+        }
+    }
+    if (scored != null && scored !== '') parts.push('Skorlanan aday: ' + scored);
+    if (sel.selected_profile_score != null) {
+        parts.push('Seçilen profil skoru: ' + sel.selected_profile_score + '/100');
+    }
+    if (fbUsed != null) parts.push('Fallback used: ' + (fbUsed ? 'true' : 'false'));
+    if (parts.length) pickLine += '. ' + parts.join(' · ');
+    return pickLine;
+}
+
+function dmParamAssistantBuildSafetyGroups(rec) {
+    var r = rec.backend || {};
+    var tel = r.telemetry || {};
+    var ad = r.action_detail || tel.action_detail || {};
+    var minN = tel.min_notional || 10;
+    var headroom = tel.exposure_headroom_quote_usdt;
+    var ladder = tel.buy_ladder_budget_usdt;
+    var worst = tel.worst_case_base_exposure_frac;
+    var feeFloor = tel.fee_floor_pct || tel.min_grid_spacing_pct;
+    var rows = [];
+    if (headroom != null) {
+        rows.push(dmParamAssistantMakeTile('Headroom', dmParamAssistantInputTextTr(headroom, 2) + ' USDT', DM_PA_PARAM_TIPS.headroom));
+    }
+    rows.push(dmParamAssistantMakeTile('Min. emir tutarı', dmParamAssistantInputTextTr(minN, 2) + ' USDT', DM_PA_PARAM_TIPS.min_notional));
+    if (ladder != null) {
+        rows.push(dmParamAssistantMakeTile(
+            'Alış merdiveni bütçesi',
+            dmParamAssistantInputTextTr(ladder, 2) + ' USDT',
+            'Exposure/min-notional sonrası bu turda grid alışlarına ayrılan quote bütçesi.'
+        ));
+    }
+    var allocDisp = (r.ui_config && r.ui_config.allocation_display) || {};
+    if (allocDisp.active_buy_ladder_usdt != null && Math.abs(Number(allocDisp.active_buy_ladder_usdt) - Number(ladder || 0)) > 0.05) {
+        rows.push(dmParamAssistantMakeTile(
+            'Aktif alış ladder toplamı',
+            dmParamAssistantInputTextTr(allocDisp.active_buy_ladder_usdt, 2) + ' USDT',
+            'Emir niyeti planındaki grid alışlarının toplam quote tutarı.'
+        ));
+    }
+    if (worst != null && r.params && r.params.max_base_exposure_frac != null) {
+        rows.push(dmParamAssistantMakeTile(
+            'En kötü maruziyet',
+            dmParamAssistantInputTextTr(worst * 100, 1) + '% / maks %' + dmParamAssistantInputTextTr(r.params.max_base_exposure_frac * 100, 1),
+            DM_PA_PARAM_TIPS.worst_exposure
+        ));
+    } else if (worst != null) {
+        rows.push(dmParamAssistantMakeTile('En kötü maruziyet', dmParamAssistantInputTextTr(worst * 100, 1) + '%', DM_PA_PARAM_TIPS.worst_exposure));
+    }
+    if (feeFloor != null) {
+        rows.push(dmParamAssistantMakeTile('Komisyon tabanı', '%' + dmParamAssistantInputTextTr(feeFloor, 2), DM_PA_PARAM_TIPS.fee_floor));
+    }
+    rows.push(dmParamAssistantMakeTile(
+        'Güvenlik sonucu',
+        dmParamAssistantActionLabel(ad.post_safety_action || r.final_action, r),
+        DM_PA_PARAM_TIPS.safety_result
+    ));
+    return rows.length ? [{ title: 'Borsa ve maruziyet', rows: rows }] : [];
+}
+
+function dmParamAssistantBackendSummarySections(rec) {
+    var r = rec.backend || {};
+    var tel = r.telemetry || {};
+    var ind = tel.indicators || {};
+    var notice = '';
+    if (rec.recommendationOnly) {
+        notice = 'Canlı karar bekleme modunda. Aşağıdaki grid değerleri yalnızca referans amaçlıdır ve borsaya uygulanmaz.';
+    } else if (rec.sellManagementOnly || r.final_action === 'SELL_MANAGEMENT_ONLY') {
+        notice = 'Güvenlik kontrolü alış tarafını kapattı; yalnızca satış yönetimi parametreleri gösteriliyor.';
+    }
+    return {
+        notice: notice,
+        params: {
+            title: 'Önerilen parametreler',
+            groups: dmParamAssistantBuildParamGroups(rec)
+        },
+        indicators: {
+            title: 'Piyasa verileri ve indikatörler',
+            groups: dmParamAssistantBuildIndicatorGroups(ind, r)
+        },
+        safety: {
+            title: 'Güvenlik kontrolleri',
+            groups: dmParamAssistantBuildSafetyGroups(rec)
+        }
+    };
+}
+
+function dmParamAssistantRenderSummarySectionsHtml(sections, rec) {
+    return dmParamAssistantRenderParamsSectionHtml(rec) + dmParamAssistantRenderDetailsSectionsHtml(sections, rec, rec.backend);
+}
+
+function dmParamAssistantTrailingLabel(rec) {
+    var sellOnly = rec.sellManagementOnly || (rec.downGrids.length === 0 && rec.upGrids.length > 0);
+    if (sellOnly) {
+        if (rec.upGrids.length > 0 && rec.upTrail > 0) {
+            return 'Alış kapalı · Satış %' + dmParamAssistantInputTextTr(rec.upTrail, 2);
+        }
+        return 'Kapalı';
+    }
+    if (!rec.upGrids.length && !rec.downGrids.length) return 'Kapalı';
+    var parts = [];
+    if (rec.upGrids.length && rec.upTrail > 0) parts.push('Satış %' + dmParamAssistantInputTextTr(rec.upTrail, 2));
+    if (rec.downGrids.length && rec.downTrail > 0) parts.push('Alış %' + dmParamAssistantInputTextTr(rec.downTrail, 2));
+    return parts.length ? parts.join(' · ') : 'Kapalı';
+}
+
+function dmParamAssistantProfitCycleLabel(rec) {
+    function profitPart(label, trigger, trail) {
+        var txt = label + ' %' + dmParamAssistantInputTextTr(trigger, 2);
+        if (trail > 0) txt += ' / Trailing %' + dmParamAssistantInputTextTr(trail, 2);
+        return txt;
+    }
+    var sellOnly = rec.sellManagementOnly || (rec.downGrids.length === 0 && rec.upGrids.length > 0);
+    if (sellOnly) {
+        return 'Kar alım kapalı · ' + profitPart('Kar satış', rec.resellTrigger, rec.resellTrail);
+    }
+    if (!rec.downGrids.length && !rec.upGrids.length) return 'Kapalı';
+    var rebuy = rec.downGrids.length
+        ? profitPart('Kar alım', rec.rebuyTrigger, rec.rebuyTrail)
+        : 'Kar alım kapalı';
+    var resell = rec.upGrids.length
+        ? profitPart('Kar satış', rec.resellTrigger, rec.resellTrail)
+        : 'Kar satış kapalı';
+    return rebuy + ' · ' + resell;
+}
+
+function dmParamAssistantSafetySummaryRows(rec) {
+    var r = rec.backend || {};
+    var tel = r.telemetry || {};
+    var ad = r.action_detail || tel.action_detail || {};
+    var minN = tel.min_notional || 10;
+    var headroom = tel.exposure_headroom_quote_usdt;
+    var ladder = tel.buy_ladder_budget_usdt;
+    var worst = tel.worst_case_base_exposure_frac;
+    var feeFloor = tel.fee_floor_pct || tel.min_grid_spacing_pct;
+    var rows = [];
+    if (headroom != null) rows.push(['Headroom', dmParamAssistantInputTextTr(headroom, 2) + ' USDT']);
+    rows.push(['Min-notional', dmParamAssistantInputTextTr(minN, 2) + ' USDT']);
+    if (ladder != null) rows.push(['Alış ladder bütçesi', dmParamAssistantInputTextTr(ladder, 2) + ' USDT']);
+    if (worst != null && r.params && r.params.max_base_exposure_frac != null) {
+        rows.push(['Worst-case exposure', dmParamAssistantInputTextTr(worst * 100, 1) + '% / max %' + dmParamAssistantInputTextTr(r.params.max_base_exposure_frac * 100, 1)]);
+    } else if (worst != null) {
+        rows.push(['Worst-case exposure', dmParamAssistantInputTextTr(worst * 100, 1) + '%']);
+    }
+    if (feeFloor != null) rows.push(['Fee floor', '%' + dmParamAssistantInputTextTr(feeFloor, 2)]);
+    rows.push(['Güvenlik sonucu', dmParamAssistantActionLabel(ad.post_safety_action || r.final_action, r)]);
+    return rows;
+}
+
 function dmParamAssistantGreetingText(snapshot, rec) {
     var pq = parseBaseQuote(snapshot.symbol || '');
     var name = dmParamAssistantCurrentUserName(snapshot);
+    var tel = rec && rec.backend && rec.backend.telemetry ? rec.backend.telemetry : {};
+    var sub = tel.sub_scores || {};
+    var coverage = sub.data_quality_score >= 70 ? 'yeterli' : (sub.data_quality_score >= 50 ? 'orta' : 'sınırlı');
     var values = {
         name: name,
         symbol: snapshot.symbol || 'bu parite',
         base: snapshot.base || pq.base || 'coin',
         quote: snapshot.quote || pq.quote || 'USDT',
-        regime: rec && rec.regime ? rec.regime : 'piyasa'
+        regime: rec && rec.regime ? rec.regime : 'piyasa',
+        basePct: rec && rec.basePct != null ? dmParamAssistantInputTextTr(rec.basePct, 1) : '',
+        quotePct: rec && rec.quotePct != null ? dmParamAssistantInputTextTr(rec.quotePct, 1) : '',
+        price: snapshot.price != null ? dmParamAssistantDisplayPrice(snapshot.price, snapshot.quote) : '',
+        change: snapshot.changePct != null ? dmParamAssistantDisplayPct(snapshot.changePct, 2) : '',
+        coverage: coverage,
+        budget: rec && rec.budget != null ? dmParamAssistantInputTextTr(rec.budget, 2) + ' ' + (snapshot.quote || 'USDT') : '',
+        confidence: rec && rec.confidence != null ? rec.confidence : ''
     };
     if (AI_ASSISTANT_SPEC && typeof AI_ASSISTANT_SPEC.greeting === 'function') {
         return AI_ASSISTANT_SPEC.greeting(values);
@@ -2163,6 +3156,19 @@ function dmParamAssistantChipItems(snapshot, rec) {
     ];
 }
 
+function dmParamAssistantFlattenSectionTiles(sections) {
+    function fromGroups(groups) {
+        return (groups || []).reduce(function (acc, group) {
+            return acc.concat((group.rows || []).map(function (tile) {
+                return [tile.label, tile.value];
+            }));
+        }, []);
+    }
+    return fromGroups(sections.params && sections.params.groups)
+        .concat(fromGroups(sections.safety && sections.safety.groups))
+        .concat(fromGroups(sections.indicators && sections.indicators.groups));
+}
+
 function dmParamAssistantRenderChips(snapshot, rec, opts) {
     var chips = document.getElementById('dmParamAssistantChips');
     if (!chips) return;
@@ -2171,12 +3177,16 @@ function dmParamAssistantRenderChips(snapshot, rec, opts) {
     chips.innerHTML = items.map(function (it, idx) {
         var cls = opts.animated ? ' class="dm-param-assistant-chip-ai"' : '';
         var style = opts.animated ? ' style="--dm-chip-delay:' + (idx * 70) + 'ms"' : '';
-        return '<span' + cls + style + '><b>' + dmParamAssistantEscape(it[0]) + '</b>' + dmParamAssistantEscape(it[1]) + '</span>';
+        var tip = DM_PA_CHIP_TIPS[it[0]];
+        var tipAttr = tip ? ' data-dyn-tip="' + dmParamAssistantAttrEscape(tip) + '"' : '';
+        return '<span' + cls + style + tipAttr + '><b>' + dmParamAssistantEscape(it[0]) + '</b>' + dmParamAssistantEscape(it[1]) + '</span>';
     }).join('');
 }
 
 function dmParamAssistantSummaryRows(rec) {
-    if (rec && rec.backend) return dmParamAssistantBackendSummaryRows(rec);
+    if (rec && rec.backend) {
+        return dmParamAssistantFlattenSectionTiles(dmParamAssistantBackendSummarySections(rec));
+    }
     var a = rec.analysis || {};
     return [
         ['Bütçe', dmParamAssistantInputTextTr(rec.budget, 2)],
@@ -2187,26 +3197,43 @@ function dmParamAssistantSummaryRows(rec) {
         ['Satış grid', dmParamAssistantGridText(rec.upGrids, '+')],
         ['Alış grid', dmParamAssistantGridText(rec.downGrids, '-')],
         ['Trailing', '%' + dmParamAssistantInputTextTr(rec.upTrail, 2) + ' / %' + dmParamAssistantInputTextTr(rec.downTrail, 2)],
-        ['Kâr', 'Rebuy %' + dmParamAssistantInputTextTr(rec.rebuyTrigger, 2) + ', Resell %' + dmParamAssistantInputTextTr(rec.resellTrigger, 2)]
+        ['Kar alım', 'tetik %' + dmParamAssistantInputTextTr(rec.rebuyTrigger, 2) + ' · trail %' + dmParamAssistantInputTextTr(rec.rebuyTrail, 2)],
+        ['Kar satış', 'tetik %' + dmParamAssistantInputTextTr(rec.resellTrigger, 2) + ' · trail %' + dmParamAssistantInputTextTr(rec.resellTrail, 2)]
     ];
 }
 
 function dmParamAssistantRenderSummary(rec) {
     var el = document.getElementById('dmParamAssistantSummary');
     if (!el) return;
+    if (rec && rec.backend) {
+        el.innerHTML = dmParamAssistantRenderParamsSectionHtml(rec);
+        el.style.display = 'block';
+        var details = document.getElementById('dmParamAssistantDetails');
+        if (details) {
+            details.innerHTML = dmParamAssistantRenderDetailsSectionsHtml(
+                dmParamAssistantBackendSummarySections(rec), rec, rec.backend
+            );
+            details.style.display = details.innerHTML.trim() ? 'block' : 'none';
+        }
+        return;
+    }
     var rows = dmParamAssistantSummaryRows(rec);
-    el.innerHTML = rows.map(function (row) {
-        return '<div class="dm-param-assistant-summary-row"><span>' + dmParamAssistantEscape(row[0]) + '</span><strong>' + dmParamAssistantEscape(row[1]) + '</strong></div>';
-    }).join('');
-    el.style.display = 'grid';
+    el.innerHTML = '<div class="dm-pa-summary-wrap"><div class="dm-pa-tile-grid">' + rows.map(function (row) {
+        return dmParamAssistantRenderTileHtml(dmParamAssistantMakeTile(row[0], row[1], ''));
+    }).join('') + '</div></div>';
+    el.style.display = 'block';
 }
 
 function dmParamAssistantRenderSummaryAi(rec) {
     var el = document.getElementById('dmParamAssistantSummary');
     if (!el) return;
-    var rows = dmParamAssistantSummaryRows(rec);
+    if (rec && rec.backend) {
+        dmParamAssistantShowParamsFirst(rec);
+        return;
+    }
     el.innerHTML = '';
-    el.style.display = 'grid';
+    el.style.display = 'block';
+    var rows = dmParamAssistantSummaryRows(rec);
     function renderRow(idx) {
         if (idx >= rows.length) return;
         var row = rows[idx];
@@ -2257,15 +3284,10 @@ function dmParamAssistantMaybeScrollToBottom(opts) {
     opts = opts || {};
     var body = document.querySelector('#dmParamAssistantModal .dm-param-assistant-body');
     if (!body || (!dmParamAssistantAutoScroll && !opts.force)) return;
-    dmParamAssistantLastAutoScrollAt = Date.now();
+    var now = Date.now();
+    if (!opts.force && now - dmParamAssistantLastAutoScrollAt < 160) return;
+    dmParamAssistantLastAutoScrollAt = now;
     body.scrollTop = body.scrollHeight;
-    if (window.requestAnimationFrame) {
-        window.requestAnimationFrame(function () {
-            if (!body || (!dmParamAssistantAutoScroll && !opts.force)) return;
-            dmParamAssistantLastAutoScrollAt = Date.now();
-            body.scrollTop = body.scrollHeight;
-        });
-    }
 }
 
 function dmParamAssistantScrollSummaryIntoView() {
@@ -2287,6 +3309,7 @@ function dmParamAssistantTypeIntroText(text, done) {
         if (typeof done === 'function') done();
         return;
     }
+    dmParamAssistantSetCursorVisible(true);
     status.textContent = '';
     var idx = 0;
     function step() {
@@ -2317,13 +3340,18 @@ function dmParamAssistantAnimateIntroAndChips(snapshot, rec, done) {
 function dmParamAssistantTypeLines(lines, idx) {
     var output = document.getElementById('dmParamAssistantOutput');
     var choice = document.getElementById('dmParamAssistantChoice');
-    var status = document.getElementById('dmParamAssistantStatus');
     if (!output) return;
+    dmParamAssistantSetCursorVisible(true);
     if (idx >= lines.length) {
         dmParamAssistantTyping = false;
+        dmParamAssistantSetCursorVisible(false);
         if (choice) choice.style.display = 'flex';
         if (dmParamAssistantRecommendation) {
-            dmParamAssistantRenderSummaryAi(dmParamAssistantRecommendation);
+            if (dmParamAssistantRecommendation.backend) {
+                dmParamAssistantRenderDetailsAi(dmParamAssistantRecommendation);
+            } else {
+                dmParamAssistantRenderSummaryAi(dmParamAssistantRecommendation);
+            }
             dmParamAssistantSetTimer(dmParamAssistantScrollSummaryIntoView, 90);
         }
         return;
@@ -2349,7 +3377,7 @@ function dmParamAssistantTypeLines(lines, idx) {
 }
 
 // ===================== Backend backtest optimizer (gerçek analiz) =====================
-// Parametre asistanı, seçilen analiz seviyesinde (Soft/Orta/Yüksek) SUNUCUDAKİ gerçek
+// Parametre asistanı, tek profesyonel modda (professional_auto) SUNUCUDAKİ gerçek
 // strateji backtest'i + Monte Carlo gelecek simülasyonunu çalıştırır (job -> poll).
 // Backend ulaşılamaz/başarısızsa AÇIKÇA etiketlenmiş yerel hızlı tahmine düşer.
 function dmParamAssistantApiCfg() {
@@ -2378,13 +3406,35 @@ function dmParamAssistantCancelActiveJob() {
     var live = document.getElementById('dmPaProgLive');
     if (btn) {
         btn.disabled = true;
-        btn.textContent = 'Sonlandırılıyor';
+        btn.textContent = 'İptal ediliyor';
+    }
+    dmParamAssistantClearTimers();
+    dmParamAssistantStopTimeProgress();
+    dmParamAssistantStopDpsProgress();
+    dmParamAssistantActiveBackendRun = ++dmParamAssistantBackendRunSeq;
+    if (!jobId) {
+        if (status) status.textContent = 'Hesaplama iptal edildi.';
+        if (live) live.textContent = 'İstek iptal edildi; yeniden başlatabilirsin.';
+        dmParamAssistantProgressState = null;
+        var prepInstant = dmParamAssistantPrepEl();
+        if (prepInstant) {
+            prepInstant.style.display = 'block';
+            prepInstant.innerHTML =
+                '<div class="dm-pa-cancelled-note" role="status" aria-live="polite">' +
+                '<div class="dm-pa-cancelled-title">Hesaplama iptal edildi</div>' +
+                '<div class="dm-pa-cancelled-copy">Parametre skoru hesaplaması durduruldu. Tekrar denemek için aşağıdan başlatabilirsin.</div>' +
+                '</div>';
+        }
+        dmParamAssistantMaybeScrollToBottom({ force: true });
+        dmParamAssistantSetTimer(function () {
+            if (dmParamAssistantLastSnapshot && typeof dmParamAssistantLastTierStartFn === 'function') {
+                dmParamAssistantShowTierSelect(dmParamAssistantLastSnapshot, dmParamAssistantLastTierStartFn);
+            }
+        }, 900);
+        return;
     }
     if (status) status.textContent = 'Analiz sonlandırılıyor…';
     if (live) live.textContent = 'Arka plandaki analiz işi sonlandırılıyor; kayıt temizlenince yeniden seçim yapabilirsin.';
-    dmParamAssistantClearTimers();
-    dmParamAssistantStopTimeProgress();
-    dmParamAssistantActiveBackendRun = ++dmParamAssistantBackendRunSeq;
     dmParamAssistantApiPost(dmParamAssistantCancelUrl(jobId), {}, {
         timeout: 20000,
         owner: 'paramAssistant',
@@ -2471,108 +3521,251 @@ function dmParamAssistantBackendErrorInfo(err) {
 function dmParamAssistantPrepEl() {
     var el = document.getElementById('dmParamAssistantPrep');
     if (el) return el;
+    var anchor = document.querySelector('#dmParamAssistantModal .perf-summary-assistant-wrap');
     var output = document.getElementById('dmParamAssistantOutput');
-    if (!output || !output.parentNode) return null;
+    if (!anchor || !anchor.parentNode) {
+        if (!output || !output.parentNode) return null;
+        anchor = output;
+    }
     el = document.createElement('div');
     el.id = 'dmParamAssistantPrep';
     el.className = 'dm-param-assistant-prep dm-pa-tier-select';
-    el.style.margin = '4px 0 12px';
-    output.parentNode.insertBefore(el, output);
+    el.style.margin = '0 0 12px';
+    if (anchor.id === 'dmParamAssistantOutput') {
+        anchor.parentNode.insertBefore(el, anchor);
+    } else {
+        anchor.parentNode.insertBefore(el, anchor.nextSibling);
+    }
     return el;
 }
 
+function dmParamAssistantScrollIntroTop() {
+    var body = document.querySelector('#dmParamAssistantModal .dm-param-assistant-body');
+    if (!body) return;
+    dmParamAssistantAutoScroll = true;
+    dmParamAssistantLastAutoScrollAt = Date.now();
+    body.scrollTop = 0;
+}
+
 function dmParamAssistantClearPrep() {
+    dmParamAssistantStopDpsProgress();
+    dmParamAssistantStopLinearProgress();
+    dmParamAssistantStopMicroSteps();
     var el = document.getElementById('dmParamAssistantPrep');
     if (el) { el.innerHTML = ''; el.style.display = 'none'; }
 }
 
+// Tek profesyonel mod: kullanıcıya süre/derinlik seçtirilmez (eski Düşük/Orta/
+// Yüksek kartları kaldırıldı). Tek buton: "Profesyonel Otomatik Analizi Başlat".
 function dmParamAssistantShowTierSelect(snapshot, onPick) {
     var prep = dmParamAssistantPrepEl();
     var status = document.getElementById('dmParamAssistantStatus');
+    var introLabel = document.getElementById('dmParamAssistantIntroLabel');
     var selectSeq = ++dmParamAssistantTierSelectSeq;
+    var modalSpec = (AI_ASSISTANT_SPEC && AI_ASSISTANT_SPEC.modal) || {};
     if (!prep) {
-        if (status) status.textContent = 'Analiz seviyesi ekranı hazırlanamadı; lütfen modalı kapatıp yeniden aç.';
+        if (status) status.textContent = 'Analiz ekranı hazırlanamadı; lütfen modalı kapatıp yeniden aç.';
         return;
     }
-    if (status) status.textContent = 'Analiz derinliğini seç — ' + (snapshot.symbol || 'parite') + ' için en iyi parametreleri sunucuda GERÇEK backtest ile hesaplayacağım.';
+    var sym = snapshot.symbol || 'Parite';
+    if (introLabel) introLabel.textContent = modalSpec.label || 'Parametre Asistanı';
+    dmParamAssistantScrollIntroTop();
+    dmParamAssistantTyping = false;
+    if (status) status.textContent = sym + ' için Parametre Skoru analizini başlatabilirsin.';
+    dmParamAssistantSetCursorVisible(false);
     prep.style.display = 'block';
-
-    var fallback = [
-        { key: 'soft', label: 'Düşük', description: 'Sunucuda gerçek strateji backtest + son dönem doğrulama. Yerel hızlı tahmin değildir.', eta_low_sec: 30, eta_high_sec: 90, requires_confirm: false },
-        { key: 'medium', label: 'Orta', description: '15dk ince veri + OOS doğrulama + Monte Carlo gelecek senaryoları.', eta_low_sec: 180, eta_high_sec: 420, requires_confirm: false },
-        { key: 'high', label: 'Yüksek', description: '5dk son yıl + tüm geçmiş + 6-fold walk-forward + ağır Monte Carlo. En az 1 saat, tavan 6 saat.', eta_low_sec: 3600, eta_high_sec: 21600, requires_confirm: true }
-    ];
-
-    function render(tiers) {
-        if (selectSeq !== dmParamAssistantTierSelectSeq) return;
-        if (!prep || prep.style.display === 'none') return;
-        prep.innerHTML = '';
-        var title = document.createElement('div');
-        title.className = 'dm-pa-tier-title';
-        title.textContent = 'Analiz seviyesi';
-        prep.appendChild(title);
-        var cards = document.createElement('div');
-        cards.className = 'dm-pa-tier-cards';
-        prep.appendChild(cards);
-        tiers.forEach(function (t) {
-            var card = document.createElement('button');
-            card.type = 'button';
-            card.className = 'dm-pa-tier-card dm-pa-tier-' + t.key;
-            var etaTxt = '~' + dmParamAssistantFmtDuration(t.eta_low_sec) +
-                (t.eta_high_sec && t.eta_high_sec !== t.eta_low_sec ? ' – ' + dmParamAssistantFmtDuration(t.eta_high_sec) : '');
-            card.innerHTML = '<div class="dm-pa-tier-card-label">' + dmParamAssistantEscape(t.label) + '</div>' +
-                '<div class="dm-pa-tier-card-desc">' + dmParamAssistantEscape(t.description || '') + '</div>' +
-                '<div class="dm-pa-tier-card-eta">tahmini süre: ' + dmParamAssistantEscape(etaTxt) + (t.cores ? ' · ' + t.cores + ' çekirdek' : '') + '</div>';
-            card.addEventListener('click', function () { dmParamAssistantPickTier(snapshot, t, onPick); });
-            cards.appendChild(card);
-        });
-        var note = document.createElement('div');
-        note.className = 'dm-pa-tier-note';
-        note.textContent = 'Hiçbir seviyede hızlı yerel tahmin gösterilmez; sonuç ancak sunucu backtest ve doğrulama tamamlanınca gelir.';
-        prep.appendChild(note);
-    }
-
-    render(fallback);
-    var api = dmParamAssistantApiCfg();
-    dmParamAssistantApiGet(api.tiers, {
-        timeout: 12000,
-        owner: 'paramAssistant',
-        trigger: 'param-assistant-tiers',
-        suppressRateLimitToast: true
-    }).then(function (resp) {
-        render(resp && resp.tiers && resp.tiers.length ? resp.tiers : fallback);
-    }).catch(function () {});
-}
-
-function dmParamAssistantPickTier(snapshot, tier, onPick) {
-    if (!tier.requires_confirm) { onPick(tier.key); return; }
-    var prep = dmParamAssistantPrepEl();
-    if (!prep) { onPick(tier.key); return; }
-    var lo = dmParamAssistantFmtDuration(tier.eta_low_sec);
-    var hi = dmParamAssistantFmtDuration(tier.eta_high_sec);
-    var accent = 'var(--ai-assistant-accent, #f0b90b)';
-    prep.style.display = 'block';
+    prep.className = 'dm-param-assistant-prep dm-pa-tier-select dm-pa-tier-ai';
     prep.innerHTML =
-        '<div class="dm-pa-tier-confirm" style="border:1px solid ' + accent + ';border-radius:10px;padding:12px 14px;">' +
-        '<div style="font-weight:600;margin-bottom:6px;">Yüksek analiz</div>' +
-        '<div style="font-size:0.86rem;line-height:1.5;opacity:0.92;">Tüm geçmişi, indikatörleri, gerçek strateji backtest\'ini ve <b>binlerce gelecek senaryosunu (Monte Carlo)</b> işler. İşlemci <b>tam güçte</b> kullanılır. Tahmini süre <b>~' + lo + ' – ' + hi + '</b>. En az 1 saat gerçek arama yapar; skor ancak bundan sonra gerçekten yakınsarsa erken biter.</div>' +
-        '<div style="display:flex;gap:8px;margin-top:12px;">' +
-        '<button type="button" id="dmPaConfirmYes" class="btn btn-primary-gold btn-sm">Başlat</button>' +
-        '<button type="button" id="dmPaConfirmNo" class="btn btn-ghost btn-sm">Geri</button>' +
-        '</div></div>';
-    var yes = document.getElementById('dmPaConfirmYes');
-    var no = document.getElementById('dmPaConfirmNo');
-    if (yes) yes.onclick = function () { onPick(tier.key); };
-    if (no) no.onclick = function () { dmParamAssistantShowTierSelect(snapshot, onPick); };
+        '<div class="dm-pa-tier-kicker">Analizi başlat</div>' +
+        '<div class="dm-pa-tier-cards">' +
+        '<button type="button" class="dm-pa-tier-card dm-pa-tier-professional_auto">' +
+        '<div class="dm-pa-tier-card-label">Parametre Skorunu Hesapla</div>' +
+        '<div class="dm-pa-tier-card-desc">Dynamic Param Score Engine: piyasa atmosferi, likidite, spread ve portföy durumuna göre anında parametre skoru ve raf eşleşmesi. Uygun değilse bilinçli bekleme kararı.</div>' +
+        '<div class="dm-pa-tier-card-eta">tahmini süre: birkaç saniye</div>' +
+        '</button></div>' +
+        '<div class="dm-pa-tier-note">Bu karar anında hesaplanır; Dinamik Mod her tur başında aynı motoru kullanır.</div>';
+    var card = prep.querySelector('.dm-pa-tier-card');
+    if (card) {
+        card.addEventListener('click', function () {
+            if (selectSeq !== dmParamAssistantTierSelectSeq) return;
+            onPick('professional_auto');
+        });
+    }
 }
 
 // ——— Zamana göre ilerleme (blok blok değil; gerçek kalan-zamana dayalı, akıcı) ———
 var dmParamAssistantTimeProg = null;       // {targetPct, totalSec, runId, done}
 var dmParamAssistantTimeProgTimer = null;
+var dmParamAssistantDpsProgressTimer = null;
+var dmParamAssistantDpsWaitCreepTimer = null;
+var dmParamAssistantDpsProgressStage = 0;
+var DM_PARAM_ASSISTANT_DPS_MAX_AUTO_STAGE = 3;
+
+var DM_PARAM_ASSISTANT_DPS_STAGES = [
+    {
+        title: 'Piyasa verisi toplanıyor',
+        explain: 'Son 7 günlük mum verisi okunuyor (5m, 15m, 1h, 4h).',
+        score: 'veri alınıyor…',
+        live: 'Kline ve emir defteri verisi çekiliyor.',
+        ticks: ['5m mumlar okunuyor…', '15m mumlar okunuyor…', '1h mumlar okunuyor…', '4h mumlar okunuyor…', 'Ticker ve spread alınıyor…']
+    },
+    {
+        title: 'İndikatörler hesaplanıyor',
+        explain: 'ATR, volatilite, spread, likidite ve BTC risk metrikleri çıkarılıyor.',
+        score: 'hesaplanıyor…',
+        live: 'Trend, range, fee ve exposure alt skorları üretiliyor.',
+        ticks: ['ATR ve volatilite persentili…', 'RSI, ADX ve momentum…', 'Spread ve fee verimi…', 'BTC baskısı ve crash hızı…', 'Likidite ve hacim tutarlılığı…']
+    },
+    {
+        title: 'Piyasa atmosferi sınıflandırılıyor',
+        explain: 'Rejim, yapı yönü, volatilite ve risk sınıfı belirleniyor; route_key oluşturuluyor.',
+        score: 'ParamScore + rejim…',
+        live: 'Piyasa imzası ve parametre skoru hesaplanıyor.',
+        ticks: ['Rejim etiketi çıkarılıyor…', 'Wide-chop / BTC baskısı kontrolü…', 'Risk durumu (Normal/Savunmacı)…', 'Route rafı imzası oluşturuluyor…']
+    },
+    {
+        title: 'Parametre rafı eşleştiriliyor',
+        explain: '300.000 profilli kütüphanede tam tarama yapılmaz; coinin atmosferine uygun raf indeksinden aday profiller çağrılır ve skorlanır.',
+        score: 'profil seçiliyor…',
+        live: 'Bütçe ve komisyon seçim sonrası uygulanır — anında sonuç, simülasyon yok.',
+        ticks: ['Route index sorgulanıyor…', 'Exact route adayları taranıyor…', 'Fallback raflar deneniyor…', 'Profil skoru hesaplanıyor…', 'Grid dağılımı doğrulanıyor…']
+    },
+    {
+        title: 'Sonuç hazırlanıyor',
+        explain: 'Seçilen profil forma aktarılıyor; piyasa zayıfsa savunmacı grid parametreleri gösterilir.',
+        score: 'hazır',
+        live: 'Dynamic Param Score Engine sonucu üretiyor.',
+        ticks: ['Güvenlik kapıları uygulanıyor…', 'Emir niyeti planı oluşturuluyor…', 'UI özeti hazırlanıyor…']
+    }
+];
 
 function dmParamAssistantStopTimeProgress() {
     if (dmParamAssistantTimeProgTimer) { clearTimeout(dmParamAssistantTimeProgTimer); dmParamAssistantTimeProgTimer = null; }
     dmParamAssistantTimeProg = null;
+}
+
+function dmParamAssistantStopDpsProgress() {
+    if (dmParamAssistantDpsProgressTimer) {
+        clearInterval(dmParamAssistantDpsProgressTimer);
+        dmParamAssistantDpsProgressTimer = null;
+    }
+    if (dmParamAssistantDpsWaitCreepTimer) {
+        clearInterval(dmParamAssistantDpsWaitCreepTimer);
+        dmParamAssistantDpsWaitCreepTimer = null;
+    }
+    dmParamAssistantStopLinearProgress();
+    dmParamAssistantStopMicroSteps();
+}
+
+function dmParamAssistantDpsStagePct(idx) {
+    var stagePcts = [12, 28, 44, 60, 92];
+    var i = Math.max(0, Math.min(stagePcts.length - 1, idx));
+    return stagePcts[i];
+}
+
+function dmParamAssistantStartDpsWaitCreep() {
+    if (dmParamAssistantDpsWaitCreepTimer) return;
+    var cap = 88;
+    dmParamAssistantDpsWaitCreepTimer = setInterval(function () {
+        if (!dmParamAssistantProgressState) return;
+        var cur = Number(dmParamAssistantProgressState.pct) || 60;
+        if (cur >= cap) return;
+        dmParamAssistantRenderTimePct(Math.min(cap, cur + 0.4));
+    }, 450);
+}
+
+function dmParamAssistantApplyDpsProgressStage(idx, opts) {
+    var stages = DM_PARAM_ASSISTANT_DPS_STAGES;
+    var allowFinal = !!(opts && opts.allowFinal);
+    var maxIdx = allowFinal ? stages.length - 1 : DM_PARAM_ASSISTANT_DPS_MAX_AUTO_STAGE;
+    var i = Math.max(0, Math.min(maxIdx, idx));
+    dmParamAssistantDpsProgressStage = i;
+    var s = stages[i];
+    var step = document.getElementById('dmPaProgStep');
+    var stage = document.getElementById('dmPaProgStage');
+    var explain = document.getElementById('dmPaProgExplain');
+    var score = document.getElementById('dmPaProgScore');
+    var live = document.getElementById('dmPaProgLive');
+    if (step) step.textContent = (i + 1) + ' / ' + stages.length;
+    if (stage) stage.textContent = s.title;
+    if (explain) explain.textContent = s.explain;
+    if (score) score.textContent = s.score;
+    var statusEl = document.getElementById('dmParamAssistantStatus');
+    if (statusEl) statusEl.textContent = s.title;
+    if (live) {
+        live.textContent = s.live || s.explain || s.title;
+        live.classList.remove('is-typing');
+    }
+    var pct = (opts && opts.forcePct != null) ? opts.forcePct : dmParamAssistantDpsStagePct(i);
+    dmParamAssistantRenderTimePct(pct);
+    if (s.ticks && s.ticks.length > 1) {
+        dmParamAssistantStartMicroSteps(
+            dmParamAssistantActiveBackendRun,
+            s.ticks,
+            2800
+        );
+    } else {
+        dmParamAssistantStopMicroSteps();
+    }
+    if (!allowFinal && i >= DM_PARAM_ASSISTANT_DPS_MAX_AUTO_STAGE) {
+        dmParamAssistantStartDpsWaitCreep();
+    }
+}
+
+function dmParamAssistantShowDpsProgress(snapshot) {
+    var prep = dmParamAssistantPrepEl();
+    if (!prep) return;
+    dmParamAssistantStopTimeProgress();
+    dmParamAssistantStopDpsProgress();
+    var sym = (snapshot && snapshot.symbol) ? snapshot.symbol : 'Parite';
+    dmParamAssistantProgressState = {
+        pct: 4,
+        stageIndex: 0,
+        stageKey: 'dps_data',
+        runId: dmParamAssistantActiveBackendRun
+    };
+    dmParamAssistantAutoScroll = true;
+    prep.style.display = 'block';
+    prep.innerHTML =
+        '<div class="dm-param-assistant-progress dm-pa-progress dm-pa-progress-dps dm-pa-progress-active">' +
+        '<div class="dm-pa-progress-top">' +
+        '<div id="dmPaProgStep" class="dm-pa-progress-step">1 / 5</div>' +
+        '<div class="dm-pa-progress-titlebox">' +
+        '<div id="dmPaProgStage" class="dm-pa-progress-stage">Piyasa verisi toplanıyor</div>' +
+        '<div id="dmPaProgExplain" class="dm-pa-progress-explain">Son 7 günlük mum verisi okunuyor (5m, 15m, 1h, 4h).</div>' +
+        '</div>' +
+        '<div id="dmPaProgEta" class="dm-pa-progress-eta"><span id="dmPaProgPct">%4</span></div>' +
+        '<button type="button" id="dmPaCancelBtn" class="dm-pa-cancel-btn">İptal</button>' +
+        '</div>' +
+        '<div class="dm-pa-progress-track"><div id="dmPaProgBar" class="dm-pa-progress-bar" style="width:4%;"></div></div>' +
+        '<div class="dm-pa-progress-meta">' +
+        '<div><span>Parite</span><strong id="dmPaProgData">' + dmParamAssistantEscape(sym) + '</strong></div>' +
+        '<div><span>Durum</span><strong id="dmPaProgScore">başlıyor…</strong></div>' +
+        '</div>' +
+        '<div id="dmPaProgDetail" class="dm-pa-progress-detail" style="display:none;"></div>' +
+        '<div id="dmPaProgLive" class="dm-pa-progress-live">Anında analiz — iş kuyruğu veya simülasyon bekleme yok.</div>' +
+        '</div>';
+    var cancelBtn = document.getElementById('dmPaCancelBtn');
+    if (cancelBtn) cancelBtn.onclick = dmParamAssistantCancelActiveJob;
+    dmParamAssistantApplyDpsProgressStage(0);
+    dmParamAssistantStartLinearProgress(dmParamAssistantActiveBackendRun, { startPct: 4, endPct: 88, durationMs: 16000, tickMs: 80 });
+    dmParamAssistantMaybeScrollToBottom({ force: true });
+}
+
+function dmParamAssistantStartDpsProgressAnimation() {
+    dmParamAssistantStopDpsProgress();
+    dmParamAssistantDpsProgressTimer = setInterval(function () {
+        if (!dmParamAssistantProgressState) return;
+        if (dmParamAssistantDpsProgressStage >= DM_PARAM_ASSISTANT_DPS_MAX_AUTO_STAGE) {
+            if (dmParamAssistantDpsProgressTimer) {
+                clearInterval(dmParamAssistantDpsProgressTimer);
+                dmParamAssistantDpsProgressTimer = null;
+            }
+            dmParamAssistantStartDpsWaitCreep();
+            return;
+        }
+        dmParamAssistantApplyDpsProgressStage(dmParamAssistantDpsProgressStage + 1);
+    }, 1050);
 }
 
 function dmParamAssistantServerWallElapsed(job) {
@@ -2987,7 +4180,7 @@ function dmParamAssistantAttachAndPoll(jobId, opts) {
     opts = opts || {};
     dmParamAssistantActiveJobId = jobId || '';
     var runId = opts.runId;
-    var level = opts.level || 'high';
+    var level = opts.level || 'professional_auto';
     var tb = Number(opts.timeBudgetSec) || 240;
     var onDone = opts.onDone, onFail = opts.onFail;
     var status = document.getElementById('dmParamAssistantStatus');
@@ -3003,11 +4196,11 @@ function dmParamAssistantAttachAndPoll(jobId, opts) {
         if (typeof onFail === 'function') dmParamAssistantSetTimer(function () { onFail(msg); }, 350);
     }
     var api = dmParamAssistantApiCfg();
-    var pollMs = level === 'high' ? 1500 : 850;  // daha sık -> işlenen veri "tık tık" akar
+    var pollMs = 1500;  // tek (uzun süren, ağır) profesyonel mod -> daha seyrek poll
     var maxPolls = Math.ceil((tb + 700) / (pollMs / 1000));
     var polls = 0;
-    var consecMiss = 0;  // ardışık poll hatası (Yüksek tier CPU'yu doldururken geçici olabilir)
-    var deadlineAt = Date.now() + (tb + (level === 'high' ? 720 : 240)) * 1000;
+    var consecMiss = 0;  // ardışık poll hatası (CPU'yu doldururken geçici olabilir)
+    var deadlineAt = Date.now() + (tb + 720) * 1000;
     var lastSig = '';
     var lastChangeAt = Date.now();
     function poll() {
@@ -3082,35 +4275,43 @@ function dmParamAssistantRunBackend(snapshot, level, runId, onDone, onFail) {
     function fail(msg) {
         if (failed || !isActiveRun()) return;
         failed = true;
-        try { console.warn('[paramAssistant] backend analysis stopped:', msg); } catch (e) {}
+        try { console.warn('[paramAssistant] DPS stopped:', msg); } catch (e) {}
         dmParamAssistantClearPrep();
         if (typeof onFail === 'function') dmParamAssistantSetTimer(function () { onFail(msg); }, 350);
     }
     var api = dmParamAssistantApiCfg();
     var budget = dmParamAssistantResolveBudget(snapshot);
-    dmParamAssistantShowProgress();
-    setStatus('Sunucuda geçmiş veri çekiliyor ve motor hazırlanıyor…');
-    dmParamAssistantApiPost(api.optimize, { symbol: snapshot.symbol, budget: budget, analysis_level: level }, {
-        timeout: DM_PARAM_ASSISTANT_BACKEND_START_TIMEOUT_MS,
+    dmParamAssistantShowDpsProgress(snapshot);
+    dmParamAssistantStartDpsProgressAnimation();
+    dmParamAssistantSetCursorVisible(true);
+    setStatus('Piyasa analizi yapılıyor…');
+    var calcUrl = api.calculate || '/api/param-assistant/calculate';
+    dmParamAssistantApiPost(calcUrl, { symbol: snapshot.symbol, budget: budget, analysis_level: level }, {
+        timeout: 90000,
         owner: 'paramAssistant',
-        trigger: 'param-assistant-start',
+        trigger: 'param-assistant-calculate',
         suppressRateLimitToast: true
-    }).then(function (resp) {
+    }).then(function (result) {
         if (!isActiveRun()) return;
-        if (!resp || !resp.job_id) { fail('optimizasyon başlatılamadı'); return; }
-        dmParamAssistantActiveJobId = resp.job_id;
-        if (resp.reused) {
-            var runningSymbol = resp.symbol || 'mevcut sembol';
-            setStatus('Bu hesapta zaten çalışan analiz var (' + runningSymbol + '); mevcut analize bağlanıldı.');
+        dmParamAssistantStopDpsProgress();
+        dmParamAssistantStopLinearProgress();
+        dmParamAssistantStopMicroSteps();
+        dmParamAssistantApplyDpsProgressStage(DM_PARAM_ASSISTANT_DPS_STAGES.length - 1, { allowFinal: true, forcePct: 100 });
+        dmParamAssistantStopTimeProgress();
+        if (!result || result.ok === false) { fail('hesaplama başarısız'); return; }
+        var ok = dmParamAssistantRenderBackendResult(snapshot, result);
+        if (ok && typeof onDone === 'function') onDone();
+        else if (!ok) {
+            var reason = 'sonuç uygulanamadı';
+            if (result.result_schema_version && result.result_schema_version !== DM_PARAM_ASSISTANT_RESULT_SCHEMA) {
+                reason = 'şema uyumsuzluğu (sunucu ' + result.result_schema_version + ', arayüz ' + DM_PARAM_ASSISTANT_RESULT_SCHEMA + ')';
+            }
+            fail(reason);
         }
-        dmParamAssistantAttachAndPoll(resp.job_id, {
-            runId: runId, level: level, timeBudgetSec: resp.time_budget_sec,
-            onDone: onDone, onFail: onFail, firstDelayMs: 550
-        });
     }).catch(function (err) {
         if (!isActiveRun()) return;
         var info = dmParamAssistantBackendErrorInfo(err);
-        fail(info.label || 'optimizasyon başlatılamadı');
+        fail(info.label || 'hesaplama başarısız');
     });
 }
 
@@ -3134,8 +4335,14 @@ function dmParamAssistantBuildBackendRec(snapshot, result) {
         rebuyTrail: Number(profit.rebuy_trail_pct),
         resellTrigger: Number(profit.resell_trigger_pct),
         resellTrail: Number(profit.resell_trail_pct),
-        regime: (result.regime && result.regime.label) || '—',
-        confidence: result.confidence != null ? result.confidence : 0,
+        regime: result.regime_tag || (result.regime && result.regime.label) || '—',
+        confidence: result.confidence != null ? result.confidence : (result.param_score != null ? result.param_score : 0),
+        paramScore: result.param_score,
+        scoreLabels: (ui.score_labels || (result.selection_telemetry && result.selection_telemetry.score_labels) || {}),
+        allocationDisplay: ui.allocation_display || {},
+        ladderDisplay: ui.ladder_display || {},
+        riskState: result.effective_risk_state || result.risk_state,
+        finalAction: result.final_action,
         volatility: '',
         backend: result
     };
@@ -3143,72 +4350,342 @@ function dmParamAssistantBuildBackendRec(snapshot, result) {
 
 function dmParamAssistantBackendChipItems(snapshot, rec) {
     var r = rec.backend || {};
-    var oos = r.oos || {};
-    var ins = r.in_sample || {};
-    var st = r.stats || {};
+    var ui = r.ui_config || {};
+    var selTel = (r.selection_telemetry || {});
+    var scoreLabels = selTel.score_labels || (r.ui_config && r.ui_config.score_labels) || {};
+    var marketConf = scoreLabels.market_confidence || {};
+    var paramWork = scoreLabels.param_work_score || {};
+    var profileFit = scoreLabels.profile_fit_score || {};
+    var profileTxt = dmParamAssistantBackendProfileText(r);
+    if (rec.sellManagementOnly || r.final_action === 'SELL_MANAGEMENT_ONLY') {
+        profileTxt = profileTxt + ' → ' + dmParamAssistantActionLabel('SELL_MANAGEMENT_ONLY', r);
+    }
     return [
         ['Parite', snapshot.symbol || r.symbol || '—'],
-        ['Rejim', (r.regime && r.regime.label) || rec.regime || '—'],
-        ['Güven', (r.confidence != null ? r.confidence : '—') + '/100'],
-        ['6 ay getiri*', oos.return_pct != null ? dmParamAssistantPctTxt(oos.return_pct, 1) : '—'],
-        ['6 ay tur*', oos.cycles_closed != null ? String(oos.cycles_closed) : '—'],
-        ['Geçmiş getiri', ins.return_pct != null ? dmParamAssistantPctTxt(ins.return_pct, 1) : '—'],
-        ['Win-rate', ins.win_rate != null ? '%' + dmParamAssistantInputTextTr(ins.win_rate, 0) : '—'],
-        ['Grid', rec.upGrids.length + ' / ' + rec.downGrids.length],
-        ['Denenen set', (st.evals_total != null ? st.evals_total : '—')]
+        [paramWork.label || 'Parametre çalışma skoru', (paramWork.value != null ? paramWork.value : (r.param_score != null ? r.param_score : rec.paramScore)) + '/100'],
+        ['Rejim', ui.display_regime_label || r.display_regime_label || dmParamAssistantRegimeLabel(r.regime_tag || rec.regime)],
+        ['Risk', dmParamAssistantRiskLabel(
+            ui.effective_risk_state || r.effective_risk_state || r.risk_state || rec.riskState
+        )],
+        ['Karar', dmParamAssistantActionLabel(r.final_action || rec.finalAction, r)],
+        [marketConf.label || 'Piyasa güven skoru', (marketConf.value != null ? marketConf.value : (r.confidence != null ? r.confidence : '—')) + '/100'],
+        [profileFit.label || 'Seçilen profil uyum skoru', (profileFit.value != null ? profileFit.value : '—') + (profileFit.value != null ? '/100' : '')],
+        ['Grid', dmParamAssistantGridCountLabel(rec)],
+        ['Profil', profileTxt]
     ];
 }
 
-function dmParamAssistantBackendSummaryRows(rec) {
-    var r = rec.backend || {};
-    var oos = r.oos || {};
-    var ins = r.in_sample || {};
-    var st = r.stats || {};
-    var fc = r.forecast || {};
-    var rows = [
-        ['Bütçe', dmParamAssistantInputTextTr(rec.budget, 2)],
-        ['Dağılım', '%' + dmParamAssistantInputTextTr(rec.basePct, 1) + ' / %' + dmParamAssistantInputTextTr(rec.quotePct, 1)],
-        ['Rejim', ((r.regime && r.regime.label) || rec.regime || '—') + ' · güven ' + (r.confidence != null ? r.confidence : '—') + '/100'],
-        ['Satış grid', dmParamAssistantGridText(rec.upGrids, '+')],
-        ['Alış grid', dmParamAssistantGridText(rec.downGrids, '-')],
-        ['Trailing', '%' + dmParamAssistantInputTextTr(rec.upTrail, 2) + ' / %' + dmParamAssistantInputTextTr(rec.downTrail, 2)],
-        ['Kâr döngüsü', 'Rebuy %' + dmParamAssistantInputTextTr(rec.rebuyTrigger, 2) + ' · Resell %' + dmParamAssistantInputTextTr(rec.resellTrigger, 2)]
-    ];
-    if (oos && oos.return_pct != null) {
-        rows.push(['Doğrulama (6 ay)*', 'getiri ' + dmParamAssistantPctTxt(oos.return_pct, 1) + ' · ' + (oos.cycles_closed || 0) + ' tur · maks. düşüş %' + dmParamAssistantInputTextTr(oos.max_drawdown_pct, 1)]);
+// Frontend'in beklediği sonuç şema sürümü. Backend PARAM_ASSISTANT_RESULT_SCHEMA ile
+// AYNI olmalı; eşleşmezse sonuç 'bayat/uyumsuz' sayılır ve GÖSTERİLMEZ.
+// 3.4: selection trace counts, fee_display, debug panel contract.
+var DM_PARAM_ASSISTANT_RESULT_SCHEMA =
+    (AI_ASSISTANT_SPEC.paramAssistant && AI_ASSISTANT_SPEC.paramAssistant.resultSchemaVersion) || '3.4';
+
+// Backend _normalize_symbol ile aynı kuralla normalize et (BTC -> BTCUSDT).
+function dmParamAssistantNormalizeSymbol(s) {
+    s = String(s || '').toUpperCase().replace(/[\/\-\s]/g, '');
+    if (!s) return '';
+    var quotes = ['USDT', 'USDC', 'BUSD', 'FDUSD', 'TUSD', 'BTC', 'ETH', 'TRY'];
+    var hasQuote = quotes.some(function (q) { return s.length > q.length && s.slice(-q.length) === q; });
+    return hasQuote ? s : (s + 'USDT');
+}
+
+// BAYAT SONUÇ ENGELİ: bir job sonucu, yalnız (a) şema sürümü uyuşuyorsa ve
+// (b) aynı sembol+bütçe için üretildiyse gösterilir. Aksi halde eski/yanlış config
+// sonucudur — stratejiyi ne kadar düzeltsen "iyileşti mi yoksa eskiyi mi görüyorum?"
+// karışır. Eşleşmezse false döner; çağıran taze analiz akışına düşer.
+function dmParamAssistantResultIsFresh(snapshot, result) {
+    if (!result) return false;
+    if (result.result_schema_version !== DM_PARAM_ASSISTANT_RESULT_SCHEMA) {
+        try { console.warn('[paramAssistant] schema mismatch, result rejected', result.result_schema_version); } catch (e) {}
+        return false;
     }
-    if (ins && ins.return_pct != null) {
-        rows.push(['Geçmiş (in-sample)', 'getiri ' + dmParamAssistantPctTxt(ins.return_pct, 1) + ' · win %' + dmParamAssistantInputTextTr(ins.win_rate, 0) + ' · ' + (ins.cycles_closed || 0) + ' tur']);
+    try {
+        var snapSym = dmParamAssistantNormalizeSymbol(snapshot && snapshot.symbol);
+        var resSym = dmParamAssistantNormalizeSymbol(result.symbol);
+        if (snapSym && resSym && snapSym !== resSym) {
+            try { console.warn('[paramAssistant] symbol mismatch, stale result rejected', resSym, '!=', snapSym); } catch (e) {}
+            return false;
+        }
+        var snapBudget = dmParamAssistantResolveBudget(snapshot);
+        if (snapBudget != null && result.budget != null &&
+            Math.abs(Number(result.budget) - Number(snapBudget)) > 0.01) {
+            try { console.warn('[paramAssistant] budget mismatch, stale result rejected', result.budget, '!=', snapBudget); } catch (e) {}
+            return false;
+        }
+    } catch (e) {}
+    return true;
+}
+
+function dmParamAssistantResolveResultConfig(result) {
+    if (!result) return null;
+    var ui = result.ui_config;
+    if (ui && ((ui.up && ui.up.grids && ui.up.grids.length) || (ui.down && ui.down.grids && ui.down.grids.length))) {
+        return ui;
     }
-    if (fc && fc.median_return_pct != null) {
-        rows.push(['Gelecek (Monte Carlo)', 'medyan ' + dmParamAssistantPctTxt(fc.median_return_pct, 1) + ' · kâr olasılığı %' + dmParamAssistantInputTextTr((fc.prob_profit || 0) * 100, 0) + ' · ' + (fc.n_paths || 0) + ' senaryo']);
+    var rec = result.recommendation_config;
+    if (rec && ((rec.up && rec.up.grids && rec.up.grids.length) || (rec.down && rec.down.grids && rec.down.grids.length))) {
+        return rec;
     }
-    rows.push(['Hesap', (st.evals_total != null ? st.evals_total : '—') + ' kombinasyon · ' + (st.workers != null ? st.workers : '—') + ' çekirdek · ' + (st.elapsed_sec != null ? st.elapsed_sec : '—') + ' sn' + (st.degraded ? ' · kısa arama' : '')]);
-    return rows;
+    return null;
 }
 
 function dmParamAssistantRenderBackendResult(snapshot, result) {
-    if (!result || !result.ui_config) return false;
+    if (!result) return false;
     if (result.stats && result.stats.degraded) return false;
-    // KARAR KAPANIŞI: backend 'çekil' dediyse seti ÖNERME — apply sunma, dürüst verdict göster.
-    var decision = result.decision || {};
-    if (decision.decision === 'abstain') {
-        dmParamAssistantShowDecisionAbstain(snapshot, result, decision);
+    if (!dmParamAssistantResultIsFresh(snapshot, result)) return false;
+
+    var displayConfig = dmParamAssistantResolveResultConfig(result);
+    if (displayConfig) {
+        result.ui_config = displayConfig;
+    }
+
+    var finalDecision = result.final_action || result.decision || result.final_recommendation;
+    var deployable = result.deployable === true;
+    var isRecommendedOnly = !deployable && displayConfig && (
+        result.result_type === 'recommended_grid' || displayConfig.recommendation_only === true
+    );
+
+    if (displayConfig) {
+        var rec = dmParamAssistantBuildBackendRec(snapshot, result);
+        var hasSell = rec.upGrids.length > 0;
+        var hasBuy = rec.downGrids.length > 0;
+        if (hasSell || hasBuy) {
+            rec.decision = { decision: deployable ? finalDecision : 'recommended_grid' };
+            rec.watchOnly = isRecommendedOnly || result.sell_management_only === true ||
+                result.final_action === 'SELL_MANAGEMENT_ONLY' || (hasSell && !hasBuy);
+            rec.sellManagementOnly = rec.watchOnly && hasSell && !hasBuy;
+            rec.recommendationOnly = isRecommendedOnly;
+            rec.introText = dmParamAssistantGreetingText(snapshot, rec);
+            dmParamAssistantRecommendation = rec;
+            dmParamAssistantTyping = true;
+            var lines = [];
+            if (result.explain) lines.push(result.explain);
+            var sel = result.selection_telemetry || (result.telemetry && result.telemetry.param_pool) || {};
+            var pickLine = dmParamAssistantFormatSelectionPickLine(result);
+        lines.push(
+            pickLine +
+            '. Parametre Skoru ' + (result.param_score != null ? result.param_score : '—') +
+            '/100 · rejim ' + (displayConfig.display_regime_label || result.display_regime_label || dmParamAssistantRegimeLabel(result.regime_tag)) + '.'
+        );
+            if (isRecommendedOnly) {
+                if (displayConfig.reference_display_only || displayConfig.reference_display_reason === 'fee_bad_wait') {
+                    lines.push('Fee verimi grid için yetersiz; canlı karar BEKLE. Referans olarak geniş aralıklı grid parametreleri gösteriliyor — bu set uygulanmaz.');
+                } else {
+                    lines.push('Piyasa koşulları zayıf; savunmacı parametre seti gösteriliyor. Canlı uygulama güvenlik kapılarına bağlı.');
+                }
+            } else if (rec.sellManagementOnly) {
+                lines.push('Yeni alış kapalı; yalnızca satış yönetimi parametreleri önerildi.');
+            }
+            lines.push('Not: Bu karar Dynamic Param Score Engine tarafından üretildi; Dinamik Mod her tur başında aynı motoru kullanır.');
+            dmParamAssistantPresentBackendResultUi(snapshot, rec, lines);
+            return true;
+        }
+    }
+
+    var sellOnly = result.sell_management_only === true || result.final_action === 'SELL_MANAGEMENT_ONLY';
+    var isManagement = (
+        ['management_decision', 'no_trade'].indexOf(result.result_type || '') >= 0 ||
+        (result.can_apply_safe_overlay === true && !displayConfig) ||
+        (['WAIT', 'NO_TRADE', 'SAFE_WAIT', 'DATA_STALE_SAFE_WAIT'].indexOf(result.final_action || '') >= 0 && !displayConfig)
+    ) && ['recommended_grid', 'single_probe_recommendation', 'first_start_buy_only', 'deployable_grid'].indexOf(result.result_type || '') < 0;
+
+    if (isRecommendedOnly && displayConfig) {
+        var recOnly = dmParamAssistantBuildBackendRec(snapshot, result);
+        var hasSellRef = recOnly.upGrids.length > 0;
+        var hasBuyRef = recOnly.downGrids.length > 0;
+        if (hasSellRef || hasBuyRef) {
+            recOnly.decision = { decision: 'recommended_grid' };
+            recOnly.recommendationOnly = true;
+            recOnly.watchOnly = !hasBuyRef && hasSellRef;
+            recOnly.sellManagementOnly = recOnly.watchOnly;
+            recOnly.introText = dmParamAssistantGreetingText(snapshot, recOnly);
+            dmParamAssistantRecommendation = recOnly;
+            dmParamAssistantTyping = true;
+            var refLines = [];
+            if (result.explain) refLines.push(result.explain);
+            refLines.push('Piyasa koşulları zayıf; savunmacı parametre seti referans olarak gösteriliyor. Canlı uygulama güvenlik kapılarına bağlı.');
+            refLines.push('Not: Bu karar Dynamic Param Score Engine tarafından üretildi; Dinamik Mod her tur başında aynı motoru kullanır.');
+            dmParamAssistantPresentBackendResultUi(snapshot, recOnly, refLines);
+            return true;
+        }
+    }
+
+    if (isManagement && !deployable) {
+        dmParamAssistantShowDpsManagementDecision(snapshot, result);
+        return true;
+    }
+    if (!deployable || finalDecision === 'abstain' || !displayConfig) {
+        if (result.ok === false || result.ui_severity === 'error') {
+            dmParamAssistantShowDpsTechnicalError(snapshot, result);
+        } else {
+            dmParamAssistantShowDpsManagementDecision(snapshot, result);
+        }
         return true;
     }
     var rec = dmParamAssistantBuildBackendRec(snapshot, result);
-    if (!rec.upGrids.length || !rec.downGrids.length) return false;
-    rec.decision = decision;
-    rec.watchOnly = (decision.decision === 'watch_only');
+    var hasSell = rec.upGrids.length > 0;
+    var hasBuy = rec.downGrids.length > 0;
+    if (!hasSell && !hasBuy) {
+        dmParamAssistantShowDpsManagementDecision(snapshot, result);
+        return true;
+    }
+    if (!sellOnly && (!hasSell || !hasBuy)) {
+        dmParamAssistantShowDpsManagementDecision(snapshot, result);
+        return true;
+    }
+    rec.decision = { decision: finalDecision };
+    rec.watchOnly = finalDecision === 'watch_only' || result.sell_management_only === true ||
+        result.final_action === 'SELL_MANAGEMENT_ONLY' || (hasSell && !hasBuy);
+    rec.sellManagementOnly = rec.watchOnly && hasSell && !hasBuy;
     rec.introText = dmParamAssistantGreetingText(snapshot, rec);
     dmParamAssistantRecommendation = rec;
     dmParamAssistantTyping = true;
-    var lines = (result.rationale && result.rationale.lines) ? result.rationale.lines.slice() : [];
-    lines.push('Not: "6 ay" satırları botun GÖRMEDİĞİ son ~6 ay üzerinde yapılan doğrulamadır (out-of-sample) — gerçeğe en yakın beklenti budur.');
-    dmParamAssistantAnimateIntroAndChips(snapshot, rec, function () {
-        dmParamAssistantTypeLines(lines, 0);
-    });
+    var lines = [];
+    if (result.explain) lines.push(result.explain);
+    if (rec.sellManagementOnly) {
+        lines.push('Savunmacı grid profili seçildi; exposure headroom veya min-notional güvenlik kontrolü alış tarafını kapattı. Yalnızca satış yönetimi parametreleri önerildi.');
+    }
+    lines.push('Not: Bu karar Dynamic Param Score Engine tarafından üretildi; Dinamik Mod her tur başında aynı motoru kullanır.');
+    dmParamAssistantPresentBackendResultUi(snapshot, rec, lines);
     return true;
+}
+
+function dmParamAssistantShowDpsManagementDecision(snapshot, result) {
+    dmParamAssistantRecommendation = null;
+    dmParamAssistantTyping = false;
+    dmParamAssistantClearPrep();
+    var status = document.getElementById('dmParamAssistantStatus');
+    var output = document.getElementById('dmParamAssistantOutput');
+    var summary = document.getElementById('dmParamAssistantSummary');
+    var choice = document.getElementById('dmParamAssistantChoice');
+    var chips = document.getElementById('dmParamAssistantChips');
+    var details = document.getElementById('dmParamAssistantDetails');
+    var fa = (result.final_action || 'WAIT').toUpperCase();
+    var mm = result.management_mode || fa;
+    var cardClass = 'dm-pa-safe-wait';
+    var title = 'Parametre önerisi üretilemedi';
+    var intro = 'Havuz taraması sonrası gösterilebilir grid parametresi bulunamadı.';
+    var rt = String(result.result_type || '');
+    if (rt === 'single_probe_recommendation') {
+        cardClass = 'dm-pa-single-probe';
+        title = 'Tek kademe deneme seviyesi';
+        intro = 'Bu koşulda gerçek grid kurulamadı. Sistem yalnızca tek kademe deneme seviyesi hesapladı; otomatik grid deploy kapalı.';
+    } else if (rt === 'first_start_buy_only') {
+        cardClass = 'dm-pa-first-start-buy';
+        title = 'İlk tur — yalnızca alış grid';
+        intro = 'Base yok; satış grid şu an kurulamaz. İlk tur alış modu açık olduğu için sadece alış grid kurulabilir. Satış grid base oluşunca aktifleşir.';
+    } else if (rt === 'recommended_grid') {
+        cardClass = 'dm-pa-recommended';
+        title = 'Parametre üretildi — deploy kapalı';
+        intro = 'Parametre üretildi ancak mevcut güvenlik koşulları otomatik deploy için yeterli değil.';
+    } else if (fa === 'WAIT' || fa === 'SAFE_WAIT') {
+        title = 'Bekle modu';
+        intro = 'Mevcut koşullarda uygulanabilir grid parametresi oluşmadı; sistem bilinçli bekleme kararı verdi.';
+    } else if (fa === 'NO_TRADE') {
+        cardClass = 'dm-pa-no-trade';
+        title = 'İşlem açma engellendi';
+        intro = 'Spread, likidite veya güvenlik nedeniyle işlem açılmadı.';
+        if ((result.regime_tag || '').toUpperCase() === 'SPREAD_UNSAFE') {
+            intro = 'Spread güvenli değil; işlem açma engellendi.';
+        }
+    } else if (fa === 'SELL_MANAGEMENT_ONLY') {
+        cardClass = 'dm-pa-sell-management';
+        title = 'Sadece satış yönetimi seçildi';
+        intro = 'Yeni alış kapalı. Elde satılabilir base varsa satış yönetimi uygulanır.';
+    } else if (fa === 'ACTIVE_DEFENSIVE_GRID' || fa === 'DEFENSIVE_GRID' || fa === 'LOW_FEE_WIDE_GRID') {
+        cardClass = 'dm-pa-defensive-ref';
+        title = 'Savunmacı grid — referans parametre';
+        intro = 'Fee verimi veya güvenlik nedeniyle otomatik deploy kapalı. Geniş aralıklı savunmacı grid referans olarak gösterilir; canlı emir açılmaz.';
+        if (result.apply_policy === 'reference_grid') {
+            intro = 'Savunmacı grid profili hesaplandı. Otomatik deploy kapalı — aşağıdaki parametreler yalnızca referans içindir.';
+        }
+    }
+    if (result.selection_telemetry && result.selection_telemetry.fallback_used) {
+        intro += ' (Fallback güvenli mod — beklenmeyen kombinasyon için yedek karar.)';
+    }
+    if (status) status.textContent = title;
+    if (summary) { summary.innerHTML = ''; summary.style.display = 'none'; }
+    if (choice) choice.style.display = 'none';
+    if (chips) chips.innerHTML = '';
+    if (details) { details.innerHTML = ''; details.style.display = 'none'; }
+    if (!output) return;
+    var score = result.param_score != null ? result.param_score : '—';
+    var regime = result.regime_tag || '—';
+    var risk = result.risk_state || '—';
+    var blocking = (result.blocking_reasons || []).map(function (b) {
+        return '<li>' + dmParamAssistantEscape(b) + '</li>';
+    }).join('');
+    var sub = (result.rationale && result.rationale.sub_scores) || (result.telemetry && result.telemetry.sub_scores) || {};
+    var subRows = Object.keys(sub).map(function (k) {
+        return '<div class="dm-pa-error-reason"><span>' + dmParamAssistantEscape(k) + '</span><strong>' + sub[k] + '/100</strong></div>';
+    }).join('');
+    var sel = result.selection_telemetry || (result.telemetry && result.telemetry.param_pool) || {};
+    var ctx = sel.selection_context || {};
+    var techRows = '';
+    function techRow(label, val) {
+        if (val == null || val === '') return '';
+        return '<div class="dm-pa-error-reason"><span>' + dmParamAssistantEscape(label) + '</span><strong>' + dmParamAssistantEscape(String(val)) + '</strong></div>';
+    }
+    techRows += techRow('decision_id', result.decision_id);
+    techRows += techRow('pool_version', sel.pool_version);
+    techRows += techRow('template', sel.selected_template_key);
+    techRows += techRow('management_mode', mm);
+    techRows += techRow('apply_policy', result.apply_policy);
+    techRows += techRow('fallback_used', sel.fallback_used);
+    techRows += techRow('fallback_reason', sel.fallback_reason);
+    techRows += techRow('active_template_count', sel.active_template_count);
+    techRows += techRow('templates_scanned', sel.templates_scanned);
+    techRows += techRow('candidates_after_filters', sel.candidate_count_after_filters);
+    techRows += techRow('profile_subfamily', sel.profile_subfamily);
+    techRows += techRow('unique_rejected_templates', sel.unique_rejected_templates);
+    techRows += techRow('reject_events_total', sel.reject_events_total);
+    techRows += techRow('budget_tier', ctx.budget_tier);
+    techRows += techRow('fee_tier', ctx.fee_tier);
+    techRows += techRow('liquidity_tier', ctx.liquidity_tier);
+    techRows += techRow('has_sellable_base', ctx.has_sellable_base);
+    var dw = sel.data_window || {};
+    if (dw['5m']) {
+        techRows += techRow('5m candles', (dw['5m'].actual || 0) + ' / ' + (dw['5m'].expected || 0));
+    }
+    if (dw.window_days) techRows += techRow('data_window', dw.window_days + 'd');
+    if (sel.intent_execution_enabled === false) {
+        techRows += techRow('rebalance/intent', 'telemetry only — henüz emir kaynağı değil');
+    }
+    output.innerHTML =
+        '<div class="dm-param-assistant-error ' + cardClass + '" role="status">' +
+        '<div class="dm-pa-error-title-wrap"><div class="dm-pa-error-title">' + dmParamAssistantEscape(title) + '</div></div>' +
+        '<p>' + dmParamAssistantEscape(result.explain || intro) + '</p>' +
+        '<div class="dm-pa-error-reason"><span>Parametre Skoru</span><strong>' + score + '/100</strong></div>' +
+        '<div class="dm-pa-error-reason"><span>Karar</span><strong>' + dmParamAssistantEscape(fa) + '</strong></div>' +
+        '<div class="dm-pa-error-reason"><span>Apply policy</span><strong>' + dmParamAssistantEscape(result.apply_policy || '—') + '</strong></div>' +
+        '<div class="dm-pa-error-reason"><span>Alış</span><strong>' + (fa === 'SELL_MANAGEMENT_ONLY' ? 'kapalı' : (fa === 'WAIT' || fa === 'SAFE_WAIT' || fa === 'NO_TRADE' ? 'kapalı' : '—')) + '</strong></div>' +
+        '<div class="dm-pa-error-reason"><span>Rejim</span><strong>' + dmParamAssistantEscape(regime) + '</strong></div>' +
+        '<div class="dm-pa-error-reason"><span>Risk</span><strong>' + dmParamAssistantEscape(risk) + '</strong></div>' +
+        (blocking ? '<ul class="dm-pa-abstain-reasons">' + blocking + '</ul>' : '') +
+        (subRows ? '<details class="dm-pa-sub-scores" open><summary>Alt skorlar</summary>' + subRows + '</details>' : '') +
+        (techRows ? '<details class="dm-pa-sub-scores dm-pa-debug-panel" open><summary>Gelişmiş teknik detaylar</summary>' + techRows + '</details>' : '') +
+        '</div>';
+}
+
+/** @deprecated use dmParamAssistantShowDpsManagementDecision */
+function dmParamAssistantShowDpsNoTrade(snapshot, result) {
+    dmParamAssistantShowDpsManagementDecision(snapshot, result);
+}
+
+function dmParamAssistantShowDpsTechnicalError(snapshot, result) {
+    dmParamAssistantRecommendation = null;
+    dmParamAssistantTyping = false;
+    dmParamAssistantClearPrep();
+    var status = document.getElementById('dmParamAssistantStatus');
+    var output = document.getElementById('dmParamAssistantOutput');
+    if (status) status.textContent = 'Teknik hata';
+    if (!output) return;
+    output.innerHTML =
+        '<div class="dm-param-assistant-error dm-pa-error" role="alert">' +
+        '<div class="dm-pa-error-title">Analiz tamamlanamadı</div>' +
+        '<p>' + dmParamAssistantEscape(result.error || result.message || 'Sunucu veya veri kaynağı hatası.') + '</p>' +
+        '</div>';
 }
 
 // 'Çekil' kararı: çürütülen seti apply'a sunmaz; kendi OOS kanıtına dayalı dürüst verdict.
@@ -3221,10 +4698,13 @@ function dmParamAssistantShowDecisionAbstain(snapshot, result, decision) {
     var summary = document.getElementById('dmParamAssistantSummary');
     var choice = document.getElementById('dmParamAssistantChoice');
     var chips = document.getElementById('dmParamAssistantChips');
-    if (status) status.textContent = 'Karar: önerilmiyor — çekil';
+    var details = document.getElementById('dmParamAssistantDetails');
+    var noDeployable = result && result.result_type === 'no_deployable_candidate';
+    if (status) status.textContent = noDeployable ? 'Uygulanabilir parametre bulunamadı' : 'Karar: önerilmiyor — çekil';
     if (summary) { summary.innerHTML = ''; summary.style.display = 'none'; }
     if (choice) choice.style.display = 'none';
     if (chips) chips.innerHTML = '';
+    if (details) { details.innerHTML = ''; details.style.display = 'none'; }
     if (!output) return;
     var hb = decision.honest_benchmark || {};
     var n1 = function (v) { return dmParamAssistantInputTextTr(v, 1); };
@@ -3234,21 +4714,39 @@ function dmParamAssistantShowDecisionAbstain(snapshot, result, decision) {
     }).join('');
     var flags = (decision.red_flags || []).filter(function (f) { return f && f.severity === 'high'; })
         .map(function (f) { return '<li>' + dmParamAssistantEscape(f.text) + '</li>'; }).join('');
-    var bench =
+    // MC örneklemi tabanın altındaysa ya da karar abstain ise olasılık yüzde
+    // olarak GÖSTERİLMEZ ("%35 dağıtıma değer" gibi yanıltıcı bir sayı basılmaz).
+    var probDisplay = (result.final_recommendation && result.final_recommendation.probability_display) ||
+        (decision.probability_detail && decision.probability_detail.probability_display) || 'not_applicable';
+    var probText = probDisplay === 'percent'
+        ? '%' + dmParamAssistantInputTextTr((decision.deploy_probability || 0) * 100, 0)
+        : (probDisplay === 'insufficient_sample' ? 'MC örneklemi yetersiz' : 'Canlıya uygunluk: kapalı');
+    var bench = noDeployable ? '' : (
         '<div class="dm-pa-error-reason"><span>Bot (OOS)</span><strong>%' + n1(hb.bot_return_pct) + '</strong></div>' +
         '<div class="dm-pa-error-reason"><span>Hedef tahsisi PASİF tutma</span><strong>%' + n1(hb.intended_hold_return_pct) + '</strong></div>' +
         '<div class="dm-pa-error-reason"><span>Dürüst alpha (vs pasif)</span><strong>%' + n1(hb.honest_alpha_pct) + '</strong></div>' +
-        '<div class="dm-pa-error-reason"><span>Dağıtıma değer olasılığı</span><strong>%' + dmParamAssistantInputTextTr((decision.deploy_probability || 0) * 100, 0) + '</strong></div>';
+        '<div class="dm-pa-error-reason"><span>Dağıtıma değer olasılığı</span><strong>' + probText + '</strong></div>'
+    );
+    // no_deployable_candidate: reddedilen en iyi adayı TEŞHİS amaçlı göster —
+    // "öneri" değil, hangi aday neden elendiğini açıklayan bir not.
+    var rejected = result && result.rejected_best_candidate;
+    var rejectedNote = (noDeployable && rejected)
+        ? '<div class="dm-pa-error-note"><strong>Reddedilen en iyi aday:</strong> ' +
+          dmParamAssistantEscape(rejected.structure || '—') +
+          ' (sebep: ' + dmParamAssistantEscape(rejected.reject_reason || '—') + ')' +
+          ' — gridler bilgi amaçlı yukarıda gösterilmiş olabilir, bu bir öneri DEĞİLDİR.</div>'
+        : '';
     output.innerHTML =
         '<div class="dm-param-assistant-error dm-pa-abstain" role="status" aria-live="polite">' +
         '<div class="dm-pa-error-head">' +
         '<div class="dm-pa-error-mark" aria-hidden="true">⚖</div>' +
         '<div class="dm-pa-error-title-wrap">' +
         '<div class="dm-pa-error-kicker">Dürüst karar</div>' +
-        '<div class="dm-pa-error-title">Önerilmiyor — çekil</div>' +
+        '<div class="dm-pa-error-title">' + (noDeployable ? 'Uygulanabilir parametre bulunamadı' : 'Önerilmiyor — çekil') + '</div>' +
         '</div></div>' +
         '<div class="dm-pa-error-note">' + headline + '</div>' +
         bench +
+        rejectedNote +
         (reasons ? '<div class="dm-pa-error-note"><strong>Neden:</strong><ul>' + reasons + '</ul></div>' : '') +
         (flags ? '<div class="dm-pa-error-note"><strong>Kırmızı bayraklar:</strong><ul>' + flags + '</ul></div>' : '') +
         '<div class="dm-pa-error-note">Bu set canlıya UYGULANMAZ olarak işaretlendi: kendi OOS kanıtına göre hedef portföyü pasif tutmaktan iyi değil. Karar burada kapatıldı; uyarı yığıp kararı sana devretmiyoruz.</div>' +
@@ -3269,10 +4767,12 @@ function dmParamAssistantShowBackendError(reason, retryFn, tierSelectFn) {
     var summary = document.getElementById('dmParamAssistantSummary');
     var choice = document.getElementById('dmParamAssistantChoice');
     var chips = document.getElementById('dmParamAssistantChips');
-    if (status) status.textContent = 'Backtest tamamlanmadı — parametre gösterilmiyor';
+    var details = document.getElementById('dmParamAssistantDetails');
+    if (status) status.textContent = 'Parametre skoru hesaplanamadı';
     if (summary) { summary.innerHTML = ''; summary.style.display = 'none'; }
     if (choice) choice.style.display = 'none';
     if (chips) chips.innerHTML = '';
+    if (details) { details.innerHTML = ''; details.style.display = 'none'; }
     if (!output) return;
     var safeReason = dmParamAssistantEscape(reason || 'Analiz tamamlanamadı.');
     output.innerHTML =
@@ -3281,14 +4781,14 @@ function dmParamAssistantShowBackendError(reason, retryFn, tierSelectFn) {
         '<div class="dm-pa-error-mark" aria-hidden="true">!</div>' +
         '<div class="dm-pa-error-title-wrap">' +
         '<div class="dm-pa-error-kicker">Analiz durdu</div>' +
-        '<div class="dm-pa-error-title">Backtest tamamlanmadı</div>' +
+        '<div class="dm-pa-error-title">Parametre skoru alınamadı</div>' +
         '</div>' +
         '</div>' +
         '<div class="dm-pa-error-reason"><span>Neden</span><strong>' + safeReason + '</strong></div>' +
-        '<div class="dm-pa-error-note">Parametre gösterilmedi; hızlı yerel tahmin kapalı. Bir seviye sunucuda gerçek backtest ve doğrulama ile tamamlanmadan öneri uygulanmaz.</div>' +
+        '<div class="dm-pa-error-note">Dynamic Param Score Engine yanıt vermedi veya sonuç forma aktarılamadı. Sunucunun çalıştığından ve oturumun açık olduğundan emin olup tekrar dene.</div>' +
         '<div class="dm-pa-error-actions">' +
         '<button type="button" id="dmPaRetrySame" class="btn btn-primary-gold btn-sm dm-pa-error-primary">Tekrar dene</button>' +
-        '<button type="button" id="dmPaRetryTier" class="btn btn-ghost btn-sm dm-pa-error-secondary">Seviye seç</button>' +
+        '<button type="button" id="dmPaRetryTier" class="btn btn-ghost btn-sm dm-pa-error-secondary">Yeniden başlat</button>' +
         '</div>' +
         '</div>';
     var retry = document.getElementById('dmPaRetrySame');
@@ -3325,7 +4825,20 @@ function openParamAssistantModal() {
     }
     if (choice) choice.style.display = 'none';
     if (chips) chips.innerHTML = '';
+    var details = document.getElementById('dmParamAssistantDetails');
+    if (details) { details.innerHTML = ''; details.style.display = 'none'; }
     if (status) status.textContent = (AI_ASSISTANT_SPEC.modal && AI_ASSISTANT_SPEC.modal.initialStatus) || 'Parite verileri okunuyor';
+    var introLabel = document.getElementById('dmParamAssistantIntroLabel');
+    if (introLabel) {
+        introLabel.textContent = (AI_ASSISTANT_SPEC.modal && AI_ASSISTANT_SPEC.modal.label) || 'Parametre Asistanı';
+    }
+    dmParamAssistantSetCursorVisible(true);
+    var kicker = document.getElementById('dmParamAssistantKicker');
+    if (kicker) kicker.textContent = 'AI · Parametre motoru';
+    var titleEl = document.getElementById('dmParamAssistantTitle');
+    if (titleEl && AI_ASSISTANT_SPEC.modal && AI_ASSISTANT_SPEC.modal.title) {
+        titleEl.textContent = AI_ASSISTANT_SPEC.modal.title;
+    }
     dmParamAssistantAutoScroll = true;
     dmParamAssistantLastAutoScrollAt = 0;
     var assistantBody = document.querySelector('#dmParamAssistantModal .dm-param-assistant-body');
@@ -3361,7 +4874,9 @@ function openParamAssistantModal() {
         if (summary) { summary.innerHTML = ''; summary.style.display = 'none'; }
         if (choice) choice.style.display = 'none';
         if (chips) chips.innerHTML = '';
-        statusFn('Sunucu analizi başlıyor — backtest, doğrulama ve seçilen seviye hesapları tamamlanmadan sonuç gösterilmeyecek…');
+        var detailsEl = document.getElementById('dmParamAssistantDetails');
+        if (detailsEl) { detailsEl.innerHTML = ''; detailsEl.style.display = 'none'; }
+        statusFn('Piyasa analizi yapılıyor…');
         dmParamAssistantRunBackend(firstSnapshot, level, runId, function () {
             rendered = true;
             dmParamAssistantClearPrep();
@@ -3377,59 +4892,7 @@ function openParamAssistantModal() {
     }
     dmParamAssistantLastTierStartFn = runBackendLevel;
 
-    // Yeniden-bağlanma / tek-sefer: bu hesabın arka planda çalışan ya da yeni biten işi var mı?
-    statusFn('Önceki analiz durumu kontrol ediliyor…');
-    var paApi = dmParamAssistantApiCfg();
-    var openRunId = dmParamAssistantActiveBackendRun;
-    function showTierFlow() {
-        if (openRunId !== dmParamAssistantActiveBackendRun) return;
-        statusFn('Analiz seviyesini seç — sonuç yalnız sunucuda tamamlanan backtest sonrası gösterilecek');
-        dmParamAssistantShowTierSelect(firstSnapshot, runBackendLevel);
-    }
-    dmParamAssistantApiGet((paApi.active || '/api/param-assistant/active'), {
-        timeout: 9000, owner: 'paramAssistant', trigger: 'param-assistant-active', suppressRateLimitToast: true
-    }).then(function (res) {
-        if (openRunId !== dmParamAssistantActiveBackendRun) return; // kullanıcı bu arada seviye seçtiyse bırak
-        var st = res && res.state;
-        var job = res && res.job;
-        if (st === 'running' && job) {
-            // Modal kapatılıp yeniden açıldı: arka planda DEVAM EDEN işe yeniden bağlan (sıfırdan başlatma YOK).
-            dmParamAssistantActiveJobId = job.id || job.job_id || '';
-            dmParamAssistantProgressState = { pct: 1, stageIndex: 0, stageKey: job.stage || 'queued', runId: openRunId };
-            dmParamAssistantShowProgress();
-            dmParamAssistantUpdateProgress(job);
-            statusFn('Bu hesapta çalışan analiz var' + (job.symbol ? ' (' + job.symbol + ')' : '') + '; kaldığı yerden izleniyor.');
-            dmParamAssistantAttachAndPoll(job.job_id || job.id, {
-                runId: openRunId, level: job.tier || 'high', timeBudgetSec: job.time_budget_sec, firstDelayMs: 200,
-                onDone: function () { rendered = true; dmParamAssistantClearPrep(); },
-                onFail: function (reason) {
-                    rendered = false;
-                    dmParamAssistantShowBackendError(reason, function () { runBackendLevel(job.tier || 'high'); }, function () {
-                        if (output) output.innerHTML = '';
-                        dmParamAssistantShowTierSelect(firstSnapshot, runBackendLevel);
-                    });
-                }
-            });
-            return;
-        }
-        if (st === 'finished' && job && job.result) {
-            // İş bittikten sonra açıldı: bitmiş öneriyi TEK SEFER göster (sunucu consumed işaretler).
-            var ok = dmParamAssistantRenderBackendResult(firstSnapshot, job.result);
-            if (ok) { rendered = true; return; }
-            showTierFlow();
-            return;
-        }
-        if (st === 'error' && job) {
-            // Son iş başarısızsa: nedenini TEK SEFER göster (tekrar dene / seviye seç).
-            rendered = false;
-            dmParamAssistantShowBackendError(job.error || 'Önceki analiz tamamlanamadı.', function () { runBackendLevel('high'); }, function () {
-                if (output) output.innerHTML = '';
-                dmParamAssistantShowTierSelect(firstSnapshot, runBackendLevel);
-            });
-            return;
-        }
-        showTierFlow(); // none -> normal seviye seçimi
-    }).catch(function () { showTierFlow(); });
+    dmParamAssistantShowTierSelect(firstSnapshot, runBackendLevel);
 }
 
 function closeParamAssistantModal(opts) {
@@ -3439,12 +4902,13 @@ function closeParamAssistantModal(opts) {
     if (!modal) return;
     dmParamAssistantClearTimers();
     dmParamAssistantStopTimeProgress();
-    // NOT: Sunucudaki analiz işi İPTAL EDİLMEZ — arka planda devam eder; yalnızca
-    // istemci poll'ü durur. Modal yeniden açılınca GET /active ile bağlanılır.
+    dmParamAssistantStopDpsProgress();
+    // Anında DPS: modal kapanınca yalnızca istemci beklemesi durur; sunucu yanıtı yok sayılır.
     dmParamAssistantActiveBackendRun = ++dmParamAssistantBackendRunSeq;
     dmParamAssistantTierSelectSeq++;
     dmParamAssistantProgressState = null;
     dmParamAssistantTyping = false;
+    dmParamAssistantSetCursorVisible(false);
     function hide() {
         modal.setAttribute('aria-hidden', 'true');
         if (backdrop) backdrop.setAttribute('aria-hidden', 'true');
@@ -3500,6 +4964,19 @@ function dmParamAssistantTypeInput(task, done) {
 
 function applyParamAssistantRecommendation(rec, onDone) {
     if (!rec) return;
+    // P0-4: yalnız BACKEND (param asistanı) önerisi uygulanınca kaynağı işaretle;
+    // yerel/heuristik öneri uygulanırsa temizle (bot manuel sayılır).
+    if (rec.backend && rec.backend.ok) {
+        var _bk = rec.backend;
+        dmParamAssistantAppliedSource = {
+            source: 'param_assistant',
+            job_id: _bk.job_id || null,
+            decision: (_bk.decision && _bk.decision.decision) || null,
+            confidence: (_bk.confidence != null ? _bk.confidence : null)
+        };
+    } else {
+        dmParamAssistantAppliedSource = null;
+    }
     dmParamAssistantClearTimers();
     dmParamAssistantClearApplyTimers();
     dmParamAssistantApplying = true;
@@ -3516,16 +4993,23 @@ function applyParamAssistantRecommendation(rec, onDone) {
         tasks.push({ id: 'upGrid_' + idx + '_trigger', value: dmParamAssistantInputTextTr(g.trigger_pct, 2) });
         tasks.push({ id: 'upGrid_' + idx + '_qty', value: dmParamAssistantInputTextTr(g.qty_pct, 1), after: function () { _updateGridQtySum('upGridRows', 'up'); } });
     });
-    tasks.push({ id: 'fDownCount', value: String(rec.downGrids.length), after: function () { buildGridRows('downGridRows', rec.downGrids.length, 'down'); syncMaxBuyLevelsWithDownCount(rec.downGrids.length); } });
+    tasks.push({ id: 'fDownCount', value: String(rec.downGrids.length), after: function () {
+        buildGridRows('downGridRows', rec.downGrids.length, 'down');
+        syncMaxBuyLevelsWithDownCount(Math.max(rec.downGrids.length, 1));
+    } });
     tasks.push({ id: 'fDownTrail', value: dmParamAssistantInputTextTr(rec.downTrail, 2) });
     rec.downGrids.forEach(function (g, idx) {
         tasks.push({ id: 'downGrid_' + idx + '_trigger', value: dmParamAssistantInputTextTr(g.trigger_pct, 2) });
         tasks.push({ id: 'downGrid_' + idx + '_qty', value: dmParamAssistantInputTextTr(g.qty_pct, 1), after: function () { _updateGridQtySum('downGridRows', 'down'); } });
     });
-    tasks.push({ id: 'fRebuyTrigger', value: dmParamAssistantInputTextTr(rec.rebuyTrigger, 2) });
-    tasks.push({ id: 'fRebuyTrail', value: dmParamAssistantInputTextTr(rec.rebuyTrail, 2) });
-    tasks.push({ id: 'fResellTrigger', value: dmParamAssistantInputTextTr(rec.resellTrigger, 2) });
-    tasks.push({ id: 'fResellTrail', value: dmParamAssistantInputTextTr(rec.resellTrail, 2) });
+    if (!rec.sellManagementOnly && rec.downGrids.length > 0) {
+        tasks.push({ id: 'fRebuyTrigger', value: dmParamAssistantInputTextTr(rec.rebuyTrigger, 2) });
+        tasks.push({ id: 'fRebuyTrail', value: dmParamAssistantInputTextTr(rec.rebuyTrail, 2) });
+    }
+    if (rec.upGrids.length > 0) {
+        tasks.push({ id: 'fResellTrigger', value: dmParamAssistantInputTextTr(rec.resellTrigger, 2) });
+        tasks.push({ id: 'fResellTrail', value: dmParamAssistantInputTextTr(rec.resellTrail, 2) });
+    }
 
     function run(i) {
         if (i >= tasks.length) {
@@ -4095,19 +5579,21 @@ function validateForm(payload) {
         return "Base ve Quote toplamı 100 olmalı";
     }
     var downGrids = (payload.down && payload.down.grids) || [];
-    if (downGrids.length < 1) {
-        return "En az bir alış grid seviyesi tanımlayın";
-    }
     var upGrids = (payload.up && payload.up.grids) || [];
+    if (downGrids.length < 1 || upGrids.length < 1) {
+        return "Alış ve satış gridlerinin her ikisinde de en az bir seviye olmalı";
+    }
     if (upGrids.length > 0) {
         var upSum = upGrids.reduce(function(s, g) { return s + (Number(g.qty_pct) || 0); }, 0);
         if (Math.abs(upSum - 100) >= 0.5) {
             return "Satış grid miktar toplamı %100 olmalı (şu an %" + upSum.toFixed(1) + ")";
         }
     }
-    var downSum = downGrids.reduce(function(s, g) { return s + (Number(g.qty_pct) || 0); }, 0);
-    if (Math.abs(downSum - 100) >= 0.5) {
-        return "Alış grid miktar toplamı %100 olmalı (şu an %" + downSum.toFixed(1) + ")";
+    if (downGrids.length >= 1) {
+        var downSum = downGrids.reduce(function(s, g) { return s + (Number(g.qty_pct) || 0); }, 0);
+        if (Math.abs(downSum - 100) >= 0.5) {
+            return "Alış grid miktar toplamı %100 olmalı (şu an %" + downSum.toFixed(1) + ")";
+        }
     }
     var gridErr = validateDcaGridNotionals(payload);
     if (gridErr) return gridErr;
@@ -4180,10 +5666,19 @@ async function createBot() {
     
     const payload = collectForm();
     const error = validateForm(payload);
-    
+
     if (error) {
         showCreateBotFormError(errorEl, error);
         return;
+    }
+
+    // P0-4: asistan önerisi uygulanarak açılan DİNAMİK bot → config_source iliştir;
+    // backend bunu görünce sizing referansını 'param_assistant' olarak dondurur.
+    if (dmParamAssistantAppliedSource && payload.dynamic_mode) {
+        payload.config_source = 'param_assistant';
+        if (dmParamAssistantAppliedSource.job_id) payload.param_assistant_job_id = dmParamAssistantAppliedSource.job_id;
+        if (dmParamAssistantAppliedSource.decision != null) payload.param_assistant_decision = dmParamAssistantAppliedSource.decision;
+        if (dmParamAssistantAppliedSource.confidence != null) payload.param_assistant_confidence = dmParamAssistantAppliedSource.confidence;
     }
 
     var requestedBudget = 0;
@@ -4221,6 +5716,7 @@ async function createBot() {
         // REFACTOR: Use apiClient instead of fetch
         const data = await window.apiClient.post("/api/bots/create", body);
         const botId = data.bot_id || data.id;
+        dmParamAssistantAppliedSource = null;  // P0-4: bir sonraki (manuel) botu yanlış etiketleme
         
         if (window.Toast) {
             window.Toast.success("Bot oluşturuldu");

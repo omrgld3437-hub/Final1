@@ -325,11 +325,12 @@ body:not(.login-mobile) .login-bg-glow-2 {
     font-family: var(--login-font);
     font-size: clamp(1.5rem, 4vw, 2rem);
     font-weight: 700;
+    font-synthesis: none;
     letter-spacing: 0.02em;
     color: var(--login-text);
     text-decoration: none;
     display: inline-block;
-    background: linear-gradient(135deg, var(--login-text) 0%, var(--login-text-secondary) 35%, var(--login-accent) 50%, var(--login-text-secondary) 65%, var(--login-text) 100%);
+    background: linear-gradient(135deg, var(--login-text) 0%, #e896c4 35%, #ffd2ec 50%, #e896c4 65%, var(--login-text) 100%);
     background-size: 200% auto;
     background-origin: border-box;
     -webkit-background-clip: text;

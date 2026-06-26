@@ -26,6 +26,7 @@ import pytest
 
 from app.botengine.dynamic import indicators as ind
 from app.botengine.dynamic import regime as reg
+from app.services.dynamic_param_score.models import RegimeTag
 from app.botengine.dynamic import strategy_engine as se
 from app.botengine.dynamic import risk_engine as risk
 from app.botengine.dynamic import cycle_manager as cm
@@ -306,31 +307,109 @@ def test_build_snapshot_stale_falls_back(monkeypatch):
         cm.build_snapshot(state, base, 1000.0)
     )
     assert snap["data_fresh"] is False
-    assert snap["applied"]["base_alloc_pct"] == 40.0  # reused prev
-    assert "data_stale_fallback" in snap["fallbacks"]
+    assert snap.get("round_pending") is True or "data_stale_pending_retry" in snap.get("fallbacks", [])
+    assert "DATA_STALE" in str(snap.get("reasons", []))
+
+
+def _fake_market_bundle(k5, k1h, price):
+    from app.services.dynamic_param_score.models import Candle
+    from tests.dynamic_param_score.conftest import market_bundle
+
+    candles_5m = [
+        Candle(t=c["t"], o=c["o"], h=c["h"], l=c["l"], c=c["c"], v=c.get("v", 1000))
+        for c in k5
+    ]
+    candles_1h = [
+        Candle(t=c["t"], o=c["o"], h=c["h"], l=c["l"], c=c["c"], v=c.get("v", 1000))
+        for c in k1h
+    ]
+    return market_bundle(candles_5m=candles_5m, candles_1h=candles_1h, price=price)
 
 
 def test_build_snapshot_fresh_full_path(monkeypatch):
-    """End-to-end build with fresh synthetic features produces valid snapshot."""
+    """End-to-end build with DPS produces valid snapshot."""
     k5 = _ranging()
     k1h = _ranging(100, 1000.0, 0.002)
 
     async def fake_collect(symbol, price):
         return _features_from(k5, k1h, price)
 
+    async def fake_market(symbol):
+        return _fake_market_bundle(k5, k1h, 1000.0)
+
     monkeypatch.setattr(cm, "collect_features", fake_collect)
+    monkeypatch.setattr(
+        "app.services.dynamic_param_score.data_collector.collect_market_data",
+        fake_market,
+    )
     base = _base_cfg()
-    state = {"cycle_id": 1, "bot_id": 1, "buy_grid_fired": []}
+    state = {"cycle_id": 2, "bot_id": 1, "buy_grid_fired": [], "quote_balance": 500}
     snap = asyncio.get_event_loop().run_until_complete(
         cm.build_snapshot(state, base, 1000.0)
     )
     assert snap["data_fresh"] is True
-    assert snap["regime"] in reg.ALL_REGIMES
+    assert snap["regime"] in [r.value for r in RegimeTag]
     a = snap["applied"]
     assert abs(a["base_alloc_pct"] + a["quote_alloc_pct"] - 100.0) < 1e-6
-    # grid count preserved (same shape as manual config)
-    assert len(a["sell_grids"]) == len(base["sell_grids"])
-    assert len(a["buy_grids"]) == len(base["buy_grids"])
-    # reasons + history present for explainability
+    assert snap["dps"]["param_score"] is not None
     assert snap["reasons"]
     assert snap["history"]
+
+
+def test_p0_4_reference_source_param_assistant_in_snapshot(monkeypatch):
+    """P0-4: set_reference meta preserved; params from DPS (not reference shape)."""
+    k5 = _ranging()
+    k1h = _ranging(100, 1000.0, 0.002)
+
+    async def fake_collect(symbol, price):
+        return _features_from(k5, k1h, price)
+
+    async def fake_market(symbol):
+        return _fake_market_bundle(k5, k1h, 1000.0)
+
+    monkeypatch.setattr(cm, "collect_features", fake_collect)
+    monkeypatch.setattr(
+        "app.services.dynamic_param_score.data_collector.collect_market_data",
+        fake_market,
+    )
+    base = _base_cfg()
+    assistant_cfg = dict(base)
+    assistant_cfg["base_alloc_pct"] = 30.0
+    assistant_cfg["quote_alloc_pct"] = 70.0
+    assistant_cfg["buy_grids"] = [
+        {"buy_grid_pct": 3.0, "buy_qty_pct_of_quote": 40.0},
+        {"buy_grid_pct": 6.0, "buy_qty_pct_of_quote": 60.0},
+    ]
+    state = {"cycle_id": 2, "bot_id": 1, "buy_grid_fired": [], "quote_balance": 500}
+    assert cm.set_reference(state, assistant_cfg, source="param_assistant") is True
+
+    snap = asyncio.get_event_loop().run_until_complete(
+        cm.build_snapshot(state, base, 1000.0)
+    )
+    assert snap["reference"]["source"] == "param_assistant"
+    assert "dps" in snap
+    assert snap["dps"]["decision_id"]
+
+
+def test_p0_4_reference_source_defaults_initial_config(monkeypatch):
+    """P0-4: harici referans yokken snapshot reference.source 'initial_config'."""
+    k5 = _ranging()
+    k1h = _ranging(100, 1000.0, 0.002)
+
+    async def fake_collect(symbol, price):
+        return _features_from(k5, k1h, price)
+
+    async def fake_market(symbol):
+        return _fake_market_bundle(k5, k1h, 1000.0)
+
+    monkeypatch.setattr(cm, "collect_features", fake_collect)
+    monkeypatch.setattr(
+        "app.services.dynamic_param_score.data_collector.collect_market_data",
+        fake_market,
+    )
+    base = _base_cfg()
+    state = {"cycle_id": 2, "bot_id": 1, "buy_grid_fired": [], "quote_balance": 500}
+    snap = asyncio.get_event_loop().run_until_complete(
+        cm.build_snapshot(state, base, 1000.0)
+    )
+    assert snap["reference"]["source"] == "initial_config", snap["reference"]

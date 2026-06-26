@@ -299,7 +299,7 @@ async def get_spot_quick_data(
                         "tick_size": "0.01",
                         "step_size": "0.00001",
                         "min_qty": "0.00001",
-                        "min_notional": "5",
+                        "min_notional": "10",
                     }
                 else:
                     try:
@@ -311,7 +311,7 @@ async def get_spot_quick_data(
                             "tick_size": "0.01",
                             "step_size": "0.00001",
                             "min_qty": "0.00001",
-                            "min_notional": "5",
+                            "min_notional": "10",
                         }
                 return {
                     "ok": True,
@@ -330,7 +330,7 @@ async def get_spot_quick_data(
                         "tickSize": flt.get("tick_size", "0.01"),
                         "stepSize": flt.get("step_size", "0.00001"),
                         "minQty": flt.get("min_qty", "0.00001"),
-                        "minNotional": flt.get("min_notional", "5"),
+                        "minNotional": flt.get("min_notional", "10"),
                     },
                     "ts": time.time(),
                     "paper": True,

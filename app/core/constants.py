@@ -24,3 +24,6 @@ SNAPSHOT_FIELDS_ENABLED = os.environ.get(
 SNAPSHOT_TRIM_ENABLED = os.environ.get(
     "SNAPSHOT_TRIM_ENABLED", "1"
 ).strip().lower() in ("1", "true", "yes")
+
+# Exchange min order notional fallback (USDT) when symbol filters unavailable
+DEFAULT_MIN_NOTIONAL_USDT = float(os.environ.get("DEFAULT_MIN_NOTIONAL_USDT", "10"))

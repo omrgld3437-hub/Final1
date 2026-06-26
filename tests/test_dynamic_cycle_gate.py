@@ -14,10 +14,18 @@ from __future__ import annotations
 
 import time
 
+import pytest
+
 from app.botengine.dynamic import cycle_gate as cg
 from app.botengine.dynamic import regime as reg
 from app.botengine.dynamic import strategy_engine as se
 from app.botengine.dynamic.features import MarketFeatures
+
+
+@pytest.fixture(autouse=True)
+def _legacy_cycle_hold_enabled_for_gate_unit_tests(monkeypatch):
+    """Gate unit tests exercise legacy hold logic; V4 production default is OFF."""
+    monkeypatch.setattr(cg, "HOLD_ENABLED", True)
 
 
 # ---- feature fixtures -------------------------------------------------------
@@ -104,6 +112,16 @@ def test_hold_starts_on_high_risk():
     v = cg.evaluate(_dump_features(), reg.DUMP_RISK, 0.9, st, _cfg())
     assert v.holding is True
     assert cg.is_holding(st) is True
+
+
+def test_emergency_only_no_hold_on_moderate_trend_down():
+    f = _dump_features()
+    f["ret_5m_last"] = -2.0
+    f["spread_pct"] = 0.08
+    f["volume_zscore_5m"] = 1.0
+    st = _state()
+    v = cg.evaluate(f, reg.TRENDING_DOWN, 0.75, st, _cfg())
+    assert v.holding is False
 
 
 def test_hold_releases_after_confirm_streak():

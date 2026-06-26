@@ -13,6 +13,7 @@ import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.botengine.models import TrdcaProConfig
+from app.core.constants import DEFAULT_MIN_NOTIONAL_USDT
 from app.botengine.strategies.base import Strategy
 
 logger = logging.getLogger(__name__)
@@ -84,7 +85,7 @@ def _get_filters(filters: Dict[str, Any], symbol: str) -> Dict[str, float]:
     return {
         "minQty": _num(s.get("minQty") or s.get("min_qty")),
         "stepSize": _num(s.get("stepSize") or s.get("step_size") or 0.00001),
-        "minNotional": _num(s.get("minNotional") or s.get("min_notional") or 5),
+        "minNotional": _num(s.get("minNotional") or s.get("min_notional") or DEFAULT_MIN_NOTIONAL_USDT),
     }
 
 

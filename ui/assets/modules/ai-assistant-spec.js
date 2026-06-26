@@ -1153,8 +1153,8 @@
         },
         modal: {
             title: "Parametre Asistanı",
-            label: "Parametre asistanı",
-            initialStatus: "Parite verileri okunuyor",
+            label: "Parametre Asistanı",
+            initialStatus: "Parite ve bütçe hazırlanıyor…",
             closeLabel: "Kapat"
         },
         timing: {
@@ -1171,14 +1171,15 @@
         api: {
             tiers: "/api/param-assistant/tiers",
             optimize: "/api/param-assistant/optimize",
+            calculate: "/api/param-assistant/calculate",
             active: "/api/param-assistant/active"
         },
         progress: {
-            prefix: "AI",
-            defaultMessage: "hesaplanıyor",
-            scoreLabel: "skor",
-            percentSeparator: "-",
-            etaPrefix: "kalan ~"
+            prefix: "DPS",
+            defaultMessage: "Piyasa analizi yapılıyor",
+            scoreLabel: "ParamScore",
+            percentSeparator: "·",
+            etaPrefix: "tahmini ~"
         },
         copy: {
             fallbackUserName: "dostum",
@@ -1188,6 +1189,7 @@
             backendFallbackSuffix: "hızlı öneriye geçiliyor"
         },
         paramAssistant: {
+            resultSchemaVersion: "3.4",
             scenarioPool: PARAM_ASSISTANT_SCENARIO_POOL,
             scenarioPoolSize: PARAM_ASSISTANT_SCENARIO_POOL.length,
             rationalePool: PARAM_ASSISTANT_RATIONALE_POOL,
@@ -1231,9 +1233,15 @@
         },
         formatTemplate: function (template, values) {
             var data = values || {};
-            return String(template || "").replace(/\{([a-zA-Z0-9_]+)\}/g, function (_, key) {
-                return data[key] == null ? "" : String(data[key]);
+            var out = String(template || "").replace(/\{([a-zA-Z0-9_]+)\}/g, function (_, key) {
+                var v = data[key];
+                if (v == null || v === "") return "";
+                return String(v);
             });
+            out = out.replace(/\s+,/g, ",").replace(/,\s*,/g, ",").replace(/,\s*\./g, ".");
+            out = out.replace(/\(\s*,/g, "(").replace(/,\s*\)/g, ")");
+            out = out.replace(/\s{2,}/g, " ").replace(/ ,/g, ",").trim();
+            return out;
         },
         randomIndex: function (max) {
             var size = Math.max(1, Number(max) || 1);
@@ -1248,8 +1256,18 @@
         },
         greeting: function (values) {
             var pool = spec.paramAssistant.greetingPool || [];
-            var template = pool[spec.randomIndex(pool.length)] || pool[0] || "";
-            return spec.formatTemplate(template, values || {});
+            var data = values || {};
+            function ok(key) { return data[key] != null && data[key] !== ""; }
+            var filtered = pool.filter(function (tmpl) {
+                if (!ok("basePct") && (/\{basePct\}/.test(tmpl) || /\{quotePct\}/.test(tmpl))) return false;
+                if (!ok("price") && /\{price\}/.test(tmpl)) return false;
+                if (!ok("change") && /\{change\}/.test(tmpl)) return false;
+                if (!ok("coverage") && /\{coverage\}/.test(tmpl)) return false;
+                return true;
+            });
+            if (!filtered.length) filtered = pool.slice(0, 12);
+            var template = filtered[spec.randomIndex(filtered.length)] || filtered[0] || "";
+            return spec.formatTemplate(template, data);
         },
         paramScenarioLines: function (values, count) {
             var pool = spec.paramAssistant.scenarioPool || [];
@@ -1464,7 +1482,8 @@
             spec.applyButton(base.getElementById ? base.getElementById("dmParamAssistantBtn") : document.getElementById("dmParamAssistantBtn"));
             var title = document.getElementById("dmParamAssistantTitle");
             if (title) title.textContent = spec.modal.title;
-            var label = document.querySelector(".perf-summary-assistant-label");
+            var label = document.getElementById("dmParamAssistantIntroLabel") ||
+                document.querySelector("#dmParamAssistantModal .perf-summary-assistant-label");
             if (label) label.textContent = spec.modal.label;
             var status = document.getElementById("dmParamAssistantStatus");
             if (status && !status.textContent.trim()) status.textContent = spec.modal.initialStatus;

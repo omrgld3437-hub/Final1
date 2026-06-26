@@ -303,13 +303,14 @@ _LOGGED_EVENT_TYPES = frozenset(
     }
 )
 
-# SKIP_REASON values that are routine/expected — log file only, not bot UI event stream
-_SILENT_SKIP_REASONS = frozenset(
-    {
-        "PRICE_STALE_OR_MISSING",
-        "IDEMPOTENT_LOCK",
-    }
+from app.botengine.skip_event_policy import (
+    SILENT_SKIP_REASONS as _POLICY_SILENT_SKIPS,
+    evaluate_skip_log,
+    merge_skip_meta,
 )
+
+# SKIP_REASON values that are routine/expected — log file only, not bot UI event stream
+_SILENT_SKIP_REASONS = _POLICY_SILENT_SKIPS | frozenset({"IDEMPOTENT_LOCK"})
 
 
 def queue_engine_event(
@@ -319,14 +320,22 @@ def queue_engine_event(
     meta: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Queue event from strategy tick (no db); flushed by orchestrator after tick."""
+    ty = (event_type or "").strip()
+    m = dict(meta or {})
+    if ty == "SKIP_REASON":
+        decision = evaluate_skip_log(state, str(m.get("skip_reason") or ""), m)
+        if not decision.persist:
+            return
+        m = merge_skip_meta(m, decision.meta_patch)
+        m["_skip_policy_applied"] = True
     q = state.setdefault("_pending_engine_events", [])
     if len(q) >= 24:
         return
     q.append(
         {
-            "type": (event_type or "").strip(),
+            "type": ty,
             "message": message or "",
-            "meta": meta or {},
+            "meta": m,
         }
     )
 
@@ -346,6 +355,7 @@ def flush_queued_events(
             ev.get("type") or "INFO",
             ev.get("message") or "",
             ev.get("meta"),
+            state=state,
         )
 
 
@@ -357,6 +367,8 @@ def append_event(
     message: str = "",
     meta: Optional[Dict[str, Any]] = None,
     ts: Optional[datetime] = None,
+    *,
+    state: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Append one event to bot_engine_events. Only important types are stored (no TICK, no IDEMPOTENT_LOCK noise)."""
     import os
@@ -364,10 +376,17 @@ def append_event(
     ty = (event_type or "").strip()
     if ty == "TICK" or ty not in _LOGGED_EVENT_TYPES:
         return
+    m = dict(meta or {})
     if ty == "SKIP_REASON":
-        skip_code = str((meta or {}).get("skip_reason") or "").strip()
+        skip_code = str(m.get("skip_reason") or "").strip()
         if skip_code in _SILENT_SKIP_REASONS or "IDEMPOTENT_LOCK" in (message or ""):
             return
+        if not m.get("_skip_policy_applied"):
+            decision = evaluate_skip_log(state, skip_code, m)
+            if not decision.persist:
+                return
+            m = merge_skip_meta(m, decision.meta_patch)
+        m.pop("_skip_policy_applied", None)
     if os.getenv("RAM_PROBE_ENABLED") == "1" and ty == "ORDER_FILLED":
         try:
             from app.observability.ram_probe import probe_event_store
@@ -376,7 +395,7 @@ def append_event(
         except Exception:
             pass
     try:
-        meta_js = json.dumps(meta or {}, ensure_ascii=False)
+        meta_js = json.dumps(m, ensure_ascii=False)
     except Exception:
         meta_js = "{}"
     db.execute(

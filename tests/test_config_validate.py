@@ -18,7 +18,7 @@ def _cfg(budget, base_pct=50, quote_pct=50, sell_grids=None, buy_grids=None):
             "quote_alloc_pct": quote_pct,
             "sell_grids": sell_grids or [],
             "buy_grids": buy_grids or [],
-            "min_notional_guard": 5.0,
+            "min_notional_guard": 10.0,
         }
     )
 

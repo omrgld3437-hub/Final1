@@ -48,6 +48,13 @@ def _spawn_env():
     env = os.environ.copy()
     env.setdefault("RAM_PROBE", "0")
     env.setdefault("RAM_PROBE_INTERVAL", "30")
+    env.setdefault("PARAM_POOL_WARMUP", "0")
+    if not env.get("PARAM_POOL_VERSION"):
+        env.pop("PARAM_POOL_VERSION", None)
+    if not env.get("WEB_UVICORN_WORKERS"):
+        env["WEB_UVICORN_WORKERS"] = "1" if platform.system() == "Darwin" else "2"
+    if not env.get("WEB_HOST"):
+        env["WEB_HOST"] = "127.0.0.1" if platform.system() == "Darwin" else "0.0.0.0"
     return env
 
 
@@ -194,7 +201,8 @@ def _start_web() -> bool:
     venv_bin = _PROJECT_ROOT / ".venv" / ("Scripts" if _IS_WINDOWS else "bin")
     py_exe = venv_bin / ("python.exe" if _IS_WINDOWS else "python")
     uvicorn_exe = venv_bin / ("uvicorn.exe" if _IS_WINDOWS else "uvicorn")
-    host = os.environ.get("WEB_HOST", "0.0.0.0")
+    host = os.environ.get("WEB_HOST", "127.0.0.1" if not _IS_WINDOWS else "0.0.0.0")
+    workers = os.environ.get("WEB_UVICORN_WORKERS", "1" if platform.system() == "Darwin" else "2")
     # .venv varsa her zaman .venv Python kullan (fastapi/uvicorn orada kurulu olsun)
     use_py = str(py_exe) if py_exe.exists() else sys.executable
     uvicorn_extra = [] if _IS_WINDOWS else ["--loop", "uvloop", "--http", "httptools"]
@@ -213,7 +221,7 @@ def _start_web() -> bool:
                 "--port",
                 "8000",
                 "--workers",
-                "2",
+                str(workers),
             ]
             + access_log_args
             + uvicorn_extra
@@ -238,7 +246,7 @@ def _start_web() -> bool:
                 "--port",
                 "8000",
                 "--workers",
-                "2",
+                str(workers),
             ]
             + access_log_args
             + uvicorn_extra

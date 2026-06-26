@@ -1,6 +1,8 @@
-# Param Optimizer
+# Param Optimizer (OFFLINE-ONLY)
 
-Parametre Asistani backend motoru. Bu klasor, bot olusturma ekranindaki AI onerisi icin gecmis veri toplar, indikatörleri hesaplar, aday parametreleri arar, stratejiyi backtest eder ve sonucu frontend'e job olarak dondurur.
+> **DEPRECATED for live decisions.** Canlı bot parametre seçimi artık `app/services/dynamic_param_score/` (Dynamic Param Score Engine) üzerinden yapılır. Bu paket yalnızca araştırma, kalibrasyon ve offline backtest için kalır.
+
+Parametre Asistanı **canlı** akışı artık bu motoru kullanmaz.
 
 ## Akis
 

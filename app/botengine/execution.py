@@ -17,6 +17,7 @@ from app.bot.ledger import Ledger
 from app.botengine.adapters.binance_adapter import BinanceAdapter
 from app.botengine.models import DcaGridTrailingConfig
 from app.botengine.dca_manager import MaxBuyLevelsError, assert_can_open_buy_level
+from app.botengine.dynamic.cycle_gate import CYCLE_CLOSE_BUY_REASONS
 from app.botengine.risk import acquire_bot_lock, check_idempotency, guard_min_notional
 from app.botengine.intent_ledger import (
     build_intent_id,
@@ -31,6 +32,7 @@ from app.botengine.kill_switch import check_kill_switch
 from app.botengine.locks import lease_still_valid, trade_lock_symbol
 from app.botengine.state_store import append_event, load_state, save_state
 from app.botengine.virtual_wallet import (
+    _symbol_to_base_quote,
     check_virtual_budget,
     get_virtual_wallet,
     update_virtual_after_fill,
@@ -457,12 +459,13 @@ def _append_skip(
     skip_reason: str,
     message: str,
     meta: Optional[Dict[str, Any]] = None,
+    state: Optional[Dict[str, Any]] = None,
 ) -> None:
     if db is None:
         return
     payload = dict(meta or {})
     payload["skip_reason"] = skip_reason
-    append_event(db, bot_id, account_id, "SKIP_REASON", message, payload)
+    append_event(db, bot_id, account_id, "SKIP_REASON", message, payload, state=state)
 
 
 def _cycle_meta(
@@ -826,8 +829,54 @@ async def run_actions(
                 symbol = (
                     a.get("symbol") or getattr(config, "symbol", "BTCUSDT")
                 ).upper()
+                base_asset, quote_asset = _symbol_to_base_quote(symbol)
                 qty = _num(a.get("quantity"))
                 quote_qty_raw = a.get("quote_qty")
+
+                if side == "BUY":
+                    _fa = getattr(config, "final_action", None) or (
+                        (state.get("dynamic_snapshot") or {})
+                        .get("stance", {})
+                        .get("final_action")
+                    )
+                    _skip_buy = None
+                    if reason not in CYCLE_CLOSE_BUY_REASONS:
+                        if getattr(config, "buy_disabled", False):
+                            _skip_buy = "BUY_DISABLED"
+                        elif getattr(config, "sell_only_mode", False):
+                            _skip_buy = "SELL_ONLY_MODE"
+                        elif int(getattr(config, "max_buy_levels", 0) or 0) <= 0:
+                            _skip_buy = "MAX_BUY_LEVELS_ZERO"
+                    if (
+                        _skip_buy is None
+                        and reason == "initial_allocation"
+                        and _fa
+                        in (
+                            "WAIT",
+                            "NO_TRADE",
+                            "SELL_MANAGEMENT_ONLY",
+                            "SAFE_WAIT",
+                        )
+                    ):
+                        _skip_buy = "INITIAL_ALLOC_BLOCKED_BY_ACTION"
+                    if _skip_buy:
+                        logger.warning(
+                            "BOT_EXECUTION_SKIP bot_id=%s reason=%s skip_reason=%s side=BUY",
+                            bot_id,
+                            reason,
+                            _skip_buy,
+                        )
+                        _append_skip(
+                            db,
+                            bot_id,
+                            account_id,
+                            _skip_buy,
+                            f"{_skip_buy} side=BUY reason={reason}",
+                            _cycle_meta(state, symbol, reason=reason, side=side),
+                            state=state,
+                        )
+                        continue
+
                 if side == "BUY" and reason == "trail_buy_grid":
                     try:
                         assert_can_open_buy_level(
@@ -854,6 +903,7 @@ async def run_actions(
                                 grid_index=a.get("grid_index"),
                                 max_buy_levels=getattr(config, "max_buy_levels", 0),
                             ),
+                            state=state,
                         )
                         continue
                 if reason == "initial_allocation":
@@ -1306,6 +1356,66 @@ async def run_actions(
                 price = adapter.get_price(symbol) or 0.0
                 notional = (quote_qty if side == "BUY" else qty * price) if price else 0
                 min_notional = getattr(config, "min_notional_guard", 10.0)
+                # Max base exposure cap (live BUY — grid/reentry; initial_allocation hariç)
+                max_exp_frac = float(getattr(config, "max_base_exposure_frac", 1.0) or 1.0)
+                if (
+                    side == "BUY"
+                    and reason != "initial_allocation"
+                    and max_exp_frac < 1.0
+                    and price > 0
+                    and quote_qty > 0
+                ):
+                    try:
+                        _bal = (
+                            binance_balances
+                            if binance_balances is not None
+                            else await adapter.get_account_balances()
+                        )
+                        _bf = float((_bal.get(base_asset) or {}).get("free") or 0)
+                        _qf = float((_bal.get(quote_asset) or {}).get("free") or 0)
+                        _equity = _qf + _bf * price
+                        _max_base = max_exp_frac * _equity
+                        _allowed = max(0.0, _max_base - _bf * price)
+                        if quote_qty > _allowed + 1e-9:
+                            logger.info(
+                                "BOT_EXECUTION_CAP_EXPOSURE bot_id=%s reason=%s quote_qty=%.2f -> %.2f max_exp=%.2f",
+                                bot_id,
+                                reason,
+                                quote_qty,
+                                _allowed,
+                                max_exp_frac,
+                            )
+                            quote_qty = _allowed
+                        if quote_qty <= 0 or quote_qty < min_notional:
+                            logger.warning(
+                                "BOT_EXECUTION_SKIP bot_id=%s skip_reason=EXPOSURE_CAP reason=%s allowed=%.2f",
+                                bot_id,
+                                reason,
+                                _allowed,
+                            )
+                            _append_skip(
+                                db,
+                                bot_id,
+                                account_id,
+                                "EXPOSURE_CAP",
+                                f"EXPOSURE_CAP allowed={_allowed:.2f} max_exp={max_exp_frac:.2f}",
+                                _cycle_meta(
+                                    state,
+                                    symbol,
+                                    reason=reason,
+                                    side=side,
+                                    allowed_quote=round(_allowed, 4),
+                                    grid_index=a.get("grid_index"),
+                                ),
+                                state=state,
+                            )
+                            continue
+                    except Exception as _exp_err:
+                        logger.debug(
+                            "BOT_EXECUTION_EXPOSURE_CAP_CHECK bot_id=%s err=%s",
+                            bot_id,
+                            _exp_err,
+                        )
                 if not guard_min_notional(notional, min_notional):
                     logger.info(
                         "BOT_EXECUTION_SKIP bot_id=%s reason=%s skip_reason=MIN_NOTIONAL notional=%.2f min=%.2f",
@@ -1329,6 +1439,7 @@ async def run_actions(
                             min_notional=float(min_notional),
                             grid_index=a.get("grid_index"),
                         ),
+                        state=state,
                     )
                     continue
                 if reason == "initial_allocation":
@@ -1350,8 +1461,6 @@ async def run_actions(
                         fee_buffer_pct,
                     )
                     binance_balances = await adapter.get_account_balances()
-                    base_asset = (symbol or "BTCUSDT").replace("USDT", "") or "BTC"
-                    quote_asset = "USDT"
                     base_free = float(
                         (binance_balances.get(base_asset) or {}).get("free") or 0
                     )
@@ -1534,6 +1643,7 @@ async def run_actions(
                                         ),
                                         "grid_index": a.get("grid_index"),
                                     },
+                                    state=state,
                                 )
                                 continue
                         if (
@@ -1675,16 +1785,19 @@ async def run_actions(
                             balances = binance_balances
                         else:
                             balances = await adapter.get_account_balances()
-                        usdt = balances.get("USDT") or {}
-                        free_usdt = float(usdt.get("free") or 0)
-                        fee_buffer_usdt = 0.5
-                        if quote_qty + fee_buffer_usdt > free_usdt:
+                        quote_bal = balances.get(quote_asset) or {}
+                        free_quote = float(quote_bal.get("free") or 0)
+                        fee_buffer_quote = max(
+                            0.5, float(quote_qty) * 0.002
+                        )
+                        if quote_qty + fee_buffer_quote > free_quote:
                             logger.warning(
-                                "BOT_EXECUTION_SKIP error_code=BINANCE_FREE_QUOTE_INSUFFICIENT bot_id=%s quote_qty=%.2f free_usdt=%.2f fee_buffer=%.2f",
+                                "BOT_EXECUTION_SKIP error_code=BINANCE_FREE_QUOTE_INSUFFICIENT bot_id=%s quote_asset=%s quote_qty=%.2f free_quote=%.2f fee_buffer=%.2f",
                                 bot_id,
+                                quote_asset,
                                 quote_qty,
-                                free_usdt,
-                                fee_buffer_usdt,
+                                free_quote,
+                                fee_buffer_quote,
                             )
                             if db is not None:
                                 append_event(
@@ -1692,12 +1805,13 @@ async def run_actions(
                                     bot_id,
                                     account_id,
                                     "SKIP_REASON",
-                                    f"BINANCE_FREE_QUOTE_INSUFFICIENT quote_qty={quote_qty:.2f} free_usdt={free_usdt:.2f}",
+                                    f"BINANCE_FREE_QUOTE_INSUFFICIENT quote_asset={quote_asset} quote_qty={quote_qty:.2f} free_quote={free_quote:.2f}",
                                     {
                                         "skip_reason": "BINANCE_FREE_QUOTE_INSUFFICIENT",
                                         "error_code": "BINANCE_FREE_QUOTE_INSUFFICIENT",
+                                        "quote_asset": quote_asset,
                                         "quote_qty": quote_qty,
-                                        "free_usdt": free_usdt,
+                                        "free_quote": free_quote,
                                         "reason": reason,
                                         "side": side,
                                         "grid_index": a.get("grid_index"),
@@ -1725,9 +1839,6 @@ async def run_actions(
                 elif not adapter.paper_mode and side == "SELL":
                     try:
                         balances = await adapter.get_account_balances()
-                        base_asset = (symbol or "BTCUSDT").replace(
-                            "USDT", ""
-                        ).strip() or "BTC"
                         base_bal = balances.get(base_asset) or {}
                         free_base = float(base_bal.get("free") or 0)
                         base_buffer = 0.001
@@ -1836,6 +1947,7 @@ async def run_actions(
                                         "symbol": symbol,
                                         "grid_index": a.get("grid_index"),
                                     },
+                                    state=state,
                                 )
                                 continue
                             qty = qty_adj
@@ -1859,6 +1971,7 @@ async def run_actions(
                                     "symbol": symbol,
                                     "grid_index": a.get("grid_index"),
                                 },
+                                state=state,
                             )
                             continue
                 if db is not None:
@@ -1914,6 +2027,7 @@ async def run_actions(
                                     "side": side,
                                     "grid_index": a.get("grid_index"),
                                 },
+                                state=state,
                             )
                             logger.warning(
                                 "run_actions WEIGHT_DENIED bot_id=%s account_id=%s",
@@ -1988,6 +2102,7 @@ async def run_actions(
                                 "client_order_id": client_order_id,
                                 "grid_index": a.get("grid_index"),
                             },
+                            state=state,
                         )
                         logger.warning(
                             "run_actions TIMEOUT bot_id=%s intent_id=%s (reconcile will resolve)",

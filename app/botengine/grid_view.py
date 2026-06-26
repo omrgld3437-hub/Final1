@@ -4,6 +4,8 @@ Uses state + config. Dip/tepe yalnızca state'teki saklı tepe/dip (motor min/ma
 """
 
 from __future__ import annotations
+
+import math
 from typing import Any, Dict, List, Optional, Tuple
 
 
@@ -14,6 +16,33 @@ def _f(v: Any, default: float = 0.0) -> float:
         return round(float(v), 10)
     except (TypeError, ValueError):
         return default
+
+
+def _price_decimals(price: float) -> int:
+    """Spot fiyat büyüklüğüne göre gösterim ondalığı (PEPE gibi mikro fiyatlar için 8)."""
+    try:
+        p = abs(float(price))
+    except (TypeError, ValueError):
+        return 8
+    if not math.isfinite(p) or p == 0:
+        return 8
+    if p < 0.01:
+        return 8
+    if p < 1:
+        return 6
+    return 4
+
+
+def _round_price(v: Any) -> Optional[float]:
+    if v is None:
+        return None
+    try:
+        p = float(v)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(p):
+        return None
+    return round(p, _price_decimals(p))
 
 
 def _avg_sell_price(state: Dict) -> Optional[float]:
@@ -212,7 +241,7 @@ def compute_grid_profit_view(
     ref = _f(state.get("reference_price"))
     ref_available = ref > 0
     if ref_available:
-        meta["ref_display"] = round(ref, 4)
+        meta["ref_display"] = _round_price(ref)
     meta["ref_available"] = ref_available
     sell_trail = _f(
         config.get("sell_trigger_trailing_pct")
@@ -304,12 +333,12 @@ def compute_grid_profit_view(
         fired = bool(sell_fired[i]) if i < len(sell_fired) else False
         trigger_hit = trigger_sell[i] if i < len(trigger_sell) else None
         th_num = _f(trigger_hit) if trigger_hit is not None else None
-        calc_trigger = round(ref * (1 + pct / 100.0), 4) if ref_available else None
+        calc_trigger = _round_price(ref * (1 + pct / 100.0)) if ref_available else None
         # Tetiklenmiş/armed grid: gerçek (state'te saklı) tetik fiyatını göster;
         # canlı referanstan yeniden hesaplama YAPMA. Bu, tetik ≤ tepe değişmezini
         # korur ve Dynamic Mode'da (arm anındaki % ≠ manuel config %) doğru olur.
         if th_num is not None:
-            trigger_price = round(th_num, 4)
+            trigger_price = _round_price(th_num)
         else:
             trigger_price = calc_trigger
         anchor: Optional[float] = None
@@ -349,11 +378,9 @@ def compute_grid_profit_view(
                 "i": i,
                 "trigger_price": trigger_price,
                 "fired": fired,
-                "trigger_hit_price": round(th_num, 4) if th_num is not None else None,
-                "anchor": round(anchor, 4) if anchor is not None else None,
-                "execution_price": round(execution_price, 4)
-                if execution_price is not None
-                else None,
+                "trigger_hit_price": _round_price(th_num),
+                "anchor": _round_price(anchor),
+                "execution_price": _round_price(execution_price),
                 "active": active,
                 "enabled": sell_grids_enabled or fired,
                 "disabled": not sell_grids_enabled and not fired,
@@ -373,11 +400,11 @@ def compute_grid_profit_view(
         fired = bool(buy_fired[j]) if j < len(buy_fired) else False
         trigger_hit = trigger_buy[j] if j < len(trigger_buy) else None
         th_num = _f(trigger_hit) if trigger_hit is not None else None
-        calc_trigger = round(ref * (1 - pct / 100.0), 4) if ref_available else None
+        calc_trigger = _round_price(ref * (1 - pct / 100.0)) if ref_available else None
         # Tetiklenmiş/armed grid: gerçek (state'te saklı) tetik fiyatını göster;
         # canlı referanstan yeniden hesaplama YAPMA (tetik ≥ dip değişmezi korunur).
         if th_num is not None:
-            trigger_price = round(th_num, 4)
+            trigger_price = _round_price(th_num)
         else:
             trigger_price = calc_trigger
         anchor = None
@@ -415,11 +442,9 @@ def compute_grid_profit_view(
                 "i": j,
                 "trigger_price": trigger_price,
                 "fired": fired,
-                "trigger_hit_price": round(th_num, 4) if th_num is not None else None,
-                "anchor": round(anchor, 4) if anchor is not None else None,
-                "execution_price": round(execution_price, 4)
-                if execution_price is not None
-                else None,
+                "trigger_hit_price": _round_price(th_num),
+                "anchor": _round_price(anchor),
+                "execution_price": _round_price(execution_price),
                 "active": active,
                 "enabled": buy_grids_enabled or fired,
                 "disabled": not buy_grids_enabled and not fired,
@@ -431,9 +456,9 @@ def compute_grid_profit_view(
     avg_sell_grid = _avg_sell_price_grid_only(state)
     avg_buy_grid = _avg_buy_price_grid_only(state)
     if avg_sell_grid is not None:
-        meta["avg_sell_grid"] = round(avg_sell_grid, 4)
+        meta["avg_sell_grid"] = _round_price(avg_sell_grid)
     if avg_buy_grid is not None:
-        meta["avg_buy_grid"] = round(avg_buy_grid, 4)
+        meta["avg_buy_grid"] = _round_price(avg_buy_grid)
     reentry_done = bool(state.get("_reentry_done"))
     profit_exit_done = bool(state.get("_profit_exit_done"))
     quote_bal = _f(state.get("quote_balance") or 0)
@@ -468,18 +493,16 @@ def compute_grid_profit_view(
         profit_points.append(
             {
                 "type": "reentry",
-                "trigger_price": round(trigger, 4),
-                "average_cost": round(avg_sell_grid, 4) if avg_sell_grid else None,
+                "trigger_price": _round_price(trigger),
+                "average_cost": _round_price(avg_sell_grid) if avg_sell_grid else None,
                 "profit_pct": round(reentry_drop, 2),
                 "planned_quote_usd": planned_reentry_usd,
-                "anchor": round(anchor, 4) if anchor is not None else None,
-                "dip": round(anchor, 4)
+                "anchor": _round_price(anchor),
+                "dip": _round_price(anchor)
                 if (reentry_trigger_hit and anchor is not None)
                 else None,
                 "tepe": None,
-                "execution_price": round(execution, 4)
-                if execution is not None
-                else None,
+                "execution_price": _round_price(execution),
                 "trigger_hit": reentry_trigger_hit,
                 "status": status,
                 "active": True,
@@ -511,18 +534,16 @@ def compute_grid_profit_view(
         profit_points.append(
             {
                 "type": "profit_exit",
-                "trigger_price": round(trigger, 4),
-                "average_cost": round(avg_buy_grid, 4) if avg_buy_grid else None,
+                "trigger_price": _round_price(trigger),
+                "average_cost": _round_price(avg_buy_grid) if avg_buy_grid else None,
                 "profit_pct": round(exit_rise, 2),
                 "planned_base_qty": planned_exit_base,
-                "anchor": round(anchor, 4) if anchor is not None else None,
-                "tepe": round(anchor, 4)
+                "anchor": _round_price(anchor),
+                "tepe": _round_price(anchor)
                 if (profit_exit_trigger_hit and anchor is not None)
                 else None,
                 "dip": None,
-                "execution_price": round(execution, 4)
-                if execution is not None
-                else None,
+                "execution_price": _round_price(execution),
                 "trigger_hit": profit_exit_trigger_hit,
                 "status": status,
                 "active": True,

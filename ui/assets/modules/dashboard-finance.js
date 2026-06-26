@@ -2033,7 +2033,9 @@ function collectFinanceBotsTabAlertSummary() {
     var alertCount = levels.length;
     var mode = '';
 
-    if (alertCount > 1 || (hasCrit && hasWarn)) mode = 'both';
+    // Yalnızca sarı uyarılar (birden fazla olsa bile) → normal hızda sarı blink.
+    // Hızlı blink yalnızca kritik + sarı karışımında.
+    if (hasCrit && hasWarn) mode = 'both';
     else if (hasCrit) mode = 'crit';
     else if (hasWarn) mode = 'warn';
 
@@ -2318,7 +2320,7 @@ function renderFinanceBots(bots, opts) {
         var sz = 36;
         if (!base || typeof getCoinLogoUrl !== 'function') return '<span class="mevcut-bot-logo-placeholder" style="width:' + sz + 'px;height:' + sz + 'px;display:inline-block;"></span>';
         var url = getCoinLogoUrl(base);
-        var initials = (base || '').substring(0, 2).toUpperCase();
+        var initials = (typeof getCoinLogoInitials === 'function' ? getCoinLogoInitials(base) : (base || '?').substring(0, 1).toUpperCase());
         var dynClass = logoOpts.dynamicActive ? ' mevcut-bot-logo-wrap--dynamic' : '';
         var dynAttrs = '';
         if (logoOpts.dynamicActive && logoOpts.dynTip) {
@@ -2329,7 +2331,7 @@ function renderFinanceBots(bots, opts) {
         }
         var wrapStyle = 'position:relative;width:' + sz + 'px;height:' + sz + 'px;border-radius:50%;background:var(--ds-bg-tertiary);display:inline-flex;align-items:center;justify-content:center;overflow:visible;flex-shrink:0;';
         var inner = url
-            ? '<span class="mevcut-bot-logo-wrap' + dynClass + '"' + dynAttrs + ' style="' + wrapStyle + '"><img decoding="async" loading="lazy" fetchpriority="low" src="' + url + '" alt="' + (base || '') + '" class="mevcut-bot-logo" style="width:100%;height:100%;object-fit:cover;border-radius:50%;" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'inline-flex\'" /><span class="mevcut-bot-logo-initials" style="display:none;position:absolute;width:' + sz + 'px;height:' + sz + 'px;border-radius:50%;align-items:center;justify-content:center;font-size:0.8rem;font-weight:600;background:var(--ds-bg-tertiary);color:var(--ds-text-secondary);">' + initials + '</span></span>'
+            ? '<span class="mevcut-bot-logo-wrap' + dynClass + '"' + dynAttrs + ' style="' + wrapStyle + '"><img decoding="async" loading="' + ((typeof shouldEagerLoadLogo === 'function' && shouldEagerLoadLogo(base)) ? 'eager' : 'lazy') + '" fetchpriority="low" src="' + url + '" alt="' + (base || '') + '" data-symbol="' + (base || '') + '" class="mevcut-bot-logo" style="width:100%;height:100%;object-fit:cover;border-radius:50%;" onload="if(window.markCoinLogoLoaded)window.markCoinLogoLoaded(this)" onerror="if(window.handleCoinLogoError)window.handleCoinLogoError(this)" /><span class="mevcut-bot-logo-initials" style="display:none;position:absolute;width:' + sz + 'px;height:' + sz + 'px;border-radius:50%;align-items:center;justify-content:center;font-size:0.8rem;font-weight:600;background:var(--ds-bg-tertiary);color:var(--ds-text-secondary);">' + initials + '</span></span>'
             : '<span class="mevcut-bot-logo-initials' + dynClass + '"' + dynAttrs + ' style="width:' + sz + 'px;height:' + sz + 'px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:0.8rem;font-weight:600;background:var(--ds-bg-tertiary);color:var(--ds-text-secondary);">' + initials + '</span>';
         return inner;
     };
@@ -2763,6 +2765,30 @@ let financeTradesTypeFilter = 'all'; // all | buysell | depositwithdraw
 let _financeTradesLoadedOnce = false;
 let _financeTradesSyncedOnce = false; // sync=1 only for explicit refresh; first paint stays fast
 
+function setTradesPeriod(period) {
+    financeTradesPeriod = period;
+
+    ['daily', 'weekly', 'monthly', 'yearly', 'all'].forEach(function (p) {
+        var btn = document.getElementById('tradesPeriod' + p.charAt(0).toUpperCase() + p.slice(1));
+        if (!btn) return;
+        if (p === period) {
+            btn.style.background = 'var(--ds-accent-dark, #c9930a)';
+            btn.style.color = '#000';
+            btn.style.fontWeight = '600';
+        } else {
+            btn.style.background = '';
+            btn.style.color = '';
+            btn.style.fontWeight = '';
+        }
+    });
+
+    if (typeof financeReportsState !== 'undefined' && financeReportsState) {
+        financeReportsState.tradesOffset = 0;
+    }
+    if (typeof loadFinanceTrades === 'function') loadFinanceTrades();
+}
+window.setTradesPeriod = setTradesPeriod;
+
 /** Türkiye saatine göre dönem aralığı (start/end UTC ISO). Günlük = bugün 00:00 TR → şimdi, vb. */
 function getTurkeyDateRange(period) {
     const now = new Date();
@@ -2963,35 +2989,6 @@ async function loadFinancePeriodData() {
     } catch (error) {
         console.error("[reports] Error loading finance period data:", error);
     }
-}
-
-// Early definition to prevent ReferenceError
-window.setTradesPeriod = window.setTradesPeriod || function(period) {
-    console.warn("[dashboard] setTradesPeriod called before initialization, period:", period);
-};
-
-function setTradesPeriod(period) {
-    financeTradesPeriod = period;
-    
-    // Update button styles
-    ['daily', 'weekly', 'monthly', 'yearly', 'all'].forEach(p => {
-        const btn = document.getElementById(`tradesPeriod${p.charAt(0).toUpperCase() + p.slice(1)}`);
-        if (btn) {
-            if (p === period) {
-                btn.style.background = 'var(--ds-accent-dark, #c9930a)';
-                btn.style.color = '#000';
-                btn.style.fontWeight = '600';
-            } else {
-                btn.style.background = '';
-                btn.style.color = '';
-                btn.style.fontWeight = '';
-            }
-        }
-    });
-    
-    // Reset offset and load trades
-    financeReportsState.tradesOffset = 0;
-    loadFinanceTrades();
 }
 
 function setTradesTypeFilter(filter) {
@@ -3321,8 +3318,6 @@ window.loadFinanceBotDetail = loadFinanceBotDetail;
 // window.triggerFinanceSync removed - auto-update enabled
 window.exportReportCSV = exportReportCSV;
 window.setFinancePeriod = setFinancePeriod;
-// Update window reference after function definition
-window.setTradesPeriod = setTradesPeriod;
 window.setTradesTypeFilter = setTradesTypeFilter;
 window.exportTradesCSV = exportTradesCSV;
 

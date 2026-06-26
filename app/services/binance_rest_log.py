@@ -23,13 +23,26 @@ _current_source: contextvars.ContextVar[str] = contextvars.ContextVar(
     "binance_rest_source", default="unknown"
 )
 
-REST_LOG_ENABLED = os.getenv("REST_LOG_ENABLED", "1").strip().lower() in (
-    "1",
-    "true",
-    "yes",
-)
+def _env_flag(name: str, default: bool) -> bool:
+    raw = os.getenv(name, "").strip().lower()
+    if not raw:
+        return default
+    return raw in ("1", "true", "yes", "on")
+
+
+# Disk rest.log yazımı (debug/ops). Throttle + weight budget her zaman aktif kalır.
+REST_LOG_FILE_ENABLED = _env_flag("REST_LOG_FILE_ENABLED", False)
+# Geriye dönük: REST_LOG_ENABLED=1 dosya yazımını açar, =0 kapatır.
+_legacy_rest = os.getenv("REST_LOG_ENABLED", "").strip().lower()
+if _legacy_rest in ("1", "true", "yes", "on"):
+    REST_LOG_FILE_ENABLED = True
+elif _legacy_rest in ("0", "false", "no", "off"):
+    REST_LOG_FILE_ENABLED = False
+# Eski kod REST_LOG_ENABLED okuyor — dosya yazım bayrağı ile eşle.
+REST_LOG_ENABLED = REST_LOG_FILE_ENABLED
 REST_LOG_INTERVAL_SEC = float(os.getenv("REST_LOG_INTERVAL_SEC", "60"))
-REST_LOG_PATH = Path(os.getenv("REST_LOG_PATH", "rest.log"))
+# Varsayılan: logs/ altında (proje kökünü kirletmez). Eski kurulumlar REST_LOG_PATH=rest.log kullanabilir.
+REST_LOG_PATH = Path(os.getenv("REST_LOG_PATH", "logs/rest.log"))
 # rest.log maksimum boyut (bayt); aşılırsa rotate edilir. Varsayılan 20 MB.
 REST_LOG_MAX_BYTES = int(os.getenv("REST_LOG_MAX_BYTES", str(20 * 1024 * 1024)))
 # Saklanacak yedek sayısı (rest.log.1, rest.log.2, ...)
@@ -199,9 +212,7 @@ def record_rest(
     outcome: str = "ok",
     detail: str = "",
 ) -> None:
-    """Her REST denemesini kaydet (ok / denied / skipped / error)."""
-    if not REST_LOG_ENABLED:
-        return
+    """Her REST denemesini kaydet (ok / denied / skipped / error). Throttle state her zaman güncellenir."""
     w = weight if weight is not None else compute_weight(path, method, params)
     src = source or get_rest_source()
     evt = {
@@ -218,12 +229,14 @@ def record_rest(
         "has_symbol": bool((params or {}).get("symbol")),
     }
     with _lock:
-        _events.append(evt)
         if outcome == "ok":
             key = _path_throttle_key(path, params)
             _last_path_ts[key] = evt["ts"]
         elif outcome in ("denied", "skipped"):
             _denied_by_reason[evt.get("detail") or outcome] += 1
+        if not REST_LOG_FILE_ENABLED:
+            return
+        _events.append(evt)
 
 
 def _aggregate_window(events: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -369,7 +382,7 @@ def _rotate_rest_log_if_needed(log_path: Path) -> None:
 
 def flush_rest_log(force: bool = False) -> None:
     """Mevcut pencereyi rest.log dosyasına yaz; gerekirse rotate et."""
-    if not REST_LOG_ENABLED and not force:
+    if not REST_LOG_FILE_ENABLED and not force:
         return
     with _lock:
         global _window_start
@@ -405,9 +418,9 @@ async def _flush_loop() -> None:
 
 
 def start_rest_log_flush_task() -> None:
-    """Web/worker startup: 60s periyodik rest.log yazıcı."""
+    """Web/worker startup: 60s periyodik rest.log yazıcı (dosya yazımı açıksa)."""
     global _flush_task
-    if not REST_LOG_ENABLED:
+    if not REST_LOG_FILE_ENABLED:
         return
     try:
         loop = asyncio.get_running_loop()

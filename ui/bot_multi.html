@@ -923,8 +923,9 @@
             </div>
         </div>
     </div>
-    <script src="/ui/assets/utils/coinLogo.js?v=1"></script>
+    <script src="/ui/assets/utils/coinLogo.js?v=5"></script>
     <script src="/ui/assets/core/apiClient.js?v=refactor1"></script>
+    <script src="/ui/assets/utils/coinPriceFormat.js?v=1"></script>
     <script src="/ui/assets/utils/gridTrailEnvelope.js?v=2"></script>
     <script src="/ui/assets/utils/engineLogAccess.js?v=1"></script>
     <script src="/ui/assets/utils/engineLogArchive.js?v=1"></script>
@@ -1040,6 +1041,40 @@
             if (v == null || v === '' || isNaN(v)) return '—';
             var n = Number(v);
             return n.toLocaleString('en-US', { minimumFractionDigits: decimals != null ? decimals : 2, maximumFractionDigits: decimals != null ? decimals : 8 });
+        }
+        function _cpf() { return window.CoinPriceFormat || {}; }
+        function botPriceHints(extra) {
+            var hints = [];
+            if (lastPriceForBlink != null && !isNaN(lastPriceForBlink)) hints.push(Number(lastPriceForBlink));
+            if (lastBotDetail && lastBotDetail.reference_display != null) hints.push(Number(lastBotDetail.reference_display));
+            if (_gridPointsRefCtx && _gridPointsRefCtx.refD != null) hints.push(Number(_gridPointsRefCtx.refD));
+            (extra || []).forEach(function (v) {
+                var n = Number(v);
+                if (Number.isFinite(n) && n > 0) hints.push(n);
+            });
+            return hints;
+        }
+        function priceDecimalsForBot(symbol, priceHints) {
+            symbol = (symbol || (lastBotDetail && lastBotDetail.symbol) || '').toUpperCase();
+            if (_cpf().resolvePriceDecimals) return _cpf().resolvePriceDecimals(symbol, botPriceHints(priceHints));
+            return 8;
+        }
+        function ensureBotSymbolPriceDecimals(symbol) {
+            if (!symbol || !accountId || !_cpf().ensureSymbolTickDecimals) return;
+            _cpf().ensureSymbolTickDecimals(String(symbol).toUpperCase(), accountId);
+        }
+        function fmtBotPrice(v, extraHints) {
+            var sym = (lastBotDetail && lastBotDetail.symbol) || '';
+            if (_cpf().fmtSymbolPrice) return _cpf().fmtSymbolPrice(v, sym, botPriceHints(extraHints));
+            return fmtNum(v, priceDecimalsForBot(sym, extraHints));
+        }
+        function fmtBotPriceFixed(v, extraHints) {
+            var sym = (lastBotDetail && lastBotDetail.symbol) || '';
+            if (_cpf().fmtSymbolPriceFixed) return _cpf().fmtSymbolPriceFixed(v, sym, botPriceHints(extraHints));
+            return Number(v).toFixed(priceDecimalsForBot(sym, extraHints));
+        }
+        function gridPriceDecimals(extraHints) {
+            return priceDecimalsForBot((lastBotDetail && lastBotDetail.symbol) || '', extraHints);
         }
         /** Base bakiye için: sondaki sıfırları kaldır, en fazla 8 ondalık (0.01820000 → 0.0182) */
         function fmtBaseCompact(v) {
@@ -1195,7 +1230,7 @@
                 var quotePct = cfg.quote_alloc_pct != null ? cfg.quote_alloc_pct : (alloc.quote_pct != null ? alloc.quote_pct : null);
                 var sellTrail = cfg.sell_trigger_trailing_pct != null ? cfg.sell_trigger_trailing_pct : (up.trail_pct != null ? up.trail_pct : null);
                 var buyTrail = cfg.buy_trigger_trailing_pct != null ? cfg.buy_trigger_trailing_pct : (down.trail_pct != null ? down.trail_pct : null);
-                var refPriceVal = referencePrice != null && !isNaN(referencePrice) ? fmtNum(referencePrice, 4) : '—';
+                var refPriceVal = referencePrice != null && !isNaN(referencePrice) ? fmtBotPrice(referencePrice, [referencePrice]) : '—';
                 var pr = cfg.profit || {};
                 var reTr = cfg.profit_reentry_drop_pct != null ? cfg.profit_reentry_drop_pct : pr.rebuy_trigger_pct;
                 var reTrl = cfg.profit_reentry_rise_pct != null ? cfg.profit_reentry_rise_pct : pr.rebuy_trail_pct;
@@ -1404,15 +1439,13 @@
             var pct = (Number(cellPrice) - Number(basePrice)) / Number(basePrice) * 100;
             return '<span class="grid-price-pct muted">' + (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%</span>';
         }
-        function gridPlainPriceHtml(priceVal, decimals) {
-            decimals = decimals != null ? decimals : 4;
+        function gridPlainPriceHtml(priceVal, extraHints) {
             if (priceVal == null || isNaN(priceVal)) return '—';
-            return fmtNum(priceVal, decimals);
+            return fmtBotPrice(priceVal, [priceVal].concat(extraHints || []));
         }
-        function gridTepeDipCellHtml(priceVal, refPrice, decimals) {
-            decimals = decimals != null ? decimals : 4;
+        function gridTepeDipCellHtml(priceVal, refPrice, extraHints) {
             if (priceVal == null || isNaN(priceVal)) return '—';
-            return '<span class="grid-tepe-dip-cell"><span class="grid-price-val">' + fmtNum(priceVal, decimals) + '</span>' +
+            return '<span class="grid-tepe-dip-cell"><span class="grid-price-val">' + fmtBotPrice(priceVal, [priceVal, refPrice].concat(extraHints || [])) + '</span>' +
                 formatPctFromBase(priceVal, refPrice) + '</span>';
         }
         function profitRowAvgCost(p, avgBuyGrid, avgSellGrid) {
@@ -1630,7 +1663,7 @@
             var ctx = _gridPointsRefCtx;
             if (!refEl || !ctx) return;
             if (ctx.refD != null && ctx.refD > 0) {
-                refEl.textContent = 'Tur ' + ctx.cycleNum + ' referans fiyatı: ' + (ctx.baseAsset ? ctx.baseAsset + ' ' : '') + fmtNum(ctx.refD, 4) + formatPctFromRef(ctx.refD, livePrice);
+                refEl.textContent = 'Tur ' + ctx.cycleNum + ' referans fiyatı: ' + (ctx.baseAsset ? ctx.baseAsset + ' ' : '') + fmtBotPrice(ctx.refD, [ctx.refD, livePrice]) + formatPctFromRef(ctx.refD, livePrice);
             } else {
                 refEl.textContent = 'Tur ' + ctx.cycleNum + ' referans fiyatı: —';
             }
@@ -1676,7 +1709,7 @@
                 if (p.qty_pct != null && !isNaN(p.qty_pct)) level += ' %' + Number(p.qty_pct);
                 var statusText = p.fired ? 'Tamamlandı' : ((p.anchor != null || (p.trigger_hit_price != null)) ? 'Tetiklendi' : 'Bekliyor');
                 var statusClass = p.fired ? 'grid-status-tamamlandi' : ((p.anchor != null || (p.trigger_hit_price != null)) ? 'grid-status-tetiklendi' : 'grid-status-bekliyor');
-                var trigger = gridPlainPriceHtml(p.trigger_price, 4);
+                var trigger = gridPlainPriceHtml(p.trigger_price);
                 var liveTrailS = window.GridTrailEnvelope
                     ? window.GridTrailEnvelope.trailDisplayFromEnvelope(p, 'sell', sellTrailPct)
                     : { anchor: p.anchor, exec: p.execution_price };
@@ -1712,7 +1745,7 @@
                 if (p.qty_pct != null && !isNaN(p.qty_pct)) level += ' %' + Number(p.qty_pct);
                 var statusText = p.fired ? 'Tamamlandı' : ((p.anchor != null || (p.trigger_hit_price != null)) ? 'Tetiklendi' : 'Bekliyor');
                 var statusClass = p.fired ? 'grid-status-tamamlandi' : ((p.anchor != null || (p.trigger_hit_price != null)) ? 'grid-status-tetiklendi' : 'grid-status-bekliyor');
-                var trigger = gridPlainPriceHtml(p.trigger_price, 4);
+                var trigger = gridPlainPriceHtml(p.trigger_price);
                 var liveTrailB = window.GridTrailEnvelope
                     ? window.GridTrailEnvelope.trailDisplayFromEnvelope(p, 'buy', buyTrailPct)
                     : { anchor: p.anchor, exec: p.execution_price };
@@ -1756,7 +1789,7 @@
                 var tq = h.reduce(function(s, x) { return s + (Number(x.qty) || 0); }, 0);
                 if (tq <= 0) return null;
                 var tv = h.reduce(function(s, x) { return s + (Number(x.qty) || 0) * gridHistPrice(x); }, 0);
-                return (tv / tq).toFixed(4);
+                return fmtBotPriceFixed(tv / tq, [tv / tq]);
             }
             var gm = data.grid_meta || {};
             var avgSellGrid = gm.avg_sell_grid != null ? String(gm.avg_sell_grid) : avgFromHist(sellHist, true);
@@ -1799,9 +1832,9 @@
                 var karPctVal = (p.profit_pct != null && !isNaN(p.profit_pct)) ? Number(p.profit_pct) : (configPct != null && !isNaN(configPct) ? configPct : null);
                 var karPct = karPctVal != null ? ((p.type === 'reentry' ? '-' : '+') + karPctVal + '%') : '';
                 var labelCell = typ + (karPct ? ' <span class="muted" style="font-size:0.85em">' + karPct + '</span>' : '');
-                var triggerStr = gridPlainPriceHtml(p.trigger_price, 4);
+                var triggerStr = gridPlainPriceHtml(p.trigger_price);
                 var avgBase = profitRowAvgCost(p, avgBuyGrid, avgSellGrid);
-                var avgCostStr = avgBase != null ? fmtNum(avgBase, 4) : '—';
+                var avgCostStr = avgBase != null ? fmtBotPrice(avgBase, [avgBase, p.trigger_price]) : '—';
                 var tepeDipNum = null;
                 var execNum = null;
                 if (p.trigger_hit) {
@@ -2132,7 +2165,7 @@
                     var coin = baseFromSymbol(t.symbol || botSymbolForTrades) || '—';
                     var reason = tradeReason(t);
                     var qty = fmtNum(t.qty, 8);
-                    var price = fmtNum(t.price, 4);
+                    var price = fmtBotPrice(t.price, [t.price]);
                     var quoteQty = (t.qty && t.price) ? fmtUsd(t.qty * t.price) : '—';
                     var feeVal = t.fee != null ? t.fee : t.commission;
                     var feeStr = (feeVal != null && feeVal !== '') ? fmtUsd(Number(feeVal)) : '—';
@@ -2282,15 +2315,21 @@
             lastRefPriceForPerf = refPrice != null ? refPrice : null;
             initialCapForPerf = initialCapital > 0 ? initialCapital : null;
             if (perfReport) {
-                var refPStr = (lastRefPriceForPerf != null ? lastRefPriceForPerf.toFixed(4) : '—');
+                var refPStr = (lastRefPriceForPerf != null ? fmtBotPriceFixed(lastRefPriceForPerf, [lastRefPriceForPerf, priceForBot]) : '—');
+                var pariteDiffStr = '—';
+                if (lastRefPriceForPerf != null && priceForBot != null) {
+                    var diffP = priceForBot - lastRefPriceForPerf;
+                    pariteDiffStr = (diffP >= 0 ? '+' : '') + fmtBotPriceFixed(diffP, [lastRefPriceForPerf, priceForBot]) + ' ' +
+                        (priceForBot >= lastRefPriceForPerf ? '+' : '') + ((priceForBot - lastRefPriceForPerf) / lastRefPriceForPerf * 100).toFixed(2) + '%';
+                }
                 var startBalStr = (initialCapForPerf != null ? fmtUsd(initialCapForPerf) : '—');
                 perfReport.innerHTML =
                     '<p><strong>Başlangıç bakiyesi:</strong> <span id="perfReportStartBakiye">' + startBalStr + '</span></p>' +
                     '<p><strong>Güncel bakiye:</strong> <span id="perfReportGuncelBakiye">' + (botBalanceUsd || '—') + '</span></p>' +
                     '<p><strong>Bakiye Değişimi:</strong> <span id="perfReportBakiyeDegisim" style="color:' + totalKzCl + '">' + totalKzStr + (initialCapital > 0 && totalPnlUsd != null ? ' ' + (totalPnlUsd >= 0 ? '+' : '') + (initialCapital > 0 ? (totalPnlUsd / initialCapital * 100).toFixed(2) : '0') + '%' : '') + '</span></p>' +
                     '<p style="margin-top:1rem;"><strong>Parite Başlangıç Fiyatı (referans):</strong> <span id="perfReportRefPrice">' + refPStr + '</span></p>' +
-                    '<p><strong>Parite Güncel Fiyatı:</strong> <span id="perfReportPariteGuncel">' + (priceForBot != null ? priceForBot.toFixed(4) : '—') + '</span></p>' +
-                    '<p><strong>Parite Değişimi:</strong> <span id="perfReportPariteDegisim">' + (lastRefPriceForPerf != null && priceForBot != null ? (priceForBot - lastRefPriceForPerf >= 0 ? '+' : '') + (priceForBot - lastRefPriceForPerf).toFixed(4) + ' ' + (priceForBot >= lastRefPriceForPerf ? '+' : '') + ((priceForBot - lastRefPriceForPerf) / lastRefPriceForPerf * 100).toFixed(2) + '%' : '—') + '</span></p>' +
+                    '<p><strong>Parite Güncel Fiyatı:</strong> <span id="perfReportPariteGuncel">' + (priceForBot != null ? fmtBotPriceFixed(priceForBot, [lastRefPriceForPerf, priceForBot]) : '—') + '</span></p>' +
+                    '<p><strong>Parite Değişimi:</strong> <span id="perfReportPariteDegisim">' + pariteDiffStr + '</span></p>' +
                     '<p><strong>Gerçek performans</strong> (Bakiye % − Parite %): <span id="perfReportGercekPerf" style="font-weight:600">—</span></p>';
                 var bakiyePct0 = initialCapForPerf > 0 && currentUsdNum != null ? (currentUsdNum - initialCapForPerf) / initialCapForPerf * 100 : null;
                 var paritePct0 = lastRefPriceForPerf != null && lastRefPriceForPerf > 0 && priceForBot != null ? (priceForBot - lastRefPriceForPerf) / lastRefPriceForPerf * 100 : null;
@@ -2536,12 +2575,13 @@
             var realColor = (realPct != null && realPct >= 0) ? '#0ecb81' : '#f6465d';
             var realSign = (realPct != null && realPct >= 0) ? '+' : '';
 
+            var pariteHints = [refP, curP].filter(function (x) { return x != null && !isNaN(x); });
             var html = '<p><strong>Başlangıç bakiyesi:</strong> <span id="perfReportStartBakiye">' + (startUsd != null ? fmtUsd(startUsd) : '—') + '</span></p>' +
                 '<p><strong>Güncel bakiye:</strong> <span id="perfReportGuncelBakiye">' + (endUsd != null ? fmtUsd(endUsd) : '—') + '</span></p>' +
                 '<p><strong>Bakiye Değişimi:</strong> <span id="perfReportBakiyeDegisim" style="color:' + pnlColor + '">' + (pnlUsd != null ? pnlSign + fmtUsd(pnlUsd) + ' ' : '') + (pnlPct != null ? (pnlPct >= 0 ? '+' : '') + pnlPct.toFixed(2) + '%' : '—') + '</span></p>' +
-                '<p style="margin-top:1rem;"><strong>Parite Başlangıç Fiyatı (referans):</strong> <span id="perfReportRefPrice">' + (refP != null ? refP.toFixed(4) : '—') + '</span></p>' +
-                '<p><strong>Parite Güncel Fiyatı:</strong> <span id="perfReportPariteGuncel">' + (curP != null ? curP.toFixed(4) : '—') + '</span></p>' +
-                (priceDiffUsd != null && pricePct != null ? '<p><strong>Parite Değişimi:</strong> <span id="perfReportPariteDegisim" style="color:' + priceColor + '">' + (priceDiffUsd >= 0 ? '+' : '') + priceDiffUsd.toFixed(4) + ' ' + (pricePct >= 0 ? '+' : '') + pricePct.toFixed(2) + '%</span></p>' : '<p><strong>Parite Değişimi:</strong> <span id="perfReportPariteDegisim">—</span></p>');
+                '<p style="margin-top:1rem;"><strong>Parite Başlangıç Fiyatı (referans):</strong> <span id="perfReportRefPrice">' + (refP != null ? fmtBotPriceFixed(refP, pariteHints) : '—') + '</span></p>' +
+                '<p><strong>Parite Güncel Fiyatı:</strong> <span id="perfReportPariteGuncel">' + (curP != null ? fmtBotPriceFixed(curP, pariteHints) : '—') + '</span></p>' +
+                (priceDiffUsd != null && pricePct != null ? '<p><strong>Parite Değişimi:</strong> <span id="perfReportPariteDegisim" style="color:' + priceColor + '">' + (priceDiffUsd >= 0 ? '+' : '') + fmtBotPriceFixed(priceDiffUsd, pariteHints) + ' ' + (pricePct >= 0 ? '+' : '') + pricePct.toFixed(2) + '%</span></p>' : '<p><strong>Parite Değişimi:</strong> <span id="perfReportPariteDegisim">—</span></p>');
             if (realPct != null) {
                 html += '<p><strong>Gerçek performans</strong> (Bakiye % − Parite %): <span style="color:' + realColor + '; font-weight:600">' + (realPct >= 0 ? '+' : '') + realPct.toFixed(2) + '%</span></p>';
             }
@@ -2930,12 +2970,12 @@
                         bakiyeDegisimEl.style.color = totalPnlPoll != null ? (totalPnlPoll >= 0 ? '#0ecb81' : '#f6465d') : 'var(--ds-text-secondary)';
                     }
                     var pariteGuncelEl = document.getElementById('perfReportPariteGuncel');
-                    if (pariteGuncelEl && liveP > 0) pariteGuncelEl.textContent = fmtNum(liveP, 4);
+                    if (pariteGuncelEl && liveP > 0) pariteGuncelEl.textContent = fmtBotPriceFixed(liveP, [lastRefPriceForPerf, liveP]);
                     if (liveP > 0) refreshGridPointsLivePrice(liveP);
                     var pariteDegisimEl = document.getElementById('perfReportPariteDegisim');
                     if (pariteDegisimEl && lastRefPriceForPerf != null && lastRefPriceForPerf > 0 && liveP > 0) {
                         var diff = liveP - lastRefPriceForPerf;
-                        pariteDegisimEl.textContent = (diff >= 0 ? '+' : '') + diff.toFixed(4) + ' ' + (paritePctPoll != null ? (paritePctPoll >= 0 ? '+' : '') + paritePctPoll.toFixed(2) + '%' : '');
+                        pariteDegisimEl.textContent = (diff >= 0 ? '+' : '') + fmtBotPriceFixed(diff, [lastRefPriceForPerf, liveP]) + ' ' + (paritePctPoll != null ? (paritePctPoll >= 0 ? '+' : '') + paritePctPoll.toFixed(2) + '%' : '');
                         pariteDegisimEl.style.color = paritePctPoll >= 0 ? '#0ecb81' : '#f6465d';
                     }
                     var gercekPerfEl = document.getElementById('perfReportGercekPerf');

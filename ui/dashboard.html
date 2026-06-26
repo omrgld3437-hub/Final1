@@ -85,6 +85,9 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
     })();
     </script>
     <title>Dashboard - ayserose</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,700;1,300&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/ui/assets/ticker.css?v=static-fx1">
     <link rel="stylesheet" href="/ui/assets/theme.css?v=clean1">
     <link rel="stylesheet" href="/ui/assets/ui.css?v=footer-sticky1">
@@ -93,6 +96,7 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
     <link rel="stylesheet" href="/ui/assets/binance-colors.css?v=bin1">
     <link rel="stylesheet" href="/ui/assets/blink.css?v=1">
     <link rel="stylesheet" href="/ui/assets/dashboard-login-theme.css?v=spot-modal-chart1">
+    <link rel="stylesheet" href="/ui/assets/brand-logo.css?v=rose4">
     <script src="/ui/assets/scrollAutoHide.js?v=5"></script>
     <style id="chat-animations">
         /* Sohbet: Admin yazıyor + mesaj giriş animasyonu */
@@ -162,12 +166,13 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
                 <a id="adminLink" class="btn-admin-back" href="/ui/admin.html" style="display: none;" title="Admin paneline dön">← Admin'e dön</a>
             </div>
             <div class="dashboard-appbar-center appbar-company">
+                <span class="brand-logo-mark" aria-hidden="true"></span><span class="tt-logo-text"><span class="ar-ayse">ayse</span><span class="ar-rose">rose</span></span>
+            </div>
+            <div class="dashboard-appbar-right">
                 <span id="datahubWsIndicator" class="datahub-ws-indicator" title="Piyasa verisi WebSocket durumu" aria-label="WS durumu">
                     <span class="datahub-ws-dot"></span><span class="datahub-ws-label">WS</span>
                 </span>
-                <span class="tt-logo-text"><span class="ar-ayse">ayse</span><span class="ar-rose">rose</span></span>
             </div>
-            <div class="dashboard-appbar-right" aria-hidden="true"></div>
         </div>
     </div>
     <script>
@@ -1414,12 +1419,15 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
     <div id="dmParamAssistantModal" class="modal-overlay dm-param-assistant-modal" aria-hidden="true" role="dialog" aria-labelledby="dmParamAssistantTitle" style="display: none;">
         <div class="modal-panel parametreler-modal-panel perf-summary-modal-panel dm-param-assistant-panel">
             <div class="modal-panel-head dm-param-assistant-head">
-                <h3 class="modal-title" id="dmParamAssistantTitle">Parametre Asistanı</h3>
+                <div class="dm-pa-head-left">
+                    <div class="dm-param-assistant-kicker" id="dmParamAssistantKicker">AI · Parametre motoru</div>
+                    <h3 class="modal-title dm-param-assistant-title" id="dmParamAssistantTitle">Parametre Asistanı</h3>
+                </div>
                 <button type="button" class="parametreler-modal-close" id="dmParamAssistantCloseBtn" aria-label="Kapat">&times;</button>
             </div>
             <div class="parametreler-body perf-summary-modal-body dm-param-assistant-body">
                 <div class="perf-summary-assistant-wrap">
-                    <div class="perf-summary-assistant-intro-block perf-summary-intro-spark-wrap">
+                    <div class="perf-summary-assistant-intro-block perf-summary-intro-spark-wrap dm-pa-intro-block">
                         <span class="perf-summary-spark perf-summary-intro-spark perf-summary-intro-spark-1" aria-hidden="true"></span>
                         <span class="perf-summary-spark perf-summary-intro-spark perf-summary-intro-spark-2" aria-hidden="true"></span>
                         <span class="perf-summary-spark perf-summary-intro-spark perf-summary-intro-spark-3" aria-hidden="true"></span>
@@ -1427,17 +1435,19 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
                         <span class="perf-summary-spark perf-summary-intro-spark perf-summary-intro-spark-5" aria-hidden="true"></span>
                         <span class="perf-summary-spark perf-summary-intro-spark perf-summary-intro-spark-6" aria-hidden="true"></span>
                         <div class="perf-summary-assistant-intro-inner">
-                            <div class="perf-summary-assistant-label">Parametre asistanı</div>
+                            <div class="perf-summary-assistant-label" id="dmParamAssistantIntroLabel">Parametre Asistanı</div>
                             <p class="perf-summary-assistant-intro">
-                                <span id="dmParamAssistantStatus">Parite verileri okunuyor</span>
+                                <span id="dmParamAssistantStatus">Parite ve bütçe hazırlanıyor…</span>
                                 <span class="perf-summary-stream-cursor" id="dmParamAssistantCursor" aria-hidden="true"></span>
                             </p>
                         </div>
                     </div>
                 </div>
+                <div id="dmParamAssistantPrep" class="dm-param-assistant-prep dm-pa-tier-select" style="display:none;"></div>
+                <div id="dmParamAssistantSummary" class="dm-param-assistant-summary" style="display: none;"></div>
                 <div id="dmParamAssistantChips" class="dm-param-assistant-chips"></div>
                 <div id="dmParamAssistantOutput" class="perf-summary-stream-content dm-param-assistant-output"></div>
-                <div id="dmParamAssistantSummary" class="dm-param-assistant-summary" style="display: none;"></div>
+                <div id="dmParamAssistantDetails" class="dm-param-assistant-details" style="display: none;"></div>
                 <div id="dmParamAssistantChoice" class="dm-param-assistant-choice" style="display: none;">
                     <button id="dmParamAssistantUseBtn" class="btn btn-primary-gold" type="button">Kullanmak istiyorum</button>
                 </div>
@@ -2209,7 +2219,7 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
     <!-- DEPRECATED: BinanceMarketData - will be disabled -->
     <!-- <script src="/ui/assets/binanceMarketData.js?v=1.0&nocache=202601230000"></script> -->
     <script src="/ui/assets/spot_engine.js?v=1.0&nocache=202601222350"></script>
-    <script src="/ui/assets/utils/coinLogo.js?v=1"></script>
+    <script src="/ui/assets/utils/coinLogo.js?v=5"></script>
     <script src="/ui/assets/utils/botHealthAlerts.js?v=34"></script>
     <!-- Flash Home (Patch H). Deploy ui/assets/ so storageCache, renderHome, homeFlash exist (else 404). -->
     <script src="/ui/assets/storageCache.js?v=flash1"></script>
@@ -2229,8 +2239,9 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
     <script src="/ui/assets/modules/dashboard-bots.js?v=1"></script>
     <script src="/ui/assets/modules/dashboard-bot-create.js?v=param-assistant3"></script>
     <script src="/ui/assets/modules/dashboard-tabs.js?v=1"></script>
-    <script src="/ui/assets/modules/ai-assistant-spec.js?v=20260622"></script>
-    <script src="/ui/assets/modules/dashboard-create-modal.js?v=pa-progress-stable1"></script>
+    <script src="/ui/assets/modules/user-activity-beacon.js?v=1"></script>
+    <script src="/ui/assets/modules/ai-assistant-spec.js?v=20260626pa34"></script>
+    <script src="/ui/assets/modules/dashboard-create-modal.js?v=20260626pa34"></script>
     <script src="/ui/assets/modules/dashboard-spot-trade.js?v=2"></script>
     <script src="/ui/assets/modules/dashboard-finance.js?v=bot-health-status1"></script>
     <script src="/ui/assets/ticker.js?v=chg-pct1" defer></script>

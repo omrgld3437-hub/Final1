@@ -23,10 +23,14 @@
     </script>
     <script src="/ui/assets/scrollRestore.js?v=scroll-restore4"></script>
     <title>Bot Detay - ayserose</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,700;1,300&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/ui/assets/theme.css?v=1">
     <link rel="stylesheet" href="/ui/assets/design.css?v=design-scroll8">
     <link rel="stylesheet" href="/ui/assets/binance-colors.css?v=bin1">
     <link rel="stylesheet" href="/ui/assets/dashboard-login-theme.css?v=bot-state-panel1">
+    <link rel="stylesheet" href="/ui/assets/brand-logo.css?v=rose4">
     <script src="/ui/assets/scrollAutoHide.js?v=5"></script>
     <link rel="stylesheet" href="/ui/assets/blink.css?v=1">
     <style>
@@ -1606,7 +1610,7 @@
     <div class="dashboard-appbar page-bot-appbar" role="banner">
         <div class="dashboard-appbar-inner page-bot-appbar-inner">
             <div class="page-bot-appbar-center appbar-company">
-                <span class="tt-logo-text"><span class="ar-ayse">ayse</span><span class="ar-rose">rose</span></span>
+                <span class="brand-logo-mark" aria-hidden="true"></span><span class="tt-logo-text"><span class="ar-ayse">ayse</span><span class="ar-rose">rose</span></span>
             </div>
         </div>
     </div>
@@ -1935,13 +1939,14 @@
         </div>
     </div>
     <script src="/ui/assets/utils/trTime.js?v=utc-naive1"></script>
-    <script src="/ui/assets/utils/coinLogo.js?v=1"></script>
+    <script src="/ui/assets/utils/coinLogo.js?v=5"></script>
     <script src="/ui/assets/core/apiClient.js?v=refactor1"></script>
+    <script src="/ui/assets/utils/coinPriceFormat.js?v=1"></script>
     <script src="/ui/assets/utils/gridTrailEnvelope.js?v=2"></script>
     <script src="/ui/assets/utils/engineLogAccess.js?v=2"></script>
     <script src="/ui/assets/utils/engineLogArchive.js?v=1"></script>
     <script src="/ui/assets/utils/botHealthAlerts.js?v=35"></script>
-    <script src="/ui/assets/modules/ai-assistant-spec.js?v=err-fast1"></script>
+    <script src="/ui/assets/modules/ai-assistant-spec.js?v=20260626pa34"></script>
     <script src="/ui/assets/modules/bot-error-assistant.js?v=healthy-quiet1"></script>
     <script src="/ui/assets/utils/dynamicModeParamsView.js?v=param-dyn-regime-dir1"></script>
 <script src="/ui/assets/utils/engineLogFormat.js?v=70"></script>
@@ -2444,87 +2449,65 @@
             } catch (e) { return '—'; }
         }
         var _botSymbolTickDecimals = {};
+        function _cpf() {
+            return window.CoinPriceFormat || {};
+        }
         function decimalPlacesFromTickSize(tickSize) {
-            if (tickSize == null || tickSize === '') return null;
-            var s = String(tickSize).trim();
-            var t = Number(s);
-            if (!Number.isFinite(t) || t <= 0) return null;
-            if (t >= 1) return 0;
-            if (/e/i.test(s)) {
-                var em = s.match(/e-?(\d+)/i);
-                if (em) return Math.min(8, parseInt(em[1], 10));
-            }
-            var parts = s.split('.');
-            if (parts.length < 2) return 0;
-            var frac = parts[1].replace(/0+$/, '');
-            return Math.min(8, frac.length || parts[1].length);
+            return _cpf().decimalPlacesFromTickSize ? _cpf().decimalPlacesFromTickSize(tickSize) : null;
         }
         function inferPriceDecimalsFromMagnitude(price) {
-            var p = Number(price);
-            if (!Number.isFinite(p) || p <= 0) return 4;
-            if (p >= 1000) return 2;
-            if (p >= 100) return 3;
-            if (p >= 1) return 4;
-            if (p >= 0.1) return 4;
-            if (p >= 0.01) return 5;
-            if (p >= 0.0001) return 6;
-            return 8;
+            return _cpf().inferPriceDecimalsFromMagnitude
+                ? _cpf().inferPriceDecimalsFromMagnitude(price)
+                : 8;
         }
         function decimalsNeededToDiffer(a, b, minDec) {
-            minDec = minDec != null ? minDec : 2;
-            var x = Number(a);
-            var y = Number(b);
-            if (!Number.isFinite(x) || !Number.isFinite(y)) return minDec;
-            for (var d = minDec; d <= 8; d++) {
-                if (x.toFixed(d) !== y.toFixed(d)) return d;
+            return _cpf().decimalsNeededToDiffer
+                ? _cpf().decimalsNeededToDiffer(a, b, minDec)
+                : (minDec != null ? minDec : 8);
+        }
+        function botPriceHints(extra) {
+            var hints = [];
+            var live = liveBotPriceNumber();
+            if (live != null) hints.push(live);
+            if (lastBotDetail && lastBotDetail.reference_display != null && !isNaN(lastBotDetail.reference_display)) {
+                hints.push(Number(lastBotDetail.reference_display));
             }
-            return 8;
+            if (lastBotDetail && lastBotDetail.state && lastBotDetail.state.reference_price != null) {
+                hints.push(Number(lastBotDetail.state.reference_price));
+            }
+            if (lastBotDetail && lastBotDetail.current_price != null) {
+                hints.push(Number(lastBotDetail.current_price));
+            }
+            if (_gridPointsRefCtx && _gridPointsRefCtx.refD != null) {
+                hints.push(Number(_gridPointsRefCtx.refD));
+            }
+            (extra || []).forEach(function (v) {
+                var n = Number(v);
+                if (Number.isFinite(n) && n > 0) hints.push(n);
+            });
+            return hints;
         }
         function priceDecimalsForBot(symbol, priceHints) {
             symbol = (symbol || (lastBotDetail && lastBotDetail.symbol) || '').toUpperCase();
-            if (symbol && _botSymbolTickDecimals[symbol] != null) {
-                return _botSymbolTickDecimals[symbol];
-            }
-            var hint = null;
-            var hints = priceHints || [];
-            for (var i = 0; i < hints.length; i++) {
-                var v = Number(hints[i]);
-                if (Number.isFinite(v) && v > 0) { hint = v; break; }
-            }
-            var dec = inferPriceDecimalsFromMagnitude(hint);
-            return Math.min(8, Math.max(2, dec));
+            var hints = botPriceHints(priceHints);
+            if (_cpf().resolvePriceDecimals) return _cpf().resolvePriceDecimals(symbol, hints);
+            return inferPriceDecimalsFromMagnitude(hints[0]);
         }
-        function ensureBotSymbolPriceDecimals(symbol) {
-            if (!symbol || !accountId || !window.apiClient) return;
+        function ensureBotSymbolPriceDecimals(symbol, onLoaded) {
+            if (!symbol || !accountId) return;
             symbol = String(symbol).toUpperCase();
-            if (_botSymbolTickDecimals[symbol] != null) return;
-            window.apiClient.get('/api/spot/quick_data?account_id=' + encodeURIComponent(accountId) + '&symbol=' + encodeURIComponent(symbol))
-                .then(function (r) {
-                    if (!r || !r.filters) return;
-                    var d = decimalPlacesFromTickSize(r.filters.tickSize);
-                    if (d != null) _botSymbolTickDecimals[symbol] = Math.min(8, Math.max(4, d));
-                })
-                .catch(function () {});
+            if (_cpf().ensureSymbolTickDecimals) {
+                _cpf().ensureSymbolTickDecimals(symbol, accountId, function () {
+                    if (typeof onLoaded === 'function') onLoaded();
+                    else if (lastBotDetail && lastBotDetail.symbol) {
+                        patchGridDisplayCellsStatic(lastBotDetail);
+                        renderProfitPointsPanel(lastBotDetail);
+                    }
+                });
+            }
         }
         function priceDecimalsForModal(symbol, priceHints) {
-            var dec = botStripPriceDecimals(symbol);
-            var nums = (priceHints || []).map(Number).filter(function (p) { return Number.isFinite(p) && p > 0; });
-            if (nums.length >= 2) {
-                var need = dec;
-                for (var i = 1; i < nums.length; i++) {
-                    need = Math.max(need, decimalsNeededToDiffer(nums[0], nums[i], dec));
-                }
-                dec = Math.min(8, need);
-            }
-            return dec;
-        }
-        function decimalsFromDisplayedPriceText(text) {
-            if (text == null) return null;
-            var s = String(text).trim().replace(/,/g, '');
-            if (!s || s === '—') return null;
-            var dot = s.indexOf('.');
-            if (dot < 0) return 0;
-            return Math.min(8, Math.max(0, s.length - dot - 1));
+            return priceDecimalsForBot(symbol, priceHints);
         }
         function liveBotPriceNumber() {
             if (lastPriceForBlink != null && !isNaN(Number(lastPriceForBlink)) && Number(lastPriceForBlink) > 0) {
@@ -2536,24 +2519,23 @@
             }
             return null;
         }
-        /** Üst şerit (#botPriceEl) ile grid tablosu aynı ondalık — tick + canlı fiyat metni. */
-        function botStripPriceDecimals(symbol) {
-            symbol = (symbol || (lastBotDetail && lastBotDetail.symbol) || '').toUpperCase();
-            var dec = decimalsFromDisplayedPriceText(botPriceEl && botPriceEl.textContent);
-            if (dec == null || dec < 2) {
-                dec = _botSymbolTickDecimals[symbol] != null ? _botSymbolTickDecimals[symbol] : null;
-            }
-            if (dec == null || dec < 2) {
-                dec = inferPriceDecimalsFromMagnitude(liveBotPriceNumber() || (lastBotDetail && lastBotDetail.reference_display));
-            }
-            return Math.min(8, Math.max(4, dec != null ? dec : 4));
+        /** Üst şerit (#botPriceEl) ile grid tablosu aynı ondalık — tick + fiyat büyüklüğü. */
+        function botStripPriceDecimals(symbol, extraHints) {
+            return priceDecimalsForBot(symbol, extraHints);
         }
-        function fmtBotPrice(v) {
-            return fmtNum(v, botStripPriceDecimals());
+        function fmtBotPrice(v, extraHints) {
+            var sym = (lastBotDetail && lastBotDetail.symbol) || '';
+            if (_cpf().fmtSymbolPrice) return _cpf().fmtSymbolPrice(v, sym, botPriceHints(extraHints));
+            return fmtNum(v, botStripPriceDecimals(sym, extraHints));
+        }
+        function fmtBotPriceFixed(v, extraHints) {
+            var sym = (lastBotDetail && lastBotDetail.symbol) || '';
+            if (_cpf().fmtSymbolPriceFixed) return _cpf().fmtSymbolPriceFixed(v, sym, botPriceHints(extraHints));
+            return Number(v).toFixed(botStripPriceDecimals(sym, extraHints));
         }
         /** Grid fiyat hücreleri — #botPriceEl ile aynı formatter. */
-        function fmtGridPrice(v) {
-            return fmtBotPrice(v);
+        function fmtGridPrice(v, extraHints) {
+            return fmtBotPrice(v, extraHints);
         }
         /** Grid tablo miktarı: büyük bakiyeler kısa, küçük miktarlar anlamlı ondalık. */
         function fmtGridBaseQty(v) {
@@ -3469,7 +3451,7 @@
             var quotePct = cfg.quote_alloc_pct != null ? cfg.quote_alloc_pct : (alloc.quote_pct != null ? alloc.quote_pct : null);
             var sellTrail = cfg.sell_trigger_trailing_pct != null ? cfg.sell_trigger_trailing_pct : (up.trail_pct != null ? up.trail_pct : null);
             var buyTrail = cfg.buy_trigger_trailing_pct != null ? cfg.buy_trigger_trailing_pct : (down.trail_pct != null ? down.trail_pct : null);
-            var refPriceVal = referencePrice != null && !isNaN(referencePrice) ? fmtNum(referencePrice, 4) : '—';
+            var refPriceVal = referencePrice != null && !isNaN(referencePrice) ? fmtBotPrice(referencePrice, [referencePrice]) : '—';
             var pr = cfg.profit || {};
             var reTr = cfg.profit_reentry_drop_pct != null ? cfg.profit_reentry_drop_pct : pr.rebuy_trigger_pct;
             var reTrl = cfg.profit_reentry_rise_pct != null ? cfg.profit_reentry_rise_pct : pr.rebuy_trail_pct;
@@ -4461,10 +4443,11 @@
                 if (side && t.qty != null && t.price != null) {
                     var q = Number(t.qty);
                     var p = Number(t.price);
-                    if (Number.isFinite(q) && Number.isFinite(p)) keys.push('row:' + side + ':' + q.toFixed(8) + ':' + p.toFixed(4));
+                    var pDec = priceDecimalsForBot(symbol, [p]);
+                    if (Number.isFinite(q) && Number.isFinite(p)) keys.push('row:' + side + ':' + q.toFixed(8) + ':' + p.toFixed(pDec));
                 } else if (side && t.slot_id != null && t.price != null) {
                     var p2 = Number(t.price);
-                    if (Number.isFinite(p2)) keys.push('slotp:' + side + ':' + Number(t.slot_id) + ':' + p2.toFixed(4));
+                    if (Number.isFinite(p2)) keys.push('slotp:' + side + ':' + Number(t.slot_id) + ':' + p2.toFixed(priceDecimalsForBot(symbol, [p2])));
                 }
                 return keys;
             }
@@ -4575,7 +4558,7 @@
         }
         function gridPlainPriceHtml(priceVal) {
             if (priceVal == null || isNaN(priceVal)) return '—';
-            return fmtGridPrice(priceVal);
+            return fmtGridPrice(priceVal, [priceVal]);
         }
         function gridTepeDipCellHtml(priceVal, refPrice) {
             if (priceVal == null || isNaN(priceVal)) return '—';
@@ -5090,7 +5073,7 @@
                 var tq = h.reduce(function(s, x) { return s + (Number(x.qty) || 0); }, 0);
                 if (tq <= 0) return null;
                 var tv = h.reduce(function(s, x) { return s + (Number(x.qty) || 0) * gridHistPrice(x); }, 0);
-                return (tv / tq).toFixed(4);
+                return fmtBotPriceFixed(tv / tq, [tv / tq]);
             }
             var gm = data.grid_meta || {};
             var avgSellGrid = gm.avg_sell_grid != null ? String(gm.avg_sell_grid) : avgFromHist(sellHist, true);
@@ -5131,7 +5114,7 @@
                 var labelCell = typ + (karPct ? ' <span class="muted" style="font-size:0.85em">' + karPct + '</span>' : '');
                 var triggerStr = gridPlainPriceHtml(p.trigger_price);
                 var avgBase = profitRowAvgCost(p, avgBuyGrid, avgSellGrid);
-                var avgCostStr = avgBase != null ? fmtNum(avgBase, 4) : '—';
+                var avgCostStr = avgBase != null ? fmtGridPrice(avgBase, [avgBase, p.trigger_price]) : '—';
                 var tepeDipNum = null;
                 var execNum = null;
                 if (p.trigger_hit) {
@@ -5629,7 +5612,7 @@
                     var coin = baseFromSymbol(t.symbol || ctx.botSymbol || '') || '—';
                     var reason = ctx.reason || '—';
                     var qty = fmtNum(t.qty, 8);
-                    var price = fmtNum(t.price, 4);
+                    var price = fmtGridPrice(t.price, [t.price]);
                     var quoteQty = (t.qty && t.price) ? fmtUsd(t.qty * t.price) : '—';
                     var feeVal = t.fee != null ? t.fee : t.commission;
                     var feeStr = (feeVal != null && feeVal !== '') ? fmtUsd(Number(feeVal)) : '—';
@@ -5953,15 +5936,21 @@
                 try { window.PerfChartTV.init(chartBotId, accountId, accountCode); } catch (err) { console.warn('PerfChartTV.init', err); }
             }
             if (perfReport) {
-                var refPStr = (runStartPrice != null ? runStartPrice.toFixed(4) : '—');
+                var refPStr = (runStartPrice != null ? fmtBotPriceFixed(runStartPrice, [runStartPrice, priceForBot]) : '—');
                 var startBalStr = (runStartBal != null ? fmtUsd(runStartBal) : '—');
+                var pariteDiffStr = '—';
+                if (runStartPrice != null && priceForBot != null) {
+                    var diffP = priceForBot - runStartPrice;
+                    pariteDiffStr = (diffP >= 0 ? '+' : '') + fmtBotPriceFixed(diffP, [runStartPrice, priceForBot]) + ' ' +
+                        (priceForBot >= runStartPrice ? '+' : '') + ((priceForBot - runStartPrice) / runStartPrice * 100).toFixed(2) + '%';
+                }
                 perfReport.innerHTML =
                     '<p><strong>Başlangıç bakiyesi:</strong> <span id="perfReportStartBakiye">' + startBalStr + '</span></p>' +
                     '<p><strong>Güncel bakiye:</strong> <span id="perfReportGuncelBakiye">' + (botBalanceUsd || '—') + '</span></p>' +
                     '<p><strong>Bakiye Değişimi:</strong> <span id="perfReportBakiyeDegisim" style="color:' + totalKzCl + '">' + totalKzStr + (initialCapital > 0 && totalPnlUsd != null ? ' ' + (totalPnlUsd >= 0 ? '+' : '') + (initialCapital > 0 ? (totalPnlUsd / initialCapital * 100).toFixed(2) : '0') + '%' : '') + '</span></p>' +
                     '<p style="margin-top:1rem;"><strong>Parite Başlangıç Fiyatı (bot start):</strong> <span id="perfReportRefPrice">' + refPStr + '</span></p>' +
-                    '<p><strong>Parite Güncel Fiyatı:</strong> <span id="perfReportPariteGuncel">' + (priceForBot != null ? priceForBot.toFixed(4) : '—') + '</span></p>' +
-                    '<p><strong>Parite Değişimi:</strong> <span id="perfReportPariteDegisim">' + (runStartPrice != null && priceForBot != null ? (priceForBot - runStartPrice >= 0 ? '+' : '') + (priceForBot - runStartPrice).toFixed(4) + ' ' + (priceForBot >= runStartPrice ? '+' : '') + ((priceForBot - runStartPrice) / runStartPrice * 100).toFixed(2) + '%' : '—') + '</span></p>' +
+                    '<p><strong>Parite Güncel Fiyatı:</strong> <span id="perfReportPariteGuncel">' + (priceForBot != null ? fmtBotPriceFixed(priceForBot, [runStartPrice, priceForBot]) : '—') + '</span></p>' +
+                    '<p><strong>Parite Değişimi:</strong> <span id="perfReportPariteDegisim">' + pariteDiffStr + '</span></p>' +
                     '<p><strong>Gerçek performans</strong> (Bakiye % − Parite %): <span id="perfReportGercekPerf" style="font-weight:600">—</span></p>';
                 var perfReportGercekPerf = document.getElementById('perfReportGercekPerf');
                 if (perfReportGercekPerf && realPct0 != null) {
@@ -6585,12 +6574,13 @@
             var realColor = (realPct != null && realPct >= 0) ? '#0ecb81' : '#f6465d';
             var realSign = (realPct != null && realPct >= 0) ? '+' : '';
 
+            var pariteHints = [refP, curP].filter(function (x) { return x != null && !isNaN(x); });
             var html = '<p><strong>Başlangıç bakiyesi:</strong> <span id="perfReportStartBakiye">' + (startUsd != null ? fmtUsd(startUsd) : '—') + '</span></p>' +
                 '<p><strong>Güncel bakiye:</strong> <span id="perfReportGuncelBakiye">' + (endUsd != null ? fmtUsd(endUsd) : '—') + '</span></p>' +
                 '<p><strong>Bakiye Değişimi:</strong> <span id="perfReportBakiyeDegisim" style="color:' + pnlColor + '">' + (pnlUsd != null ? pnlSign + fmtUsd(pnlUsd) + ' ' : '') + (pnlPct != null ? (pnlPct >= 0 ? '+' : '') + pnlPct.toFixed(2) + '%' : '—') + '</span></p>' +
-                '<p style="margin-top:1rem;"><strong>Parite Başlangıç Fiyatı (referans):</strong> <span id="perfReportRefPrice">' + (refP != null ? refP.toFixed(4) : '—') + '</span></p>' +
-                '<p><strong>Parite Güncel Fiyatı:</strong> <span id="perfReportPariteGuncel">' + (curP != null ? curP.toFixed(4) : '—') + '</span></p>' +
-                (priceDiffUsd != null && pricePct != null ? '<p><strong>Parite Değişimi:</strong> <span id="perfReportPariteDegisim" style="color:' + priceColor + '">' + (priceDiffUsd >= 0 ? '+' : '') + priceDiffUsd.toFixed(4) + ' ' + (pricePct >= 0 ? '+' : '') + pricePct.toFixed(2) + '%</span></p>' : '<p><strong>Parite Değişimi:</strong> <span id="perfReportPariteDegisim">—</span></p>');
+                '<p style="margin-top:1rem;"><strong>Parite Başlangıç Fiyatı (referans):</strong> <span id="perfReportRefPrice">' + (refP != null ? fmtBotPriceFixed(refP, pariteHints) : '—') + '</span></p>' +
+                '<p><strong>Parite Güncel Fiyatı:</strong> <span id="perfReportPariteGuncel">' + (curP != null ? fmtBotPriceFixed(curP, pariteHints) : '—') + '</span></p>' +
+                (priceDiffUsd != null && pricePct != null ? '<p><strong>Parite Değişimi:</strong> <span id="perfReportPariteDegisim" style="color:' + priceColor + '">' + (priceDiffUsd >= 0 ? '+' : '') + fmtBotPriceFixed(priceDiffUsd, pariteHints) + ' ' + (pricePct >= 0 ? '+' : '') + pricePct.toFixed(2) + '%</span></p>' : '<p><strong>Parite Değişimi:</strong> <span id="perfReportPariteDegisim">—</span></p>');
             if (realPct != null) {
                 html += '<p><strong>Gerçek performans</strong> (Bakiye % − Parite %): <span style="color:' + realColor + '; font-weight:600">' + formatSignedPct2(realPct) + '</span></p>';
             }
@@ -8148,7 +8138,7 @@
         }
         function formatAvgCostWithQuote(avgCost, quoteUsdt, kind) {
             if (avgCost == null || isNaN(Number(avgCost))) return '—';
-            var s = fmtNum(avgCost, 4);
+            var s = fmtGridPrice(avgCost, [avgCost]);
             if (quoteUsdt != null && !isNaN(Number(quoteUsdt))) {
                 var quoteLabel = kind === 'reentry' ? 'toplam' : 'harcanan';
                 s += ' · ' + quoteLabel + ' ' + fmtUsd(quoteUsdt);

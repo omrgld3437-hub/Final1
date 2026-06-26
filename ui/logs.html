@@ -58,7 +58,9 @@
         .page-header-left { flex: 1; min-width: 0; }
         .page-header .page-title-main { margin: 0; padding: 0; font: inherit; }
         .page-header .brand {
-            display: block;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
             font-size: 1.6rem;
             font-weight: 700;
             color: var(--ds-accent);
@@ -425,6 +427,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,700;1,300&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/ui/assets/scroll-auto-hide.css?v=8">
+    <link rel="stylesheet" href="/ui/assets/brand-logo.css?v=rose4">
     <script src="/ui/assets/scrollAutoHide.js?v=5"></script>
     <script src="/ui/assets/scrollRestore.js?v=scroll-restore4"></script>
 </head>
@@ -433,7 +436,7 @@
         <div class="page-header">
             <div class="page-header-left">
                 <h1 class="page-title-main">
-                    <span class="brand"><span class="ar-ayse">ayse</span><span class="ar-rose">rose</span></span>
+                    <span class="brand"><span class="brand-logo-mark brand-logo-mark--lg" aria-hidden="true"></span><span class="ar-ayse">ayse</span><span class="ar-rose">rose</span></span>
                     <span class="subtitle">Server Yönetici Paneli</span>
                 </h1>
                 <p class="desc">Web, Bot Engine ve Manager sunucularını bu panelden izleyip yönetebilirsiniz. Sadece bu bilgisayardan erişilebilir.</p>

@@ -31,7 +31,12 @@ from app.services.param_optimizer.robust_policy import (
     forecast_skill_gate,
     robust_objective,
 )
-from app.services.param_optimizer.space import ParamSpace
+from app.services.param_optimizer.space import (
+    FEE_FLOOR_STEP_PCT,
+    ParamSpace,
+    decode as sp_decode,
+    regime_max_exposure_headroom_pct,
+)
 
 
 _DAY_MS = 86_400_000
@@ -315,31 +320,47 @@ def _gjr_garch_term_pct(returns: Sequence[float], horizon: int, bars_per_day: fl
 
 @dataclass
 class StructuralVariant:
+    # P0-7: 'reserve' alanı KALDIRILDI. Hiç kullanılmıyordu (qty her zaman %100
+    # dağıtılır — sistemin "tüm sermaye grid'lere" değişmezi, ilgili testlerle kilitli),
+    # bu yüzden 'defensive_wide_reserve' gibi adlar gerçek bir rezerv olmadığı halde
+    # çeşitlilik iması yaratıyordu. Varyantlar zaten step/base_shift/growth/asymmetric
+    # ile GERÇEKTEN farklılaşır; sahte 'reserve' boyutu çıkarıldı.
     name: str
     step_mult: float
     trail_mult: float
     base_shift: float
     growth: float
-    reserve: float
     asymmetric: bool
     moving_anchor: bool
-    dd_stop: bool
+    # Aşama 2: envanter tavanı headroom'u (intended base_alloc_pct'in üzerinde,
+    # backtest._apply() tarafından sert uygulanan, izin verilen ek base yüzdesi).
+    # Savunma odaklı varyantlar daha sıkı, trend-takip eden daha gevşek.
+    exposure_headroom_pct: float
+    # Aşama 2: backtest içi nedensel ayı-bar proxy'si aktifken BUY fill'lerinin ne
+    # kadar kısılacağı (0=etkisiz). Savunma odaklı varyantlar daha yüksek throttle;
+    # trend-takip eden varyant zaten kendi düşüş-genişletmesiyle korunduğu için düşük.
+    downtrend_buy_throttle: float
+    # Aşama 2 madde 4 (genelleştirilmiş asimetri): yukarı trendde sell sıkışması/buy
+    # genişlemesinin bu varyantta NE KADAR uygulanacağı (0=tam simetrik, 1=bugünkü
+    # trend_tilted_asymmetric'in birebir gücü). Düşüş-genişletmesi (1.15x) TÜM
+    # varyantlarda SABİT kalır — burada ölçeklenmez (mevcut düşüş koruması zayıflamaz).
+    tilt_strength: float
 
 
 def _structural_variants() -> List[StructuralVariant]:
     return [
-        StructuralVariant("symmetric_moving_cap_stop", 1.00, 1.00, 0.0, 1.22, 0.12, False, True, True),
-        StructuralVariant("defensive_wide_reserve", 1.28, 0.92, -8.0, 1.30, 0.24, False, True, True),
-        StructuralVariant("trend_tilted_asymmetric", 1.10, 1.10, 8.0, 1.20, 0.10, True, True, True),
-        StructuralVariant("squeeze_tight_reduced", 0.84, 0.88, 0.0, 1.16, 0.18, False, True, True),
-        StructuralVariant("high_vol_survival", 1.55, 0.85, -12.0, 1.38, 0.32, False, True, True),
+        StructuralVariant("symmetric_moving_cap_stop", 1.00, 1.00, 0.0, 1.22, False, True, 18.0, 0.30, 0.35),
+        StructuralVariant("defensive_wide", 1.28, 0.92, -8.0, 1.30, False, True, 12.0, 0.50, 0.25),
+        StructuralVariant("trend_tilted_asymmetric", 1.10, 1.10, 8.0, 1.20, True, True, 22.0, 0.25, 1.00),
+        StructuralVariant("squeeze_tight_reduced", 0.84, 0.88, 0.0, 1.16, False, True, 18.0, 0.30, 0.20),
+        StructuralVariant("high_vol_survival", 1.55, 0.85, -12.0, 1.38, False, True, 14.0, 0.55, 0.30),
     ]
 
 
-def _qtys(count: int, reserve: float) -> List[float]:
+def _qtys(count: int) -> List[float]:
     count = max(1, int(count))
-    # Grid miktarları toplamda HER ZAMAN %100 olmalı: tüm tahsis grid'lere dağıtılır.
-    # ('reserve' artık toplamı düşürmez — yalnızca kademeler arası ağırlık eğrisi korunur.)
+    # Grid miktarları toplamda HER ZAMAN %100 (tüm tahsis grid'lere dağıtılır —
+    # sistemin değişmezi; testlerle kilitli). Kademeler arası ağırlık öne yüklenir.
     weights = [1.0 / (1.0 + i * 0.18) for i in range(count)]
     s = sum(weights) or 1.0
     qtys = [round(100.0 * w / s, 3) for w in weights]
@@ -349,6 +370,91 @@ def _qtys(count: int, reserve: float) -> List[float]:
     return qtys
 
 
+# P0-3 / Aşama 3: hybrid arama — space.py'den decode edilecek deterministik
+# quasi-random örnek sayısı. Tek profesyonel mod (geniş aday taraması hedefi:
+# 300-600 benzersiz aday) için yüksek tutulur; ÜRETİM ucuzdur (decode + dedup,
+# backtest YOK) — gerçek maliyet doğrulama/MC adımlarında ve onlar zaten kendi
+# deadline'larıyla sınırlı, bu sayı runtime'ı patlatmaz.
+_SPACE_SAMPLES_TARGET = 350
+
+
+def _normalize_grid_qty_100(params: Dict[str, Any]) -> None:
+    """Grid qty'lerini toplam TAM 100 olacak şekilde yerinde ölçekle.
+
+    space.decode() çıktısının qty toplamı (min-notional zorlaması nedeniyle) tam
+    100 olmayabilir; hybrid space adaylarını yapısal adaylarla aynı %100 değişmezine
+    getirir. Ölçek yalnızca büyütür (toplam<100 iken) ya da küçültür; her iki halde
+    min-notional alt sınırı korunur (büyütme zaten güvenli, decode küçültmeyi kendi
+    yapmıştı)."""
+    for key, qkey in (
+        ("sell_grids", "sell_qty_pct_of_base"),
+        ("buy_grids", "buy_qty_pct_of_quote"),
+    ):
+        grids = params.get(key) or []
+        s = sum(_safe_float(g.get(qkey)) for g in grids)
+        if not grids or s <= 0:
+            continue
+        scale = 100.0 / s
+        for g in grids:
+            g[qkey] = round(_safe_float(g.get(qkey)) * scale, 3)
+        drift = round(100.0 - sum(_safe_float(g.get(qkey)) for g in grids), 3)
+        grids[-1][qkey] = round(_safe_float(grids[-1].get(qkey)) + drift, 3)
+
+
+# ── canlıya uygun olmayan ADAY YAPILARINI erken/ucuza ele ────────────────────
+# Backtest'e gitmeden ÖNCE, salt PARAMS yapısından (gridler/tahsis) ve mevcut
+# rejimden anlaşılan, açıkça canlıya uygun olmayan adayları reddet. Motor artık
+# "en iyi skoru" değil "en iyi CANLIYA UYGUN skoru" seçer — bu fonksiyon hangi
+# adayların hiç canlıya uygun aday havuzuna girmeyeceğini belirler.
+def _structural_reject_reason(
+    params: Dict[str, Any],
+    *,
+    regime_code: str,
+    grid_suitability: float,
+) -> Optional[str]:
+    buy_grids = params.get("buy_grids") or []
+    n_buy = len(buy_grids)
+    max_buy_qty = max(
+        (_safe_float(g.get("buy_qty_pct_of_quote")) for g in buy_grids), default=0.0
+    )
+    quote_alloc = _safe_float(params.get("quote_alloc_pct"), 0.0)
+    base_frac = _safe_float(params.get("base_alloc_pct"), 0.0) / 100.0
+    max_exposure_frac = _safe_float(params.get("max_base_exposure_frac"), base_frac)
+    headroom_cap = regime_max_exposure_headroom_pct(regime_code) / 100.0
+    if max_exposure_frac - base_frac > headroom_cap + 1e-6:
+        return "exposure_headroom_too_wide"
+
+    # Aşağı trend / grid'e uygun olmayan piyasada: quote'un büyük kısmını tek
+    # alış kademesine koymak grid stratejisi değil, düşüşte tek mermiyle bıçak
+    # yakalamadır (SOLUSDT denetim bulgusu: 1 buy grid + quote'un %100'ü).
+    defensive_unsuitable = regime_code == "TRENDING_DOWN" or grid_suitability < 0.30
+    if defensive_unsuitable:
+        if n_buy == 1 and max_buy_qty >= 50.0:
+            return "single_big_buy_in_downtrend"
+        if quote_alloc >= 40.0 and n_buy < 3:
+            return "quote_not_laddered"
+        if max_buy_qty > 35.0:
+            return "oversized_buy_level"
+    return None
+
+
+def _oos_reject_reason(oos_metrics: Optional[Dict[str, Any]]) -> Optional[str]:
+    """validation_oos kapısı: hedef pasifi yenmeyen ya da maruziyeti aşırı kaymış
+    aday, skoru ne olursa olsun canlıya uygun aday havuzundan çıkar (MC bile
+    görmez) — yenilmiş bir set asla 'gelecekte kâr olasılığı' pazarlamasın."""
+    if not oos_metrics:
+        return None
+    drift = _safe_float(oos_metrics.get("exposure_drift"), 0.0)
+    honest_alpha = _safe_float(oos_metrics.get("grid_alpha_vs_intended_pct"), 0.0)
+    if drift > 0.08 and honest_alpha <= 0.0:
+        return "bad_alpha_with_exposure_drift"
+    if honest_alpha <= 0.0:
+        return "worse_than_passive"
+    if abs(drift) > 0.12:
+        return "exposure_drift_too_high"
+    return None
+
+
 def _params_from_policy(
     state: Mapping[str, Any],
     variant: StructuralVariant,
@@ -356,18 +462,32 @@ def _params_from_policy(
     min_notional: float,
     *,
     trend_score: float,
+    regime_code: str = "UNKNOWN",
 ) -> Dict[str, Any]:
-    step = max(0.6, _safe_float(state.get("grid_step_pct")) * variant.step_mult)
+    step = max(FEE_FLOOR_STEP_PCT, _safe_float(state.get("grid_step_pct")) * variant.step_mult)
     base = _clamp(_safe_float(state.get("base_alloc_pct"), 50.0) + variant.base_shift, 20.0, 70.0)
     if trend_score < -0.15:
         base = min(base, 42.0)
     if trend_score > 0.25 and variant.asymmetric:
         base = max(base, 55.0)
     quote = 100.0 - base
-    sell_step = step * (0.95 if variant.asymmetric and trend_score > 0 else 1.0)
-    buy_step = step * (1.15 if variant.asymmetric and trend_score > 0 else 1.0)
+    # Aşama 2 madde 4: yukarı-trend tilt'i artık TEK bir varyanta (asymmetric=True)
+    # kilitli değil — her varyant kendi tilt_strength'i kadar (0..1) orantılı pay
+    # alır. trend_tilted_asymmetric (tilt_strength=1.0) için herhangi bir
+    # trend_score>0'da bugünküyle BİREBİR aynı 0.95/1.15 çarpanını üretir (ikili
+    # kapı korunur, sadece MAĞNİTÜD varyanta göre ölçeklenir). Düşüş genişletmesi
+    # (1.15x) TÜM varyantlarda sabit kalır — mevcut düşüş koruması zayıflatılmaz.
+    uptrend_tilt = variant.tilt_strength if trend_score > 0 else 0.0
+    sell_step = step * (1.0 - 0.05 * uptrend_tilt)
+    buy_step = step * (1.0 + 0.15 * uptrend_tilt)
     if trend_score < -0.15:
         buy_step *= 1.15
+    # space.decode() ücret tabanını sadece kendi çıkışında uygular; buradaki
+    # step_mult/asimetri/düşüş çarpanları sonrasında aynı tabanı tekrar kontrol
+    # etmezsek squeeze_tight_reduced (step_mult<1) veya sell-side sıkışma tabanın
+    # altına inebilir (komisyonu eziyor).
+    sell_step = max(FEE_FLOOR_STEP_PCT, sell_step)
+    buy_step = max(FEE_FLOOR_STEP_PCT, buy_step)
     base_leg = budget * base / 100.0
     quote_leg = budget * quote / 100.0
     sell_count = max(1, min(6, int(base_leg // max(1.0, min_notional * 1.05))))
@@ -380,8 +500,8 @@ def _params_from_policy(
         buy_count = min(buy_count, 4)
     sell_trigs = [round(sell_step * (variant.growth ** i), 3) for i in range(sell_count)]
     buy_trigs = [round(min(91.0, buy_step * (variant.growth ** i)), 3) for i in range(buy_count)]
-    sell_qty = _qtys(sell_count, variant.reserve)
-    buy_qty = _qtys(buy_count, variant.reserve)
+    sell_qty = _qtys(sell_count)
+    buy_qty = _qtys(buy_count)
     trail = max(0.2, _safe_float(state.get("trailing_pct"), step * 0.42) * variant.trail_mult)
     return {
         "base_alloc_pct": round(base, 2),
@@ -402,10 +522,19 @@ def _params_from_policy(
         "profit_reentry_rise_pct": round(_clamp(trail * 0.9, 0.2, 4.0), 3),
         "max_buy_levels": buy_count,
         "min_net_profit_rate": 0.0015,
+        "max_base_exposure_frac": round(
+            _clamp(
+                base / 100.0
+                + min(variant.exposure_headroom_pct, regime_max_exposure_headroom_pct(regime_code)) / 100.0,
+                base / 100.0,
+                1.0,
+            ),
+            4,
+        ),
+        "downtrend_buy_throttle": variant.downtrend_buy_throttle,
         "basis_mode": "moving_anchor" if variant.moving_anchor else "grid_only",
         "min_notional_guard": min_notional,
         "robust_structure": variant.name,
-        "dd_stop_enabled": variant.dd_stop,
     }
 
 
@@ -960,7 +1089,10 @@ def optimize_robust(
     current_state = policy[current_regime].to_dict()
 
     t0 = time.time()
-    base_params = _params_from_policy(current_state, center_variant, budget, min_notional, trend_score=features.trend_score)
+    base_params = _params_from_policy(
+        current_state, center_variant, budget, min_notional,
+        trend_score=features.trend_score, regime_code=current_regime,
+    )
     r0 = run_backtest(train, base_params, budget, symbol, fee_rate=fee, slippage_bps=slippage)
     per_eval = max(0.001, time.time() - t0)
     emit("measure", per_eval_sec=round(per_eval, 4), workers=workers, base_score=round(score_backtest(r0, obj_cfg).score, 4))
@@ -968,7 +1100,10 @@ def optimize_robust(
     variants = _structural_variants()
     candidates: List[Tuple[str, Dict[str, Any]]] = []
     for variant in variants:
-        params = _params_from_policy(current_state, variant, budget, min_notional, trend_score=features.trend_score)
+        params = _params_from_policy(
+            current_state, variant, budget, min_notional,
+            trend_score=features.trend_score, regime_code=current_regime,
+        )
         candidates.append((variant.name, params))
         for step_mult in (0.92, 1.08):
             vv = StructuralVariant(
@@ -977,12 +1112,42 @@ def optimize_robust(
                 variant.trail_mult,
                 variant.base_shift,
                 variant.growth,
-                variant.reserve,
                 variant.asymmetric,
                 variant.moving_anchor,
-                variant.dd_stop,
+                variant.exposure_headroom_pct,
+                variant.downtrend_buy_throttle,
+                variant.tilt_strength,
             )
-            candidates.append((vv.name, _params_from_policy(current_state, vv, budget, min_notional, trend_score=features.trend_score)))
+            candidates.append((vv.name, _params_from_policy(
+                current_state, vv, budget, min_notional,
+                trend_score=features.trend_score, regime_code=current_regime,
+            )))
+    _structural_count = len(candidates)
+    # P0-3: HYBRID ARAMA — space.py uzayını GERÇEKTEN kullan. Önceden build_space()
+    # 13-boyutlu uzayı kuruyor ama optimize_robust yalnız space.min_notional okuyup
+    # decode()'u hiç çağırmıyordu (ölü kod). Artık space merkezi + deterministik
+    # quasi-random decode adayları yapısal varyantlara EKLENİR ve aynı doğrulamadan
+    # geçer; böylece coin'e özgü ATR-çapalı uzay aramaya katılır.
+    space_added = 0
+    try:
+        space_rng = random.Random(seed + 777)
+        _n_space = _SPACE_SAMPLES_TARGET
+        _space_vecs = [("space_center", space.center())]
+        for _i in range(max(0, _n_space)):
+            _space_vecs.append((f"space_sample_{_i}", space.random(space_rng)))
+        for _nm, _vec in _space_vecs:
+            try:
+                _p = sp_decode(_vec, space, features=features)
+                _normalize_grid_qty_100(_p)
+                candidates.append((_nm, _p))
+                space_added += 1
+            except Exception:
+                continue
+    except Exception:
+        space_added = 0
+    _search_method = (
+        "hybrid_structural_plus_space" if space_added > 0 else "structural_variants"
+    )
     # Deduplicate by actual bot params.
     unique: List[Tuple[str, Dict[str, Any]]] = []
     seen = set()
@@ -997,17 +1162,32 @@ def optimize_robust(
         if sig not in seen:
             seen.add(sig)
             unique.append((name, params))
+    _raw_candidate_count = len(candidates)
     candidates = unique
+    # Erken/ucuz yapısal eleme: backtest'e GİTMEDEN önce açıkça canlıya uygun
+    # olmayan aday yapılarını işaretle (tek aşırı-büyük alış kademesi, kısa
+    # merdivenli quote, aşırı geniş envanter tavanı). Adaylar havuzdan SİLİNMEZ
+    # (validasyon/teşhis için backtest'e girerler) — ama MC ve "best_deployable"
+    # seçiminden ASLA çıkamaz; aşağıda her skorlanan adaya bu etiket işlenir.
+    _grid_suit = _safe_float(getattr(features, "grid_suitability", 0.5), 0.5)
+    _structural_reject_map: Dict[str, Optional[str]] = {
+        name: _structural_reject_reason(
+            params, regime_code=current_regime, grid_suitability=_grid_suit
+        )
+        for name, params in candidates
+    }
+    _structural_rejected_count = sum(1 for v in _structural_reject_map.values() if v)
     emit("coarse", evaluated=len(candidates), best_score=round(score_backtest(r0, obj_cfg).score, 4), elapsed=round(time.time() - t_start, 1))
 
     # Candidate validation — embarrassingly parallel: each candidate is a full
     # robust score (train/oos/recent + walk-forward folds) over the SAME shared
     # data. Fan out across workers; deadline-safe; serial fallback inside pmap.
     emit("validate", candidates=len(candidates), candidates_done=0, workers=workers, elapsed=round(time.time() - t_start, 1))
+    _val_folds = max(2, int(getattr(tier, "walk_forward_oos_folds", folds) or folds))
     _val_payload = {
         "train": train, "oos": oos, "recent_in": recent_in, "budget": budget,
         "symbol": symbol, "fee": fee, "slippage": slippage, "obj_cfg": obj_cfg,
-        "folds": max(2, int(getattr(tier, "walk_forward_oos_folds", folds) or folds)),
+        "folds": _val_folds,
     }
     _val_results = parallel.pmap(
         _validate_candidate_worker, candidates, workers=workers,
@@ -1015,6 +1195,18 @@ def optimize_robust(
         deadline=deadline, min_items=1, serial_threshold=4,
     )
     scored: List[Dict[str, Any]] = [sc for sc in _val_results if sc]
+    # Her skorlanan adaya YAPISAL red sebebini (varsa) + validation_oos KAPISI
+    # sonucunu işle: validation_oos.honest_alpha<=0 ya da maruziyet kayması aşırıysa
+    # candidate.deployable_candidate=False — skoru ne olursa olsun bu aday ASLA
+    # best_deployable/MC havuzuna giremez (kullanıcı denetimi madde 5: "OOS'ta
+    # hedef pasifi yenemeyen set MC'ye bile sokulmamalı").
+    for sc in scored:
+        struct_reason = _structural_reject_map.get(sc.get("variant"))
+        oos_reason = _oos_reject_reason(sc.get("oos_metrics"))
+        sc["structural_reject_reason"] = struct_reason
+        sc["oos_reject_reason"] = oos_reason
+        sc["reject_reason"] = struct_reason or oos_reason
+        sc["deployable_candidate"] = sc["reject_reason"] is None
     emit(
         "validate",
         message="görülmemiş doğrulama: %d aday %d çekirdekte" % (len(scored), workers),
@@ -1025,6 +1217,104 @@ def optimize_robust(
     )
 
     pbo = _pbo_from_candidates(scored)
+
+    # ── best_candidate (en iyi skor) vs best_deployable_candidate (TÜM hard
+    # gate'leri geçen en iyi skor) ayrımı ────────────────────────────────────
+    # Eskiden tüm adaylar kötü olsa bile en iyi skorlu olan "best_params" diye
+    # döndürülüyordu (SOLUSDT denetim bulgusu: tek-buy-grid + quote'un %100'ü +
+    # aşağı trend adayı "öneri" gibi sunulmuştu). Artık deploy edilebilir aday
+    # yoksa best_params=None döner; en iyi REDDEDİLEN aday "rejected_best_candidate"
+    # olarak ayrıca raporlanır — bu bir ÖNERİ değil, teşhis amaçlıdır.
+    deployable_pool = [sc for sc in scored if sc.get("deployable_candidate")]
+    _n_fold_seg = len(_fold_segments(train, _val_folds))
+    _bt_per_candidate = 1 + (1 if oos else 0) + (1 if recent_in else 0) + _n_fold_seg
+    candidate_backtests_total = len(scored) * _bt_per_candidate
+    _base_stats: Dict[str, Any] = {
+        "engine_version": "robust_v2",
+        "search_method": _search_method,
+        "structural_candidates_total": int(_structural_count),
+        "space_candidates_total": int(space_added),
+        "per_eval_sec": round(per_eval, 4),
+        "workers": int(workers),
+        "workers_used": int(workers),
+        "raw_candidates_total": int(_raw_candidate_count),
+        "unique_candidates_total": len(candidates),
+        "validated_candidates_total": len(scored),
+        "deployable_candidates_total": len(deployable_pool),
+        "rejected_candidates_total": len(scored) - len(deployable_pool),
+        "candidate_backtests_total": int(candidate_backtests_total),
+        "walk_forward_folds": folds,
+        "nested_oos_points": skill_meta.get("oos_points", 0),
+        "purge": skill_meta.get("purge", 0),
+        "embargo": skill_meta.get("embargo", 0),
+        "pbo": round(pbo, 4),
+        "elapsed_sec": round(time.time() - t_start, 1),
+        "forecast_skill_score": skill.to_dict().get("skill_score"),
+        "forecast_fallback_used": skill.fallback_used,
+        # geriye-uyum (eski okuyucular): aday sayısı — "kombinasyon" değil.
+        "evals_total": len(candidates),
+        "search_evals": len(candidates),
+        "validated": len(scored),
+    }
+
+    if not deployable_pool:
+        scored.sort(key=lambda x: x.get("fold_adjusted_score", x["final_score"]), reverse=True)
+        rejected_best = scored[0] if scored else None
+        rejected_payload = None
+        if rejected_best is not None:
+            rejected_payload = {
+                "structure": rejected_best.get("variant"),
+                "params": rejected_best.get("params"),
+                "reject_reason": rejected_best.get("reject_reason"),
+                "in_sample_result": rejected_best.get("in_metrics"),
+                "oos_result": rejected_best.get("oos_metrics"),
+                "final_score": round(_safe_float(rejected_best.get("final_score"), 0.0), 4),
+            }
+        _base_stats.update({
+            "mc_candidates_total": 0,
+            "mc_paths_requested": int(mc_paths_target),
+            "mc_paths_effective": 0,
+            "mc_backtests_total": 0,
+            "mc_tested": 0,
+            "mc_paths": 0,
+            "deflated_sharpe_ok": False,
+            "plateau_ok": False,
+            "deploy": False,
+            "degraded": False,
+        })
+        return {
+            "result_type": "no_deployable_candidate",
+            "best_vec": None,
+            "best_params": None,
+            "best_score": None,
+            "rejected_best_candidate": rejected_payload,
+            "forecast": None,
+            "in_sample_result": None,
+            "oos_result": None,
+            "leaderboard": [
+                {
+                    "combined_score": round(_safe_float(sc.get("fold_adjusted_score"), sc["final_score"]), 4),
+                    "final_score": round(sc["final_score"], 4),
+                    "oos_return_pct": (sc.get("oos_metrics") or {}).get("return_pct"),
+                    "in_return_pct": (sc.get("in_metrics") or {}).get("return_pct"),
+                    "structure": sc.get("variant"),
+                    "deployable": False,
+                    "reject_reason": sc.get("reject_reason"),
+                    "params": sc["params"],
+                }
+                for sc in scored[: min(len(scored), 12)]
+            ],
+            "robust_skill": skill.to_dict(),
+            "robust_forecast": robust_forecast.to_dict(),
+            "causal_features": _causal_feature_pack(train),
+            "pbo": round(pbo, 4),
+            "deflated_sharpe_ok": False,
+            "plateau_ok": False,
+            "stress_ok": False,
+            "deploy_gate": {"deploy": False, "reasons": ["no_deployable_candidate"], "checks": {}},
+            "stats": _base_stats,
+        }
+
     # MC path budgeting: parallelism multiplies throughput, so we afford a much
     # higher FLOOR — tail metrics (p05 / CVaR5 / worst-DD) are meaningless at the
     # old ~15-path floor and need O(100+) paths. pmap still respects the deadline.
@@ -1032,18 +1322,23 @@ def optimize_robust(
     if mc_paths_target > 0:
         elapsed = time.time() - t_start
         remaining = max(0.0, time_budget_sec - elapsed)
-        mc_top_n = max(1, min(int(getattr(tier, "mc_top_candidates", 5) or 5), len(scored)))
+        mc_top_n = max(1, min(int(getattr(tier, "mc_top_candidates", 5) or 5), len(deployable_pool)))
         # parallel throughput ≈ workers paths per (per_eval × candidates_per_path)
         thru = int(max(1, workers) * remaining / max(per_eval * mc_top_n, 0.01))
         floor = 24 if time_budget_sec <= 30 else 96
         mc_paths_eff = min(mc_paths_target, max(floor, thru))
     forecast_scores: Dict[int, Dict[str, Any]] = {}
     stress_results: Dict[int, bool] = {}
-    if mc_paths_eff > 0 and scored:
-        mc_top = max(1, min(int(getattr(tier, "mc_top_candidates", 5) or 5), len(scored)))
+    mc_candidates_count = 0
+    # MC SADECE deploy edilebilir adayları görür: OOS'ta hedef pasifi yenemeyen
+    # ya da yapısal olarak reddedilen aday skoru ne olursa olsun MC'ye bile
+    # sokulmaz — yenilmiş bir set "gelecekte kâr olasılığı" pazarlaması yapamaz.
+    if mc_paths_eff > 0 and deployable_pool:
+        mc_top = max(1, min(int(getattr(tier, "mc_top_candidates", 5) or 5), len(deployable_pool)))
         if time_budget_sec <= 30:
             mc_top = 1
-        top_for_mc = sorted(scored, key=lambda x: x["final_score"], reverse=True)[:mc_top]
+        top_for_mc = sorted(deployable_pool, key=lambda x: x["final_score"], reverse=True)[:mc_top]
+        mc_candidates_count = len(top_for_mc)
 
         def _mc_prog(done: int, total: int) -> None:
             emit(
@@ -1108,8 +1403,12 @@ def optimize_robust(
         sc.setdefault("forecast", None)
         sc.setdefault("robustness", None)
 
+    # Genel leaderboard sıralaması (teşhis/şeffaflık) TÜM havuzu kapsar; ama
+    # `best` SADECE deploy edilebilir havuzdan seçilir — reddedilen bir aday
+    # skoru ne kadar yüksek olursa olsun ASLA best/best_params olamaz.
     scored.sort(key=lambda x: x.get("combined_score", x.get("fold_adjusted_score", x["final_score"])), reverse=True)
-    best = scored[0]
+    deployable_pool.sort(key=lambda x: x.get("combined_score", x.get("fold_adjusted_score", x["final_score"])), reverse=True)
+    best = deployable_pool[0]
     # Garanti: MC açıkken kazanan adayın her zaman bir forecast'i olsun. Bütçe sınırı
     # nedeniyle kazanan MC görmemişse, taban yol sayısıyla (deadline-bağımsız min) tek
     # bir bounded MC daha koştur — sonuç/UI forecast'siz kalmasın, donma da olmaz.
@@ -1165,7 +1464,10 @@ def optimize_robust(
     if time_budget_sec >= 20 and mc_paths_target >= 400:
         while time.time() - t_start < min(8.0, time_budget_sec * 0.5):
             v = rng.choice(variants)
-            p = _params_from_policy(current_state, v, budget, min_notional, trend_score=features.trend_score)
+            p = _params_from_policy(
+                current_state, v, budget, min_notional,
+                trend_score=features.trend_score, regime_code=current_regime,
+            )
             run_backtest(train[-min(len(train), 180) :], p, budget, symbol, fee_rate=fee, slippage_bps=slippage)
 
     leaderboard = []
@@ -1182,6 +1484,8 @@ def optimize_robust(
                 "mc_prob_profit": fc.get("prob_profit"),
                 "mc_robustness": sc.get("robustness"),
                 "structure": sc.get("variant"),
+                "deployable": bool(sc.get("deployable_candidate")),
+                "reject_reason": sc.get("reject_reason"),
                 "params": sc["params"],
             }
         )
@@ -1201,10 +1505,27 @@ def optimize_robust(
             "robustness": None,
         }
 
+    mc_backtests_total = mc_candidates_count * mc_paths_eff
+    _base_stats.update({
+        "mc_candidates_total": int(mc_candidates_count),
+        "mc_paths_requested": int(mc_paths_target),
+        "mc_paths_effective": int(mc_paths_eff),
+        "mc_backtests_total": int(mc_backtests_total),
+        "mc_tested": sum(1 for sc in scored if sc.get("forecast")),
+        "mc_paths": mc_paths_eff,
+        "deflated_sharpe_ok": dsr_ok,
+        "plateau_ok": plateau,
+        "deploy": gate.deploy,
+        "degraded": False,
+        "elapsed_sec": round(time.time() - t_start, 1),
+    })
+
     return {
+        "result_type": "ok",
         "best_vec": {"structure": best.get("variant")},
         "best_params": best_params,
         "best_score": best_score,
+        "rejected_best_candidate": None,
         "forecast": best_forecast,
         "in_sample_result": best.get("in_metrics"),
         "oos_result": best.get("oos_metrics"),
@@ -1217,26 +1538,5 @@ def optimize_robust(
         "plateau_ok": plateau,
         "stress_ok": stress_ok,
         "deploy_gate": gate.to_dict(),
-        "stats": {
-            "engine_version": "robust_v2",
-            "per_eval_sec": round(per_eval, 4),
-            "workers": 1,
-            "evals_total": len(candidates),
-            "search_evals": len(candidates),
-            "validated": len(scored),
-            "mc_tested": sum(1 for sc in scored if sc.get("forecast")),
-            "mc_paths": mc_paths_eff,
-            "walk_forward_folds": folds,
-            "nested_oos_points": skill_meta.get("oos_points", 0),
-            "purge": skill_meta.get("purge", 0),
-            "embargo": skill_meta.get("embargo", 0),
-            "pbo": round(pbo, 4),
-            "deflated_sharpe_ok": dsr_ok,
-            "plateau_ok": plateau,
-            "deploy": gate.deploy,
-            "degraded": False,
-            "elapsed_sec": round(time.time() - t_start, 1),
-            "forecast_skill_score": skill.to_dict().get("skill_score"),
-            "forecast_fallback_used": skill.fallback_used,
-        },
+        "stats": _base_stats,
     }

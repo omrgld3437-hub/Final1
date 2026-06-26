@@ -73,7 +73,9 @@ class DataHub:
         self._pinned_symbols: set = (
             set()
         )  # worker: çalışan bot sembolleri asla trim'den düşmez
-        self._symbol_24h_fetch_ts: Dict[str, float] = {}  # tek sembol REST throttle
+        self._symbol_24h_fetch_ts: Dict[str, float] = {}
+        self._price_ensure_task: Optional[asyncio.Task] = None  # tek sembol REST throttle
+        self._symbol_price_fetch_ts: Dict[str, float] = {}
         self.all_symbols: List[str] = []
         self.all_symbols_ts: float = 0
         self.ALL_SYMBOLS_TTL = 600.0
@@ -424,6 +426,100 @@ class DataHub:
                 pass
         except Exception as e:
             logger.debug("[DataHub] update_ticker_24h error: %s", e)
+
+    def schedule_price_ensure(self, symbols: List[str]) -> None:
+        """Cache miss için arka plan doldurma — GET /data/prices asla bekletmez."""
+        syms = []
+        seen: set = set()
+        for raw in symbols or []:
+            s = (raw or "").strip().upper()
+            if not s or s in seen:
+                continue
+            seen.add(s)
+            syms.append(s)
+        if not syms:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        if self._price_ensure_task and not self._price_ensure_task.done():
+            return
+        self._price_ensure_task = loop.create_task(self._ensure_symbols_background(syms))
+
+    async def _ensure_symbols_background(self, symbols: List[str]) -> None:
+        unique = list(dict.fromkeys(symbols))[:32]
+        missing = [
+            s
+            for s in unique
+            if float((self.prices.get(s) or {}).get("price") or 0) <= 0
+        ]
+        if not missing:
+            return
+        try:
+            if not self.prices or len(missing) > 2:
+                await self.refresh_all_prices_bulk()
+                missing = [
+                    s
+                    for s in unique
+                    if float((self.prices.get(s) or {}).get("price") or 0) <= 0
+                ]
+            if not missing:
+                return
+            sem = asyncio.Semaphore(5)
+
+            async def _one(sym: str) -> None:
+                async with sem:
+                    await self.ensure_symbol_price(sym)
+
+            await asyncio.gather(*(_one(s) for s in missing[:15]))
+        except Exception as e:
+            logger.debug("[DataHub] background price ensure failed: %s", e)
+
+    async def ensure_symbol_price(self, symbol: str) -> bool:
+        """Bot tick: pinned sembol cache'te yoksa tek sembol REST ile fiyat çek."""
+        sym = (symbol or "").upper().strip()
+        if not sym:
+            return False
+        meta = self.get_price_with_meta(sym)
+        if meta and float(meta.get("price") or 0) > 0 and not meta.get("is_stale"):
+            return True
+        last = self._symbol_price_fetch_ts.get(sym, 0.0)
+        if time.time() - last < 5.0:
+            cached = self.prices.get(sym) or {}
+            return float(cached.get("price") or 0) > 0
+        self._symbol_price_fetch_ts[sym] = time.time()
+        if len(self._symbol_price_fetch_ts) > 200:
+            oldest = min(
+                self._symbol_price_fetch_ts, key=self._symbol_price_fetch_ts.get
+            )
+            self._symbol_price_fetch_ts.pop(oldest, None)
+        if self._skip_rest_during_ban:
+            try:
+                from app.services.binance_spot import is_ip_banned
+
+                if is_ip_banned():
+                    return False
+            except Exception:
+                pass
+        try:
+            from app.services.binance_rest_log import rest_source
+            from app.services.binance_spot import ticker_24h_all
+
+            with rest_source("data_hub.ticker_24h_single"):
+                data = await ticker_24h_all(testnet=False, symbol=sym)
+            row = (
+                data
+                if isinstance(data, dict)
+                else (data[0] if isinstance(data, list) and data else None)
+            )
+            if row:
+                self._merge_ticker_24h_row(row, time.time())
+                self.pin_symbols([sym])
+                return float((self.prices.get(sym) or {}).get("price") or 0) > 0
+        except Exception as e:
+            logger.debug("[DataHub] ensure_symbol_price %s: %s", sym, e)
+        return False
 
     async def ensure_symbol_ticker_24h(self, symbol: str) -> bool:
         """Bot/UI: sembol için 24s % yoksa tek sembol REST (throttle)."""

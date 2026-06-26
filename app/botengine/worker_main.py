@@ -669,27 +669,36 @@ def _running_bot_symbols() -> list:
         db.close()
 
 
-async def _market_sync_from_web_loop():
-    """Worker: web sürecindeki DataHub cache'ini kopyala — tek Binance WS/REST web'de."""
+async def _market_sync_once() -> int:
+    """Worker: web sürecindeki DataHub snapshot'ını tek sefer kopyala."""
     import httpx
     from app.services.market_data import import_from_peer_snapshot
     from app.services.data_hub import data_hub
 
     base = os.getenv("WEB_INTERNAL_URL", "http://127.0.0.1:8000").rstrip("/")
+    syms = _running_bot_symbols()
+    if syms:
+        data_hub.pin_symbols(syms)
+    params: dict = {"slim": 1}
+    if syms:
+        params["symbols"] = ",".join(syms)
+    async with httpx.AsyncClient(timeout=5.0) as c:
+        r = await c.get(f"{base}/api/data/prices", params=params)
+    if r.status_code == 200:
+        return import_from_peer_snapshot(r.json())
+    return 0
+
+
+async def _market_sync_from_web_loop():
+    """Worker: web sürecindeki DataHub cache'ini kopyala — tek Binance WS/REST web'de."""
+    from app.services.data_hub import data_hub
+
     interval = float(os.getenv("MARKET_SYNC_INTERVAL_SEC", "2"))
     failures = 0
     while True:
         try:
-            syms = _running_bot_symbols()
-            if syms:
-                data_hub.pin_symbols(syms)
-            params: dict = {"slim": 1}
-            if syms:
-                params["symbols"] = ",".join(syms)
-            async with httpx.AsyncClient(timeout=5.0) as c:
-                r = await c.get(f"{base}/api/data/prices", params=params)
-            if r.status_code == 200:
-                import_from_peer_snapshot(r.json())
+            n = await _market_sync_once()
+            if n > 0:
                 failures = 0
             else:
                 failures += 1
@@ -702,6 +711,27 @@ async def _market_sync_from_web_loop():
                     "WORKER_MARKET_SYNC web unreachable — WS fallback (opt-in)"
                 )
         await asyncio.sleep(interval)
+
+
+async def _log_maintenance_loop() -> None:
+    """Daily log rotation + 90-day retention (worker process)."""
+    try:
+        from scripts.maintenance.manage_logs import run_if_due
+
+        run_if_due(force=True)
+    except Exception as e:
+        logger.debug("LOG_MAINTAIN initial skipped: %s", e)
+    interval = max(3600, int(os.getenv("LOG_MAINTAIN_INTERVAL_SEC", "86400")))
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            from scripts.maintenance.manage_logs import run_if_due
+
+            actions = run_if_due(force=False)
+            if actions:
+                logger.info("LOG_MAINTAIN actions=%s", len(actions))
+        except Exception as e:
+            logger.debug("LOG_MAINTAIN skipped: %s", e)
 
 
 async def worker_loop():
@@ -720,7 +750,11 @@ async def worker_loop():
         sync_from_web = os.getenv("MARKET_SYNC_FROM_WEB", "1").strip() == "1"
         if sync_from_web:
             asyncio.create_task(_market_sync_from_web_loop())
-            await asyncio.sleep(2.5)
+            for _ in range(8):
+                n = await _market_sync_once()
+                if n > 0:
+                    break
+                await asyncio.sleep(0.4)
         elif os.getenv("DATAHUB_REST_IN_WORKER", "0").strip() == "1":
             data_hub.start_background_updates()
             data_hub.start_ws(testnet=False)
@@ -738,6 +772,8 @@ async def worker_loop():
         )
     except Exception as e:
         logger.warning("WORKER_MARKET_START failed: %s", e)
+
+    asyncio.create_task(_log_maintenance_loop())
 
     v5_scheduler = None
     if use_v5_scheduler:

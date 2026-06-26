@@ -15,10 +15,12 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,700;1,300&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/ui/assets/theme.css?v=login2">
     <link rel="stylesheet" href="/ui/assets/design.css?v=design-scroll8">
     <link rel="stylesheet" href="/ui/assets/login.css?v=zip-auth1">
-    <link rel="stylesheet" href="/ui/assets/login-zip-layout.css?v=zip-flag2">
+    <link rel="stylesheet" href="/ui/assets/brand-logo.css?v=rose4">
+    <link rel="stylesheet" href="/ui/assets/login-zip-layout.css?v=zip-rose6">
     <script src="/ui/assets/scrollAutoHide.js?v=5"></script>
 </head>
 <body class="login-page login-page--zip">
@@ -72,31 +74,7 @@
             </nav>
         </div>
         <button type="button" class="zip-nav__brand zip-nav__brand--btn" id="zipNavBrand" onclick="goLoginHome()" aria-label="ayserose anasayfa">
-            <span class="zip-nav__logo-mark" aria-hidden="true">
-                <svg class="zip-nav__logo-svg" width="34" height="34" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" focusable="false">
-                    <!-- Hale -->
-                    <circle cx="50" cy="50" r="45" fill="rgba(194,128,212,0.10)" stroke="rgba(220,140,190,0.34)" stroke-width="1.5"/>
-                    <!-- Dış yapraklar — 5 adet, 72° aralıklı -->
-                    <path d="M50 40 C46 30 44 18 50 13 C56 18 54 30 50 40Z" transform="rotate(0   50 40)" fill="rgba(232,150,196,0.22)" stroke="#e07aad" stroke-width="1.9" stroke-linejoin="round"/>
-                    <path d="M50 40 C46 30 44 18 50 13 C56 18 54 30 50 40Z" transform="rotate(72  50 40)" fill="rgba(232,150,196,0.22)" stroke="#e07aad" stroke-width="1.9" stroke-linejoin="round"/>
-                    <path d="M50 40 C46 30 44 18 50 13 C56 18 54 30 50 40Z" transform="rotate(144 50 40)" fill="rgba(232,150,196,0.22)" stroke="#e07aad" stroke-width="1.9" stroke-linejoin="round"/>
-                    <path d="M50 40 C46 30 44 18 50 13 C56 18 54 30 50 40Z" transform="rotate(216 50 40)" fill="rgba(232,150,196,0.22)" stroke="#e07aad" stroke-width="1.9" stroke-linejoin="round"/>
-                    <path d="M50 40 C46 30 44 18 50 13 C56 18 54 30 50 40Z" transform="rotate(288 50 40)" fill="rgba(232,150,196,0.22)" stroke="#e07aad" stroke-width="1.9" stroke-linejoin="round"/>
-                    <!-- İç yapraklar — 5 adet, 36° kaydırılmış -->
-                    <path d="M50 40 C48 34 47 27 50 23 C53 27 52 34 50 40Z" transform="rotate(36  50 40)" fill="rgba(212,102,159,0.32)" stroke="#d4669f" stroke-width="2.1" stroke-linejoin="round"/>
-                    <path d="M50 40 C48 34 47 27 50 23 C53 27 52 34 50 40Z" transform="rotate(108 50 40)" fill="rgba(212,102,159,0.32)" stroke="#d4669f" stroke-width="2.1" stroke-linejoin="round"/>
-                    <path d="M50 40 C48 34 47 27 50 23 C53 27 52 34 50 40Z" transform="rotate(180 50 40)" fill="rgba(212,102,159,0.32)" stroke="#d4669f" stroke-width="2.1" stroke-linejoin="round"/>
-                    <path d="M50 40 C48 34 47 27 50 23 C53 27 52 34 50 40Z" transform="rotate(252 50 40)" fill="rgba(212,102,159,0.32)" stroke="#d4669f" stroke-width="2.1" stroke-linejoin="round"/>
-                    <path d="M50 40 C48 34 47 27 50 23 C53 27 52 34 50 40Z" transform="rotate(324 50 40)" fill="rgba(212,102,159,0.32)" stroke="#d4669f" stroke-width="2.1" stroke-linejoin="round"/>
-                    <!-- Merkez -->
-                    <circle cx="50" cy="40" r="7.5" fill="rgba(192,80,140,0.36)" stroke="#c0509c" stroke-width="2.2"/>
-                    <circle cx="50" cy="40" r="3.5" fill="rgba(212,102,159,0.78)"/>
-                    <!-- Sap -->
-                    <path d="M50 60 C50 68 49 76 47 86" fill="none" stroke="#b87098" stroke-width="2.2" stroke-linecap="round"/>
-                    <!-- Yaprak -->
-                    <path d="M49 74 C43 69 36 72 37 79" fill="rgba(176,96,144,0.14)" stroke="#b87098" stroke-width="1.7" stroke-linecap="round"/>
-                </svg>
-            </span>
+            <span class="zip-nav__logo-mark brand-logo-mark" aria-hidden="true"></span>
             <span class="zip-nav__brand-text login-brand"><span class="ar-ayse">ayse</span><span class="ar-rose">rose</span></span>
         </button>
         <div class="zip-nav__end">
@@ -127,6 +105,7 @@
 
     <div id="loginZipApp" class="login-zip-app">
     <main id="loginZipMain" class="zip-main zip-main--welcome" aria-label="Karşılama">
+        <canvas class="zip-welcome__rose" id="zipRoseStars" aria-hidden="true"></canvas>
         <section class="zip-welcome" id="loginZipHome" aria-label="Karşılama ekranı">
             <span class="login-hero__badge zip-welcome__badge">✦ Yeni Nesil Yazılım Geliştirme Stüdyosu</span>
             <h1 class="login-hero__title zip-welcome__title" aria-label="Yazılım Uzmanlığı">
@@ -463,6 +442,7 @@
     </footer>
     </div>
 
+    <script src="/ui/assets/zipRoseStars.js?v=7" defer></script>
     <script src="/ui/assets/utils/trTime.js?v=1"></script>
     <script src="/ui/assets/js/maintenanceOverlay.js?v=1"></script>
     <script src="/ui/assets/core/intervalRegistry.js?v=1"></script>
@@ -1427,6 +1407,7 @@
                 setTyping(true);
                 if (ci === phrase.length) {
                     setTyping(false);
+                    deleting = true;  // tam kelimeden sonra silmeye geç (yoksa ilk ifadede takılı kalır)
                     return window.setTimeout(tick, 2100);
                 }
                 window.setTimeout(tick, 62);
@@ -1441,9 +1422,6 @@
                     return window.setTimeout(tick, 340);
                 }
                 window.setTimeout(tick, 32);
-            }
-            if (ci === phrase.length && !deleting) {
-                deleting = true;
             }
         }
 

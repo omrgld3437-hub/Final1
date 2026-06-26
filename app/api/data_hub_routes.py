@@ -76,9 +76,17 @@ async def get_prices(
         None, description="Virgülle ayrılmış; slim=1 iken her zaman dahil (ör. ETHUSDT)"
     ),
 ):
-    """Cached prices. Worker sync should use slim=1 to limit RAM."""
+    """Cached prices — cache-first; REST asla istek yolunda bekletilmez."""
+    extra = [s.strip().upper() for s in (symbols or "").split(",") if s.strip()]
+    if slim and extra:
+        missing = [
+            sym
+            for sym in extra
+            if float((data_hub.prices.get(sym) or {}).get("price") or 0) <= 0
+        ]
+        if missing:
+            data_hub.schedule_price_ensure(missing)
     if slim:
-        extra = [s.strip().upper() for s in (symbols or "").split(",") if s.strip()]
         return data_hub.get_prices_for_ui(ensure_symbols=extra or None)
     return data_hub.get_all_prices()
 

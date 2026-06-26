@@ -8,6 +8,8 @@ from __future__ import annotations
 from decimal import ROUND_DOWN, Decimal
 from typing import Any, Dict, Optional, Tuple
 
+from app.core.constants import DEFAULT_MIN_NOTIONAL_USDT
+
 
 def step_decimals(step_str: str) -> int:
     s = str(step_str or "").strip()
@@ -68,7 +70,7 @@ def normalize_symbol_filters(raw: Dict[str, Any]) -> Dict[str, Any]:
         "step_size": float(raw.get("step_size") or step_str),
         "min_qty": float(raw.get("min_qty") or min_str),
         "tick_size": float(raw.get("tick_size") or tick_str),
-        "min_notional": float(raw.get("min_notional") or raw.get("minNotional") or 5.0),
+        "min_notional": float(raw.get("min_notional") or raw.get("minNotional") or DEFAULT_MIN_NOTIONAL_USDT),
         "base_asset": raw.get("base_asset") or raw.get("baseAsset"),
         "quote_asset": raw.get("quote_asset") or raw.get("quoteAsset"),
     }

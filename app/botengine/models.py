@@ -8,6 +8,7 @@ from enum import Enum
 from typing import Any, Dict, List
 
 from app.botengine.dca_manager import normalize_max_buy_levels_payload
+from app.core.constants import DEFAULT_MIN_NOTIONAL_USDT
 from app.utils.parse_utils import parse_bool
 
 
@@ -137,7 +138,7 @@ class DcaGridTrailingConfig:
         self.trail_fast_tick_ms = _int_or(r.get("trail_fast_tick_ms"), 800)
         self.max_orders_per_minute = _int_or(r.get("max_orders_per_minute"), 12)
         self.max_slippage_pct = _float_or(r.get("max_slippage_pct"), 0.5)
-        self.min_notional_guard = _float_or(r.get("min_notional_guard"), 5.0)
+        self.min_notional_guard = _float_or(r.get("min_notional_guard"), DEFAULT_MIN_NOTIONAL_USDT)
         # Fee/rounding buffer for initial allocation: usable = virtual_quote * (1 - initial_fee_buffer_pct)
         self.initial_fee_buffer_pct = _float_or(
             r.get("initial_fee_buffer_pct") or r.get("fee_buffer_pct"), 0.002
@@ -154,7 +155,41 @@ class DcaGridTrailingConfig:
         # Max buy grid seviyesi hard limiti. Production'da zorunlu ve pozitif.
         _mbl = r.get("max_buy_levels")
         _mbl_val = _int_or(_mbl, 0) if _mbl not in (None, "") else 0
-        self.max_buy_levels: int = max(1, _mbl_val)
+        _buy_off = parse_bool(r.get("buy_disabled"))
+        if _buy_off or _mbl_val == 0:
+            self.max_buy_levels: int = max(0, _mbl_val)
+        else:
+            self.max_buy_levels: int = max(1, _mbl_val)
+
+        _mbe = r.get("max_base_exposure_frac")
+        if _mbe is None:
+            dps = r.get("_dps_meta") or {}
+            _mbe = dps.get("max_base_exposure_frac")
+        self.max_base_exposure_frac: float = _float_or(_mbe, 1.0)
+        if self.max_base_exposure_frac <= 0:
+            self.max_base_exposure_frac = 1.0
+
+        self.buy_disabled: bool = parse_bool(r.get("buy_disabled"))
+        self.sell_only_mode: bool = parse_bool(r.get("sell_only_mode"))
+        self.rebuy_enabled: bool = parse_bool(
+            r.get("rebuy_enabled") if "rebuy_enabled" in r else True
+        )
+        self.resell_enabled: bool = parse_bool(
+            r.get("resell_enabled") if "resell_enabled" in r else True
+        )
+        self.cancel_existing_buy_orders: bool = parse_bool(
+            r.get("cancel_existing_buy_orders")
+        )
+        self.cancel_existing_sell_orders: bool = parse_bool(
+            r.get("cancel_existing_sell_orders")
+        )
+        self.selected_template_key: str | None = r.get("selected_template_key")
+        self.pool_version: str | None = r.get("pool_version")
+        self.final_action: str | None = r.get("final_action")
+        self.management_mode: str | None = r.get("management_mode")
+        self.intent_execution_enabled: bool = parse_bool(
+            r.get("intent_execution_enabled")
+        )
 
         # Dynamic Mode: ON/OFF, default False (mevcut manuel mod aynen çalışır).
         # Kullanıcıdan ek parametre ALINMAZ; sistem tüm dinamik değerleri otomatik üretir.

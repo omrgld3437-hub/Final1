@@ -155,7 +155,7 @@ body {
     letter-spacing: 0.02em;
     display: inline-block;
     font-weight: 700;
-    background: linear-gradient(135deg, var(--ds-text-primary, #eaecef) 0%, var(--ds-text-secondary, #848e9c) 35%, var(--ds-accent, #f0b90b) 50%, var(--ds-text-secondary, #848e9c) 65%, var(--ds-text-primary, #eaecef) 100%);
+    background: linear-gradient(135deg, var(--ds-text-primary, #eaecef) 0%, #e896c4 35%, #ffd2ec 50%, #e896c4 65%, var(--ds-text-primary, #eaecef) 100%);
     background-size: 200% auto;
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;

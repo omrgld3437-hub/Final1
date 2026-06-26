@@ -1,10 +1,9 @@
 """
-Dynamic Mode — Cycle-Entry Risk Gate ("yeni turu riskte beklet").
+Dynamic Mode — Cycle-Entry Risk Gate (legacy, disabled by default in V4).
 
-When a NEW cycle (tur) is about to begin under Dynamic Mode (cycle_id >= 2),
-this gate decides whether to ENTER (let the bot deploy / accumulate normally) or
-HOLD (defer pushing FRESH quote into the market until near-term downside risk
-subsides — "don't open a fresh tur into a falling knife").
+V4 policy: parametre seçimi yalnızca tur başında (DPS snapshot) yapılır; tur
+başladıktan sonra tur ortası güvenlik müdahalesi yoktur. Bu modül varsayılan
+kapalıdır (`DYN_CYCLE_HOLD_ENABLED=false`). Açmak yalnızca ops/legacy içindir.
 
 What it does / does NOT do
 --------------------------
@@ -75,8 +74,8 @@ def _env_flag(name: str, default: bool) -> bool:
     return raw in ("1", "true", "yes", "on")
 
 
-# Master switch. ON by default (operator asked for risk-based cycle holding).
-HOLD_ENABLED = _env_flag("DYN_CYCLE_HOLD_ENABLED", True)
+# Master switch. OFF by default — V4: no mid-turn / cycle-entry hold intervention.
+HOLD_ENABLED = _env_flag("DYN_CYCLE_HOLD_ENABLED", False)
 
 # Hysteresis band on the 0..1 risk score.
 HOLD_ON = _env_float("DYN_CYCLE_HOLD_ON", 0.62)   # start holding at/above this
@@ -86,7 +85,14 @@ RELEASE_CONFIRM = int(_env_float("DYN_CYCLE_HOLD_RELEASE_CONFIRM", 2))
 # Never freeze forever: release defensively after this many seconds held.
 MAX_HOLD_SEC = _env_float("DYN_CYCLE_HOLD_MAX_SEC", 86400.0)  # 24h
 # While holding, re-check this often (orchestrator clamps next_wake to this).
-RECHECK_SEC = _env_float("DYN_CYCLE_HOLD_RECHECK_SEC", 30.0)
+RECHECK_SEC = _env_float("DYN_CYCLE_HOLD_RECHECK_SEC", 900.0)
+
+# Emergency-only hold: normal volatility / moderate downside does NOT defer tur.
+EMERGENCY_ONLY_HOLD = _env_flag("DYN_CYCLE_HOLD_EMERGENCY_ONLY", True)
+EMERGENCY_HOLD_ON = _env_float("DYN_CYCLE_HOLD_EMERGENCY_ON", 0.88)
+EMERGENCY_REGIMES = frozenset({reg.DUMP_RISK})
+EMERGENCY_SPREAD_PCT = _env_float("DYN_CYCLE_HOLD_EMERGENCY_SPREAD_PCT", 0.35)
+EMERGENCY_FAST_DROP_PCT = _env_float("DYN_CYCLE_HOLD_EMERGENCY_FAST_DROP_PCT", 4.5)
 
 # Sub-signal scale anchors (denominators chosen so a "textbook" bad reading ≈1).
 FAST_DROP_FULL_PCT = 4.0     # a -4% closed 5m bar → s_fast = 1.0
@@ -339,8 +345,15 @@ def mark_engaged(state: Dict[str, Any]) -> None:
 
 
 def reset_for_new_cycle(state: Dict[str, Any]) -> None:
-    """Called from cycle_reset_after_fill: a brand-new tur is unengaged."""
+    """Called from cycle_reset_after_fill: brand-new tur — clear gate + pending."""
     state.pop("_dynamic_cycle_engaged", None)
+    state.pop("_dynamic_cycle_hold", None)
+    try:
+        from app.botengine.dynamic.round_start_policy import clear_pending
+
+        clear_pending(state)
+    except Exception:
+        state.pop("_dynamic_round_pending", None)
 
 
 def evaluate(
@@ -443,8 +456,19 @@ def evaluate(
         }
         return v
 
-    # not currently holding → start only if risk is clearly high
-    if v.risk_score >= HOLD_ON:
+    def _should_start_hold() -> bool:
+        if not EMERGENCY_ONLY_HOLD:
+            return v.risk_score >= HOLD_ON
+        spread = float(features.get("spread_pct") or 0.0)
+        fast_drop = float(features.get("ret_5m_last") or 0.0)
+        return (
+            regime in EMERGENCY_REGIMES
+            or v.risk_score >= EMERGENCY_HOLD_ON
+            or spread >= EMERGENCY_SPREAD_PCT
+            or fast_drop <= -EMERGENCY_FAST_DROP_PCT
+        )
+
+    if _should_start_hold():
         v.holding = True
         state["_dynamic_cycle_hold"] = {
             "active": True,
@@ -458,6 +482,7 @@ def evaluate(
             "release_streak": 0,
             "held_sec": 0.0,
             "last_eval_ms": now_ms,
+            "next_recheck_ms": now_ms + int(RECHECK_SEC * 1000),
         }
         v.reasons.insert(0, f"YENİ TUR BEKLETİLİYOR (risk={v.risk_score:.2f})")
         return v
@@ -478,11 +503,9 @@ async def maintain(
     cfg_dict: Dict[str, Any],
     price: float,
 ) -> CycleGateVerdict:
-    """Tick-time maintenance while a hold may be active and the cycle is not yet
-    engaged: collect (cached) features, re-classify regime, advance the state
-    machine. Fail-safe: on any error returns a non-holding verdict and clears
-    the hold so the bot proceeds normally.
-    """
+    """Tick-time maintenance while a hold may be active (legacy; no-op when disabled)."""
+    if not HOLD_ENABLED:
+        return CycleGateVerdict(holding=False, risk_score=0.0, regime=reg.UNKNOWN)
     try:
         from app.botengine.dynamic.features import collect_features
 
@@ -523,16 +546,16 @@ async def maintain(
 
 # Actions that DEPLOY fresh quote into the market (what a hold withholds).
 _FRESH_BUY_REASONS = ("initial_allocation", "trail_buy_grid")
+# Cycle-closing inventory rebuy — not subject to buy_disabled / sell_only overlays.
+CYCLE_CLOSE_BUY_REASONS = frozenset({"trail_reentry_buy"})
 
 
 def filter_actions(
     state: Dict[str, Any], actions: List[Dict[str, Any]]
 ) -> tuple:
-    """If holding & unengaged, drop fresh-buy deployments; keep everything else
-    (sells, profit-exit, cycle-closing re-entry). Returns (kept_actions,
-    blocked_count). If not holding, marks the cycle ENGAGED the moment a fresh
-    buy is allowed through so we never re-hold mid-cycle.
-    """
+    """Legacy hold filter — no-op when V4 mid-turn intervention is disabled."""
+    if not HOLD_ENABLED:
+        return actions, 0
     if not actions:
         return actions, 0
     if is_holding(state) and not cycle_engaged(state):

@@ -8,6 +8,7 @@ from pathlib import Path
 from sqlalchemy import create_engine, event
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import NullPool
 import os
 
 # Kalici konum: proje silinip yeniden kurulunca veritabani korunur
@@ -27,6 +28,18 @@ def _sqlite_wal_init(conn, connection_record):
 def _create_engine_for_role(role: str):
     """Create engine with pool_pre_ping, WAL for SQLite, optional PG statement timeout."""
     is_sqlite = "sqlite" in DATABASE_URL
+    role_l = (role or "web").strip().lower()
+    # Worker: many concurrent bot loops each hold a session — avoid QueuePool exhaustion.
+    if is_sqlite and role_l == "worker":
+        engine = create_engine(
+            DATABASE_URL,
+            connect_args={"check_same_thread": False, "timeout": 30},
+            poolclass=NullPool,
+            pool_pre_ping=True,
+        )
+        event.listen(engine, "connect", _sqlite_wal_init)
+        return engine
+
     opts = dict(
         pool_size=10,
         max_overflow=20,
@@ -34,7 +47,6 @@ def _create_engine_for_role(role: str):
         pool_recycle=3600,
     )
     if is_sqlite:
-        # timeout: wait up to 30s for lock (avoids "database is locked" on concurrent access)
         engine = create_engine(
             DATABASE_URL,
             connect_args={"check_same_thread": False, "timeout": 30},
@@ -42,7 +54,6 @@ def _create_engine_for_role(role: str):
         )
         event.listen(engine, "connect", _sqlite_wal_init)
     else:
-        # PostgreSQL: optional statement timeout (ms)
         stmt_timeout = os.getenv("PG_STATEMENT_TIMEOUT_MS")
         connect_args = {}
         if stmt_timeout and stmt_timeout.isdigit():

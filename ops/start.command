@@ -4,15 +4,32 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 mkdir -p logs .run
 
+# Bu calistirma "her sey ayakta olsun" niyetini ifade eder: supervisor.sh'nin
+# servisleri kalici olarak durdurulmus saymasini onlemek icin .disabled
+# bayraklarini temizle (stop.command bunlari yazar).
+rm -f "$ROOT/.run/manager.disabled" "$ROOT/.run/web.disabled" "$ROOT/.run/worker.disabled" "$ROOT/.run/html.disabled"
+
 # urllib3/LibreSSL uyarisini bastir (macOS; format: action:message:category:module)
 export PYTHONWARNINGS="${PYTHONWARNINGS:+$PYTHONWARNINGS,}ignore:::urllib3"
+# PARAM_POOL_VERSION bos birakilirsa v4 sqlite varsa otomatik v4 yuklenir.
+export PARAM_POOL_WARMUP="${PARAM_POOL_WARMUP:-0}"
+export PARAM_POOL_WARMUP="${PARAM_POOL_WARMUP:-0}"
+# Yerel macOS: tek worker = daha hizli acilis, cift havuz yuklemesi yok.
+if [ -z "${WEB_UVICORN_WORKERS:-}" ]; then
+  if [ "$(uname -s)" = "Darwin" ]; then
+    WEB_UVICORN_WORKERS=1
+  else
+    WEB_UVICORN_WORKERS=2
+  fi
+fi
+export WEB_UVICORN_WORKERS
 
 PY="$ROOT/.venv/bin/python"
 [ -x "$PY" ] || PY="python3"
 
-# Runtime log bakimi: buyuk aktif loglari copy-truncate ile arsivle.
-# Env ile ayarlanabilir: LOG_ACTIVE_MAX_MB, LOG_COMPRESS_AFTER_MB, LOG_ARCHIVE_DELETE_DAYS.
-"$PY" "$ROOT/scripts/maintenance/manage_logs.py" >/dev/null 2>&1 || true
+# Runtime log bakimi: aktif loglari arsivle; 90 gunluk saklama (LOG_RETENTION_DAYS).
+# Her baslatmada zorla bir tur; gunluk tekrar supervisor/worker uzerinden.
+"$PY" "$ROOT/scripts/maintenance/manage_logs.py" --force >/dev/null 2>&1 || true
 
 STARTED=()
 
@@ -32,7 +49,10 @@ _kill_stale_pid() {
   rm -f "$pidfile"
 }
 
-# Manager (7999)
+# Manager (7999) — "(set -m; ... &)" ile kendi bagimsiz surec grubunda baslatilir;
+# terminal/oturum kapansa da bu nohup'lanmis surec ayakta kalir. Asil kalicilik
+# garantisi supervisor.sh'den gelir (asagida baslatilir): bu servis beklenmedik
+# sekilde duserse supervisor en fazla 5 saniye icinde yeniden baslatir.
 MANAGER_PID="$ROOT/.run/manager.pid"
 MANAGER_LOG="$ROOT/logs/manager.log"
 if _port_open 7999; then
@@ -40,9 +60,8 @@ if _port_open 7999; then
 else
   _kill_stale_pid "$MANAGER_PID"
   P=$(lsof -ti:7999 2>/dev/null); [ -n "$P" ] && echo "$P" | xargs kill -KILL 2>/dev/null || true
-  nohup "$PY" -m manager_server >> "$MANAGER_LOG" 2>&1 &
-  echo $! > "$MANAGER_PID"
-  STARTED+=("Manager (7999): baslatildi, PID=$!")
+  (set -m; nohup "$PY" -m manager_server >> "$MANAGER_LOG" 2>&1 & echo $! > "$MANAGER_PID")
+  STARTED+=("Manager (7999): baslatildi, PID=$(cat "$MANAGER_PID" 2>/dev/null)")
   sleep 2
 fi
 
@@ -54,9 +73,8 @@ if _port_open 8000; then
 else
   _kill_stale_pid "$WEB_PID"
   P=$(lsof -ti:8000 2>/dev/null); [ -n "$P" ] && echo "$P" | xargs kill -KILL 2>/dev/null || true
-  nohup "$PY" -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 2 --loop uvloop --http httptools --log-level warning --no-access-log >> "$WEB_LOG" 2>&1 &
-  echo $! > "$WEB_PID"
-  STARTED+=("Web (8000): baslatildi, PID=$!")
+  (set -m; nohup "$PY" -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers "$WEB_UVICORN_WORKERS" --loop uvloop --http httptools --log-level warning --no-access-log >> "$WEB_LOG" 2>&1 & echo $! > "$WEB_PID")
+  STARTED+=("Web (8000): baslatildi, PID=$(cat "$WEB_PID" 2>/dev/null)")
   sleep 2
 fi
 
@@ -67,9 +85,8 @@ if [ -f "$ENGINE_PID" ] && kill -0 "$(cat "$ENGINE_PID")" 2>/dev/null; then
   STARTED+=("Engine (worker): zaten calisiyor, PID=$(cat "$ENGINE_PID")")
 else
   rm -f "$ENGINE_PID"
-  nohup "$PY" -m app.botengine.worker_main >> "$ENGINE_LOG" 2>&1 &
-  echo $! > "$ENGINE_PID"
-  STARTED+=("Engine (worker): baslatildi, PID=$!")
+  (set -m; nohup "$PY" -m app.botengine.worker_main >> "$ENGINE_LOG" 2>&1 & echo $! > "$ENGINE_PID")
+  STARTED+=("Engine (worker): baslatildi, PID=$(cat "$ENGINE_PID" 2>/dev/null)")
 fi
 
 # marketing sitesi (8080) — marketing/ birincil; eski klasor adlari geriye uyumlu
@@ -82,9 +99,8 @@ for d in "marketing" "omeraltinhtml" "Omeraltinhtml"; do
   fi
 done
 if [ -n "$HTML_DIR" ]; then
-  nohup "$PY" -u "$HTML_DIR/start.py" >> "$ROOT/logs/html.log" 2>&1 &
-  HTML_PID=$!
-  echo $HTML_PID > "$ROOT/.run/html.pid" 2>/dev/null || true
+  (set -m; nohup "$PY" -u "$HTML_DIR/start.py" >> "$ROOT/logs/html.log" 2>&1 & echo $! > "$ROOT/.run/html.pid")
+  HTML_PID=$(cat "$ROOT/.run/html.pid" 2>/dev/null)
   STARTED+=("HTML (8080): baslatildi, PID=$HTML_PID")
   sleep 2
   if command -v nc >/dev/null 2>&1; then
@@ -104,6 +120,18 @@ elif [ -d "$ROOT/marketing" ] || [ -d "$ROOT/omeraltinhtml" ] || [ -d "$ROOT/Ome
     STARTED+=("HTML (8080): baslatildi, PID=$HTML_PID")
     sleep 1
   fi
+fi
+
+# Supervisor — manager/web/worker/html'i izleyen kalici arka plan bekci. Kendi
+# bagimsiz surec grubunda calistigi icin terminal/oturum kapansa, Mac uykuya
+# gecse de hayatta kalir; izledigi servislerden biri beklenmedik sekilde duserse
+# en fazla 5 saniye icinde otomatik yeniden baslatir.
+SUPERVISOR_PID="$ROOT/.run/supervisor.pid"
+if [ -f "$SUPERVISOR_PID" ] && kill -0 "$(cat "$SUPERVISOR_PID" 2>/dev/null)" 2>/dev/null; then
+  STARTED+=("Supervisor: zaten calisiyor, PID=$(cat "$SUPERVISOR_PID")")
+else
+  (set -m; nohup bash "$ROOT/ops/supervisor.sh" >> "$ROOT/logs/supervisor.log" 2>&1 & echo $! > "$SUPERVISOR_PID")
+  STARTED+=("Supervisor: baslatildi, PID=$(cat "$SUPERVISOR_PID" 2>/dev/null)")
 fi
 
 echo ""

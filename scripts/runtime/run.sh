@@ -129,7 +129,11 @@ if [ -n "$OLD_PID" ]; then
 fi
 
 WEB_HOST="${WEB_HOST:-127.0.0.1}"
-echo "🚀 Backend başlatılıyor (FastAPI + Uvicorn)..."
+if [ -z "${WEB_UVICORN_WORKERS:-}" ]; then
+  WEB_UVICORN_WORKERS=1
+fi
+export PARAM_POOL_WARMUP="${PARAM_POOL_WARMUP:-0}"
+echo "🚀 Backend başlatılıyor (FastAPI + Uvicorn, workers=$WEB_UVICORN_WORKERS)..."
 echo "   URL: http://${WEB_HOST}:8000"
 echo ""
 
@@ -148,7 +152,7 @@ if [ $FG_MODE -eq 1 ]; then
   echo "🛑 Durdurmak: Ctrl+C"
   echo "========================================="
   echo ""
-  "$DIR/.venv/bin/uvicorn" app.main:app --host "$WEB_HOST" --port 8000 --workers 2 --loop uvloop --http httptools --log-level info || true
+  "$DIR/.venv/bin/uvicorn" app.main:app --host "$WEB_HOST" --port 8000 --workers "$WEB_UVICORN_WORKERS" --loop uvloop --http httptools --log-level info || true
   echo ""
   echo "========================================="
   echo "Server kapandı. Pencereyi kapatmak için Enter'a basın."
@@ -157,7 +161,7 @@ if [ $FG_MODE -eq 1 ]; then
   exit 0
 else
   # Background: 2 API workers; bot engine remains separate (worker_main.py)
-  nohup "$DIR/.venv/bin/uvicorn" app.main:app --host "$WEB_HOST" --port 8000 --workers 2 --loop uvloop --http httptools --log-level info \
+  nohup "$DIR/.venv/bin/uvicorn" app.main:app --host "$WEB_HOST" --port 8000 --workers "$WEB_UVICORN_WORKERS" --loop uvloop --http httptools --log-level info \
     > "$LOG_FILE" 2>&1 &
 
   PID=$!

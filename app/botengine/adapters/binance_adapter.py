@@ -8,6 +8,8 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional
 
+from app.core.constants import DEFAULT_MIN_NOTIONAL_USDT
+
 logger = logging.getLogger(__name__)
 
 
@@ -98,7 +100,7 @@ class BinanceAdapter:
                         "step_size_str": cached_ex.get("step_size_str"),
                         "min_qty_str": cached_ex.get("min_qty_str"),
                         "tick_size_str": cached_ex.get("tick_size_str"),
-                        "min_notional": cached_ex.get("min_notional", 5.0),
+                        "min_notional": cached_ex.get("min_notional", DEFAULT_MIN_NOTIONAL_USDT),
                     }
                     out = normalize_symbol_filters(raw)
                     self._filters_cache[symbol] = out
@@ -193,7 +195,7 @@ class BinanceAdapter:
                 client_order_id=client_order_id,
             )
         filters = await self.get_symbol_filters(symbol)
-        min_notional = filters.get("min_notional") or 5.0
+        min_notional = filters.get("min_notional") or DEFAULT_MIN_NOTIONAL_USDT
         if quote_amount_usdt < min_notional:
             raise ValueError(
                 f"quote_amount {quote_amount_usdt} < min_notional {min_notional}"

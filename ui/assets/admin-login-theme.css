@@ -81,11 +81,11 @@
 
 @keyframes adminLogoMarkShine {
     0%, 100% {
-        filter: drop-shadow(0 0 4px rgba(132, 142, 156, 0.2));
+        filter: drop-shadow(0 0 4px rgba(232, 150, 196, 0.25));
         transform: scale(1);
     }
     50% {
-        filter: drop-shadow(0 0 14px rgba(240, 185, 11, 0.55));
+        filter: drop-shadow(0 0 14px rgba(232, 150, 196, 0.6));
         transform: scale(1.04);
     }
 }
@@ -104,7 +104,7 @@
     letter-spacing: 0.02em;
     white-space: nowrap;
     font-family: var(--admin-font);
-    background-image: linear-gradient(135deg, var(--ds-text-primary, #eaecef) 0%, var(--ds-text-secondary, #848e9c) 35%, var(--ds-accent, #f0b90b) 50%, var(--ds-text-secondary, #848e9c) 65%, var(--ds-text-primary, #eaecef) 100%);
+    background-image: linear-gradient(135deg, var(--ds-text-primary, #eaecef) 0%, #e896c4 35%, #ffd2ec 50%, #e896c4 65%, var(--ds-text-primary, #eaecef) 100%);
     background-size: 200% auto;
     background-repeat: no-repeat;
     background-position: 0% center;

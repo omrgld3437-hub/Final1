@@ -12,6 +12,7 @@ run_optimization():
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import math
 import time
@@ -29,6 +30,42 @@ from app.services.param_optimizer.cancel import ParamOptimizerCancelled
 logger = logging.getLogger(__name__)
 
 _DAY_MS = 86_400_000
+
+# Sonuç şema sürümü: UI eski/uyumsuz cache'i tanıyıp atabilsin diye sonuca gömülür.
+# Şema kırıcı bir değişiklikte (alan adı/anlam) artır → frontend eşleşmeyen sürümü
+# "bayat" sayar ve göstermez.
+RESULT_SCHEMA_VERSION = "2.0"
+
+
+def config_hash(symbol: str, budget: float, tier_key: str) -> str:
+    """İSTEK kimliği: aynı (sembol, bütçe, seviye) → aynı hash.
+
+    Bayat sonuç engeli: bir job sonucu yalnız bu hash'i üreten istekle eşleşirse
+    gösterilmelidir. Sembol/bütçe/seviye değişince hash değişir → eski sonuç reddedilir.
+    """
+    try:
+        b = float(budget or 0.0)
+    except (TypeError, ValueError):
+        b = 0.0
+    payload = f"{(symbol or '').upper().strip()}|{b:.8f}|{(tier_key or '').strip().lower()}"
+    return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:16]
+
+
+def market_data_hash(candles: Optional[Sequence[Dict[str, Any]]]) -> str:
+    """Backtest'e giren mum serisinin ucuz parmak izi (uzunluk + uç zaman/kapanış).
+
+    Aynı sembol/seviye için veri değişirse (yeni mumlar, farklı pencere) hash değişir.
+    UI/teşhis 'sonuç hangi veriyle üretildi?' sorusuna bununla bağ kurar.
+    """
+    seq = list(candles or [])
+    if not seq:
+        return ""
+    first, last = seq[0], seq[-1]
+    sig = (
+        f"{len(seq)}|{first.get('t')}|{last.get('t')}|"
+        f"{last.get('c')}|{first.get('o')}"
+    )
+    return hashlib.sha1(sig.encode("utf-8")).hexdigest()[:16]
 
 
 def json_safe(obj: Any) -> Any:
@@ -167,6 +204,7 @@ def run_optimization(
     min_notional: float = 10.0,
     oos_days: float = 182.0,
     recent_in_days: float = 365.0,
+    final_holdout_days: float = 60.0,
     tier: Optional[AnalysisTier] = None,
     tier_key: Optional[str] = None,
     progress_cb: Optional[Callable[[Dict[str, Any]], None]] = None,
@@ -214,10 +252,17 @@ def run_optimization(
     # 3) Arama uzayı
     space = build_space(features, budget, min_notional=min_notional, symbol=symbol)
 
-    # 4) Walk-forward bölümleme
-    train, oos = _split_by_days(backtest_candles, oos_days)
+    # 4) Üçlü walk-forward bölümleme (P0-2: veri sızıntısını kapat).
+    #    final_holdout = en TAZE final_holdout_days gün; optimizer'a HİÇ verilmez,
+    #    yani seçim onu görmez → tek GERÇEK bağımsız doğrulama penceresidir.
+    #    Geri kalan (pre_holdout) train + validation(oos)'a bölünür; bunlar seçimde
+    #    KULLANILIR (dolayısıyla "held-out" değildir, güveni tek başına yükseltemez).
+    pre_holdout, final_holdout = _split_by_days(backtest_candles, final_holdout_days)
+    if len(final_holdout) < 30 or len(pre_holdout) < 60:
+        pre_holdout, final_holdout = backtest_candles, None  # holdout ayrılamıyor
+    train, oos = _split_by_days(pre_holdout, oos_days)
     if len(train) < 50:  # OOS ayıracak kadar veri yoksa hepsini train yap
-        train, oos = backtest_candles, None
+        train, oos = pre_holdout, None
     recent_in = None
     if train:
         _head, recent_in = _split_by_days(train, recent_in_days)
@@ -225,10 +270,11 @@ def run_optimization(
             recent_in = None
     emit(
         "split",
-        message="walk-forward bölümlendi",
+        message="walk-forward bölümlendi (train/validation/final-holdout)",
         train_bars=len(train),
         oos_bars=len(oos or []),
         recent_in_bars=len(recent_in or []),
+        final_holdout_bars=len(final_holdout or []),
         regime=features.regime_label,
     )
 
@@ -258,20 +304,137 @@ def run_optimization(
         n_workers=n_workers,
     )
 
-    best_params = result["best_params"]
+    best_params = result.get("best_params")
+
+    if best_params is None:
+        # robust_engine hiçbir adayı için TÜM hard gate'leri geçemedi (result_type
+        # = no_deployable_candidate). Walk-forward/final_holdout best_params'a
+        # bağımlı olduğundan ANLAMSIZ — atlanır. Kısa devre: dürüst "uygulanabilir
+        # parametre bulunamadı" kararı + reddedilen en iyi adayı teşhis amaçlı raporla.
+        from app.services.param_optimizer.decision import (
+            evaluate_decision,
+            build_final_recommendation,
+        )
+
+        confidence = 0
+        confidence_warnings: List[str] = ["no_deployable_candidate"]
+        decision = evaluate_decision(result, confidence=confidence, has_oos=False)
+        rationale = {
+            "lines": [decision["headline"]],
+            "summary": decision["headline"],
+            "decision": decision["decision"],
+        }
+        # Rejim/forecast-skill teşhisi (climatology/transition/iskonto) HİÇBİR
+        # adayın parametrelerine bağlı değil — best_params olmasa bile hesaplanır.
+        robust_policy = build_robust_policy_report(
+            features, result, fee_rate=fee, slippage_bps=slippage_bps,
+        )
+        final_recommendation = build_final_recommendation(
+            decision=decision,
+            deploy_gate=result.get("deploy_gate"),
+            robust_policy_gate=(robust_policy or {}).get("deploy_gate"),
+            forecast=None,
+            oos=None,
+            final_holdout_present=False,
+            confidence_warnings=confidence_warnings,
+        )
+        # Reddedilen en iyi adayın gridlerini TEŞHİS amaçlı göster (öneri DEĞİL —
+        # apply_policy.allowed=False bunu garanti eder). Kullanıcı denetimi: "UI'da
+        # gridler gösterilecekse 'reddedilen en iyi aday' olarak gösterilmeli."
+        _rejected_params = (result.get("rejected_best_candidate") or {}).get("params")
+        ui_config = (
+            to_ui_config(_rejected_params, budget, symbol)
+            if _rejected_params
+            else {"symbol": symbol, "budget_usd": round(budget, 2)}
+        )
+        # P0-8/P0-9: AYNI açık eşleme normal yoldaki gibi — burada da decision'ı
+        # körü körüne "abstain" diye sabitleme (testlerde evaluate_decision/
+        # build_final_recommendation monkeypatch'lenebilir; gerçek üretimde
+        # decision.py'nin no_deployable_candidate kısa-devresi zaten abstain
+        # döner, ama bu eşleme HER ZAMAN final_recommendation'ı baz almalı).
+        _final_dec = final_recommendation["decision"]
+        if _final_dec == "abstain":
+            _allowed, _mode = False, "none"
+        elif _final_dec == "watch_only":
+            _allowed, _mode = True, "paper"
+        else:  # deploy
+            _allowed, _mode = True, "live"
+        ui_config["apply_policy"] = {
+            "allowed": _allowed,
+            "recommended_mode": _mode,
+            "decision": _final_dec,
+            "reason": final_recommendation.get("headline", ""),
+        }
+        out = {
+            "ok": True,
+            "result_type": "no_deployable_candidate",
+            "result_schema_version": RESULT_SCHEMA_VERSION,
+            "config_hash": config_hash(symbol, budget, tier.key),
+            "market_data_hash": market_data_hash(backtest_candles),
+            "symbol": symbol,
+            "budget": budget,
+            "tier": tier.key,
+            "tier_label": tier.label,
+            "params": None,
+            "rejected_best_candidate": result.get("rejected_best_candidate"),
+            "ui_config": ui_config,
+            "features": features.to_dict(),
+            "regime": {"code": features.regime_code, "label": features.regime_label},
+            "confidence": confidence,
+            "confidence_base": features.confidence,
+            "decision": decision,
+            "final_recommendation": final_recommendation,
+            "in_sample": None,
+            "oos": None,
+            "forecast": None,
+            "robust_policy": robust_policy,
+            "robust_forecast": result.get("robust_forecast"),
+            "causal_features": result.get("causal_features"),
+            "deploy_gate": result.get("deploy_gate"),
+            "pbo": result.get("pbo"),
+            "deflated_sharpe_ok": result.get("deflated_sharpe_ok"),
+            "plateau_ok": result.get("plateau_ok"),
+            "stress_ok": result.get("stress_ok"),
+            "walk_forward": None,
+            "walk_forward_scope": "none",
+            "final_holdout": None,
+            "confidence_warnings": confidence_warnings,
+            "score": None,
+            "leaderboard": result.get("leaderboard"),
+            "stats": result.get("stats"),
+            "rationale": rationale,
+            "elapsed_sec": round(time.time() - t0, 1),
+        }
+        emit("done", message="tamamlandı (uygulanabilir aday yok)", best_score=0.0)
+        return json_safe(out)
 
     # 6) Walk-forward çapraz-dönem doğrulama: seçilen seti çok sayıda tarihsel OOS
     #    diliminde test et (tek 6-aylık OOS / n=3 tur yerine). Canlı botu DEĞİŞTİRMEZ;
     #    yalnızca seçilen setin tek döneme mi yoksa genele mi uyduğunu ölçer.
+    # P0-2: çapraz-dönem walk-forward YALNIZ train üzerinde (oos/validation ve
+    # final_holdout dahil DEĞİL) — seçim verisini yeniden test edip güveni şişirmesin.
     n_wf = int(getattr(tier, "walk_forward_oos_folds", 0) or 0)
     walk_forward = None
-    if n_wf >= 2:
-        emit("walk_forward", message="çapraz-dönem doğrulama (walk-forward)", folds=n_wf)
+    wf_candles = train if (train and len(train) >= 120) else None
+    if n_wf >= 2 and wf_candles:
+        emit("walk_forward", message="çapraz-dönem doğrulama (walk-forward, yalnız train)", folds=n_wf)
         walk_forward = _walk_forward_eval(
-            best_params, backtest_candles, n_wf, budget, symbol,
+            best_params, wf_candles, n_wf, budget, symbol,
             fee=fee, slippage=slippage_bps, obj_cfg=obj_cfg,
         )
+    if walk_forward is not None:
+        walk_forward["scope"] = "train_only"
     result["walk_forward"] = walk_forward
+
+    # P0-2: GERÇEK bağımsız doğrulama — final_holdout optimizer tarafından HİÇ
+    # görülmedi. Güven YALNIZCA bununla yükselebilir; yoksa/negatifse tavanlanır.
+    final_holdout_result = None
+    if final_holdout:
+        _fhr = run_backtest(
+            final_holdout, best_params, budget, symbol,
+            fee_rate=fee, slippage_bps=slippage_bps,
+        )
+        final_holdout_result = _fhr.to_dict() if _fhr.ok else None
 
     confidence = adjust_confidence(
         features.confidence,
@@ -280,13 +443,24 @@ def run_optimization(
         result.get("forecast"),
         walk_forward=walk_forward,
     )
+    confidence_warnings: List[str] = []
+    if final_holdout_result is None:
+        confidence = min(confidence, 55)
+        confidence_warnings.append("final_holdout_missing_confidence_capped")
+    elif float(final_holdout_result.get("return_pct") or 0.0) < 0:
+        confidence = min(confidence, 55)
+        confidence_warnings.append("final_holdout_negative_confidence_capped")
     rationale = build_rationale(symbol, budget, features, result, confidence=confidence)
     # KARAR KAPANIŞI: teşhis -> eylem. Dürüst kıyas (hedef tahsisi pasif tutma),
     # çekilme (abstention), tek kalibre olasılık, aşırı-uydurma bayrakları.
-    from app.services.param_optimizer.decision import evaluate_decision
+    from app.services.param_optimizer.decision import (
+        evaluate_decision,
+        build_final_recommendation,
+    )
 
     decision = evaluate_decision(
-        result, confidence=confidence, has_oos=bool(result.get("oos_result"))
+        result, confidence=confidence, has_oos=bool(result.get("oos_result")),
+        final_holdout=final_holdout_result,
     )
     # Dürüst manşeti EN ÜSTE koy (en parlak metriklerin altına gömme).
     try:
@@ -297,16 +471,53 @@ def run_optimization(
             rationale["decision"] = decision["decision"]
     except Exception:
         pass
-    ui_config = to_ui_config(best_params, budget, symbol)
     robust_policy = build_robust_policy_report(
         features,
         result,
         fee_rate=fee,
         slippage_bps=slippage_bps,
     )
+    # P0-6: decision + robust_engine.deploy_gate + robust_policy.deploy_gate → TEK
+    # nihai karar. Sert bloklayıcı (OOS<0 / pbo / DSR / stres) varken deploy ASLA
+    # mümkün olmaz; UI artık "önerilir" + "deploy=false" çelişkisini göstermez.
+    final_recommendation = build_final_recommendation(
+        decision=decision,
+        deploy_gate=result.get("deploy_gate"),
+        robust_policy_gate=(robust_policy or {}).get("deploy_gate"),
+        forecast=result.get("forecast"),
+        oos=result.get("oos_result"),
+        final_holdout_present=final_holdout_result is not None,
+        confidence_warnings=confidence_warnings,
+    )
+    ui_config = to_ui_config(best_params, budget, symbol)
+    # P0-8/P0-9: NİHAİ karara göre AÇIK eşleme — abstain'de "live" YAZILAMAZ.
+    # decision == abstain -> allowed=False, recommended_mode="none"
+    # decision == watch_only -> allowed=True, recommended_mode="paper"
+    # decision == deploy -> allowed=True, recommended_mode="live"
+    _final_dec = final_recommendation["decision"]
+    if _final_dec == "abstain":
+        _allowed, _mode = False, "none"
+    elif _final_dec == "watch_only":
+        _allowed, _mode = True, "paper"
+    else:  # deploy
+        _allowed, _mode = True, "live"
+    ui_config["apply_policy"] = {
+        "allowed": _allowed,
+        "recommended_mode": _mode,
+        "decision": _final_dec,
+        "reason": final_recommendation.get("headline", ""),
+    }
 
     out = {
         "ok": True,
+        "result_type": result.get("result_type", "ok"),
+        "rejected_best_candidate": result.get("rejected_best_candidate"),
+        # ── VERİ BÜTÜNLÜĞÜ / BAYAT SONUÇ ENGELİ ──────────────────────────────
+        # UI bu üçlüyle "bu sonuç bu isteğe mi ait, şema uyumlu mu?" doğrular.
+        # created_at/completed_at/job_id job katmanında (jobs.py) damgalanır.
+        "result_schema_version": RESULT_SCHEMA_VERSION,
+        "config_hash": config_hash(symbol, budget, tier.key),
+        "market_data_hash": market_data_hash(backtest_candles),
         "symbol": symbol,
         "budget": budget,
         "tier": tier.key,
@@ -318,6 +529,7 @@ def run_optimization(
         "confidence": confidence,
         "confidence_base": features.confidence,
         "decision": decision,
+        "final_recommendation": final_recommendation,
         "in_sample": result.get("in_sample_result"),
         "oos": result.get("oos_result"),
         "forecast": result.get("forecast"),
@@ -330,6 +542,9 @@ def run_optimization(
         "plateau_ok": result.get("plateau_ok"),
         "stress_ok": result.get("stress_ok"),
         "walk_forward": walk_forward,
+        "walk_forward_scope": (walk_forward or {}).get("scope", "none"),
+        "final_holdout": final_holdout_result,
+        "confidence_warnings": confidence_warnings,
         "score": result.get("best_score"),
         "leaderboard": result.get("leaderboard"),
         "stats": result.get("stats"),
@@ -573,10 +788,25 @@ def build_rationale(
             f"çok düşük — trend GÜCÜ zayıf. Yani güçlü {yon} trend değil; piyasa yatay/dalgalı "
             f"(hafif {yon} eğimli) okunmalı. (ADX yön değil, yalnızca trend gücünü ölçer.)"
         )
+    # P0-1 DÜRÜSTLÜK: bu bir "binlerce kombinasyon" brute-force taraması DEĞİLDİR.
+    # Gerçek üretilen aday sayısı, gerçek backtest sayısı ve gerçek çekirdek sayısı
+    # raporlanır (eski metin literal workers=1 ve aday sayısını "kombinasyon" diye basıyordu).
+    _uniq = stats.get("unique_candidates_total", stats.get("evals_total", "—"))
+    _valid = stats.get("validated_candidates_total", stats.get("validated", "—"))
+    _bt = stats.get("candidate_backtests_total", "—")
+    _cores = stats.get("workers_used", stats.get("workers", "—"))
+    _mc_cand = stats.get("mc_candidates_total", 0)
+    _mc_paths = stats.get("mc_paths_effective", stats.get("mc_paths", 0))
+    _mc_txt = (
+        f" Monte Carlo açıkken {_mc_cand} aday × {_mc_paths} sentetik fiyat yolu (gerçek değil, simülasyon) test edildi."
+        if _mc_paths and int(_mc_paths or 0) > 0
+        else ""
+    )
     lines.append(
-        f"Bütçe-parite dışındaki her parametreyi {stats.get('evals_total', '—')} farklı kombinasyon "
-        f"üzerinde GERÇEK strateji backtest'iyle denedim ({stats.get('workers', '—')} çekirdek, "
-        f"{_fmt(stats.get('elapsed_sec'), 1)} sn)."
+        "Bu analiz binlerce kombinasyonun brute-force taraması DEĞİLDİR: rejim/volatiliteden "
+        f"türetilen {_uniq} benzersiz yapısal aday üretildi; {_valid} aday train/OOS/recent "
+        f"backtest'inden geçti (yaklaşık {_bt} gerçek strateji backtest'i, {_cores} paralel "
+        f"çekirdek, {_fmt(stats.get('elapsed_sec'), 1)} sn)." + _mc_txt
     )
     lines.append(
         f"Alloc: base %{_fmt(p['base_alloc_pct'], 1)} / quote %{_fmt(p['quote_alloc_pct'], 1)} "
