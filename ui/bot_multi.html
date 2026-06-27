@@ -22,6 +22,8 @@
     window.__TT_SCROLL_NO_AUTO_FINALIZE__ = true;
     </script>
     <script src="/ui/assets/scrollRestore.js?v=scroll-restore4"></script>
+    <link rel="stylesheet" href="/ui/assets/bot-detail-shell.css?v=1">
+    <script src="/ui/assets/modules/bot-detail-shell.js?v=1"></script>
     <title>Multi-Asset Bot - ayserose</title>
     <link rel="stylesheet" href="/ui/assets/theme.css?v=1">
     <link rel="stylesheet" href="/ui/assets/design.css?v=design-scroll8">
@@ -753,6 +755,7 @@
             <div class="state-hero-meta" id="stateHeroMeta"></div>
             <div class="state-hero-grid" id="stateGrid"></div>
         </div>
+        <script>if (window.BotDetailShell) BotDetailShell.syncBootFromUrl();</script>
 
         <div class="panel" id="headerPanel">
             <div id="botTopStrip" class="bot-top-strip" style="display: none;">
@@ -1000,6 +1003,7 @@
         var perfReport = document.getElementById('perfReport');
         var loadingEl = document.getElementById('loadingEl');
         var errorEl = document.getElementById('errorEl');
+        var _botDetailHydrated = false;
         var lastKnownCycleId = null;
         var _lastGridStructureFp = '';
         var _lastGridDisplayFp = '';
@@ -1009,6 +1013,60 @@
         var initialCapForPerf = null;
         var lastBotStartedAt = null;
         var stateHeroMetaInterval = null;
+
+        function persistBotDetailUiCache(id) {
+            if (!id || !window.BotDetailShell) return;
+            try {
+                var stateHeroTitleEl = document.getElementById('stateHeroTitle');
+                var stateHeroMetaEl = document.getElementById('stateHeroMeta');
+                var statusBadgeEl = document.getElementById('statusBadge');
+                var cycleReportEl = document.getElementById('cycleReport');
+                var turBtns = document.getElementById('cycleTradesTurButtons');
+                var refEl = document.getElementById('gridPointsRefPrice');
+                BotDetailShell.writeCache(id, {
+                    ts: Date.now(),
+                    panelsReady: _botDetailHydrated,
+                    statePanelDisplay: statePanel ? statePanel.style.display : '',
+                    stateHeroTitle: stateHeroTitleEl ? stateHeroTitleEl.textContent : '',
+                    stateHeroMetaHtml: stateHeroMetaEl ? stateHeroMetaEl.innerHTML : '',
+                    stateGridHtml: stateGrid ? stateGrid.innerHTML : '',
+                    botTopStripDisplay: botTopStrip && botTopStrip.style.display !== 'none' ? 'flex' : (botTopStrip ? botTopStrip.style.display : ''),
+                    botTypeHeaderDisplay: document.getElementById('botTypeHeader') ? document.getElementById('botTypeHeader').style.display : '',
+                    botTypeHeaderName: document.getElementById('botTypeHeaderName') ? document.getElementById('botTypeHeaderName').textContent : '',
+                    botSymbol: (lastBotDetail && lastBotDetail.symbol) ? lastBotDetail.symbol : 'MULTI',
+                    botPrice: '',
+                    bot24h: '',
+                    bot24hClass: '',
+                    statusBadgeHtml: statusBadgeEl ? statusBadgeEl.outerHTML : '',
+                    gridPanelDisplay: gridPointsPanel ? gridPointsPanel.style.display : '',
+                    profitPanelDisplay: profitPointsPanel ? profitPointsPanel.style.display : '',
+                    tradesPanelDisplay: tradesPanel ? tradesPanel.style.display : '',
+                    perfPanelDisplay: perfPanel ? perfPanel.style.display : '',
+                    engineLogPanelDisplay: engineLogPanel ? engineLogPanel.style.display : '',
+                    gridSellHtml: gridSellBody ? gridSellBody.innerHTML : '',
+                    gridBuyHtml: gridBuyBody ? gridBuyBody.innerHTML : '',
+                    profitHtml: profitPointsBody ? profitPointsBody.innerHTML : '',
+                    perfMetricsHtml: perfMetrics ? perfMetrics.innerHTML : '',
+                    cycleReportHtml: cycleReportEl ? cycleReportEl.innerHTML : '',
+                    cycleReportDisplay: cycleReportEl ? cycleReportEl.style.display : '',
+                    cycleTradesHtml: cycleTradesList ? cycleTradesList.innerHTML : '',
+                    cycleTurBtnsHtml: turBtns ? turBtns.innerHTML : '',
+                    engineLogHtml: engineLogList ? engineLogList.innerHTML : '',
+                    gridRefText: refEl ? refEl.textContent : '',
+                    lastKnownCycleId: lastKnownCycleId != null ? lastKnownCycleId : null
+                });
+            } catch (e) {}
+        }
+
+        function restoreBotDetailUiCache(id) {
+            if (!id || !window.BotDetailShell) return false;
+            var o = BotDetailShell.readCache(id);
+            if (!o) return false;
+            var ok = BotDetailShell.applySnapshotSync(o, {});
+            if (ok) _botDetailHydrated = true;
+            if (o.lastKnownCycleId != null) lastKnownCycleId = Number(o.lastKnownCycleId);
+            return ok;
+        }
 
         function parseUtcMs(iso) {
             if (!iso || typeof iso !== 'string') return 0;
@@ -1968,6 +2026,7 @@
 
         function showDetail(data) {
             loadingEl.style.display = 'none';
+            if (window.BotDetailShell) BotDetailShell.setBootRefreshing(false);
             setError(null);
             var symbol = (data.symbol || '?').toString().toUpperCase();
             var cfg = data.config || {};
@@ -2383,6 +2442,8 @@
                 setInterval(fetchBotHealth, 15000);
             }
             loadPerfMetrics();
+            _botDetailHydrated = true;
+            persistBotDetailUiCache(botId);
         }
 
         function getPerfPeriod() {
@@ -2658,6 +2719,10 @@
 
         function loadDetail() {
             if (!botId || !window.apiClient) return;
+            var restoredFromCache = restoreBotDetailUiCache(botId);
+            if (!restoredFromCache && window.BotDetailShell) BotDetailShell.ensureSkeletonShell();
+            if (restoredFromCache && loadingEl) loadingEl.style.display = 'none';
+            if (window.BotDetailShell) BotDetailShell.setBootRefreshing(true);
             var q = '?account_id=' + (accountId || '');
             window.apiClient.get('/api/bots-engine/' + botId + q)
                 .then(function (res) {
@@ -2669,6 +2734,7 @@
                     return res;
                 })
                 .catch(function (e) {
+                    if (window.BotDetailShell) BotDetailShell.setBootRefreshing(false);
                     setError('Bot yüklenemedi: ' + (e.message || 'Hata'));
                     if (window.TtScrollRestore) {
                         window.TtScrollRestore.scheduleFinalize();
@@ -2855,11 +2921,11 @@
         }
 
         function run() {
-            var boot = function () { loadDetail(); };
+            loadDetail();
             if (window.EngineLogAccess && typeof window.EngineLogAccess.resolve === 'function') {
-                window.EngineLogAccess.resolve().finally(boot);
-            } else {
-                boot();
+                window.EngineLogAccess.resolve().then(function () {
+                    if (typeof syncEngineLogPanelVisibility === 'function') syncEngineLogPanelVisibility();
+                });
             }
         }
 
@@ -2875,6 +2941,9 @@
         } else {
             run();
         }
+        window.addEventListener('pagehide', function () {
+            if (_botDetailHydrated && botId) persistBotDetailUiCache(botId);
+        });
         var pricePollMs = 1000;
         setInterval(function () {
             if (document.hidden || !botId || !window.apiClient) return;

@@ -190,10 +190,12 @@ def constraints(min_notional: float = DEFAULT_MIN_NOTIONAL_USDT) -> ExchangeCons
 
 
 def ctx(run_source: str = "param_assistant", budget: float = 1000.0) -> BotContext:
-    return BotContext(
+    from app.services.dynamic_param_score.data_collector import build_bot_context
+
+    return build_bot_context(
         run_source=run_source,
         budget_usdt=budget,
-        is_first_start=True,
+        portfolio=portfolio(budget),
         allow_live=True,
         allow_no_trade=True,
     )

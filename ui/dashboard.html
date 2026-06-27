@@ -301,6 +301,7 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
         </div>
 
         <!-- Ortak KPI şeridi: tek satırda 2 bölüm – [Cüzdan + Günlük Değişim] | [Botlar Bakiye + Kapanan Tur K/Z] -->
+        <script src="/ui/assets/modules/dashboard-bots-shell.js?v=2"></script>
         <div id="unifiedKpiStrip" class="kpi-strip kpi-strip-unified kpi-strip-row" style="margin-bottom: 2rem; display: none;">
             <div class="kpi-block kpi-block-cuzdan">
                 <div class="kpi-block-row kpi-block-row-with-status">
@@ -331,77 +332,10 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
         </div>
         <script>
         (function () {
-            function earlyAccountId() {
-                try {
-                    var qs = new URLSearchParams(location.search);
-                    var idParam = qs.get('account_id');
-                    if (idParam && !/^\d{5,7}$/.test(String(idParam).trim())) {
-                        var n = parseInt(idParam, 10);
-                        if (n > 0) return n;
-                    }
-                    var fromAdmin = qs.get('from_admin') === '1' || sessionStorage.getItem('dashboard_from_admin') === '1';
-                    if (fromAdmin) {
-                        var adminId = sessionStorage.getItem('dashboard_admin_account_id');
-                        if (adminId) { var aid = parseInt(adminId, 10); if (aid > 0) return aid; }
-                    }
-                    var storedId = localStorage.getItem('selectedAccountId');
-                    if (storedId) { var sid = parseInt(String(storedId).trim(), 10); if (sid > 0) return sid; }
-                    var u = sessionStorage.getItem('user') || localStorage.getItem('user');
-                    if (u) { var user = JSON.parse(u); if (user && user.account_id > 0) return Number(user.account_id); }
-                } catch (e) {}
-                return null;
+            if (window.DashboardBotsShell) {
+                var aid = window.DashboardBotsShell.earlyAccountId();
+                if (aid) window.DashboardBotsShell.bootKpi(aid);
             }
-            function fmtUsdEarly(v) {
-                var n = Number(v);
-                if (!isFinite(n)) return '$0.00';
-                return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-            }
-            function paintKpi(spot, pnl, pct) {
-                var strip = document.getElementById('unifiedKpiStrip');
-                if (strip) strip.style.removeProperty('display');
-                if (spot > 0) {
-                    var w = document.getElementById('kpiCuzdan');
-                    if (w) w.textContent = fmtUsdEarly(spot);
-                }
-                if (pnl != null && isFinite(Number(pnl))) {
-                    var pnlEl = document.getElementById('kpiCuzdanPnl');
-                    var n = Number(pnl);
-                    if (pnlEl) {
-                        pnlEl.textContent = (n >= 0 ? '' : '-') + fmtUsdEarly(Math.abs(n));
-                        pnlEl.style.color = n >= 0 ? '#0ecb81' : '#f6465d';
-                    }
-                    if (pct != null && isFinite(Number(pct))) {
-                        var pe = document.getElementById('kpiCuzdanPnlPct');
-                        var p = Number(pct);
-                        if (pe) {
-                            pe.textContent = (p >= 0 ? '+' : '') + p.toFixed(2) + '%';
-                            pe.style.color = n >= 0 ? '#0ecb81' : '#f6465d';
-                        }
-                    }
-                }
-            }
-            function loadSnap(aid) {
-                try {
-                    var sess = sessionStorage.getItem('kpi_cuzdan_snap_v1_' + aid);
-                    if (sess) {
-                        var o = JSON.parse(sess);
-                        if (o && o.spot > 0 && (!o.ts || Date.now() - o.ts < 86400000)) {
-                            paintKpi(o.spot, o.pnl, o.pct);
-                            return;
-                        }
-                    }
-                    var raw = localStorage.getItem('tt_home_cache_v1:' + aid);
-                    if (!raw) return;
-                    var data = JSON.parse(raw);
-                    if (!data || !data.kpis) return;
-                    if (data.stored_at && Date.now() - data.stored_at > 604800000) return;
-                    var k = data.kpis;
-                    var spot = k.spot_balance_usd != null ? Number(k.spot_balance_usd) : Number(k.spot_kpi_total_usd);
-                    if (spot > 0) paintKpi(spot, k.daily_wallet_pnl_usd, k.daily_wallet_pnl_pct);
-                } catch (e) {}
-            }
-            var aid = earlyAccountId();
-            if (aid) loadSnap(aid);
         })();
         </script>
 
@@ -692,6 +626,13 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
                 <div id="walletStaleBotNoticeBotsTab" class="wallet-stale-bot-notice" style="display:none;" role="status" aria-live="polite"></div>
                 <div id="financeBotsListBots" class="mevcut-botlar-list"></div>
             </div>
+            <script>
+            (function () {
+                if (!window.DashboardBotsShell) return;
+                var aid = window.DashboardBotsShell.earlyAccountId();
+                if (aid) window.DashboardBotsShell.bootBotsDom(aid);
+            })();
+            </script>
 
             <!-- En İyi 5 Bot (Anasayfa ile aynı veri) -->
             <div id="globalLeaderboardPanelBots" class="panel global-leaderboard-panel" style="margin-top: 2rem; margin-bottom: 0; width: 100%; max-width: 100%; display: none;">
@@ -933,6 +874,12 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
         document.body.classList.toggle('tab-settings-active', saved === 'settings');
         document.body.classList.toggle('tab-trade-active', saved === 'trade');
         document.body.classList.toggle('tab-bots-active', saved === 'bots');
+        var kpiStrip = document.getElementById('unifiedKpiStrip');
+        if (kpiStrip && window.innerWidth > 768) {
+          var showDesktopKpi = saved === 'binance' || saved === 'reports' || saved === 'trade' || saved === 'bots';
+          if (showDesktopKpi) kpiStrip.style.removeProperty('display');
+          else kpiStrip.style.display = 'none';
+        }
         // Mobil: kaydedilen sekmeye göre alt menü + body sınıfı (yenilemede doğru sekme görünsün)
         if (window.innerWidth <= 768) {
           var mobileTab = (saved === 'binance' || saved === 'reports') ? 'home' : (saved === 'finance' || saved === 'contact') ? 'portfoy' : (saved === 'trade') ? 'trade' : (saved === 'bots') ? 'bots' : 'ayarlar';
@@ -946,7 +893,7 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
           }
           var s = document.getElementById('unifiedKpiStrip');
           if (s) {
-            var showKpi = (mobileTab === 'home' || mobileTab === 'portfoy' || mobileTab === 'trade');
+            var showKpi = (mobileTab === 'home' || mobileTab === 'portfoy' || mobileTab === 'trade' || mobileTab === 'bots');
             if (showKpi) s.style.removeProperty('display');
             else s.style.display = 'none';
           }
@@ -1420,7 +1367,7 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
         <div class="modal-panel parametreler-modal-panel perf-summary-modal-panel dm-param-assistant-panel">
             <div class="modal-panel-head dm-param-assistant-head">
                 <div class="dm-pa-head-left">
-                    <div class="dm-param-assistant-kicker" id="dmParamAssistantKicker">AI · Parametre motoru</div>
+                    <div class="dm-param-assistant-kicker" id="dmParamAssistantKicker">AI · V5 exact shelf motoru</div>
                     <h3 class="modal-title dm-param-assistant-title" id="dmParamAssistantTitle">Parametre Asistanı</h3>
                 </div>
                 <button type="button" class="parametreler-modal-close" id="dmParamAssistantCloseBtn" aria-label="Kapat">&times;</button>
@@ -2219,7 +2166,7 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
     <!-- DEPRECATED: BinanceMarketData - will be disabled -->
     <!-- <script src="/ui/assets/binanceMarketData.js?v=1.0&nocache=202601230000"></script> -->
     <script src="/ui/assets/spot_engine.js?v=1.0&nocache=202601222350"></script>
-    <script src="/ui/assets/utils/coinLogo.js?v=5"></script>
+    <script src="/ui/assets/utils/coinLogo.js?v=6"></script>
     <script src="/ui/assets/utils/botHealthAlerts.js?v=34"></script>
     <!-- Flash Home (Patch H). Deploy ui/assets/ so storageCache, renderHome, homeFlash exist (else 404). -->
     <script src="/ui/assets/storageCache.js?v=flash1"></script>
@@ -2236,14 +2183,14 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
     <script src="/ui/assets/modules/dashboard-bot-perf.js?v=grid-qtysum-seed1"></script>
     <script src="/ui/assets/modules/dashboard-leaderboard.js?v=12"></script>
     <script src="/ui/assets/modules/dashboard-tx-history.js?v=1"></script>
-    <script src="/ui/assets/modules/dashboard-bots.js?v=1"></script>
+    <script src="/ui/assets/modules/dashboard-bots.js?v=bots-shell1"></script>
     <script src="/ui/assets/modules/dashboard-bot-create.js?v=param-assistant3"></script>
-    <script src="/ui/assets/modules/dashboard-tabs.js?v=1"></script>
+    <script src="/ui/assets/modules/dashboard-tabs.js?v=4"></script>
     <script src="/ui/assets/modules/user-activity-beacon.js?v=1"></script>
     <script src="/ui/assets/modules/ai-assistant-spec.js?v=20260626pa34"></script>
     <script src="/ui/assets/modules/dashboard-create-modal.js?v=20260626pa34"></script>
     <script src="/ui/assets/modules/dashboard-spot-trade.js?v=2"></script>
-    <script src="/ui/assets/modules/dashboard-finance.js?v=bot-health-status1"></script>
+    <script src="/ui/assets/modules/dashboard-finance.js?v=bots-shell1"></script>
     <script src="/ui/assets/ticker.js?v=chg-pct1" defer></script>
 </body>
 </html>

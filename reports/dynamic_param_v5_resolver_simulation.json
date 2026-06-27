@@ -1,0 +1,9 @@
+{
+  "totalRoutesSimulated": 192780,
+  "exactHitCount": 192780,
+  "exactHitRatio": 1.0,
+  "fallbackCount": 0,
+  "fallbackRatio": 0.0,
+  "invalidOutputCount": 0,
+  "expectedShelves": 192780
+}

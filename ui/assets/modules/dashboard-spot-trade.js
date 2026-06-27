@@ -750,9 +750,11 @@ function updateSpotTradeModal() {
         lastModalLogoBase = base;
         var logoUrl = getCoinLogoUrl(base);
         var initials = (base || ' ').substring(0, 2).toUpperCase();
-        logoWrap.innerHTML = (logoUrl
-            ? '<img src="' + logoUrl + '" alt="' + base + '" loading="lazy" onerror="if(window.registerLogo404)window.registerLogo404(this.alt);this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\';" /><span class="varlik-logo-initials" style="display:none">' + initials + '</span>'
-            : '<span class="varlik-logo-initials">' + initials + '</span>');
+        logoWrap.innerHTML = (typeof buildCoinLogoHtml === "function"
+            ? buildCoinLogoHtml(base, { eager: true })
+            : (logoUrl
+                ? '<img src="' + logoUrl + '" alt="' + base + '" loading="lazy" onload="if(window.markCoinLogoLoaded)window.markCoinLogoLoaded(this)" onerror="if(window.handleCoinLogoError)window.handleCoinLogoError(this)" /><span class="varlik-logo-initials" style="display:none">' + initials + '</span>'
+                : '<span class="varlik-logo-initials">' + initials + '</span>'));
     }
     
     // Update labels based on side

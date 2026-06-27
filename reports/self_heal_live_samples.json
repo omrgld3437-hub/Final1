@@ -1,0 +1,267 @@
+{
+  "samples": [
+    {
+      "name": "BTCUSDT low-vol squeeze defensive",
+      "symbol": "BTCUSDT",
+      "expected_regime_code": "R3",
+      "actual_regime_code": "R3",
+      "actual_vol_code": "V1",
+      "regime_match": true,
+      "route_key": "A1|R3|D2|S1|V1|K1|L1",
+      "shelf_id": "DPLV5_A1_R3_D2_S1_V1_K1_L1",
+      "selection_type": "EXACT_V5",
+      "exact_hit": true,
+      "fallback_used": false,
+      "classification_reason": "live_v5:R3_LOW_VOL_SQUEEZE:D2_NEUTRAL_BIAS:S1_RANGE_MID",
+      "sell_grids": [
+        2.4,
+        4.56,
+        8.66
+      ],
+      "buy_grids": [
+        2.64,
+        5.02,
+        9.53
+      ],
+      "target_base_pct": 35.0,
+      "target_quote_pct": 65.0,
+      "max_exposure_pct": 41.13,
+      "trailing_pct": 0.31,
+      "validator_ok": true,
+      "reasoning": "Grid from cost+ATR+scenario max → base 2.4% ; S1_RANGE_MID sell×structure buy×structure ; D2_NEUTRAL_BIAS direction bias ; K1_DEFENSIVE buy risk adjust → sell 2.4% buy 2.64%",
+      "v4_leak": false,
+      "r15_fallback_policy": null
+    },
+    {
+      "name": "BTCUSDT crash defensive",
+      "symbol": "BTCUSDT",
+      "expected_regime_code": "R8",
+      "actual_regime_code": "R8",
+      "actual_vol_code": "V4",
+      "regime_match": true,
+      "route_key": "A1|R8|D3|S8|V4|K1|L1",
+      "shelf_id": "DPLV5_A1_R8_D3_S8_V4_K1_L1",
+      "selection_type": "EXACT_V5",
+      "exact_hit": true,
+      "fallback_used": false,
+      "classification_reason": "live_v5:R8_CRASH:D3_DOWN_BIAS:S8_BREAKDOWN",
+      "sell_grids": [
+        5.5,
+        14.03
+      ],
+      "buy_grids": [
+        9.86,
+        25.14
+      ],
+      "target_base_pct": 5.0,
+      "target_quote_pct": 95.0,
+      "max_exposure_pct": 15.57,
+      "trailing_pct": 1.06,
+      "validator_ok": true,
+      "reasoning": "Grid from cost+ATR+scenario max → base 6.79% ; S8_BREAKDOWN sell×structure buy×structure ; D3_DOWN_BIAS direction bias ; K1_DEFENSIVE buy risk adjust → sell 5.5% buy 9.86%",
+      "v4_leak": false,
+      "r15_fallback_policy": null
+    },
+    {
+      "name": "ETHUSDT balanced range normal",
+      "symbol": "ETHUSDT",
+      "expected_regime_code": "R2",
+      "actual_regime_code": "R2",
+      "actual_vol_code": "V3",
+      "regime_match": true,
+      "route_key": "A2|R2|D2|S1|V3|K2|L1",
+      "shelf_id": "DPLV5_A2_R2_D2_S1_V3_K2_L1",
+      "selection_type": "EXACT_V5",
+      "exact_hit": true,
+      "fallback_used": false,
+      "classification_reason": "live_v5:R2_BALANCED_RANGE:D2_NEUTRAL_BIAS:S1_RANGE_MID",
+      "sell_grids": [
+        3.23,
+        6.78,
+        14.24
+      ],
+      "buy_grids": [
+        3.23,
+        6.78,
+        14.24
+      ],
+      "target_base_pct": 50.0,
+      "target_quote_pct": 50.0,
+      "max_exposure_pct": 58.9,
+      "trailing_pct": 0.58,
+      "validator_ok": true,
+      "reasoning": "Grid from cost+ATR+scenario max → base 3.23% ; S1_RANGE_MID sell×structure buy×structure ; D2_NEUTRAL_BIAS direction bias ; K2_NORMAL_CONTROLLED buy risk adjust → sell 3.23% buy 3.23%",
+      "v4_leak": false,
+      "r15_fallback_policy": null
+    },
+    {
+      "name": "major alt high-vol defensive",
+      "symbol": "SOLUSDT",
+      "expected_regime_code": "R4",
+      "actual_regime_code": "R4",
+      "actual_vol_code": "V4",
+      "regime_match": true,
+      "route_key": "A4|R4|D2|S1|V4|K1|L2",
+      "shelf_id": "DPLV5_A4_R4_D2_S1_V4_K1_L2",
+      "selection_type": "EXACT_V5",
+      "exact_hit": true,
+      "fallback_used": false,
+      "classification_reason": "live_v5:R4_VOLATILE_RANGE:D2_NEUTRAL_BIAS:S1_RANGE_MID",
+      "sell_grids": [
+        5.79,
+        13.32,
+        30.63
+      ],
+      "buy_grids": [
+        6.37,
+        14.65,
+        33.7
+      ],
+      "target_base_pct": 35.35,
+      "target_quote_pct": 64.65,
+      "max_exposure_pct": 35.35,
+      "trailing_pct": 1.03,
+      "validator_ok": true,
+      "reasoning": "Grid from cost+ATR+scenario max → base 5.79% ; S1_RANGE_MID sell×structure buy×structure ; D2_NEUTRAL_BIAS direction bias ; K1_DEFENSIVE buy risk adjust → sell 5.79% buy 6.37%",
+      "v4_leak": false,
+      "r15_fallback_policy": null
+    },
+    {
+      "name": "meme coin shock volatility defensive",
+      "symbol": "DOGEUSDT",
+      "expected_regime_code": "R13",
+      "actual_regime_code": "R13",
+      "actual_vol_code": "V5",
+      "regime_match": true,
+      "route_key": "A5|R13|D3|S1|V5|K1|L2",
+      "shelf_id": "DPLV5_A5_R13_D3_S1_V5_K1_L2",
+      "selection_type": "EXACT_V5",
+      "exact_hit": true,
+      "fallback_used": false,
+      "classification_reason": "live_v5:R13_HIGH_VOL_DISORDER:D3_DOWN_BIAS:S1_RANGE_MID",
+      "sell_grids": [
+        9.0,
+        22.5
+      ],
+      "buy_grids": [
+        11.83,
+        29.58
+      ],
+      "target_base_pct": 17.0,
+      "target_quote_pct": 83.0,
+      "max_exposure_pct": 21.18,
+      "trailing_pct": 1.44,
+      "validator_ok": true,
+      "reasoning": "Grid from cost+ATR+scenario max → base 9.78% ; S1_RANGE_MID sell×structure buy×structure ; D3_DOWN_BIAS direction bias ; K1_DEFENSIVE buy risk adjust → sell 9.0% buy 11.83%",
+      "v4_leak": false,
+      "r15_fallback_policy": null
+    },
+    {
+      "name": "low-liquidity alt L4 execution risky",
+      "symbol": "ACMUSDT",
+      "expected_regime_code": "L4",
+      "actual_regime_code": "R4",
+      "actual_vol_code": "V4",
+      "regime_match": true,
+      "route_key": "A6|R4|D2|S1|V4|K1|L4",
+      "shelf_id": "DPLV5_A6_R4_D2_S1_V4_K1_L4",
+      "selection_type": "EXACT_V5",
+      "exact_hit": true,
+      "fallback_used": false,
+      "classification_reason": "live_v5:R4_VOLATILE_RANGE:D2_NEUTRAL_BIAS:S1_RANGE_MID",
+      "sell_grids": [
+        6.0,
+        13.8
+      ],
+      "buy_grids": [
+        6.6,
+        15.18
+      ],
+      "target_base_pct": 20.17,
+      "target_quote_pct": 79.83,
+      "max_exposure_pct": 20.17,
+      "trailing_pct": 1.12,
+      "validator_ok": true,
+      "reasoning": "Grid from cost+ATR+scenario max → base 6.0% ; S1_RANGE_MID sell×structure buy×structure ; D2_NEUTRAL_BIAS direction bias ; K1_DEFENSIVE buy risk adjust → sell 6.0% buy 6.6%",
+      "v4_leak": false,
+      "r15_fallback_policy": null
+    },
+    {
+      "name": "R15 special stress transition",
+      "symbol": "BTCUSDT",
+      "expected_regime_code": "R15",
+      "actual_regime_code": "R15",
+      "actual_vol_code": "V3",
+      "regime_match": true,
+      "route_key": "A1|R15|D2|S1|V3|K1|L2",
+      "shelf_id": "DPLV5_A1_R15_D2_S1_V3_K1_L2",
+      "selection_type": "EXACT_V5",
+      "exact_hit": true,
+      "fallback_used": false,
+      "classification_reason": "live_v5:R15_SPECIAL_STRESS_TRANSITION:D2_NEUTRAL_BIAS:S1_RANGE_MID",
+      "sell_grids": [
+        4.37,
+        9.4
+      ],
+      "buy_grids": [
+        4.81,
+        10.34
+      ],
+      "target_base_pct": 24.0,
+      "target_quote_pct": 76.0,
+      "max_exposure_pct": 33.78,
+      "trailing_pct": 0.57,
+      "validator_ok": true,
+      "reasoning": "Grid from cost+ATR+scenario max → base 4.37% ; S1_RANGE_MID sell×structure buy×structure ; D2_NEUTRAL_BIAS direction bias ; K1_DEFENSIVE buy risk adjust → sell 4.37% buy 4.81%",
+      "v4_leak": false,
+      "r15_fallback_policy": {
+        "forbidden_fallbacks": [
+          "R2_BALANCED_RANGE_RAW",
+          "R2_BALANCED_RANGE",
+          "K2_NORMAL_CONTROLLED_RAW",
+          "K3_AGGRESSIVE_RAW"
+        ],
+        "nearest_safe_dimensions": [
+          "R12_CAPITULATION_REACTION",
+          "R7_RECOVERY",
+          "R6_BREAKOUT_CONTINUATION"
+        ],
+        "fallback_family": "same_asset_same_risk_K1_DEFENSIVE"
+      }
+    },
+    {
+      "name": "R17 data uncertain",
+      "symbol": "ETHUSDT",
+      "expected_regime_code": "R17",
+      "actual_regime_code": "R17",
+      "actual_vol_code": "V3",
+      "regime_match": true,
+      "route_key": "A2|R17|D2|S1|V3|K1|L2",
+      "shelf_id": "DPLV5_A2_R17_D2_S1_V3_K1_L2",
+      "selection_type": "EXACT_V5",
+      "exact_hit": true,
+      "fallback_used": false,
+      "classification_reason": "live_v5:R17_DATA_UNCERTAIN_REGIME:D2_NEUTRAL_BIAS:S1_RANGE_MID",
+      "sell_grids": [
+        3.88,
+        8.34
+      ],
+      "buy_grids": [
+        4.27,
+        9.18
+      ],
+      "target_base_pct": 20.0,
+      "target_quote_pct": 80.0,
+      "max_exposure_pct": 27.36,
+      "trailing_pct": 0.44,
+      "validator_ok": true,
+      "reasoning": "Grid from cost+ATR+scenario max → base 3.88% ; S1_RANGE_MID sell×structure buy×structure ; D2_NEUTRAL_BIAS direction bias ; K1_DEFENSIVE buy risk adjust → sell 3.88% buy 4.27%",
+      "v4_leak": false,
+      "r15_fallback_policy": null
+    }
+  ],
+  "regime_mismatches": [],
+  "v4_leak_count": 0,
+  "non_exact_count": 0,
+  "pass_audit": true
+}

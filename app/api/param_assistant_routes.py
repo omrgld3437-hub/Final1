@@ -5,8 +5,8 @@ Canlı karar artık ağır optimizer yerine merkezî DPS motorunu kullanır.
 Eski async optimizer endpoint'leri uyumluluk için kalır ama /optimize
 anında DPS sonucu döner (MC/backtest bekleme yok).
 
-    POST /api/param-assistant/calculate     -> anında DPS kararı
-    POST /api/dynamic-param-score/calculate -> aynı motor (dynamic_param_score_routes)
+    POST /api/param-assistant/calculate     -> Param Assistant (consumer_policy=param_assistant)
+    POST /api/dynamic-param-score/calculate -> Dynamic Mode tur simülasyonu (consumer_policy=dynamic_round_start)
     POST /api/param-assistant/optimize      -> DPS'e yönlendirilir (legacy path)
 """
 
@@ -29,8 +29,9 @@ from app.services.dynamic_param_score.data_collector import (
     collect_market_data,
     default_exchange_constraints,
     portfolio_from_budget,
+    portfolio_from_user_scenario,
 )
-from app.services.dynamic_param_score.models import BotContext
+from app.services.dynamic_param_score.consumer_policy import build_param_assistant_context
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +44,7 @@ class OptimizeRequest(BaseModel):
     symbol: str
     budget: float
     analysis_level: Optional[str] = "professional_auto"  # ignored
-    first_start_buy_only: Optional[bool] = False
+    first_start_buy_only: Optional[bool] = None
     base_balance_usdt: Optional[float] = None
     quote_balance_usdt: Optional[float] = None
     base_alloc_frac: Optional[float] = None
@@ -73,16 +74,13 @@ def _level(v: Optional[str]) -> str:
 async def _run_dps(
     symbol: str,
     budget: float,
-    run_source: str = "param_assistant",
     *,
-    first_start_buy_only: bool = False,
+    first_start_buy_only: Optional[bool] = None,
     base_balance_usdt: Optional[float] = None,
     quote_balance_usdt: Optional[float] = None,
     base_alloc_frac: Optional[float] = None,
     dry_run: bool = True,
 ):
-    from app.services.dynamic_param_score.data_collector import portfolio_from_user_scenario
-
     market = await collect_market_data(symbol)
     price = float(market.ticker_price or 0.0)
     if base_balance_usdt is not None or quote_balance_usdt is not None or base_alloc_frac is not None:
@@ -96,11 +94,10 @@ async def _run_dps(
     else:
         portfolio = portfolio_from_budget(budget, price)
     constraints = default_exchange_constraints(symbol)
-    ctx = BotContext(
-        run_source=run_source,
+    ctx = build_param_assistant_context(
         budget_usdt=budget,
-        is_first_start=run_source == "param_assistant" and float(portfolio.base_value_usdt or 0) <= 0,
-        first_start_buy_only=bool(first_start_buy_only),
+        portfolio=portfolio,
+        first_start_buy_only=first_start_buy_only,
         allow_live=not dry_run,
         allow_no_trade=True,
     )
@@ -175,7 +172,7 @@ async def calculate(req: OptimizeRequest, current: dict = Depends(require_auth))
     result = await _run_dps(
         symbol,
         budget,
-        first_start_buy_only=bool(req.first_start_buy_only),
+        first_start_buy_only=req.first_start_buy_only,
         base_balance_usdt=req.base_balance_usdt,
         quote_balance_usdt=req.quote_balance_usdt,
         base_alloc_frac=req.base_alloc_frac,
@@ -223,7 +220,7 @@ async def start_optimize(req: OptimizeRequest, current: dict = Depends(require_a
     result = await _run_dps(
         symbol,
         budget,
-        first_start_buy_only=bool(req.first_start_buy_only),
+        first_start_buy_only=req.first_start_buy_only,
         base_balance_usdt=req.base_balance_usdt,
         quote_balance_usdt=req.quote_balance_usdt,
         base_alloc_frac=req.base_alloc_frac,

@@ -1,0 +1,11 @@
+{
+  "formula_version": "DPLV5_FORMULA_2",
+  "run_a_aggregate_hash": "fe86ee6dfebc02a0cf196fef9df15323",
+  "run_b_aggregate_hash": "fe86ee6dfebc02a0cf196fef9df15323",
+  "hashes_match": true,
+  "sampled_mismatch_count": 0,
+  "mismatch_samples": [],
+  "random_used_all_false": true,
+  "forbidden_random_scan_hits": [],
+  "pass_audit": true
+}

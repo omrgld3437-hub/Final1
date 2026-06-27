@@ -26,6 +26,52 @@ var WALLET_PANEL_STALE_DELAY_MS = 10000;
 var _dashboardWalletForceTick = 0;
 var _binanceWalletIdleCycles = 0;
 
+function _dashboardAccountCodeHint() {
+    try {
+        if (typeof State !== 'undefined') {
+            if (State.accountCode) return String(State.accountCode).trim();
+            if (State.accountMeta && State.accountMeta.account_code) {
+                return String(State.accountMeta.account_code).trim();
+            }
+        }
+        var q = new URLSearchParams(location.search);
+        var fromUrl = q.get('account_code');
+        if (fromUrl) return String(fromUrl).trim();
+        var stored = localStorage.getItem('selectedAccountCode');
+        if (stored) return String(stored).trim();
+        var admin = sessionStorage.getItem('dashboard_admin_account_code');
+        if (admin) return String(admin).trim();
+    } catch (e) { /* ignore */ }
+    return '';
+}
+
+function isDashboardTestAccountCode(code) {
+    return /^TEST/i.test(String(code || '').trim());
+}
+
+/** Test paper hesabı — API yanıtı gelmeden URL/kod ipucu ile de true döner (KPI rozeti flicker önleme). */
+function isDashboardTestAccountContext() {
+    if (typeof State !== 'undefined') {
+        if (State.isTestAccount) return true;
+        var acc = State.summary && State.summary.account;
+        if (acc && acc.is_test_account) return true;
+        if (State.accountMeta && State.accountMeta.is_test_account) return true;
+    }
+    return isDashboardTestAccountCode(_dashboardAccountCodeHint());
+}
+
+function syncDashboardTestAccountFlag() {
+    if (typeof State === 'undefined') return isDashboardTestAccountContext();
+    if (State.isTestAccount) return true;
+    if (isDashboardTestAccountCode(State.accountCode || _dashboardAccountCodeHint())) {
+        State.isTestAccount = true;
+    }
+    return !!State.isTestAccount;
+}
+window.isDashboardTestAccountContext = isDashboardTestAccountContext;
+window.syncDashboardTestAccountFlag = syncDashboardTestAccountFlag;
+window.isDashboardTestAccountCode = isDashboardTestAccountCode;
+
 function cancelWalletPanelStaleBadgeTimer() {
     if (_walletPanelStaleTimer) {
         clearTimeout(_walletPanelStaleTimer);
@@ -223,7 +269,7 @@ function _walletLiveFailedAfterOk() {
 
 /** Gerçek canlı Binance cüzdan verisi (KPI/PnL iç mantığı). */
 function isWalletDataLive() {
-    if (typeof State !== 'undefined' && State.isTestAccount) return true;
+    if (isDashboardTestAccountContext()) return true;
     if (!assetsState.wallet || assetsState.wallet.keys_configured !== true) return false;
     var code = walletErrorCode();
     if (_isHardWalletError(code)) return false;
@@ -306,7 +352,7 @@ window.walletErrorDetailText = walletErrorDetailText;
 
 /** Cüzdan durum etiketi (iç mantık; UI'da Canlı gösterilmez). */
 function walletLiveStatusLabel() {
-    if (typeof State !== 'undefined' && State.isTestAccount) return 'Test';
+    if (isDashboardTestAccountContext()) return 'Test';
     if (assetsState.wallet.keys_configured !== true) return 'Bağlı değil';
     if (isWalletDataLive()) return 'Canlı';
     return walletStaleStatusText();
@@ -342,8 +388,9 @@ window.shouldShowWalletStaleWarning = shouldShowWalletStaleWarning;
 /** KPI/Binance rozeti: canlı → Canlı; değilse Güncel değil (kpiBotBakiyePct yalnızca uyarı). */
 function applyWalletStaleWarningEl(el) {
     if (!el) return;
+    syncDashboardTestAccountFlag();
     var warnOnly = el.id === 'kpiBotBakiyePct';
-    if (typeof State !== 'undefined' && State.isTestAccount) {
+    if (isDashboardTestAccountContext()) {
         if (warnOnly) {
             el.hidden = true;
             el.textContent = '';

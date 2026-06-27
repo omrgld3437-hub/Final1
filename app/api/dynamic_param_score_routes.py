@@ -16,8 +16,7 @@ from app.services.dynamic_param_score.data_collector import (
     default_exchange_constraints,
     portfolio_from_budget,
 )
-from app.services.dynamic_param_score.models import BotContext
-
+from app.services.dynamic_param_score.consumer_policy import build_dynamic_round_context
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
@@ -37,8 +36,8 @@ def _normalize_symbol(sym: str) -> str:
 class CalculateRequest(BaseModel):
     symbol: str
     budget: float = Field(ge=25)
-    run_source: str = "param_assistant"
     bot_id: Optional[int] = None
+    cycle_id: Optional[int] = Field(default=1, ge=1)
     analysis_level: Optional[str] = None  # legacy — ignored
 
 
@@ -51,22 +50,15 @@ async def calculate_dynamic_param_score(
     if not symbol or len(symbol) < 5:
         raise HTTPException(status_code=400, detail="Geçersiz parite.")
 
-    run_source = (
-        req.run_source
-        if req.run_source in ("param_assistant", "dynamic_round_start")
-        else "param_assistant"
-    )
-
     market = await collect_market_data(symbol)
     portfolio = portfolio_from_budget(req.budget, market.ticker_price)
     constraints = default_exchange_constraints(symbol)
-    ctx = BotContext(
-        run_source=run_source,
+    ctx = build_dynamic_round_context(
         budget_usdt=req.budget,
-        is_first_start=run_source == "param_assistant",
+        cycle_id=int(req.cycle_id or 1),
+        bot_id=req.bot_id,
         allow_live=True,
         allow_no_trade=True,
-        bot_id=req.bot_id,
     )
 
     decision = get_engine().calculate_decision(

@@ -132,11 +132,30 @@ def test_worst_case_tolerance_respected():
     assert not is_deployable(FinalAction.ACTIVE_DEFENSIVE_GRID.value, params, meta)
 
 
-def test_fee_bad_fallback_pinned_template_renders_params():
+def test_fee_bad_fallback_uses_library_not_pinned():
+    import os
+
+    import pytest
+
     from app.services.dynamic_param_score.models import BotContext, RegimeTag, SubScores
     from app.services.dynamic_param_score.indicators import IndicatorSnapshot
+    from app.services.dynamic_param_score.param_pool.defaults import POOL_VERSION_V4
+    from app.services.dynamic_param_score.param_pool.registry import get_active_pool
     from app.services.dynamic_param_score.param_pool.selector import select_and_render
+    from app.services.dynamic_param_score.param_pool.versioning import (
+        clear_pool_cache,
+        production_pool_status,
+    )
     from tests.dynamic_param_score.conftest import constraints, portfolio
+
+    if not production_pool_status(POOL_VERSION_V4).get("production_pool_loaded"):
+        pytest.skip("v4 production pool sqlite/index not on disk")
+
+    clear_pool_cache()
+    os.environ["PARAM_POOL_VERSION"] = POOL_VERSION_V4
+    os.environ["PARAM_POOL_MODE"] = "auto"
+    pool_version, _ = get_active_pool()
+    assert pool_version.version_id == POOL_VERSION_V4
 
     sub = SubScores(
         trend_score=38,
@@ -172,10 +191,12 @@ def test_fee_bad_fallback_pinned_template_renders_params():
         5.0,
         symbol="BTCUSDT",
     )
-    assert sel.selected_template_key == "FALLBACK_FEE_BAD_ACTIVE_DEFENSIVE"
+    key = sel.selected_template_key or ""
+    assert not key.startswith("FALLBACK_"), "generic pinned fallback must not be used when v4 pool loaded"
+    assert sel.selection_context.get("pinned_fallback_template_key") is None
+    assert key.startswith("DPLV4_") or sel.selection_context.get("runtime_safe_profile_generated")
     assert params is not None
-    assert int(params.buy_grid_count or 0) > 0 or int(params.sell_grid_count or 0) > 0
-    assert sel.selection_context.get("pinned_fallback_template_key") == "BALANCED_RANGE_60_69_FEE_BAD_WAIT"
+    assert params.base_alloc_frac is not None
 
 
 def test_trim_side_distribution_defensive_three_to_two():
@@ -198,7 +219,11 @@ def test_exact_candidate_blocks_runtime_permitted():
         filtered_out={},
         fallback_used=True,
         fallback_reason="test",
-        selection_context={"exact_route_candidate_count": 10, "scored_candidate_count": 0},
+        selection_context={
+            "exact_route_candidate_count": 10,
+            "exact_scored_count": 2,
+            "scored_candidate_count": 0,
+        },
     )
     assert not _runtime_safe_permitted(
         selection,
@@ -226,3 +251,85 @@ def test_exact_scored_blocks_runtime_permitted():
         selection,
         pool_status={"production_pool_loaded": True},
     )
+
+
+def test_empty_deployable_grid_template_hard_rejected():
+    import sqlite3
+    import json
+
+    from app.services.dynamic_param_score.param_generator.v4_scoring import hard_reject_v4
+
+    conn = sqlite3.connect("data/param_pool/v4/param_pool_v4.sqlite")
+    row = conn.execute(
+        "SELECT final_action, params_json FROM param_templates "
+        "WHERE template_key='DPLV4_A1_R2_S3_V3_DEFENSIVE_910007'"
+    ).fetchone()
+    assert row is not None
+
+    class _Stub:
+        deployable = True
+        final_action = row[0]
+        params = json.loads(row[1])
+
+    sig = {
+        "route_key": "A1|R2|S3|V3|DEFENSIVE",
+        "structure_code": "S3",
+        "regime_code": "R2",
+        "fee_code": "F6",
+        "data_quality_score": 100,
+    }
+    assert hard_reject_v4(_Stub(), sig) == "empty_deployable_grid"
+
+
+def test_btcusdt_fee_bad_first_start_returns_grid_recommendation():
+    import os
+
+    import pytest
+
+    from app.services.dynamic_param_score.adapters import decision_to_param_assistant_result
+    from app.services.dynamic_param_score.engine import DynamicParamScoreEngine
+    from app.services.dynamic_param_score.models import FinalAction
+    from app.services.dynamic_param_score.param_pool.defaults import POOL_VERSION_V4
+    from app.services.dynamic_param_score.param_pool.registry import get_active_pool
+    from app.services.dynamic_param_score.param_pool.versioning import (
+        clear_pool_cache,
+        production_pool_status,
+    )
+    from tests.dynamic_param_score.conftest import constraints
+    from tests.dynamic_param_score.factories import make_context, make_market_bundle, make_portfolio_state
+
+    if not production_pool_status(POOL_VERSION_V4).get("production_pool_loaded"):
+        pytest.skip("v4 production pool sqlite/index not on disk")
+
+    clear_pool_cache()
+    os.environ["PARAM_POOL_VERSION"] = POOL_VERSION_V4
+    os.environ["PARAM_POOL_MODE"] = "auto"
+    pool_version, _ = get_active_pool()
+    assert pool_version.version_id == POOL_VERSION_V4
+
+    engine = DynamicParamScoreEngine()
+    decision = engine.calculate_decision(
+        "BTCUSDT",
+        make_market_bundle(symbol="BTCUSDT", price=95000.0, pattern="balanced_range"),
+        make_portfolio_state(budget_usdt=1000.0, base_exposure_frac=0.0),
+        constraints(),
+        make_context(
+            run_source="param_assistant",
+            budget_usdt=1000.0,
+            is_first_start=True,
+        ),
+    )
+    pool = decision.telemetry.get("param_pool") or {}
+    key = pool.get("selected_template_key") or ""
+    assert key != "DPLV4_A1_R2_S3_V3_DEFENSIVE_910007"
+    pre = decision.telemetry.get("pre_safety_params") or {}
+    assert int(pre.get("buy_grid_count") or 0) > 0 or int(pre.get("sell_grid_count") or 0) > 0
+
+    pa = decision_to_param_assistant_result(decision, 1000.0, "BTCUSDT")
+    rec = pa.get("recommendation_config") or pa.get("ui_config")
+    assert rec is not None, "Param Assistant must show grid params when library template has grids"
+    down = len(rec.get("down", {}).get("grids", []) or [])
+    up = len(rec.get("up", {}).get("grids", []) or [])
+    assert down >= 1 or up >= 1
+    if decision.blocking_reasons and decision.final_action == FinalAction.NO_TRADE.value:
+        assert pa.get("decision") == "recommended_grid"

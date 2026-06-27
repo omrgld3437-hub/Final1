@@ -1,0 +1,10 @@
+{
+  "totalShelves": 192780,
+  "invalidCount": 0,
+  "exactLookupMissCount": 0,
+  "blockerCount": 0,
+  "criticalCount": 0,
+  "majorCount": 0,
+  "minorCount": 0,
+  "pass": true
+}

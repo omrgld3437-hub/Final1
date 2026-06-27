@@ -167,6 +167,61 @@ def _return_pct(candles: List[Candle], n: int) -> Optional[float]:
     return (b - a) / a * 100.0
 
 
+def _last_positive_close(candles: Optional[List[Candle]]) -> float:
+    if not candles:
+        return 0.0
+    for c in reversed(candles):
+        if c.c and c.c > 0:
+            return float(c.c)
+    return 0.0
+
+
+def _volume_from_klines_24h(c1h: Optional[List[Candle]]) -> tuple[float, float]:
+    """Estimate 24h base + quote volume from hourly candles when DataHub cache is empty."""
+    if not c1h:
+        return 0.0, 0.0
+    seg = c1h[-24:] if len(c1h) >= 24 else c1h
+    base_vol = 0.0
+    quote_vol = 0.0
+    for c in seg:
+        if c.v and c.v > 0 and c.c and c.c > 0:
+            base_vol += float(c.v)
+            quote_vol += float(c.v) * float(c.c)
+    return base_vol, quote_vol
+
+
+def _enrich_market_bundle_from_klines(
+    *,
+    price: float,
+    vol: float,
+    qvol: float,
+    c5: Optional[List[Candle]],
+    c1h: Optional[List[Candle]],
+) -> tuple[float, float, float, Optional[str]]:
+    """
+    DPS/Param Assistant must not treat missing DataHub ticker as NO_DATA/LOW_LIQUIDITY
+    when Binance klines already provide price and volume context.
+    Returns (price, vol, qvol, price_source_tag).
+    """
+    price_source: Optional[str] = None
+    if price <= 0:
+        for candles in (c5, c1h):
+            px = _last_positive_close(candles)
+            if px > 0:
+                price = px
+                price_source = "klines_close"
+                break
+    if qvol <= 0 and vol <= 0:
+        base_vol, quote_vol = _volume_from_klines_24h(c1h)
+        if base_vol > 0:
+            vol = base_vol
+        if quote_vol > 0:
+            qvol = quote_vol
+    elif qvol <= 0 and vol > 0 and price > 0:
+        qvol = vol * price
+    return price, vol, qvol, price_source
+
+
 async def _btc_reference() -> Optional[BtcReferenceData]:
     try:
         c1h = await _fetch_klines("BTCUSDT", "1h", C.KLINES_LIMIT_1H)
@@ -208,6 +263,13 @@ async def collect_market_data(symbol: str) -> MarketDataBundle:
     qvol = float(meta.get("quoteVolume24h") or vol * price if price else 0)
 
     c5, c15, c1h, c4h, c1m, ob, btc = await _gather_parallel(sym)
+    price, vol, qvol, price_source = _enrich_market_bundle_from_klines(
+        price=price,
+        vol=vol,
+        qvol=qvol,
+        c5=c5,
+        c1h=c1h,
+    )
     data_window = {
         "window_days": C.DATA_WINDOW_DAYS,
         "5m": {"actual": len(c5 or []), "expected": C.KLINES_LIMIT_5M},
@@ -216,6 +278,10 @@ async def collect_market_data(symbol: str) -> MarketDataBundle:
         "4h": {"actual": len(c4h or []), "expected": C.KLINES_LIMIT_4H},
         "1m": {"actual": len(c1m or []), "expected": C.KLINES_LIMIT_1M},
     }
+    if price_source:
+        data_window["price_source"] = price_source
+    if (meta.get("price") or ticker.get("lastPrice") or 0) in (0, None, "") and qvol > 0:
+        data_window["volume_source"] = "klines_1h"
     bundle = MarketDataBundle(
         symbol=sym,
         base_asset=base,
@@ -340,4 +406,60 @@ def portfolio_from_bot_state(state: Dict[str, Any], price: float) -> PortfolioSt
         open_orders_count=len(open_orders),
         open_buy_orders_count=buy_n,
         open_sell_orders_count=sell_n,
+    )
+
+
+def resolve_first_start_flags(
+    *,
+    run_source: str,
+    portfolio: PortfolioState,
+    first_start_buy_only: Optional[bool] = None,
+) -> tuple[bool, bool]:
+    """Param Assistant ilk kurulum: base yok → is_first_start; varsayılan sadece alış grid."""
+    from app.services.dynamic_param_score.consumer_policy import (
+        policy_for,
+        resolve_first_start_flags as _resolve,
+    )
+
+    return _resolve(policy_for(run_source), portfolio, first_start_buy_only=first_start_buy_only)
+
+
+def build_bot_context(
+    *,
+    run_source: str,
+    budget_usdt: float,
+    portfolio: PortfolioState,
+    first_start_buy_only: Optional[bool] = None,
+    allow_live: bool = True,
+    allow_no_trade: bool = True,
+    bot_id: Optional[int] = None,
+    current_round_id: Optional[str] = None,
+    previous_round_id: Optional[str] = None,
+    last_rebalance_round_id: Optional[str] = None,
+) -> BotContext:
+    """Generic BotContext builder — prefer build_param_assistant_context / build_dynamic_round_context."""
+    from app.services.dynamic_param_score.consumer_policy import (
+        build_dynamic_round_context,
+        build_param_assistant_context,
+        normalize_run_source,
+    )
+
+    rs = normalize_run_source(run_source)
+    if rs == "param_assistant":
+        ctx = build_param_assistant_context(
+            budget_usdt=budget_usdt,
+            portfolio=portfolio,
+            first_start_buy_only=first_start_buy_only,
+            allow_live=allow_live,
+            allow_no_trade=allow_no_trade,
+        )
+        return ctx
+    cycle_id = int(current_round_id or 1)
+    return build_dynamic_round_context(
+        budget_usdt=budget_usdt,
+        cycle_id=cycle_id,
+        bot_id=bot_id,
+        last_rebalance_round_id=last_rebalance_round_id,
+        allow_live=allow_live,
+        allow_no_trade=allow_no_trade,
     )

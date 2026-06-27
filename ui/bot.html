@@ -22,6 +22,8 @@
     window.__TT_SCROLL_NO_AUTO_FINALIZE__ = true;
     </script>
     <script src="/ui/assets/scrollRestore.js?v=scroll-restore4"></script>
+    <link rel="stylesheet" href="/ui/assets/bot-detail-shell.css?v=1">
+    <script src="/ui/assets/modules/bot-detail-shell.js?v=1"></script>
     <title>Bot Detay - ayserose</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -1634,59 +1636,7 @@
             <div class="state-hero-meta" id="stateHeroMeta"></div>
             <div class="state-hero-grid" id="stateGrid"></div>
         </div>
-        <script>
-        (function () {
-            try {
-                var qs = new URLSearchParams(location.search);
-                var botId = qs.get('bot_id') || qs.get('id');
-                if (!botId) return;
-                var urlSymbol = (qs.get('symbol') || '').trim().toUpperCase();
-                var raw = sessionStorage.getItem('bot_detail_ui_v2_' + botId) || localStorage.getItem('bot_detail_ui_v2_' + botId)
-                    || sessionStorage.getItem('bot_detail_ui_v1_' + botId) || localStorage.getItem('bot_detail_ui_v1_' + botId);
-                if (!raw) return;
-                var o = JSON.parse(raw);
-                if (!o || !o.ts || Date.now() - o.ts > 604800000) return;
-                var statePanel = document.getElementById('statePanel');
-                var stateGrid = document.getElementById('stateGrid');
-                var botTopStrip = document.getElementById('botTopStrip');
-                var botTypeHeader = document.getElementById('botTypeHeader');
-                if (statePanel && o.statePanelDisplay) statePanel.style.display = o.statePanelDisplay;
-                if (o.stateHeroTitle) {
-                    var t = document.getElementById('stateHeroTitle');
-                    if (t) t.textContent = o.stateHeroTitle;
-                }
-                if (o.stateHeroMetaHtml) {
-                    var m = document.getElementById('stateHeroMeta');
-                    if (m) m.innerHTML = o.stateHeroMetaHtml;
-                }
-                if (stateGrid && o.stateGridHtml) stateGrid.innerHTML = o.stateGridHtml;
-                if (botTopStrip && o.botTopStripDisplay) botTopStrip.style.display = o.botTopStripDisplay === 'none' ? 'none' : 'grid';
-                if (botTypeHeader && o.botTypeHeaderDisplay) botTypeHeader.style.display = o.botTypeHeaderDisplay;
-                if (o.botTypeHeaderName) {
-                    var n = document.getElementById('botTypeHeaderName');
-                    if (n) n.textContent = o.botTypeHeaderName;
-                }
-                if (o.botSymbol || urlSymbol) {
-                    var s = document.getElementById('botSymbolEl');
-                    var symShow = urlSymbol || o.botSymbol;
-                    if (s && symShow) s.textContent = symShow;
-                }
-                if (o.botPrice) {
-                    var p = document.getElementById('botPriceEl');
-                    if (p) p.textContent = o.botPrice;
-                }
-                if (o.bot24h) {
-                    var h = document.getElementById('bot24hEl');
-                    if (h) {
-                        h.textContent = o.bot24h;
-                        if (o.bot24hClass) h.className = o.bot24hClass;
-                    }
-                }
-                var loadingEl = document.getElementById('loadingEl');
-                if (loadingEl) loadingEl.style.display = 'none';
-            } catch (e) {}
-        })();
-        </script>
+        <script>if (window.BotDetailShell) BotDetailShell.syncBootFromUrl();</script>
 
         <div class="panel" id="headerPanel">
             <div id="botTopStrip" class="bot-top-strip" style="display: none;">
@@ -2072,7 +2022,7 @@
         var lastKnownCycleId = null;
         var _botDetailHydrated = false;
         var _botDetailMissing = false;
-        var BOT_DETAIL_UI_CACHE_PREFIX = 'bot_detail_ui_v2_';
+        var BOT_DETAIL_UI_CACHE_PREFIX = (window.BotDetailShell && BotDetailShell.CACHE_V3) || 'bot_detail_shell_v3_';
         var BOT_DETAIL_LIVE_POLL_MS = 3000;
         var SESSION_ALPHA_POLL_MS = 60000;
         var _sessionAlphaFetchInFlight = false;
@@ -2194,23 +2144,15 @@
                     botRefPrice: (lastBotDetail && lastBotDetail.reference_display != null) ? lastBotDetail.reference_display : null,
                     dynamicMode: (lastBotDetail && lastBotDetail.dynamic_mode) ? lastBotDetail.dynamic_mode : null
                 };
-                var key = BOT_DETAIL_UI_CACHE_PREFIX + id;
-                sessionStorage.setItem(key, JSON.stringify(payload));
-                localStorage.setItem(key, JSON.stringify(payload));
+                if (window.BotDetailShell) BotDetailShell.writeCache(id, payload);
             } catch (e) {}
         }
 
         function restoreBotDetailUiCache(id) {
             if (!id) return false;
             try {
-                var raw = sessionStorage.getItem(BOT_DETAIL_UI_CACHE_PREFIX + id) || localStorage.getItem(BOT_DETAIL_UI_CACHE_PREFIX + id);
-                if (!raw) {
-                    raw = sessionStorage.getItem('bot_detail_ui_v1_' + id) || localStorage.getItem('bot_detail_ui_v1_' + id);
-                }
-                if (!raw) return false;
-                var o = JSON.parse(raw);
-                if (!o || !o.ts) return false;
-                if (Date.now() - o.ts > 604800000 && !sessionStorage.getItem(BOT_DETAIL_UI_CACHE_PREFIX + id)) return false;
+                var o = window.BotDetailShell ? BotDetailShell.readCache(id) : null;
+                if (!o) return false;
                 if (statePanel && o.statePanelDisplay) statePanel.style.display = o.statePanelDisplay;
                 var stateHeroTitleEl = document.getElementById('stateHeroTitle');
                 if (stateHeroTitleEl && o.stateHeroTitle) stateHeroTitleEl.textContent = o.stateHeroTitle;
@@ -2298,10 +2240,7 @@
         function clearBotDetailPersistentCache(id) {
             if (!id) return;
             try {
-                sessionStorage.removeItem(BOT_DETAIL_UI_CACHE_PREFIX + id);
-                localStorage.removeItem(BOT_DETAIL_UI_CACHE_PREFIX + id);
-                sessionStorage.removeItem('bot_detail_ui_v1_' + id);
-                localStorage.removeItem('bot_detail_ui_v1_' + id);
+                if (window.BotDetailShell) BotDetailShell.clearCache(id);
                 sessionStorage.removeItem(botLogoStorageKey(id));
             } catch (e) {}
         }
@@ -3941,12 +3880,6 @@
             _lastGridDisplayFp = '';
             _lastPerfRenderFp = '';
             _lastGridTrailActive = false;
-            try {
-                if (botId) {
-                    sessionStorage.removeItem(BOT_DETAIL_UI_CACHE_PREFIX + botId);
-                    localStorage.removeItem(BOT_DETAIL_UI_CACHE_PREFIX + botId);
-                }
-            } catch (e) {}
             if (cycleTradesList) cycleTradesList.innerHTML = cycleTradesListPlaceholder('Yükleniyor…');
             var turBtns = document.getElementById('cycleTradesTurButtons');
             if (turBtns) turBtns.innerHTML = '';
@@ -7611,9 +7544,11 @@
                 if (loadingEl) loadingEl.style.display = 'none';
             } else if (!restoredFromCache) {
                 resetBotDetailUi();
+                if (window.BotDetailShell) BotDetailShell.ensureSkeletonShell();
             } else if (loadingEl) {
                 loadingEl.style.display = 'none';
             }
+            if (window.BotDetailShell) BotDetailShell.setBootRefreshing(true);
             if (lastBotDetail.symbol && !wrapHasStripSvg()) ensureStripMiniChart(lastBotDetail.symbol);
             _botStatusGraceUntil = Date.now() + 8000;
             var q = accountCode ? '?account_code=' + encodeURIComponent(accountCode) : '?account_id=' + (accountId || '');
@@ -7654,9 +7589,11 @@
                         window.TtScrollRestore.scheduleFinalize();
                         window.TtScrollRestore.ensureRestored();
                     }
+                    if (window.BotDetailShell) BotDetailShell.setBootRefreshing(false);
                     return res;
                 })
                 .catch(function (e) {
+                    if (window.BotDetailShell) BotDetailShell.setBootRefreshing(false);
                     if (isBotDetailNotFoundError(e)) {
                         showBotDetailNotFound();
                         if (window.TtScrollRestore) {
@@ -8527,11 +8464,11 @@
             document.body.style.top = '';
             _bodyScrollLockCount = 0;
             applyBotLogoCacheOnBoot();
-            var boot = function () { loadDetail(); };
+            loadDetail();
             if (window.EngineLogAccess && typeof window.EngineLogAccess.resolve === 'function') {
-                window.EngineLogAccess.resolve().finally(boot);
-            } else {
-                boot();
+                window.EngineLogAccess.resolve().then(function () {
+                    if (typeof syncEngineLogPanelVisibility === 'function') syncEngineLogPanelVisibility();
+                });
             }
         }
 

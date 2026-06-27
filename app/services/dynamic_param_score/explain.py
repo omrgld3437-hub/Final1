@@ -8,6 +8,11 @@ from app.services.dynamic_param_score.models import (
     RegimeTag,
     SubScores,
 )
+from app.services.dynamic_param_score.v5.ui_trace import (
+    build_pattern_phrase,
+    render_risk_opportunity_sentence,
+    risk_label_from_route,
+)
 
 _REGIME_TR = {
     RegimeTag.NO_DATA.value: "veri yetersiz",
@@ -137,7 +142,11 @@ def build_explanation(
 ) -> str:
     regime_txt = _REGIME_TR.get(regime_tag, regime_tag)
     regime_label = regime_txt.upper().replace(" ", "_")
-    risk_txt = _RISK_TR.get(risk_state, risk_state)
+    route_key = str((indicators or {}).get("route_key") or "")
+    if route_key and len(route_key.split("|")) == 7:
+        risk_txt = risk_label_from_route(route_key).lower()
+    else:
+        risk_txt = _RISK_TR.get(risk_state, risk_state)
 
     if final_action in (
         FinalAction.WAIT.value,
@@ -258,18 +267,18 @@ def build_explanation(
         structure_note = ""
         profile_hint = ""
         ind = indicators or {}
-        if selected_template_key and "DOWNBUY" in selected_template_key.upper():
-            profile_hint = (
-                "geniş aralık ve savunmacı koşullar nedeniyle downbuy grid profili seçildi"
-            )
+        hh = bool(ind.get("higher_highs"))
+        ll = bool(ind.get("lower_lows"))
+        rs = float(ind.get("range_stability") or 0.5)
+        pattern = build_pattern_phrase(higher_highs=hh, lower_lows=ll, range_stability=rs)
+        if pattern and pattern != "belirsiz/chop yapı":
+            structure_note = f" {pattern.capitalize()} nedeniyle savunmacı downbuy grid seçildi."
         elif ind.get("lower_lows") and not ind.get("higher_highs"):
             structure_note = " Lower lows yapısı nedeniyle alış tarafı satışa göre daha geniş açıldı."
         elif ind.get("higher_highs") and not ind.get("lower_lows"):
             structure_note = " Higher highs yapısı nedeniyle satış tarafı alışa göre daha geniş açıldı."
-        elif ind.get("higher_highs") and ind.get("lower_lows"):
-            structure_note = (
-                " Geniş chop (üst tepe + alt dip) nedeniyle savunmacı downbuy grid seçildi."
-            )
+        else:
+            structure_note = ""
         budget_note = ""
         if budget_usdt and params:
             budget_note = (
@@ -289,8 +298,8 @@ def build_explanation(
         if indicators:
             route_key = str(indicators.get("route_key") or "")
         pool_note = (
-            f"300.000 profil canlıda tek tek taranmadı; "
-            f"{route_key + ' rafı' if route_key else 'route index'} çağrıldı ve adaylar skorlandı."
+            f"192.780 raflı V5 kütüphane canlıda taranmaz; "
+            f"{route_key + ' route_key' if route_key else 'route imzası'} ile exact shelf lookup yapılır."
         )
         if fallback_reason:
             pool_note += f" Fallback: {fallback_reason}."
@@ -317,10 +326,14 @@ def build_explanation(
     elif final_action == FinalAction.TREND_TRAILING.value:
         profile_hint = "trend trailing profili seçildi"
 
+    risk_opp = render_risk_opportunity_sentence(
+        getattr(sub, "drawdown_risk_score", None),
+        getattr(sub, "trend_score", None),
+    )
     return (
         f"Parametre Skoru {param_score}/100. Rejim {regime_txt}, risk durumu {risk_txt}. "
-        f"Trend skoru {sub.trend_score}, volatilite {sub.volatility_score}, "
-        f"BTC piyasa riski {sub.btc_market_risk_score}. "
+        f"{risk_opp.capitalize()}. "
+        f"Volatilite {sub.volatility_score}, BTC piyasa riski {sub.btc_market_risk_score}. "
         f"{profile_hint.capitalize()}. "
         f"Base tahsisi %{base_pct}, quote %{quote_pct}, maksimum base exposure %{max_exp} ile sınırlandı. "
         f"Alışlar {params.buy_grid_count} kademeye bölündü; "

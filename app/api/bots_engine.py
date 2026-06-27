@@ -2022,7 +2022,17 @@ def create_bot_engine_core(
         cfg = config_from_ui_payload(raw)
     # Yeni botlar her zaman canlı modda oluşturulur.
     mode = "live" if not cfg.paper_mode else "paper"
-    config_json = json.dumps(cfg.to_dict(), ensure_ascii=False)
+    stored_cfg = cfg.to_dict()
+    for key in (
+        "config_source",
+        "param_assistant_job_id",
+        "param_assistant_decision",
+        "param_assistant_confidence",
+        "param_assistant",
+    ):
+        if key in (config_dict or {}):
+            stored_cfg[key] = config_dict[key]
+    config_json = json.dumps(stored_cfg, ensure_ascii=False)
     for _ in range(20):
         bot_code = str(random.randint(100_000, 999_999))
         if db.query(Bot).filter(Bot.bot_code == bot_code).first() is None:

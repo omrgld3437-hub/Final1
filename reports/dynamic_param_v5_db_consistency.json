@@ -1,0 +1,12 @@
+{
+  "json_shelf_count": 192780,
+  "db_shelf_count": 192780,
+  "db_index_count": 192780,
+  "expected": 192780,
+  "missing_in_db_count": 0,
+  "missing_in_json_count": 0,
+  "hash_mismatch_count": 0,
+  "hash_mismatch_samples": [],
+  "json_file_sha256": "9e76dfac29d8b240019787a47ce4bb7955a77d178b2c1043adba5f246c4dcff6",
+  "pass_audit": true
+}

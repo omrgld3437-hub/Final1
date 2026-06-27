@@ -64,7 +64,10 @@ def resolve_result_type(
     if params and (buy_n > 0 or sell_n > 0) and has_recommendation_ui:
         return "recommended_grid"
 
-    if meta.get("deploy_blocked_reason") == "NO_SELLABLE_BASE" or "NO_SELLABLE_BASE" in blocking:
+    if (
+        (meta.get("deploy_blocked_reason") == "NO_SELLABLE_BASE" or "NO_SELLABLE_BASE" in blocking)
+        and not (first_start and buy_only_mode)
+    ):
         return "recommended_grid"
 
     if str(profile_source or "") == "runtime_synthetic" and has_recommendation_ui:
@@ -107,13 +110,17 @@ def result_type_from_decision(
         run_source=decision.run_source,
         budget_usdt=float(tel.get("budget_usdt") or 0),
         is_first_start=bool(tel.get("is_first_start")),
+        first_start_buy_only=bool(tel.get("first_start_buy_only")),
     )
+    from app.services.dynamic_param_score.consumer_policy import policy_for_context
+
+    policy = policy_for_context(ctx)
     deploy = (
         bool(deployable_ui)
         if deployable_ui is not None
         else bool(decision.deployable and decision.params)
     )
-    has_ui = decision.params is not None
+    has_ui = bool(policy.recommendation_ui and decision.params is not None)
     return resolve_result_type(
         deployable=deploy,
         final_action=str(decision.final_action or ""),

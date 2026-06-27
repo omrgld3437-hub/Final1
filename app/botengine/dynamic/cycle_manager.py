@@ -49,6 +49,7 @@ from app.services.dynamic_param_score.data_collector import (
     default_exchange_constraints,
     portfolio_from_bot_state,
 )
+from app.services.dynamic_param_score.consumer_policy import build_dynamic_round_context
 from app.services.dynamic_param_score.safe_overlay import build_data_stale_overlay
 from app.services.dynamic_param_score.models import BotContext, MarketDataBundle, FinalAction
 from app.botengine.dynamic import round_start_policy as rsp
@@ -229,16 +230,13 @@ def _build_dps_context(
     *,
     allow_no_trade: bool = True,
 ) -> BotContext:
-    return BotContext(
-        run_source="dynamic_round_start",
+    return build_dynamic_round_context(
         budget_usdt=budget,
-        is_first_start=False,
-        current_round_id=str(cycle_id),
-        previous_round_id=str(cycle_id - 1) if cycle_id > 1 else None,
+        cycle_id=cycle_id,
+        bot_id=int(state.get("bot_id") or 0) or None,
         last_rebalance_round_id=state.get("_dynamic_last_rebalance_turn"),
         allow_live=True,
         allow_no_trade=allow_no_trade,
-        bot_id=int(state.get("bot_id") or 0) or None,
     )
 
 

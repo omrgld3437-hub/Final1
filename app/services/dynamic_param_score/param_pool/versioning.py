@@ -11,6 +11,7 @@ from app.services.dynamic_param_score.param_pool.defaults import (
     POOL_VERSION_V2,
     POOL_VERSION_V3,
     POOL_VERSION_V4,
+    POOL_VERSION_V5,
     build_v1_pool,
     build_v2_pool,
     build_v3_pool,
@@ -31,6 +32,7 @@ from app.services.dynamic_param_score.param_pool.sqlite_store import (
     load_templates_from_sqlite,
     selection_index_path_for_version,
 )
+from app.services.dynamic_param_score.v5.store.sqlite_store import DEFAULT_V5_SQLITE_PATH
 
 _CACHED_POOLS: Dict[str, List[ParamTemplate]] = {}
 _CACHED_INDEXED_POOLS: Dict[str, object] = {}
@@ -50,6 +52,10 @@ def resolve_pool_version(version_id: Optional[str] = None) -> str:
         return POOL_VERSION_V3
     if os.environ.get("PARAM_POOL_MODE") == "v4":
         return POOL_VERSION_V4
+    if os.environ.get("PARAM_POOL_MODE") == "v5":
+        return POOL_VERSION_V5
+    if DEFAULT_V5_SQLITE_PATH.exists():
+        return POOL_VERSION_V5
     if DEFAULT_V4_SQLITE_PATH.exists():
         return POOL_VERSION_V4
     if DEFAULT_V3_SQLITE_PATH.exists():
@@ -57,11 +63,18 @@ def resolve_pool_version(version_id: Optional[str] = None) -> str:
     if DEFAULT_V2_SQLITE_PATH.exists():
         return POOL_VERSION_V2
     if os.environ.get("PARAM_POOL_MODE") == "programmatic":
-        return POOL_VERSION_V4
-    return POOL_VERSION_V3
+        return POOL_VERSION_V5
+    return POOL_VERSION_V5
 
 
 def _sqlite_paths_for_version(version_id: str) -> tuple[Path, Path]:
+    if version_id == POOL_VERSION_V5:
+        from app.services.dynamic_param_score.v5.store.sqlite_store import (
+            DEFAULT_V5_MANIFEST_PATH,
+            DEFAULT_V5_SQLITE_PATH,
+        )
+
+        return DEFAULT_V5_SQLITE_PATH, DEFAULT_V5_MANIFEST_PATH
     if version_id == POOL_VERSION_V4:
         return DEFAULT_V4_SQLITE_PATH, DEFAULT_V4_MANIFEST_PATH
     if version_id == POOL_VERSION_V3:
@@ -72,8 +85,10 @@ def _sqlite_paths_for_version(version_id: str) -> tuple[Path, Path]:
 
 
 def lazy_shelf_enabled(version_id: Optional[str] = None) -> bool:
-    """V4: load only route shelf on demand (not full 300k pool)."""
+    """V5/V4: load only route shelf on demand."""
     vid = resolve_pool_version(version_id)
+    if vid == POOL_VERSION_V5:
+        return DEFAULT_V5_SQLITE_PATH.exists()
     if vid != POOL_VERSION_V4:
         return False
     flag = os.environ.get("PARAM_POOL_LAZY_SHELF", "1").strip().lower()

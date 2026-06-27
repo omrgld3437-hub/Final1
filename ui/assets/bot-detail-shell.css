@@ -1,0 +1,77 @@
+/* Bot detail — instant shell; data refreshes in place */
+
+body.bot-detail-shell-active #loadingEl {
+    display: none !important;
+}
+
+body.bot-detail-refreshing::after {
+    content: '';
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 3px;
+    z-index: 10050;
+    background: linear-gradient(
+        90deg,
+        transparent,
+        var(--ds-accent, #f0b90b),
+        transparent
+    );
+    background-size: 200% 100%;
+    animation: bot-detail-refresh-bar 1.1s ease-in-out infinite;
+    pointer-events: none;
+}
+
+@keyframes bot-detail-refresh-bar {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+}
+
+.bot-detail-skel {
+    display: inline-block;
+    min-width: 3.5rem;
+    height: 0.85em;
+    border-radius: 4px;
+    background: linear-gradient(
+        90deg,
+        var(--ds-bg-tertiary, #2b3139) 0%,
+        rgba(255, 255, 255, 0.06) 50%,
+        var(--ds-bg-tertiary, #2b3139) 100%
+    );
+    background-size: 200% 100%;
+    animation: bot-detail-skel-shimmer 1.2s ease-in-out infinite;
+    vertical-align: middle;
+}
+
+.bot-detail-skel--block {
+    display: block;
+    width: 100%;
+    min-height: 2.5rem;
+    margin-bottom: 0.5rem;
+}
+
+.bot-detail-skel--wide {
+    min-width: 6rem;
+}
+
+@keyframes bot-detail-skel-shimmer {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+}
+
+tr.bot-detail-skel-row td {
+    padding: 0.55rem 0.5rem;
+}
+
+.state-hero-item.bot-detail-skel-card {
+    min-height: 3.25rem;
+}
+
+body.bot-detail-shell-active .panel.bot-detail-shell-panel {
+    opacity: 1;
+}
+
+body.bot-detail-shell-active.bot-detail-refreshing .panel.bot-detail-shell-panel {
+    opacity: 1;
+}

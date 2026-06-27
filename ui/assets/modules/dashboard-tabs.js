@@ -72,7 +72,7 @@ function initMobileBottomNav(currentDesktopTab) {
 
         const unifiedStrip = document.getElementById("unifiedKpiStrip");
         if (unifiedStrip) {
-            const showStrip = tab === "home" || tab === "portfoy" || tab === "trade";
+            const showStrip = tab === "home" || tab === "portfoy" || tab === "trade" || tab === "bots";
             unifiedStrip.classList.toggle("kpi-strip-hidden", !showStrip);
             if (showStrip) unifiedStrip.style.removeProperty("display");
             else unifiedStrip.style.display = "none";
@@ -105,11 +105,7 @@ function initMobileBottomNav(currentDesktopTab) {
             var mobileTradeEl = document.getElementById("mobileTradeView");
             if (mobileTradeEl) { mobileTradeEl.classList.add("is-active"); mobileTradeEl.style.display = "block"; }
             initMobileTradeSearch();
-            if (typeof getFavoritesStorageKey === "function" && getFavoritesStorageKey() && typeof loadSpotFavoritesFromStorage === "function") {
-                loadSpotFavoritesFromStorage().then(function () { if (typeof renderMobileTradeFavorites === "function") renderMobileTradeFavorites(); }).catch(function () { if (typeof renderMobileTradeFavorites === "function") renderMobileTradeFavorites(); });
-            } else {
-                if (typeof renderMobileTradeFavorites === "function") renderMobileTradeFavorites();
-            }
+            _activateTradeTabFavorites();
             if (typeof startMobileTradeFavPriceUpdates === "function") startMobileTradeFavPriceUpdates();
         } else if (tab === "bots") {
             document.body.classList.add("tab-bots-active");
@@ -238,13 +234,47 @@ function initMobileTradeSearch() {
     ensureCoinListSearchSymbolsLoaded("all").then(function () { buildCoinListSearchSymbols(); fillDropdown(); });
 }
 
+function _activateTradeTabFavorites() {
+    if (typeof hydrateSpotFavoritesFromLocal === "function") hydrateSpotFavoritesFromLocal();
+    if (typeof renderMobileTradeFavorites === "function") renderMobileTradeFavorites();
+    if (typeof ensureSpotFavoritesLoaded === "function") {
+        ensureSpotFavoritesLoaded().then(function () {
+            if (typeof window._mobileTradeFavListChanged === "function" && window._mobileTradeFavListChanged()) {
+                if (typeof renderMobileTradeFavorites === "function") renderMobileTradeFavorites(true);
+            }
+        }).catch(function () {});
+    }
+}
+
 var MOBILE_TRADE_FAV_TICKER_CACHE_KEY = "mobileTradeFavTicker_v1";
 var _mobileTradeFavBatchInflight = null;
 var _mobileTradeFavStoreSub = null;
+var _mobileTradeFavRenderedKey = "";
+
+function _mobileTradeFavTickerCacheKey() {
+    var aid = (typeof State !== "undefined" && State && State.accountId) ? State.accountId : "";
+    return aid ? ("mobileTradeFavTicker_" + aid) : MOBILE_TRADE_FAV_TICKER_CACHE_KEY;
+}
+
+function _mobileTradeFavListKey(favs) {
+    return (favs || []).join("|");
+}
+
+window._mobileTradeFavListChanged = function () {
+    var favs = (typeof spotFavorites !== "undefined" && Array.isArray(spotFavorites)) ? spotFavorites.slice() : [];
+    return _mobileTradeFavListKey(favs) !== _mobileTradeFavRenderedKey;
+};
 
 function _readMobileTradeFavTickerCache() {
     try {
-        var raw = sessionStorage.getItem(MOBILE_TRADE_FAV_TICKER_CACHE_KEY);
+        var key = _mobileTradeFavTickerCacheKey();
+        var raw = localStorage.getItem(key);
+        if (!raw) {
+            raw = sessionStorage.getItem(MOBILE_TRADE_FAV_TICKER_CACHE_KEY);
+            if (raw) {
+                try { localStorage.setItem(key, raw); } catch (e2) {}
+            }
+        }
         return raw ? JSON.parse(raw) : {};
     } catch (e) {
         return {};
@@ -257,7 +287,7 @@ function _writeMobileTradeFavTickerCache(symbol, price, changePct) {
         if (!sym || price == null || !Number.isFinite(price)) return;
         var cache = _readMobileTradeFavTickerCache();
         cache[sym] = { price: price, changePct: changePct, ts: Date.now() };
-        sessionStorage.setItem(MOBILE_TRADE_FAV_TICKER_CACHE_KEY, JSON.stringify(cache));
+        localStorage.setItem(_mobileTradeFavTickerCacheKey(), JSON.stringify(cache));
     } catch (e) {}
 }
 
@@ -544,15 +574,26 @@ function startMobileTradeFavPriceUpdates() {
 }
 
 // Mobil Trade: Favori coinler listesini doldur; tıklayınca alım satım modalı açılır
-function renderMobileTradeFavorites() {
+function renderMobileTradeFavorites(force) {
     var listEl = document.getElementById("mobileTradeFavoritesList");
     if (!listEl) return;
     try {
     var favs = (typeof spotFavorites !== "undefined" && Array.isArray(spotFavorites)) ? spotFavorites.slice() : [];
+    var listKey = _mobileTradeFavListKey(favs);
     if (favs.length === 0) {
+        _mobileTradeFavRenderedKey = "";
         listEl.innerHTML = '<div style="padding: 1.5rem; text-align: center; color: var(--ds-text-secondary); font-size: 0.9rem;">Favori yok. Yukarıdaki arama çubuğunda coin arayıp seçin, alım satım ekranında yıldıza tıklayarak favorilere ekleyin.</div>';
         return;
     }
+    if (!force && listKey === _mobileTradeFavRenderedKey && listEl.querySelector(".mobile-trade-fav-item")) {
+        refreshMobileTradeFavPricesFromStore();
+        var activeView = document.getElementById("mobileTradeView");
+        if (activeView && activeView.classList.contains("is-active")) {
+            fetchMobileTradeFavPricesBatch(favs);
+        }
+        return;
+    }
+    _mobileTradeFavRenderedKey = listKey;
     var baseFromSymbol = function (sym) {
         var pq = parseTradingPairSymbol(sym);
         return pq.valid ? pq.base : sym;
@@ -561,12 +602,21 @@ function renderMobileTradeFavorites() {
         return formatTradingPairDisplay(sym);
     };
     var getLogoHtml = function (base) {
+        if (typeof buildCoinLogoHtml === "function") {
+            return buildCoinLogoHtml(base, {
+                style: "width:32px;height:32px;border-radius:50%;flex-shrink:0;",
+                wrapClass: "mobile-trade-fav-logo-wrap",
+                eager: true
+            });
+        }
         var initials = (typeof getCoinLogoInitials === "function" ? getCoinLogoInitials(base) : (base || "?").substring(0, 1).toUpperCase());
         var initStyle = 'width:32px;height:32px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:0.7rem;font-weight:600;background:var(--ds-bg-tertiary);color:var(--ds-text-secondary);';
         if (!base || typeof getCoinLogoUrl !== "function") return '<span class="varlik-logo-initials" style="' + initStyle + '">' + initials + "</span>";
         var url = getCoinLogoUrl(base);
         return url
-            ? '<img src="' + url + '" alt="' + base + '" data-symbol="' + base + '" class="mobile-trade-fav-logo" style="width:32px;height:32px;border-radius:50%;object-fit:cover;" onerror="if(window.handleCoinLogoError)window.handleCoinLogoError(this)" /><span class="varlik-logo-initials" style="display:none;' + initStyle + '">' + initials + "</span>"
+            ? '<span class="coin-logo-wrap mobile-trade-fav-logo-wrap" style="position:relative;display:inline-flex;width:32px;height:32px;flex-shrink:0;">' +
+                '<img src="' + url + '" alt="' + base + '" data-symbol="' + base + '" class="mobile-trade-fav-logo" style="width:100%;height:100%;border-radius:50%;object-fit:cover;" onload="if(window.markCoinLogoLoaded)window.markCoinLogoLoaded(this)" onerror="if(window.handleCoinLogoError)window.handleCoinLogoError(this)" />' +
+                '<span class="varlik-logo-initials" style="display:none;position:absolute;inset:0;align-items:center;justify-content:center;font-size:0.7rem;font-weight:600;background:var(--ds-bg-tertiary);color:var(--ds-text-secondary);border-radius:50%;">' + initials + "</span></span>"
             : '<span class="varlik-logo-initials" style="' + initStyle + '">' + initials + "</span>";
     };
     var html = favs.map(function (symbol) {
@@ -685,7 +735,7 @@ function bindTabs() {
                 // Ortak KPI şeridi: Anasayfa, Trade; Botlar/Portföy/İletişim/Ayarlar’da gizle
                 const unifiedStrip = document.getElementById('unifiedKpiStrip');
                 if (unifiedStrip) {
-                    const showStrip = (targetTab === 'reports' || targetTab === 'binance' || targetTab === 'trade');
+                    const showStrip = (targetTab === 'reports' || targetTab === 'binance' || targetTab === 'trade' || targetTab === 'bots');
                     unifiedStrip.classList.toggle('kpi-strip-hidden', !showStrip);
                     if (showStrip) unifiedStrip.style.removeProperty('display');
                     else unifiedStrip.style.display = 'none';
@@ -800,11 +850,7 @@ function bindTabs() {
                     if (typeof window.startChatNotify === 'function') window.startChatNotify();
                 } else if (targetTab === "trade") {
                     initMobileTradeSearch();
-                    if (typeof getFavoritesStorageKey === "function" && getFavoritesStorageKey() && typeof loadSpotFavoritesFromStorage === "function") {
-                        loadSpotFavoritesFromStorage().then(function () { if (typeof renderMobileTradeFavorites === "function") renderMobileTradeFavorites(); }).catch(function () { if (typeof renderMobileTradeFavorites === "function") renderMobileTradeFavorites(); });
-                    } else {
-                        if (typeof renderMobileTradeFavorites === "function") renderMobileTradeFavorites();
-                    }
+                    _activateTradeTabFavorites();
                     if (typeof startMobileTradeFavPriceUpdates === "function") startMobileTradeFavPriceUpdates();
                 } else if (targetTab === "bots") {
                     if (typeof activateBotsTab === "function") activateBotsTab();

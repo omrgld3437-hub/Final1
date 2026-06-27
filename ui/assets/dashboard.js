@@ -1967,10 +1967,47 @@ const assetNameMap = { BTC: 'Bitcoin', ETH: 'Ethereum', BNB: 'BNB', USDT: 'Tethe
 
 // --- Favori coin çiftleri (⭐) — tek kaynak: sunucu (GET/PUT spot-favorites). Yedek: localStorage ---
 const FAVORITES_STORAGE_PREFIX = 'spot_favorites_';
+const SPOT_FAVORITES_SYNC_MS = 5 * 60 * 1000;
 var spotFavorites = []; // string[] (symbols: BTCUSDT, ETHBTC, ...)
+var _spotFavoritesServerSyncAt = 0;
+var _spotFavoritesLoadPromise = null;
 
 function getFavoritesStorageKey() {
     return State.accountId ? (FAVORITES_STORAGE_PREFIX + State.accountId) : null;
+}
+
+function hydrateSpotFavoritesFromLocal() {
+    loadSpotFavoritesFromLocalStorage();
+    try {
+        var sk = State.accountId ? ('spot_favorites_sync_at_' + State.accountId) : null;
+        if (sk) {
+            var ts = parseInt(sessionStorage.getItem(sk) || '0', 10);
+            if (ts > 0) _spotFavoritesServerSyncAt = ts;
+        }
+    } catch (e) {}
+}
+
+function _markSpotFavoritesSynced() {
+    _spotFavoritesServerSyncAt = Date.now();
+    try {
+        var sk = State.accountId ? ('spot_favorites_sync_at_' + State.accountId) : null;
+        if (sk) sessionStorage.setItem(sk, String(_spotFavoritesServerSyncAt));
+    } catch (e) {}
+}
+
+function ensureSpotFavoritesLoaded(force) {
+    if (!State.accountId) return Promise.resolve();
+    hydrateSpotFavoritesFromLocal();
+    var now = Date.now();
+    if (!force && spotFavorites.length > 0 && _spotFavoritesServerSyncAt
+        && (now - _spotFavoritesServerSyncAt) < SPOT_FAVORITES_SYNC_MS) {
+        return Promise.resolve();
+    }
+    if (_spotFavoritesLoadPromise) return _spotFavoritesLoadPromise;
+    _spotFavoritesLoadPromise = loadSpotFavoritesFromStorage().finally(function () {
+        _spotFavoritesLoadPromise = null;
+    });
+    return _spotFavoritesLoadPromise;
 }
 
 function loadSpotFavoritesFromLocalStorage() {
@@ -1988,24 +2025,25 @@ function loadSpotFavoritesFromLocalStorage() {
 }
 
 async function loadSpotFavoritesFromStorage() {
-    spotFavorites = [];
     if (!State.accountId) return;
+    if (spotFavorites.length === 0) loadSpotFavoritesFromLocalStorage();
     try {
-        var data = await window.apiClient.get('/api/accounts/' + State.accountId + '/spot-favorites?_=' + Date.now());
+        var data = await window.apiClient.get('/api/accounts/' + State.accountId + '/spot-favorites');
         var list = data && Array.isArray(data.symbols) ? data.symbols : [];
-        spotFavorites = list.map(function (s) { return normalizePairSymbol(s); }).filter(Boolean);
-        if (spotFavorites.length === 0) {
-            loadSpotFavoritesFromLocalStorage();
+        var next = list.map(function (s) { return normalizePairSymbol(s); }).filter(Boolean);
+        if (next.length === 0) {
+            if (spotFavorites.length === 0) loadSpotFavoritesFromLocalStorage();
             if (spotFavorites.length > 0) {
                 window.apiClient.put('/api/accounts/' + State.accountId + '/spot-favorites', { symbols: spotFavorites.slice() }).catch(function () {});
             }
+        } else {
+            spotFavorites = next;
         }
         try { localStorage.setItem(getFavoritesStorageKey(), JSON.stringify(spotFavorites)); } catch (e) {}
+        _markSpotFavoritesSynced();
     } catch (e) {
-        loadSpotFavoritesFromLocalStorage();
-        if (spotFavorites.length === 0) {
-            throw e;
-        }
+        if (spotFavorites.length === 0) loadSpotFavoritesFromLocalStorage();
+        if (spotFavorites.length === 0) throw e;
     }
 }
 
@@ -2014,6 +2052,7 @@ function saveSpotFavoritesToStorage() {
     var payload = { symbols: spotFavorites.slice() };
     return window.apiClient.put('/api/accounts/' + State.accountId + '/spot-favorites', payload).then(function () {
         try { localStorage.setItem(getFavoritesStorageKey(), JSON.stringify(spotFavorites)); } catch (e) {}
+        _markSpotFavoritesSynced();
     }).catch(function (err) {
         if (typeof console !== 'undefined' && console.error) console.error('[spot-favorites] Kaydetme hatası:', err);
         throw err;
@@ -3726,7 +3765,7 @@ function initBinanceCoinList() {
     window.intervalRegistry.stopByOwner('tab.coinlist');
     binanceCoinListLoadFailed = false;
     if (spotFavorites.length === 0 && getFavoritesStorageKey()) {
-        loadSpotFavoritesFromStorage()
+        ensureSpotFavoritesLoaded()
             .then(function () { if (typeof renderBinanceCoinList === 'function') renderBinanceCoinList(); })
             .catch(function () {
                 binanceCoinListLoadFailed = true;
@@ -4097,7 +4136,7 @@ async function initDashboard() {
         // Bakiye şeridi: Anasayfa, Trade; diğer sekmelerde gizle
         const unifiedStrip = document.getElementById('unifiedKpiStrip');
         if (unifiedStrip) {
-            const showStrip = (savedTab === 'reports' || savedTab === 'binance' || savedTab === 'trade');
+            const showStrip = (savedTab === 'reports' || savedTab === 'binance' || savedTab === 'trade' || savedTab === 'bots');
             unifiedStrip.classList.toggle('kpi-strip-hidden', !showStrip);
             if (showStrip) unifiedStrip.style.removeProperty('display');
             else unifiedStrip.style.display = 'none';
@@ -4161,6 +4200,10 @@ async function initDashboard() {
     State.accountId = accountId;
     State.accountCode = accountCode;
     window.__ACTIVE_ACCOUNT_ID = accountId;
+    if (typeof syncDashboardTestAccountFlag === 'function') syncDashboardTestAccountFlag();
+    else if (/^TEST/i.test(String(accountCode || '').trim())) State.isTestAccount = true;
+    if (typeof updateKpiCuzdanLiveStatus === 'function') updateKpiCuzdanLiveStatus();
+    if (typeof hydrateSpotFavoritesFromLocal === 'function') hydrateSpotFavoritesFromLocal();
     if (typeof restoreAppbarFromSessionCache === 'function') restoreAppbarFromSessionCache(accountId, accountCode);
     if (showAdminNav) {
         try {
@@ -4191,14 +4234,22 @@ async function initDashboard() {
     if (typeof loadGlobalLeaderboard === 'function') {
         loadGlobalLeaderboard(savedTab === 'bots' && isBotsTabCacheReady());
     }
-    await loadSpotFavoritesFromStorage();
-    if (typeof prefetchMobileTradeFavTickerCache === 'function') prefetchMobileTradeFavTickerCache();
+    if (savedTab === 'trade' && typeof renderMobileTradeFavorites === 'function') {
+        renderMobileTradeFavorites();
+    }
+    ensureSpotFavoritesLoaded().then(function () {
+        if (typeof window._mobileTradeFavListChanged === 'function' && window._mobileTradeFavListChanged()) {
+            if (typeof renderMobileTradeFavorites === 'function') renderMobileTradeFavorites(true);
+        }
+        if (typeof prefetchMobileTradeFavTickerCache === 'function') prefetchMobileTradeFavTickerCache();
+    }).catch(function () {
+        if (typeof prefetchMobileTradeFavTickerCache === 'function') prefetchMobileTradeFavTickerCache();
+    });
     if (typeof window.__DEBUG_DASH__ !== 'undefined' && window.__DEBUG_DASH__) console.log("[dashboard] initDashboard: accountId =", accountId, "accountCode =", accountCode);
     updateBinanceConnectionNotice();
     var activeTabName = document.querySelector('.dm-tab.is-active')?.getAttribute('data-tab');
     if (activeTabName === 'trade') {
         initMobileTradeSearch();
-        if (typeof renderMobileTradeFavorites === 'function') renderMobileTradeFavorites();
         if (typeof startMobileTradeFavPriceUpdates === 'function') startMobileTradeFavPriceUpdates();
     }
     if (new URLSearchParams(window.location.search).get('debug_wallet') === '1' && typeof window.renderWalletDebugOverlay === 'function') {

@@ -203,6 +203,43 @@ def test_param_assistant_fresh_budget_never_selects_sell_management_without_base
         assert float(d.telemetry.get("param_pool", {}).get("selection_context", {}).get("sellable_base_usdt", 0)) >= 5
 
 
+def test_build_bot_context_auto_first_start_buy_only_without_base():
+    from app.services.dynamic_param_score.data_collector import build_bot_context
+
+    p = portfolio(100)
+    auto = build_bot_context(run_source="param_assistant", budget_usdt=100, portfolio=p)
+    assert auto.is_first_start is True
+    assert auto.first_start_buy_only is True
+
+    explicit_off = build_bot_context(
+        run_source="param_assistant",
+        budget_usdt=100,
+        portfolio=p,
+        first_start_buy_only=False,
+    )
+    assert explicit_off.is_first_start is True
+    assert explicit_off.first_start_buy_only is False
+
+
+def test_first_start_auto_buy_only_skips_no_sellable_base_blocking():
+    from app.services.dynamic_param_score.data_collector import build_bot_context
+
+    engine = DynamicParamScoreEngine()
+    d = engine.calculate_decision(
+        "SOLUSDT",
+        _sol_market(),
+        portfolio(100),
+        constraints(),
+        build_bot_context(
+            run_source="param_assistant",
+            budget_usdt=100,
+            portfolio=portfolio(100),
+        ),
+    )
+    blocking = [str(b).upper() for b in (d.blocking_reasons or [])]
+    assert "NO_SELLABLE_BASE" not in blocking
+
+
 def test_sell_management_template_rejected_without_sellable_base():
     pinned = {t.template_key: t for t in _pinned_templates()}
     tmpl = pinned["BALANCED_RANGE_60_69_FEE_BAD_SELL_MANAGEMENT"]

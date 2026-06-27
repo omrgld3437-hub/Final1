@@ -1480,8 +1480,15 @@ h1, h2, h3, h4 {
     min-width: 0;
 }
 .page-dashboard .mobile-trade-fav-logo-symbol .mobile-trade-fav-logo,
+.page-dashboard .mobile-trade-fav-logo-symbol .mobile-trade-fav-logo-wrap,
+.page-dashboard .mobile-trade-fav-logo-symbol .coin-logo-wrap,
 .page-dashboard .mobile-trade-fav-logo-symbol .varlik-logo-initials {
     flex-shrink: 0;
+}
+.page-dashboard .mobile-trade-fav-logo-symbol .mobile-trade-fav-logo-wrap,
+.page-dashboard .mobile-trade-fav-logo-symbol .coin-logo-wrap {
+    width: 32px;
+    height: 32px;
 }
 /* Sembol: tam gösterim, kesilme yok – bol yer */
 .page-dashboard .mobile-trade-fav-symbol {
@@ -1590,6 +1597,8 @@ h1, h2, h3, h4 {
         white-space: nowrap;
     }
     .page-dashboard #mobileTradeView .mobile-trade-fav-item .mobile-trade-fav-logo,
+    .page-dashboard #mobileTradeView .mobile-trade-fav-item .mobile-trade-fav-logo-wrap,
+    .page-dashboard #mobileTradeView .mobile-trade-fav-item .coin-logo-wrap,
     .page-dashboard #mobileTradeView .mobile-trade-fav-item .varlik-logo-initials {
         width: 28px !important;
         height: 28px !important;

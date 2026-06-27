@@ -48,6 +48,19 @@ _PINNED_FALLBACK_ALIASES: Dict[str, str] = {
     "FALLBACK_DUMP_DEFENSIVE": "BALANCED_RANGE_60_69_FEE_BAD_WAIT",
 }
 
+_GENERIC_PINNED_FALLBACK_KEYS = frozenset(_PINNED_FALLBACK_ALIASES.keys()) | frozenset(
+    {
+        "FALLBACK_NO_TRADE",
+        "FALLBACK_SELL_MANAGEMENT",
+        "FALLBACK_DUMP_DEFENSIVE",
+    }
+)
+
+
+def _is_generic_pinned_fallback(template_key: Optional[str]) -> bool:
+    key = str(template_key or "").strip()
+    return key in _GENERIC_PINNED_FALLBACK_KEYS or key.startswith("FALLBACK_")
+
 
 def build_selection_context(
     param_score: int,
@@ -195,14 +208,15 @@ def _candidate_templates(
             crash_velocity=float(sub.get("crash_velocity") or 0.0),
         )
         ctx.sub_scores["_market_signature"] = sig  # noqa: SLF001 — selection scoring reuse
+        dps_narrowed: List[ParamTemplate] = []
         if getattr(pool, "lazy_mode", False) or pool.dps_signature_index or getattr(
             pool, "route_key_index", None
         ):
             dps_narrowed, route_trace = pool.query_route_shelf_with_trace(sig)
             ctx.sub_scores["_route_lookup_trace"] = route_trace  # noqa: SLF001
-            if dps_narrowed:
-                return dps_narrowed[:500]
-            return []
+        if dps_narrowed:
+            return dps_narrowed[:500]
+        # Route shelf miss — broaden via legacy indexes instead of scanning zero templates.
         narrowed = query_candidates(pool, _selection_features_from_context(ctx))
         if narrowed:
             return narrowed
@@ -224,6 +238,44 @@ def _v4_hard_reject(template: ParamTemplate, ctx: SelectionContext) -> Optional[
     if not sig:
         return None
     return hard_reject_v4(template, sig)
+
+
+_V4_HARD_REJECT_REASONS = frozenset(
+    {
+        "forbidden_fallback_regime",
+        "structure_fit_zero",
+        "grid_direction_fit_zero",
+        "base_quote_fit_zero",
+        "null_grid_ladder",
+        "empty_deployable_grid",
+    }
+)
+
+
+def _template_has_usable_grids(template: ParamTemplate) -> bool:
+    """Deployable grid templates must expose at least one buy or sell ladder."""
+    if template.final_action in (
+        FinalAction.NO_TRADE.value,
+        FinalAction.WAIT.value,
+        FinalAction.SAFE_WAIT.value,
+    ):
+        return False
+    p = template.params or {}
+    dps = p.get("dps_profile") or {}
+    buy_n = int(p.get("buy_grid_count") or dps.get("buy_grid_count") or 0)
+    sell_n = int(p.get("sell_grid_count") or dps.get("sell_grid_count") or 0)
+    buy_l = p.get("buy_grid_ladder_pcts") or dps.get("buy_grid_ladder_pcts") or dps.get("buy_grid_pcts")
+    sell_l = (
+        p.get("sell_grid_ladder_pcts")
+        or dps.get("sell_grid_ladder_pcts")
+        or dps.get("sell_grid_pcts")
+    )
+    if template.final_action in (
+        FinalAction.SELL_MANAGEMENT_ONLY.value,
+        FinalAction.RECOVERY_SELL.value,
+    ):
+        return sell_n > 0 or bool(sell_l)
+    return buy_n > 0 or sell_n > 0 or bool(buy_l) or bool(sell_l)
 
 
 def _hard_filter(
@@ -446,6 +498,28 @@ def _apply_selection_trace(
         and fb_risk == "NORMAL"
         and index_fb
     )
+    selection_type = "EXACT"
+    fallback_warning_level = "none"
+    if index_fb:
+        selection_type = "CLAMPED_FALLBACK" if defensive_overlay else "SAFE_FALLBACK"
+        fallback_warning_level = "warning" if defensive_overlay else "info"
+    elif exact_count == 0:
+        selection_type = "GLOBAL_SAFE" if scored > 0 else "UNRESOLVED"
+        fallback_warning_level = "critical" if exact_count == 0 and scored == 0 else "warning"
+
+    route_suitability = None
+    if result.template:
+        from app.services.dynamic_param_score.param_generator.v4_scoring import (
+            route_suitability_score,
+        )
+
+        route_suitability = route_suitability_score(
+            result.template,
+            sig,
+            route_key_matched=exact_count > 0 and not index_fb,
+            fallback_used=index_fb,
+            defensive_overlay=defensive_overlay,
+        )
     result.selection_context.update(
         {
             "exact_route_candidate_count": exact_count,
@@ -459,6 +533,9 @@ def _apply_selection_trace(
             "requested_risk_class": requested_risk,
             "scored_candidate_count": scored,
             "selected_profile_score": round(float(result.selection_score or 0), 2),
+            "route_suitability_score": route_suitability,
+            "selection_type": selection_type,
+            "fallback_warning_level": fallback_warning_level,
             "selection_reason": result.selection_context.get("reason"),
             "hard_reject_count": len(result.filtered_out),
             "market_signature": result.selection_context.get("market_signature")
@@ -510,7 +587,7 @@ def _runtime_safe_permitted(
     *,
     pool_status: Optional[Dict[str, object]] = None,
 ) -> bool:
-    """Runtime synthetic profile only when pool is loaded and shelf paths are exhausted."""
+    """Runtime synthetic profile when v4 pool is loaded and library paths are exhausted."""
     from app.services.dynamic_param_score.param_pool.versioning import production_pool_status
 
     status = pool_status or production_pool_status()
@@ -521,17 +598,23 @@ def _runtime_safe_permitted(
     if selection.final_action in (FinalAction.NO_TRADE.value, FinalAction.WAIT.value):
         return False
     trace = _selection_route_trace(selection)
-    exact = int(trace.get("exact_route_candidate_count") or 0)
-    fb = int(trace.get("fallback_candidate_count") or 0)
     exact_scored = int(trace.get("exact_scored_count") or 0)
-    if exact > 0:
-        return False
-    if fb > 0:
-        return False
-    if int(selection.candidate_count or 0) > 0:
-        return False
+    scored = int(
+        trace.get("scored_candidate_count")
+        or selection.candidate_count
+        or 0
+    )
     if exact_scored > 0:
         return False
+    if scored > 0 and not _is_generic_pinned_fallback(selection.selected_template_key):
+        return False
+    # Generic pinned fallback keys → symbol-specific runtime safe instead.
+    if _is_generic_pinned_fallback(selection.selected_template_key):
+        return True
+    exact = int(trace.get("exact_route_candidate_count") or 0)
+    fb = int(trace.get("fallback_candidate_count") or 0)
+    if exact > 0 or fb > 0:
+        return True
     return True
 
 
@@ -891,6 +974,8 @@ def _nearby_deployable_search(
         ok, soft_reasons = _hard_filter_nearby(t, ctx)
         if not ok:
             continue
+        if not _template_has_usable_grids(t):
+            continue
         score = _combined_selection_score(t, ctx, pool_version_id)
         score -= 6.0 * len(soft_reasons)
         candidates.append((t, score))
@@ -914,13 +999,7 @@ def _hard_filter_relaxed(
 
     if pool_version_id == POOL_VERSION_V4:
         v4_reject = _v4_hard_reject(template, ctx)
-        if v4_reject in (
-            "forbidden_fallback_regime",
-            "structure_fit_zero",
-            "grid_direction_fit_zero",
-            "base_quote_fit_zero",
-            "null_grid_ladder",
-        ):
+        if v4_reject in _V4_HARD_REJECT_REASONS:
             return False, [v4_reject]
 
     if template.status != "active":
@@ -1010,11 +1089,8 @@ def _hard_filter_fallback_shelf(
 
     if pool_version_id == POOL_VERSION_V4:
         v4_reject = _v4_hard_reject(template, ctx)
-        if v4_reject in (
-            "forbidden_fallback_regime",
-            "null_grid_ladder",
-            "legacy_wait_profile",
-            "distribution_not_100",
+        if v4_reject in _V4_HARD_REJECT_REASONS | frozenset(
+            {"legacy_wait_profile", "distribution_not_100"}
         ):
             return False, [v4_reject]
         if v4_reject:
@@ -1064,6 +1140,8 @@ def _shelf_relaxed_deployable_search(
         )
         if not ok:
             continue
+        if not _template_has_usable_grids(t):
+            continue
         score = _combined_selection_score(t, ctx, pool_version_id)
         score -= 4.0 * len(soft_reasons)
         if t.profile_family in _DEPLOYABLE_FALLBACK_PROFILES:
@@ -1109,6 +1187,8 @@ def _relaxed_deployable_search(
         ok, soft_reasons = _hard_filter_relaxed(t, ctx, pool_version_id=pool_version_id)
         if not ok:
             continue
+        if not _template_has_usable_grids(t):
+            continue
         score = _combined_selection_score(t, ctx, pool_version_id)
         score -= 5.0 * len(soft_reasons)
         if t.profile_family in _DEPLOYABLE_FALLBACK_PROFILES:
@@ -1126,6 +1206,37 @@ def _relaxed_deployable_search(
             continue
         candidates.append((t, score))
     candidates.sort(key=lambda x: (-x[1], -x[0].selection_priority, -x[0].priority, x[0].template_key))
+    return candidates
+
+
+def _library_deployable_last_resort(
+    templates: List[ParamTemplate],
+    ctx: SelectionContext,
+    pool_version_id: str = "",
+) -> List[Tuple[ParamTemplate, float]]:
+    """Exhaustive library pass with shelf-minimal filters — avoids generic pinned fallback."""
+    if not templates:
+        return []
+    min_score = float(C.SELECTOR_RELAXED_MIN_SELECTION_SCORE) - 15.0
+    candidates: List[Tuple[ParamTemplate, float]] = []
+    for t in templates:
+        ok, soft_reasons = _hard_filter_fallback_shelf(
+            t, ctx, pool_version_id=pool_version_id
+        )
+        if not ok:
+            continue
+        if not _template_has_usable_grids(t):
+            continue
+        score = _combined_selection_score(t, ctx, pool_version_id)
+        score -= 3.0 * len(soft_reasons)
+        if t.profile_family in _DEPLOYABLE_FALLBACK_PROFILES:
+            score += 6.0
+        if score < min_score:
+            continue
+        candidates.append((t, score))
+    candidates.sort(
+        key=lambda x: (-x[1], -x[0].selection_priority, -x[0].priority, x[0].template_key)
+    )
     return candidates
 
 
@@ -1240,6 +1351,9 @@ def select_template(
         if not ok:
             filtered_out[t.template_key] = reasons
             continue
+        if ctx.is_first_start and not _template_has_usable_grids(t):
+            filtered_out[t.template_key] = ["empty_grid_profile"]
+            continue
         candidates.append((t, _combined_selection_score(t, ctx, pool_version.version_id)))
 
     if not candidates:
@@ -1323,6 +1437,15 @@ def select_template(
         relaxed = _relaxed_deployable_search(scan_templates, ctx, pool_version.version_id)
         if not relaxed:
             relaxed = _relaxed_deployable_search(templates, ctx, pool_version.version_id)
+        if not relaxed:
+            library_last = _library_deployable_last_resort(
+                scan_templates, ctx, pool_version.version_id
+            )
+            if not library_last:
+                library_last = _library_deployable_last_resort(
+                    templates, ctx, pool_version.version_id
+                )
+            relaxed = library_last
         route_trace = ctx.sub_scores.get("_route_lookup_trace") or {}
         exact_count = int(route_trace.get("exact_route_candidate_count") or 0)
         if exact_count > 0:
@@ -1417,6 +1540,23 @@ def select_and_render(
     symbol: str = "",
 ) -> Tuple[TemplateSelectionResult, Optional[BotParams], str]:
     """Select template and render BotParams. Returns (selection, params, profile_bucket)."""
+    from app.services.dynamic_param_score.v5.bridge import v5_pool_enabled, v5_select_and_render
+
+    if v5_pool_enabled():
+        return v5_select_and_render(
+            param_score,
+            regime,
+            risk_state,
+            sub,
+            ind,
+            portfolio,
+            constraints,
+            bot_context,
+            budget_usdt,
+            min_notional,
+            symbol=symbol or getattr(bot_context, "symbol", "") or "",
+        )
+
     selection = select_template(
         param_score, regime, risk_state, sub, ind, portfolio, constraints,
         budget_usdt, min_notional,
@@ -1453,10 +1593,38 @@ def select_and_render(
             return selection, params, bucket
         if selection.final_action in (FinalAction.NO_TRADE.value, FinalAction.WAIT.value):
             return selection, None, bucket
-        # Render a minimal fallback template from pinned defaults
+        from app.services.dynamic_param_score.param_pool.defaults import POOL_VERSION_V4
+        from app.services.dynamic_param_score.param_pool.versioning import production_pool_status
+
+        pool_stat = production_pool_status()
+        v4_loaded = (
+            selection.pool_version == POOL_VERSION_V4
+            and bool(pool_stat.get("production_pool_loaded"))
+        )
+        fallback_key = selection.selected_template_key or ""
+        pinned_generic = _is_generic_pinned_fallback(fallback_key)
+
+        if v4_loaded and pinned_generic:
+            if _runtime_safe_permitted(selection, pool_status=pool_stat):
+                v4_params, _ = _v4_runtime_fallback_params(
+                    selection,
+                    sub=sub,
+                    ind=ind,
+                    constraints=constraints,
+                    budget_usdt=budget_usdt,
+                    min_notional=min_notional,
+                )
+                if v4_params is not None:
+                    selection.selection_context["pinned_fallback_skipped"] = True
+                    selection.selection_context["library_exhausted"] = True
+                    return selection, v4_params, bucket
+            selection.selection_context["pinned_fallback_blocked"] = True
+            selection.selection_context["library_exhausted"] = True
+            return selection, None, bucket
+
+        # Legacy pinned defaults — only when v4 pool is not loaded.
         from app.services.dynamic_param_score.param_pool.defaults import _pinned_templates
 
-        fallback_key = selection.selected_template_key
         pinned_key = _PINNED_FALLBACK_ALIASES.get(fallback_key or "", fallback_key or "")
         pinned = {t.template_key: t for t in _pinned_templates()}
         tmpl = pinned.get(pinned_key or "")

@@ -108,35 +108,45 @@ var DASHBOARD_LAST_CREATE_BOT_PARAMS_PREFIX = "dashboard_last_create_bot_params_
 /** @deprecated Yalnızca legacy taşıma — yeni yazımlar hesap suffiksli anahtar kullanır */
 var DASHBOARD_LAST_CREATE_BOT_PARAMS = "dashboard_last_create_bot_params";
 
-function createBotParamsStorageKey(accountId) {
-    return DASHBOARD_LAST_CREATE_BOT_PARAMS_PREFIX + String(accountId || "");
+function createBotParamsStorageKey(accountId, symbol) {
+    var base = DASHBOARD_LAST_CREATE_BOT_PARAMS_PREFIX + String(accountId || "");
+    var sym = symbol ? String(symbol).trim().toUpperCase() : "";
+    return sym ? (base + "_" + sym) : base;
 }
 
 function createBotParamScreenStorageKey(accountId) {
     return "createBotParamScreen_" + String(accountId || "");
 }
 
-function loadLastCreateBotParams(accountId) {
+function loadLastCreateBotParams(accountId, symbol) {
     if (accountId == null || accountId === "") return null;
-    var key = createBotParamsStorageKey(accountId);
+    var sym = symbol ? String(symbol).trim().toUpperCase() : "";
+    var keys = [];
+    if (sym) keys.push(createBotParamsStorageKey(accountId, sym));
+    keys.push(createBotParamsStorageKey(accountId));
     try {
-        var raw = localStorage.getItem(key);
-        if (!raw) {
-            var legacy = localStorage.getItem(DASHBOARD_LAST_CREATE_BOT_PARAMS);
-            if (legacy) {
-                var legacyObj = JSON.parse(legacy);
-                if (legacyObj && Number(legacyObj.account_id) === Number(accountId)) {
-                    localStorage.setItem(key, legacy);
-                    localStorage.removeItem(DASHBOARD_LAST_CREATE_BOT_PARAMS);
-                    raw = legacy;
+        for (var ki = 0; ki < keys.length; ki++) {
+            var raw = localStorage.getItem(keys[ki]);
+            if (!raw && ki === keys.length - 1) {
+                var legacy = localStorage.getItem(DASHBOARD_LAST_CREATE_BOT_PARAMS);
+                if (legacy) {
+                    var legacyObj = JSON.parse(legacy);
+                    if (legacyObj && Number(legacyObj.account_id) === Number(accountId)) {
+                        localStorage.setItem(keys[ki], legacy);
+                        localStorage.removeItem(DASHBOARD_LAST_CREATE_BOT_PARAMS);
+                        raw = legacy;
+                    }
                 }
             }
+            if (!raw) continue;
+            var p = JSON.parse(raw);
+            if (!p || typeof p !== "object") continue;
+            if (p.account_id != null && Number(p.account_id) !== Number(accountId)) continue;
+            var cacheSym = String(p.symbol || "").trim().toUpperCase();
+            if (sym && cacheSym && sym !== cacheSym) continue;
+            return p;
         }
-        if (!raw) return null;
-        var p = JSON.parse(raw);
-        if (!p || typeof p !== "object") return null;
-        if (p.account_id != null && Number(p.account_id) !== Number(accountId)) return null;
-        return p;
+        return null;
     } catch (e) {
         return null;
     }
@@ -145,8 +155,10 @@ function loadLastCreateBotParams(accountId) {
 function saveLastCreateBotParams(accountId, payload) {
     if (accountId == null || accountId === "" || !payload || typeof payload !== "object") return;
     try {
+        var sym = String(payload.symbol || "").trim().toUpperCase();
         var body = Object.assign({}, payload, { account_id: Number(accountId) });
-        localStorage.setItem(createBotParamsStorageKey(accountId), JSON.stringify(body));
+        var key = createBotParamsStorageKey(accountId, sym || null);
+        localStorage.setItem(key, JSON.stringify(body));
     } catch (e) { /* ignore */ }
 }
 
@@ -154,20 +166,40 @@ window.loadLastCreateBotParams = loadLastCreateBotParams;
 window.saveLastCreateBotParams = saveLastCreateBotParams;
 window.createBotParamScreenStorageKey = createBotParamScreenStorageKey;
 
-/** Son oluşturulan bot parametrelerini forma uygula (yalnızca aktif hesap) */
+/** Param asistanı / sembol değişiminde çapraz parite state sızıntısını kes. */
+function resetParamAssistantSymbolIsolation(prevSym, newSym) {
+    var n = String(newSym || "").trim().toUpperCase();
+    var p = String(prevSym || "").trim().toUpperCase();
+    if (!n || n === p) return;
+    if (dmParamAssistantAppliedSource) {
+        var srcSym = String(dmParamAssistantAppliedSource.symbol || "").trim().toUpperCase();
+        if (!srcSym || srcSym !== n) dmParamAssistantAppliedSource = null;
+    }
+    if (dmParamAssistantRecommendation) {
+        var recSym = String(dmParamAssistantRecommendation.symbol || "").trim().toUpperCase();
+        if (!recSym || recSym !== n) dmParamAssistantRecommendation = null;
+    }
+}
+
+/** Son oluşturulan bot parametrelerini forma uygula — yalnızca aynı parite + hesap. */
 function applyLastCreateParamsToForm() {
     try {
         var accountId = State.accountId;
         if (!accountId) return;
-        var p = loadLastCreateBotParams(accountId);
-        if (!p) return;
-        var strategy = (p.strategy_id || "").trim().toLowerCase();
-        var currentId = (currentSelectedTemplate && currentSelectedTemplate.id) ? currentSelectedTemplate.id : "trailing_dca";
         var symEl = document.getElementById("fSymbol");
+        var curSym = symEl ? String(symEl.value || "").trim().toUpperCase() : "";
+        // Sembol seçilmeden önceki bot parametrelerini asla taşıma (BTC→XLM grid kopyası).
+        if (!curSym) return;
+        var p = loadLastCreateBotParams(accountId, curSym);
+        if (!p) return;
+        var cacheSym = String(p.symbol || "").trim().toUpperCase();
+        if (!cacheSym || curSym !== cacheSym) return;
         var budgetEl = document.getElementById("fBudget");
         var basePctEl = document.getElementById("fBasePct");
         var quotePctEl = document.getElementById("fQuotePct");
-        if (symEl && p.symbol) { symEl.value = p.symbol; symEl.readOnly = false; }
+        if (symEl && p.symbol) {
+            symEl.readOnly = false;
+        }
         if (budgetEl && (p.budget_usd != null || p.initial_capital_usdt != null)) budgetEl.value = p.budget_usd != null ? p.budget_usd : p.initial_capital_usdt;
         var alloc = p.allocation || {};
         if (basePctEl && (alloc.base_pct != null || alloc.base_pct === 0)) basePctEl.value = alloc.base_pct;
@@ -966,6 +998,7 @@ function updateCreateBotModalPairStrip(symbol, opts) {
     }
     const sym = norm.normalized;
     if (!opts.preserveDropdown && sym && sym !== _dmModalStripSymbol) {
+        resetParamAssistantSymbolIsolation(_dmModalStripSymbol, sym);
         hideCreateModalSymbolDropdown();
         _dmModalStripSymbol = sym;
     }
@@ -2225,9 +2258,10 @@ var DM_PA_CHIP_TIPS = {
     'Risk': 'Kısa vadeli downside risk durumu; NORMAL iken savunmacı mod zorunlu değildir.',
     'Karar': 'Bu koşulda canlıya uygulanacak nihai aksiyon.',
     'Piyasa güven skoru': 'Kararın veri kalitesi ve sinyal tutarlılığına dayalı güven skoru.',
-    'Seçilen profil uyum skoru': 'Seçilen profilin route ve fallback içindeki uyum skoru.',
+    'Seçilen raf uyum skoru': 'Seçilen V5 rafının route imzası ve senaryo uyum skoru.',
     'Grid': 'Önerilen alış ve satış grid kademe sayısı.',
-    'Profil': 'Parametre havuzundan seçilen profil ve şablon anahtarı.'
+    'Raf (V5)': '192.780 raflı V5 kütüphaneden exact lookup ile seçilen DPLV5 shelf anahtarı.',
+    'Profil': 'V5 kütüphaneden seçilen raf (DPLV5 shelf ID).'
 };
 
 function dmParamAssistantRegimeLabel(tag) {
@@ -2264,7 +2298,7 @@ function dmParamAssistantRenderRegimeBanner(rec) {
     );
     var conf = r.confidence != null ? r.confidence : '—';
     var slug = dmParamAssistantRegimeSlug(r.regime_tag || rec.regime || label);
-    var tip = 'Motorun bu parite için seçtiği piyasa rejimi: ' + label + '. Grid agresifliği ve profil seçimi buna göre yapılır.';
+    var tip = 'Motorun bu parite için seçtiği piyasa rejimi: ' + label + '. Grid agresifliği ve V5 raf seçimi buna göre yapılır.';
     if (ui.effective_route_key || r.effective_route_key) {
         tip += ' Etkin route: ' + (ui.effective_route_key || r.effective_route_key) + '.';
     }
@@ -2554,7 +2588,7 @@ var DM_PA_INDICATOR_TIPS = {
 };
 
 var DM_PA_PARAM_TIPS = {
-    profile: 'Parametre havuzundan seçilen profil ailesi ve şablon.',
+    profile: 'V5 kütüphaneden exact route lookup ile seçilen DPLV5 shelf.',
     budget: 'Bot için ayrılan toplam USDT bütçesi.',
     allocation: 'Base (coin) ve quote (USDT) başlangıç dağılımı.',
     regime: 'Sınıflandırılmış piyasa rejimi ve karar güveni.',
@@ -2705,7 +2739,7 @@ function dmParamAssistantBuildParamTileMap(rec) {
     var strat = allocDisp.strategic_target || {};
     var p = tel.post_safety_params || tel.pre_safety_params || r.params || {};
     var map = {};
-    map.profile = dmParamAssistantMakeTile('Profil', dmParamAssistantBackendProfileText(r), DM_PA_PARAM_TIPS.profile);
+    map.profile = dmParamAssistantMakeTile('Raf (V5)', dmParamAssistantBackendProfileText(r), DM_PA_PARAM_TIPS.profile);
     map.budget = dmParamAssistantMakeTile('Bütçe', dmParamAssistantInputTextTr(rec.budget, 2) + ' USDT', DM_PA_PARAM_TIPS.budget);
     var targetBase = strat.base_pct != null ? strat.base_pct : rec.basePct;
     var targetQuote = strat.quote_pct != null ? strat.quote_pct : rec.quotePct;
@@ -2800,29 +2834,49 @@ function dmParamAssistantBuildDebugParamGroups(rec) {
     }).filter(function (group) { return group.rows.length > 0; });
 }
 
+function dmParamAssistantIsV5Selection(sel, tmpl) {
+    var ctx = (sel && sel.selection_context) || {};
+    if (String(ctx.engine_version || '') === 'DPS_ENGINE_V5') return true;
+    if (String(sel.pool_version || '').indexOf('v5') === 0) return true;
+    return String(tmpl || sel.selected_template_key || '').indexOf('DPLV5_') === 0;
+}
+
 function dmParamAssistantBuildSelectionTraceTiles(result) {
     var sel = (result && result.selection_telemetry) || {};
+    var ctx = sel.selection_context || {};
+    var tmpl = sel.selected_template_key || result.selected_profile || '';
+    var isV5 = dmParamAssistantIsV5Selection(sel, tmpl);
     var rows = [];
     function add(label, val) {
         if (val == null || val === '') return;
         rows.push(dmParamAssistantMakeTile(label, String(val), 'Seçim telemetrisi — gelişmiş debug.'));
     }
-    add('Exact route aday', sel.exact_route_candidate_count);
-    add('Fallback route', sel.fallback_route);
-    add('Fallback aday', sel.fallback_candidate_count);
-    add('Skorlanan aday', sel.scored_candidate_count);
-    add('Profil skoru', sel.selected_profile_score != null ? sel.selected_profile_score + '/100' : null);
-    add('Fallback kullanıldı', sel.fallback_used === true ? 'evet' : (sel.fallback_used === false ? 'hayır' : null));
-    add('Route index fallback', sel.route_index_fallback_used === true ? 'evet' : null);
-    if (sel.runtime_safe_profile_generated) {
-        rows.push(dmParamAssistantMakeTile(
-            'Runtime profil',
-            'güvenli üretici devrede',
-            'Route rafı boştu; runtime safe profile generator çalıştı.'
-        ));
+    if (isV5) {
+        add('Route key', ctx.route_key || ctx.v5_route_key || sel.route_key);
+        add('V5 shelf ID', ctx.v5_shelf_id || tmpl);
+        add('Seçim tipi', ctx.selection_type || sel.selection_type);
+        add('Exact hit', ctx.exact_route_hit === true ? 'evet' : (ctx.exact_route_hit === false ? 'hayır' : null));
+        add('Fallback kullanıldı', sel.fallback_used === true ? 'evet' : (sel.fallback_used === false ? 'hayır' : null));
+        if (sel.fallback_reason) add('Fallback nedeni', sel.fallback_reason);
+        add('Motor sürümü', ctx.engine_version || 'DPS_ENGINE_V5');
+    } else {
+        add('Exact route aday', sel.exact_route_candidate_count);
+        add('Fallback route', sel.fallback_route);
+        add('Fallback aday', sel.fallback_candidate_count);
+        add('Skorlanan aday', sel.scored_candidate_count);
+        add('Profil skoru', sel.selected_profile_score != null ? sel.selected_profile_score + '/100' : null);
+        add('Fallback kullanıldı', sel.fallback_used === true ? 'evet' : (sel.fallback_used === false ? 'hayır' : null));
+        add('Route index fallback', sel.route_index_fallback_used === true ? 'evet' : null);
+        if (sel.runtime_safe_profile_generated) {
+            rows.push(dmParamAssistantMakeTile(
+                'Runtime profil',
+                'güvenli üretici devrede',
+                'Route rafı boştu; runtime safe profile generator çalıştı.'
+            ));
+        }
     }
     if (sel.selection_reason) {
-        rows.push(dmParamAssistantMakeTile('Seçim nedeni', sel.selection_reason, 'Profil seçim gerekçesi.'));
+        rows.push(dmParamAssistantMakeTile('Seçim nedeni', sel.selection_reason, 'Raf seçim gerekçesi.'));
     }
     return rows.length ? [{ title: 'Seçim izi', rows: rows }] : [];
 }
@@ -2856,8 +2910,21 @@ function dmParamAssistantBuildFeeDisplayTiles(result) {
 
 function dmParamAssistantFormatSelectionPickLine(result) {
     var sel = result.selection_telemetry || (result.telemetry && result.telemetry.param_pool) || {};
-    var routeKey = sel.route_key || (sel.selection_context && sel.selection_context.route_key) || '';
+    var ctx = sel.selection_context || {};
+    var routeKey = sel.route_key || ctx.route_key || ctx.v5_route_key || (sel.selection_context && sel.selection_context.route_key) || '';
     var tmpl = sel.selected_template_key || result.selected_profile || '—';
+    var isV5 = dmParamAssistantIsV5Selection(sel, tmpl);
+    if (isV5) {
+        var pickLine = routeKey
+            ? ('Route ' + routeKey + ' için exact V5 raf: ' + tmpl)
+            : ('Exact V5 raf: ' + tmpl);
+        var parts = [];
+        if (ctx.exact_route_hit != null) parts.push('Exact hit: ' + (ctx.exact_route_hit ? 'evet' : 'hayır'));
+        if (sel.fallback_used != null) parts.push('Fallback: ' + (sel.fallback_used ? 'evet' : 'hayır'));
+        if (ctx.selection_type) parts.push('Seçim: ' + ctx.selection_type);
+        if (parts.length) pickLine += '. ' + parts.join(' · ');
+        return pickLine;
+    }
     var pickLine = routeKey
         ? ('Route ' + routeKey + ' rafından seçilen profil: ' + tmpl)
         : ('Seçilen profil: ' + tmpl);
@@ -3625,14 +3692,14 @@ var DM_PARAM_ASSISTANT_DPS_STAGES = [
     },
     {
         title: 'Parametre rafı eşleştiriliyor',
-        explain: '300.000 profilli kütüphanede tam tarama yapılmaz; coinin atmosferine uygun raf indeksinden aday profiller çağrılır ve skorlanır.',
-        score: 'profil seçiliyor…',
-        live: 'Bütçe ve komisyon seçim sonrası uygulanır — anında sonuç, simülasyon yok.',
-        ticks: ['Route index sorgulanıyor…', 'Exact route adayları taranıyor…', 'Fallback raflar deneniyor…', 'Profil skoru hesaplanıyor…', 'Grid dağılımı doğrulanıyor…']
+        explain: '192.780 raflı V5 kütüphanede tam tarama yapılmaz; coinin route_key imzasına göre tek raf doğrudan çağrılır.',
+        score: 'raf seçiliyor…',
+        live: 'Exact shelf lookup — bütçe ve komisyon sonradan uygulanır; normal yolda fallback yok.',
+        ticks: ['Route key doğrulanıyor…', 'V5 raf indeksi sorgulanıyor…', 'DPLV5 shelf eşleştiriliyor…', 'Grid ve dağılım doğrulanıyor…', 'Exposure ve trailing sınırları kontrol ediliyor…']
     },
     {
         title: 'Sonuç hazırlanıyor',
-        explain: 'Seçilen profil forma aktarılıyor; piyasa zayıfsa savunmacı grid parametreleri gösterilir.',
+        explain: 'Seçilen V5 rafı forma aktarılıyor; piyasa zayıfsa savunmacı grid parametreleri gösterilir.',
         score: 'hazır',
         live: 'Dynamic Param Score Engine sonucu üretiyor.',
         ticks: ['Güvenlik kapıları uygulanıyor…', 'Emir niyeti planı oluşturuluyor…', 'UI özeti hazırlanıyor…']
@@ -4286,7 +4353,7 @@ function dmParamAssistantRunBackend(snapshot, level, runId, onDone, onFail) {
     dmParamAssistantSetCursorVisible(true);
     setStatus('Piyasa analizi yapılıyor…');
     var calcUrl = api.calculate || '/api/param-assistant/calculate';
-    dmParamAssistantApiPost(calcUrl, { symbol: snapshot.symbol, budget: budget, analysis_level: level }, {
+    dmParamAssistantApiPost(calcUrl, { symbol: snapshot.symbol, budget: budget, analysis_level: level, first_start_buy_only: true }, {
         timeout: 90000,
         owner: 'paramAssistant',
         trigger: 'param-assistant-calculate',
@@ -4369,9 +4436,9 @@ function dmParamAssistantBackendChipItems(snapshot, rec) {
         )],
         ['Karar', dmParamAssistantActionLabel(r.final_action || rec.finalAction, r)],
         [marketConf.label || 'Piyasa güven skoru', (marketConf.value != null ? marketConf.value : (r.confidence != null ? r.confidence : '—')) + '/100'],
-        [profileFit.label || 'Seçilen profil uyum skoru', (profileFit.value != null ? profileFit.value : '—') + (profileFit.value != null ? '/100' : '')],
+        [profileFit.label || 'Seçilen raf uyum skoru', (profileFit.value != null ? profileFit.value : '—') + (profileFit.value != null ? '/100' : '')],
         ['Grid', dmParamAssistantGridCountLabel(rec)],
-        ['Profil', profileTxt]
+        ['Raf (V5)', profileTxt]
     ];
 }
 
@@ -4834,7 +4901,7 @@ function openParamAssistantModal() {
     }
     dmParamAssistantSetCursorVisible(true);
     var kicker = document.getElementById('dmParamAssistantKicker');
-    if (kicker) kicker.textContent = 'AI · Parametre motoru';
+    if (kicker) kicker.textContent = 'AI · V5 exact shelf motoru';
     var titleEl = document.getElementById('dmParamAssistantTitle');
     if (titleEl && AI_ASSISTANT_SPEC.modal && AI_ASSISTANT_SPEC.modal.title) {
         titleEl.textContent = AI_ASSISTANT_SPEC.modal.title;
@@ -4968,11 +5035,18 @@ function applyParamAssistantRecommendation(rec, onDone) {
     // yerel/heuristik öneri uygulanırsa temizle (bot manuel sayılır).
     if (rec.backend && rec.backend.ok) {
         var _bk = rec.backend;
+        var _tel = _bk.telemetry || {};
+        var _pool = _tel.param_pool || _bk.selection_telemetry || {};
         dmParamAssistantAppliedSource = {
             source: 'param_assistant',
             job_id: _bk.job_id || null,
-            decision: (_bk.decision && _bk.decision.decision) || null,
-            confidence: (_bk.confidence != null ? _bk.confidence : null)
+            decision_id: _bk.decision_id || null,
+            decision: (_bk.decision && _bk.decision.decision) || _bk.decision || null,
+            confidence: (_bk.confidence != null ? _bk.confidence : null),
+            symbol: _bk.symbol || (rec.backend && rec.backend.symbol) || null,
+            template_key: _pool.selected_template_key || _pool.template_key || null,
+            param_score: _bk.param_score != null ? _bk.param_score : null,
+            regime_tag: _bk.regime_tag || null
         };
     } else {
         dmParamAssistantAppliedSource = null;
@@ -5672,13 +5746,23 @@ async function createBot() {
         return;
     }
 
-    // P0-4: asistan önerisi uygulanarak açılan DİNAMİK bot → config_source iliştir;
-    // backend bunu görünce sizing referansını 'param_assistant' olarak dondurur.
-    if (dmParamAssistantAppliedSource && payload.dynamic_mode) {
+    // Parametre asistanı önerisi uygulanarak açılan bot → config_source + iz metadata.
+    if (dmParamAssistantAppliedSource) {
         payload.config_source = 'param_assistant';
         if (dmParamAssistantAppliedSource.job_id) payload.param_assistant_job_id = dmParamAssistantAppliedSource.job_id;
         if (dmParamAssistantAppliedSource.decision != null) payload.param_assistant_decision = dmParamAssistantAppliedSource.decision;
         if (dmParamAssistantAppliedSource.confidence != null) payload.param_assistant_confidence = dmParamAssistantAppliedSource.confidence;
+        payload.param_assistant = {
+            source: 'param_assistant',
+            job_id: dmParamAssistantAppliedSource.job_id || null,
+            decision_id: dmParamAssistantAppliedSource.decision_id || null,
+            decision: dmParamAssistantAppliedSource.decision != null ? dmParamAssistantAppliedSource.decision : null,
+            confidence: dmParamAssistantAppliedSource.confidence != null ? dmParamAssistantAppliedSource.confidence : null,
+            template_key: dmParamAssistantAppliedSource.template_key || null,
+            param_score: dmParamAssistantAppliedSource.param_score != null ? dmParamAssistantAppliedSource.param_score : null,
+            regime_tag: dmParamAssistantAppliedSource.regime_tag || null,
+            symbol: dmParamAssistantAppliedSource.symbol || payload.symbol || null
+        };
     }
 
     var requestedBudget = 0;

@@ -523,6 +523,24 @@ class ParamPool:
                 if sc:
                     self.structure_index.setdefault(sc, []).append(t)
 
+    @staticmethod
+    def _deployable_route_hits(hits: List[ParamTemplate]) -> List[ParamTemplate]:
+        """Templates that can be rendered for first-start / Param Assistant bot creation."""
+        from app.services.dynamic_param_score.models import FinalAction
+
+        out: List[ParamTemplate] = []
+        for t in hits:
+            if not t.deployable:
+                continue
+            if t.final_action in (
+                FinalAction.NO_TRADE.value,
+                FinalAction.WAIT.value,
+                FinalAction.SAFE_WAIT.value,
+            ):
+                continue
+            out.append(t)
+        return out
+
     def query_route_shelf_with_trace(
         self, signature: Dict[str, Any]
     ) -> Tuple[List[ParamTemplate], Dict[str, Any]]:
@@ -587,27 +605,70 @@ class ParamPool:
 
         exact_filtered = _filter_forbidden(signature, exact_hits)
         trace["exact_route_candidate_count"] = len(exact_filtered)
-        if exact_filtered:
-            return exact_filtered[:500], trace
-
         requested_risk = str(signature.get("risk_class") or "NORMAL")
+        needs_deployable = requested_risk in ("DEFENSIVE", "CAUTION")
+        if exact_filtered:
+            if not needs_deployable or self._deployable_route_hits(exact_filtered):
+                return exact_filtered[:500], trace
+            trace["exact_route_wait_only"] = True
+
+        def _accept_route_hits(
+            route_key: str,
+            filtered: List[ParamTemplate],
+            *,
+            fallback: bool,
+        ) -> Optional[List[ParamTemplate]]:
+            if not filtered:
+                return None
+            deployable = self._deployable_route_hits(filtered)
+            if needs_deployable and not deployable:
+                if fallback:
+                    trace.setdefault("wait_only_fallback_routes", []).append(route_key)
+                return None
+            trace["route_index_fallback_used"] = bool(fallback)
+            if fallback:
+                trace["fallback_route"] = route_key
+                trace["fallback_candidate_count"] = len(filtered)
+                trace["coverage_gap"] = True
+                fb_parts = route_key.split("|")
+                fb_risk = fb_parts[4] if len(fb_parts) >= 5 else ""
+                trace["defensive_fallback_overlay"] = (
+                    requested_risk in ("DEFENSIVE", "CAUTION") and fb_risk == "NORMAL"
+                )
+            else:
+                trace["exact_route_candidate_count"] = len(filtered)
+            return filtered[:500]
+
         for fb in signature.get("fallback_keys") or clean_fallback_keys(rk):
             fb = normalize_route_key(fb)
             hits = self._load_shelf_for_route(fb)
             if not hits:
                 continue
             filtered = _filter_forbidden(signature, hits)
-            if filtered:
-                trace["route_index_fallback_used"] = True
-                trace["fallback_route"] = fb
-                trace["fallback_candidate_count"] = len(filtered)
-                trace["coverage_gap"] = True
-                fb_parts = fb.split("|")
-                fb_risk = fb_parts[4] if len(fb_parts) >= 5 else ""
-                trace["defensive_fallback_overlay"] = (
-                    requested_risk in ("DEFENSIVE", "CAUTION") and fb_risk == "NORMAL"
+            accepted = _accept_route_hits(fb, filtered, fallback=True)
+            if accepted is not None:
+                return accepted, trace
+
+        # Last resort: DEFENSIVE/CAUTION shelves may only contain WAIT profiles — use
+        # same asset/regime/structure/vol NORMAL route for deployable library templates.
+        if needs_deployable:
+            parts = rk.split("|")
+            if len(parts) >= 5:
+                normal_route = normalize_route_key(
+                    "|".join([parts[0], parts[1], parts[2], parts[3], "NORMAL"])
                 )
-                return filtered[:500], trace
+                hits = self._load_shelf_for_route(normal_route)
+                if hits:
+                    filtered = _filter_forbidden(signature, hits)
+                    deployable = self._deployable_route_hits(filtered)
+                    if deployable:
+                        trace["route_index_fallback_used"] = True
+                        trace["fallback_route"] = normal_route
+                        trace["fallback_candidate_count"] = len(deployable)
+                        trace["coverage_gap"] = True
+                        trace["defensive_fallback_overlay"] = True
+                        trace["wait_only_escalation"] = True
+                        return deployable[:500], trace
 
         trace["coverage_gap"] = requested_risk in ("DEFENSIVE", "CAUTION")
         return [], trace

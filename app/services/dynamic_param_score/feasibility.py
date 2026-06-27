@@ -738,14 +738,13 @@ def _enforce_bilateral_grid_minimum(
     if not sell_ok:
         sell_budget = float(portfolio.base_value_usdt or 0.0)
         if context.is_first_start and sell_budget <= 0:
-            if (
-                context.first_start_buy_only
-                and int(p.buy_grid_count or 0) >= int(C.MIN_GRID_COUNT_DEPLOYABLE)
-            ):
+            if context.first_start_buy_only and int(p.buy_grid_count or 0) >= 1:
                 meta["first_start_buy_only"] = True
                 meta["bilateral_grid_ok"] = False
                 meta["sell_management_only"] = False
                 meta["min_notional_feasible"] = True
+                meta.pop("deploy_blocked_reason", None)
+                meta.pop("single_probe_only", None)
                 warnings.append("FIRST_START_BUY_ONLY")
                 return p, meta
             meta["deploy_blocked_reason"] = "NO_SELLABLE_BASE"

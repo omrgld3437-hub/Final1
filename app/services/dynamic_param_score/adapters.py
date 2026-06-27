@@ -20,35 +20,57 @@ from app.services.dynamic_param_score.safe_overlay import (
     management_mode_from_action,
     ui_severity_from_decision,
 )
+from app.services.dynamic_param_score.v5.ui_trace import (
+    build_display_regime_label_v5,
+    build_route_semantic_label,
+    derive_safety_result_label,
+    risk_label_from_route,
+    risk_state_from_route,
+)
 
 PARAM_ASSISTANT_RESULT_SCHEMA = "3.4"  # 3.4: selection trace counts + fee display contract
 
+# Legacy V4 route labels — V5 paths use ui_trace.REGIME_LABELS via build_display_regime_label_v5
 _ROUTE_REGIME_TR = {
     "R2": "Dengeli aralık",
     "R3": "Düşük volatilite sıkışma",
-    "R4": "Kırılım riski / yüksek volatil momentum",
-    "R5": "Geniş chop",
-    "R6": "Zayıf düşüş aralığı",
-    "R7": "Güçlü düşüş baskısı",
+    "R4": "Volatil aralık",
+    "R5": "Kırılım öncesi sıkışma",
+    "R6": "Kırılım devamı",
+    "R7": "Toparlanma",
     "R8": "Crash riski",
-    "R9": "Zayıf yükseliş",
-    "R12": "Oversold toparlanma",
-    "R13": "Overbought chop",
-    "R14": "BTC baskılı savunmacı alan",
-    "R15": "Aşırı pump / blow-off riski",
+    "R9": "Güçlü düşüş",
+    "R10": "Alt dipli düşüş",
+    "R12": "Kapitülasyon tepkisi",
+    "R13": "Yüksek volatilite düzensizliği",
+    "R14": "Düşük likidite sürüklenmesi",
+    "R15": "Özel stres/geçiş",
+    "R16": "Aşırı uzamış momentum",
+    "R17": "Veri belirsiz rejim",
 }
 
 _STRUCTURE_TR = {
-    "S2": "alt dip yapısı",
-    "S3": "yüksek tepe yapısı",
-    "S4": "geniş chop (üst tepe + alt dip)",
-    "S6": "mikro düşüş / makro aralık",
-    "S8": "makro düşüş / mikro tepki",
+    "S2": "aralık üst bölge",
+    "S3": "aralık alt bölge",
+    "S4": "üst tepe yapısı",
+    "S5": "alt dip yapısı",
+    "S6": "kırılım hazırlığı",
+    "S8": "destek kırılımı",
 }
 
 
 def _parse_route_parts(route_key: str) -> Dict[str, str]:
     parts = [p.strip() for p in str(route_key or "").split("|") if p.strip()]
+    if len(parts) == 7:
+        return {
+            "asset": parts[0],
+            "regime": parts[1],
+            "direction": parts[2],
+            "structure": parts[3],
+            "volatility": parts[4],
+            "risk": parts[5],
+            "liquidity": parts[6],
+        }
     if len(parts) < 5:
         return {}
     return {
@@ -75,6 +97,8 @@ def build_display_regime_label(
 ) -> str:
     """Human-readable regime for UI — prefers final selected route over soft tag."""
     effective = route_key or fallback_route
+    if effective and len(effective.split("|")) == 7:
+        return build_display_regime_label_v5(effective, fallback_used=fallback_used)
     parts = _parse_route_parts(effective)
     if not parts and regime_code:
         parts = {
@@ -110,7 +134,14 @@ def build_profile_display_line(
     fallback_used: bool = False,
 ) -> str:
     effective = fallback_route if fallback_used and fallback_route else route_key
+    if str(template_key or "").startswith("DPLV5_"):
+        return template_key
     parts = _parse_route_parts(effective)
+    if parts and len(parts) >= 7:
+        return (
+            f"DPLV5_{parts['asset']}_{parts['regime']}_{parts['direction']}_"
+            f"{parts['structure']}_{parts['volatility']}_{parts['risk']}_{parts['liquidity']}"
+        )
     if parts:
         core = (
             f"DPLV4_{parts['asset']}_{parts['regime']}_{parts['structure']}_"
@@ -396,6 +427,14 @@ def _resolve_recommendation_params(decision: DynamicParamDecision) -> Optional[B
     return None
 
 
+def _is_v5_selection(sel_ctx: Dict[str, Any], template_key: Optional[str] = None) -> bool:
+    if str(sel_ctx.get("engine_version") or "") == "DPS_ENGINE_V5":
+        return True
+    if sel_ctx.get("v5_shelf_id") or sel_ctx.get("v5_route_key"):
+        return True
+    return str(template_key or "").startswith("DPLV5_")
+
+
 def _build_score_labels(
     decision: DynamicParamDecision,
     sel_ctx: Dict[str, Any],
@@ -403,13 +442,15 @@ def _build_score_labels(
     runtime_safe = bool(sel_ctx.get("runtime_safe_profile_generated"))
     scored = int(sel_ctx.get("scored_candidate_count") or 0)
     profile_score = sel_ctx.get("selected_profile_score")
+    template_key = str(sel_ctx.get("selected_template_key") or "")
+    is_v5 = _is_v5_selection(sel_ctx, template_key)
     labels: Dict[str, Any] = {
         "market_confidence": {
             "label": "Piyasa güven skoru",
             "value": decision.confidence_score,
         },
     }
-    if runtime_safe or (scored <= 0 and profile_score in (0, 0.0, None)):
+    if runtime_safe or (scored <= 0 and profile_score in (0, 0.0, None) and not is_v5):
         labels["runtime_safety_score"] = {
             "label": "Runtime güvenlik skoru",
             "value": decision.param_score,
@@ -418,16 +459,18 @@ def _build_score_labels(
         labels["route_profile_score"] = {
             "label": "Raf profil skoru",
             "value": 0,
-            "note": "Gerçek 300k profil seçilmedi.",
+            "note": "Exact V5 raf seçilmedi; runtime güvenli profil üretildi.",
         }
     else:
         labels["param_work_score"] = {
             "label": "Parametre çalışma skoru",
             "value": decision.param_score,
         }
-        labels["route_profile_score"] = {
-            "label": "Seçilen profil uyum skoru",
-            "value": profile_score,
+        fit_label = "Seçilen raf uyum skoru" if is_v5 else "Seçilen profil uyum skoru"
+        fit_value = 100 if is_v5 and sel_ctx.get("exact_route_hit") else profile_score
+        labels["profile_fit_score"] = {
+            "label": fit_label,
+            "value": fit_value,
         }
     return labels
 
@@ -499,17 +542,23 @@ def _params_to_param_assistant_ui(
     fallback_used = bool(pool.get("fallback_used") or pool.get("route_index_fallback_used"))
     template_key = str(pool.get("selected_template_key") or decision.selected_profile_name or "")
     market_sig = tel.get("market_signature") or {}
-    effective_risk = str(
-        market_sig.get("risk_class")
-        or sel_ctx.get("risk_class")
-        or (
-            "DEFENSIVE"
-            if fa in (FinalAction.ACTIVE_DEFENSIVE_GRID.value, FinalAction.DEFENSIVE_GRID.value)
-            else decision.risk_state
+    is_v5_route = "|" in route_key and len(route_key.split("|")) == 7
+    if is_v5_route:
+        effective_risk = risk_state_from_route(route_key)
+        route_risk_label = risk_label_from_route(route_key)
+    else:
+        effective_risk = str(
+            market_sig.get("risk_class")
+            or sel_ctx.get("risk_class")
+            or (
+                "DEFENSIVE"
+                if fa in (FinalAction.ACTIVE_DEFENSIVE_GRID.value, FinalAction.DEFENSIVE_GRID.value)
+                else decision.risk_state
+            )
+            or decision.risk_state
+            or "NORMAL"
         )
-        or decision.risk_state
-        or "NORMAL"
-    )
+        route_risk_label = ""
     display_regime_label = build_display_regime_label(
         regime_tag=str(market_sig.get("regime_tag_live") or decision.regime_tag or ""),
         route_key=route_key,
@@ -560,8 +609,10 @@ def _params_to_param_assistant_ui(
         "display_regime_label": display_regime_label,
         "effective_route_key": fallback_route if fallback_used and fallback_route else route_key,
         "profile_display": profile_display,
-        "risk_state": decision.risk_state,
+        "risk_state": risk_state_from_route(route_key) if is_v5_route else decision.risk_state,
         "effective_risk_state": effective_risk,
+        "route_risk_label": route_risk_label,
+        "route_semantic_label": build_route_semantic_label(route_key) if is_v5_route else "",
         "final_action": fa,
         "management_mode": cfg.get("management_mode"),
         "action_detail": decision.action_detail,
@@ -827,16 +878,22 @@ def decision_to_param_assistant_result(
     diag = pool_meta.get("diagnostics") or {}
     data_window = decision.telemetry.get("data_window") or {}
     market_sig = decision.telemetry.get("market_signature") or {}
-    effective_risk = str(
-        market_sig.get("risk_class")
-        or (
-            "DEFENSIVE"
-            if fa in (FinalAction.ACTIVE_DEFENSIVE_GRID.value, FinalAction.DEFENSIVE_GRID.value)
-            else decision.risk_state
+    sel_ctx = pool_meta.get("selection_context") or {}
+    route_key = str(sel_ctx.get("route_key") or sel_ctx.get("v5_route_key") or "")
+    is_v5 = bool(sel_ctx.get("engine_version") == "DPS_ENGINE_V5" or (route_key and len(route_key.split("|")) == 7))
+    if is_v5 and route_key:
+        effective_risk = risk_state_from_route(route_key)
+    else:
+        effective_risk = str(
+            market_sig.get("risk_class")
+            or (
+                "DEFENSIVE"
+                if fa in (FinalAction.ACTIVE_DEFENSIVE_GRID.value, FinalAction.DEFENSIVE_GRID.value)
+                else decision.risk_state
+            )
+            or decision.risk_state
+            or "NORMAL"
         )
-        or decision.risk_state
-        or "NORMAL"
-    )
     display_regime = (display_config or {}).get("display_regime_label") or ""
 
     feas_meta = {
@@ -859,6 +916,7 @@ def decision_to_param_assistant_result(
 
     from app.services.dynamic_param_score.models import BotContext
     from app.services.dynamic_param_score.result_type import resolve_result_type
+    from app.services.dynamic_param_score.consumer_policy import policy_for
 
     bot_ctx = BotContext(
         run_source=decision.run_source,
@@ -869,6 +927,7 @@ def decision_to_param_assistant_result(
             or decision.telemetry.get("first_start_buy_only")
         ),
     )
+    pa_policy = policy_for("param_assistant")
     result_type = resolve_result_type(
         deployable=deploy,
         final_action=fa,
@@ -876,11 +935,23 @@ def decision_to_param_assistant_result(
         feasibility_meta=feas_meta,
         bot_context=bot_ctx,
         blocking_reasons=decision.blocking_reasons,
-        has_recommendation_ui=has_ui,
+        has_recommendation_ui=bool(pa_policy.recommendation_ui and has_ui),
         profile_source=profile_source,
     )
     if profile_source == "runtime_synthetic" and has_ui and not deploy:
         result_type = "recommended_grid"
+
+    fee_display = _fee_display_from_selection(pool_meta)
+    fee_missing = fee_display.get("fee_data_available") is False
+    base_action_label = _action_label_tr(fa)
+    safety_label = derive_safety_result_label(
+        confidence=decision.confidence_score,
+        fee_missing=fee_missing,
+        btc_risk=float(sub.get("btc_market_risk_score") or 0),
+        volume_consistency=float(decision.telemetry.get("volume_consistency") or 1),
+        live_applicable=deploy,
+        final_action_label=base_action_label,
+    )
 
     return {
         "ok": True,
@@ -913,7 +984,8 @@ def decision_to_param_assistant_result(
         "risk_state": decision.risk_state,
         "effective_risk_state": effective_risk,
         "final_action": fa,
-        "final_action_label": _action_label_tr(fa),
+        "final_action_label": safety_label,
+        "final_action_label_raw": base_action_label,
         "selected_profile": decision.selected_profile_name,
         "post_safety_action": fa,
         "action_detail": decision.action_detail,
@@ -955,6 +1027,16 @@ def decision_to_param_assistant_result(
             "selected_profile_score": (pool_meta.get("selection_context") or {}).get(
                 "selected_profile_score"
             ),
+            "route_suitability_score": (pool_meta.get("selection_context") or {}).get(
+                "route_suitability_score"
+            ),
+            "selection_type": (pool_meta.get("selection_context") or {}).get("selection_type"),
+            "fallback_warning_level": (pool_meta.get("selection_context") or {}).get(
+                "fallback_warning_level"
+            ),
+            "requested_risk_class": (pool_meta.get("selection_context") or {}).get(
+                "requested_risk_class"
+            ),
             "hard_reject_count": (pool_meta.get("selection_context") or {}).get("hard_reject_count"),
             "runtime_safe_profile_generated": (pool_meta.get("selection_context") or {}).get(
                 "runtime_safe_profile_generated"
@@ -971,22 +1053,13 @@ def decision_to_param_assistant_result(
             "defensive_fallback_overlay": (pool_meta.get("selection_context") or {}).get(
                 "defensive_fallback_overlay"
             ),
-            "score_labels": {
-                "market_confidence": {
-                    "label": "Piyasa güven skoru",
-                    "value": decision.confidence_score,
+            "score_labels": _build_score_labels(
+                decision,
+                {
+                    **dict(pool_meta.get("selection_context") or {}),
+                    "selected_template_key": pool_meta.get("selected_template_key"),
                 },
-                "param_work_score": {
-                    "label": "Parametre çalışma skoru",
-                    "value": decision.param_score,
-                },
-                "profile_fit_score": {
-                    "label": "Seçilen profil uyum skoru",
-                    "value": (pool_meta.get("selection_context") or {}).get(
-                        "selected_profile_score"
-                    ),
-                },
-            },
+            ),
             "candidate_count": (
                 (pool_meta.get("selection_context") or {}).get("scored_candidate_count")
                 if (pool_meta.get("selection_context") or {}).get("scored_candidate_count") is not None

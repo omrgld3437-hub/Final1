@@ -41,7 +41,7 @@ Paylaşılan iş mantığı: Binance, fiyat, PnL, şifreleme, audit.
 | `bot_perf_file_store.py` | Bot performans dosyaları; `reconcile_bot_cycles_file_with_state` (state/arşiv ↔ `bots/{id}.json`) |
 | `ip_blocklist.py` | Manager'ın yazdığı `.run/blocked_ips.json` okuma; web middleware 403 |
 | `leaderboard_service.py` | Global/structure leaderboard; `running_since_iso` = `bot_run_started_at_iso` (bot detay süre ile aynı) |
-| `dynamic_param_score/` | Merkez karar motoru: … → persistence + **log_retention** (1 GiB cap → 100 MiB prune) |
+| `dynamic_param_score/` | Merkez karar motoru: … → **consumer_policy** (PA/DM bağımsızlığı) → persistence + **log_retention** (1 GiB cap → 100 MiB prune) |
 | `param_optimizer/` | **Offline-only** araştırma/kalibrasyon (MC/backtest); canlı karar akışında kullanılmaz |
 
 ## Dosya envanteri

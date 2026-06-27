@@ -39,6 +39,10 @@ from app.services.dynamic_param_score.scoring import (
 )
 from app.services.dynamic_param_score.persistence import persist_decision
 from app.services.dynamic_param_score.utils import json_safe
+from app.services.dynamic_param_score.consumer_policy import (
+    policy_for_context,
+    sanitize_context_for_consumer,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +58,8 @@ class DynamicParamScoreEngine:
         exchange_constraints: ExchangeConstraints,
         bot_context: BotContext,
     ) -> DynamicParamDecision:
+        bot_context = sanitize_context_for_consumer(bot_context)
+        consumer = policy_for_context(bot_context)
         ind = compute_indicators(market_data, portfolio_state)
         sub = compute_sub_scores(ind, portfolio_state, exchange_constraints)
 
@@ -144,12 +150,13 @@ class DynamicParamScoreEngine:
 
         if blocking and bot_context.allow_no_trade:
             deployable = False
-            if final_action not in (
-                FinalAction.WAIT.value,
-                FinalAction.WAIT_SAFETY.value,
-                FinalAction.SELL_MANAGEMENT_ONLY.value,
-            ):
-                final_action = FinalAction.NO_TRADE.value
+            if not consumer.soften_extreme_safety_for_ui:
+                if final_action not in (
+                    FinalAction.WAIT.value,
+                    FinalAction.WAIT_SAFETY.value,
+                    FinalAction.SELL_MANAGEMENT_ONLY.value,
+                ):
+                    final_action = FinalAction.NO_TRADE.value
 
         target_base = float(params.base_alloc_frac) if params else portfolio_state.current_base_exposure_frac
         headroom = exposure_headroom_quote_usdt(
@@ -226,6 +233,11 @@ class DynamicParamScoreEngine:
             min_notional=min_n,
         )
         risk_sc = compute_risk_score(sub)
+        ind_dict = ind.to_dict()
+        sel_ctx = pool_selection.selection_context or {}
+        rk = sel_ctx.get("route_key") or sel_ctx.get("v5_route_key")
+        if rk:
+            ind_dict["route_key"] = rk
         explain = build_explanation(
             param_score,
             regime.value,
@@ -237,7 +249,7 @@ class DynamicParamScoreEngine:
             selected_template_key=pool_selection.selected_template_key,
             fallback_reason=pool_selection.fallback_reason,
             rebalance_plan=rebalance_plan.to_dict(),
-            indicators=ind.to_dict(),
+            indicators=ind_dict,
             budget_usdt=budget,
         )
 
@@ -280,6 +292,8 @@ class DynamicParamScoreEngine:
         engine_ver = C.DPS_ENGINE_V4 if pool_selection.pool_version == POOL_VERSION_V4 else C.DPS_ENGINE_V2
 
         telemetry = {
+            "consumer_id": consumer.consumer_id,
+            "consumer_independent": True,
             "sub_scores": sub.to_dict(),
             "indicators": ind.to_dict(),
             "market_signature": market_signature,
@@ -300,7 +314,7 @@ class DynamicParamScoreEngine:
             "rebalance_plan": rebalance_plan.to_dict(),
             "target_allocation": target_allocation.to_dict() if target_allocation else None,
             "order_intent_plan": order_intent_plan.to_dict(),
-            "intent_execution_enabled": False,
+            "intent_execution_enabled": consumer.intent_execution_enabled,
             "data_window": getattr(market_data, "data_window", None),
             "is_first_start": bool(bot_context.is_first_start),
             "first_start_buy_only": bool(bot_context.first_start_buy_only),

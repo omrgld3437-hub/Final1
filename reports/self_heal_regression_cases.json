@@ -1,0 +1,74 @@
+[
+  {
+    "case_id": "ADAUSDT-001",
+    "shelf_id": "DPLV5_A3_R6_D1_S4_V3_K1_L2",
+    "route_key": "A3|R6|D1|S4|V3|K1|L2",
+    "violations": [],
+    "rendered_fields": {
+      "ui_risk_label": "Savunmacı",
+      "explanation_risk_label": "Savunmacı",
+      "route_risk": "K1",
+      "market_regime_text": "Kırılım devamı · Üst tepeler · savunmacı",
+      "pattern_phrase": "",
+      "higher_highs": true,
+      "lower_lows": false,
+      "target_base_pct": 50.4,
+      "max_exposure_pct": 50.4,
+      "worst_exposure_pct": 50.4,
+      "active_buy_ladder_budget_usdt": 0.0,
+      "min_notional_usdt": 10,
+      "buy_orders_active": true,
+      "final_action_label": "Referans / bekle",
+      "deployable": false,
+      "grid_summary_buy_pct": 3.41,
+      "grid_summary_sell_pct": 3.71,
+      "final_first_buy_grid": 3.41,
+      "final_first_sell_grid": 3.71,
+      "risk_opportunity_text": "risk skoru 45/100, fırsat skoru 55/100",
+      "explain_excerpt": "Parametre Skoru 65/100. Rejim dengeli aralık, risk durumu savunmacı. Risk skoru 45/100, fırsat skoru 55/100. Volatilite 50, BTC piyasa riski 70. Dengeli grid profili seçildi. Base tahsisi %50.4, quote %49.6, maksimum base exposure %50.4 ile sınırlandı. Alışlar 3 kademeye bölündü; grid aralığı alış %3.41 / satış %3.71."
+    },
+    "result_summary": {
+      "confidence": 15,
+      "final_action_label": "Referans / bekle",
+      "effective_risk_state": "DEFENSIVE",
+      "deployable": false
+    },
+    "pass": true
+  },
+  {
+    "case_id": "ADAUSDT-002",
+    "shelf_id": "DPLV5_A3_R6_D1_S4_V3_K2_L2",
+    "route_key": "A3|R6|D1|S4|V3|K2|L2",
+    "violations": [],
+    "rendered_fields": {
+      "ui_risk_label": "Normal kontrollü",
+      "explanation_risk_label": "Normal kontrollü",
+      "route_risk": "K2",
+      "market_regime_text": "Kırılım devamı · Üst tepeler · normal kontrollü",
+      "pattern_phrase": "",
+      "higher_highs": true,
+      "lower_lows": false,
+      "target_base_pct": 66.0,
+      "max_exposure_pct": 66.5,
+      "worst_exposure_pct": 66.0,
+      "active_buy_ladder_budget_usdt": 0.0,
+      "min_notional_usdt": 10,
+      "buy_orders_active": true,
+      "final_action_label": "Referans / bekle",
+      "deployable": false,
+      "grid_summary_buy_pct": 3.1,
+      "grid_summary_sell_pct": 3.71,
+      "final_first_buy_grid": 3.1,
+      "final_first_sell_grid": 3.71,
+      "risk_opportunity_text": "risk skoru 45/100, fırsat skoru 55/100",
+      "explain_excerpt": "Parametre Skoru 65/100. Rejim dengeli aralık, risk durumu normal kontrollü. Risk skoru 45/100, fırsat skoru 55/100. Volatilite 50, BTC piyasa riski 70. Dengeli grid profili seçildi. Base tahsisi %66.0, quote %34.0, maksimum base exposure %66.5 ile sınırlandı. Alışlar 3 kademeye bölündü; grid aralığı alış %3.10 / satış %3.71."
+    },
+    "result_summary": {
+      "confidence": 29,
+      "final_action_label": "Referans / bekle",
+      "effective_risk_state": "NORMAL",
+      "deployable": false
+    },
+    "pass": true
+  }
+]

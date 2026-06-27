@@ -30,6 +30,7 @@ from app.services.dynamic_param_score.action_detail import (
     is_sell_management_only,
     resolve_post_safety_action,
 )
+from app.services.dynamic_param_score.consumer_policy import policy_for_context
 
 
 def _gate(
@@ -78,6 +79,7 @@ def apply_safety_gates(
     warnings: List[str] = []
     feasibility_meta: dict = {}
     action = final_action
+    consumer = policy_for_context(context)
     spread_pct = float(getattr(ind, "orderbook_spread_pct", 0.0) or 0.0) if ind else 0.0
 
     if sub.data_quality_score < C.DATA_QUALITY_BLOCKED:
@@ -184,10 +186,12 @@ def apply_safety_gates(
         if int(p.buy_grid_count or 0) > 0:
             action = FinalAction.ACTIVE_DEFENSIVE_GRID.value
             warnings.append("NO_BASE_BUY_ONLY_ACTIVE")
-        else:
+        elif not feasibility_meta.get("first_start_buy_only"):
             action = FinalAction.WAIT_SAFETY.value
             blocking.append("NO_SELLABLE_BASE")
-    elif not feasibility_meta.get("bilateral_grid_ok", True):
+    elif not feasibility_meta.get("bilateral_grid_ok", True) and not feasibility_meta.get(
+        "first_start_buy_only"
+    ):
         if is_sell_management_only(p) and has_sellable:
             action = FinalAction.SELL_MANAGEMENT_ONLY.value
         elif int(p.buy_grid_count or 0) > 0 and int(p.sell_grid_count or 0) > 0:
@@ -254,7 +258,7 @@ def apply_safety_gates(
         p.buy_grid_count = 0
         p.buy_qty_distribution = []
         blocking.append("DUMP_RISK")
-        if context.run_source == "param_assistant":
+        if consumer.soften_extreme_safety_for_ui:
             action = resolve_post_safety_action(p, FinalAction.DEFENSIVE_GRID.value)
             deployable = is_deployable(action, p, feasibility_meta)
             feasibility_meta["fee_floor_pct"] = round(required_min, 4)
@@ -332,7 +336,7 @@ def apply_safety_gates(
 
     if param_score < 15:
         blocking.append("PARAM_SCORE_TOO_LOW")
-        if context.run_source == "param_assistant" and p is not None:
+        if consumer.soften_extreme_safety_for_ui and p is not None:
             action = resolve_post_safety_action(p, FinalAction.DEFENSIVE_GRID.value)
             deployable = is_deployable(action, p, feasibility_meta)
             feasibility_meta["fee_floor_pct"] = round(required_min, 4)
@@ -340,8 +344,12 @@ def apply_safety_gates(
             return p, action, deployable, gates, blocking, warnings, feasibility_meta
         return None, FinalAction.NO_TRADE.value, False, gates, blocking, warnings, feasibility_meta
 
-    if feasibility_meta.get("exposure_hard_cap_breach") or feasibility_meta.get(
-        "deploy_blocked_reason"
+    if feasibility_meta.get("exposure_hard_cap_breach") or (
+        feasibility_meta.get("deploy_blocked_reason")
+        and not (
+            feasibility_meta.get("first_start_buy_only")
+            and feasibility_meta.get("deploy_blocked_reason") == "SINGLE_PROBE_ONLY"
+        )
     ):
         if is_sell_management_only(p) and has_sellable_base_feasible(
             portfolio, constraints, price=current_price
@@ -356,7 +364,11 @@ def apply_safety_gates(
                 )
             )
 
-    action = resolve_post_safety_action(p, action, blocking=bool(blocking))
+    action = resolve_post_safety_action(
+        p,
+        action,
+        blocking=bool(blocking) and not consumer.soften_extreme_safety_for_ui,
+    )
     deployable = is_deployable(action, p, feasibility_meta)
 
     feasibility_meta["fee_floor_pct"] = round(required_min, 4)

@@ -12,16 +12,63 @@ from app.services.dynamic_param_score.param_generator.feature_bins_v4 import (
 from app.services.dynamic_param_score.param_pool.models import ParamTemplate
 
 WEIGHTS = {
-    "route_match": 0.30,
-    "scenario_fit": 0.20,
-    "structure_fit": 0.15,
-    "grid_direction_fit": 0.15,
+    "route_match": 0.25,
+    "risk_match": 0.15,
+    "scenario_fit": 0.18,
+    "structure_fit": 0.12,
+    "grid_direction_fit": 0.12,
     "base_quote_fit": 0.10,
     "capacity_fit": 0.04,
-    "cost_fit": 0.03,
-    "data_quality_fit": 0.02,
+    "cost_fit": 0.02,
+    "data_quality_fit": 0.01,
     "prior_score": 0.01,
 }
+
+
+def risk_match_score(signature: Dict[str, Any], dps: Dict[str, Any]) -> float:
+    """Heavy penalty when requested DEFENSIVE/CAUTION but profile shelf is NORMAL."""
+    req = str(signature.get("risk_class") or signature.get("risk_level") or "NORMAL").upper()
+    prof_route = normalize_route_key(str(dps.get("route_key") or ""))
+    prof_risk = str(dps.get("risk_class") or "").upper()
+    if prof_route:
+        parts = prof_route.split("|")
+        if len(parts) >= 5:
+            prof_risk = parts[4] if not prof_risk else prof_risk
+    if not prof_risk:
+        prof_risk = "NORMAL"
+    if req == prof_risk:
+        return 1.0
+    if req in ("DEFENSIVE", "CAUTION") and prof_risk == "NORMAL":
+        return 0.0
+    if req == "NORMAL" and prof_risk == "DEFENSIVE":
+        return 0.55
+    return 0.35
+
+
+def route_suitability_score(
+    template: ParamTemplate,
+    signature: Dict[str, Any],
+    *,
+    route_key_matched: bool = False,
+    fallback_used: bool = False,
+    defensive_overlay: bool = False,
+) -> float:
+    """Independent suitability — penalizes route/risk mismatch even if profile_score is high."""
+    dps = (template.params or {}).get("dps_profile") or {}
+    scores = {
+        "route_match": 1.0 if route_key_matched else 0.25,
+        "risk_match": risk_match_score(signature, dps),
+        "structure_fit": structure_fit_score(
+            str(dps.get("structure_code") or dps.get("structure") or ""),
+            str(signature.get("structure_code") or signature.get("structure") or ""),
+        ),
+    }
+    base = sum(scores[k] * v for k, v in (("route_match", 0.45), ("risk_match", 0.35), ("structure_fit", 0.20)))
+    if fallback_used:
+        base *= 0.82
+    if defensive_overlay:
+        base = min(base, 0.58)
+    return round(base, 4)
 
 
 def _prefix(a: str, b: str) -> float:
@@ -100,6 +147,15 @@ def hard_reject_v4(
     sell_n = int(params.get("sell_grid_count") or dps.get("sell_grid_count") or 0)
     if (buy_n > 0 and not buy_ladder) or (sell_n > 0 and not sell_ladder):
         return "null_grid_ladder"
+
+    _non_grid_actions = frozenset({"WAIT", "SAFE_WAIT", "NO_TRADE", "DATA_STALE_SAFE_WAIT"})
+    _sell_only_actions = frozenset({"SELL_MANAGEMENT_ONLY", "RECOVERY_SELL"})
+    if template.final_action in _sell_only_actions:
+        if sell_n == 0 and not sell_ladder:
+            return "empty_deployable_grid"
+    elif template.final_action not in _non_grid_actions and template.deployable:
+        if buy_n == 0 and sell_n == 0 and not buy_ladder and not sell_ladder:
+            return "empty_deployable_grid"
 
     sf = structure_fit_score(
         str(dps.get("structure_code") or dps.get("structure") or ""),
@@ -185,6 +241,7 @@ def compute_v4_profile_score(
         str(dps.get("structure_code") or dps.get("structure") or ""),
         str(signature.get("structure_code") or signature.get("structure") or ""),
     )
+    scores["risk_match"] = risk_match_score(signature, dps)
     scores["grid_direction_fit"] = grid_direction_fit_score(dps, signature)
     scores["base_quote_fit"] = base_quote_fit_score(dps, signature)
     scores["capacity_fit"] = float(overrides.get("capacity_fit") or 0.85)

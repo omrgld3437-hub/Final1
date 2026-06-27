@@ -18,6 +18,7 @@ POOL_VERSION_ID = "v1.0.0"
 POOL_VERSION_V2 = "v2.0.0"
 POOL_VERSION_V3 = "v3.0.0"
 POOL_VERSION_V4 = "v4.0.0"
+POOL_VERSION_V5 = "v5.0.0"
 
 # Score band definitions: (min, max, label)
 SCORE_BANDS: List[Tuple[int, int, str]] = [

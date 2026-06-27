@@ -17,8 +17,10 @@ function clearBotsTabCache() {
         try {
             sessionStorage.removeItem(botsTabCacheSessionKey(State.accountId));
             sessionStorage.removeItem(financeBotsDomCacheKey(State.accountId));
+            localStorage.removeItem(financeBotsDomCacheKey(State.accountId));
         } catch (e) {}
     }
+    try { delete window.__DASH_BOTS_DOM_BOOT; } catch (e2) { window.__DASH_BOTS_DOM_BOOT = null; }
 }
 
 function isBotsTabCacheReady() {
@@ -39,6 +41,21 @@ function financeBotsDomCacheKey(accountId) {
 }
 
 /** Bot detaydan dönüşte tablo HTML — renderFinanceBots yerine enjekte. */
+function readFinanceBotsDomCache(accountId) {
+    if (!accountId) return null;
+    try {
+        var key = financeBotsDomCacheKey(accountId);
+        var raw = sessionStorage.getItem(key) || localStorage.getItem(key);
+        if (!raw) return null;
+        var data = JSON.parse(raw);
+        if (!data || !data.html || data.html.indexOf('data-bot-id') < 0) return null;
+        if (data.ts && Date.now() - data.ts > 86400000) return null;
+        return data;
+    } catch (e) {
+        return null;
+    }
+}
+
 function persistFinanceBotsDomCache() {
     if (!State.accountId) return;
     var home = document.getElementById('financeBotsList');
@@ -46,34 +63,56 @@ function persistFinanceBotsDomCache() {
     var src = (_financeBotsPanelHasRows(tab) && tab) ? tab : ((_financeBotsPanelHasRows(home) && home) ? home : null);
     if (!src || !src.innerHTML || src.innerHTML.indexOf('data-bot-id') < 0) return;
     try {
-        sessionStorage.setItem(financeBotsDomCacheKey(State.accountId), JSON.stringify({
+        var payload = JSON.stringify({
             ts: Date.now(),
             html: src.innerHTML,
             structureSig: _financeBotsStructureSignature,
             idsSig: _financeBotsIdsSignature,
             sortBy: normalizeFinanceBotsSortBy(typeof financeBotsSortBy !== 'undefined' ? financeBotsSortBy : 'best')
-        }));
+        });
+        var key = financeBotsDomCacheKey(State.accountId);
+        sessionStorage.setItem(key, payload);
+        localStorage.setItem(key, payload);
     } catch (e) { /* quota */ }
+}
+
+function adoptEarlyBotsDomBoot(accountId) {
+    var boot = window.__DASH_BOTS_DOM_BOOT;
+    if (!boot || Number(boot.accountId) !== Number(accountId)) return false;
+    var tab = document.getElementById('financeBotsListBots');
+    if (!_financeBotsPanelHasRows(tab)) return false;
+    _financeBotsStructureSignature = boot.structureSig || _financeBotsStructureSignature;
+    _financeBotsIdsSignature = boot.idsSig || _financeBotsIdsSignature;
+    if (boot.sortBy) financeBotsSortBy = normalizeFinanceBotsSortBy(boot.sortBy);
+    bindFinanceBotsRowClicks(tab);
+    var home = document.getElementById('financeBotsList');
+    if (home && _financeBotsPanelHasRows(home)) bindFinanceBotsRowClicks(home);
+    markBotsTabCacheReady();
+    return true;
 }
 
 function restoreFinanceBotsDomFromSessionCache(accountId, bots) {
     if (!accountId) return false;
+    if (adoptEarlyBotsDomBoot(accountId)) return true;
     try {
-        var raw = sessionStorage.getItem(financeBotsDomCacheKey(accountId));
-        if (!raw) return false;
-        var data = JSON.parse(raw);
-        if (!data || !data.html || data.html.indexOf('data-bot-id') < 0) return false;
-        if (data.ts && Date.now() - data.ts > 86400000) return false;
+        var data = readFinanceBotsDomCache(accountId);
+        if (!data) return false;
         bots = Array.isArray(bots) ? bots : [];
         var sortBy = normalizeFinanceBotsSortBy(data.sortBy || (typeof financeBotsSortBy !== 'undefined' ? financeBotsSortBy : 'best'));
         var structureSig = bots.length ? financeBotsStructureSignature(bots, sortBy) : data.structureSig;
         var idsSig = bots.length
             ? bots.map(function (b) { return String(b.bot_id || b.id || ''); }).sort().join(',')
             : data.idsSig;
-        if (data.idsSig && idsSig && data.idsSig !== idsSig) return false;
-        if (data.structureSig && structureSig && data.structureSig !== structureSig) return false;
-        var home = document.getElementById('financeBotsList');
+        if (bots.length && data.idsSig && idsSig && data.idsSig !== idsSig) return false;
         var tab = document.getElementById('financeBotsListBots');
+        if (_financeBotsPanelHasRows(tab) && data.idsSig && (!idsSig || data.idsSig === idsSig)) {
+            _financeBotsStructureSignature = structureSig || data.structureSig;
+            _financeBotsIdsSignature = idsSig || data.idsSig;
+            if (data.sortBy) financeBotsSortBy = normalizeFinanceBotsSortBy(data.sortBy);
+            markBotsTabCacheReady();
+            return true;
+        }
+        var home = document.getElementById('financeBotsList');
         if (!home && !tab) return false;
         if (home) {
             home.innerHTML = data.html;
@@ -103,6 +142,7 @@ function persistDashboardBeforeBotDetailNav() {
 
 function tryRestoreBotsTabCacheFlag(accountId) {
     if (!accountId) return false;
+    if (typeof adoptEarlyBotsDomBoot === 'function' && adoptEarlyBotsDomBoot(accountId)) return true;
     try {
         if (sessionStorage.getItem(botsTabCacheSessionKey(accountId)) !== '1') return false;
     } catch (e) { return false; }
@@ -165,7 +205,7 @@ function activateBotsTab(opts) {
     }
 
     if (State.bots && State.bots.length && typeof renderFinanceBots === 'function') {
-        renderFinanceBots(State.bots, { forceFullRender: true });
+        renderFinanceBots(State.bots);
     } else if (State.accountId) {
         if (typeof loadBotsListFast === 'function') loadBotsListFast(State.accountId);
         if (!State.bots || !State.bots.length) {
@@ -425,3 +465,10 @@ function renderBotsList(bots, opts) {
 function renderBotsNow(bots) { renderBotsList(bots); }
 function renderBotsListDirect(bots) { renderBotsList(bots); }
 function updateBotsList(bots) { renderBotsList(bots); }
+
+window.addEventListener('pagehide', function () {
+    if (typeof persistFinanceBotsDomCache === 'function') persistFinanceBotsDomCache();
+    if (State.accountId && State.bots && State.bots.length && typeof persistFinanceBotsSessionCache === 'function') {
+        persistFinanceBotsSessionCache(State.bots);
+    }
+});

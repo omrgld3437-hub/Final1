@@ -1496,14 +1496,27 @@ function persistFinanceBotsSessionCache(bots) {
             bots: slim,
             metrics: metrics
         }));
+        try {
+            localStorage.setItem(financeBotsSessionCacheKey(State.accountId), JSON.stringify({
+                ts: Date.now(),
+                bots: slim,
+                metrics: metrics
+            }));
+        } catch (e2) { /* quota */ }
     } catch (e) {}
 }
 
 function restoreFinanceBotsFromSessionCache(accountId) {
     if (!accountId) return false;
     try {
-        var raw = sessionStorage.getItem(financeBotsSessionCacheKey(accountId));
-        if (!raw) return false;
+        var raw = sessionStorage.getItem(financeBotsSessionCacheKey(accountId))
+            || localStorage.getItem(financeBotsSessionCacheKey(accountId));
+        if (!raw) {
+            if (typeof adoptEarlyBotsDomBoot === 'function' && adoptEarlyBotsDomBoot(accountId)) {
+                return true;
+            }
+            return false;
+        }
         var data = JSON.parse(raw);
         if (!data || typeof data !== 'object') return false;
         if (data.ts && Date.now() - data.ts > 86400000) return false;
@@ -1627,8 +1640,10 @@ function clearFinanceBotsSessionCache(accountId) {
     if (!accountId) return;
     try {
         sessionStorage.removeItem(financeBotsSessionCacheKey(accountId));
+        localStorage.removeItem(financeBotsSessionCacheKey(accountId));
         sessionStorage.removeItem(botsTabCacheSessionKey(accountId));
         sessionStorage.removeItem(financeBotsDomCacheKey(accountId));
+        localStorage.removeItem(financeBotsDomCacheKey(accountId));
     } catch (e) {}
     _financeBotsMetricsCache = {};
     _financeBotsStructureSignature = null;

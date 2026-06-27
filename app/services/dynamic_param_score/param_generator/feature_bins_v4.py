@@ -435,6 +435,15 @@ def clean_fallback_keys(route: str) -> List[str]:
     elif r == "R8":
         for alt_r in ("R14", "R7", "R15"):
             _add("|".join([a, alt_r, s, v, risk]))
+    elif r == "R3":
+        # LOW_VOL_COMPRESSION live shelf often maps to BALANCED_RANGE (R2) in the library.
+        for alt_r in ("R2", "R4", "R1", "R5"):
+            if alt_r == r:
+                continue
+            _add("|".join([a, alt_r, s, v, risk]))
+            for alt_v in ("V4", "V3", "V5", "V2", "V1"):
+                if alt_v != v:
+                    _add("|".join([a, alt_r, s, alt_v, risk]))
     elif r == "R2" and risk in ("DEFENSIVE", "CAUTION"):
         for alt_r in ("R7", "R12", "R6"):
             _add("|".join([a, alt_r, s, v, risk]))

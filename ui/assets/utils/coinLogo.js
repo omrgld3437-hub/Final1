@@ -108,6 +108,11 @@
         markLogoConfirmed(key);
         var src = (img.currentSrc || img.src || "").split("?")[0];
         if (src && global.coinLogoCache) global.coinLogoCache.set(src, true);
+        img.style.display = "";
+        var initials = img.nextElementSibling;
+        if (initials && initials.classList && initials.classList.contains("varlik-logo-initials")) {
+            initials.style.display = "none";
+        }
     }
 
     function ensureCoinLogo(symbol, cb) {
