@@ -1540,23 +1540,6 @@ def select_and_render(
     symbol: str = "",
 ) -> Tuple[TemplateSelectionResult, Optional[BotParams], str]:
     """Select template and render BotParams. Returns (selection, params, profile_bucket)."""
-    from app.services.dynamic_param_score.v5.bridge import v5_pool_enabled, v5_select_and_render
-
-    if v5_pool_enabled():
-        return v5_select_and_render(
-            param_score,
-            regime,
-            risk_state,
-            sub,
-            ind,
-            portfolio,
-            constraints,
-            bot_context,
-            budget_usdt,
-            min_notional,
-            symbol=symbol or getattr(bot_context, "symbol", "") or "",
-        )
-
     selection = select_template(
         param_score, regime, risk_state, sub, ind, portfolio, constraints,
         budget_usdt, min_notional,

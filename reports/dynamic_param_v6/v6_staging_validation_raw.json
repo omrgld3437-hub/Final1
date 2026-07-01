@@ -1,0 +1,68 @@
+{
+  "generated_at": "2026-07-01T19:19:16.056439+00:00",
+  "budget_usdt": 500.0,
+  "engine_version": "v6",
+  "symbols": {
+    "BTCUSDT": {
+      "ok": true,
+      "errors": [],
+      "profile_id": "DPLV6_R6-41-161_T553_PB06_STD",
+      "behavior": "PB06",
+      "severity": "STD",
+      "rebuy_enabled": true,
+      "buy_grid_count": 0,
+      "deployable": true
+    },
+    "ETHUSDT": {
+      "ok": true,
+      "errors": [],
+      "profile_id": "DPLV6_R4-25-098_T364_PB02_STD",
+      "behavior": "PB02",
+      "severity": "STD",
+      "rebuy_enabled": true,
+      "buy_grid_count": 2,
+      "deployable": true
+    },
+    "MANTAUSDT": {
+      "ok": true,
+      "errors": [],
+      "profile_id": "DPLV6_R8-57-211_T705_PB11_DEF",
+      "behavior": "PB11",
+      "severity": "DEF",
+      "rebuy_enabled": true,
+      "buy_grid_count": 0,
+      "deployable": true
+    },
+    "SYNUSDT": {
+      "ok": true,
+      "errors": [],
+      "profile_id": "DPLV6_R8-57-211_T705_PB11_STD",
+      "behavior": "PB11",
+      "severity": "STD",
+      "rebuy_enabled": true,
+      "buy_grid_count": 0,
+      "deployable": true
+    },
+    "ADAUSDT": {
+      "ok": true,
+      "errors": [],
+      "profile_id": "DPLV6_R4-25-098_T364_PB02_DEF",
+      "behavior": "PB02",
+      "severity": "DEF",
+      "rebuy_enabled": true,
+      "buy_grid_count": 2,
+      "deployable": true
+    },
+    "REUSDT": {
+      "ok": true,
+      "errors": [],
+      "profile_id": "DPLV6_R8-57-211_T705_PB11_STD",
+      "behavior": "PB11",
+      "severity": "STD",
+      "rebuy_enabled": true,
+      "buy_grid_count": 0,
+      "deployable": true
+    }
+  },
+  "staging_v6_all_ok": true
+}

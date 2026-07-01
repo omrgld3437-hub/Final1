@@ -8,11 +8,12 @@ from app.services.dynamic_param_score.models import (
     RegimeTag,
     SubScores,
 )
-from app.services.dynamic_param_score.v5.ui_trace import (
+from app.services.dynamic_param_score.regime_display import (
     build_pattern_phrase,
     render_risk_opportunity_sentence,
     risk_label_from_route,
 )
+from app.services.dynamic_param_score.atmosphere import regime_text_for_explanation, regime_code_from_route
 
 _REGIME_TR = {
     RegimeTag.NO_DATA.value: "veri yetersiz",
@@ -140,9 +141,9 @@ def build_explanation(
     indicators: dict | None = None,
     budget_usdt: float | None = None,
 ) -> str:
-    regime_txt = _REGIME_TR.get(regime_tag, regime_tag)
-    regime_label = regime_txt.upper().replace(" ", "_")
     route_key = str((indicators or {}).get("route_key") or "")
+    regime_txt = regime_text_for_explanation(route_key, regime_tag)
+    regime_label = regime_txt
     if route_key and len(route_key.split("|")) == 7:
         risk_txt = risk_label_from_route(route_key).lower()
     else:
@@ -314,7 +315,10 @@ def build_explanation(
     elif final_action == FinalAction.DEFENSIVE_GRID.value:
         profile_hint = "agresif grid yerine savunmacı profil seçildi"
     elif final_action == FinalAction.BALANCED_GRID.value:
-        if selected_template_key and "DOWNBUY" in selected_template_key.upper():
+        rc = regime_code_from_route(route_key) if route_key else ""
+        if rc == "R5":
+            profile_hint = "kırılım öncesi sıkışma profiline uygun grid seçildi"
+        elif selected_template_key and "DOWNBUY" in selected_template_key.upper():
             profile_hint = (
                 "geniş aralık ve BTC riski nedeniyle alış tarafı genişletilmiş "
                 "savunmacı downbuy grid seçildi"
