@@ -136,11 +136,24 @@ class V6Engine:
         validity = assess_operational_validity(adjusted)
         opportunity_notes["operational_validity"] = validity.to_dict()
         has_trade_surface = validity.valid
-        deployable = "price_valid_false" not in errors and has_trade_surface
+        reason_codes = set(opportunity_notes.get("reason_codes") or [])
+        restricted_by_liquidity = (
+            opportunity_notes.get("deployable") is False
+            and "R4_RESTRICTED_UNSTABLE" in reason_codes
+            and bool({"HIGH_SPREAD", "LOW_VOLUME", "UNSTABLE_RANGE"} & reason_codes)
+        )
+        deployable = (
+            "price_valid_false" not in errors
+            and has_trade_surface
+            and not restricted_by_liquidity
+        )
         block_reason = "price_valid_false" if not inp.price_valid else None
         if not has_trade_surface:
             deployable = False
             block_reason = block_reason or "technical_block"
+        elif restricted_by_liquidity:
+            deployable = False
+            block_reason = block_reason or "restricted_by_liquidity"
         elif val_errors and not has_trade_surface:
             deployable = False
             block_reason = block_reason or "profile_validation_failed"

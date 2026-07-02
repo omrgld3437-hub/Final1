@@ -1,0 +1,175 @@
+{
+  "scope": "Dynamic Param V6 regression lock and global failure triage",
+  "requested_failure_triage_count": 21,
+  "source": "original 21-failure audit plus current restored-test-folder verification",
+  "current_restored_global_attempt": {
+    "command": "PYTHONPYCACHEPREFIX=/private/tmp/final1-pycache-v6lock python3 -m pytest tests/dynamic_param_score -q",
+    "status": "interrupted_after_pytest_failure_summary",
+    "observed_failures": 89,
+    "observed_passed": 321,
+    "observed_skipped": 10,
+    "warnings": 6,
+    "duration_seconds": 938.08,
+    "note": "The complete tests directory restored from git includes additional legacy, property, V4, and shell-contract tests beyond the original 21-failure audit. The V6-only regression command passed separately."
+  },
+  "affects_v6_final_profile_regime_grid_profit_trailing": false,
+  "v6_only_command": "PYTHONPYCACHEPREFIX=/private/tmp/final1-pycache-v6lock python3 -m pytest tests/dynamic_param_score/test_v6_* -q",
+  "categories": {
+    "PARAM_POOL_LEGACY": 4,
+    "PERFORMANCE_THRESHOLD": 1,
+    "SEMANTIC_OLD_EXPECTATION": 8,
+    "ASYNC_PLUGIN": 3,
+    "V4_LEGACY": 4,
+    "PERSISTENCE_ENV": 1,
+    "ADDITIONAL_RESTORED_LEGACY_PROPERTY_SHELL_FAILURES_OBSERVED": 68
+  },
+  "triage": [
+    {
+      "failed_test": "test_balanced_range_61_defensive_fee_bad_active_without_base",
+      "file": "tests/dynamic_param_score/param_pool/test_param_pool_sol_50_regression.py",
+      "fail_type": "PARAM_POOL_LEGACY",
+      "touches_v6_final_profile_regime_grid_profit_trailing": false,
+      "action": "legacy_param_pool_scope_split"
+    },
+    {
+      "failed_test": "test_balanced_range_61_defensive_fee_bad_sell_management_with_base",
+      "file": "tests/dynamic_param_score/param_pool/test_param_pool_sol_50_regression.py",
+      "fail_type": "PARAM_POOL_LEGACY",
+      "touches_v6_final_profile_regime_grid_profit_trailing": false,
+      "action": "legacy_param_pool_scope_split"
+    },
+    {
+      "failed_test": "test_pool_v2_selector_performance_100k",
+      "file": "tests/dynamic_param_score/param_pool/test_pool_v2.py",
+      "fail_type": "PERFORMANCE_THRESHOLD",
+      "touches_v6_final_profile_regime_grid_profit_trailing": false,
+      "action": "track_as_performance_threshold_outside_v6_profile"
+    },
+    {
+      "failed_test": "test_sell_management_only_when_buy_blocked_sell_feasible",
+      "file": "tests/dynamic_param_score/test_action_semantics.py",
+      "fail_type": "SEMANTIC_OLD_EXPECTATION",
+      "touches_v6_final_profile_regime_grid_profit_trailing": false,
+      "action": "old_action_semantics_expectation_not_v6_profile"
+    },
+    {
+      "failed_test": "test_result_type_differs_by_consumer_with_same_params",
+      "file": "tests/dynamic_param_score/test_consumer_independence.py",
+      "fail_type": "SEMANTIC_OLD_EXPECTATION",
+      "touches_v6_final_profile_regime_grid_profit_trailing": false,
+      "action": "consumer_shell_expectation_scope_split"
+    },
+    {
+      "failed_test": "test_engine_calls_are_stateless_between_consumers",
+      "file": "tests/dynamic_param_score/test_consumer_independence.py",
+      "fail_type": "SEMANTIC_OLD_EXPECTATION",
+      "touches_v6_final_profile_regime_grid_profit_trailing": false,
+      "action": "consumer_telemetry_expectation_scope_split"
+    },
+    {
+      "failed_test": "test_two_grid_40_60_allowed_in_normal_range",
+      "file": "tests/dynamic_param_score/test_distribution_policy.py",
+      "fail_type": "PARAM_POOL_LEGACY",
+      "touches_v6_final_profile_regime_grid_profit_trailing": false,
+      "action": "legacy_distribution_policy_scope_split"
+    },
+    {
+      "failed_test": "test_trim_three_to_two_uses_context_not_slice",
+      "file": "tests/dynamic_param_score/test_distribution_policy.py",
+      "fail_type": "PARAM_POOL_LEGACY",
+      "touches_v6_final_profile_regime_grid_profit_trailing": false,
+      "action": "legacy_distribution_policy_scope_split"
+    },
+    {
+      "failed_test": "test_build_snapshot_calls_dps_engine",
+      "file": "tests/dynamic_param_score/test_dynamic_mode_dps_integration_deep.py",
+      "fail_type": "ASYNC_PLUGIN",
+      "touches_v6_final_profile_regime_grid_profit_trailing": false,
+      "action": "requires_async_plugin_harness"
+    },
+    {
+      "failed_test": "test_soft_wait_snapshot_stays_active_not_idle",
+      "file": "tests/dynamic_param_score/test_dynamic_mode_dps_integration_deep.py",
+      "fail_type": "ASYNC_PLUGIN",
+      "touches_v6_final_profile_regime_grid_profit_trailing": false,
+      "action": "requires_async_plugin_harness"
+    },
+    {
+      "failed_test": "test_hard_safety_wait_snapshot_clears_buys_and_pending",
+      "file": "tests/dynamic_param_score/test_dynamic_mode_dps_integration_deep.py",
+      "fail_type": "ASYNC_PLUGIN",
+      "touches_v6_final_profile_regime_grid_profit_trailing": false,
+      "action": "requires_async_plugin_harness"
+    },
+    {
+      "failed_test": "test_defensive_low_vol_not_raw_normal_without_overlay",
+      "file": "tests/dynamic_param_score/test_dynamic_param_v4_regression_btc_low_vol_defensive.py",
+      "fail_type": "V4_LEGACY",
+      "touches_v6_final_profile_regime_grid_profit_trailing": false,
+      "action": "v4_legacy_expectation_scope_split"
+    },
+    {
+      "failed_test": "test_headroom_below_min_notional_closes_buy",
+      "file": "tests/dynamic_param_score/test_feasibility_deep.py",
+      "fail_type": "SEMANTIC_OLD_EXPECTATION",
+      "touches_v6_final_profile_regime_grid_profit_trailing": false,
+      "action": "feasibility_shell_expectation_not_v6_profile"
+    },
+    {
+      "failed_test": "test_sell_grid_min_notional",
+      "file": "tests/dynamic_param_score/test_feasibility_deep.py",
+      "fail_type": "SEMANTIC_OLD_EXPECTATION",
+      "touches_v6_final_profile_regime_grid_profit_trailing": false,
+      "action": "feasibility_shell_expectation_not_v6_profile"
+    },
+    {
+      "failed_test": "test_buy_grid_min_notional",
+      "file": "tests/dynamic_param_score/test_feasibility_deep.py",
+      "fail_type": "SEMANTIC_OLD_EXPECTATION",
+      "touches_v6_final_profile_regime_grid_profit_trailing": false,
+      "action": "feasibility_shell_expectation_not_v6_profile"
+    },
+    {
+      "failed_test": "test_fee_bad_shows_active_defensive_grid_in_param_assistant",
+      "file": "tests/dynamic_param_score/test_fee_bad_templates.py",
+      "fail_type": "SEMANTIC_OLD_EXPECTATION",
+      "touches_v6_final_profile_regime_grid_profit_trailing": false,
+      "action": "param_assistant_text_expectation_scope_split"
+    },
+    {
+      "failed_test": "test_avax_overbought_btc_pressure_not_r3_v4_normal",
+      "file": "tests/dynamic_param_score/test_live_route_classifier_v4.py",
+      "fail_type": "V4_LEGACY",
+      "touches_v6_final_profile_regime_grid_profit_trailing": false,
+      "action": "v4_live_route_scope_split"
+    },
+    {
+      "failed_test": "test_two_grid_distribution_ban",
+      "file": "tests/dynamic_param_score/test_live_route_classifier_v4.py",
+      "fail_type": "V4_LEGACY",
+      "touches_v6_final_profile_regime_grid_profit_trailing": false,
+      "action": "v4_live_route_scope_split"
+    },
+    {
+      "failed_test": "test_live_route_constraints_caps_base_and_dist",
+      "file": "tests/dynamic_param_score/test_live_route_classifier_v4.py",
+      "fail_type": "V4_LEGACY",
+      "touches_v6_final_profile_regime_grid_profit_trailing": false,
+      "action": "v4_live_route_scope_split"
+    },
+    {
+      "failed_test": "test_compact_log_no_huge_filtered_out",
+      "file": "tests/dynamic_param_score/test_log_retention.py",
+      "fail_type": "PERSISTENCE_ENV",
+      "touches_v6_final_profile_regime_grid_profit_trailing": false,
+      "action": "environment_persistence_fixture_scope_split"
+    },
+    {
+      "failed_test": "test_order_intent_plan_not_executed_unless_intent_execution_enabled",
+      "file": "tests/dynamic_param_score/test_management_decision_contract.py",
+      "fail_type": "SEMANTIC_OLD_EXPECTATION",
+      "touches_v6_final_profile_regime_grid_profit_trailing": false,
+      "action": "management_contract_shell_expectation_not_v6_profile"
+    }
+  ]
+}

@@ -9,7 +9,6 @@ from app.services.dynamic_param_score.v6.constants import (
     BASE_ALLOC_PCT_STEPS,
     GRID_AMOUNT_STEP_PCT,
     GRID_DISTANCE_STEP_PCT,
-    MIN_PROFIT_BUFFER_PCT,
     DEFAULT_COST_FLOOR_PCT,
     PROFIT_TRIGGER_CODES,
     PROFIT_PCT_TO_CODE,
@@ -74,7 +73,7 @@ def quantize_profit_trigger_pct(pct: float, *, floor_pct: float = 1.0) -> float:
 
 
 def min_profit_pct_for_trailing(trailing_pct: float, *, regime_floor: Optional[float] = None) -> float:
-    raw = DEFAULT_COST_FLOOR_PCT + trailing_pct + MIN_PROFIT_BUFFER_PCT
+    raw = DEFAULT_COST_FLOOR_PCT
     if regime_floor is not None:
         raw = max(raw, regime_floor)
     return quantize_profit_trigger_pct(raw)
