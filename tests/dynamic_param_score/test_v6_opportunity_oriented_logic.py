@@ -250,10 +250,11 @@ def test_btcusdt_btc_context_delta_multiplier_is_half(btc_r6_fixture: V6InputCon
 
 def test_r6_major_clean_coin_uses_bilateral_grid_per_spec(btc_r6_clean_fixture: V6InputContract):
     decision = _decision_from_inp(btc_r6_clean_fixture)
-    assert decision.regime_tag == "R6"
+    assert decision.regime_tag != "R6"
+    assert decision.regime_tag == "R4"
     params = decision.params
     assert params is not None
-    assert params.base_alloc_frac >= 0.35
+    assert 0.35 <= params.base_alloc_frac <= 0.55
     assert params.sell_grid_count >= 3
     assert not params.buy_disabled
     assert params.buy_grid_count >= 1
@@ -264,7 +265,8 @@ def test_r6_major_clean_coin_uses_bilateral_grid_per_spec(btc_r6_clean_fixture: 
 
 def test_r6_high_risk_uses_defensive_profile_not_empty(r6_f3_v5_l3_fixture: V6InputContract):
     decision = _decision_from_inp(r6_f3_v5_l3_fixture)
-    assert decision.regime_tag == "R6"
+    assert decision.regime_tag != "R6"
+    assert decision.regime_tag == "R4"
     params = decision.params
     assert params is not None
     assert params.base_alloc_frac <= 0.25

@@ -142,6 +142,11 @@ _R1_STD_PULLBACK = _tpl(
     5, [3, 6, 10, 15, 21], list(SELL_AMOUNTS_NAMED["BALANCED_VOL_SELL_5"]),
     3.0, 1.1, 3.5, 1.1,
 )
+_R1_STD_TREND_COOLDOWN = _tpl(
+    60, 40, 80, 30, 25, 3, [2, 4, 7], [15, 30, 55],
+    5, [2, 4, 7, 11, 16], [10, 15, 20, 25, 30],
+    2.5, 0.8, 2.5, 1.1,
+)
 
 # --- R2 Dengeli range ---
 _R2: Dict[SeverityMode, RegimeBehaviorTemplate] = {
@@ -201,6 +206,13 @@ _R5_DEF_PARABOLIC_OVEREXTENDED = _tpl(
     buy_enabled=False, new_buys="paused", paused=True,
     pb_mode="restricted_trailing_rebuy", buyback_restricted=True, max_buyback_pct=35,
     ps_mode="risk_reduce_trailing",
+)
+_R5_DEF_OVEREXTENDED = _tpl(
+    45, 55, 65, 20, 45, 3, [3, 6, 10], [15, 30, 55],
+    4, [2, 5, 9, 14], list(SELL_AMOUNTS_NAMED["RISK_REDUCE_SELL_4"]),
+    3.0, 1.1, 4.0, 1.1,
+    new_buys="restricted", pb_mode="restricted_trailing_rebuy",
+    buyback_restricted=True, max_buyback_pct=50, ps_mode="risk_reduce_trailing",
 )
 
 # --- R6 Recovery ---
@@ -263,7 +275,7 @@ REGIME_BEHAVIOR_TEMPLATES: Dict[str, Dict[SeverityMode, RegimeBehaviorTemplate]]
 
 
 def _liquid_coin(inp: V6InputContract) -> bool:
-    spread = float(inp.spread_pct or 1.0)
+    spread = float(inp.spread_pct if inp.spread_pct is not None else 1.0)
     vq = float(inp.volume_consistency if inp.volume_consistency is not None else 0.5)
     vol = float(inp.volume_24h or 0)
     return spread <= 0.03 and vq >= 0.45 and vol >= 1_000_000
@@ -323,6 +335,38 @@ def _is_r1_pullback_setup(inp: V6InputContract) -> bool:
     return votes >= 4
 
 
+def _is_r1_trend_cooldown_setup(inp: V6InputContract) -> bool:
+    return (
+        inp.higher_highs is True
+        and inp.lower_lows is False
+        and (inp.price_vs_ema200_pct or 0) >= 1.5
+        and (inp.return_24h_pct or 0) >= 1.5
+        and (inp.rsi_1h or 0) < 70
+        and (inp.bb_position or 0) < 0.75
+        and (inp.z_score or 0) < 1.0
+        and (inp.roc_5m or 0) < 0.5
+        and (inp.return_1h_pct or 0) < 0.7
+        and (inp.return_4h_pct or 0) < 1.5
+        and (inp.ema20_slope or 0) < 0.15
+        and (inp.ema50_slope or 0) < 0.10
+    )
+
+
+def _is_overextended_top_setup(inp: V6InputContract) -> bool:
+    top_votes = 0
+    if (inp.rsi_1h or 0) >= 70:
+        top_votes += 1
+    if (inp.bb_position or 0) >= 0.75:
+        top_votes += 1
+    if (inp.z_score or 0) >= 1.0:
+        top_votes += 1
+    if (inp.price_vs_ema200_pct or 0) >= 6:
+        top_votes += 1
+    if (inp.return_24h_pct or 0) >= 5:
+        top_votes += 1
+    return top_votes >= 2
+
+
 _R4_SUB_TEMPLATES: Dict[str, RegimeBehaviorTemplate] = {
     "R4_STD_LIQUID": _R4_STD_LIQUID,
     "R4_DEF_OVERHEATED": _R4_DEF_OVERHEATED,
@@ -375,6 +419,11 @@ def resolve_regime_template(
         if hint == "R8_RECOVERY_RESTRICTED":
             reasons.append("CRASH_RECOVERY")
             deployable = False
+    elif rid == "R1" and (
+        sub_profile_hint == "R1_STD_TREND_COOLDOWN" or _is_r1_trend_cooldown_setup(inp)
+    ):
+        tpl = _R1_STD_TREND_COOLDOWN
+        reasons.append("R1_STD_TREND_COOLDOWN")
     elif rid == "R1" and (sub_profile_hint == "R1_STD_PULLBACK" or _is_r1_pullback_setup(inp)):
         tpl = _R1_STD_PULLBACK
         reasons.append("R1_STD_PULLBACK")
@@ -392,7 +441,8 @@ def resolve_regime_template(
                 ]
             )
         else:
-            reasons.extend(["R5_DEF_OVEREXTENDED", "MOMENTUM_STRONG"])
+            tpl = _R5_DEF_OVEREXTENDED
+            reasons.extend(["R5_DEF_OVEREXTENDED", "HIGH_REVERSAL_RISK", "NEW_BUYS_RESTRICTED"])
         if (inp.rsi_1h or 0) >= 68:
             reasons.append("RSI_OVERBOUGHT")
         if (inp.atr_1h_pct or 0) >= 3:
@@ -433,7 +483,9 @@ def resolve_effective_severity(
     spread = float(inp.spread_pct or 0)
 
     if sev == "ACT":
-        if regime_id == "R1" and _is_r1_pullback_setup(inp):
+        if regime_id == "R1" and (_is_r1_pullback_setup(inp) or _is_r1_trend_cooldown_setup(inp)):
+            sev = "STD"
+        if regime_id == "R5" and _is_overextended_top_setup(inp):
             sev = "STD"
         if btc in ("B2", "B3"):
             sev = "STD"

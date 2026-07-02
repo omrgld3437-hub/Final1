@@ -62,6 +62,12 @@ class V6Engine:
         logger.info("V6 adjusters applied tags=%s", delta_pre.tags)
         severity = resolve_severity(inp, data_quality_risk=dq_risk)
         severity = apply_severity_override(severity, delta_pre.severity_override)
+        label_lc = str(classified.label or "").lower()
+        if severity == "ACT" and (
+            classified.sub_profile_hint == "R1_STD_TREND_COOLDOWN"
+            or any(term in label_lc for term in ("tepe", "dağılım", "zayıflama", "geri çekilme riski", "aşırı"))
+        ):
+            severity = "STD"
         scenario = to_scenario_identity(classified, severity)
         scenario.behavior_id = behavior_id
         terminal = find_terminal_for_classifier(

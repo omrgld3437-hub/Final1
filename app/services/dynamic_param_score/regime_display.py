@@ -10,7 +10,7 @@ V6_REGIME_LABELS = {
     "R3": "Zayıf / gürültülü aralık",
     "R4": "Volatil aralık",
     "R5": "Toparlanma",
-    "R6": "Tepe / dağılım / zayıflama",
+    "R6": "Toparlanma / zayıf yükseliş",
     "R7": "Düşüş trendi",
     "R8": "Crash / sert düşüş",
 }
@@ -22,7 +22,7 @@ V6_MARKET_STATUS_PLAIN: dict[str, str] = {
     "R3": "Fiyat gürültülü aralıkta, temkinli grid kullanılıyor",
     "R4": "Fiyat sert dalgalanıyor, gridler geniş tutuldu",
     "R5": "Toparlanma başlıyor, kontrollü alım fırsatı var",
-    "R6": "Fiyat tepede, geri çekilme riski var",
+    "R6": "Düşüş sonrası kademeli toparlanma var",
     "R7": "Düşüş trendi var, savunmacı mod aktif",
     "R8": "Sert düşüş var, yüksek riskli savunmacı mod",
 }

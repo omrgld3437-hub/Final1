@@ -201,6 +201,124 @@ def _r7_downtrend_inp():
     )
 
 
+def _btc_trend_cooldown_inp():
+    return _base_inp(
+        symbol="BTCUSDT",
+        adx_1h=36,
+        rsi_5m=53.1,
+        rsi_1h=65.6,
+        ema20_slope=0.01,
+        ema50_slope=0.03,
+        price_vs_ema200_pct=2.03,
+        roc_5m=0.02,
+        higher_highs=True,
+        lower_lows=False,
+        atr_5m_pct=0.20,
+        atr_1h_pct=0.77,
+        volatility_percentile=63.18,
+        bb_width=1.02,
+        bb_position=0.59,
+        z_score=0.36,
+        range_stability=0.44,
+        return_1h_pct=0.02,
+        return_4h_pct=-0.54,
+        return_24h_pct=2.6,
+        drawdown_7d_pct=0.32,
+        spread_pct=0.0,
+        volume_24h=1_500_000_000.0,
+        volume_consistency=0.95,
+        asset_fragility_class="F0",
+    )
+
+
+def _overextended_top_inp():
+    return _base_inp(
+        symbol="TOPUSDT",
+        adx_1h=30,
+        rsi_5m=68,
+        rsi_1h=72,
+        ema20_slope=-0.02,
+        ema50_slope=0.05,
+        price_vs_ema200_pct=6.5,
+        roc_5m=-0.1,
+        higher_highs=True,
+        lower_lows=False,
+        volatility_percentile=62,
+        atr_1h_pct=1.5,
+        bb_position=0.82,
+        z_score=1.2,
+        range_stability=0.45,
+        return_4h_pct=2.2,
+        return_24h_pct=5.5,
+        spread_pct=0.01,
+        volume_24h=100_000_000.0,
+        volume_consistency=0.9,
+        volume_spike=2.8,
+        asset_fragility_class="F1",
+    )
+
+
+def test_btc_trend_cooldown_not_r6_top_distribution_act():
+    result, params, display, notes, scenario = _run(_btc_trend_cooldown_inp())
+    _assert_global_invariants("BTC trend cooldown", result, params, display, notes)
+    profile = result.profile
+    title_blob = " ".join(
+        str(v or "").lower()
+        for v in (
+            display.get("regime_headline"),
+            display.get("market_status_plain"),
+            display.get("regime_strategy_why"),
+            scenario.get("label"),
+        )
+    )
+    assert scenario["regime_id"] == "R1"
+    assert scenario["sub_profile_hint"] == "R1_STD_TREND_COOLDOWN"
+    assert scenario["regime_id"] not in ("R6", "R8")
+    assert scenario["sub_profile_hint"] != "R5_DEF_PARABOLIC_OVEREXTENDED"
+    assert not (scenario["severity"] == "ACT" and profile.base_allocation_pct >= 70)
+    assert profile.base_allocation_pct in (55, 60, 65)
+    assert profile.quote_allocation_pct in (35, 40, 45)
+    assert params.max_base_exposure_frac <= 0.80
+    assert [(abs(g.distance_pct), g.amount_pct) for g in profile.buy_grids] == [
+        (2, 15),
+        (4, 30),
+        (7, 55),
+    ]
+    assert [(g.distance_pct, g.amount_pct) for g in profile.sell_grids] == [
+        (2, 10),
+        (4, 15),
+        (7, 20),
+        (11, 25),
+        (16, 30),
+    ]
+    assert params.rebuy_trigger_pct in (2.5, 3.0)
+    assert params.rebuy_trail_pct in (0.8, 1.1)
+    assert params.resell_trigger_pct in (2.0, 2.5)
+    assert params.resell_trail_pct in (0.8, 1.1)
+    assert "düşüş sonrası toparlanma" not in title_blob
+    assert "tepe" not in title_blob
+    assert "dağılım" not in title_blob
+
+
+def test_no_profile_can_be_act_and_top_distribution_with_high_base():
+    result, params, display, notes, scenario = _run(_overextended_top_inp())
+    _assert_global_invariants("overextended top", result, params, display, notes)
+    text = " ".join(
+        str(v or "").lower()
+        for v in (
+            display.get("regime_headline"),
+            display.get("market_status_plain"),
+            display.get("regime_strategy_why"),
+            scenario.get("label"),
+        )
+    )
+    if any(term in text for term in ("tepe", "dağılım", "geri çekilme riski", "aşırı")):
+        assert scenario["severity"] != "ACT"
+        assert result.profile.base_allocation_pct <= 55
+        assert params.max_base_exposure_frac <= 0.65
+        assert result.profile.modules.get("new_buys_status") in ("restricted", "defensive", "paused")
+
+
 @pytest.mark.parametrize(
     ("name", "factory"),
     [

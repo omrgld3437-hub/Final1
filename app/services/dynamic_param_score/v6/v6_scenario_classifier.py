@@ -161,7 +161,7 @@ def _volume_quality(inp: V6InputContract) -> float:
 
 
 def _liquid_coin(inp: V6InputContract) -> bool:
-    spread = float(inp.spread_pct or 1.0)
+    spread = float(inp.spread_pct if inp.spread_pct is not None else 1.0)
     vq = _volume_quality(inp)
     return spread <= 0.03 and vq >= 0.45 and float(inp.volume_24h or 0) >= 1_000_000
 
@@ -173,7 +173,7 @@ def _clear_strong_trend(inp: V6InputContract, *, trend: int, momentum: int) -> b
     rsi1 = inp.rsi_1h or 0
     if trend >= 70:
         return True
-    if momentum >= 75:
+    if momentum >= 75 and _raw_act_momentum_confirmed(inp):
         return True
     if adx >= 28 and pve >= 3 and ret24 >= 4:
         return True
@@ -201,6 +201,94 @@ def _overextended(inp: V6InputContract) -> bool:
         and (inp.bb_position or 0) >= 0.70
         and (inp.z_score or 0) >= 1.0
     )
+
+
+def _raw_act_momentum_confirmed(inp: V6InputContract) -> bool:
+    return (
+        (inp.roc_5m or 0) >= 0.5
+        or (inp.return_1h_pct or 0) >= 0.7
+        or (inp.return_4h_pct or 0) >= 1.5
+        or (inp.ema20_slope or 0) >= 0.15
+        or (inp.ema50_slope or 0) >= 0.10
+    )
+
+
+def _recovery_semantics_confirmed(inp: V6InputContract) -> bool:
+    ret24 = inp.return_24h_pct or 0
+    ret4 = inp.return_4h_pct or 0
+    dd7 = inp.drawdown_7d_pct or 0
+    pve = inp.price_vs_ema200_pct or 0
+    previous_downtrend = (
+        inp.lower_lows is True
+        or ret24 <= 0
+        or dd7 >= 5
+        or pve <= 0.5
+    )
+    recovery_now = (
+        ret4 > 0
+        or (inp.return_1h_pct or 0) > 0
+        or inp.higher_highs is True
+        or (inp.ema20_slope or 0) > 0
+    )
+    explicit_not_recovery = (
+        ret24 > 2
+        and dd7 < 2
+        and pve > 2
+        and inp.higher_highs is True
+        and inp.lower_lows is False
+    )
+    return previous_downtrend and recovery_now and not explicit_not_recovery
+
+
+def _trend_cooldown(inp: V6InputContract, *, trend: int, momentum: int) -> bool:
+    if not inp.higher_highs or inp.lower_lows:
+        return False
+    if not _liquid_coin(inp):
+        return False
+    if (inp.price_vs_ema200_pct or 0) < 1.5:
+        return False
+    if (inp.return_24h_pct or 0) < 1.5:
+        return False
+    if (inp.rsi_1h or 0) >= 70:
+        return False
+    if (inp.bb_position or 0) >= 0.75:
+        return False
+    if (inp.z_score or 0) >= 1.0:
+        return False
+    if _raw_act_momentum_confirmed(inp):
+        return False
+    return trend >= 62 and momentum <= 65
+
+
+def _top_distribution(inp: V6InputContract) -> bool:
+    top_votes = 0
+    if (inp.rsi_1h or 0) >= 70:
+        top_votes += 1
+    if (inp.bb_position or 0) >= 0.75:
+        top_votes += 1
+    if (inp.z_score or 0) >= 1.0:
+        top_votes += 1
+    if (inp.price_vs_ema200_pct or 0) >= 6:
+        top_votes += 1
+    if (inp.return_24h_pct or 0) >= 5:
+        top_votes += 1
+    if (inp.return_4h_pct or 0) >= 2 and not _raw_act_momentum_confirmed(inp):
+        top_votes += 1
+    if top_votes == 0:
+        return False
+
+    confirmation = 0
+    if (inp.roc_5m or 0) < 0:
+        confirmation += 1
+    if (inp.ema20_slope or 0) < 0:
+        confirmation += 1
+    if inp.higher_highs is False:
+        confirmation += 1
+    if (inp.volume_spike or 0) >= 2.5:
+        confirmation += 1
+    if (inp.mean_reversion_score or 0) >= 0.5:
+        confirmation += 1
+    return confirmation >= 1
 
 
 def _parabolic_overextended_pump(inp: V6InputContract) -> bool:
@@ -392,7 +480,11 @@ def classify_scenario(inp: V6InputContract) -> ClassifiedScenario:
                 sub_profile_hint = "R1_STD_PULLBACK"
             else:
                 label = "Güçlü yükseliş trendi"
-    elif _recovery_gate(inp):
+    elif _trend_cooldown(inp, trend=trend, momentum=momentum):
+        regime, sub, micro, behavior = "R1", "01", "001", "PB05"
+        label = "Yükseliş trendi / kontrollü soğuma"
+        sub_profile_hint = "R1_STD_TREND_COOLDOWN"
+    elif _recovery_gate(inp) and _recovery_semantics_confirmed(inp):
         regime, sub, micro, behavior = "R6", "02", "002", "PB06"
         label = "Toparlanma / kontrollü geri dönüş"
         sub_profile_hint = "R6_RECOVERY_ACT"
@@ -415,6 +507,10 @@ def classify_scenario(inp: V6InputContract) -> ClassifiedScenario:
             regime, sub, micro, behavior = "R4", "03", "004", "PB02"
             label = "Düşük likidite / dengesiz aralık"
             sub_profile_hint = "R4_RESTRICTED_UNSTABLE"
+        elif _trend_cooldown(inp, trend=trend, momentum=momentum):
+            regime, sub, micro, behavior = "R1", "01", "001", "PB05"
+            label = "Yükseliş trendi / kontrollü soğuma"
+            sub_profile_hint = "R1_STD_TREND_COOLDOWN"
         elif _clear_strong_trend(inp, trend=trend, momentum=momentum):
             regime, sub, micro, behavior = "R5", "01", "001", "PB07"
             label = "Yüksek volatilite + güçlü momentum"
@@ -423,8 +519,9 @@ def classify_scenario(inp: V6InputContract) -> ClassifiedScenario:
             regime, sub, micro, behavior = "R7", "02", "002", "PB10"
             label = "Dengesiz volatilite / düşüş riski"
         else:
-            regime, sub, micro, behavior = "R6", "01", "001", "PB06"
-            label = "Yüksek volatilite / kontrollü mod"
+            regime, sub, micro, behavior = "R4", "01", "001", "PB02"
+            label = "Volatil aralık"
+            sub_profile_hint = "R4_STD_LIQUID"
     elif _strong_uptrend(inp):
         regime, sub, micro, behavior = "R1", "01", "001", "PB05"
         if _strong_uptrend_pullback(inp):
@@ -442,11 +539,12 @@ def classify_scenario(inp: V6InputContract) -> ClassifiedScenario:
         regime, sub, micro, behavior = "R5", "01", "001", "PB07"
         label = "Toparlanma"
     elif _upper_band_boundary(inp) and not _strong_uptrend(inp):
-        regime, sub, micro, behavior = "R6", "01", "001", "PB06"
-        label = "Tepe / üst bant / dağılım"
+        regime, sub, micro, behavior = "R4", "01", "001", "PB02"
+        label = "Üst bant / kontrollü volatil aralık"
+        sub_profile_hint = "R4_DEF_OVERHEATED"
     else:
-        regime, sub, micro, behavior = "R6", "01", "001", "PB06"
-        label = "Tepe / dağılım / zayıflama"
+        regime, sub, micro, behavior = "R3", "01", "001", "PB01"
+        label = "Yönsüz sıkışma / kontrollü soğuma"
 
     # Fake breakout / pump micro overrides
     if inp.fake_breakout_score >= 70 and regime not in ("R8", "R7"):

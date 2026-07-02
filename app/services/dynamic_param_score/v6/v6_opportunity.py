@@ -755,20 +755,20 @@ def build_v6_opportunity_explain(
     ro = str(opportunity_notes.get("regime_opportunity") or "")
     if ro == R6_CONTROLLED_ACTIVE:
         parts.append(
-            "Tepe bölgesinde kontrollü aktif mod: derin alış açık, satış ve kâr döngüsü birlikte çalışır."
+            "Düşüş sonrası toparlanmada kontrollü aktif mod: derin alış açık, satış ve kâr döngüsü birlikte çalışır."
         )
     elif ro == R6_PROTECTIVE_SELL_ONLY:
         parts.append(
-            "Yüksek risk nedeniyle satış ağırlıklı mod; normal alış kapalı, satış sonrası geri alım aktif."
+            "Zayıf recovery nedeniyle satış ağırlıklı mod; normal alış kapalı, satış sonrası geri alım aktif."
         )
     elif r6_mode == R6_CONTROLLED_ACTIVE:
         parts.append(
             "Bu profil alış tarafını tamamen kapatmak yerine derin kontrollü alış kullanır; "
-            "amaç tepe bölgesinde kovalamadan geri çekilmelerde kontrollü pozisyon kurmaktır."
+            "amaç düşüş sonrası kademeli toparlanmada kontrollü pozisyon kurmaktır."
         )
     elif r6_mode == R6_PROTECTIVE_SELL_ONLY:
         parts.append(
-            "Yüksek risk nedeniyle normal alış kapalı; kontrollü satış ve satış sonrası geri alım döngüsü aktif."
+            "Zayıf recovery nedeniyle normal alış kapalı; kontrollü satış ve satış sonrası geri alım döngüsü aktif."
         )
     elif profile.scenario.behavior_id == "PB11":
         parts.append(

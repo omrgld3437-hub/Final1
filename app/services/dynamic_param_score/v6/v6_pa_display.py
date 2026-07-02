@@ -197,11 +197,11 @@ def build_regime_strategy_why(
         mode = str(opp.get("regime_opportunity") or opp.get("r6_mode") or "")
         if "CONTROLLED_ACTIVE" in mode:
             return (
-                "Tepe bölgesinde temiz majör koşullarda kontrollü aktif mod: alış açık, "
+                "Düşüş sonrası toparlanmada kontrollü aktif mod: alış açık, "
                 f"satış ve kâr döngüsü birlikte — {grid}."
             )
         return (
-            "Yüksek tepe riskinde normal alış kapalı; satış ağırlıklı yönetim ve "
+            "Zayıf recovery koşullarında normal alış temkinli tutuldu; satış ağırlıklı yönetim ve "
             f"satış sonrası geri alım döngüsü — {grid}."
         )
     if rid == "R7":
