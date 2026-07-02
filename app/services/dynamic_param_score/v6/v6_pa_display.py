@@ -87,6 +87,10 @@ def safety_result_label_v6(
 ) -> str:
     if deploy_block_reason == "price_valid_false":
         return "Fiyat verisi geçersiz · profil üretilmedi"
+    if deploy_block_reason == "restricted_by_liquidity":
+        return "Düşük likidite · restricted teknik profil gösteriliyor"
+    if deploy_block_reason == "conditional_probe_only":
+        return "Conditional probe · otomatik deploy kapalı"
     if sell_grid_count > 0 and buy_grid_count == 0 and not normal_buy_enabled:
         if rebuy_enabled:
             return "Alış kapalı · Satış ve kâr döngüsü aktif"
@@ -118,9 +122,48 @@ def _trace_class_from_list(trace: Optional[List[Dict[str, Any]]], name: str) -> 
     return ""
 
 
+def _semantic_role_from_notes(opp: Optional[Dict[str, Any]]) -> str:
+    opp = opp or {}
+    role = str(opp.get("semantic_role") or "")
+    if role:
+        return role
+    codes = {str(c) for c in (opp.get("reason_codes") or [])}
+    if "LOW_LIQUIDITY_RESTRICTED" in codes:
+        return "LOW_LIQUIDITY_RESTRICTED"
+    if "CONDITIONAL_PROBE_ONLY" in codes:
+        return "R8_CAPITULATION_CONDITIONAL_PROBE"
+    if "R5_ACT_CLEAN_BREAKOUT" in codes:
+        return "CLEAN_BREAKOUT"
+    if "R5_STD_POST_BREAKOUT_COOLDOWN" in codes:
+        return "POST_BREAKOUT_COOLDOWN"
+    if "R5_DEF_PARABOLIC_OVEREXTENDED" in codes:
+        return "PARABOLIC_OVEREXTENDED"
+    if "R5_DEF_OVEREXTENDED" in codes:
+        return "OVEREXTENDED_MOMENTUM"
+    return ""
+
+
+_R3_BUY_GRID_STATUS = (
+    "Yakın alış gridleri açık; son kademe daha derin destek için ayrıldı"
+)
+
+
+def _r3_uptrend_compression_context(
+    *,
+    sub_profile_hint: str = "",
+    scenario_name: str = "",
+) -> bool:
+    if "UPTREND_COMPRESSION" in str(sub_profile_hint or ""):
+        return True
+    return "yukarı eğilimli sıkışma" in str(scenario_name or "").lower()
+
+
 def contextual_market_status_plain(
     regime_id: str,
     adjuster_trace: Optional[List[Dict[str, Any]]] = None,
+    *,
+    sub_profile_hint: str = "",
+    scenario_name: str = "",
 ) -> str:
     """Volatility-aware plain status — avoids 'sert dalgalanıyor' when V1/V2."""
     rid = str(regime_id or "").upper()
@@ -133,7 +176,14 @@ def contextual_market_status_plain(
     if rid == "R2" and vol in ("V1",):
         return "Sakin yatay bölge; gridler 1 haftalık bot için yakın"
     if rid == "R3" and vol in ("V1", "V2"):
-        return "Gürültülü ama kontrollü aralık; derin alış açık"
+        if _r3_uptrend_compression_context(
+            sub_profile_hint=sub_profile_hint,
+            scenario_name=scenario_name,
+        ):
+            return (
+                f"Yukarı eğilimli sıkışma / kontrollü soğuma; {_R3_BUY_GRID_STATUS}"
+            )
+        return f"Gürültülü ama kontrollü aralık; {_R3_BUY_GRID_STATUS}"
     return market_status_plain(rid)
 
 
@@ -163,6 +213,17 @@ def build_regime_strategy_why(
     base = int(display.get("base_allocation_pct") or 0)
     quote = int(display.get("quote_allocation_pct") or 100 - base)
     op_mode = build_operational_mode_plain(display, opportunity_notes)
+    semantic_role = _semantic_role_from_notes(opp)
+
+    if semantic_role in (
+        "LOW_LIQUIDITY_RESTRICTED",
+        "OVEREXTENDED_LOW_LIQUIDITY",
+        "R3_RESTRICTED_LOW_LIQUIDITY_COMPRESSION",
+    ):
+        return (
+            "Likidite/spread riski normal grid için uygun değil; profil restricted tutuldu. "
+            f"Plan: {grid}. Dağılım coin %{base} · USDT %{quote}. Mod: {op_mode}."
+        )
 
     if rid == "R4":
         if vol in ("V1", "V2"):
@@ -186,13 +247,28 @@ def build_regime_strategy_why(
         )
     if rid == "R3":
         return (
-            f"Gürültülü aralıkta alış tamamen kapatılmadı; {grid} ile kontrollü derin alış "
+            f"Sıkışma bölgesinde alış tamamen kapatılmadı; {grid} ile {_R3_BUY_GRID_STATUS.lower()} "
             f"ve satış dengesi korundu."
         )
     if rid == "R5":
+        if semantic_role == "CLEAN_BREAKOUT":
+            return (
+                f"Temiz breakout onaylandığı için trend devamı planlandı: {grid}. "
+                f"Dağılım coin %{base} · USDT %{quote}; satış gridleri yukarı tepkiyi kademeli toplar."
+            )
+        if semantic_role == "POST_BREAKOUT_COOLDOWN":
+            return (
+                "Trend güçlü fakat kısa vadeli momentum yavaşlıyor; sahte kırılım riskine karşı "
+                f"USDT rezervi korundu. Plan: {grid}. Dağılım coin %{base} · USDT %{quote}."
+            )
+        if semantic_role in ("OVEREXTENDED_MOMENTUM", "PARABOLIC_OVEREXTENDED"):
+            return (
+                "Momentum güçlü fakat fiyat üst bölgede; yeni alımlar derine veya kapalı bırakıldı, "
+                f"yukarı tepkilerde kademeli kâr alınır. Plan: {grid}. Dağılım coin %{base} · USDT %{quote}."
+            )
         return (
-            f"Toparlanma aşamasında fazla savunmacı kalmamak için {grid} ve "
-            f"coin %{base} tabanı tercih edildi."
+            f"Breakout rejiminde kontrollü trend takibi için {grid}. "
+            f"Dağılım coin %{base} · USDT %{quote}."
         )
     if rid == "R6":
         mode = str(opp.get("regime_opportunity") or opp.get("r6_mode") or "")
@@ -212,6 +288,11 @@ def build_regime_strategy_why(
         )
     if rid == "R8":
         mode = str(opp.get("pb11_operational_mode") or "")
+        if semantic_role == "R8_CAPITULATION_CONDITIONAL_PROBE":
+            return (
+                "Derin crash koşulu var; ana profil micro-base satış/geri alımda kalır, "
+                "derin alış yalnızca conditional probe metadata olarak sunulur."
+            )
         if "mod_b" in mode:
             return f"Crash profilinde derin kontrollü alış modu: {grid}."
         return (
@@ -249,6 +330,15 @@ def build_operational_mode_plain(
     opp = opportunity_notes or {}
     validity = opp.get("operational_validity") or {}
     mode = str(validity.get("mode") or "")
+    semantic_role = _semantic_role_from_notes(opportunity_notes)
+    if semantic_role in (
+        "LOW_LIQUIDITY_RESTRICTED",
+        "OVEREXTENDED_LOW_LIQUIDITY",
+        "R3_RESTRICTED_LOW_LIQUIDITY_COMPRESSION",
+    ):
+        return "Restricted · otomatik deploy kapalı"
+    if semantic_role == "R8_CAPITULATION_CONDITIONAL_PROBE":
+        return "Conditional probe · otomatik deploy kapalı"
     mapping = {
         "bilateral_grid": "İki yönlü grid aktif",
         "sell_management": "Satış yönetimi + geri alım",
@@ -393,7 +483,29 @@ def enrich_v6_display(
     scen = out.get("scenario_identity") or {}
     regime_id = str(scen.get("regime_id") or "")
     trace = list(adjuster_trace or out.get("adjuster_trace") or [])
-    out["market_status_plain"] = contextual_market_status_plain(regime_id, trace)
+    sub_hint = str(scen.get("sub_profile_hint") or out.get("sub_profile_hint") or "")
+    scenario_name = str(scen.get("name") or "")
+    out["market_status_plain"] = contextual_market_status_plain(
+        regime_id,
+        trace,
+        sub_profile_hint=sub_hint,
+        scenario_name=scenario_name,
+    )
+    semantic_role = _semantic_role_from_notes(opportunity_notes)
+    if semantic_role in (
+        "LOW_LIQUIDITY_RESTRICTED",
+        "OVEREXTENDED_LOW_LIQUIDITY",
+        "R3_RESTRICTED_LOW_LIQUIDITY_COMPRESSION",
+    ):
+        out["market_status_plain"] = "Likidite/spread riski yüksek; restricted teknik profil"
+    elif regime_id == "R5" and semantic_role == "POST_BREAKOUT_COOLDOWN":
+        out["market_status_plain"] = "Breakout sonrası kontrollü soğuma; USDT rezervi korunur"
+    elif regime_id == "R5" and semantic_role == "CLEAN_BREAKOUT":
+        out["market_status_plain"] = "Temiz breakout; trend devamı kontrollü takip edilir"
+    elif regime_id == "R5" and semantic_role in ("OVEREXTENDED_MOMENTUM", "PARABOLIC_OVEREXTENDED"):
+        out["market_status_plain"] = "Üst bölgede momentum; yeni alımlar kısılır, satış/kâr yönetimi öne çıkar"
+    elif regime_id == "R8" and semantic_role == "R8_CAPITULATION_CONDITIONAL_PROBE":
+        out["market_status_plain"] = "Derin crash; conditional probe metadata var, deploy kapalı"
     out["regime_headline"] = build_regime_headline(scen)
     out["display_regime_technical"] = build_regime_technical_label(scen)
     out["risk_tone_plain"] = risk_tone_plain(out["risk_display_label"])

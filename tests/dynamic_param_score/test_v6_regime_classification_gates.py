@@ -420,3 +420,58 @@ def test_params_valid_always_true_after_spec():
         prof, _doge_like_inp(), trace, regime_id="R4", severity="STD", sub_profile_hint="R4_FRAGILE_BUT_LIQUID"
     )
     assert notes.get("params_valid") is True
+
+
+def _btc_r3_uptrend_compression_inp() -> object:
+    """Live BTCUSDT low-vol squeeze above EMA200 — R3 uptrend compression, not R1 cooldown."""
+    return _base_inp(
+        symbol="BTCUSDT",
+        adx_1h=36.0,
+        rsi_5m=54.8,
+        rsi_1h=66.4,
+        ema20_slope=0.06,
+        ema50_slope=0.05,
+        price_vs_ema200_pct=2.14,
+        roc_5m=0.16,
+        higher_highs=False,
+        lower_lows=False,
+        atr_5m_pct=0.17,
+        atr_1h_pct=0.79,
+        volatility_percentile=51.6,
+        bb_width=0.41,
+        bb_position=0.63,
+        z_score=0.54,
+        range_stability=0.56,
+        return_1h_pct=0.16,
+        return_4h_pct=0.63,
+        return_24h_pct=2.73,
+        drawdown_7d_pct=0.21,
+        spread_pct=0.0,
+        volume_24h=1_500_000_000.0,
+        volume_consistency=0.55,
+        asset_fragility_class="F0",
+    )
+
+
+def test_btc_r3_uptrend_compression_label_not_directionless():
+    classified = classify_scenario(_btc_r3_uptrend_compression_inp())
+    assert classified.regime_id == "R3"
+    assert classified.sub_profile_hint == "R3_STD_UPTREND_COMPRESSION"
+    assert classified.label == "Yukarı eğilimli sıkışma / kontrollü soğuma"
+    assert "Yönsüz" not in classified.label
+
+
+def test_btc_r3_uptrend_compression_display_copy():
+    from app.services.dynamic_param_score.v6.v6_pa_display import contextual_market_status_plain
+
+    trace = [{"name": "volatility", "class": "V1"}]
+    status = contextual_market_status_plain(
+        "R3",
+        trace,
+        sub_profile_hint="R3_STD_UPTREND_COMPRESSION",
+        scenario_name="Yukarı eğilimli sıkışma / kontrollü soğuma",
+    )
+    assert "Yukarı eğilimli sıkışma" in status
+    assert "derin alış açık" not in status.lower()
+    assert "Yakın alış gridleri açık" in status
+    assert "son kademe daha derin destek" in status

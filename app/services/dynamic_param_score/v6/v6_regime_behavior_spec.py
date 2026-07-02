@@ -161,6 +161,11 @@ _R3: Dict[SeverityMode, RegimeBehaviorTemplate] = {
     "STD": _tpl(45, 55, 60, 25, 40, 4, [1, 2, 4, 6], [10, 20, 30, 40], 4, [1, 2, 4, 6], [25, 30, 25, 20], 1.0, 0.5, 1.5, 0.5, ps_mode="staged_plus_tight_trailing"),
     "ACT": _tpl(55, 45, 65, 25, 35, 3, [1, 2, 4], [15, 30, 55], 4, [2, 4, 7, 10], [15, 25, 30, 30], 1.5, 0.5, 2.0, 0.5, ps_mode="staged_plus_trailing"),
 }
+_R3_STD_CONTROLLED_COMPRESSION = _tpl(
+    35, 65, 50, 20, 50, 3, [1, 3, 6], [10, 25, 65],
+    3, [1, 2, 4], list(SELL_AMOUNTS_NAMED["LOW_LIQUIDITY_SELL_3"]),
+    1.5, 0.5, 1.5, 0.5, ps_mode="staged_plus_tight_trailing",
+)
 
 # --- R4 Yüksek volatilite range ---
 _R4: Dict[SeverityMode, RegimeBehaviorTemplate] = {
@@ -214,6 +219,13 @@ _R5_DEF_OVEREXTENDED = _tpl(
     new_buys="restricted", pb_mode="restricted_trailing_rebuy",
     buyback_restricted=True, max_buyback_pct=50, ps_mode="risk_reduce_trailing",
 )
+_R5_STD_POST_BREAKOUT_COOLDOWN = _tpl(
+    45, 55, 65, 20, 45, 3, [3, 6, 10], [15, 30, 55],
+    4, [2, 5, 9, 14], list(SELL_AMOUNTS_NAMED["RISK_REDUCE_SELL_4"]),
+    3.0, 1.1, 4.0, 1.1,
+    new_buys="restricted", pb_mode="restricted_trailing_rebuy",
+    buyback_restricted=True, max_buyback_pct=50, ps_mode="risk_reduce_trailing",
+)
 
 # --- R6 Recovery ---
 _R6: Dict[SeverityMode, RegimeBehaviorTemplate] = {
@@ -221,6 +233,11 @@ _R6: Dict[SeverityMode, RegimeBehaviorTemplate] = {
     "STD": _tpl(50, 50, 70, 30, 30, 4, [2, 4, 7, 11], [10, 20, 30, 40], 4, [3, 6, 10, 15], [15, 25, 30, 30], 2.5, 1.1, 3.0, 1.1, ps_mode="staged_plus_trailing"),
     "ACT": _tpl(65, 35, 80, 25, 20, 3, [2, 4, 7], [15, 30, 55], 5, [3, 6, 10, 15, 21], [10, 15, 20, 25, 30], 2.5, 1.1, 3.5, 1.1),
 }
+_R6_RECOVERY_BREAKOUT = _tpl(
+    50, 50, 70, 25, 40, 3, [3, 6, 10], [15, 30, 55],
+    4, [2, 5, 9, 14], list(SELL_AMOUNTS_NAMED["RISK_REDUCE_SELL_4"]),
+    3.0, 1.1, 4.0, 1.1, new_buys="restricted", ps_mode="staged_plus_trailing",
+)
 
 # --- R7 Düşüş trendi ---
 _R7: Dict[SeverityMode, RegimeBehaviorTemplate] = {
@@ -416,9 +433,19 @@ def resolve_regime_template(
         hint = sub_profile_hint or _infer_r8_sub_profile(inp)
         tpl = _R8_SUB_TEMPLATES.get(hint, _R8_DEF_PANIC)
         reasons.append(hint)
+        if hint == "R8_CAPITULATION_CONDITIONAL_PROBE":
+            tpl = _R8_DEF_PANIC
+            reasons.extend(["DEEP_CRASH", "CAPITULATION", "CONDITIONAL_PROBE_ONLY"])
+            deployable = False
         if hint == "R8_RECOVERY_RESTRICTED":
             reasons.append("CRASH_RECOVERY")
             deployable = False
+    elif rid == "R3" and sub_profile_hint in ("R3_STD_CONTROLLED_COMPRESSION", "R3_STD_UPTREND_COMPRESSION"):
+        tpl = _R3_STD_CONTROLLED_COMPRESSION
+        reasons.append(sub_profile_hint)
+    elif rid == "R6" and sub_profile_hint == "R6_RECOVERY_BREAKOUT":
+        tpl = _R6_RECOVERY_BREAKOUT
+        reasons.extend(["R6_RECOVERY_BREAKOUT", "RECOVERY_BREAKOUT"])
     elif rid == "R1" and (
         sub_profile_hint == "R1_STD_TREND_COOLDOWN" or _is_r1_trend_cooldown_setup(inp)
     ):
@@ -429,6 +456,9 @@ def resolve_regime_template(
         reasons.append("R1_STD_PULLBACK")
     elif rid == "R5" and sub_profile_hint == "R5_ACT_CLEAN_BREAKOUT":
         reasons.extend(["R5_ACT_CLEAN_BREAKOUT", "CLEAN_BREAKOUT"])
+    elif rid == "R5" and sub_profile_hint == "R5_STD_POST_BREAKOUT_COOLDOWN":
+        tpl = _R5_STD_POST_BREAKOUT_COOLDOWN
+        reasons.extend(["R5_STD_POST_BREAKOUT_COOLDOWN", "POST_BREAKOUT_COOLDOWN", "NEW_BUYS_RESTRICTED"])
     elif rid == "R5" and sub_profile_hint in ("R5_DEF_PARABOLIC_OVEREXTENDED", "R5_DEF_OVEREXTENDED"):
         if sub_profile_hint == "R5_DEF_PARABOLIC_OVEREXTENDED":
             tpl = _R5_DEF_PARABOLIC_OVEREXTENDED

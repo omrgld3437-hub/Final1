@@ -59,7 +59,8 @@ def _crash_like(inp: V6InputContract) -> bool:
     deep_drawdown = (dd7 >= 15 or dd30 >= 25) and votes >= 5
     broad_negative = ret24 <= -8 and ret4 < 0 and votes >= 5
     severe_combo = cv is not None and cv < -2.0 and dd7 >= 15 and ret24 <= -8
-    return fast_crash or deep_drawdown or broad_negative or severe_combo
+    capitulation_probe = _r8_capitulation_probe(inp)
+    return fast_crash or deep_drawdown or broad_negative or severe_combo or capitulation_probe
 
 
 def _r8_crash_veto(inp: V6InputContract) -> bool:
@@ -240,6 +241,29 @@ def _recovery_semantics_confirmed(inp: V6InputContract) -> bool:
     return previous_downtrend and recovery_now and not explicit_not_recovery
 
 
+def _recovery_breakout(inp: V6InputContract) -> bool:
+    return (
+        (inp.return_24h_pct or 0) < -5
+        and (inp.drawdown_7d_pct or 0) >= 10
+        and ((inp.return_4h_pct or 0) > 1 or (inp.return_1h_pct or 0) > 0)
+        and (inp.ema20_slope or 0) > 0
+        and (inp.ema50_slope or 0) > 0
+        and inp.higher_highs is True
+        and inp.lower_lows is False
+    )
+
+
+def _r8_capitulation_probe(inp: V6InputContract) -> bool:
+    return (
+        (inp.return_24h_pct or 0) <= -40
+        and (inp.drawdown_7d_pct or 0) >= 50
+        and (inp.return_4h_pct or 0) > 0
+        and (inp.red_pressure or 0) < 0.6
+        and float(inp.spread_pct or 0) < 0.30
+        and float(inp.volume_24h or 0) >= 1_000_000
+    )
+
+
 def _trend_cooldown(inp: V6InputContract, *, trend: int, momentum: int) -> bool:
     if not inp.higher_highs or inp.lower_lows:
         return False
@@ -340,6 +364,18 @@ def _strong_trend_breakout_gate(inp: V6InputContract, *, trend: int, momentum: i
     if ret4 > 1 and ret24 > 3 and trend >= 65:
         return True
     return False
+
+
+def _post_breakout_cooldown(inp: V6InputContract) -> bool:
+    return (
+        (inp.adx_1h or 0) >= 28
+        and (inp.price_vs_ema200_pct or 0) >= 3
+        and (inp.return_24h_pct or 0) > 2
+        and (inp.bb_position or 0) < 0.80
+        and (inp.z_score or 0) < 1.20
+        and ((inp.higher_highs is not True) or (inp.roc_5m or 0) < 0.5)
+        and inp.lower_lows is not True
+    )
 
 
 def _true_volatile_range(inp: V6InputContract, *, range_sc: int) -> bool:
@@ -445,6 +481,31 @@ def _upper_band_boundary(inp: V6InputContract) -> bool:
     return vp < 40 and atr < 1.5 and bb > 0.80 and z > 1.3
 
 
+def _uptrend_compression(inp: V6InputContract) -> bool:
+    """R3 squeeze with upward bias — above EMA200, positive drift, no dump structure."""
+    pve = inp.price_vs_ema200_pct
+    if pve is None or pve < 0.5:
+        return False
+    if (inp.return_24h_pct or 0) <= 0:
+        return False
+    if inp.lower_lows is True:
+        return False
+    if (inp.ema20_slope or 0) < -0.05 or (inp.ema50_slope or 0) < -0.05:
+        return False
+    return not _downtrend(inp)
+
+
+def _controlled_compression(inp: V6InputContract) -> bool:
+    return (
+        (inp.bb_width or 99) <= 1.0
+        and (inp.volatility_percentile or 0) < 35
+        and (inp.range_stability or 0) >= 0.30
+        and inp.lower_lows is not True
+        and (inp.ema20_slope or 0) >= -0.05
+        and (inp.ema50_slope or 0) >= -0.05
+    )
+
+
 def classify_scenario(inp: V6InputContract) -> ClassifiedScenario:
     """Priority cascade: crash → downtrend → trend/breakout → recovery → true range → …"""
     range_sc = _range_score(inp)
@@ -457,7 +518,11 @@ def classify_scenario(inp: V6InputContract) -> ClassifiedScenario:
         label = "Parabolik pump / aşırı uzamış momentum"
         sub_profile_hint = "R5_DEF_PARABOLIC_OVEREXTENDED"
     elif _crash_like(inp):
-        if _r8_recovery_restricted(inp):
+        if _r8_capitulation_probe(inp):
+            regime, sub, micro, behavior = "R8", "02", "003", "PB11"
+            label = "Kapitülasyon crash / conditional probe"
+            sub_profile_hint = "R8_CAPITULATION_CONDITIONAL_PROBE"
+        elif _r8_recovery_restricted(inp):
             regime, sub, micro, behavior = "R8", "02", "002", "PB11"
             label = "Crash sonrası kontrollü toparlanma"
             sub_profile_hint = "R8_RECOVERY_RESTRICTED"
@@ -468,6 +533,10 @@ def classify_scenario(inp: V6InputContract) -> ClassifiedScenario:
     elif _downtrend(inp):
         regime, sub, micro, behavior = "R7", "01", "001", "PB10"
         label = "Düşüş trendi"
+    elif _recovery_breakout(inp):
+        regime, sub, micro, behavior = "R6", "02", "003", "PB06"
+        label = "Düşüş sonrası recovery breakout"
+        sub_profile_hint = "R6_RECOVERY_BREAKOUT"
     elif _strong_trend_breakout_gate(inp, trend=trend, momentum=momentum):
         if _strong_uptrend_pullback(inp):
             regime, sub, micro, behavior = "R1", "01", "001", "PB05"
@@ -477,6 +546,10 @@ def classify_scenario(inp: V6InputContract) -> ClassifiedScenario:
             regime, sub, micro, behavior = "R5", "01", "001", "PB07"
             label = "Yukarı breakout / aşırı ısınmış momentum"
             sub_profile_hint = "R5_DEF_OVEREXTENDED"
+        elif _post_breakout_cooldown(inp):
+            regime, sub, micro, behavior = "R5", "01", "001", "PB07"
+            label = "Breakout sonrası kontrollü soğuma"
+            sub_profile_hint = "R5_STD_POST_BREAKOUT_COOLDOWN"
         elif _clear_breakout(inp):
             regime, sub, micro, behavior = "R5", "01", "001", "PB07"
             label = "Temiz breakout / trend devamı"
@@ -542,7 +615,14 @@ def classify_scenario(inp: V6InputContract) -> ClassifiedScenario:
         label = "Dengeli aralık"
     elif (inp.volatility_percentile or 0) < 35:
         regime, sub, micro, behavior = "R3", "01", "001", "PB01"
-        label = "Zayıf / gürültülü aralık"
+        if _uptrend_compression(inp):
+            label = "Yukarı eğilimli sıkışma / kontrollü soğuma"
+            sub_profile_hint = "R3_STD_UPTREND_COMPRESSION"
+        elif _controlled_compression(inp):
+            label = "Düşük volatilite sıkışması"
+            sub_profile_hint = "R3_STD_CONTROLLED_COMPRESSION"
+        else:
+            label = "Zayıf / gürültülü aralık"
     elif (inp.return_24h_pct or 0) > 0 and (inp.drawdown_7d_pct or 0) > 5:
         regime, sub, micro, behavior = "R5", "01", "001", "PB07"
         label = "Toparlanma"
@@ -552,7 +632,11 @@ def classify_scenario(inp: V6InputContract) -> ClassifiedScenario:
         sub_profile_hint = "R4_DEF_OVERHEATED"
     else:
         regime, sub, micro, behavior = "R3", "01", "001", "PB01"
-        label = "Yönsüz sıkışma / kontrollü soğuma"
+        if _uptrend_compression(inp):
+            label = "Yukarı eğilimli sıkışma / kontrollü soğuma"
+            sub_profile_hint = "R3_STD_UPTREND_COMPRESSION"
+        else:
+            label = "Yönsüz sıkışma / kontrollü soğuma"
 
     # Fake breakout / pump micro overrides
     if inp.fake_breakout_score >= 70 and regime not in ("R8", "R7"):

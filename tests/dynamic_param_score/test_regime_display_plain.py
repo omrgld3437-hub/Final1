@@ -8,6 +8,7 @@ from app.services.dynamic_param_score.regime_display import (
     market_status_plain,
     risk_tone_plain,
 )
+from app.services.dynamic_param_score.v6.v6_pa_display import contextual_market_status_plain
 
 
 def test_r6_market_status_plain():
@@ -45,3 +46,11 @@ def test_technical_label_includes_sub_and_micro():
     assert "alt-41" in label
     assert "mikro-161" in label
     assert "T553" in label
+
+
+def test_r3_contextual_market_status_uses_near_buy_grid_language():
+    trace = [{"name": "volatility", "class": "V2"}]
+    status = contextual_market_status_plain("R3", trace)
+    assert "derin alış açık" not in status.lower()
+    assert "Yakın alış gridleri açık" in status
+    assert "son kademe daha derin destek" in status
