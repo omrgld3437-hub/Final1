@@ -1,4 +1,7 @@
-"""V6 live engine — classify → catalog → adjust → quantize → validate."""
+"""V6 live engine — classify → catalog → adjust → quantize → validate.
+
+V6 profile resolver must maximize controlled risk/reward, not minimize risk.
+"""
 
 from __future__ import annotations
 
@@ -46,6 +49,12 @@ from app.services.dynamic_param_score.v6.v6_opportunity import (
 logger = logging.getLogger(__name__)
 
 
+def _score_0_100(value: float, lo: float, hi: float) -> float:
+    if hi <= lo:
+        return 0.0
+    return max(0.0, min(100.0, (float(value) - lo) * 100.0 / (hi - lo)))
+
+
 def _strong_low_liq_reason_codes(inp: V6InputContract) -> set[str]:
     spread = float(inp.spread_pct or 0)
     volume = float(inp.volume_24h or 0)
@@ -63,6 +72,100 @@ def _strong_low_liq_reason_codes(inp: V6InputContract) -> set[str]:
     if reasons:
         reasons.update({"LOW_LIQUIDITY_RESTRICTED", "RESTRICTED_DEPLOY"})
     return reasons
+
+
+def _controlled_risk_reward_score(
+    inp: V6InputContract,
+    profile,
+    *,
+    regime_id: str,
+    deployable_hint: bool,
+    reason_codes: set[str],
+) -> Dict[str, Any]:
+    spread = float(inp.spread_pct or 0)
+    volume = float(inp.volume_24h or 0)
+    vq = float(inp.volume_consistency if inp.volume_consistency is not None else 0.5)
+    frag = str(inp.asset_fragility_class or "F1").upper()
+    pve = float(inp.price_vs_ema200_pct or 0)
+    ret24 = float(inp.return_24h_pct or 0)
+    ret4 = float(inp.return_4h_pct or 0)
+    atr = float(inp.atr_1h_pct or 0)
+    rstab = float(inp.range_stability or 0)
+    bb_pos = float(inp.bb_position if inp.bb_position is not None else 0.5)
+    z = float(inp.z_score or 0)
+    dd7 = float(inp.drawdown_7d_pct or 0)
+    crash_velocity = float(inp.crash_velocity or 0)
+    rid = str(regime_id or "").upper()
+
+    trend_continuation = min(
+        100.0,
+        _score_0_100(pve, -2, 8) * 0.35
+        + _score_0_100(ret24, -3, 8) * 0.25
+        + _score_0_100(ret4, -1, 3) * 0.20
+        + (15.0 if inp.higher_highs else 0.0)
+        + (5.0 if (inp.ema20_slope or 0) > 0 else 0.0),
+    )
+    range_loop = min(100.0, rstab * 75.0 + max(0.0, 25.0 - abs(bb_pos - 0.5) * 50.0))
+    volatility_profit = 100.0 - min(100.0, abs(atr - 2.0) * 25.0)
+    liquidity_execution = min(
+        100.0,
+        (100.0 - min(100.0, spread * 500.0)) * 0.45
+        + min(100.0, vq * 100.0) * 0.30
+        + _score_0_100(volume, 250_000, 25_000_000) * 0.25,
+    )
+    mean_reversion = min(
+        100.0,
+        rstab * 40.0 + min(60.0, abs(bb_pos - 0.5) * 90.0 + abs(z) * 12.0),
+    )
+
+    reward_score = round(
+        trend_continuation * (0.30 if rid in ("R1", "R5", "R6") else 0.18)
+        + range_loop * (0.28 if rid in ("R2", "R3", "R4") else 0.18)
+        + volatility_profit * 0.16
+        + liquidity_execution * 0.22
+        + mean_reversion * 0.16,
+        2,
+    )
+
+    drawdown_risk = min(100.0, dd7 * 3.0)
+    crash_risk = min(100.0, abs(min(0.0, crash_velocity)) * 30.0 + max(0.0, -ret24) * 2.0)
+    spread_risk = min(100.0, spread * 500.0)
+    liquidity_risk = max(0.0, 100.0 - liquidity_execution)
+    overextension_risk = min(100.0, max(0.0, pve - 3.0) * 10.0 + max(0.0, bb_pos - 0.70) * 120.0 + max(0.0, z - 1.0) * 25.0)
+    fragility_risk = {"F0": 0.0, "F1": 12.0, "F2": 30.0, "F3": 55.0}.get(frag, 20.0)
+    risk_score = round(
+        drawdown_risk * 0.22
+        + crash_risk * 0.20
+        + spread_risk * 0.18
+        + liquidity_risk * 0.18
+        + overextension_risk * 0.14
+        + fragility_risk * 0.08,
+        2,
+    )
+    penalty_multiplier = 1.10 if {"LOW_LIQUIDITY_RESTRICTED", "CONDITIONAL_PROBE_ONLY"} & reason_codes else 0.82
+    risk_penalty_adjusted = round(risk_score * penalty_multiplier, 2)
+    return {
+        "objective": "maximize_controlled_risk_reward_not_minimize_risk",
+        "reward_score": reward_score,
+        "risk_score": risk_score,
+        "risk_penalty_adjusted": risk_penalty_adjusted,
+        "risk_reward_score": round(reward_score - risk_penalty_adjusted, 2),
+        "base_allocation_pct": int(getattr(profile, "base_allocation_pct", 0) or 0),
+        "deployable_hint": bool(deployable_hint),
+        "components": {
+            "trend_continuation_potential": round(trend_continuation, 2),
+            "range_loop_potential": round(range_loop, 2),
+            "volatility_profit_potential": round(volatility_profit, 2),
+            "liquidity_execution_quality": round(liquidity_execution, 2),
+            "mean_reversion_opportunity": round(mean_reversion, 2),
+            "drawdown_risk": round(drawdown_risk, 2),
+            "crash_risk": round(crash_risk, 2),
+            "spread_risk": round(spread_risk, 2),
+            "liquidity_risk": round(liquidity_risk, 2),
+            "overextension_risk": round(overextension_risk, 2),
+            "fragility_risk": round(fragility_risk, 2),
+        },
+    }
 
 
 def _semantic_role(regime_id: str, sub_profile_hint: str, reason_codes: set[str]) -> str:
@@ -194,6 +297,7 @@ def _add_semantic_contract_notes(
     notes["reason_codes"] = sorted(reason_codes)
     notes["params_valid"] = notes.get("params_valid", True)
     notes["controlled_grid"] = notes.get("controlled_grid", True)
+    notes["profile_resolver_objective"] = "maximize_controlled_risk_reward_not_minimize_risk"
     return notes
 
 
@@ -216,7 +320,11 @@ class V6Engine:
         severity = apply_severity_override(severity, delta_pre.severity_override)
         label_lc = str(classified.label or "").lower()
         if severity == "ACT" and (
-            classified.sub_profile_hint in ("R1_STD_TREND_COOLDOWN", "R1_STD_PULLBACK")
+            classified.sub_profile_hint in (
+                "R1_STD_TREND_COOLDOWN",
+                "R1_STD_PULLBACK",
+                "R5_STD_POST_BREAKOUT_COOLDOWN",
+            )
             or any(term in label_lc for term in ("tepe", "dağılım", "zayıflama", "geri çekilme riski", "aşırı"))
         ):
             severity = "STD"
@@ -295,6 +403,13 @@ class V6Engine:
             opportunity_notes,
             regime_id=scenario.regime_id,
             sub_profile_hint=getattr(classified, "sub_profile_hint", "") or "",
+        )
+        opportunity_notes["risk_reward"] = _controlled_risk_reward_score(
+            inp,
+            adjusted,
+            regime_id=scenario.regime_id,
+            deployable_hint=opportunity_notes.get("deployable", True) is not False,
+            reason_codes=set(opportunity_notes.get("reason_codes") or []),
         )
         adjusted.scenario.name = classified.label
         adjusted.scenario.severity = scenario.severity

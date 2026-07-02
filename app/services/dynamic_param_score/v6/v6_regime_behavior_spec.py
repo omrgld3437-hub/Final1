@@ -194,7 +194,7 @@ _R4_RESTRICTED_UNSTABLE = _tpl(
     new_buys="restricted", buyback_restricted=True, ps_mode="staged_plus_trailing",
 )
 _R4_FRAGILE_BUT_LIQUID = _tpl(
-    35, 65, 60, 30, 40, 5, [3, 6, 10, 15, 21], list(BUY_AMOUNTS_FRAGILE_LIQUID_5), 4, [2, 5, 9, 14],
+    35, 65, 60, 30, 40, 5, [3, 6, 10, 15, 21], list(BUY_AMOUNTS_FRAGILE_LIQUID_5), 4, [3, 6, 10, 15],
     list(SELL_AMOUNTS_NAMED["RISK_REDUCE_SELL_4"]), 3.0, 1.1, 3.5, 1.1, ps_mode="staged_plus_trailing",
 )
 
@@ -567,7 +567,7 @@ def _apply_fragility_to_template(
             base = max(45, base)
         quote = 100 - base
         buy_d = tuple(min(25, d + (1 if liquid else 2)) for d in tpl.buy_distances_pct)
-        sell_d = tuple(max(1, d - 1) for d in tpl.sell_distances_pct)
+        sell_d = tpl.sell_distances_pct if rid == "R4" and liquid else tuple(max(1, d - 1) for d in tpl.sell_distances_pct)
         return RegimeBehaviorTemplate(
             **{
                 **tpl.__dict__,
@@ -580,6 +580,8 @@ def _apply_fragility_to_template(
     if frag == "F3":
         penalty = 10 if liquid else 15
         base = max(5, tpl.initial_base_pct - penalty)
+        if rid == "R7":
+            base = max(15, base)
         if rid in ("R1", "R5"):
             base = max(40, base)
         elif rid == "R4" and liquid:

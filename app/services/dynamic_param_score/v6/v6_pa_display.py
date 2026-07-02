@@ -232,8 +232,8 @@ def build_regime_strategy_why(
                 f"Plan: {grid}. Dağılım coin %{base} · USDT %{quote}. Mod: {op_mode}."
             )
         return (
-            f"Volatil aralıkta ani harekete tepki için gridler geniş bırakıldı: {grid}. "
-            "Komisyon tabanı (%1,2) korunarak kâr hedefi ayarlandı."
+            f"Dalgalanma yüksek; gridler genişletilir ama aktif kalır: {grid}. "
+            "Amaç fitillerde al-sat döngüsünü çalıştırmak ve USDT rezervini erken tüketmemektir."
         )
     if rid == "R1":
         return (
@@ -247,8 +247,8 @@ def build_regime_strategy_why(
         )
     if rid == "R3":
         return (
-            f"Sıkışma bölgesinde alış tamamen kapatılmadı; {grid} ile {_R3_BUY_GRID_STATUS.lower()} "
-            f"ve satış dengesi korundu."
+            f"Hareket dar; gridler yakın tutulur: {grid}. "
+            "Amaç küçük ama tekrarlanabilir kâr döngüsü üretmektir."
         )
     if rid == "R5":
         if semantic_role == "CLEAN_BREAKOUT":
@@ -264,7 +264,8 @@ def build_regime_strategy_why(
         if semantic_role in ("OVEREXTENDED_MOMENTUM", "PARABOLIC_OVEREXTENDED"):
             return (
                 "Momentum güçlü fakat fiyat üst bölgede; yeni alımlar derine veya kapalı bırakıldı, "
-                f"yukarı tepkilerde kademeli kâr alınır. Plan: {grid}. Dağılım coin %{base} · USDT %{quote}."
+                "yukarı tepkilerde kademeli kâr alınır. Amaç tepe riskini sınırlarken trend devamından pay almaktır. "
+                f"Plan: {grid}. Dağılım coin %{base} · USDT %{quote}."
             )
         return (
             f"Breakout rejiminde kontrollü trend takibi için {grid}. "

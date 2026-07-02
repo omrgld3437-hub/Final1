@@ -783,3 +783,120 @@ def test_low_liq_veto_caps_base_and_deployable_across_regimes():
         assert result.deploy_block_reason == "restricted_by_liquidity"
         assert result.profile.base_allocation_pct <= 15
         assert "LOW_LIQUIDITY_RESTRICTED" in set(notes["reason_codes"])
+
+
+def _assert_profit_loop_filled(result, params):
+    assert result.profile.buyback_after_sell_enabled is True
+    assert result.profile.profit_sell_after_buyback_enabled is True
+    assert params.rebuy_enabled is True
+    assert params.resell_enabled is True
+    assert params.rebuy_trigger_pct is not None
+    assert params.resell_trigger_pct is not None
+    assert params.rebuy_trail_pct is not None
+    assert params.resell_trail_pct is not None
+
+
+def test_v6_does_not_choose_safest_profile_when_reward_is_high():
+    result, params, display, notes, scenario = _run(_clean_breakout_act_inp())
+    _assert_global_invariants("risk/reward clean breakout", result, params, display, notes)
+    rr = notes["risk_reward"]
+    assert notes["profile_resolver_objective"] == "maximize_controlled_risk_reward_not_minimize_risk"
+    assert scenario["sub_profile_hint"] == "R5_ACT_CLEAN_BREAKOUT"
+    assert scenario["severity"] == "ACT"
+    assert result.deployable is True
+    assert result.profile.base_allocation_pct >= 70
+    assert params.buy_grid_count > 0
+    assert params.sell_grid_count >= 5
+    assert rr["reward_score"] > rr["risk_score"]
+    assert "safest" not in _display_blob(display, scenario, notes)
+
+
+def test_v6_std_is_balanced_risk_reward_not_passive():
+    result, params, display, notes, scenario = _run(_ada_post_breakout_cooldown_inp())
+    _assert_global_invariants("STD balanced cooldown", result, params, display, notes)
+    assert scenario["severity"] == "STD"
+    assert result.profile.base_allocation_pct == 45
+    assert params.buy_grid_count == 3
+    assert params.sell_grid_count == 4
+    _assert_profit_loop_filled(result, params)
+    blob = _display_blob(display, scenario, notes)
+    assert "usdt rezervi korunur" in blob
+    assert "kâr" in blob or "kar" in blob
+    assert "alış kapalı" not in blob
+
+
+def test_v6_def_still_has_working_profit_loop():
+    result, params, display, notes, scenario = _run(_r7_downtrend_inp())
+    _assert_global_invariants("DEF working loop", result, params, display, notes)
+    assert scenario["severity"] == "DEF"
+    assert 15 <= result.profile.base_allocation_pct <= 35
+    assert params.buy_grid_count > 0
+    assert params.sell_grid_count > 0
+    _assert_profit_loop_filled(result, params)
+    assert result.profile.modules.get("new_buys_status") == "restricted"
+
+
+def test_v6_low_vol_grids_are_triggerable():
+    result, params, display, notes, scenario = _run(_bnb_r3_compression_inp())
+    _assert_global_invariants("low-vol triggerable grids", result, params, display, notes)
+    assert scenario["regime_id"] == "R3"
+    assert params.buy_grid_ladder_pcts[0] <= 1
+    assert params.sell_grid_ladder_pcts[0] <= 1
+    assert params.rebuy_trigger_pct <= 2.0
+    assert params.resell_trigger_pct <= 2.0
+    blob = _display_blob(display, scenario, notes)
+    assert "tekrarlanabilir" in blob
+
+
+def test_v6_high_vol_grids_are_wide_but_not_dead():
+    result, params, display, notes, scenario = _run(_doge_like_inp())
+    _assert_global_invariants("high-vol working grids", result, params, display, notes)
+    assert scenario["regime_id"] == "R4"
+    assert 2 <= params.buy_grid_ladder_pcts[0] <= 5
+    assert 3 <= params.sell_grid_ladder_pcts[0] <= 6
+    assert params.buy_grid_count >= 4
+    assert params.sell_grid_count >= 4
+    assert result.profile.base_allocation_pct >= 30
+    blob = _display_blob(display, scenario, notes)
+    assert "aktif kalır" in blob or "fitillerde" in blob
+
+
+def test_v6_overextended_liquid_asset_uses_controlled_profit_profile_not_zero_opportunity():
+    result, params, display, notes, scenario = _run(_sky_r5_overextended_inp())
+    _assert_global_invariants("liquid overextended opportunity", result, params, display, notes)
+    assert scenario["regime_id"] == "R5"
+    assert notes["semantic_role"] == "OVEREXTENDED_MOMENTUM"
+    assert result.deployable is True
+    assert 35 <= result.profile.base_allocation_pct <= 50
+    assert params.buy_grid_count > 0
+    assert params.sell_grid_count >= 4
+    _assert_profit_loop_filled(result, params)
+    assert "LOW_LIQUIDITY_RESTRICTED" not in set(notes["reason_codes"])
+    blob = _display_blob(display, scenario, notes)
+    assert "trend devamından pay" in blob
+
+
+def test_v6_low_liq_restricted_does_not_claim_normal_active_grid():
+    result, params, display, notes, scenario = _run(_cat_low_liq_r4_inp())
+    _assert_global_invariants("low-liq display contract", result, params, display, notes)
+    blob = _display_blob(display, scenario, notes)
+    assert result.deployable is False
+    assert result.deploy_block_reason == "restricted_by_liquidity"
+    assert "restricted" in blob
+    assert "normal aktif" not in blob
+    assert "uygulanabilir savunmacı profil" not in blob
+
+
+def test_v6_base_not_over_penalized_when_liquidity_is_good():
+    for name, factory, minimum_base in (
+        ("BNB", _bnb_r3_compression_inp, 35),
+        ("ADA", _ada_post_breakout_cooldown_inp, 40),
+        ("SKY", _sky_r5_overextended_inp, 35),
+        ("BREAK", _clean_breakout_act_inp, 65),
+    ):
+        result, params, display, notes, scenario = _run(factory())
+        _assert_global_invariants(name, result, params, display, notes)
+        assert result.profile.base_allocation_pct >= minimum_base
+        assert result.profile.base_allocation_pct > 15
+        assert result.deploy_block_reason != "restricted_by_liquidity"
+        assert "LOW_LIQUIDITY_RESTRICTED" not in set(notes["reason_codes"])
