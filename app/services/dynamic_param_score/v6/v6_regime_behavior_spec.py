@@ -427,6 +427,8 @@ def resolve_regime_template(
     elif rid == "R1" and (sub_profile_hint == "R1_STD_PULLBACK" or _is_r1_pullback_setup(inp)):
         tpl = _R1_STD_PULLBACK
         reasons.append("R1_STD_PULLBACK")
+    elif rid == "R5" and sub_profile_hint == "R5_ACT_CLEAN_BREAKOUT":
+        reasons.extend(["R5_ACT_CLEAN_BREAKOUT", "CLEAN_BREAKOUT"])
     elif rid == "R5" and sub_profile_hint in ("R5_DEF_PARABOLIC_OVEREXTENDED", "R5_DEF_OVEREXTENDED"):
         if sub_profile_hint == "R5_DEF_PARABOLIC_OVEREXTENDED":
             tpl = _R5_DEF_PARABOLIC_OVEREXTENDED

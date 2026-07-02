@@ -64,7 +64,7 @@ class V6Engine:
         severity = apply_severity_override(severity, delta_pre.severity_override)
         label_lc = str(classified.label or "").lower()
         if severity == "ACT" and (
-            classified.sub_profile_hint == "R1_STD_TREND_COOLDOWN"
+            classified.sub_profile_hint in ("R1_STD_TREND_COOLDOWN", "R1_STD_PULLBACK")
             or any(term in label_lc for term in ("tepe", "dağılım", "zayıflama", "geri çekilme riski", "aşırı"))
         ):
             severity = "STD"
@@ -131,6 +131,8 @@ class V6Engine:
             severity=severity,
             sub_profile_hint=getattr(classified, "sub_profile_hint", "") or "",
         )
+        adjusted.scenario.name = classified.label
+        adjusted.scenario.severity = scenario.severity
         val_errors = validate_profile(adjusted)
         if val_errors:
             logger.warning("V6 profile validation after opportunity: %s", val_errors)

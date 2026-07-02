@@ -469,17 +469,21 @@ def classify_scenario(inp: V6InputContract) -> ClassifiedScenario:
         regime, sub, micro, behavior = "R7", "01", "001", "PB10"
         label = "Düşüş trendi"
     elif _strong_trend_breakout_gate(inp, trend=trend, momentum=momentum):
-        if _overextended(inp) or _clear_breakout(inp):
+        if _strong_uptrend_pullback(inp):
+            regime, sub, micro, behavior = "R1", "01", "001", "PB05"
+            label = "Güçlü yükseliş trendi içinde geri çekilme"
+            sub_profile_hint = "R1_STD_PULLBACK"
+        elif _overextended(inp) or _top_distribution(inp):
             regime, sub, micro, behavior = "R5", "01", "001", "PB07"
             label = "Yukarı breakout / aşırı ısınmış momentum"
             sub_profile_hint = "R5_DEF_OVEREXTENDED"
+        elif _clear_breakout(inp):
+            regime, sub, micro, behavior = "R5", "01", "001", "PB07"
+            label = "Temiz breakout / trend devamı"
+            sub_profile_hint = "R5_ACT_CLEAN_BREAKOUT"
         else:
             regime, sub, micro, behavior = "R1", "01", "001", "PB05"
-            if _strong_uptrend_pullback(inp):
-                label = "Güçlü yükseliş trendi içinde geri çekilme"
-                sub_profile_hint = "R1_STD_PULLBACK"
-            else:
-                label = "Güçlü yükseliş trendi"
+            label = "Güçlü yükseliş trendi"
     elif _trend_cooldown(inp, trend=trend, momentum=momentum):
         regime, sub, micro, behavior = "R1", "01", "001", "PB05"
         label = "Yükseliş trendi / kontrollü soğuma"
@@ -513,8 +517,12 @@ def classify_scenario(inp: V6InputContract) -> ClassifiedScenario:
             sub_profile_hint = "R1_STD_TREND_COOLDOWN"
         elif _clear_strong_trend(inp, trend=trend, momentum=momentum):
             regime, sub, micro, behavior = "R5", "01", "001", "PB07"
-            label = "Yüksek volatilite + güçlü momentum"
-            sub_profile_hint = "R5_DEF_OVEREXTENDED"
+            if _overextended(inp) or _top_distribution(inp):
+                label = "Yüksek volatilite + aşırı momentum"
+                sub_profile_hint = "R5_DEF_OVEREXTENDED"
+            else:
+                label = "Yüksek volatilite + temiz momentum"
+                sub_profile_hint = "R5_ACT_CLEAN_BREAKOUT"
         elif range_sc < 40:
             regime, sub, micro, behavior = "R7", "02", "002", "PB10"
             label = "Dengesiz volatilite / düşüş riski"

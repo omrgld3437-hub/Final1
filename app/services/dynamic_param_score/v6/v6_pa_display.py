@@ -140,7 +140,8 @@ def contextual_market_status_plain(
 def build_regime_headline(scen: Optional[Dict[str, Any]]) -> str:
     scen = scen or {}
     regime_id = str(scen.get("regime_id") or "").upper()
-    label = V6_REGIME_LABELS.get(regime_id, regime_id)
+    scenario_name = str(scen.get("name") or "").strip()
+    label = scenario_name if scenario_name and " / alt-" not in scenario_name else V6_REGIME_LABELS.get(regime_id, regime_id)
     if regime_id and label:
         return f"{regime_id} · {label}"
     return label or regime_id or "—"

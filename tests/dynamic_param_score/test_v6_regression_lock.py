@@ -319,6 +319,46 @@ def test_no_profile_can_be_act_and_top_distribution_with_high_base():
         assert result.profile.modules.get("new_buys_status") in ("restricted", "defensive", "paused")
 
 
+def _clean_breakout_act_inp():
+    return _base_inp(
+        symbol="BREAKUSDT",
+        adx_1h=34.0,
+        rsi_5m=64.0,
+        rsi_1h=66.0,
+        ema20_slope=0.35,
+        ema50_slope=0.22,
+        price_vs_ema200_pct=4.5,
+        roc_5m=0.8,
+        higher_highs=True,
+        lower_lows=False,
+        atr_1h_pct=1.4,
+        volatility_percentile=55.0,
+        bb_width=2.8,
+        bb_position=0.68,
+        z_score=0.8,
+        range_stability=0.48,
+        return_1h_pct=0.9,
+        return_4h_pct=1.8,
+        return_24h_pct=4.8,
+        drawdown_7d_pct=0.0,
+        spread_pct=0.01,
+        volume_24h=200_000_000.0,
+        volume_consistency=0.92,
+        asset_fragility_class="F1",
+    )
+
+
+def test_clean_breakout_act_not_capped_by_overextended_guard():
+    result, params, display, notes, scenario = _run(_clean_breakout_act_inp())
+    _assert_global_invariants("clean breakout", result, params, display, notes)
+    assert scenario["regime_id"] in ("R5", "R1")
+    assert scenario["sub_profile_hint"] == "R5_ACT_CLEAN_BREAKOUT"
+    assert scenario["severity"] == "ACT"
+    assert 70 <= result.profile.base_allocation_pct <= 75
+    assert params.sell_grid_count >= 5
+    assert "Temiz breakout" in display["regime_headline"]
+
+
 @pytest.mark.parametrize(
     ("name", "factory"),
     [
@@ -340,6 +380,7 @@ def test_v6_live_and_regime_cases_locked(name, factory):
     if name == "SOL":
         assert scenario["regime_id"] == "R1"
         assert scenario["sub_profile_hint"] == "R1_STD_PULLBACK"
+        assert scenario["severity"] != "ACT"
         assert profile.normal_buy_enabled is True
         assert profile.base_allocation_pct >= 55
     elif name == "ETH":
