@@ -67,9 +67,10 @@ def profit_pct_from_code(code: str) -> float:
     return PROFIT_TRIGGER_CODES.get(code, PROFIT_TRIGGER_CODES["K10"])
 
 
-def quantize_profit_trigger_pct(pct: float) -> float:
+def quantize_profit_trigger_pct(pct: float, *, floor_pct: float = 1.0) -> float:
     step = 0.5
-    return round(max(2.5, min(8.0, round(pct / step) * step)), 1)
+    lo = max(1.0, float(floor_pct or 1.0))
+    return round(max(lo, min(8.0, round(pct / step) * step)), 1)
 
 
 def min_profit_pct_for_trailing(trailing_pct: float, *, regime_floor: Optional[float] = None) -> float:

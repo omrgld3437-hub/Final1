@@ -49,6 +49,7 @@ var dmParamAssistantHistoryCache = {};
 var dmParamAssistantBackendRunSeq = 0;
 var dmParamAssistantActiveBackendRun = 0;
 var dmParamAssistantTierSelectSeq = 0;
+var dmParamAssistantResultPresentSeq = 0;
 var dmParamAssistantProgressState = null;
 var dmParamAssistantProgressTickTimer = null;
 var dmParamAssistantLinearProgTimer = null;
@@ -59,10 +60,32 @@ var dmParamAssistantLastSnapshot = null;
 var dmParamAssistantLastTierStartFn = null;
 var dmParamAssistantApplyTimers = [];
 var dmParamAssistantApplying = false;
+
+function dmParamAssistantIsOpen() {
+    var modal = document.getElementById('dmParamAssistantModal');
+    return !!(modal && modal.getAttribute('aria-hidden') === 'false');
+}
+
+function dmParamAssistantShieldParentModals(shield) {
+    var dmBackdrop = document.getElementById('dmBackdrop');
+    var dmModal = document.getElementById('dmModal');
+    if (dmBackdrop) dmBackdrop.style.pointerEvents = shield ? 'none' : '';
+    if (dmModal) dmModal.style.pointerEvents = shield ? 'none' : '';
+    document.body.classList.toggle('dm-param-assistant-open', !!shield);
+}
+
+function dmParamAssistantIsBackendRunActive() {
+    if (!dmParamAssistantIsOpen()) return false;
+    var prep = document.getElementById('dmParamAssistantPrep');
+    if (!prep || prep.style.display === 'none') return false;
+    return !!prep.querySelector('.dm-pa-progress-active');
+}
 // P0-4: backend (param asistanı) önerisi forma uygulandıysa, oluşturma payload'una
 // config_source='param_assistant' iliştirip dinamik referansı bağlamak için saklanır.
 var dmParamAssistantAppliedSource = null;
 var DM_PARAM_ASSISTANT_HISTORY_TTL_MS = (AI_ASSISTANT_SPEC.cache && AI_ASSISTANT_SPEC.cache.marketHistoryTtlMs) || 10 * 60 * 1000;
+var DM_PARAM_ASSISTANT_RESULT_CACHE_PREFIX = 'dm_pa_backend_result_';
+var DM_PARAM_ASSISTANT_RESULT_TTL_MS = (AI_ASSISTANT_SPEC.cache && AI_ASSISTANT_SPEC.cache.backendResultTtlMs) || 45 * 60 * 1000;
 var DM_PARAM_ASSISTANT_HISTORY_TIMEOUT_MS = (AI_ASSISTANT_SPEC.cache && AI_ASSISTANT_SPEC.cache.marketHistoryTimeoutMs) || 9000;
 var DM_PARAM_ASSISTANT_DAY_MS = 24 * 60 * 60 * 1000;
 var DM_PARAM_ASSISTANT_BACKEND_START_TIMEOUT_MS = 60000;
@@ -166,11 +189,140 @@ window.loadLastCreateBotParams = loadLastCreateBotParams;
 window.saveLastCreateBotParams = saveLastCreateBotParams;
 window.createBotParamScreenStorageKey = createBotParamScreenStorageKey;
 
+function dmParamAssistantResultCacheKey(accountId, symbol, budget) {
+    var sym = dmParamAssistantNormalizeSymbol(symbol);
+    var b = Number(budget);
+    var bKey = Number.isFinite(b) ? b.toFixed(2) : '0';
+    return DM_PARAM_ASSISTANT_RESULT_CACHE_PREFIX + String(accountId || '') + '_' + sym + '_' + bKey;
+}
+
+function saveParamAssistantBackendResult(accountId, snapshot, result) {
+    if (!accountId || !result || !snapshot) return;
+    try {
+        if (!dmParamAssistantResultIsFresh(snapshot, result)) return;
+        var key = dmParamAssistantResultCacheKey(
+            accountId,
+            snapshot.symbol,
+            dmParamAssistantResolveBudget(snapshot)
+        );
+        localStorage.setItem(key, JSON.stringify({
+            ts: Date.now(),
+            symbol: dmParamAssistantNormalizeSymbol(snapshot.symbol),
+            budget: dmParamAssistantResolveBudget(snapshot),
+            result: result
+        }));
+    } catch (e) { /* ignore quota */ }
+}
+
+function loadParamAssistantBackendResult(accountId, snapshot) {
+    if (!accountId || !snapshot || !snapshot.symbol) return null;
+    try {
+        var key = dmParamAssistantResultCacheKey(
+            accountId,
+            snapshot.symbol,
+            dmParamAssistantResolveBudget(snapshot)
+        );
+        var raw = localStorage.getItem(key);
+        if (!raw) return null;
+        var parsed = JSON.parse(raw);
+        if (!parsed || !parsed.result || !parsed.ts) return null;
+        if (Date.now() - Number(parsed.ts) > DM_PARAM_ASSISTANT_RESULT_TTL_MS) {
+            localStorage.removeItem(key);
+            return null;
+        }
+        if (!dmParamAssistantResultIsFresh(snapshot, parsed.result)) return null;
+        return parsed.result;
+    } catch (e) {
+        return null;
+    }
+}
+
+window.saveParamAssistantBackendResult = saveParamAssistantBackendResult;
+window.loadParamAssistantBackendResult = loadParamAssistantBackendResult;
+
+function clearParamAssistantBackendCache(accountId, snapshot) {
+    if (!accountId) return;
+    try {
+        if (snapshot && snapshot.symbol) {
+            localStorage.removeItem(dmParamAssistantResultCacheKey(
+                accountId,
+                snapshot.symbol,
+                dmParamAssistantResolveBudget(snapshot)
+            ));
+            return;
+        }
+        var prefix = DM_PARAM_ASSISTANT_RESULT_CACHE_PREFIX + String(accountId || '') + '_';
+        for (var i = localStorage.length - 1; i >= 0; i--) {
+            var k = localStorage.key(i);
+            if (k && k.indexOf(prefix) === 0) localStorage.removeItem(k);
+        }
+    } catch (e) { /* ignore */ }
+}
+
+/** Param asistanı oturumunu sıfırla — modal kapanınca veya parametre uygulanınca. */
+function resetParamAssistantSession(opts) {
+    opts = opts || {};
+    dmParamAssistantClearTimers();
+    dmParamAssistantStopTimeProgress();
+    dmParamAssistantClearPrep();
+    if (!opts.keepApplyTimers) dmParamAssistantClearApplyTimers();
+
+    dmParamAssistantActiveBackendRun = ++dmParamAssistantBackendRunSeq;
+    dmParamAssistantTierSelectSeq++;
+    dmParamAssistantResultPresentSeq++;
+    dmParamAssistantProgressState = null;
+    dmParamAssistantTyping = false;
+    dmParamAssistantActiveJobId = '';
+    dmParamAssistantRecommendation = null;
+    dmParamAssistantLastSnapshot = null;
+    dmParamAssistantLastTierStartFn = null;
+    dmParamAssistantSetCursorVisible(false);
+    dmParamAssistantAutoScroll = true;
+    dmParamAssistantLastAutoScrollAt = 0;
+    dmParamAssistantHistoryCache = {};
+
+    if (!opts.keepAppliedSource) {
+        dmParamAssistantAppliedSource = null;
+    }
+
+    if (opts.clearCache !== false) {
+        var snap = opts.snapshot || (typeof dmParamAssistantCurrentSnapshot === 'function'
+            ? dmParamAssistantCurrentSnapshot()
+            : null);
+        if (State.accountId) clearParamAssistantBackendCache(State.accountId, snap);
+    }
+
+    dmParamAssistantClearResultPanels();
+    var output = document.getElementById('dmParamAssistantOutput');
+    var status = document.getElementById('dmParamAssistantStatus');
+    var choice = document.getElementById('dmParamAssistantChoice');
+    var chips = document.getElementById('dmParamAssistantChips');
+    if (output) {
+        output.innerHTML = '';
+        output.classList.add('is-visible');
+    }
+    if (status) {
+        status.textContent = (AI_ASSISTANT_SPEC.modal && AI_ASSISTANT_SPEC.modal.initialStatus) || '';
+    }
+    if (choice) choice.style.display = 'none';
+    if (chips) chips.innerHTML = '';
+    var assistantBody = document.querySelector('#dmParamAssistantModal .dm-param-assistant-body');
+    if (assistantBody) assistantBody.scrollTop = 0;
+}
+
+window.resetParamAssistantSession = resetParamAssistantSession;
+
 /** Param asistanı / sembol değişiminde çapraz parite state sızıntısını kes. */
 function resetParamAssistantSymbolIsolation(prevSym, newSym) {
     var n = String(newSym || "").trim().toUpperCase();
     var p = String(prevSym || "").trim().toUpperCase();
     if (!n || n === p) return;
+    if (State.accountId) {
+        if (p) clearParamAssistantBackendCache(State.accountId, { symbol: p });
+        clearParamAssistantBackendCache(State.accountId, { symbol: n });
+    }
+    if (p) delete dmParamAssistantHistoryCache[p];
+    delete dmParamAssistantHistoryCache[n];
     if (dmParamAssistantAppliedSource) {
         var srcSym = String(dmParamAssistantAppliedSource.symbol || "").trim().toUpperCase();
         if (!srcSym || srcSym !== n) dmParamAssistantAppliedSource = null;
@@ -178,6 +330,9 @@ function resetParamAssistantSymbolIsolation(prevSym, newSym) {
     if (dmParamAssistantRecommendation) {
         var recSym = String(dmParamAssistantRecommendation.symbol || "").trim().toUpperCase();
         if (!recSym || recSym !== n) dmParamAssistantRecommendation = null;
+    }
+    if (dmParamAssistantIsOpen()) {
+        resetParamAssistantSession({ keepAppliedSource: true, clearCache: false });
     }
 }
 
@@ -202,8 +357,16 @@ function applyLastCreateParamsToForm() {
         }
         if (budgetEl && (p.budget_usd != null || p.initial_capital_usdt != null)) budgetEl.value = p.budget_usd != null ? p.budget_usd : p.initial_capital_usdt;
         var alloc = p.allocation || {};
-        if (basePctEl && (alloc.base_pct != null || alloc.base_pct === 0)) basePctEl.value = alloc.base_pct;
-        if (quotePctEl && (alloc.quote_pct != null || alloc.quote_pct === 0)) quotePctEl.value = alloc.quote_pct;
+        if (basePctEl && (alloc.base_pct != null || alloc.base_pct === 0)) {
+            var upG = (p.up && p.up.grids) || [];
+            var downG = (p.down && p.down.grids) || [];
+            var normAlloc = resolveCreateFormAllocation(alloc.base_pct, alloc.quote_pct, {
+                hasBuyGrids: downG.length > 0,
+                hasSellGrids: upG.length > 0
+            });
+            basePctEl.value = normAlloc.basePct;
+            if (quotePctEl) quotePctEl.value = normAlloc.quotePct;
+        }
         var up = p.up || {};
         var down = p.down || {};
         var profit = p.profit || {};
@@ -307,6 +470,7 @@ function openCreateBotModal(botId = null, accountId = null, skipLastCreateParams
             await createAndStartBot(currentSelectedTemplate || null);
         };
     }
+    if (typeof dmParamAssistantClearAiInputStyles === 'function') dmParamAssistantClearAiInputStyles();
     
     // Reset modal title
     const titleEl = document.querySelector(".dm-modal__title");
@@ -426,7 +590,9 @@ function bindCreateBotModal() {
     document.getElementById("dmCloseBtn")?.addEventListener("click", closeCreateBotModal);
     document.getElementById("dmCancelBtn")?.addEventListener("click", closeCreateBotModal);
     document.getElementById("dmBackdrop")?.addEventListener("click", (e) => {
-        if (e.target.id === "dmBackdrop") closeCreateBotModal();
+        if (e.target.id !== "dmBackdrop") return;
+        if (dmParamAssistantIsOpen()) return;
+        closeCreateBotModal();
     });
     
     // Close triggers for bot structure modal
@@ -436,13 +602,21 @@ function bindCreateBotModal() {
     });
 
     document.getElementById("dmParamAssistantBtn")?.addEventListener("click", openParamAssistantModal);
-    document.getElementById("dmParamAssistantCloseBtn")?.addEventListener("click", function () { closeParamAssistantModal(); });
+    document.getElementById("dmParamAssistantCloseBtn")?.addEventListener("click", function () {
+        if (dmParamAssistantIsBackendRunActive()) {
+            if (!window.confirm('Parametre analizi devam ediyor. Kapatmak istediğine emin misin?')) return;
+        }
+        closeParamAssistantModal();
+    });
     document.getElementById("dmParamAssistantUseBtn")?.addEventListener("click", acceptParamAssistantRecommendation);
     document.getElementById("dmParamAssistantBackdrop")?.addEventListener("click", function (e) {
         if (e.target.id === "dmParamAssistantBackdrop") e.preventDefault();
     });
     document.getElementById("dmParamAssistantModal")?.addEventListener("click", function (e) {
-        if (e.target.id === "dmParamAssistantModal") e.preventDefault();
+        if (e.target.id === "dmParamAssistantModal") {
+            e.preventDefault();
+            e.stopPropagation();
+        }
     });
     
     // Ondalık alanlarda type=number kalmışsa virgülü noktaya çevir; text alanlarında virgül görünümü korunur.
@@ -499,6 +673,13 @@ function bindCreateBotModal() {
             const paramModal = document.getElementById("dmModal");
             const assistantModal = document.getElementById("dmParamAssistantModal");
             if (assistantModal && assistantModal.getAttribute("aria-hidden") === "false") {
+                if (dmParamAssistantIsBackendRunActive()) {
+                    if (!window.confirm('Parametre analizi devam ediyor. Kapatmak istediğine emin misin?')) {
+                        e.preventDefault();
+                        return;
+                    }
+                }
+                closeParamAssistantModal();
                 e.preventDefault();
                 return;
             } else if (structureModal && structureModal.getAttribute("aria-hidden") === "false") {
@@ -633,13 +814,13 @@ function bindCreateBotModal() {
         });
     }
     
-    // Base/Quote sync
+    // Base/Quote sync — PA forma yazarken ara input olayları quote'u bozmasın
     const fBasePct = document.getElementById("fBasePct");
     const fQuotePct = document.getElementById("fQuotePct");
     if (fBasePct && fQuotePct) {
         fBasePct.addEventListener("input", () => {
-            const baseVal = parseFloat(fBasePct.value) || 0;
-            fQuotePct.value = (100 - baseVal).toFixed(1);
+            if (dmParamAssistantApplying) return;
+            syncQuotePctFromBaseInput();
         });
     }
     
@@ -1054,6 +1235,11 @@ function updateCreateBotModalPairStrip(symbol, opts) {
     updateCreateBotModalTahmin(sym, mini, quote);
     var needTicker = sym !== _dmModalLastTickerFetchSymbol || !(price != null && Number.isFinite(price)) || (Date.now() - _dmModalTickerFetchTs) >= DM_MODAL_TAHMIN_MIN_MS;
     if (needTicker) fetchCreateBotModalTicker24h(sym, { force: sym !== _dmModalLastTickerFetchSymbol });
+    var fSymApply = document.getElementById('fSymbol');
+    if (fSymApply && sym) fSymApply.value = sym;
+    if (typeof applyLastCreateParamsToForm === 'function') {
+        setTimeout(applyLastCreateParamsToForm, 0);
+    }
     // Canlı fiyat: modal açık ve sembol seçiliyse periyodik güncelleme başlat
     if (!dmModalLivePriceIntervalId && document.getElementById('dmModal') && document.getElementById('dmModal').style.display !== 'none') {
         dmModalLivePriceIntervalId = setInterval(function () {
@@ -1221,15 +1407,69 @@ function dmParamAssistantSetApplyTimer(fn, ms) {
     return id;
 }
 
-function dmParamAssistantClearApplyTimers() {
+function dmParamAssistantClearApplyTimers(opts) {
+    opts = opts || {};
     dmParamAssistantApplyTimers.forEach(function (id) { clearTimeout(id); });
     dmParamAssistantApplyTimers = [];
-    dmParamAssistantApplying = false;
+    if (!opts.keepApplyingFlag) {
+        dmParamAssistantApplying = false;
+    }
+    if (!opts.keepFieldStyles) {
+        try {
+            document.querySelectorAll('.dm-ai-input-writing, .dm-ai-input-done').forEach(function (el) {
+                el.classList.remove('dm-ai-input-writing', 'dm-ai-input-done');
+            });
+        } catch (e) {}
+    }
+}
+
+function dmParamAssistantClearAiInputStyles() {
     try {
-        document.querySelectorAll('.dm-ai-input-writing').forEach(function (el) {
-            el.classList.remove('dm-ai-input-writing');
+        document.querySelectorAll('.dm-ai-input-writing, .dm-ai-input-done').forEach(function (el) {
+            el.classList.remove('dm-ai-input-writing', 'dm-ai-input-done');
         });
     } catch (e) {}
+}
+
+function dmParamAssistantBeginInputTyping(el) {
+    if (!el) return { finish: function () {} };
+    var wasNumber = dmParamAssistantIsNumberInput(el);
+    if (wasNumber) {
+        el.type = 'text';
+        el.setAttribute('inputmode', 'decimal');
+    }
+    el.classList.add('dm-ai-input-writing');
+    el.classList.remove('dm-ai-input-done');
+    try { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) {}
+    try { el.focus({ preventScroll: true }); } catch (e) { try { el.focus(); } catch (_) {} }
+    return {
+        finish: function (finalValue) {
+            if (wasNumber) {
+                el.value = dmParamAssistantNormalizeNumberInputValue(finalValue);
+                el.type = 'number';
+                el.removeAttribute('inputmode');
+            }
+            el.classList.remove('dm-ai-input-writing');
+            el.classList.add('dm-ai-input-done');
+        }
+    };
+}
+
+function dmParamAssistantEnsureCreateModalVisibleForApply() {
+    var modal = document.getElementById('dmModal');
+    var backdrop = document.getElementById('dmBackdrop');
+    if (!modal) return;
+    modal.setAttribute('aria-hidden', 'false');
+    modal.style.display = 'flex';
+    modal.style.pointerEvents = '';
+    if (backdrop) {
+        backdrop.setAttribute('aria-hidden', 'false');
+        backdrop.style.display = 'block';
+        backdrop.style.pointerEvents = '';
+    }
+    document.body.classList.remove('dm-param-assistant-open');
+    document.body.style.overflow = 'hidden';
+    try { modal.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (e) {}
 }
 
 function dmParamAssistantEscape(s) {
@@ -1252,11 +1492,74 @@ function dmParamAssistantRound(v, digits) {
 function dmParamAssistantInputText(v, digits) {
     var n = Number(v);
     if (!Number.isFinite(n)) n = 0;
-    return n.toFixed(digits == null ? 2 : digits).replace(/\.?0+$/, '');
+    var d = digits == null ? 2 : digits;
+    if (d === 0) return String(Math.round(n));
+    var s = n.toFixed(d);
+    if (s.indexOf('.') >= 0) {
+        s = s.replace(/0+$/, '').replace(/\.$/, '');
+    }
+    return s;
 }
 
 function dmParamAssistantInputTextTr(v, digits) {
     return dmParamAssistantInputText(v, digits).replace('.', ',');
+}
+
+/** Form dağılımı: %100 ölçeğinde, base+quote=100 (PA / önbellek / fraksiyon düzeltmesi). */
+function normalizeFormAllocationPct(basePct, quotePct) {
+    var base = Number(basePct);
+    var quote = Number(quotePct);
+    if (!Number.isFinite(base)) base = 50;
+    if (!Number.isFinite(quote)) quote = 50;
+    if (base > 0 && base <= 1 && quote > 0 && quote <= 1 && Math.abs(base + quote - 1) < 0.05) {
+        base *= 100;
+        quote *= 100;
+    }
+    var sum = base + quote;
+    if (sum > 0 && Math.abs(sum - 100) > 0.5) {
+        base = (base / sum) * 100;
+        quote = 100 - base;
+    }
+    base = Math.round(dmParamAssistantClamp(base, 0, 100) * 10) / 10;
+    quote = Math.round(dmParamAssistantClamp(100 - base, 0, 100) * 10) / 10;
+    return { basePct: base, quotePct: quote };
+}
+
+/**
+ * Bot oluşturma formu: ilk sermaye bölüşümü (spec varsayılan ~50/50).
+ * DPS ui_config.base_alloc_pct = uzun vadeli hedef exposure; forma doğrudan yazılırsa 10/90 gibi
+ * uç değerler çıkar — çift taraflı grid için dengeli banda çekilir.
+ */
+function resolveCreateFormAllocation(basePct, quotePct, opts) {
+    opts = opts || {};
+    var norm = normalizeFormAllocationPct(basePct, quotePct);
+    var base = norm.basePct;
+    var hasBuy = opts.hasBuyGrids !== false;
+    var hasSell = opts.hasSellGrids !== false;
+    var sellOnly = !!opts.sellManagementOnly;
+    var CREATE_FORM_BASE_MIN = 25;
+    var CREATE_FORM_BASE_MAX = 65;
+    var CREATE_FORM_DEFAULT = 50;
+
+    if (hasBuy && hasSell && !sellOnly) {
+        if (base < CREATE_FORM_BASE_MIN || base > CREATE_FORM_BASE_MAX) {
+            base = CREATE_FORM_DEFAULT;
+        }
+        return normalizeFormAllocationPct(base, 100 - base);
+    }
+    if (hasBuy && !hasSell && base < CREATE_FORM_BASE_MIN) {
+        base = CREATE_FORM_DEFAULT;
+        return normalizeFormAllocationPct(base, 100 - base);
+    }
+    return norm;
+}
+
+function syncQuotePctFromBaseInput() {
+    var fBasePct = document.getElementById('fBasePct');
+    var fQuotePct = document.getElementById('fQuotePct');
+    if (!fBasePct || !fQuotePct) return;
+    var baseVal = parseFloat(String(fBasePct.value).replace(',', '.')) || 0;
+    fQuotePct.value = (100 - dmParamAssistantClamp(baseVal, 0, 100)).toFixed(1);
 }
 
 function dmParamAssistantTextChunkSize() {
@@ -1265,6 +1568,41 @@ function dmParamAssistantTextChunkSize() {
 
 function dmParamAssistantInputChunkSize() {
     return document.hidden ? 2 : 1;
+}
+
+function dmParamAssistantIsNumberInput(el) {
+    return !!(el && String(el.type || '').toLowerCase() === 'number');
+}
+
+/** type=number alanlarında ondalık için nokta; karakter karakter yazım ara "31." gibi geçersiz durumları bozar. */
+function dmParamAssistantNormalizeNumberInputValue(raw) {
+    var s = String(raw == null ? '' : raw).replace(',', '.').trim();
+    var n = parseFloat(s);
+    return Number.isFinite(n) ? String(n) : s;
+}
+
+function dmParamAssistantFinalizeFormAllocation(basePct, quotePct) {
+    var fBase = document.getElementById('fBasePct');
+    var fQuote = document.getElementById('fQuotePct');
+    var baseTxt = dmParamAssistantInputText(basePct, 1);
+    var quoteTxt = dmParamAssistantInputText(quotePct, 1);
+    if (fBase) fBase.value = baseTxt;
+    if (fQuote) fQuote.value = quoteTxt;
+    dmParamAssistantDispatch(fBase, 'input');
+    dmParamAssistantDispatch(fQuote, 'input');
+}
+
+function dmParamAssistantAllocationForApply(rec) {
+    var ui = (rec.backend && rec.backend.ui_config) || {};
+    var allocDisp = rec.allocationDisplay || ui.allocation_display || {};
+    var strat = allocDisp.strategic_target || {};
+    var baseRaw = strat.base_pct != null ? strat.base_pct : rec.basePct;
+    var quoteRaw = strat.quote_pct != null ? strat.quote_pct : rec.quotePct;
+    return resolveCreateFormAllocation(baseRaw, quoteRaw, {
+        hasBuyGrids: rec.downGrids && rec.downGrids.length > 0,
+        hasSellGrids: rec.upGrids && rec.upGrids.length > 0,
+        sellManagementOnly: !!rec.sellManagementOnly
+    });
 }
 
 function dmParamAssistantDisplayPct(v, digits) {
@@ -1304,6 +1642,20 @@ function dmParamAssistantNormalizeQtys(qtys) {
         scaled[idx] = Math.round((scaled[idx] + drift) * 10) / 10;
     }
     return scaled;
+}
+
+function dmParamAssistantSnapshotMatchesCurrent(snapshot) {
+    if (!snapshot) return false;
+    var cur = dmParamAssistantCurrentSnapshot();
+    var snapSym = dmParamAssistantNormalizeSymbol(snapshot.symbol);
+    var curSym = dmParamAssistantNormalizeSymbol(cur.symbol);
+    if (!snapSym || !curSym || snapSym !== curSym) return false;
+    var snapBudget = dmParamAssistantResolveBudget(snapshot);
+    var curBudget = dmParamAssistantResolveBudget(cur);
+    if (snapBudget != null && curBudget != null && Math.abs(Number(snapBudget) - Number(curBudget)) > 0.01) {
+        return false;
+    }
+    return true;
 }
 
 function dmParamAssistantCurrentSnapshot() {
@@ -2111,8 +2463,27 @@ function dmParamAssistantWindowText(metric) {
         ', maks. geri çekilme ' + dmParamAssistantMetricPct(metric.maxDrawdownPct, 2, { noSign: true });
 }
 
+function dmParamAssistantIsV6Result(backend) {
+    var r = backend || {};
+    var tel = r.telemetry || {};
+    var sel = r.selection_telemetry || {};
+    if (tel.v6_display || tel.pool_version === 'v6') return true;
+    if (sel.pool_version === 'v6') return true;
+    var ui = r.ui_config || {};
+    if (ui.profile_display && String(ui.profile_display).indexOf('DPLV6_') === 0) return true;
+    if (r.profile_tile_label === 'V6 Profil Kimliği') return true;
+    return false;
+}
+
+function dmParamAssistantProfileTileLabel(backend) {
+    if (backend && backend.profile_tile_label) return backend.profile_tile_label;
+    if (dmParamAssistantIsV6Result(backend)) return 'V6 Profil Kimliği';
+    return 'Raf (V5)';
+}
+
 function dmParamAssistantCoverageText(analysis) {
     if (!analysis) return 'sınırlı';
+    if (analysis.v6DataQualityLabel) return analysis.v6DataQualityLabel;
     if (analysis.coverage >= 0.82) return 'çok güçlü';
     if (analysis.coverage >= 0.58) return 'yeterli';
     if (analysis.coverage >= 0.34) return 'orta';
@@ -2229,6 +2600,14 @@ function dmParamAssistantAttrEscape(s) {
 }
 
 var DM_PA_REGIME_TR = {
+    R1: 'Güçlü yükseliş trendi',
+    R2: 'Dengeli aralık',
+    R3: 'Zayıf / gürültülü aralık',
+    R4: 'Volatil aralık',
+    R5: 'Toparlanma',
+    R6: 'Tepe / dağılım / zayıflama',
+    R7: 'Düşüş trendi',
+    R8: 'Crash / sert düşüş',
     NO_DATA: 'Veri yetersiz',
     NO_TRADE: 'İşlem için uygun değil',
     DUMP_RISK: 'Sert düşüş riski',
@@ -2251,16 +2630,42 @@ var DM_PA_RISK_TR = {
     BLOCKED: 'Engelli'
 };
 
+var DM_PA_V6_MARKET_STATUS = {
+    R1: 'Fiyat yükseliş trendinde, aktif fırsat var',
+    R2: 'Fiyat yatay bölgede, iki yönlü fırsat var',
+    R3: 'Fiyat gürültülü aralıkta, temkinli grid kullanılıyor',
+    R4: 'Fiyat sert dalgalanıyor, gridler geniş tutuldu',
+    R5: 'Toparlanma başlıyor, kontrollü alım fırsatı var',
+    R6: 'Fiyat tepede, geri çekilme riski var',
+    R7: 'Düşüş trendi var, savunmacı mod aktif',
+    R8: 'Sert düşüş var, yüksek riskli savunmacı mod'
+};
+
+var DM_PA_RISK_TONE_PLAIN = {
+    'Kontrollü savunmacı': 'Temkinli strateji',
+    'Savunmacı': 'Temkinli strateji',
+    'Normal': 'Dengeli strateji',
+    'Aktif': 'Aktif strateji',
+    'DEFENSIVE': 'Temkinli strateji',
+    'NORMAL': 'Dengeli strateji',
+    'CAUTION': 'Temkinli strateji',
+    'AGGRESSIVE': 'Aktif strateji',
+    'SAFE': 'Güvenli strateji',
+    'BLOCKED': 'İşlem kapalı'
+};
+
 var DM_PA_CHIP_TIPS = {
     'Parite': 'Analiz edilen spot işlem çifti.',
     'Parametre çalışma skoru': 'Piyasa verisi, likidite, spread ve grid uygunluğunun birleşik skoru (0–100).',
-    'Rejim': 'Motorun sınıflandırdığı piyasa rejimi; grid agresifliğini belirler.',
+    'Piyasa durumu': 'Motorun okuduğu piyasa özeti; botun neden temkinli veya aktif davrandığını anlatır.',
+    'Rejim': 'Teknik rejim kodu; ayrıntılar panelinde gösterilir.',
     'Risk': 'Kısa vadeli downside risk durumu; NORMAL iken savunmacı mod zorunlu değildir.',
     'Karar': 'Bu koşulda canlıya uygulanacak nihai aksiyon.',
     'Piyasa güven skoru': 'Kararın veri kalitesi ve sinyal tutarlılığına dayalı güven skoru.',
     'Seçilen raf uyum skoru': 'Seçilen V5 rafının route imzası ve senaryo uyum skoru.',
     'Grid': 'Önerilen alış ve satış grid kademe sayısı.',
     'Raf (V5)': '192.780 raflı V5 kütüphaneden exact lookup ile seçilen DPLV5 shelf anahtarı.',
+    'V6 Profil Kimliği': 'V6 katalogdan seçilen DPLV6 profil kimliği.',
     'Profil': 'V5 kütüphaneden seçilen raf (DPLV5 shelf ID).'
 };
 
@@ -2269,13 +2674,103 @@ function dmParamAssistantRegimeLabel(tag) {
     return DM_PA_REGIME_TR[key] || tag || '—';
 }
 
-function dmParamAssistantRiskLabel(risk) {
+function dmParamAssistantFormatConfidencePct(score) {
+    if (score == null || score === '' || score === '—') return '—';
+    var n = Number(score);
+    if (!isFinite(n)) return '—';
+    return '%' + Math.round(n);
+}
+
+function dmParamAssistantMarketStatusPlain(rec) {
+    var r = (rec && rec.backend) || rec || {};
+    var ui = r.ui_config || {};
+    if (ui.market_status_plain) return ui.market_status_plain;
+    if (r.market_status_plain) return r.market_status_plain;
+    var align = (r.telemetry && r.telemetry.scenario_alignment) || ui.scenario_alignment || {};
+    if (align.regime_label_plain) return align.regime_label_plain;
+    var v6d = (r.telemetry && r.telemetry.v6_display) || {};
+    if (v6d.market_status_plain) return v6d.market_status_plain;
+    var regime = String(r.regime_tag || (rec && rec.regime) || '').toUpperCase();
+    if (DM_PA_V6_MARKET_STATUS[regime]) return DM_PA_V6_MARKET_STATUS[regime];
+    return dmParamAssistantRegimeLabel(regime) || 'Piyasa koşulları analiz edildi';
+}
+
+function dmParamAssistantRiskTonePlain(rec) {
+    var r = (rec && rec.backend) || rec || {};
+    var ui = r.ui_config || {};
+    if (ui.risk_tone_plain) return ui.risk_tone_plain;
+    if (r.risk_tone_plain) return r.risk_tone_plain;
+    var v6d = (r.telemetry && r.telemetry.v6_display) || {};
+    if (v6d.risk_tone_plain) return v6d.risk_tone_plain;
+    var raw = dmParamAssistantRiskLabel(
+        ui.effective_risk_state || r.effective_risk_state || r.risk_state || (rec && rec.riskState),
+        r
+    );
+    return DM_PA_RISK_TONE_PLAIN[raw] || DM_PA_RISK_TONE_PLAIN[String(raw || '').toUpperCase()] || raw || 'Temkinli strateji';
+}
+
+function dmParamAssistantRegimeTechnicalLabel(rec) {
+    var r = (rec && rec.backend) || rec || {};
+    var ui = r.ui_config || {};
+    if (ui.display_regime_technical) return ui.display_regime_technical;
+    if (r.display_regime_technical) return r.display_regime_technical;
+    var align = (r.telemetry && r.telemetry.scenario_alignment) || ui.scenario_alignment || {};
+    if (align.regime_label) return align.regime_label;
+    var v6d = (r.telemetry && r.telemetry.v6_display) || {};
+    if (v6d.display_regime_technical) return v6d.display_regime_technical;
+    var scen = v6d.scenario_identity || {};
+    if (scen.name) return scen.name;
+    return ui.display_regime_label || r.display_regime_label || '';
+}
+
+function dmParamAssistantRiskLabel(risk, backend) {
+    if (backend) {
+        if (backend.risk_display_label) return backend.risk_display_label;
+        var tel = backend.telemetry || {};
+        var v6d = tel.v6_display || {};
+        if (v6d.risk_display_label) return v6d.risk_display_label;
+    }
     var key = String(risk || '').toUpperCase();
     return DM_PA_RISK_TR[key] || risk || '—';
 }
 
-function dmParamAssistantMakeTile(label, value, tip) {
-    return { label: label, value: value, tip: tip || '' };
+function dmParamAssistantMakeTile(label, value, tip, opts) {
+    opts = opts || {};
+    return { label: label, value: value, tip: tip || '', mono: opts.mono === true };
+}
+
+function dmParamAssistantExactShelfId(r) {
+    r = r || {};
+    if (r.exact_shelf_id) return String(r.exact_shelf_id);
+    var tel = r.telemetry || {};
+    var sel = r.selection_telemetry || tel.param_pool || {};
+    var v6d = tel.v6_display || {};
+    if (dmParamAssistantIsV6Result(r)) {
+        return (
+            r.v6_catalog_profile_id ||
+            v6d.catalog_profile_id ||
+            sel.catalog_profile_id ||
+            r.selected_profile ||
+            (tel.v6_final && tel.v6_final.catalog_profile_id) ||
+            '—'
+        );
+    }
+    var ctx = sel.selection_context || {};
+    return ctx.v5_shelf_id || sel.selected_template_key || r.selected_profile || '—';
+}
+
+function dmParamAssistantFinalShelfId(r) {
+    r = r || {};
+    var tel = r.telemetry || {};
+    var sel = r.selection_telemetry || tel.param_pool || {};
+    var v6d = tel.v6_display || {};
+    return (
+        r.v6_final_profile_id ||
+        v6d.final_profile_id ||
+        sel.final_profile_id ||
+        (tel.v6_final && tel.v6_final.final_profile_id) ||
+        ''
+    );
 }
 
 function dmParamAssistantRenderTileHtml(tile) {
@@ -2289,25 +2784,416 @@ function dmParamAssistantRegimeSlug(tag) {
     return String(tag || 'unknown').toLowerCase().replace(/[^a-z0-9]+/g, '_');
 }
 
+function dmParamAssistantRegimeSlugForRec(rec) {
+    var r = (rec && rec.backend) || {};
+    if (dmParamAssistantIsV6Result(r)) {
+        var rid = String(r.regime_tag || (((r.telemetry || {}).v6_display || {}).scenario_identity || {}).regime_id || '').toLowerCase();
+        if (/^r[1-8]$/.test(rid)) return rid;
+    }
+    return dmParamAssistantRegimeSlug(r.regime_tag || (rec && rec.regime));
+}
+
+function dmParamAssistantV6GridPlanPlain(rec) {
+    var r = (rec && rec.backend) || {};
+    var v6d = (r.telemetry && r.telemetry.v6_display) || {};
+    if (v6d.grid_plan_plain) return v6d.grid_plan_plain;
+    var buy = (v6d.buy_grid_distances_pct || []).map(function (d) { return '-' + Math.abs(Number(d)) + '%'; }).join(' / ');
+    var sell = (v6d.sell_grid_distances_pct || []).map(function (d) { return '+' + Number(d) + '%'; }).join(' / ');
+    if (!buy && !sell) return 'Grid kapalı';
+    if (!buy) return 'Alış kapalı · Satış ' + sell;
+    if (!sell) return 'Alış ' + buy + ' · Satış kapalı';
+    return 'Alış ' + buy + ' · Satış ' + sell;
+}
+
+function dmParamAssistantRenderV6GridChips(rec) {
+    var r = (rec && rec.backend) || {};
+    var v6d = (r.telemetry && r.telemetry.v6_display) || {};
+    var chips = v6d.grid_plan_chips || {};
+    var buyList = chips.buy || (v6d.buy_grid_distances_pct || []).map(function (d) { return '-' + Math.abs(Number(d)) + '%'; });
+    var sellList = chips.sell || (v6d.sell_grid_distances_pct || []).map(function (d) { return '+' + Number(d) + '%'; });
+    var html = '<div class="dm-pa-grid-ladder">';
+    html += '<div class="dm-pa-grid-ladder-col dm-pa-grid-ladder-col--buy">';
+    html += '<span class="dm-pa-grid-ladder-label">Alış</span>';
+    if (!buyList.length || chips.buy_closed) {
+        html += '<span class="dm-pa-grid-chip dm-pa-grid-chip--muted">Kapalı</span>';
+    } else {
+        buyList.forEach(function (t, i) {
+            html += '<span class="dm-pa-grid-chip dm-pa-grid-chip--buy" style="--chip-i:' + i + '">' + dmParamAssistantEscape(t) + '</span>';
+        });
+    }
+    html += '</div>';
+    html += '<div class="dm-pa-grid-ladder-col dm-pa-grid-ladder-col--sell">';
+    html += '<span class="dm-pa-grid-ladder-label">Satış</span>';
+    if (!sellList.length || chips.sell_closed) {
+        html += '<span class="dm-pa-grid-chip dm-pa-grid-chip--muted">Kapalı</span>';
+    } else {
+        sellList.forEach(function (t, i) {
+            html += '<span class="dm-pa-grid-chip dm-pa-grid-chip--sell" style="--chip-i:' + i + '">' + dmParamAssistantEscape(t) + '</span>';
+        });
+    }
+    html += '</div></div>';
+    return html;
+}
+
+function dmParamAssistantRenderV6StrategyHero(rec) {
+    var r = (rec && rec.backend) || {};
+    if (!dmParamAssistantIsV6Result(r)) return '';
+    var tel = r.telemetry || {};
+    var v6d = tel.v6_display || {};
+    var scen = v6d.scenario_identity || {};
+    var regimeId = String(r.regime_tag || scen.regime_id || '');
+    var headline = v6d.regime_headline || (regimeId + ' · ' + dmParamAssistantRegimeLabel(regimeId));
+    var status = v6d.market_status_plain || dmParamAssistantMarketStatusPlain(rec);
+    var riskTone = v6d.risk_tone_plain || dmParamAssistantRiskTonePlain(rec);
+    var why = v6d.regime_strategy_why || status;
+    var gridSummary = v6d.grid_strategy_plain || dmParamAssistantV6GridPlanPlain(rec);
+    var profitLoop = v6d.profit_loop_plain || '';
+    var opMode = v6d.operational_mode_plain || '';
+    var base = v6d.base_allocation_pct != null ? v6d.base_allocation_pct : rec.basePct;
+    var quote = v6d.quote_allocation_pct != null ? v6d.quote_allocation_pct : rec.quotePct;
+    var behavior = v6d.behavior_id || scen.behavior_id || '—';
+    var severity = v6d.severity || scen.severity || '—';
+    var work = tel.workability_score_1w;
+    var score = r.param_score != null ? r.param_score : rec.paramScore;
+    var slug = dmParamAssistantRegimeSlugForRec(rec);
+    var btcCtx = v6d.btc_context || {};
+    var html = '<section class="dm-pa-v6-hero dm-pa-regime--' + dmParamAssistantEscape(slug) + ' dm-pa-summary-reveal">';
+    html += '<div class="dm-pa-v6-hero-glow" aria-hidden="true"></div>';
+    html += '<div class="dm-pa-v6-hero-top">';
+    html += '<span class="dm-pa-v6-regime-badge">' + dmParamAssistantEscape(regimeId || 'V6') + '</span>';
+    html += '<div class="dm-pa-v6-hero-titles">';
+    html += '<h3 class="dm-pa-v6-hero-title">' + dmParamAssistantEscape(headline) + '</h3>';
+    html += '<p class="dm-pa-v6-hero-sub">' + dmParamAssistantEscape(status) + '</p>';
+    html += '</div>';
+    html += '<div class="dm-pa-v6-hero-score"><span>Parametre skoru</span><strong>' + dmParamAssistantEscape(String(score != null ? score : '—')) + '</strong></div>';
+    html += '</div>';
+    html += '<div class="dm-pa-v6-why-card">';
+    html += '<span class="dm-pa-v6-why-label">Neden bu rejim?</span>';
+    html += '<p class="dm-pa-v6-hero-why">' + dmParamAssistantEscape(why) + '</p>';
+    html += '</div>';
+    html += '<div class="dm-pa-v6-grid-block">';
+    html += '<div class="dm-pa-v6-grid-block-head"><span>Grid planı</span><em>' + dmParamAssistantEscape(gridSummary) + '</em></div>';
+    html += dmParamAssistantRenderV6GridChips(rec);
+    html += '</div>';
+    if (profitLoop) {
+        html += '<div class="dm-pa-v6-profit-loop"><span>Kâr döngüsü</span><p>' + dmParamAssistantEscape(profitLoop) + '</p></div>';
+    }
+    html += '<div class="dm-pa-v6-hero-meta">';
+    html += '<span class="dm-pa-v6-meta-pill"><em>Dağılım</em> Coin %' + dmParamAssistantInputTextTr(base, 0) + ' · USDT %' + dmParamAssistantInputTextTr(quote, 0) + '</span>';
+    html += '<span class="dm-pa-v6-meta-pill"><em>Davranış</em> ' + dmParamAssistantEscape(behavior) + ' · ' + dmParamAssistantEscape(severity) + '</span>';
+    html += '<span class="dm-pa-v6-meta-pill"><em>Risk</em> ' + dmParamAssistantEscape(riskTone) + '</span>';
+    if (opMode) {
+        html += '<span class="dm-pa-v6-meta-pill dm-pa-v6-meta-pill--ok"><em>Mod</em> ' + dmParamAssistantEscape(opMode) + '</span>';
+    }
+    if (btcCtx.class) {
+        html += '<span class="dm-pa-v6-meta-pill"><em>BTC</em> ' + dmParamAssistantEscape(String(btcCtx.class)) +
+            (btcCtx.delta_multiplier != null ? ' · çarpan ' + dmParamAssistantEscape(String(btcCtx.delta_multiplier)) : '') + '</span>';
+    }
+    if (work != null) {
+        html += '<span class="dm-pa-v6-meta-pill"><em>1 hafta çalışabilirlik</em> ' + dmParamAssistantEscape(String(work)) + '/100</span>';
+    }
+    html += '</div></section>';
+    return html;
+}
+
+function dmParamAssistantStaggerReveal(root, selector, baseDelayMs, stepMs) {
+    if (!root || !root.querySelectorAll) return;
+    var delay = baseDelayMs || 0;
+    var step = stepMs != null ? stepMs : 55;
+    root.querySelectorAll(selector).forEach(function (node, idx) {
+        node.classList.add('dm-pa-summary-reveal');
+        node.style.animationDelay = (delay + idx * step) + 'ms';
+    });
+}
+
+function dmParamAssistantCountUsedIndicators(ind) {
+    ind = ind || {};
+    var n = 0;
+    DM_PA_INDICATOR_GROUPS.forEach(function (group) {
+        group.keys.forEach(function (key) {
+            var v = ind[key];
+            if (v != null && v !== '') n++;
+        });
+    });
+    return n;
+}
+
+function dmParamAssistantCountCandles(ind) {
+    ind = ind || {};
+    return (Number(ind.candle_count_5m) || 0) + (Number(ind.candle_count_15m) || 0) + (Number(ind.candle_count_1h) || 0);
+}
+
+function dmParamAssistantBuildRichNarrative(snapshot, rec) {
+    var sym = snapshot.symbol || 'bu parite';
+    var name = dmParamAssistantCurrentUserName(snapshot);
+    var r = (rec && rec.backend) || {};
+    var tel = r.telemetry || {};
+    var ind = tel.indicators || {};
+    var v6d = tel.v6_display || {};
+    var regimeId = String(r.regime_tag || (v6d.scenario_identity && v6d.scenario_identity.regime_id) || '').toUpperCase();
+    var regimeTitle = (v6d.regime_headline || dmParamAssistantRegimeLabel(regimeId)).replace(/ · .+$/, '');
+    var status = v6d.market_status_plain || dmParamAssistantMarketStatusPlain(rec);
+    var indicatorN = dmParamAssistantCountUsedIndicators(ind);
+    var candleN = dmParamAssistantCountCandles(ind);
+    var base = v6d.base_allocation_pct != null ? v6d.base_allocation_pct : rec.basePct;
+    var quote = v6d.quote_allocation_pct != null ? v6d.quote_allocation_pct : rec.quotePct;
+    var score = r.param_score != null ? r.param_score : rec.paramScore;
+    var buyN = (rec.downGrids && rec.downGrids.length) || 0;
+    var sellN = (rec.upGrids && rec.upGrids.length) || 0;
+    var budget = rec.budget != null ? dmParamAssistantInputTextTr(rec.budget, 0) + ' USDT' : '';
+    var parts = [];
+    parts.push('Merhaba ' + name + '. ' + sym + ' için ' + candleN + ' mum verisi ve ' + indicatorN + ' canlı göstergeyi birlikte okudum.');
+    parts.push(regimeTitle + ' — ' + status);
+    parts.push('Bu tabloda risk ve fırsat skorlarını dengeleyerek coin %' + base + ' · USDT %' + quote + ' dağılımı ve ' + buyN + ' alış + ' + sellN + ' satış seviyesi öneriyorum.');
+    if (budget) parts.push('Bütçe ' + budget + ' üzerinden her emrin borsada çalışabilir kalmasına dikkat ettim.');
+    if (v6d.profit_loop_plain || (rec.rebuyTrigger && rec.rebuyTrigger > 0)) {
+        parts.push('Satış sonrası geri alım ve yeniden yükselişte kar satış döngüsü de açık — grid dışında ek kazanç fırsatı için.');
+    }
+    parts.push('Uygunluk skoru ' + (score != null ? score : '—') + '/100. Bu öneri bugünkü veriye dayanır; geleceği garanti etmez, piyasa değişince yeniden kontrol edilmelidir.');
+    return parts.join(' ');
+}
+
+function dmParamAssistantRegimePlainStory(rec) {
+    var r = (rec && rec.backend) || {};
+    var v6d = (r.telemetry && r.telemetry.v6_display) || {};
+    var regimeId = String(r.regime_tag || (v6d.scenario_identity && v6d.scenario_identity.regime_id) || '').toUpperCase();
+    return DM_PA_REGIME_PLAIN_STORY[regimeId] || v6d.market_status_plain || dmParamAssistantMarketStatusPlain(rec);
+}
+
+function dmParamAssistantBuildUserParamGroups(rec) {
+    var map = dmParamAssistantBuildParamTileMap(rec);
+    return DM_PA_PARAM_GROUPS_USER.map(function (group) {
+        var rows = [];
+        group.keys.forEach(function (key) {
+            if (map[key]) rows.push(map[key]);
+        });
+        return { title: group.title, rows: rows };
+    }).filter(function (group) { return group.rows.length > 0; });
+}
+
+function dmParamAssistantRenderRegimeStoryCard(rec) {
+    var r = (rec && rec.backend) || {};
+    if (!dmParamAssistantIsV6Result(r)) {
+        return dmParamAssistantRenderRegimeBanner(rec);
+    }
+    var tel = r.telemetry || {};
+    var v6d = tel.v6_display || {};
+    var scen = v6d.scenario_identity || {};
+    var regimeId = String(r.regime_tag || scen.regime_id || '');
+    var headline = (v6d.regime_headline || (regimeId + ' · ' + dmParamAssistantRegimeLabel(regimeId))).split(' · ')[1] || dmParamAssistantRegimeLabel(regimeId);
+    var status = v6d.market_status_plain || dmParamAssistantMarketStatusPlain(rec);
+    var story = dmParamAssistantRegimePlainStory(rec);
+    var base = v6d.base_allocation_pct != null ? v6d.base_allocation_pct : rec.basePct;
+    var quote = v6d.quote_allocation_pct != null ? v6d.quote_allocation_pct : rec.quotePct;
+    var buyN = (rec.downGrids && rec.downGrids.length) || 0;
+    var sellN = (rec.upGrids && rec.upGrids.length) || 0;
+    var opMode = v6d.operational_mode_plain || 'İki yönlü grid';
+    var buyDisabled = r.ui_config && r.ui_config.buy_disabled === true;
+    var allocNote = (buyDisabled || buyN === 0) && sellN > 0
+        ? 'yeni alış kapalı, satış ve kontrollü kâr döngüsü aktif'
+        : 'iki bacak da işlem yapabilir';
+    var score = r.param_score != null ? r.param_score : rec.paramScore;
+    var slug = dmParamAssistantRegimeSlugForRec(rec);
+    var html = '<section class="dm-pa-regime-story dm-pa-regime--' + dmParamAssistantEscape(slug) + ' dm-pa-summary-reveal">';
+    html += '<div class="dm-pa-story-glow" aria-hidden="true"></div>';
+    html += '<div class="dm-pa-story-head">';
+    html += '<span class="dm-pa-story-badge">' + dmParamAssistantEscape(regimeId || '—') + '</span>';
+    html += '<div class="dm-pa-story-titles"><h3 class="dm-pa-story-title">' + dmParamAssistantEscape(headline) + '</h3>';
+    html += '<p class="dm-pa-story-lead">' + dmParamAssistantEscape(status) + '</p></div>';
+    html += '<div class="dm-pa-story-score" title="Parametre uygunluk skoru"><span>Skor</span><strong>' + dmParamAssistantEscape(String(score != null ? score : '—')) + '</strong></div>';
+    html += '</div>';
+    html += '<div class="dm-pa-story-body dm-pa-summary-reveal"><p>' + dmParamAssistantEscape(story) + '</p>';
+    html += '<ul class="dm-pa-story-points">';
+    html += '<li class="dm-pa-story-row dm-pa-summary-reveal">Coin %' + dmParamAssistantInputTextTr(base, 0) + ' · USDT %' + dmParamAssistantInputTextTr(quote, 0) + ' — ' + dmParamAssistantEscape(allocNote) + '</li>';
+    html += '<li class="dm-pa-story-row dm-pa-summary-reveal">' + buyN + ' alış · ' + sellN + ' satış seviyesi · ' + dmParamAssistantEscape(opMode) + '</li>';
+    if (v6d.profit_loop_plain) {
+        html += '<li class="dm-pa-story-row dm-pa-summary-reveal">' + dmParamAssistantEscape(v6d.profit_loop_plain) + '</li>';
+    }
+    html += '</ul></div>';
+    html += '<div class="dm-pa-story-grid dm-pa-summary-reveal">';
+    html += dmParamAssistantRenderV6GridChips(rec);
+    html += '</div></section>';
+    return html;
+}
+
+function dmParamAssistantRenderUserParamsHtml(rec) {
+    var groups = dmParamAssistantBuildUserParamGroups(rec);
+    if (!groups.length) return '';
+    var html = '<section class="dm-pa-params-card dm-pa-summary-reveal"><h4 class="dm-pa-params-card-title">Önerilen parametreler</h4>';
+    groups.forEach(function (group) {
+        if (group.title) {
+            html += '<div class="dm-pa-param-group-title dm-pa-summary-reveal">' + dmParamAssistantEscape(group.title) + '</div>';
+        }
+        html += '<div class="dm-pa-param-list">';
+        (group.rows || []).forEach(function (tile) {
+            var rowCls = 'dm-pa-param-row dm-pa-param-row-ai dm-pa-summary-reveal' + (tile.mono ? ' dm-pa-param-row--code' : '');
+            html += '<div class="' + rowCls + '">' +
+                '<span>' + dmParamAssistantEscape(tile.label) + '</span>' +
+                '<strong>' + dmParamAssistantEscape(tile.value) + '</strong></div>';
+        });
+        html += '</div>';
+    });
+    html += '</section>';
+    return html;
+}
+
+function dmParamAssistantDataGroupSlug(title) {
+    var t = String(title || '').toLowerCase();
+    if (t.indexOf('trend') >= 0 || t.indexOf('momentum') >= 0) return 'trend';
+    if (t.indexOf('volatil') >= 0 || t.indexOf('aralık') >= 0) return 'vol';
+    if (t.indexOf('getiri') >= 0) return 'risk';
+    if (t.indexOf('likid') >= 0 || t.indexOf('ücret') >= 0) return 'liq';
+    if (t.indexOf('btc') >= 0) return 'btc';
+    if (t.indexOf('veri') >= 0) return 'data';
+    return 'misc';
+}
+
+function dmParamAssistantDataGroupIcon(slug) {
+    var icons = { trend: '↗', vol: '〰', risk: '⚡', liq: '◆', btc: '₿', data: '◎', misc: '·' };
+    return icons[slug] || '·';
+}
+
+function dmParamAssistantDataTileTone(label, value) {
+    var s = String(value || '').trim();
+    var l = String(label || '').toLowerCase();
+    if (s === 'Evet') return 'yes';
+    if (s === 'Hayır') return 'no';
+    if (l.indexOf('getiri') >= 0 || l.indexOf('roc') >= 0 || l.indexOf('eğim') >= 0 ||
+        (l.indexOf('btc') >= 0 && l.indexOf('1s') + l.indexOf('4s') + l.indexOf('24s') >= 0)) {
+        if (s.charAt(0) === '+') return 'up';
+        if (s.charAt(0) === '-' && s !== '—') return 'down';
+    }
+    if (l.indexOf('fiyat vs') >= 0) {
+        if (s.charAt(0) === '+') return 'up';
+        if (s.charAt(0) === '-') return 'down';
+    }
+    if (l.indexOf('crash') >= 0 || l.indexOf('dd ') >= 0) {
+        var n = parseFloat(s.replace(',', '.').replace(/[^0-9.-]/g, ''));
+        if (Number.isFinite(n) && Math.abs(n) > 3) return 'down';
+    }
+    if (l.indexOf('spread') >= 0) {
+        var sp = parseFloat(s.replace(',', '.').replace(/[^0-9.-]/g, ''));
+        if (Number.isFinite(sp) && sp > 0.08) return 'warn';
+    }
+    return 'neutral';
+}
+
+function dmParamAssistantParseScorePct(value) {
+    var m = String(value || '').match(/(\d+)\s*\/\s*100/);
+    if (m) return Math.min(100, Math.max(0, parseInt(m[1], 10)));
+    var n = parseInt(String(value || '').replace(/\D/g, ''), 10);
+    return Number.isFinite(n) ? Math.min(100, Math.max(0, n)) : null;
+}
+
+function dmParamAssistantScoreBarClass(pct) {
+    if (pct == null) return 'mid';
+    if (pct >= 75) return 'high';
+    if (pct >= 45) return 'mid';
+    return 'low';
+}
+
+function dmParamAssistantRenderDataTileHtml(tile) {
+    if (!tile) return '';
+    var tone = dmParamAssistantDataTileTone(tile.label, tile.value);
+    return '<div class="dm-pa-data-tile dm-pa-data-tile--' + tone + ' dm-pa-summary-reveal">' +
+        '<span class="dm-pa-data-tile-label">' + dmParamAssistantEscape(tile.label) + '</span>' +
+        '<strong class="dm-pa-data-tile-val">' + dmParamAssistantEscape(tile.value) + '</strong></div>';
+}
+
+function dmParamAssistantRenderScoreRowHtml(tile) {
+    if (!tile) return '';
+    var pct = dmParamAssistantParseScorePct(tile.value);
+    var barCls = dmParamAssistantScoreBarClass(pct);
+    var display = pct != null ? String(pct) : String(tile.value || '—').replace(/\/100$/, '');
+    return '<div class="dm-pa-score-row dm-pa-score-row--' + barCls + ' dm-pa-summary-reveal">' +
+        '<div class="dm-pa-score-row-head">' +
+        '<span class="dm-pa-score-row-label">' + dmParamAssistantEscape(tile.label) + '</span>' +
+        '<span class="dm-pa-score-row-dots" aria-hidden="true"></span>' +
+        '<strong class="dm-pa-score-row-val">' + dmParamAssistantEscape(display) + '</strong>' +
+        '</div>' +
+        (pct != null
+            ? '<div class="dm-pa-score-row-bar" role="presentation"><div class="dm-pa-score-row-bar-fill" style="width:' + pct + '%"></div></div>'
+            : '') +
+        '</div>';
+}
+
+function dmParamAssistantRenderDataCardsHtml(rec) {
+    if (!rec || !rec.backend) return '';
+    var sections = dmParamAssistantBackendSummarySections(rec);
+    var html = '<div class="dm-pa-data-wrap">';
+    if (sections.indicators && sections.indicators.groups && sections.indicators.groups.length) {
+        html += '<section class="dm-pa-data-panel dm-pa-data-panel--market dm-pa-summary-reveal">';
+        html += '<header class="dm-pa-data-panel-head"><span class="dm-pa-data-panel-icon">◈</span>';
+        html += '<h4 class="dm-pa-data-panel-title">Piyasa verileri</h4></header>';
+        html += '<div class="dm-pa-data-panel-body">';
+        sections.indicators.groups.forEach(function (group, gi) {
+            if (!group.rows || !group.rows.length) return;
+            var slug = dmParamAssistantDataGroupSlug(group.title);
+            html += '<div class="dm-pa-data-group-card dm-pa-data-group-card--' + slug + ' dm-pa-summary-reveal" style="--dm-group-i:' + gi + '">';
+            html += '<div class="dm-pa-data-group-head">';
+            html += '<span class="dm-pa-data-group-icon" aria-hidden="true">' + dmParamAssistantDataGroupIcon(slug) + '</span>';
+            html += '<span class="dm-pa-data-group-title">' + dmParamAssistantEscape(group.title || '') + '</span>';
+            html += '<span class="dm-pa-data-group-count">' + group.rows.length + '</span>';
+            html += '</div>';
+            html += '<div class="dm-pa-data-grid">';
+            group.rows.forEach(function (tile) {
+                html += dmParamAssistantRenderDataTileHtml(tile);
+            });
+            html += '</div></div>';
+        });
+        html += '</div></section>';
+    }
+    if (sections.sub_scores && sections.sub_scores.groups && sections.sub_scores.groups.length) {
+        html += '<section class="dm-pa-data-panel dm-pa-data-panel--scores dm-pa-summary-reveal">';
+        html += '<header class="dm-pa-data-panel-head"><span class="dm-pa-data-panel-icon">◉</span>';
+        html += '<h4 class="dm-pa-data-panel-title">Motor değerlendirmesi</h4></header>';
+        html += '<div class="dm-pa-score-list">';
+        sections.sub_scores.groups.forEach(function (group) {
+            (group.rows || []).forEach(function (tile) {
+                html += dmParamAssistantRenderScoreRowHtml(tile);
+            });
+        });
+        html += '</div></section>';
+    }
+    html += '</div>';
+    return html;
+}
+
+function dmParamAssistantWrapIntroAsRichBox() {
+    var block = document.querySelector('#dmParamAssistantModal .dm-pa-intro-block');
+    var status = document.getElementById('dmParamAssistantStatus');
+    if (block) block.classList.add('dm-pa-intro-block--rich');
+    if (status) status.classList.add('dm-pa-status--complete');
+}
+
 function dmParamAssistantRenderRegimeBanner(rec) {
     var r = rec.backend || {};
     var ui = r.ui_config || {};
-    var label = ui.display_regime_label || r.display_regime_label || dmParamAssistantRegimeLabel(r.regime_tag || rec.regime || '');
-    var risk = dmParamAssistantRiskLabel(
-        ui.effective_risk_state || r.effective_risk_state || r.risk_state || rec.riskState
-    );
-    var conf = r.confidence != null ? r.confidence : '—';
-    var slug = dmParamAssistantRegimeSlug(r.regime_tag || rec.regime || label);
-    var tip = 'Motorun bu parite için seçtiği piyasa rejimi: ' + label + '. Grid agresifliği ve V5 raf seçimi buna göre yapılır.';
+    var marketStatus = dmParamAssistantMarketStatusPlain(rec);
+    var riskTone = dmParamAssistantRiskTonePlain(rec);
+    var conf = ui.confidence_display_pct || r.confidence_display_pct ||
+        dmParamAssistantFormatConfidencePct(r.confidence != null ? r.confidence : r.param_score);
+    var technical = dmParamAssistantRegimeTechnicalLabel(rec);
+    var slug = dmParamAssistantRegimeSlugForRec(rec);
+    var v6d = ((rec.backend || {}).telemetry || {}).v6_display || {};
+    var regimeBadge = dmParamAssistantIsV6Result(rec.backend) && (v6d.regime_headline || rec.backend.regime_tag)
+        ? '<span class="dm-pa-regime-code">' + dmParamAssistantEscape(String(rec.backend.regime_tag || '')) + '</span>'
+        : '';
+    var tip = 'Piyasa durumu: ' + marketStatus + '. Risk tonu: ' + riskTone + '.';
+    if (technical && dmParamAssistantIsV6Result(r)) {
+        tip += ' Teknik detay: ' + technical + '.';
+    }
     if (ui.effective_route_key || r.effective_route_key) {
         tip += ' Etkin route: ' + (ui.effective_route_key || r.effective_route_key) + '.';
     }
     return '<div class="dm-pa-regime-banner dm-pa-regime--' + dmParamAssistantEscape(slug) +
         '" data-dyn-tip="' + dmParamAssistantAttrEscape(tip) + '">' +
-        '<div class="dm-pa-regime-kicker">Piyasa rejimi</div>' +
-        '<div class="dm-pa-regime-value">' + dmParamAssistantEscape(label) + '</div>' +
-        '<div class="dm-pa-regime-meta">Risk: <em>' + dmParamAssistantEscape(risk) +
-        '</em> · Güven: <em>' + dmParamAssistantEscape(String(conf)) + '/100</em></div></div>';
+        regimeBadge +
+        '<div class="dm-pa-regime-kicker">Piyasa durumu</div>' +
+        '<div class="dm-pa-regime-value">' + dmParamAssistantEscape(marketStatus) + '</div>' +
+        '<div class="dm-pa-regime-kicker dm-pa-regime-kicker--sub">Risk</div>' +
+        '<div class="dm-pa-regime-meta"><em>' + dmParamAssistantEscape(riskTone) +
+        '</em> · Güven <em>' + dmParamAssistantEscape(String(conf)) + '</em></div></div>';
 }
 
 function dmParamAssistantRenderParamRowHtml(tile) {
@@ -2319,8 +3205,12 @@ function dmParamAssistantRenderParamRowHtml(tile) {
 
 function dmParamAssistantRenderParamsSectionHtml(rec) {
     var sections = dmParamAssistantBackendSummarySections(rec);
-    var html = '<div class="dm-pa-summary-wrap dm-pa-params-wrap">';
-    html += dmParamAssistantRenderRegimeBanner(rec);
+    var html = '<div class="dm-pa-summary-wrap dm-pa-params-wrap dm-pa-params-wrap-ai">';
+    if (dmParamAssistantIsV6Result(rec.backend)) {
+        html += dmParamAssistantRenderV6StrategyHero(rec);
+    } else {
+        html += dmParamAssistantRenderRegimeBanner(rec);
+    }
     html += '<section class="dm-pa-summary-section dm-pa-summary-params">';
     html += '<h4 class="dm-pa-summary-section-title">' + dmParamAssistantEscape(sections.params.title) + '</h4>';
     (sections.params.groups || []).forEach(function (group) {
@@ -2338,13 +3228,112 @@ function dmParamAssistantRenderParamsSectionHtml(rec) {
     return html;
 }
 
+function dmParamAssistantRenderScenarioAlignmentHtml(align) {
+    if (!align || typeof align !== 'object') return '';
+    var score = align.combined_score;
+    var shelf = align.shelf_ideal || {};
+    var applied = align.applied || {};
+    var adj = (align.adjustments || []).slice(0, 8);
+    var isV6 = align.engine === 'v6';
+    var badge = align.fully_aligned ? 'Tam uyum' : (align.aligned ? 'Uyumlu (düzeltmeli)' : 'Düşük uyum');
+    var html = '<section class="dm-pa-summary-section dm-pa-scenario-alignment dm-pa-summary-reveal">';
+    html += '<h4 class="dm-pa-summary-section-title">Senaryo uyumu · ' + dmParamAssistantEscape(badge) + '</h4>';
+    if (isV6 && align.regime_headline) {
+        html += '<div class="dm-pa-v6-align-hero dm-pa-summary-reveal">';
+        html += '<div class="dm-pa-v6-align-regime">' + dmParamAssistantEscape(align.regime_headline) + '</div>';
+        if (align.regime_label_plain) {
+            html += '<div class="dm-pa-v6-align-status">' + dmParamAssistantEscape(align.regime_label_plain) + '</div>';
+        }
+        if (align.regime_strategy_why) {
+            html += '<p class="dm-pa-v6-align-why">' + dmParamAssistantEscape(align.regime_strategy_why) + '</p>';
+        }
+        if (align.grid_strategy_plain || align.grid_plan_plain) {
+            html += '<div class="dm-pa-v6-align-grid"><span>Grid</span><em>' +
+                dmParamAssistantEscape(align.grid_strategy_plain || align.grid_plan_plain) + '</em></div>';
+        }
+        html += '</div>';
+    }
+    html += '<div class="dm-pa-tile-grid">';
+    html += dmParamAssistantRenderTileHtml({ label: 'Birleşik skor', value: (score != null ? score + '/100' : '—') });
+    html += dmParamAssistantRenderTileHtml({ label: isV6 ? 'Katalog skoru' : 'Raf skoru', value: (align.shelf_scenario_fit != null ? align.shelf_scenario_fit + '/100' : '—') });
+    html += dmParamAssistantRenderTileHtml({ label: 'İndikatör uyumu', value: (align.indicator_fit != null ? align.indicator_fit + '/100' : '—') });
+    html += dmParamAssistantRenderTileHtml({ label: isV6 ? 'Rejim' : 'Rejim (teknik)', value: isV6 && align.regime_headline ? align.regime_headline : (align.regime_label || align.canonical_regime_tag || '—') });
+    if (align.regime_label_plain) {
+        html += dmParamAssistantRenderTileHtml({ label: 'Piyasa durumu', value: align.regime_label_plain });
+    }
+    if (isV6 && align.operational_mode_plain) {
+        html += dmParamAssistantRenderTileHtml({ label: 'Çalışma modu', value: align.operational_mode_plain });
+    }
+    if (isV6 && align.behavior_id) {
+        html += dmParamAssistantRenderTileHtml({ label: 'Davranış', value: align.behavior_id });
+    }
+    if (isV6 && align.severity) {
+        html += dmParamAssistantRenderTileHtml({ label: 'Şiddet', value: align.severity });
+    }
+    if (isV6 && align.data_quality_label) {
+        html += dmParamAssistantRenderTileHtml({ label: 'Veri kalitesi', value: align.data_quality_label });
+    }
+    if (isV6 && align.risk_display_label) {
+        html += dmParamAssistantRenderTileHtml({ label: 'Risk tonu', value: align.risk_display_label });
+    }
+    html += '</div>';
+    html += '<div class="dm-pa-align-compare">';
+    if (isV6 && (align.grid_plan_plain || align.grid_strategy_plain)) {
+        html += '<div class="dm-pa-align-col dm-pa-align-col--full"><div class="dm-pa-align-head">Grid planı</div>';
+        html += '<div class="dm-pa-align-line dm-pa-align-line--grid">' + dmParamAssistantEscape(align.grid_strategy_plain || align.grid_plan_plain) + '</div>';
+        if (align.regime_strategy_why) {
+            html += '<div class="dm-pa-align-line dm-pa-align-line--why">' + dmParamAssistantEscape(align.regime_strategy_why) + '</div>';
+        }
+        html += '</div>';
+    }
+    html += '<div class="dm-pa-align-col"><div class="dm-pa-align-head">' + (isV6 ? 'Katalog profili' : 'Raf ideali') + '</div>';
+    if (isV6 && shelf.grid_plan_plain) {
+        html += '<div class="dm-pa-align-line">' + dmParamAssistantEscape(shelf.grid_plan_plain) + '</div>';
+    } else {
+        html += '<div class="dm-pa-align-line">Alış ' + (shelf.buy_grid_count != null ? shelf.buy_grid_count : '—') + ' · Satış ' + (shelf.sell_grid_count != null ? shelf.sell_grid_count : '—') + '</div>';
+    }
+    html += '<div class="dm-pa-align-line">Hedef %' + (shelf.base_alloc_pct != null ? shelf.base_alloc_pct : '—') + ' / %' + (shelf.quote_alloc_pct != null ? shelf.quote_alloc_pct : '—') + '</div></div>';
+    html += '<div class="dm-pa-align-col"><div class="dm-pa-align-head">Uygulanan</div>';
+    if (isV6 && (applied.grid_plan_plain || align.grid_plan_plain)) {
+        html += '<div class="dm-pa-align-line">' + dmParamAssistantEscape(applied.grid_plan_plain || align.grid_plan_plain) + '</div>';
+    } else {
+        html += '<div class="dm-pa-align-line">Alış ' + (applied.buy_grid_count != null ? applied.buy_grid_count : '—') + ' · Satış ' + (applied.sell_grid_count != null ? applied.sell_grid_count : '—') + '</div>';
+    }
+    html += '<div class="dm-pa-align-line">Hedef %' + (applied.base_alloc_pct != null ? applied.base_alloc_pct : '—') + ' / %' + (applied.quote_alloc_pct != null ? applied.quote_alloc_pct : '—') + '</div></div>';
+    html += '</div>';
+    if (isV6 && align.profit_loop_plain) {
+        html += '<div class="dm-pa-align-adj dm-pa-align-adj--profit">Kâr döngüsü: ' + dmParamAssistantEscape(align.profit_loop_plain) + '</div>';
+    }
+    if (isV6 && align.final_profile_id) {
+        html += '<details class="dm-pa-align-tech"><summary>Teknik profil kimliği</summary>';
+        html += '<div class="dm-pa-align-adj">' + dmParamAssistantEscape(align.final_profile_id) + '</div></details>';
+    }
+    if (adj.length) {
+        html += '<details class="dm-pa-align-tech"><summary>Ayarlayıcı düzeltmeleri</summary>';
+        html += '<div class="dm-pa-align-adj">' + adj.map(function (a) { return dmParamAssistantEscape(a); }).join(' · ') + '</div></details>';
+    }
+    html += '</section>';
+    return html;
+}
+
 function dmParamAssistantRenderDetailsSectionsHtml(sections, rec, result) {
     var html = '<div class="dm-pa-summary-wrap dm-pa-details-wrap">';
     if (sections.notice) {
         html += dmParamAssistantRenderNoticeHtml(sections.notice, rec);
     }
+    var ui = (result && result.ui_config) || {};
+    var align = ui.scenario_alignment || (result && result.telemetry && result.telemetry.scenario_alignment);
+    if (align) {
+        html += dmParamAssistantRenderScenarioAlignmentHtml(align);
+    }
     if (sections.indicators && sections.indicators.groups && sections.indicators.groups.length) {
         html += dmParamAssistantRenderGroupedSectionHtml(sections.indicators, 'indicators');
+    }
+    if (sections.sub_scores && sections.sub_scores.groups && sections.sub_scores.groups.length) {
+        html += dmParamAssistantRenderGroupedSectionHtml(sections.sub_scores, 'sub_scores');
+    }
+    if (sections.v6_engine && sections.v6_engine.groups && sections.v6_engine.groups.length) {
+        html += dmParamAssistantRenderGroupedSectionHtml(sections.v6_engine, 'v6_engine');
     }
     if (sections.safety && sections.safety.groups && sections.safety.groups.length) {
         html += dmParamAssistantRenderGroupedSectionHtml(sections.safety, 'safety');
@@ -2396,6 +3385,7 @@ function dmParamAssistantRenderParamsSectionAi(rec, done) {
     }
     el.innerHTML = dmParamAssistantRenderParamsSectionHtml(rec);
     el.style.display = 'block';
+    dmParamAssistantStaggerReveal(el, '.dm-pa-v6-hero, .dm-pa-v6-why-card, .dm-pa-v6-grid-block, .dm-pa-v6-profit-loop, .dm-pa-v6-meta-pill, .dm-pa-grid-chip, .dm-pa-regime-banner, .dm-pa-param-row, .dm-pa-param-group-title, .dm-pa-tile');
     if (typeof done === 'function') done();
 }
 
@@ -2406,27 +3396,118 @@ function dmParamAssistantRenderDetailsAi(rec) {
     var html = dmParamAssistantRenderDetailsSectionsHtml(sections, rec, rec.backend);
     el.innerHTML = html;
     el.style.display = html.trim() ? 'block' : 'none';
+    dmParamAssistantStaggerReveal(el, '.dm-pa-summary-section, .dm-pa-v6-align-hero, .dm-pa-tile, details.dm-pa-debug-panel', 120);
+}
+
+function dmParamAssistantEnsureAiResultLayout() {
+    var body = document.querySelector('#dmParamAssistantModal .dm-param-assistant-body');
+    var prep = document.getElementById('dmParamAssistantPrep');
+    var output = document.getElementById('dmParamAssistantOutput');
+    var chips = document.getElementById('dmParamAssistantChips');
+    var summary = document.getElementById('dmParamAssistantSummary');
+    var details = document.getElementById('dmParamAssistantDetails');
+    var choice = document.getElementById('dmParamAssistantChoice');
+    if (!body || !output) return;
+    var anchor = prep || document.querySelector('#dmParamAssistantModal .perf-summary-assistant-wrap');
+    [output, chips, summary, details, choice].forEach(function (el) {
+        if (!el) return;
+        if (anchor && anchor.parentNode === body) {
+            body.insertBefore(el, anchor.nextSibling);
+            anchor = el;
+        } else {
+            body.appendChild(el);
+        }
+    });
+}
+
+function dmParamAssistantResolveV6StreamLines(result, rec) {
+    var tel = (result && result.telemetry) || (rec && rec.backend && rec.backend.telemetry) || {};
+    var fromBackend = tel.v6_stream_lines;
+    if (fromBackend && fromBackend.length) {
+        return fromBackend.filter(function (line) { return line && String(line).trim(); });
+    }
+    return dmParamAssistantBuildV6PresentationLines(result, rec);
 }
 
 function dmParamAssistantPresentBackendResultUi(snapshot, rec, lines) {
     dmParamAssistantClearResultPanels();
-    dmParamAssistantTyping = false;
-    dmParamAssistantSetCursorVisible(false);
-    var status = document.getElementById('dmParamAssistantStatus');
-    var output = document.getElementById('dmParamAssistantOutput');
+    dmParamAssistantClearPrep();
+    dmParamAssistantEnsureAiResultLayout();
+
+    var summary = document.getElementById('dmParamAssistantSummary');
+    var chips = document.getElementById('dmParamAssistantChips');
+    var details = document.getElementById('dmParamAssistantDetails');
     var choice = document.getElementById('dmParamAssistantChoice');
-    if (status) status.textContent = rec.introText || '';
-    dmParamAssistantRenderParamsSectionAi(rec);
-    dmParamAssistantRenderChips(snapshot, rec);
+    var output = document.getElementById('dmParamAssistantOutput');
+
+    if (summary) { summary.innerHTML = ''; summary.style.display = 'none'; }
+    if (chips) chips.innerHTML = '';
+    if (details) { details.innerHTML = ''; details.style.display = 'none'; }
+    if (choice) choice.style.display = 'none';
     if (output) {
-        output.classList.add('is-visible');
-        output.innerHTML = (lines || []).map(function (line) {
-            return '<div class="dm-param-assistant-line">' + dmParamAssistantEscape(line) + '</div>';
-        }).join('');
+        output.innerHTML = '';
+        output.classList.remove('is-visible');
+        output.style.display = 'none';
     }
-    dmParamAssistantRenderDetailsAi(rec);
-    if (choice) choice.style.display = 'flex';
-    dmParamAssistantMaybeScrollToBottom({ force: true });
+
+    dmParamAssistantScrollIntroTop();
+    dmParamAssistantAutoScroll = true;
+    dmParamAssistantTyping = true;
+
+    var presentSeq = ++dmParamAssistantResultPresentSeq;
+    var narrative = dmParamAssistantBuildRichNarrative(snapshot, rec);
+
+    function finishPresentation() {
+        if (presentSeq !== dmParamAssistantResultPresentSeq) return;
+        if (choice) choice.style.display = 'flex';
+        dmParamAssistantTyping = false;
+        dmParamAssistantSetCursorVisible(false);
+        dmParamAssistantMaybeScrollToBottom();
+    }
+
+    function revealDataStage() {
+        if (presentSeq !== dmParamAssistantResultPresentSeq) return;
+        if (!details) {
+            finishPresentation();
+            return;
+        }
+        details.innerHTML = dmParamAssistantRenderDataCardsHtml(rec);
+        details.style.display = details.innerHTML.trim() ? 'block' : 'none';
+        if (details.innerHTML.trim()) {
+            dmParamAssistantStaggerReveal(details, '.dm-pa-data-panel, .dm-pa-data-group-card, .dm-pa-data-tile, .dm-pa-score-row', 0, 18);
+            dmParamAssistantMaybeScrollToBottom();
+            dmParamAssistantSetTimer(finishPresentation, 320);
+        } else {
+            finishPresentation();
+        }
+    }
+
+    function revealParamsStage() {
+        if (presentSeq !== dmParamAssistantResultPresentSeq) return;
+        if (summary) {
+            summary.innerHTML += dmParamAssistantRenderUserParamsHtml(rec);
+            dmParamAssistantStaggerReveal(summary, '.dm-pa-params-card, .dm-pa-param-group-title, .dm-pa-param-row', 0, 26);
+            dmParamAssistantMaybeScrollToBottom();
+        }
+        dmParamAssistantSetTimer(revealDataStage, 260);
+    }
+
+    function revealRegimeStage() {
+        if (presentSeq !== dmParamAssistantResultPresentSeq) return;
+        if (summary) {
+            summary.innerHTML = dmParamAssistantRenderRegimeStoryCard(rec);
+            summary.style.display = 'block';
+            dmParamAssistantStaggerReveal(summary, '.dm-pa-regime-story, .dm-pa-story-row, .dm-pa-story-grid, .dm-pa-grid-chip', 0, 30);
+            dmParamAssistantMaybeScrollToBottom();
+        }
+        dmParamAssistantSetTimer(revealParamsStage, 240);
+    }
+
+    dmParamAssistantTypeIntroText(narrative, function () {
+        if (presentSeq !== dmParamAssistantResultPresentSeq) return;
+        dmParamAssistantWrapIntroAsRichBox();
+        dmParamAssistantSetTimer(revealRegimeStage, 120);
+    }, { fast: true });
 }
 
 function dmParamAssistantRenderGroupedSectionHtml(section, kind) {
@@ -2451,14 +3532,9 @@ function dmParamAssistantRenderGroupedSectionHtml(section, kind) {
 
 function dmParamAssistantRenderNoticeHtml(notice, rec) {
     if (!notice) return '';
-    var isRef = rec && rec.recommendationOnly;
-    var badge = isRef ? 'Referans modu' : 'Bilgi';
-    var tip = isRef
-        ? 'Canlı karar BEKLE. Aşağıdaki grid değerleri yalnızca hangi parametre setinin seçildiğini gösterir; borsaya uygulanmaz.'
-        : 'Güvenlik veya profil nedeniyle işlem davranışı kısıtlandı; detaylar aşağıdaki bölümlerde.';
-    return '<div class="dm-pa-summary-notice' + (isRef ? ' dm-pa-summary-notice--ref' : '') +
-        '" role="note" data-dyn-tip="' + dmParamAssistantAttrEscape(tip) + '">' +
-        '<div class="dm-pa-notice-badge">' + dmParamAssistantEscape(badge) + '</div>' +
+    var tip = 'Güvenlik veya profil nedeniyle işlem davranışı kısıtlandı; detaylar aşağıdaki bölümlerde.';
+    return '<div class="dm-pa-summary-notice" role="note" data-dyn-tip="' + dmParamAssistantAttrEscape(tip) + '">' +
+        '<div class="dm-pa-notice-badge">Bilgi</div>' +
         '<p class="dm-pa-notice-text">' + dmParamAssistantEscape(notice) + '</p></div>';
 }
 
@@ -2588,6 +3664,8 @@ var DM_PA_INDICATOR_TIPS = {
 };
 
 var DM_PA_PARAM_TIPS = {
+    exact_shelf_id: 'V6 katalogdan seçilen exact shelf kimliği (DPLV6_…).',
+    final_shelf_id: 'Ayarlayıcı pipeline sonrası nihai profil kimliği.',
     profile: 'V5 kütüphaneden exact route lookup ile seçilen DPLV5 shelf.',
     budget: 'Bot için ayrılan toplam USDT bütçesi.',
     allocation: 'Base (coin) ve quote (USDT) başlangıç dağılımı.',
@@ -2617,10 +3695,45 @@ var DM_PA_PARAM_TIPS = {
 };
 
 var DM_PA_PARAM_GROUPS = [
-    { title: 'Genel ayarlar', keys: ['profile', 'budget', 'allocation'] },
-    { title: 'Grid ve trailing', keys: ['sell_grid', 'buy_grid', 'trailing'] },
-    { title: 'Kâr döngüsü', keys: ['rebuy', 'resell'] }
+    { title: 'Genel ayarlar', keys: ['profile', 'final_profile', 'budget', 'allocation'] },
+    { title: 'Grid ve trailing', keys: ['sell_grid', 'buy_grid', 'trailing', 'grid_step'] },
+    { title: 'Kâr döngüsü', keys: ['profit_cycle', 'rebuy', 'resell'] },
+    { title: 'Limitler ve mod', keys: ['take_profit', 'max_exposure', 'min_profit_fee', 'buy_quota', 'stop_buys', 'trailing_mode', 'emergency_no_buy', 'buy_mode', 'downtrend_throttle'] }
 ];
+
+/** Kullanıcıya gösterilen sade parametre grupları. */
+var DM_PA_PARAM_GROUPS_USER = [
+    { title: 'Profil kimliği', keys: ['exact_shelf_id', 'final_shelf_id'] },
+    { title: 'Bütçe ve dağılım', keys: ['budget', 'allocation'] },
+    { title: 'Grid planı', keys: ['sell_grid', 'buy_grid', 'trailing'] },
+    { title: 'Kâr döngüsü', keys: ['profit_cycle'] }
+];
+
+var DM_PA_REGIME_PLAIN_STORY = {
+    R1: 'Fiyat güçlü yükseliş trendinde. Bot coin tarafını yüksek tutar; yükselişte satış gridleri ve geri çekilmelerde alış gridleri birlikte çalışır.',
+    R2: 'Piyasa yatay bir bantta — al-sat için en verimli rejim. Alt bölgede alır, üst bölgede satar; kâr döngüsü sürekli aktif kalır.',
+    R3: 'Hareket dar ve sakin; kırılım öncesi sıkışma. Gridler yakın tutulur, küçük ama gerçekçi kâr hedefleri seçilir.',
+    R4: 'Sert yukarı-aşağı dalgalanma var, net tek yön yok. Gridler dengeli genişletilir; ani fitillerde kâr alınır, panik alımından kaçınılır.',
+    R5: 'Önemli direnç kırılımı veya trend başlangıcı. Fırsatı kaçırmamak için coin payı artırılır; sahte kırılıma karşı USDT rezervi bırakılır.',
+    R6: 'Düşüş sonrası toparlanma aşaması. Trend henüz çok güçlü değil; kademeli alım ve erken kâr alma dengesi kurulur.',
+    R7: 'Ana yön aşağı; düşen bıçağa atlanmaz. USDT korunur, alış gridleri derinde, satış gridleri erken risk azaltır.',
+    R8: 'Sert düşüş veya panik ortamı. Normal alış kısıtlanır; satış ve kontrollü kâr döngüsü açık kalır, sermaye korunur.'
+};
+
+var DM_PA_SUB_SCORE_LABELS = {
+    trend_score: 'Trend',
+    volatility_score: 'Volatilite',
+    range_score: 'Aralık',
+    liquidity_score: 'Likidite',
+    spread_score: 'Spread',
+    momentum_score: 'Momentum',
+    mean_reversion_score: 'Ortalamaya dönüş',
+    drawdown_risk_score: 'Drawdown riski',
+    btc_market_risk_score: 'BTC piyasa riski',
+    exposure_safety_score: 'Maruziyet güvenliği',
+    fee_efficiency_score: 'Fee verimi',
+    data_quality_score: 'Veri kalitesi'
+};
 
 var DM_PA_DEBUG_PARAM_GROUPS = [
     { title: 'Limitler ve mod', keys: ['grid_step', 'take_profit', 'max_exposure', 'min_profit_fee', 'buy_quota', 'stop_buys', 'trailing_mode', 'emergency_no_buy', 'buy_mode', 'downtrend_throttle', 'profit_cycle'] }
@@ -2686,6 +3799,12 @@ function dmParamAssistantFormatIndicatorValue(key, val) {
 function dmParamAssistantBackendProfileText(r) {
     var ui = r.ui_config || {};
     if (ui.profile_display) return ui.profile_display;
+    if (dmParamAssistantIsV6Result(r)) {
+        var v6d = (r.telemetry && r.telemetry.v6_display) || {};
+        var headline = v6d.regime_headline || (r.regime_tag + ' · ' + dmParamAssistantRegimeLabel(r.regime_tag));
+        if (v6d.behavior_id) return headline + ' · ' + v6d.behavior_id;
+        return headline;
+    }
     var sel = r.selection_telemetry || (r.telemetry && r.telemetry.param_pool) || {};
     var profile = dmParamAssistantProfileLabel(r.selected_profile || '');
     var tmpl = sel.selected_template_key || sel.profile_subfamily || '';
@@ -2701,7 +3820,7 @@ function dmParamAssistantBuildIndicatorGroups(ind, backend) {
         var rows = [];
         group.keys.forEach(function (key) {
             if (!Object.prototype.hasOwnProperty.call(ind, key)) return;
-            if (key === 'total_friction_pct' && feeDisplay && feeDisplay.fee_data_available === false) {
+            if (key === 'total_friction_pct' && feeDisplay && feeDisplay.fee_data_available === false && feeDisplay.fee_mode !== 'disabled') {
                 rows.push(dmParamAssistantMakeTile(
                     'Toplam fee',
                     'veri yok',
@@ -2734,15 +3853,43 @@ function dmParamAssistantBuildParamTileMap(rec) {
     var r = rec.backend || {};
     var tel = r.telemetry || {};
     var ui = rec.backend && rec.backend.ui_config ? rec.backend.ui_config : {};
+    var profit = ui.profit || {};
+    var rebuyOn = profit.rebuy_enabled === true;
+    var resellOn = profit.resell_enabled === true;
     var allocDisp = rec.allocationDisplay || ui.allocation_display || {};
     var ladderDisp = rec.ladderDisplay || ui.ladder_display || {};
+    var v6d = tel.v6_display || {};
     var strat = allocDisp.strategic_target || {};
     var p = tel.post_safety_params || tel.pre_safety_params || r.params || {};
     var map = {};
-    map.profile = dmParamAssistantMakeTile('Raf (V5)', dmParamAssistantBackendProfileText(r), DM_PA_PARAM_TIPS.profile);
+    var profileLabel = dmParamAssistantProfileTileLabel(r);
+    map.profile = dmParamAssistantMakeTile(profileLabel, dmParamAssistantBackendProfileText(r), DM_PA_PARAM_TIPS.profile || DM_PA_CHIP_TIPS[profileLabel]);
+    if (dmParamAssistantIsV6Result(r) && (r.v6_final_profile_id || (tel.v6_display && tel.v6_display.final_profile_id))) {
+        map.final_profile = dmParamAssistantMakeTile(
+            'Final profil',
+            r.v6_final_profile_id || tel.v6_display.final_profile_id,
+            'V6 ayarlayıcı pipeline sonrası nihai profil kimliği.'
+        );
+    }
     map.budget = dmParamAssistantMakeTile('Bütçe', dmParamAssistantInputTextTr(rec.budget, 2) + ' USDT', DM_PA_PARAM_TIPS.budget);
-    var targetBase = strat.base_pct != null ? strat.base_pct : rec.basePct;
-    var targetQuote = strat.quote_pct != null ? strat.quote_pct : rec.quotePct;
+    var exactShelfId = dmParamAssistantExactShelfId(r);
+    map.exact_shelf_id = dmParamAssistantMakeTile(
+        'Exact raf ID',
+        exactShelfId,
+        DM_PA_PARAM_TIPS.exact_shelf_id,
+        { mono: true }
+    );
+    var finalShelfId = dmParamAssistantFinalShelfId(r);
+    if (finalShelfId && String(finalShelfId) !== String(exactShelfId)) {
+        map.final_shelf_id = dmParamAssistantMakeTile(
+            'Final profil ID',
+            finalShelfId,
+            DM_PA_PARAM_TIPS.final_shelf_id,
+            { mono: true }
+        );
+    }
+    var targetBase = v6d.base_allocation_pct != null ? v6d.base_allocation_pct : (strat.base_pct != null ? strat.base_pct : rec.basePct);
+    var targetQuote = v6d.quote_allocation_pct != null ? v6d.quote_allocation_pct : (strat.quote_pct != null ? strat.quote_pct : rec.quotePct);
     var allocText = 'Hedef: coin %' + dmParamAssistantInputTextTr(targetBase, 1) +
         ' · USDT %' + dmParamAssistantInputTextTr(targetQuote, 1);
     map.allocation = dmParamAssistantMakeTile('Dağılım', allocText, DM_PA_PARAM_TIPS.allocation);
@@ -2765,7 +3912,7 @@ function dmParamAssistantBuildParamTileMap(rec) {
     map.trailing = dmParamAssistantMakeTile('Trailing', dmParamAssistantTrailingLabel(rec), DM_PA_PARAM_TIPS.trailing);
     map.rebuy = dmParamAssistantMakeTile(
         'Kar alım',
-        rec.downGrids.length
+        rebuyOn
             ? ('tetik %' + dmParamAssistantInputTextTr(rec.rebuyTrigger, 2) +
                 (rec.rebuyTrail > 0 ? ' · Trailing %' + dmParamAssistantInputTextTr(rec.rebuyTrail, 2) : ''))
             : 'Kapalı',
@@ -2773,20 +3920,20 @@ function dmParamAssistantBuildParamTileMap(rec) {
     );
     map.resell = dmParamAssistantMakeTile(
         'Kar satış',
-        rec.upGrids.length
+        resellOn
             ? ('tetik %' + dmParamAssistantInputTextTr(rec.resellTrigger, 2) +
                 (rec.resellTrail > 0 ? ' · Trailing %' + dmParamAssistantInputTextTr(rec.resellTrail, 2) : ''))
             : 'Kapalı',
         DM_PA_PARAM_TIPS.resell
     );
     map.profit_cycle = dmParamAssistantMakeTile('Kâr döngüsü', dmParamAssistantProfitCycleLabel(rec), DM_PA_PARAM_TIPS.profit_cycle);
-    if (p.buy_grid_spacing_pct != null || p.sell_grid_spacing_pct != null) {
-        map.grid_step = dmParamAssistantMakeTile(
-            'Grid aralığı',
-            'alış %' + dmParamAssistantInputTextTr(p.buy_grid_spacing_pct || 0, 2) +
-                ' · satış %' + dmParamAssistantInputTextTr(p.sell_grid_spacing_pct || 0, 2),
-            DM_PA_PARAM_TIPS.grid_step
-        );
+    var buyOff = ui.buy_disabled || !activeBuy.length;
+    if (p.sell_grid_spacing_pct != null || (!buyOff && p.buy_grid_spacing_pct != null)) {
+        var gridText = buyOff
+            ? ('Alış kapalı · Satış %' + dmParamAssistantInputTextTr(p.sell_grid_spacing_pct || 0, 2))
+            : ('alış %' + dmParamAssistantInputTextTr(p.buy_grid_spacing_pct || 0, 2) +
+                ' · satış %' + dmParamAssistantInputTextTr(p.sell_grid_spacing_pct || 0, 2));
+        map.grid_step = dmParamAssistantMakeTile('Grid aralığı', gridText, DM_PA_PARAM_TIPS.grid_step);
     }
     if (p.take_profit_pct != null) {
         map.take_profit = dmParamAssistantMakeTile('Kâr hedefi', '%' + dmParamAssistantInputTextTr(p.take_profit_pct, 2), DM_PA_PARAM_TIPS.take_profit);
@@ -2841,15 +3988,90 @@ function dmParamAssistantIsV5Selection(sel, tmpl) {
     return String(tmpl || sel.selected_template_key || '').indexOf('DPLV5_') === 0;
 }
 
+function dmParamAssistantBuildSubScoreGroups(rec) {
+    var r = rec.backend || {};
+    var sub = (r.rationale && r.rationale.sub_scores) || (r.telemetry && r.telemetry.sub_scores) || {};
+    var rows = [];
+    Object.keys(DM_PA_SUB_SCORE_LABELS).forEach(function (key) {
+        if (sub[key] == null) return;
+        rows.push(dmParamAssistantMakeTile(
+            DM_PA_SUB_SCORE_LABELS[key],
+            String(sub[key]) + '/100',
+            'Motorun bu girdiyi hesaplamada kullandığı alt skor.'
+        ));
+    });
+    return rows.length ? [{ title: 'Alt skorlar', rows: rows }] : [];
+}
+
+function dmParamAssistantBuildV6AdjusterGroups(rec) {
+    var r = rec.backend || {};
+    var tel = r.telemetry || {};
+    var trace = (r.selection_telemetry && r.selection_telemetry.adjuster_trace) ||
+        (tel.v6_display && tel.v6_display.adjuster_trace) || [];
+    if (!trace.length) return [];
+    var labels = {
+        data_quality: 'Veri kalitesi',
+        btc_context: 'BTC bağlamı',
+        asset_fragility: 'Varlık kırılganlığı',
+        volatility: 'Volatilite',
+        liquidity: 'Likidite',
+        support_resistance: 'Destek / direnç',
+        fake_move: 'Sahte hareket',
+        delta_limiter: 'Delta sınırı',
+        budget_scaler: 'Bütçe ölçekleyici',
+        exchange_validator: 'Borsa doğrulayıcı'
+    };
+    var rows = trace.map(function (entry) {
+        var name = entry.name || 'adjuster';
+        var label = labels[name] || name;
+        var cls = entry.class != null ? String(entry.class) : '—';
+        var riskKey = name + '_risk_score';
+        var riskScore = entry.data_quality_risk_score != null ? entry.data_quality_risk_score :
+            entry.btc_market_risk_score != null ? entry.btc_market_risk_score :
+            entry.fragility_risk_score != null ? entry.fragility_risk_score :
+            entry.volatility_risk_score != null ? entry.volatility_risk_score :
+            entry.liquidity_risk_score != null ? entry.liquidity_risk_score :
+            entry.score;
+        var val = cls + ' · risk ' + (riskScore != null ? riskScore : '—');
+        if (name === 'btc_context' && entry.delta_multiplier != null) {
+            val += ' · çarpan ' + entry.delta_multiplier;
+        }
+        return dmParamAssistantMakeTile(label, val, 'V6 ayarlayıcı pipeline adımı.');
+    });
+    return [{ title: 'V6 ayarlayıcı izi', rows: rows }];
+}
+
 function dmParamAssistantBuildSelectionTraceTiles(result) {
     var sel = (result && result.selection_telemetry) || {};
     var ctx = sel.selection_context || {};
     var tmpl = sel.selected_template_key || result.selected_profile || '';
     var isV5 = dmParamAssistantIsV5Selection(sel, tmpl);
+    var isV6 = dmParamAssistantIsV6Result(result);
     var rows = [];
     function add(label, val) {
         if (val == null || val === '') return;
         rows.push(dmParamAssistantMakeTile(label, String(val), 'Seçim telemetrisi — gelişmiş debug.'));
+    }
+    if (isV6) {
+        add('Motor sürümü', sel.engine_version || ctx.engine_version || 'DPS_ENGINE_V6');
+        var v6disp = (result && result.telemetry && result.telemetry.v6_display) || {};
+        var scen = v6disp.scenario_identity || ctx.scenario_identity || {};
+        add('Rejim kodu', scen.regime_id || ctx.regime_id);
+        add('Alt senaryo', scen.sub_id ? ('alt-' + scen.sub_id) : null);
+        add('Mikro senaryo', scen.micro_id ? ('mikro-' + scen.micro_id) : null);
+        add('Terminal', scen.terminal_id || ctx.terminal_id);
+        add('Davranış kodu', scen.behavior_id || sel.behavior_id || ctx.behavior_id);
+        add('Senaryo adı', scen.name || ctx.scenario_name);
+        add('Teknik rejim özeti', (result && result.display_regime_technical) ||
+            v6disp.display_regime_technical || ctx.display_regime_technical);
+        add('Katalog profil', sel.catalog_profile_id || tmpl);
+        add('Final profil', sel.final_profile_id || ((result && result.telemetry && result.telemetry.v6_display) || {}).final_profile_id);
+        add('Davranış', sel.behavior_id || ctx.behavior_id);
+        add('Şiddet', sel.severity || ctx.severity);
+        add('Seçim tipi', ctx.selection_type || sel.selection_type);
+        add('Seçim nedeni', sel.selection_reason || ctx.selection_reason);
+        add('Profil skoru', sel.selected_profile_score != null ? sel.selected_profile_score + '/100' : null);
+        return rows.length ? [{ title: 'V6 seçim izi', rows: rows }] : [];
     }
     if (isV5) {
         add('Route key', ctx.route_key || ctx.v5_route_key || sel.route_key);
@@ -2882,9 +4104,19 @@ function dmParamAssistantBuildSelectionTraceTiles(result) {
 }
 
 function dmParamAssistantBuildFeeDisplayTiles(result) {
-    var fee = (result && result.selection_telemetry && result.selection_telemetry.fee_display) || {};
-    if (!fee || (!fee.display_note && fee.fee_data_available === undefined)) return [];
+    var fee = (result && result.fee_display) ||
+        (result && result.selection_telemetry && result.selection_telemetry.fee_display) || {};
+    if (!fee || (!fee.display_note && fee.fee_data_available === undefined && !fee.fee_mode)) return [];
     var rows = [];
+    if (fee.fee_mode === 'disabled' || fee.status === 'v6_cost_floor') {
+        rows.push(dmParamAssistantMakeTile('Komisyon modu', fee.mode_label || 'Canlı fee kullanılmaz', DM_PA_PARAM_TIPS.fee_floor));
+        rows.push(dmParamAssistantMakeTile(
+            'Maliyet tabanı',
+            fee.floor_label || ('Sabit cost floor %' + dmParamAssistantInputTextTr(fee.total_cost_floor_pct || 1.2, 1)),
+            DM_PA_PARAM_TIPS.fee_floor
+        ));
+        return [{ title: 'Komisyon ve maliyet', rows: rows }];
+    }
     if (fee.display_note) {
         rows.push(dmParamAssistantMakeTile('Fee verisi', 'yok / okunamadı', fee.display_note));
         rows.push(dmParamAssistantMakeTile(
@@ -2908,11 +4140,48 @@ function dmParamAssistantBuildFeeDisplayTiles(result) {
     return rows.length ? [{ title: 'Komisyon ve maliyet', rows: rows }] : [];
 }
 
+function dmParamAssistantBuildV6PresentationLines(result, rec) {
+    var r = result || (rec && rec.backend) || {};
+    var tel = r.telemetry || {};
+    var v6d = tel.v6_display || {};
+    var align = tel.scenario_alignment || {};
+    var lines = [];
+    var headline = v6d.regime_headline || align.regime_headline ||
+        ((r.regime_tag || '') + ' · ' + dmParamAssistantRegimeLabel(r.regime_tag));
+    var status = v6d.market_status_plain || align.regime_label_plain || dmParamAssistantMarketStatusPlain({ backend: r });
+    var why = v6d.regime_strategy_why || align.regime_strategy_why || '';
+    var grid = v6d.grid_strategy_plain || align.grid_strategy_plain || dmParamAssistantV6GridPlanPlain({ backend: r });
+    var opMode = v6d.operational_mode_plain || align.operational_mode_plain || '';
+    var score = r.param_score != null ? r.param_score : (rec && rec.paramScore);
+    lines.push(headline + ' — ' + status);
+    if (why && why !== status) lines.push(why);
+    lines.push('Grid planı: ' + grid + '.');
+    if (opMode) lines.push('Çalışma modu: ' + opMode + '.');
+    if (v6d.profit_loop_plain || align.profit_loop_plain) {
+        lines.push('Kâr döngüsü: ' + (v6d.profit_loop_plain || align.profit_loop_plain) + '.');
+    }
+    if (score != null) {
+        lines.push('Parametre skoru ' + score + '/100 · komisyon tabanı %1,2 korunarak hesaplandı.');
+    }
+    lines.push('Not: Bu karar Dynamic Param Score Engine tarafından üretildi; Dinamik Mod her tur başında aynı motoru kullanır.');
+    return lines;
+}
+
 function dmParamAssistantFormatSelectionPickLine(result) {
     var sel = result.selection_telemetry || (result.telemetry && result.telemetry.param_pool) || {};
     var ctx = sel.selection_context || {};
-    var routeKey = sel.route_key || ctx.route_key || ctx.v5_route_key || (sel.selection_context && sel.selection_context.route_key) || '';
     var tmpl = sel.selected_template_key || result.selected_profile || '—';
+    if (dmParamAssistantIsV6Result(result)) {
+        var v6d = (result.telemetry && result.telemetry.v6_display) || {};
+        var headline = v6d.regime_headline || ('V6 · ' + dmParamAssistantRegimeLabel(result.regime_tag));
+        var grid = v6d.grid_plan_plain || dmParamAssistantV6GridPlanPlain({ backend: result });
+        var beh = sel.behavior_id || ctx.behavior_id || v6d.behavior_id || '';
+        var parts = [headline];
+        if (grid) parts.push('Grid: ' + grid);
+        if (beh) parts.push('Davranış ' + beh);
+        return parts.join(' · ');
+    }
+    var routeKey = sel.route_key || ctx.route_key || ctx.v5_route_key || (sel.selection_context && sel.selection_context.route_key) || '';
     var isV5 = dmParamAssistantIsV5Selection(sel, tmpl);
     if (isV5) {
         var pickLine = routeKey
@@ -2996,7 +4265,7 @@ function dmParamAssistantBuildSafetyGroups(rec) {
     }
     rows.push(dmParamAssistantMakeTile(
         'Güvenlik sonucu',
-        dmParamAssistantActionLabel(ad.post_safety_action || r.final_action, r),
+        r.final_action_label || dmParamAssistantActionLabel(ad.post_safety_action || r.final_action, r),
         DM_PA_PARAM_TIPS.safety_result
     ));
     return rows.length ? [{ title: 'Borsa ve maruziyet', rows: rows }] : [];
@@ -3007,9 +4276,7 @@ function dmParamAssistantBackendSummarySections(rec) {
     var tel = r.telemetry || {};
     var ind = tel.indicators || {};
     var notice = '';
-    if (rec.recommendationOnly) {
-        notice = 'Canlı karar bekleme modunda. Aşağıdaki grid değerleri yalnızca referans amaçlıdır ve borsaya uygulanmaz.';
-    } else if (rec.sellManagementOnly || r.final_action === 'SELL_MANAGEMENT_ONLY') {
+    if (rec.sellManagementOnly || r.final_action === 'SELL_MANAGEMENT_ONLY') {
         notice = 'Güvenlik kontrolü alış tarafını kapattı; yalnızca satış yönetimi parametreleri gösteriliyor.';
     }
     return {
@@ -3021,6 +4288,14 @@ function dmParamAssistantBackendSummarySections(rec) {
         indicators: {
             title: 'Piyasa verileri ve indikatörler',
             groups: dmParamAssistantBuildIndicatorGroups(ind, r)
+        },
+        sub_scores: {
+            title: 'Motor alt skorları',
+            groups: dmParamAssistantBuildSubScoreGroups(rec)
+        },
+        v6_engine: {
+            title: 'V6 motor detayı',
+            groups: dmParamAssistantIsV6Result(r) ? dmParamAssistantBuildV6AdjusterGroups(rec) : []
         },
         safety: {
             title: 'Güvenlik kontrolleri',
@@ -3049,23 +4324,27 @@ function dmParamAssistantTrailingLabel(rec) {
 }
 
 function dmParamAssistantProfitCycleLabel(rec) {
-    function profitPart(label, trigger, trail) {
-        var txt = label + ' %' + dmParamAssistantInputTextTr(trigger, 2);
-        if (trail > 0) txt += ' / Trailing %' + dmParamAssistantInputTextTr(trail, 2);
+    var ui = rec.backend && rec.backend.ui_config ? rec.backend.ui_config : {};
+    var profit = ui.profit || {};
+    var rebuyOn = profit.rebuy_enabled === true;
+    var resellOn = profit.resell_enabled === true;
+    function cyclePart(sign, trigger, trail) {
+        var txt = sign + '%' + dmParamAssistantInputTextTr(trigger, 2);
+        if (trail > 0) txt += ' · trailing %' + dmParamAssistantInputTextTr(trail, 2);
         return txt;
     }
-    var sellOnly = rec.sellManagementOnly || (rec.downGrids.length === 0 && rec.upGrids.length > 0);
-    if (sellOnly) {
-        return 'Kar alım kapalı · ' + profitPart('Kar satış', rec.resellTrigger, rec.resellTrail);
+    if (!rebuyOn && !resellOn) {
+        return 'Satış sonrası kar alım: Kapalı · Kar satış: Kapalı';
     }
-    if (!rec.downGrids.length && !rec.upGrids.length) return 'Kapalı';
-    var rebuy = rec.downGrids.length
-        ? profitPart('Kar alım', rec.rebuyTrigger, rec.rebuyTrail)
-        : 'Kar alım kapalı';
-    var resell = rec.upGrids.length
-        ? profitPart('Kar satış', rec.resellTrigger, rec.resellTrail)
-        : 'Kar satış kapalı';
-    return rebuy + ' · ' + resell;
+    if (rebuyOn && resellOn) {
+        return 'Satış sonrası kar alım: ' + cyclePart('-', rec.rebuyTrigger, rec.rebuyTrail) +
+            ' · Kar alım sonrası kar satış: ' + cyclePart('+', rec.resellTrigger, rec.resellTrail);
+    }
+    if (rebuyOn) {
+        return 'Satış sonrası kar alım: ' + cyclePart('-', rec.rebuyTrigger, rec.rebuyTrail) +
+            ' · Kar satış: Kapalı';
+    }
+    return 'Satış sonrası kar alım: Kapalı · Kar satış: Kapalı';
 }
 
 function dmParamAssistantSafetySummaryRows(rec) {
@@ -3096,7 +4375,14 @@ function dmParamAssistantGreetingText(snapshot, rec) {
     var name = dmParamAssistantCurrentUserName(snapshot);
     var tel = rec && rec.backend && rec.backend.telemetry ? rec.backend.telemetry : {};
     var sub = tel.sub_scores || {};
-    var coverage = sub.data_quality_score >= 70 ? 'yeterli' : (sub.data_quality_score >= 50 ? 'orta' : 'sınırlı');
+    var v6d = tel.v6_display || {};
+    var coverage = 'sınırlı';
+    if (v6d.data_quality_label) {
+        coverage = String(v6d.data_quality_label).toLowerCase().indexOf('yeterli') >= 0 ? 'yeterli' :
+            (String(v6d.data_quality_label).toLowerCase().indexOf('hafif') >= 0 ? 'orta' : 'sınırlı');
+    } else {
+        coverage = sub.data_quality_score >= 70 ? 'yeterli' : (sub.data_quality_score >= 50 ? 'orta' : 'sınırlı');
+    }
     var values = {
         name: name,
         symbol: snapshot.symbol || 'bu parite',
@@ -3232,8 +4518,10 @@ function dmParamAssistantFlattenSectionTiles(sections) {
         }, []);
     }
     return fromGroups(sections.params && sections.params.groups)
-        .concat(fromGroups(sections.safety && sections.safety.groups))
-        .concat(fromGroups(sections.indicators && sections.indicators.groups));
+        .concat(fromGroups(sections.indicators && sections.indicators.groups))
+        .concat(fromGroups(sections.sub_scores && sections.sub_scores.groups))
+        .concat(fromGroups(sections.v6_engine && sections.v6_engine.groups))
+        .concat(fromGroups(sections.safety && sections.safety.groups));
 }
 
 function dmParamAssistantRenderChips(snapshot, rec, opts) {
@@ -3354,7 +4642,27 @@ function dmParamAssistantMaybeScrollToBottom(opts) {
     var now = Date.now();
     if (!opts.force && now - dmParamAssistantLastAutoScrollAt < 160) return;
     dmParamAssistantLastAutoScrollAt = now;
+    if (opts.followTyping) {
+        var anchor = opts.anchorEl || null;
+        if (!anchor) {
+            var cursor = document.getElementById('dmParamAssistantCursor');
+            anchor = (cursor && cursor.offsetParent) ? cursor : outputAnchorFromTyping();
+        }
+        if (anchor && anchor.getBoundingClientRect) {
+            var anchorTop = anchor.getBoundingClientRect().top - body.getBoundingClientRect().top + body.scrollTop;
+            var target = Math.max(0, anchorTop - body.clientHeight * 0.28);
+            if (target > body.scrollTop) body.scrollTop = target;
+        }
+        return;
+    }
     body.scrollTop = body.scrollHeight;
+}
+
+function outputAnchorFromTyping() {
+    var output = document.getElementById('dmParamAssistantOutput');
+    if (!output) return null;
+    var lines = output.querySelectorAll('.dm-param-assistant-line');
+    return lines.length ? lines[lines.length - 1] : output;
 }
 
 function dmParamAssistantScrollSummaryIntoView() {
@@ -3370,7 +4678,8 @@ function dmParamAssistantScrollSummaryIntoView() {
     }
 }
 
-function dmParamAssistantTypeIntroText(text, done) {
+function dmParamAssistantTypeIntroText(text, done, opts) {
+    opts = opts || {};
     var status = document.getElementById('dmParamAssistantStatus');
     if (!status) {
         if (typeof done === 'function') done();
@@ -3379,18 +4688,21 @@ function dmParamAssistantTypeIntroText(text, done) {
     dmParamAssistantSetCursorVisible(true);
     status.textContent = '';
     var idx = 0;
+    var ms = opts.fast ? 5 : DM_PARAM_ASSISTANT_TEXT_MS;
+    var chunkMult = opts.fast ? 5 : 1;
     function step() {
         if (!dmParamAssistantTyping) return;
-        var chunk = dmParamAssistantTextChunkSize();
+        var chunk = dmParamAssistantTextChunkSize() * chunkMult;
         status.textContent += String(text || '').slice(idx, idx + chunk);
         idx += chunk;
+        dmParamAssistantMaybeScrollToBottom({ followTyping: true, anchorEl: status });
         if (idx < String(text || '').length) {
-            dmParamAssistantSetTimer(step, DM_PARAM_ASSISTANT_TEXT_MS);
+            dmParamAssistantSetTimer(step, ms);
             return;
         }
         dmParamAssistantSetTimer(function () {
             if (typeof done === 'function') done();
-        }, 180);
+        }, opts.fast ? 80 : 180);
     }
     step();
 }
@@ -3404,12 +4716,16 @@ function dmParamAssistantAnimateIntroAndChips(snapshot, rec, done) {
     });
 }
 
-function dmParamAssistantTypeLines(lines, idx) {
+function dmParamAssistantTypeLines(lines, idx, onDone) {
     var output = document.getElementById('dmParamAssistantOutput');
     var choice = document.getElementById('dmParamAssistantChoice');
     if (!output) return;
     dmParamAssistantSetCursorVisible(true);
     if (idx >= lines.length) {
+        if (typeof onDone === 'function') {
+            onDone();
+            return;
+        }
         dmParamAssistantTyping = false;
         dmParamAssistantSetCursorVisible(false);
         if (choice) choice.style.display = 'flex';
@@ -3433,7 +4749,7 @@ function dmParamAssistantTypeLines(lines, idx) {
         var chunk = dmParamAssistantTextChunkSize();
         line.textContent += text.slice(charIdx, charIdx + chunk);
         charIdx += chunk;
-        dmParamAssistantMaybeScrollToBottom();
+        dmParamAssistantMaybeScrollToBottom({ followTyping: true, anchorEl: line });
         if (charIdx < text.length) {
             dmParamAssistantSetTimer(step, text.charAt(charIdx - 1) === '.' ? DM_PARAM_ASSISTANT_TEXT_MS * 2 : DM_PARAM_ASSISTANT_TEXT_MS);
         } else {
@@ -4360,13 +5676,21 @@ function dmParamAssistantRunBackend(snapshot, level, runId, onDone, onFail) {
         suppressRateLimitToast: true
     }).then(function (result) {
         if (!isActiveRun()) return;
+        if (!dmParamAssistantIsOpen()) return;
         dmParamAssistantStopDpsProgress();
         dmParamAssistantStopLinearProgress();
         dmParamAssistantStopMicroSteps();
         dmParamAssistantApplyDpsProgressStage(DM_PARAM_ASSISTANT_DPS_STAGES.length - 1, { allowFinal: true, forcePct: 100 });
         dmParamAssistantStopTimeProgress();
         if (!result || result.ok === false) { fail('hesaplama başarısız'); return; }
-        var ok = dmParamAssistantRenderBackendResult(snapshot, result);
+        var ok = false;
+        try {
+            ok = dmParamAssistantRenderBackendResult(snapshot, result);
+        } catch (renderErr) {
+            try { console.error('[paramAssistant] render failed:', renderErr); } catch (e) {}
+            fail('sonuç ekrana yazılamadı');
+            return;
+        }
         if (ok && typeof onDone === 'function') onDone();
         else if (!ok) {
             var reason = 'sonuç uygulanamadı';
@@ -4390,18 +5714,34 @@ function dmParamAssistantBuildBackendRec(snapshot, result) {
     function grids(list) {
         return (list || []).map(function (g) { return { trigger_pct: Number(g.trigger_pct), qty_pct: Number(g.qty_pct) }; });
     }
+    var allocDisp = ui.allocation_display || {};
+    var strat = allocDisp.strategic_target || {};
+    var upGridList = grids(up.grids);
+    var downGridList = grids(down.grids);
+    var sellOnlyUi = ui.sell_management_only === true || result.sell_management_only === true;
+    var allocNorm = resolveCreateFormAllocation(
+        strat.base_pct != null ? strat.base_pct : ui.base_alloc_pct,
+        strat.quote_pct != null ? strat.quote_pct : ui.quote_alloc_pct,
+        {
+            hasBuyGrids: downGridList.length > 0,
+            hasSellGrids: upGridList.length > 0,
+            sellManagementOnly: sellOnlyUi
+        }
+    );
     return {
         budget: Number(ui.budget_usd != null ? ui.budget_usd : result.budget),
-        basePct: Number(ui.base_alloc_pct),
-        quotePct: Number(ui.quote_alloc_pct),
-        upGrids: grids(up.grids),
-        downGrids: grids(down.grids),
+        basePct: allocNorm.basePct,
+        quotePct: allocNorm.quotePct,
+        upGrids: upGridList,
+        downGrids: downGridList,
         upTrail: Number(up.trail_pct),
         downTrail: Number(down.trail_pct),
         rebuyTrigger: Number(profit.rebuy_trigger_pct),
         rebuyTrail: Number(profit.rebuy_trail_pct),
         resellTrigger: Number(profit.resell_trigger_pct),
         resellTrail: Number(profit.resell_trail_pct),
+        rebuyEnabled: profit.rebuy_enabled === true,
+        resellEnabled: profit.resell_enabled === true,
         regime: result.regime_tag || (result.regime && result.regime.label) || '—',
         confidence: result.confidence != null ? result.confidence : (result.param_score != null ? result.param_score : 0),
         paramScore: result.param_score,
@@ -4430,15 +5770,14 @@ function dmParamAssistantBackendChipItems(snapshot, rec) {
     return [
         ['Parite', snapshot.symbol || r.symbol || '—'],
         [paramWork.label || 'Parametre çalışma skoru', (paramWork.value != null ? paramWork.value : (r.param_score != null ? r.param_score : rec.paramScore)) + '/100'],
-        ['Rejim', ui.display_regime_label || r.display_regime_label || dmParamAssistantRegimeLabel(r.regime_tag || rec.regime)],
-        ['Risk', dmParamAssistantRiskLabel(
-            ui.effective_risk_state || r.effective_risk_state || r.risk_state || rec.riskState
-        )],
+        ['Piyasa durumu', dmParamAssistantMarketStatusPlain(rec)],
+        ['Risk', dmParamAssistantRiskTonePlain(rec)],
         ['Karar', dmParamAssistantActionLabel(r.final_action || rec.finalAction, r)],
-        [marketConf.label || 'Piyasa güven skoru', (marketConf.value != null ? marketConf.value : (r.confidence != null ? r.confidence : '—')) + '/100'],
-        [profileFit.label || 'Seçilen raf uyum skoru', (profileFit.value != null ? profileFit.value : '—') + (profileFit.value != null ? '/100' : '')],
-        ['Grid', dmParamAssistantGridCountLabel(rec)],
-        ['Raf (V5)', profileTxt]
+        [marketConf.label || 'Piyasa güven skoru', ui.confidence_display_pct || r.confidence_display_pct ||
+            dmParamAssistantFormatConfidencePct(marketConf.value != null ? marketConf.value : (r.confidence != null ? r.confidence : null))],
+        [profileFit.label || (dmParamAssistantIsV6Result(r) ? 'V6 profil uyumu' : 'Seçilen raf uyum skoru'), (profileFit.value != null ? profileFit.value : '—') + (profileFit.value != null ? '/100' : '')],
+        ['Grid', dmParamAssistantIsV6Result(r) ? (dmParamAssistantV6GridPlanPlain(rec) || dmParamAssistantGridCountLabel(rec)) : dmParamAssistantGridCountLabel(rec)],
+        [dmParamAssistantProfileTileLabel(r), profileTxt]
     ];
 }
 
@@ -4499,6 +5838,8 @@ function dmParamAssistantResolveResultConfig(result) {
 
 function dmParamAssistantRenderBackendResult(snapshot, result) {
     if (!result) return false;
+    if (!dmParamAssistantIsOpen()) return false;
+    if (!dmParamAssistantSnapshotMatchesCurrent(snapshot)) return false;
     if (result.stats && result.stats.degraded) return false;
     if (!dmParamAssistantResultIsFresh(snapshot, result)) return false;
 
@@ -4526,15 +5867,18 @@ function dmParamAssistantRenderBackendResult(snapshot, result) {
             rec.introText = dmParamAssistantGreetingText(snapshot, rec);
             dmParamAssistantRecommendation = rec;
             dmParamAssistantTyping = true;
-            var lines = [];
-            if (result.explain) lines.push(result.explain);
-            var sel = result.selection_telemetry || (result.telemetry && result.telemetry.param_pool) || {};
-            var pickLine = dmParamAssistantFormatSelectionPickLine(result);
-        lines.push(
-            pickLine +
-            '. Parametre Skoru ' + (result.param_score != null ? result.param_score : '—') +
-            '/100 · rejim ' + (displayConfig.display_regime_label || result.display_regime_label || dmParamAssistantRegimeLabel(result.regime_tag)) + '.'
-        );
+            var lines = dmParamAssistantIsV6Result(result)
+                ? dmParamAssistantResolveV6StreamLines(result, rec)
+                : [];
+            if (!lines.length) {
+                if (result.explain) lines.push(result.explain);
+                var pickLine = dmParamAssistantFormatSelectionPickLine(result);
+                lines.push(
+                    pickLine +
+                    '. Parametre Skoru ' + (result.param_score != null ? result.param_score : '—') +
+                    '/100 · ' + dmParamAssistantMarketStatusPlain({ backend: result }) + '.'
+                );
+            }
             if (isRecommendedOnly) {
                 if (displayConfig.reference_display_only || displayConfig.reference_display_reason === 'fee_bad_wait') {
                     lines.push('Fee verimi grid için yetersiz; canlı karar BEKLE. Referans olarak geniş aralıklı grid parametreleri gösteriliyor — bu set uygulanmaz.');
@@ -4544,7 +5888,9 @@ function dmParamAssistantRenderBackendResult(snapshot, result) {
             } else if (rec.sellManagementOnly) {
                 lines.push('Yeni alış kapalı; yalnızca satış yönetimi parametreleri önerildi.');
             }
-            lines.push('Not: Bu karar Dynamic Param Score Engine tarafından üretildi; Dinamik Mod her tur başında aynı motoru kullanır.');
+            if (!dmParamAssistantIsV6Result(result)) {
+                lines.push('Not: Bu karar Dynamic Param Score Engine tarafından üretildi; Dinamik Mod her tur başında aynı motoru kullanır.');
+            }
             dmParamAssistantPresentBackendResultUi(snapshot, rec, lines);
             return true;
         }
@@ -4608,12 +5954,16 @@ function dmParamAssistantRenderBackendResult(snapshot, result) {
     rec.introText = dmParamAssistantGreetingText(snapshot, rec);
     dmParamAssistantRecommendation = rec;
     dmParamAssistantTyping = true;
-    var lines = [];
-    if (result.explain) lines.push(result.explain);
-    if (rec.sellManagementOnly) {
-        lines.push('Savunmacı grid profili seçildi; exposure headroom veya min-notional güvenlik kontrolü alış tarafını kapattı. Yalnızca satış yönetimi parametreleri önerildi.');
+    var lines = dmParamAssistantIsV6Result(result)
+        ? dmParamAssistantResolveV6StreamLines(result, rec)
+        : [];
+    if (!lines.length) {
+        if (result.explain) lines.push(result.explain);
+        if (rec.sellManagementOnly) {
+            lines.push('Savunmacı grid profili seçildi; exposure headroom veya min-notional güvenlik kontrolü alış tarafını kapattı. Yalnızca satış yönetimi parametreleri önerildi.');
+        }
+        lines.push('Not: Bu karar Dynamic Param Score Engine tarafından üretildi; Dinamik Mod her tur başında aynı motoru kullanır.');
     }
-    lines.push('Not: Bu karar Dynamic Param Score Engine tarafından üretildi; Dinamik Mod her tur başında aynı motoru kullanır.');
     dmParamAssistantPresentBackendResultUi(snapshot, rec, lines);
     return true;
 }
@@ -4630,9 +5980,22 @@ function dmParamAssistantShowDpsManagementDecision(snapshot, result) {
     var details = document.getElementById('dmParamAssistantDetails');
     var fa = (result.final_action || 'WAIT').toUpperCase();
     var mm = result.management_mode || fa;
+    var isV6 = !!(result.telemetry && (result.telemetry.v6_display || result.telemetry.pool_version === 'v6')) ||
+        (result.selection_telemetry && result.selection_telemetry.pool_version === 'v6') ||
+        result.apply_policy_label;
     var cardClass = 'dm-pa-safe-wait';
     var title = 'Parametre önerisi üretilemedi';
     var intro = 'Havuz taraması sonrası gösterilebilir grid parametresi bulunamadı.';
+    if (isV6 && result.apply_policy_label) {
+        title = result.apply_policy_label;
+        intro = result.explain || 'V6 savunmacı profil üretildi; canlı uygulama güvenlik limitlerine bağlı.';
+        if (result.apply_policy === 'technical_block') {
+            cardClass = 'dm-pa-no-trade';
+            intro = result.explain || 'Parametre üretildi ancak emir teknik nedenle uygulanamaz.';
+        } else if (result.apply_policy === 'high_risk_controlled') {
+            cardClass = 'dm-pa-defensive-ref';
+        }
+    }
     var rt = String(result.result_type || '');
     if (rt === 'single_probe_recommendation') {
         cardClass = 'dm-pa-single-probe';
@@ -4869,15 +6232,16 @@ function openParamAssistantModal() {
     var backdrop = document.getElementById('dmParamAssistantBackdrop');
     if (!modal) return;
     dmParamAssistantClearTimers();
-    dmParamAssistantActiveBackendRun = ++dmParamAssistantBackendRunSeq;
-    dmParamAssistantProgressState = null;
-    dmParamAssistantTyping = false;
-    dmParamAssistantRecommendation = null;
     modal.classList.remove('is-closing');
+    resetParamAssistantSession({
+        keepAppliedSource: true,
+        clearCache: true
+    });
     modal.setAttribute('aria-hidden', 'false');
     if (backdrop) backdrop.setAttribute('aria-hidden', 'true');
     modal.style.display = 'flex';
     if (backdrop) backdrop.style.display = 'none';
+    dmParamAssistantShieldParentModals(true);
 
     var output = document.getElementById('dmParamAssistantOutput');
     var summary = document.getElementById('dmParamAssistantSummary');
@@ -4901,7 +6265,7 @@ function openParamAssistantModal() {
     }
     dmParamAssistantSetCursorVisible(true);
     var kicker = document.getElementById('dmParamAssistantKicker');
-    if (kicker) kicker.textContent = 'AI · V5 exact shelf motoru';
+    if (kicker) kicker.textContent = 'V6 exact shelf engine';
     var titleEl = document.getElementById('dmParamAssistantTitle');
     if (titleEl && AI_ASSISTANT_SPEC.modal && AI_ASSISTANT_SPEC.modal.title) {
         titleEl.textContent = AI_ASSISTANT_SPEC.modal.title;
@@ -4915,12 +6279,11 @@ function openParamAssistantModal() {
     var firstSnapshot = dmParamAssistantCurrentSnapshot();
     dmParamAssistantLastSnapshot = firstSnapshot;
     if (!firstSnapshot.symbol) {
+        dmParamAssistantRecommendation = null;
         dmParamAssistantTyping = false;
         if (status) status.textContent = 'Önce işlem çiftini ve bakiyeni seçmen gerekiyor';
         return;
     }
-
-    dmParamAssistantClearPrep();
 
     var rendered = false;
 
@@ -4970,18 +6333,27 @@ function closeParamAssistantModal(opts) {
     dmParamAssistantClearTimers();
     dmParamAssistantStopTimeProgress();
     dmParamAssistantStopDpsProgress();
-    // Anında DPS: modal kapanınca yalnızca istemci beklemesi durur; sunucu yanıtı yok sayılır.
-    dmParamAssistantActiveBackendRun = ++dmParamAssistantBackendRunSeq;
-    dmParamAssistantTierSelectSeq++;
-    dmParamAssistantProgressState = null;
-    dmParamAssistantTyping = false;
-    dmParamAssistantSetCursorVisible(false);
+    if (!opts.skipReset) {
+        resetParamAssistantSession({
+            keepAppliedSource: !!opts.keepAppliedSource,
+            keepApplyTimers: !!opts.keepApplyTimers,
+            clearCache: opts.clearCache !== false,
+            snapshot: opts.snapshot
+        });
+    } else {
+        dmParamAssistantActiveBackendRun = ++dmParamAssistantBackendRunSeq;
+        dmParamAssistantTierSelectSeq++;
+        dmParamAssistantProgressState = null;
+        dmParamAssistantTyping = false;
+        dmParamAssistantSetCursorVisible(false);
+    }
     function hide() {
         modal.setAttribute('aria-hidden', 'true');
         if (backdrop) backdrop.setAttribute('aria-hidden', 'true');
         modal.style.display = 'none';
         if (backdrop) backdrop.style.display = 'none';
         modal.classList.remove('is-closing');
+        dmParamAssistantShieldParentModals(false);
     }
     if (opts.immediate) {
         hide();
@@ -5005,12 +6377,18 @@ function dmParamAssistantTypeInput(task, done) {
     var value = String(task.value);
     var oldReadonly = el.readOnly;
     if (task.allowReadonly) el.readOnly = false;
-    el.classList.add('dm-ai-input-writing');
-    try { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) {}
-    try { el.focus({ preventScroll: true }); } catch (e) { try { el.focus(); } catch (_) {} }
+    var typing = dmParamAssistantBeginInputTyping(el);
+
     el.value = '';
     dmParamAssistantDispatch(el, 'input');
     var idx = 0;
+    function finishField() {
+        typing.finish(value);
+        dmParamAssistantDispatch(el, 'change');
+        if (task.allowReadonly) el.readOnly = oldReadonly;
+        if (typeof task.after === 'function') task.after();
+        dmParamAssistantSetApplyTimer(done, DM_PARAM_ASSISTANT_FIELD_PAUSE_MS);
+    }
     function step() {
         var chunk = dmParamAssistantInputChunkSize();
         el.value += value.slice(idx, idx + chunk);
@@ -5020,11 +6398,7 @@ function dmParamAssistantTypeInput(task, done) {
             dmParamAssistantSetApplyTimer(step, DM_PARAM_ASSISTANT_INPUT_MS);
             return;
         }
-        dmParamAssistantDispatch(el, 'change');
-        if (task.allowReadonly) el.readOnly = oldReadonly;
-        el.classList.remove('dm-ai-input-writing');
-        if (typeof task.after === 'function') task.after();
-        dmParamAssistantSetApplyTimer(done, DM_PARAM_ASSISTANT_FIELD_PAUSE_MS);
+        finishField();
     }
     step();
 }
@@ -5052,13 +6426,21 @@ function applyParamAssistantRecommendation(rec, onDone) {
         dmParamAssistantAppliedSource = null;
     }
     dmParamAssistantClearTimers();
-    dmParamAssistantClearApplyTimers();
+    dmParamAssistantClearApplyTimers({ keepApplyingFlag: true, keepFieldStyles: true });
+    dmParamAssistantClearAiInputStyles();
     dmParamAssistantApplying = true;
+    var dmModal = document.getElementById('dmModal');
+    if (dmModal) {
+        try { dmModal.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (e) {}
+    }
     var submitBtn = document.getElementById('dmSubmitBtn');
     if (submitBtn) submitBtn.classList.remove('dm-ai-create-pulse');
+    var allocApply = dmParamAssistantAllocationForApply(rec);
+    rec.basePct = allocApply.basePct;
+    rec.quotePct = allocApply.quotePct;
     var tasks = [
         { id: 'fBudget', value: dmParamAssistantInputText(rec.budget, 2) },
-        { id: 'fBasePct', value: dmParamAssistantInputText(rec.basePct, 1) },
+        { id: 'fBasePct', value: dmParamAssistantInputText(rec.basePct, 1), after: syncQuotePctFromBaseInput },
         { id: 'fQuotePct', value: dmParamAssistantInputText(rec.quotePct, 1), allowReadonly: true },
         { id: 'fUpCount', value: String(rec.upGrids.length), after: function () { buildGridRows('upGridRows', rec.upGrids.length, 'up'); } },
         { id: 'fUpTrail', value: dmParamAssistantInputTextTr(rec.upTrail, 2) }
@@ -5087,6 +6469,7 @@ function applyParamAssistantRecommendation(rec, onDone) {
 
     function run(i) {
         if (i >= tasks.length) {
+            dmParamAssistantFinalizeFormAllocation(rec.basePct, rec.quotePct);
             if (submitBtn) {
                 submitBtn.classList.add('dm-ai-create-pulse');
                 submitBtn.setAttribute('data-ai-ready', '1');
@@ -5106,10 +6489,20 @@ function acceptParamAssistantRecommendation() {
     var rec = dmParamAssistantRecommendation;
     var status = document.getElementById('dmParamAssistantStatus');
     if (status) status.textContent = 'Parametreler forma işleniyor...';
-    closeParamAssistantModal({ immediate: true });
-    applyParamAssistantRecommendation(rec, function () {
-        if (status) status.textContent = 'Parametreler forma işlendi.';
+    closeParamAssistantModal({
+        immediate: true,
+        skipReset: true,
+        keepApplyTimers: true
     });
+    dmParamAssistantEnsureCreateModalVisibleForApply();
+    dmParamAssistantSetApplyTimer(function () {
+        applyParamAssistantRecommendation(rec, function () {
+            resetParamAssistantSession({
+                keepAppliedSource: true,
+                clearCache: true
+            });
+        });
+    }, 80);
 }
 
 /** Create bot modal: mini grafik yükle (dmPairChart) */
@@ -5649,7 +7042,7 @@ function validateForm(payload) {
     if (!payload.budget_usd || payload.budget_usd < 10) {
         return "Bütçe en az 10 USD olmalı";
     }
-    if (payload.allocation.base_pct + payload.allocation.quote_pct !== 100) {
+    if (Math.abs(payload.allocation.base_pct + payload.allocation.quote_pct - 100) > 0.5) {
         return "Base ve Quote toplamı 100 olmalı";
     }
     var downGrids = (payload.down && payload.down.grids) || [];

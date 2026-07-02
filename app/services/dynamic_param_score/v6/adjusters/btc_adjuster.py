@@ -5,6 +5,10 @@ from __future__ import annotations
 from typing import Dict, Tuple
 
 from app.services.dynamic_param_score.v6.domain.types import AdjusterDelta, V6InputContract
+from app.services.dynamic_param_score.v6.v6_opportunity import (
+    btc_context_delta_multiplier,
+    scale_adjuster_delta,
+)
 
 
 def _btc_risk(inp: V6InputContract) -> int:
@@ -53,4 +57,9 @@ def btc_adjuster(inp: V6InputContract) -> Tuple[AdjusterDelta, Dict]:
         delta.buy_grid_distance_delta -= 1
         delta.profit_sell_trigger_delta -= 0.5
         delta.tags.append("BTC_B1")
-    return delta, {"btc_risk": risk}
+    btc_class = f"B{min(3, max(0, risk // 25))}"
+    mult = btc_context_delta_multiplier(str(inp.symbol or ""), btc_class)
+    if mult < 1.0:
+        scale_adjuster_delta(delta, mult)
+        delta.tags.append(f"BTC_MULT_{mult}")
+    return delta, {"btc_risk": risk, "btc_context_delta_multiplier": mult}

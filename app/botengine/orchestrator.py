@@ -1735,6 +1735,17 @@ async def start_bot(
     touch_bot_started_at(bot, connectivity_resume=connectivity_resume)
     state = load_state(db, bot_id) or {}
     mark_bot_run_started(state, connectivity_resume=connectivity_resume)
+    if not connectivity_resume:
+        try:
+            import json
+            from app.botengine.strategies.grid_outage_recovery import (
+                prepare_grids_for_cold_run_start,
+            )
+
+            raw_cfg = json.loads(bot.config_json or "{}")
+            prepare_grids_for_cold_run_start(state, raw_cfg)
+        except Exception:
+            pass
     save_state(db, bot_id, account_id, state)
     db.commit()
     if not connectivity_resume:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import List, Optional
 
 from app.services.dynamic_param_score import constants as C
@@ -131,11 +132,30 @@ def _btc_market_risk_score(ind: IndicatorSnapshot) -> int:
     return int(clamp(score, 0, 100))
 
 
+def _fee_scoring_atr_pct(ind: IndicatorSnapshot) -> float:
+    """ATR for fee-efficiency: 5m when representative; else √(time)-scaled 1h ATR."""
+    a5 = float(ind.atr14_pct_5m or 0.0)
+    a1 = float(ind.atr14_pct_1h or 0.0)
+    if a5 >= 0.35:
+        return a5
+    if a1 > 0:
+        # 1h → 5m vol scale ≈ 1/√12 (random-walk)
+        a5_equiv = a1 / math.sqrt(12.0)
+        return max(a5, a5_equiv) if a5 > 0 else a5_equiv
+    return a5 if a5 > 0 else 1.0
+
+
 def _fee_efficiency_score(ind: IndicatorSnapshot, constraints: ExchangeConstraints) -> int:
-    atr = ind.atr14_pct_5m or 1.0
+    atr = _fee_scoring_atr_pct(ind)
     spread = max(float(ind.orderbook_spread_pct or 0.0), 0.0)
     friction = constraints.total_fee_slippage_pct * 2 + spread / 2.0
-    min_spacing = max(friction * C.FEE_SPACING_MULTIPLIER, C.MIN_SPACING_FLOOR_PCT)
+    friction_min = friction * C.FEE_SPACING_MULTIPLIER
+    # Majör / yüksek likidite: skor paydasında mutlak 1.2% zeminini yumuşat (gerçek grid zeminı feasibility'de kalır)
+    qv = float(ind.quote_volume_24h or 0.0)
+    if atr < 0.45 and qv >= 1_000_000:
+        min_spacing = max(friction_min, atr * 2.5, C.MIN_SPACING_FLOOR_PCT * 0.55)
+    else:
+        min_spacing = max(friction_min, C.MIN_SPACING_FLOOR_PCT)
     ratio = atr / min_spacing if min_spacing > 0 else 1.0
     if ratio >= 3.0:
         return 90
@@ -235,52 +255,38 @@ def compute_confidence_score(
     profile_name: Optional[str] = None,
     final_action: Optional[str] = None,
     min_notional: float = C.DEFAULT_MIN_NOTIONAL_USDT,
+    fee_data_available: bool = True,
+    blocking: Optional[List[str]] = None,
 ) -> int:
-    fm = feasibility_meta or {}
-    mn_feas = 90
-    buy_reason = str(fm.get("adjusted_buy_grid_count_reason") or "")
-    if fm.get("min_notional_adjusted"):
-        mn_feas = 55
-    elif fm.get("min_notional_feasible") is False and "headroom" in buy_reason:
-        mn_feas = 65
-    elif fm.get("min_notional_feasible") is False:
-        mn_feas = 25
+    from app.services.dynamic_param_score.controlled_deploy import compute_confidence_components
 
-    parts = [
-        sub.data_quality_score,
-        sub.liquidity_score,
-        sub.spread_score,
-        sub.fee_efficiency_score,
-        sub.exposure_safety_score,
-        mn_feas,
-    ]
-    base = sum(parts) / len(parts)
+    comps = compute_confidence_components(
+        sub,
+        param_score=param_score,
+        feasibility_meta=feasibility_meta,
+        blocking=blocking,
+        fee_data_available=fee_data_available,
+    )
+    if feasibility_meta is not None:
+        feasibility_meta["confidence_components"] = comps
+    base = float(comps["final_deploy_confidence"])
 
     if warnings:
-        base -= min(20, 5 * len(warnings))
+        base -= min(12, 3 * len(warnings))
     if gates:
         adj = sum(1 for g in gates if not getattr(g, "passed", True))
-        base -= min(20, 5 * adj)
-    if 60 <= param_score < 70 and final_action in ("ACTIVE_GRID", "BALANCED_GRID"):
-        base -= 10
+        base -= min(12, 3 * adj)
+    if 60 <= param_score < 70 and final_action in ("ACTIVE_GRID", "BALANCED_GRID", "CONTROLLED_GRID"):
+        base -= 5
     if final_action == "ACTIVE_GRID" and param_score < 75:
-        base -= 10
+        base -= 8
     if profile_name == "ACTIVE_RANGE_GRID_PROFILE" and param_score < 75:
-        base -= 10
-    if sub.fee_efficiency_score < 30:
         base -= 8
-    elif sub.fee_efficiency_score < 50:
-        base -= 5
-    if fm.get("min_notional_adjusted"):
-        base -= 10
-    headroom = float(fm.get("exposure_headroom_quote_usdt") or 999)
-    ladder = float(fm.get("buy_ladder_budget_usdt") or headroom)
+
+    headroom = float((feasibility_meta or {}).get("exposure_headroom_quote_usdt") or 999)
+    ladder = float((feasibility_meta or {}).get("buy_ladder_budget_usdt") or headroom)
     if ladder < float(min_notional) * 2 and headroom < float(min_notional) * 4:
-        base -= 15
-    if "reduced_to" in buy_reason:
-        base -= 8
-    if fm.get("exposure_gate_adjusted"):
-        base -= 5
+        base -= 10
 
     return int(clamp(base, 0, 100))
 

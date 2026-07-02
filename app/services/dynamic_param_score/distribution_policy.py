@@ -25,6 +25,7 @@ class DistributionContext:
     """Inputs for choosing and validating ladder weight distributions."""
 
     risk_state: str = "NORMAL"
+    regime_code: str = ""
     vol_code: str = "V3"
     structure_code: str = "S2"
     liquidity_score: int = 50
@@ -36,6 +37,17 @@ class DistributionContext:
     lower_lows: bool = False
     higher_highs: bool = False
     regime_tag: str = "BALANCED_RANGE"
+    rsi_5m: Optional[float] = None
+    rsi_1h: Optional[float] = None
+    fee_bad: bool = False
+
+    @property
+    def high_momentum_buy_context(self) -> bool:
+        """Late momentum / breakout continuation — tighten 3-grid back-weight."""
+        rc = str(self.regime_code or "").upper()
+        breakout_family = rc in ("R3", "R6", "R7", "R12", "R16")
+        rsi_hi = float(self.rsi_5m or 50) >= 65 or float(self.rsi_1h or 50) >= 60
+        return bool(breakout_family and rsi_hi and (self.fee_bad or int(self.btc_market_risk_score or 50) >= 55))
 
     @property
     def liquidity_good(self) -> bool:
@@ -97,6 +109,7 @@ def distribution_context_from_mapping(data: Optional[Dict[str, Any]]) -> Distrib
         return DistributionContext()
     return DistributionContext(
         risk_state=str(data.get("risk_state") or data.get("risk_class") or "NORMAL"),
+        regime_code=str(data.get("regime_code") or ""),
         vol_code=str(data.get("vol_code") or "V3"),
         structure_code=str(data.get("structure_code") or "S2"),
         liquidity_score=int(data.get("liquidity_score") or 50),
@@ -108,11 +121,31 @@ def distribution_context_from_mapping(data: Optional[Dict[str, Any]]) -> Distrib
         lower_lows=bool(data.get("lower_lows")),
         higher_highs=bool(data.get("higher_highs")),
         regime_tag=str(data.get("regime_tag") or data.get("regime") or "BALANCED_RANGE"),
+        rsi_5m=data.get("rsi_5m"),
+        rsi_1h=data.get("rsi_1h"),
+        fee_bad=bool(data.get("fee_bad")),
     )
+
+
+def is_insufficient_back_weight_for_high_momentum(
+    buy_dist: list,
+    *,
+    ctx: Optional[DistributionContext] = None,
+) -> bool:
+    """Context-aware 3-grid check — not a blanket ban on 20/30/50."""
+    if not ctx or not buy_dist or len(buy_dist) != 3:
+        return False
+    if not ctx.high_momentum_buy_context:
+        return False
+    d = _to_percent_ints(list(buy_dist)[:3])
+    return d[-1] < 55 or d[0] > 15
 
 
 def resolve_two_grid_weights(ctx: DistributionContext) -> Tuple[int, int]:
     """Pick 2-grid buy/sell weights for current market context. 50/50 never returned."""
+    rc = str(ctx.regime_code or "").upper()
+    if rc in ("R8", "R13", "R15") or int(ctx.btc_market_risk_score or 50) < 35:
+        return TWO_GRID_EXTREME
     if ctx.extreme_risk:
         return TWO_GRID_EXTREME
     if ctx.severe_defensive:
@@ -121,20 +154,37 @@ def resolve_two_grid_weights(ctx: DistributionContext) -> Tuple[int, int]:
         if ctx.lower_lows or ctx.btc_pressure or str(ctx.vol_code or "").upper() == "V4":
             return TWO_GRID_DEFENSIVE
         return TWO_GRID_CAUTION
+    if rc in ("R5", "R7"):
+        return TWO_GRID_DEFENSIVE if ctx.btc_pressure else TWO_GRID_NORMAL
+    if int(ctx.btc_market_risk_score or 50) < 55:
+        return TWO_GRID_DEFENSIVE
     if ctx.normal_range_ok:
         return TWO_GRID_NORMAL
     if str(ctx.risk_state or "").upper() in ("CAUTION", "DEFENSIVE"):
+        return TWO_GRID_CAUTION
+    if int(ctx.liquidity_score or 50) < 45 or int(ctx.spread_score or 50) < 45:
         return TWO_GRID_CAUTION
     return TWO_GRID_NORMAL
 
 
 def resolve_three_grid_weights(ctx: DistributionContext) -> Tuple[int, int, int]:
     """Pick 3-grid back-weighted distribution."""
+    if ctx.high_momentum_buy_context:
+        if ctx.severe_defensive or ctx.extreme_risk:
+            return THREE_GRID_SEVERE
+        return THREE_GRID_DEFENSIVE if ctx.fee_bad else THREE_GRID_NORMAL
+    rc = str(ctx.regime_code or "").upper()
+    if rc in ("R8", "R13", "R15"):
+        return THREE_GRID_SEVERE
     if ctx.extreme_risk:
         return THREE_GRID_EXTREME
     if ctx.severe_defensive:
         return THREE_GRID_SEVERE
     if ctx.moderate_defensive:
+        return THREE_GRID_DEFENSIVE
+    if rc in ("R5", "R7"):
+        return THREE_GRID_NORMAL
+    if int(ctx.btc_market_risk_score or 50) < 55:
         return THREE_GRID_DEFENSIVE
     return THREE_GRID_NORMAL
 

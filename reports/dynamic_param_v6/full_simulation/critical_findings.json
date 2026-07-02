@@ -1,0 +1,11 @@
+{
+  "summary": {
+    "profiles_tested": 2295,
+    "path_simulations": 114750,
+    "live_symbols_tested": 50,
+    "critical_error_count": 0,
+    "warning_count": 0
+  },
+  "critical_errors": [],
+  "warnings": []
+}

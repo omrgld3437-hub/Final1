@@ -513,6 +513,9 @@ def tick_dca_grid_trailing(
         base_balance,
         quote_balance,
     )
+    from app.botengine.strategies.grid_outage_recovery import maybe_reset_cold_start_grids
+
+    maybe_reset_cold_start_grids(state, config)
     apply_recovery, gap_sec = should_apply_outage_recovery(state, config)
     if apply_recovery:
         apply_grid_outage_recovery(state, config, P, gap_sec=gap_sec)

@@ -7,7 +7,11 @@ import pytest
 from app.botengine.models import DcaGridTrailingConfig, BotEngineMode
 from app.botengine.strategies.grid_outage_recovery import (
     apply_grid_outage_recovery,
+    clear_pending_grid_triggers,
     gap_threshold_sec,
+    is_cold_run_start,
+    maybe_reset_cold_start_grids,
+    prepare_grids_for_cold_run_start,
     should_apply_outage_recovery,
 )
 from app.botengine.strategies.dca_grid_trailing import tick_dca_grid_trailing
@@ -299,3 +303,51 @@ def test_flush_outage_recovery_emits_connectivity_stable(monkeypatch):
     assert flush_calls == [7]
     assert "_outage_recovery_log" not in state
     assert "_pending_connectivity_stable" not in state
+
+
+def test_cold_run_start_skips_outage_recovery():
+    cfg = _cfg()
+    st = _state_with_gap(
+        bot_run_started_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        last_tick_at=datetime.now(timezone.utc) - timedelta(seconds=120),
+    )
+    assert is_cold_run_start(st) is True
+    ok, gap = should_apply_outage_recovery(st, cfg)
+    assert ok is False
+    assert gap is not None
+
+
+def test_cold_run_start_clears_pending_triggers():
+    cfg = _cfg()
+    st = _state_with_gap(
+        bot_run_started_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        sell_grid_trigger_price=[101.0],
+        sell_grid_peak_price=[102.0],
+        buy_grid_trigger_price=[99.0],
+        buy_grid_trough_price=[98.0],
+    )
+    prepare_grids_for_cold_run_start(
+        st,
+        {
+            "symbol": "ETHUSDT",
+            "sell_grids": [{"sell_grid_pct": 1.0, "sell_qty_pct_of_base": 10.0}],
+            "buy_grids": [{"buy_grid_pct": 1.0, "buy_qty_pct_of_quote": 10.0}],
+            "sell_trigger_trailing_pct": 0.3,
+            "buy_trigger_trailing_pct": 0.3,
+        },
+    )
+    assert st["sell_grid_trigger_price"][0] is None
+    assert st["buy_grid_trigger_price"][0] is None
+    assert st.get("_cold_start_grids_cleared") is True
+
+
+def test_cold_start_first_tick_does_not_mass_trigger():
+    cfg = _cfg()
+    st = _state_with_gap(
+        bot_run_started_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        sell_grid_trigger_price=[101.0],
+        sell_grid_peak_price=[101.5],
+    )
+    maybe_reset_cold_start_grids(st, cfg)
+    tick_dca_grid_trailing(st, cfg, 100.0, 1.0, 50.0)
+    assert st["sell_grid_trigger_price"][0] is None

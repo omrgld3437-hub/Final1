@@ -274,7 +274,11 @@ async def collect_market_data(symbol: str) -> MarketDataBundle:
         "window_days": C.DATA_WINDOW_DAYS,
         "5m": {"actual": len(c5 or []), "expected": C.KLINES_LIMIT_5M},
         "15m": {"actual": len(c15 or []), "expected": C.KLINES_LIMIT_15M},
-        "1h": {"actual": len(c1h or []), "expected": C.KLINES_LIMIT_1H},
+        "1h": {
+            "actual": len(c1h or []),
+            "expected": C.KLINES_LIMIT_1H,
+            "window_days": C.DATA_WINDOW_1H_DAYS,
+        },
         "4h": {"actual": len(c4h or []), "expected": C.KLINES_LIMIT_4H},
         "1m": {"actual": len(c1m or []), "expected": C.KLINES_LIMIT_1M},
     }

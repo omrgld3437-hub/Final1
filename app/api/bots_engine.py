@@ -4892,6 +4892,14 @@ async def bots_start(
     state = load_state(db, bot.id) or {}
     state["run_id"] = f"cmd{command_id}"
     mark_bot_run_started(state, connectivity_resume=False)
+    try:
+        from app.botengine.strategies.grid_outage_recovery import (
+            prepare_grids_for_cold_run_start,
+        )
+
+        prepare_grids_for_cold_run_start(state, raw_cfg)
+    except Exception:
+        pass
     save_state(db, bot.id, bot.account_id, state)
     logger.info("BOT_RUN_ID set bot_id=%s run_id=cmd%s", bot.id, command_id)
     account = db.query(Account).filter(Account.id == bot.account_id).first()

@@ -59,6 +59,7 @@ def mark_bot_run_started(
     """State'te oturum başlangıcı — UI süre sayacı tek kaynak."""
     if connectivity_resume:
         return
+    state.pop("_cold_start_grids_cleared", None)
     state[_STATE_KEY] = _utc_now_iso()
 
 

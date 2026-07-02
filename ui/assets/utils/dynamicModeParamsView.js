@@ -169,8 +169,78 @@
         return { text: 'Beklemede', cls: 'dyn-param-status--warn' };
     }
 
-    function paramRow(label, value, cls) {
-        return '<div class="param-row' + (cls ? ' ' + cls : '') + '"><span class="param-label">' + esc(label) + '</span><span class="param-value">' + esc(value) + '</span></div>';
+    function fmtPctDisplay(v) {
+        if (v == null || isNaN(Number(v))) return null;
+        var n = Number(v);
+        if (typeof fmtNum === 'function') {
+            return fmtNum(n, Math.abs(n - Math.round(n)) < 0.0001 ? 0 : 2);
+        }
+        return Math.abs(n - Math.round(n)) < 0.0001 ? String(Math.round(n)) : n.toFixed(2);
+    }
+
+    function fmtRefPrice(v) {
+        if (v == null || isNaN(Number(v))) return '—';
+        if (typeof fmtBotPrice === 'function') return fmtBotPrice(v, [v]);
+        return fmtNumLocal(v, 4);
+    }
+
+    function resolveConfigAllocation(cfg, allocOverride) {
+        cfg = cfg || {};
+        var alloc = cfg.allocation || {};
+        var basePct = allocOverride && allocOverride.base_alloc_pct != null
+            ? allocOverride.base_alloc_pct
+            : (cfg.base_alloc_pct != null ? cfg.base_alloc_pct : (alloc.base_pct != null ? alloc.base_pct : null));
+        var quotePct = allocOverride && allocOverride.quote_alloc_pct != null
+            ? allocOverride.quote_alloc_pct
+            : (cfg.quote_alloc_pct != null ? cfg.quote_alloc_pct : (alloc.quote_pct != null ? alloc.quote_pct : null));
+        if (quotePct == null && basePct != null && !isNaN(Number(basePct))) {
+            quotePct = 100 - Number(basePct);
+        }
+        return { basePct: basePct, quotePct: quotePct };
+    }
+
+    function resolveDynamicAllocation(dyn, applied) {
+        dyn = dyn || {};
+        applied = applied || {};
+        var fromApplied = {
+            base_alloc_pct: applied.base_alloc_pct,
+            quote_alloc_pct: applied.quote_alloc_pct,
+        };
+        if (fromApplied.base_alloc_pct != null || fromApplied.quote_alloc_pct != null) {
+            return fromApplied;
+        }
+        var pos = dyn.position || {};
+        if (pos.base_alloc_pct != null || pos.quote_alloc_pct != null) {
+            return {
+                base_alloc_pct: pos.base_alloc_pct,
+                quote_alloc_pct: pos.quote_alloc_pct,
+            };
+        }
+        return null;
+    }
+
+    /** Genel blok — bot detay Parametreler modalı ile aynı satırlar. */
+    function renderGeneralParamsBlock(cfg, symbol, referencePrice, allocOverride, opts) {
+        cfg = cfg || {};
+        opts = opts || {};
+        var budget = cfg.initial_capital_usdt != null ? cfg.initial_capital_usdt : (cfg.budget_usd != null ? cfg.budget_usd : null);
+        var ref = referencePrice != null && !isNaN(Number(referencePrice))
+            ? referencePrice
+            : (cfg.reference_price != null && !isNaN(Number(cfg.reference_price)) ? Number(cfg.reference_price) : null);
+        var alloc = resolveConfigAllocation(cfg, allocOverride);
+        var baseDisp = alloc.basePct != null ? fmtPctDisplay(alloc.basePct) + '%' : '—';
+        var quoteDisp = alloc.quotePct != null ? fmtPctDisplay(alloc.quotePct) + '%' : '—';
+        var budgetDisp = typeof fmtUsd === 'function' ? fmtUsd(budget) : fmtNumLocal(budget, 2);
+        var html = '<div class="param-block"><div class="param-block-title">Genel</div>';
+        html += paramRow('Sembol', symbol || cfg.symbol || '—');
+        if (!opts.hideBudget) {
+            html += paramRow('Bütçe (USDT)', budgetDisp);
+        }
+        html += paramRow('Başlangıç fiyatı (referans)', fmtRefPrice(ref));
+        html += paramRow('Base dağılım (%)', baseDisp);
+        html += paramRow('Quote dağılım (%)', quoteDisp);
+        html += '</div>';
+        return html;
     }
 
     function renderGridTable(grids, side) {
@@ -315,18 +385,28 @@
     /** Full Dinamik tab for bot detay / leaderboard parametreler modal. opts.showBalances: bakiye satırları (leaderboard: false). */
     function renderBotDetailDynamicTab(dyn, state, symbol, cfg, opts) {
         dyn = dyn || {};
+        cfg = cfg || {};
+        opts = opts || {};
         if (!dyn.enabled) {
             return '<p class="param-hint">Bu bot statik parametrelerle çalışıyor.</p>';
         }
 
+        var snap = dyn.snapshot;
+        var applied = snap && snap.applied;
+        var allocOverride = resolveDynamicAllocation(dyn, applied);
+        var html = renderGeneralParamsBlock(cfg, symbol, opts.referencePrice, allocOverride, opts);
+
         if (dyn.first_cycle_manual) {
-            return '<p class="param-hint">İlk tur manuel başlangıç değerleriyle çalışıyor; dinamik değerler tur 2 başında görünecek.</p>';
+            html += '<p class="param-hint">İlk tur manuel başlangıç değerleriyle çalışıyor; dinamik değerler tur 2 başında görünecek.</p>';
+            return html;
         }
 
-        var snap = dyn.snapshot;
-        if (!snap || !snap.applied) return '<p class="param-hint">Henüz dinamik tur verisi yok.</p>';
+        if (!snap || !applied) {
+            html += '<p class="param-hint">Henüz dinamik tur verisi yok.</p>';
+            return html;
+        }
 
-        var html = renderAppliedParamsBlock(snap.applied || {}, snap);
+        html += renderAppliedParamsBlock(applied, snap);
         if (dyn.emergency) {
             var emg = dyn.emergency;
             var emgAction = emg.action || emg.code || '';
@@ -565,6 +645,7 @@
         wrapLogoForDynamicMode: wrapLogoForDynamicMode,
         dynamicModeStatusLabel: dynamicModeStatusLabel,
         renderLeaderboardDynamicSection: renderLeaderboardDynamicSection,
+        renderGeneralParamsBlock: renderGeneralParamsBlock,
         renderBotDetailDynamicTab: renderBotDetailDynamicTab,
         renderParamModalTabsHtml: renderParamModalTabsHtml,
         summarizeDynSnapshotActions: summarizeDynSnapshotActions,

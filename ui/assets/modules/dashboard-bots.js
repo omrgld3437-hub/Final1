@@ -93,6 +93,7 @@ function adoptEarlyBotsDomBoot(accountId) {
 
 function restoreFinanceBotsDomFromSessionCache(accountId, bots) {
     if (!accountId) return false;
+    if (typeof DashboardAccountScope !== 'undefined' && !DashboardAccountScope.isActiveAccount(accountId)) return false;
     if (adoptEarlyBotsDomBoot(accountId)) return true;
     try {
         var data = readFinanceBotsDomCache(accountId);
@@ -225,18 +226,27 @@ window.activateBotsTab = activateBotsTab;
 /** Hızlı bot listesi: /api/bots-engine ile hemen listeyi doldurur; summary gelene kadar "Yükleniyor" kalmaz. */
 function loadBotsListFast(accountId) {
     if (!accountId || !window.apiClient) return;
-    window.apiClient.get('/api/bots-engine?account_id=' + accountId, { timeout: 8000 })
+    if (typeof DashboardAccountScope !== 'undefined' && !DashboardAccountScope.isActiveAccount(accountId)) return;
+    var reqAccountId = accountId;
+    var reqScopeGen = (typeof DashboardAccountScope !== 'undefined') ? DashboardAccountScope.getScopeGeneration() : null;
+    window.apiClient.get('/api/bots-engine?account_id=' + reqAccountId, { timeout: 8000 })
         .then(function(res) {
+            if (typeof DashboardAccountScope !== 'undefined') {
+                if (!DashboardAccountScope.isScopeGenerationCurrent(reqScopeGen, reqAccountId)) return;
+            }
             // Summary zaten geldiyse (current_usd dahil) onu ezme; sadece henüz veri yoksa doldur
             if (State.summary && Array.isArray(State.summary.bots) && State.summary.bots.length > 0) return;
+            var list = Array.isArray(res.bots) ? res.bots : [];
+            if (typeof DashboardAccountScope !== 'undefined') {
+                list = DashboardAccountScope.filterBotsForAccount(list, reqAccountId);
+            }
             if (_financeBotsTableHasRows() && isBotsTabCacheReady()) {
-                var list = Array.isArray(res.bots) ? res.bots : [];
                 if (!list.length) {
                     State.bots = [];
                     renderBotsList([], { clearWhenEmpty: true });
                     return;
                 }
-                var mapped = list.map(function(r) {
+                var mappedFast = list.map(function(r) {
                     var cfg = r.config || {};
                     var budget = Number(cfg.initial_capital_usdt || cfg.budget_usd || cfg.bot_budget_usdt) || 0;
                     var existing = (State.bots || []).find(function(b) { return (b.bot_id || b.id) === r.bot_id; });
@@ -262,14 +272,13 @@ function loadBotsListFast(accountId) {
                         daily_pnl_usd: existing.daily_pnl_usd != null ? existing.daily_pnl_usd : base.daily_pnl_usd
                     });
                 });
-                var idsSig = mapped.map(function (b) { return String(b.bot_id || b.id || ''); }).sort().join(',');
+                var idsSig = mappedFast.map(function (b) { return String(b.bot_id || b.id || ''); }).sort().join(',');
                 if (idsSig === _financeBotsIdsSignature) {
-                    State.bots = hydrateBotsWithMetricsCache(mapped);
+                    State.bots = hydrateBotsWithMetricsCache(mappedFast);
                     patchFinanceBotsMetrics(State.bots);
                     return;
                 }
             }
-            var list = Array.isArray(res.bots) ? res.bots : [];
             var mapped = list.map(function(r) {
                 var cfg = r.config || {};
                 var budget = Number(cfg.initial_capital_usdt || cfg.budget_usd || cfg.bot_budget_usdt) || 0;
@@ -449,6 +458,9 @@ function updateFinanceBotsSortButtonUi(sortBy) {
 function renderBotsList(bots, opts) {
     if (typeof window.__DEBUG_DASH__ !== 'undefined' && window.__DEBUG_DASH__) console.count('renderBotsList');
     bots = Array.isArray(bots) ? bots : [];
+    if (typeof DashboardAccountScope !== 'undefined') {
+        bots = DashboardAccountScope.guardBotsBeforeRender(bots, State.accountId, 'renderBotsList');
+    }
     if (!(opts && opts.forceFullRender) && isBotsTabActive() && isBotsTabCacheReady()) {
         var idsSig = bots.map(function (b) { return String(b.bot_id || b.id || ''); }).sort().join(',');
         if (idsSig === _financeBotsIdsSignature) {

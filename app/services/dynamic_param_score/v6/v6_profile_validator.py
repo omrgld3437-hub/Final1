@@ -34,7 +34,8 @@ def validate_profile(profile: V6CatalogProfile) -> List[str]:
             errors.append(f"{side}_qty_sum_not_100")
         tpls = QTY_TEMPLATES.get(len(grids), [])
         amounts = tuple(g.amount_pct for g in grids)
-        if tpls and amounts not in tpls:
+        spec_profile = bool((profile.modules or {}).get("regime_behavior_spec"))
+        if tpls and amounts not in tpls and not spec_profile:
             errors.append(f"{side}_qty_template_invalid")
     if profile.buyback_after_sell_enabled:
         bt = trailing_pct_from_code(profile.buyback_trailing_code)

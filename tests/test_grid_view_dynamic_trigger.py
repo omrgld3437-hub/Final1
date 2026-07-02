@@ -91,6 +91,28 @@ def test_pending_sell_grid_uses_calc_trigger():
     sells = [p for p in gp if p["type"] == "sell"]
     assert sells[0]["trigger_price"] == 1020.0  # 1000 × 1.02
     assert sells[1]["trigger_price"] == 1040.0  # 1000 × 1.04
+    assert sells[0]["status"] == "bekliyor"
+    assert sells[1]["status"] == "bekliyor"
+
+
+def test_armed_grid_status_tetiklendi_not_anchor_only():
+    ref = 1000.0
+    state = {
+        "reference_price": ref,
+        "sell_grid_fired": [False],
+        "sell_grid_trigger_price": [1010.0],
+        "sell_grid_peak_price": [1012.0],
+        "sell_grid_fill_price": [None],
+        "buy_grid_fired": [False],
+        "buy_grid_trigger_price": [None],
+        "buy_grid_trough_price": [None],
+        "buy_grid_fill_price": [None],
+        "mode": "IDLE",
+    }
+    gp, _pp, _meta = compute_grid_profit_view(state, _manual_cfg(), ref)
+    sells = [p for p in gp if p["type"] == "sell"]
+    assert sells[0]["status"] == "tetiklendi"
+    assert sells[0]["anchor"] is not None
 
 
 def test_fired_buy_grid_uses_stored_trigger():

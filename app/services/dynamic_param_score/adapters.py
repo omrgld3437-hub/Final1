@@ -24,8 +24,11 @@ from app.services.dynamic_param_score.regime_display import (
     build_display_regime_label_v5,
     build_route_semantic_label,
     derive_safety_result_label,
+    format_confidence_pct,
+    market_status_plain,
     risk_label_from_route,
     risk_state_from_route,
+    risk_tone_plain,
 )
 
 PARAM_ASSISTANT_RESULT_SCHEMA = "3.4"  # 3.4: selection trace counts + fee display contract
@@ -213,8 +216,12 @@ def _profit_ui_values(
         and sell_n > 0
         and params.rebuy_trigger_pct is not None
     )
-    rebuy_on = params.rebuy_enabled and (buy_n > 0 or post_sell_buyback) and not params.buy_disabled
-    resell_on = params.resell_enabled and sell_n > 0
+    rebuy_on = (
+        params.rebuy_enabled
+        and (buy_n > 0 or post_sell_buyback)
+        and not params.emergency_no_buy
+    )
+    resell_on = params.resell_enabled and rebuy_on and sell_n > 0
 
     if ui_display:
         rebuy_trigger = (
@@ -307,8 +314,16 @@ def _exposure_frac_from_telemetry(tel: Dict[str, Any]) -> float:
     }.get(tier, 0.0)
 
 
-def _fee_display_from_selection(pool_meta: dict) -> dict:
+def _fee_display_v6() -> dict:
+    from app.services.dynamic_param_score.v6.v6_pa_display import fee_display_v6
+
+    return fee_display_v6()
+
+
+def _fee_display_from_selection(pool_meta: dict, *, pool_version: str = "") -> dict:
     """UI-facing fee breakdown — never show %0 when live fee data is missing."""
+    if str(pool_version or pool_meta.get("pool_version") or "").lower() == "v6":
+        return _fee_display_v6()
     ctx = pool_meta.get("selection_context") or {}
     cost = ctx.get("cost_resolution") or {}
     if cost:
@@ -465,6 +480,9 @@ def _build_score_labels(
     profile_score = sel_ctx.get("selected_profile_score")
     template_key = str(sel_ctx.get("selected_template_key") or "")
     is_v5 = _is_v5_selection(sel_ctx, template_key)
+    is_v6 = str(sel_ctx.get("engine_version") or "") == "DPS_ENGINE_V6" or str(
+        sel_ctx.get("selection_type") or ""
+    ) == "v6_catalog"
     labels: Dict[str, Any] = {
         "market_confidence": {
             "label": "Piyasa uygunluk skoru",
@@ -493,7 +511,7 @@ def _build_score_labels(
             "final_deploy_confidence", decision.confidence_score
         )
         labels["market_confidence"]["label"] = "Final deploy güveni"
-    if runtime_safe or (scored <= 0 and profile_score in (0, 0.0, None) and not is_v5):
+    if runtime_safe or (scored <= 0 and profile_score in (0, 0.0, None) and not is_v5 and not is_v6):
         labels["runtime_safety_score"] = {
             "label": "Runtime güvenlik skoru",
             "value": decision.param_score,
@@ -509,8 +527,12 @@ def _build_score_labels(
             "label": "Parametre çalışma skoru",
             "value": decision.param_score,
         }
-        fit_label = "Seçilen raf uyum skoru" if is_v5 else "Seçilen profil uyum skoru"
-        fit_value = 100 if is_v5 and sel_ctx.get("exact_route_hit") else profile_score
+        if is_v6:
+            fit_label = "V6 profil uyumu"
+            fit_value = profile_score if profile_score is not None else decision.param_score
+        else:
+            fit_label = "Seçilen raf uyum skoru" if is_v5 else "Seçilen profil uyum skoru"
+            fit_value = 100 if is_v5 and sel_ctx.get("exact_route_hit") else profile_score
         labels["profile_fit_score"] = {
             "label": fit_label,
             "value": fit_value,
@@ -620,6 +642,14 @@ def _params_to_param_assistant_ui(
         fallback_route=fallback_route,
         fallback_used=fallback_used,
     )
+    v6d_ui = (decision.telemetry or {}).get("v6_display") or {}
+    if str(template_key or "").startswith("DPLV6_") and v6d_ui:
+        rh = str(v6d_ui.get("regime_headline") or "")
+        gp = str(v6d_ui.get("grid_plan_plain") or "")
+        if rh and gp:
+            profile_display = f"{rh} · {gp}"
+        elif rh:
+            profile_display = rh
     ui_payload: Dict[str, Any] = {
         "symbol": decision.symbol,
         "budget_usd": round(budget, 2),
@@ -641,7 +671,7 @@ def _params_to_param_assistant_ui(
             "resell_trigger_pct": resell_trigger,
             "resell_trail_pct": resell_trail,
             "rebuy_enabled": cfg["rebuy_enabled"],
-            "resell_enabled": cfg.get("resell_enabled", True),
+            "resell_enabled": cfg.get("resell_enabled", False),
             "basis_mode": "grid_only",
         },
         "max_buy_levels": cfg.get("max_buy_levels"),
@@ -698,8 +728,16 @@ def _params_to_param_assistant_ui(
     align = tel.get("scenario_alignment") or {}
     if align:
         ui_payload["scenario_alignment"] = align
-        if align.get("regime_label"):
-            ui_payload["display_regime_label"] = str(align["regime_label"])
+        v6d_align = tel.get("v6_display") or {}
+        plain = str(v6d_align.get("market_status_plain") or align.get("regime_label_plain") or "")
+        if plain:
+            ui_payload["market_status_plain"] = plain
+            ui_payload["display_regime_label"] = plain
+        technical = str(
+            v6d_align.get("display_regime_technical") or align.get("regime_label") or ""
+        )
+        if technical:
+            ui_payload["display_regime_technical"] = technical
         ui_payload["legacy_regime_tag"] = align.get("legacy_regime_tag") or tel.get("legacy_regime_tag")
     if reference_display_template_key:
         ui_payload["reference_display_template_key"] = reference_display_template_key
@@ -732,6 +770,17 @@ def decision_to_recommendation_config(
 
 def decision_to_ui_config(decision: DynamicParamDecision, budget: float) -> Optional[Dict[str, Any]]:
     """Param Assistant UI schema (compatible with create-modal)."""
+    if _is_v6_selection(decision) and decision.params:
+        p = decision.params
+        fa = decision.final_action
+        if int(p.sell_grid_count or 0) > 0 or int(p.buy_grid_count or 0) > 0 or p.rebuy_enabled:
+            return _params_to_param_assistant_ui(
+                decision,
+                budget,
+                p,
+                final_action=fa,
+                recommendation_only=not decision.deployable,
+            )
     if not decision.deployable or not decision.params:
         return None
     fa = decision.final_action
@@ -780,18 +829,25 @@ def params_to_grid_config(
         and int(params.sell_grid_count or 0) > 0
         and params.rebuy_trigger_pct is not None
     )
-    buy_disabled = params.buy_disabled or params.buy_grid_count == 0 or params.emergency_no_buy
+    buy_disabled = (
+        params.buy_disabled
+        or params.emergency_no_buy
+        or (params.buy_grid_count == 0 and not post_sell_buyback)
+    )
     min_tr = max(float(min_trailing_pct or 0.0), 0.0)
+    is_v6 = str(pool_version or params.pool_version or "").lower() == "v6"
 
     from app.services.dynamic_param_score.param_generator.grid_distribution import cap_trailing_pct
 
-    if params.trailing_enabled:
+    if is_v6 and params.resell_trail_pct is not None:
+        sell_trail = max(float(params.resell_trail_pct or 0.0), min_tr)
+    elif params.trailing_enabled:
         sell_trail = max(float(params.trailing_callback_pct or 0.0), min_tr)
     elif params.sell_grid_count > 0:
         sell_trail = max(float(params.trailing_callback_pct or 0.0), min_tr)
     else:
         sell_trail = 0.0
-    if sell_grids:
+    if sell_grids and not is_v6:
         sell_trail = max(cap_trailing_pct(sell_trail, float(sell_grids[0]["sell_grid_pct"])), min_tr)
 
     buy_trail_blocked = (sell_only and not post_sell_buyback) or (
@@ -799,19 +855,24 @@ def params_to_grid_config(
     )
     if buy_trail_blocked:
         buy_trail = 0.0
+    elif is_v6 and params.rebuy_trail_pct is not None:
+        buy_trail = max(float(params.rebuy_trail_pct or 0.0), min_tr)
     elif params.trailing_enabled or params.buy_grid_count > 0:
         buy_trail = max(float(params.trailing_callback_pct or 0.0) * 0.8, min_tr * 0.8)
     else:
         buy_trail = 0.0
-    if buy_grids and not buy_trail_blocked:
+    if buy_grids and not buy_trail_blocked and not is_v6:
         buy_trail = max(
             cap_trailing_pct(buy_trail, float(buy_grids[0]["buy_grid_pct"])),
             min_tr * 0.8,
         )
 
-    rebuy_enabled = params.rebuy_enabled and (
-        params.buy_grid_count > 0 or post_sell_buyback
-    ) and not buy_disabled
+    rebuy_enabled = (
+        params.rebuy_enabled
+        and (params.buy_grid_count > 0 or post_sell_buyback)
+        and not params.emergency_no_buy
+    )
+    resell_enabled = bool(params.resell_enabled and rebuy_enabled)
 
     rebuy_trigger = (
         float(params.rebuy_trigger_pct)
@@ -826,12 +887,12 @@ def params_to_grid_config(
     resell_trigger = (
         float(params.resell_trigger_pct)
         if params.resell_trigger_pct is not None
-        else round(params.take_profit_pct, 4) if params.sell_grid_count > 0 else 0.0
+        else round(params.take_profit_pct, 4) if resell_enabled else 0.0
     )
     resell_trail_val = (
         float(params.resell_trail_pct)
         if params.resell_trail_pct is not None
-        else round(sell_trail, 4) if params.sell_grid_count > 0 else 0.0
+        else round(sell_trail, 4) if resell_enabled else 0.0
     )
 
     fa = final_action or params.management_mode or ""
@@ -852,7 +913,7 @@ def params_to_grid_config(
         "min_net_profit_rate": round(params.min_cycle_profit_after_fee_pct / 100.0, 6),
         "max_base_exposure_frac": round(params.max_base_exposure_frac, 4),
         "rebuy_enabled": rebuy_enabled,
-        "resell_enabled": params.resell_enabled,
+        "resell_enabled": resell_enabled,
         "buy_disabled": buy_disabled,
         "sell_only_mode": sell_only,
         "cancel_existing_buy_orders": params.cancel_existing_buy_orders,
@@ -877,6 +938,8 @@ def params_to_grid_config(
 
 def _is_management_decision(decision: DynamicParamDecision) -> bool:
     """True only when there is no grid recommendation to show."""
+    if _is_v6_selection(decision) and _resolve_recommendation_params(decision) is not None:
+        return False
     if _resolve_recommendation_params(decision) is not None:
         return False
     fa = str(decision.final_action or "")
@@ -901,6 +964,8 @@ def decision_to_param_assistant_result(
     decision: DynamicParamDecision, budget: float, symbol: str
 ) -> Dict[str, Any]:
     """Adapter for legacy param-assistant response shape."""
+    v6d_early = (decision.telemetry or {}).get("v6_display") or {}
+    is_v6 = bool(v6d_early) or str((decision.telemetry or {}).get("pool_version") or "").lower() == "v6"
     ui_config = decision_to_ui_config(decision, budget)
     recommendation_config = decision_to_recommendation_config(decision, budget)
     display_config = ui_config or recommendation_config
@@ -908,23 +973,39 @@ def decision_to_param_assistant_result(
     up_n = len((display_config or {}).get("up", {}).get("grids", []) or [])
     down_n = len((display_config or {}).get("down", {}).get("grids", []) or [])
     deploy = bool(decision.deployable and ui_config is not None)
+    if is_v6 and decision.params and (ui_config or recommendation_config):
+        deploy = bool(decision.deployable)
+        if not ui_config:
+            ui_config = recommendation_config
+        has_ui = ui_config is not None
     fa = decision.final_action
     management = _is_management_decision(decision)
     mm = management_mode_from_action(fa)
-    apply_policy = apply_policy_from_decision(fa, deployable=deploy)
+    if is_v6:
+        from app.services.dynamic_param_score.v6.v6_opportunity import apply_policy_v6, apply_policy_label_v6
+
+        apply_policy = apply_policy_v6(decision)
+        apply_policy_label = apply_policy_label_v6(apply_policy)
+    else:
+        apply_policy = apply_policy_from_decision(fa, deployable=deploy)
+        apply_policy_label = None
     safe_overlay = None
     can_apply_safe_overlay = False
 
-    if management and not deploy:
-        safe_overlay = build_safe_overlay_for_decision(decision)
-        can_apply_safe_overlay = True
-        apply_policy = apply_policy_from_decision(fa, deployable=False)
+    if is_v6 and decision.params and has_ui:
+        management = False
+        decision_label = "deploy" if deploy else "recommended_grid"
+    elif management and not deploy:
+        if not is_v6:
+            safe_overlay = build_safe_overlay_for_decision(decision)
+            can_apply_safe_overlay = True
+            apply_policy = apply_policy_from_decision(fa, deployable=False)
         decision_label = "management_decision"
     elif has_ui and not deploy:
         decision_label = "recommended_grid"
     elif not deploy or not has_ui:
         decision_label = "management_decision" if management else "abstain"
-        if management:
+        if management and not is_v6:
             safe_overlay = build_safe_overlay_for_decision(decision)
             can_apply_safe_overlay = True
     elif fa == FinalAction.SELL_MANAGEMENT_ONLY.value:
@@ -934,17 +1015,24 @@ def decision_to_param_assistant_result(
 
     sub = decision.telemetry.get("sub_scores", {})
     v6d = decision.telemetry.get("v6_display") or {}
+    is_v6 = bool(v6d) or str(decision.telemetry.get("pool_version") or "").lower() == "v6"
     pool_meta = decision.telemetry.get("param_pool") or {}
+    if is_v6 and not pool_meta.get("pool_version"):
+        pool_meta = {**pool_meta, "pool_version": decision.telemetry.get("pool_version") or "v6"}
     diag = pool_meta.get("diagnostics") or {}
     data_window = decision.telemetry.get("data_window") or {}
     market_sig = decision.telemetry.get("market_signature") or {}
     sel_ctx = pool_meta.get("selection_context") or {}
     route_key = str(sel_ctx.get("route_key") or "")
-    is_v6 = bool(v6d)
     is_v5 = False
     if is_v6:
         scen = v6d.get("scenario_identity") or {}
-        effective_risk = str(v6d.get("severity") or decision.risk_state or "NORMAL")
+        effective_risk = str(
+            v6d.get("risk_display_label")
+            or v6d.get("severity")
+            or decision.risk_state
+            or "NORMAL"
+        )
         if effective_risk == "DEF":
             effective_risk = "DEFENSIVE"
     elif route_key and len(route_key.split("|")) == 7:
@@ -961,9 +1049,47 @@ def decision_to_param_assistant_result(
             or "NORMAL"
         )
     display_regime = (display_config or {}).get("display_regime_label") or ""
-    if is_v6 and not display_regime:
+    market_status_plain_out = (display_config or {}).get("market_status_plain") or ""
+    risk_tone_plain_out = (display_config or {}).get("risk_tone_plain") or ""
+    display_regime_technical = (display_config or {}).get("display_regime_technical") or ""
+    confidence_display_pct = format_confidence_pct(decision.confidence_score)
+    if is_v6:
         scen = v6d.get("scenario_identity") or {}
-        display_regime = str(scen.get("name") or decision.regime_tag or "")
+        regime_id = str(scen.get("regime_id") or decision.regime_tag or "")
+        if not market_status_plain_out:
+            market_status_plain_out = str(
+                v6d.get("market_status_plain") or market_status_plain(regime_id)
+            )
+        if not risk_tone_plain_out:
+            risk_tone_plain_out = str(
+                v6d.get("risk_tone_plain")
+                or risk_tone_plain(str(v6d.get("risk_display_label") or effective_risk or ""))
+            )
+        if not display_regime_technical:
+            display_regime_technical = str(
+                v6d.get("display_regime_technical")
+                or (decision.telemetry.get("scenario_alignment") or {}).get("regime_label")
+                or ""
+            )
+        display_regime = market_status_plain_out or display_regime
+    elif not display_regime:
+        display_regime = market_status_plain("", legacy_tag=str(decision.regime_tag or ""))
+        market_status_plain_out = display_regime
+        risk_tone_plain_out = risk_tone_plain(str(effective_risk or decision.risk_state or ""))
+    if ui_config:
+        ui_config["market_status_plain"] = market_status_plain_out or display_regime
+        ui_config["display_regime_label"] = market_status_plain_out or display_regime
+        ui_config["risk_tone_plain"] = risk_tone_plain_out
+        ui_config["confidence_display_pct"] = confidence_display_pct
+        if display_regime_technical:
+            ui_config["display_regime_technical"] = display_regime_technical
+    if recommendation_config and recommendation_config is not ui_config:
+        recommendation_config["market_status_plain"] = market_status_plain_out or display_regime
+        recommendation_config["display_regime_label"] = market_status_plain_out or display_regime
+        recommendation_config["risk_tone_plain"] = risk_tone_plain_out
+        recommendation_config["confidence_display_pct"] = confidence_display_pct
+        if display_regime_technical:
+            recommendation_config["display_regime_technical"] = display_regime_technical
 
     feas_meta = {
         k: decision.telemetry.get(k)
@@ -1036,9 +1162,13 @@ def decision_to_param_assistant_result(
         result_type = "controlled_grid"
         deploy = bool(deploy and decision.deployable)
 
-    fee_display = _fee_display_from_selection(pool_meta)
-    fee_missing = fee_display.get("fee_bad") or fee_display.get("fee_data_available") is False
-    fee_data_status = fee_display.get("status") or "missing_fee"
+    fee_display = _fee_display_from_selection(
+        pool_meta, pool_version=str(pool_meta.get("pool_version") or "")
+    )
+    fee_missing = False if is_v6 else (
+        fee_display.get("fee_bad") or fee_display.get("fee_data_available") is False
+    )
+    fee_data_status = fee_display.get("status") or ("v6_cost_floor" if is_v6 else "missing_fee")
 
     from app.services.dynamic_param_score.decision_contract import (
         grid_spacing_from_params,
@@ -1088,15 +1218,39 @@ def decision_to_param_assistant_result(
         "controlled_grid",
         "restricted_deployable_grid",
     ):
-        controlled_note = (
-            "Piyasa grid için tamamen uygunsuz değil; güven düşük olduğu için sistem "
-            "kontrollü grid önerdi. Rebalance fee verisi nedeniyle ertelendi. "
-            "Aktif alış bütçesi sınırlı tutuldu."
-            if fee_missing
-            else "Piyasa grid için uygun; güvenlik düzeltmeleri sonrası kontrollü grid önerildi."
-        )
+        if is_v6:
+            controlled_note = "Piyasa koşulları zayıf; savunmacı parametre seti gösteriliyor."
+        elif fee_missing:
+            controlled_note = (
+                "Piyasa grid için tamamen uygunsuz değil; güven düşük olduğu için sistem "
+                "kontrollü grid önerdi. Rebalance fee verisi nedeniyle ertelendi. "
+                "Aktif alış bütçesi sınırlı tutuldu."
+            )
+        else:
+            controlled_note = (
+                "Piyasa grid için uygun; güvenlik düzeltmeleri sonrası kontrollü grid önerildi."
+            )
 
-    if feas_meta.get("exposure_hard_cap_breach") or (
+    if is_v6:
+        v6d = decision.telemetry.get("v6_display") or {}
+        safety_label = str(v6d.get("safety_result_label") or safety_label or "")
+        if apply_policy_label:
+            if apply_policy == "high_risk_controlled":
+                safety_label = apply_policy_label
+            elif apply_policy == "controlled_deploy" and "savunmacı" not in safety_label.lower():
+                safety_label = apply_policy_label
+        if feas_meta.get("exposure_hard_cap_breach") or (
+            feas_meta.get("worst_case_base_exposure_frac")
+            and feas_meta.get("max_base_exposure_frac")
+            and float(feas_meta["worst_case_base_exposure_frac"])
+            > float(feas_meta["max_base_exposure_frac"])
+        ):
+            if "maruziyet" not in (safety_label or "").lower():
+                safety_label = f"{safety_label or 'Savunmacı parametre seti'} · Maruziyet sınırı aşılıyor"
+        risk_display = v6d.get("risk_display_label")
+        if risk_display:
+            effective_risk = str(risk_display)
+    elif feas_meta.get("exposure_hard_cap_breach") or (
         feas_meta.get("worst_case_base_exposure_frac")
         and feas_meta.get("max_base_exposure_frac")
         and float(feas_meta["worst_case_base_exposure_frac"])
@@ -1106,6 +1260,8 @@ def decision_to_param_assistant_result(
             safety_label = f"{safety_label or 'Referans / bekle'} · Maruziyet sınırı aşılıyor"
 
     first_buy_pct, first_sell_pct = grid_spacing_from_params(decision.params)
+    if is_v6 and decision.params and int(decision.params.buy_grid_count or 0) < 1:
+        first_buy_pct = None
     volume_24h = decision.telemetry.get("volume_24h") or tel_ind.get("quote_volume_24h")
     volume_consistency = decision.telemetry.get("volume_consistency") or tel_ind.get(
         "volume_consistency"
@@ -1146,6 +1302,7 @@ def decision_to_param_assistant_result(
         "can_apply_safe_overlay": can_apply_safe_overlay,
         "management_mode": mm,
         "apply_policy": apply_policy,
+        "apply_policy_label": apply_policy_label if is_v6 else None,
         "ui_severity": ui_severity_from_decision(fa, ok=True),
         "trade_opens_new_position": deploy_out and fa not in (
             FinalAction.SELL_MANAGEMENT_ONLY.value,
@@ -1157,8 +1314,30 @@ def decision_to_param_assistant_result(
         "confidence": decision.confidence_score,
         "risk_score": decision.risk_score,
         "fee_display": fee_display,
+        "risk_display_label": (v6d.get("risk_display_label") if is_v6 else None),
+        "data_quality_display": (v6d.get("data_quality_label") if is_v6 else None),
+        "profile_tile_label": (v6d.get("profile_tile_label") if is_v6 else None),
+        "v6_final_profile_id": (
+            v6d.get("final_profile_id") if is_v6 else None
+        ),
+        "v6_catalog_profile_id": (
+            v6d.get("catalog_profile_id") if is_v6 else None
+        ),
+        "exact_shelf_id": (
+            v6d.get("catalog_profile_id")
+            if is_v6
+            else (
+                (pool_meta.get("selection_context") or {}).get("v5_shelf_id")
+                or pool_meta.get("selected_template_key")
+                or decision.selected_profile_name
+            )
+        ),
         "regime_tag": decision.regime_tag,
         "display_regime_label": display_regime,
+        "market_status_plain": market_status_plain_out or display_regime,
+        "risk_tone_plain": risk_tone_plain_out,
+        "display_regime_technical": display_regime_technical or None,
+        "confidence_display_pct": confidence_display_pct,
         "risk_state": decision.risk_state,
         "effective_risk_state": effective_risk,
         "final_action": fa,
@@ -1182,7 +1361,10 @@ def decision_to_param_assistant_result(
             "pool_version": pool_meta.get("pool_version"),
             "profile_subfamily": pool_meta.get("profile_subfamily"),
             "route_key": (pool_meta.get("selection_context") or {}).get("route_key"),
-            "scenario": (pool_meta.get("selection_context") or {}).get("market_signature", {}).get("scenario"),
+            "scenario": (
+                ((pool_meta.get("selection_context") or {}).get("market_signature") or {}).get("scenario")
+                or ((pool_meta.get("selection_context") or {}).get("scenario_identity") or {})
+            ),
             "selection_path": (pool_meta.get("selection_context") or {}).get("selection_path"),
             "selection_reason": (
                 (pool_meta.get("selection_context") or {}).get("selection_reason")
@@ -1270,6 +1452,20 @@ def decision_to_param_assistant_result(
                 "intent_execution_enabled", False
             ),
             "data_window": data_window,
+            **(
+                {
+                    "engine_version": (pool_meta.get("selection_context") or {}).get("engine_version"),
+                    "behavior_id": v6d.get("behavior_id"),
+                    "severity": v6d.get("severity"),
+                    "final_profile_id": v6d.get("final_profile_id"),
+                    "catalog_profile_id": v6d.get("catalog_profile_id"),
+                    "adjuster_trace": v6d.get("adjuster_trace"),
+                    "v6_display": v6d,
+                    "scenario_alignment": decision.telemetry.get("scenario_alignment"),
+                }
+                if is_v6
+                else {}
+            ),
         },
         "symbol": symbol,
         "budget": budget,
@@ -1281,9 +1477,8 @@ def decision_to_param_assistant_result(
             )
         ),
         "grid_summary": (
-            f"Alış {down_n} · Satış {up_n}"
-            if has_ui
-            else None
+            (v6d.get("grid_plan_plain") if is_v6 and v6d.get("grid_plan_plain") else None)
+            or (f"Alış {down_n} · Satış {up_n}" if has_ui else None)
         ),
     }
 

@@ -92,6 +92,32 @@ def test_kullanici_bilgisi_eksikse_userid_dosyasi_olusturulur(log_root):
     assert (user_log_dir() / "user_99.log").exists()
 
 
+def test_generic_log_ad_soyad_geldiginde_tek_dosyada_birlesir(log_root):
+    """Önce user_{id}.log, sonra ad-soyadlı yazım → tek dosya."""
+    UserReadableActivityLogger.write_sync(4, screen="Hesap", action="İlk kayıt", result="OK")
+    assert (user_log_dir() / "user_4.log").exists()
+    UserReadableActivityLogger.write_sync(
+        4, user_name="Ömer", user_surname="Altın", screen="Hesap", action="İkinci kayıt", result="OK"
+    )
+    named = user_log_dir() / "Ömer.Altın__4.log"
+    assert named.exists()
+    assert not (user_log_dir() / "user_4.log").exists()
+    content = named.read_text(encoding="utf-8")
+    assert "İlk kayıt" in content
+    assert "İkinci kayıt" in content
+
+
+def test_ad_soyad_yokken_mevcut_adli_dosyaya_yazilir(log_root):
+    UserReadableActivityLogger.write_sync(
+        7, user_name="Ayşe", user_surname="Demir", screen="Hesap", action="A", result="OK"
+    )
+    UserReadableActivityLogger.write_sync(7, screen="Hesap", action="B", result="OK")
+    assert (user_log_dir() / "Ayşe.Demir__7.log").exists()
+    assert not (user_log_dir() / "user_7.log").exists()
+    assert "A" in (user_log_dir() / "Ayşe.Demir__7.log").read_text(encoding="utf-8")
+    assert "B" in (user_log_dir() / "Ayşe.Demir__7.log").read_text(encoding="utf-8")
+
+
 # --- Sade dil ---
 
 

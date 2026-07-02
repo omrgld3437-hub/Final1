@@ -7,6 +7,24 @@ from typing import Any, Dict, List, Optional
 from app.services.dynamic_param_score.models import BotContext, BotParams, FinalAction
 
 
+def _min_notional_limited(
+    *,
+    budget: float,
+    buy_n: int,
+    has_recommendation_ui: bool,
+    blocked_reason: str,
+    blocking_u: set,
+) -> bool:
+    if budget > 100 or buy_n < 2 or not has_recommendation_ui:
+        return False
+    return (
+        blocked_reason in ("BUDGET_TOO_SMALL", "MIN_NOTIONAL", "MIN_NOTIONAL_LIMIT")
+        or "MIN_NOTIONAL" in blocked_reason
+        or "BUDGET_TOO_SMALL" in blocking_u
+        or "MIN_NOTIONAL_HARD_FAIL" in blocking_u
+    )
+
+
 def resolve_result_type(
     *,
     deployable: bool,
@@ -21,7 +39,47 @@ def resolve_result_type(
     """Map engine output to UI result_type contract."""
     meta = feasibility_meta or {}
     blocking = [str(b).upper() for b in (blocking_reasons or [])]
+    blocking_u = set(blocking)
     fa = str(final_action or "").upper()
+    buy_n = int(params.buy_grid_count or 0) if params else 0
+    sell_n = int(params.sell_grid_count or 0) if params else 0
+    first_start = bool(getattr(bot_context, "is_first_start", False))
+    buy_only_mode = bool(getattr(bot_context, "first_start_buy_only", False))
+    budget = float(getattr(bot_context, "budget_usdt", 0) or 0)
+    blocked_reason = str(meta.get("deploy_blocked_reason") or "").upper()
+
+    if _min_notional_limited(
+        budget=budget,
+        buy_n=buy_n,
+        has_recommendation_ui=has_recommendation_ui,
+        blocked_reason=blocked_reason,
+        blocking_u=blocking_u,
+    ):
+        return "min_notional_limited_grid"
+
+    if deployable and params and buy_n >= 2:
+        if meta.get("fee_bad_rebalance_deferred"):
+            mode = str(meta.get("controlled_grid_mode") or "controlled_grid")
+            return "restricted_deployable_grid" if mode == "restricted_deployable_grid" else "controlled_grid"
+        if fa == FinalAction.CONTROLLED_GRID.value:
+            mode = str(meta.get("controlled_grid_mode") or "controlled_grid")
+            return "restricted_deployable_grid" if mode == "restricted_deployable_grid" else "controlled_grid"
+        if first_start and buy_only_mode and sell_n < 2:
+            return "first_start_buy_only"
+        if sell_n >= 2 or (first_start and buy_only_mode):
+            return "deployable_grid"
+
+    if meta.get("controlled_grid") and params and buy_n >= 2 and has_recommendation_ui:
+        if deployable and not meta.get("exposure_hard_cap_breach"):
+            mode = str(meta.get("controlled_grid_mode") or "controlled_grid")
+            return "restricted_deployable_grid" if mode == "restricted_deployable_grid" else "controlled_grid"
+        return "recommended_grid"
+
+    if params and buy_n == 1:
+        return "single_probe_recommendation"
+
+    if budget <= 100 and params and buy_n >= 2 and has_recommendation_ui and first_start:
+        return "first_start_buy_only"
 
     if fa in (
         FinalAction.NO_TRADE.value,
@@ -29,7 +87,7 @@ def resolve_result_type(
         FinalAction.WAIT_SAFETY.value,
         FinalAction.SAFE_WAIT.value,
     ) or any(
-        b in blocking
+        b in blocking_u
         for b in (
             "SPREAD_HIGH",
             "LIQUIDITY_LOW",
@@ -38,23 +96,11 @@ def resolve_result_type(
             "PARAM_SCORE_TOO_LOW",
         )
     ):
-        if fa == FinalAction.NO_TRADE.value or "SPREAD_HIGH" in blocking or "LIQUIDITY_LOW" in blocking:
+        if fa == FinalAction.NO_TRADE.value or "SPREAD_HIGH" in blocking_u or "LIQUIDITY_LOW" in blocking_u:
             return "no_trade"
+        if params and buy_n >= 2 and has_recommendation_ui:
+            return "recommended_grid"
         return "management_decision"
-
-    buy_n = int(params.buy_grid_count or 0) if params else 0
-    sell_n = int(params.sell_grid_count or 0) if params else 0
-    first_start = bool(getattr(bot_context, "is_first_start", False))
-    buy_only_mode = bool(getattr(bot_context, "first_start_buy_only", False))
-
-    if deployable and params and buy_n >= 2:
-        if first_start and buy_only_mode and sell_n < 2:
-            return "first_start_buy_only"
-        if sell_n >= 2 or (first_start and buy_only_mode):
-            return "deployable_grid"
-
-    if params and buy_n == 1:
-        return "single_probe_recommendation"
 
     if params and buy_n >= 2 and has_recommendation_ui:
         if first_start and buy_only_mode and sell_n < 2:
@@ -65,7 +111,7 @@ def resolve_result_type(
         return "recommended_grid"
 
     if (
-        (meta.get("deploy_blocked_reason") == "NO_SELLABLE_BASE" or "NO_SELLABLE_BASE" in blocking)
+        (meta.get("deploy_blocked_reason") == "NO_SELLABLE_BASE" or "NO_SELLABLE_BASE" in blocking_u)
         and not (first_start and buy_only_mode)
     ):
         return "recommended_grid"
@@ -103,6 +149,11 @@ def result_type_from_decision(
             "exposure_hard_cap_breach",
             "first_start_buy_only",
             "single_probe_only",
+            "controlled_grid",
+            "controlled_grid_mode",
+            "confidence_components",
+            "fee_bad_rebalance_deferred",
+            "full_deployable",
         )
         if tel.get(k) is not None
     }

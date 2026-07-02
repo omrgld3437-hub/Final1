@@ -30,7 +30,7 @@ def v6_profile_to_display_dict(
     sell_trail = trailing_pct_from_code(profile.sell_trailing_code)
     buy_trail = trailing_pct_from_code(profile.buy_trailing_code)
     post_sell_bb = profile.buyback_after_sell_enabled
-    post_bb_profit = profile.profit_sell_after_buyback_enabled
+    post_bb_profit = profile.profit_sell_after_buyback_enabled and post_sell_bb
     return {
         "base_allocation_pct": base_pct,
         "quote_allocation_pct": quote_pct,
@@ -109,7 +109,7 @@ def v6_profile_to_bot_params(
     sell_trail = trailing_pct_from_code(profile.sell_trailing_code)
     buy_trail = trailing_pct_from_code(profile.buy_trailing_code)
     post_sell_bb = profile.buyback_after_sell_enabled
-    post_bb_profit = profile.profit_sell_after_buyback_enabled
+    post_bb_profit = profile.profit_sell_after_buyback_enabled and post_sell_bb
 
     rebuy_trigger = profit_pct_from_code(profile.buyback_trigger_code) if post_sell_bb else None
     rebuy_trail = trailing_pct_from_code(profile.buyback_trailing_code) if post_sell_bb else None
@@ -119,6 +119,11 @@ def v6_profile_to_bot_params(
     base_frac = profile.base_allocation_pct / 100.0
     pid = catalog_profile_id or profile.profile_id
     sell_only = not profile.normal_buy_enabled and sell_n > 0
+    max_exposure_pct = (profile.modules or {}).get("max_total_exposure_pct")
+    if max_exposure_pct is not None:
+        max_base_exposure_frac = max(base_frac, min(float(max_exposure_pct) / 100.0, 0.95))
+    else:
+        max_base_exposure_frac = min(base_frac + 0.15, 0.95)
 
     return BotParams(
         base_alloc_frac=base_frac,
@@ -133,7 +138,7 @@ def v6_profile_to_bot_params(
         trailing_callback_pct=max(sell_trail, buy_trail),
         take_profit_pct=resell_trigger or (rebuy_trigger or DEFAULT_COST_FLOOR_PCT),
         stop_new_buys_below_score=0,
-        max_base_exposure_frac=min(base_frac + 0.15, 0.95),
+        max_base_exposure_frac=max_base_exposure_frac,
         max_quote_to_spend_per_buy_frac=min(max(buy_weights) if buy_weights else 0.35, 0.45),
         downtrend_buy_throttle=False,
         min_cycle_profit_after_fee_pct=DEFAULT_COST_FLOOR_PCT,

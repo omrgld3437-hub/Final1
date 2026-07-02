@@ -16,7 +16,7 @@ GRID_DISTANCE_STEP_PCT = 1
 # Grid amount: 5% steps
 GRID_AMOUNT_STEP_PCT = 5
 
-# Trailing ladder T0..T8
+# Trailing ladder T0..T9
 TRAILING_CODES: Dict[str, float] = {
     "T0": 0.5,
     "T1": 0.8,
@@ -27,11 +27,15 @@ TRAILING_CODES: Dict[str, float] = {
     "T6": 2.3,
     "T7": 2.6,
     "T8": 2.9,
+    "T9": 3.2,
 }
 TRAILING_PCT_TO_CODE: Dict[float, str] = {v: k for k, v in TRAILING_CODES.items()}
 
-# Profit trigger K05..K12 (%)
+# Profit trigger K01..K16 (% · 0.5 lattice)
 PROFIT_TRIGGER_CODES: Dict[str, float] = {
+    "K01": 1.0,
+    "K02": 1.5,
+    "K03": 2.0,
     "K05": 2.5,
     "K06": 3.0,
     "K07": 3.5,

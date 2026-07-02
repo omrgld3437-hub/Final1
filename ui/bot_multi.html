@@ -928,7 +928,7 @@
     </div>
     <script src="/ui/assets/utils/coinLogo.js?v=5"></script>
     <script src="/ui/assets/core/apiClient.js?v=refactor1"></script>
-    <script src="/ui/assets/utils/coinPriceFormat.js?v=1"></script>
+    <script src="/ui/assets/utils/coinPriceFormat.js?v=3"></script>
     <script src="/ui/assets/utils/gridTrailEnvelope.js?v=2"></script>
     <script src="/ui/assets/utils/engineLogAccess.js?v=1"></script>
     <script src="/ui/assets/utils/engineLogArchive.js?v=1"></script>
@@ -1117,9 +1117,13 @@
             if (_cpf().resolvePriceDecimals) return _cpf().resolvePriceDecimals(symbol, botPriceHints(priceHints));
             return 8;
         }
-        function ensureBotSymbolPriceDecimals(symbol) {
+        function ensureBotSymbolPriceDecimals(symbol, onLoaded) {
             if (!symbol || !accountId || !_cpf().ensureSymbolTickDecimals) return;
-            _cpf().ensureSymbolTickDecimals(String(symbol).toUpperCase(), accountId);
+            symbol = String(symbol).toUpperCase();
+            var afterTick = function () {
+                if (typeof onLoaded === 'function') onLoaded();
+            };
+            _cpf().ensureSymbolTickDecimals(symbol, accountId, afterTick);
         }
         function fmtBotPrice(v, extraHints) {
             var sym = (lastBotDetail && lastBotDetail.symbol) || '';
@@ -1497,13 +1501,13 @@
             var pct = (Number(cellPrice) - Number(basePrice)) / Number(basePrice) * 100;
             return '<span class="grid-price-pct muted">' + (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%</span>';
         }
-        function gridPlainPriceHtml(priceVal, extraHints) {
+        function gridPlainPriceHtml(priceVal) {
             if (priceVal == null || isNaN(priceVal)) return '—';
-            return fmtBotPrice(priceVal, [priceVal].concat(extraHints || []));
+            return fmtBotPrice(priceVal);
         }
-        function gridTepeDipCellHtml(priceVal, refPrice, extraHints) {
+        function gridTepeDipCellHtml(priceVal, refPrice) {
             if (priceVal == null || isNaN(priceVal)) return '—';
-            return '<span class="grid-tepe-dip-cell"><span class="grid-price-val">' + fmtBotPrice(priceVal, [priceVal, refPrice].concat(extraHints || [])) + '</span>' +
+            return '<span class="grid-tepe-dip-cell"><span class="grid-price-val">' + fmtBotPrice(priceVal) + '</span>' +
                 formatPctFromBase(priceVal, refPrice) + '</span>';
         }
         function profitRowAvgCost(p, avgBuyGrid, avgSellGrid) {
@@ -1726,6 +1730,20 @@
                 refEl.textContent = 'Tur ' + ctx.cycleNum + ' referans fiyatı: —';
             }
         }
+        function gridStatusBadge(p) {
+            if (!p) return { text: 'Bekliyor', cls: 'grid-status-bekliyor' };
+            var st = (p.status || '').toLowerCase();
+            if (st === 'devre_disi' || p.disabled) return { text: 'Devre dışı', cls: 'grid-status-disabled' };
+            if (st === 'tamamlandi' || p.fired) return { text: 'Tamamlandı', cls: 'grid-status-tamamlandi' };
+            if (st === 'tetiklendi') return { text: 'Tetiklendi', cls: 'grid-status-tetiklendi' };
+            if (st === 'bekliyor') return { text: 'Bekliyor', cls: 'grid-status-bekliyor' };
+            if (p.fired) return { text: 'Tamamlandı', cls: 'grid-status-tamamlandi' };
+            var hit = p.trigger_hit_price;
+            if (hit != null && !isNaN(Number(hit)) && Number(hit) > 0) {
+                return { text: 'Tetiklendi', cls: 'grid-status-tetiklendi' };
+            }
+            return { text: 'Bekliyor', cls: 'grid-status-bekliyor' };
+        }
         function renderGridPointsPanel(data, opts) {
             if (!gridSellBody || !gridBuyBody) return;
             opts = opts || {};
@@ -1765,16 +1783,17 @@
                 if (refD && p.trigger_price != null) level += ' (+' + ((p.trigger_price / refD - 1) * 100).toFixed(2) + '%)';
                 else level += ' (satış)';
                 if (p.qty_pct != null && !isNaN(p.qty_pct)) level += ' %' + Number(p.qty_pct);
-                var statusText = p.fired ? 'Tamamlandı' : ((p.anchor != null || (p.trigger_hit_price != null)) ? 'Tetiklendi' : 'Bekliyor');
-                var statusClass = p.fired ? 'grid-status-tamamlandi' : ((p.anchor != null || (p.trigger_hit_price != null)) ? 'grid-status-tetiklendi' : 'grid-status-bekliyor');
+                var stBadge = gridStatusBadge(p);
+                var statusText = stBadge.text;
+                var statusClass = stBadge.cls;
                 var trigger = gridPlainPriceHtml(p.trigger_price);
                 var liveTrailS = window.GridTrailEnvelope
                     ? window.GridTrailEnvelope.trailDisplayFromEnvelope(p, 'sell', sellTrailPct)
                     : { anchor: p.anchor, exec: p.execution_price };
                 var anchorVal = liveTrailS.anchor != null ? liveTrailS.anchor : p.anchor;
                 var execVal = liveTrailS.exec != null ? liveTrailS.exec : p.execution_price;
-                var anchor = gridTepeDipCellHtml(anchorVal, refD, 4);
-                var exec = gridTepeDipCellHtml(execVal, refD, 4);
+                var anchor = gridTepeDipCellHtml(anchorVal, refD);
+                var exec = gridTepeDipCellHtml(execVal, refD);
                 var miktar = '—';
                 if (p.planned_base_qty != null && !isNaN(p.planned_base_qty) && p.planned_base_qty > 0) {
                     miktar = fmtBaseCompact(Number(p.planned_base_qty)) + (baseAsset ? ' ' + baseAsset : '');
@@ -1801,16 +1820,17 @@
                 if (refD && p.trigger_price != null) level += ' (-' + ((1 - p.trigger_price / refD) * 100).toFixed(2) + '%)';
                 else level += ' (alım)';
                 if (p.qty_pct != null && !isNaN(p.qty_pct)) level += ' %' + Number(p.qty_pct);
-                var statusText = p.fired ? 'Tamamlandı' : ((p.anchor != null || (p.trigger_hit_price != null)) ? 'Tetiklendi' : 'Bekliyor');
-                var statusClass = p.fired ? 'grid-status-tamamlandi' : ((p.anchor != null || (p.trigger_hit_price != null)) ? 'grid-status-tetiklendi' : 'grid-status-bekliyor');
+                var stBadge = gridStatusBadge(p);
+                var statusText = stBadge.text;
+                var statusClass = stBadge.cls;
                 var trigger = gridPlainPriceHtml(p.trigger_price);
                 var liveTrailB = window.GridTrailEnvelope
                     ? window.GridTrailEnvelope.trailDisplayFromEnvelope(p, 'buy', buyTrailPct)
                     : { anchor: p.anchor, exec: p.execution_price };
                 var anchorValB = liveTrailB.anchor != null ? liveTrailB.anchor : p.anchor;
                 var execValB = liveTrailB.exec != null ? liveTrailB.exec : p.execution_price;
-                var anchor = gridTepeDipCellHtml(anchorValB, refD, 4);
-                var exec = gridTepeDipCellHtml(execValB, refD, 4);
+                var anchor = gridTepeDipCellHtml(anchorValB, refD);
+                var exec = gridTepeDipCellHtml(execValB, refD);
                 var tutar = '—';
                 if (p.qty_pct != null && !isNaN(p.qty_pct)) {
                     if (quoteBal > 0) {
@@ -1913,8 +1933,8 @@
                     }
                 }
                 var amountStr = profitRowAmountHtml(p, baseAssetProfit, st, quoteBalProfit, baseBalProfit);
-                var tepeDipStr = gridTepeDipCellHtml(tepeDipNum, avgBase, 4);
-                var execStr = gridTepeDipCellHtml(execNum, avgBase, 4);
+                var tepeDipStr = gridTepeDipCellHtml(tepeDipNum, avgBase);
+                var execStr = gridTepeDipCellHtml(execNum, avgBase);
                 var statusKey = (p.status || '').toLowerCase();
                 var statusText = statusKey === 'tamamlandi' ? 'Tamamlandı' : (statusKey === 'tetiklendi' ? 'Tetiklendi' : 'Bekliyor');
                 var statusClass = statusKey === 'tamamlandi' ? 'grid-status-tamamlandi' : (statusKey === 'tetiklendi' ? 'grid-status-tetiklendi' : 'grid-status-bekliyor');
@@ -1940,7 +1960,7 @@
             var gps = data.grid_points || [];
             for (var gi = 0; gi < gps.length; gi++) {
                 var gp = gps[gi];
-                if (!gp.fired && (gp.anchor != null || gp.trigger_hit_price != null)) return true;
+                if (!gp.fired && (gp.status || '').toLowerCase() === 'tetiklendi') return true;
             }
             var pps = data.profit_points || [];
             for (var pi = 0; pi < pps.length; pi++) {

@@ -776,10 +776,21 @@ async function loadAccountMeta(accountId) {
 // Load summary (legacy) - stable URL, used as fallback or one-shot
 async function loadSummary(accountId) {
     if (State.inFlight) return;
+    var reqAccountId = accountId;
+    var reqScopeGen = (typeof DashboardAccountScope !== 'undefined') ? DashboardAccountScope.getScopeGeneration() : null;
     State.inFlight = true;
     try {
-        const url = `/api/dashboard/summary?account_id=${accountId}`;
+        const url = `/api/dashboard/summary?account_id=${reqAccountId}`;
         const data = await window.apiClient.get(url, { timeout: 15000 });
+        if (typeof DashboardAccountScope !== 'undefined') {
+            if (!DashboardAccountScope.isScopeGenerationCurrent(reqScopeGen, reqAccountId)) return;
+            var guarded = DashboardAccountScope.guardPayloadForActiveAccount(
+                { bots: data.bots, account: data.account, account_id: reqAccountId },
+                'loadSummary'
+            );
+            if (!guarded) return;
+            if (Array.isArray(guarded.bots)) data.bots = guarded.bots;
+        }
         const hash = computeHash(data);
         State.summary = data;
         State.bots = hydrateBotsWithMetricsCache(Array.isArray(data.bots) ? data.bots : []);
@@ -839,6 +850,7 @@ function startDashboardSSE() {
         var es = new EventSource(url);
         es.onmessage = function (ev) {
             if (!ev.data) return;
+            if (typeof DashboardAccountScope !== 'undefined' && !DashboardAccountScope.isActiveAccount(State.accountId)) return;
             try {
                 var res = JSON.parse(ev.data);
                 if (State.inFlight) return;
@@ -877,11 +889,16 @@ function getSnapshotFields() {
 
 async function fetchSnapshot() {
     if (!State.accountId || State.inFlight || (typeof isSpotModalOpen === 'function' && isSpotModalOpen())) return;
+    var reqAccountId = State.accountId;
+    var reqScopeGen = (typeof DashboardAccountScope !== 'undefined') ? DashboardAccountScope.getScopeGeneration() : null;
     State.inFlight = true;
     try {
         var fields = getSnapshotFields();
-        var url = '/api/dashboard/snapshot?account_id=' + State.accountId + (fields ? '&fields=' + encodeURIComponent(fields) : '');
+        var url = '/api/dashboard/snapshot?account_id=' + reqAccountId + (fields ? '&fields=' + encodeURIComponent(fields) : '');
         const res = await window.apiClient.get(url, { timeout: 12000 });
+        if (typeof DashboardAccountScope !== 'undefined') {
+            if (!DashboardAccountScope.isScopeGenerationCurrent(reqScopeGen, reqAccountId)) return;
+        }
         _applySnapshotResponse(res);
     } catch (error) {
         if (window.errorReporter) window.errorReporter.report(error, { tab: 'dashboard', account_id: State.accountId, action: 'fetchSnapshot' });
@@ -950,6 +967,10 @@ function dashboardDataRefresh() {
 }
 
 function applySnapshotToUI(data) {
+    if (typeof DashboardAccountScope !== 'undefined') {
+        data = DashboardAccountScope.guardPayloadForActiveAccount(data, 'applySnapshotToUI');
+        if (!data) return;
+    }
     // Progressive render: apply each section as it arrives
     if (data.prices && typeof data.prices === 'object' && !data.prices._error) {
         const priceMap = {};
@@ -1450,6 +1471,7 @@ function _persistBinanceWalletCache(accountId) {
 
 function hydrateWalletFromStorageCache(accountId) {
     if (!accountId) return false;
+    if (typeof DashboardAccountScope !== 'undefined' && !DashboardAccountScope.isActiveAccount(accountId)) return false;
     if (assetsState.wallet.assets && assetsState.wallet.assets.length && _varliklarTableHasRows()) return false;
     var cached = _readBinanceWalletCache(accountId);
     if (!cached) return false;
@@ -4197,9 +4219,15 @@ async function initDashboard() {
         return;
     }
     
-    State.accountId = accountId;
     State.accountCode = accountCode;
-    window.__ACTIVE_ACCOUNT_ID = accountId;
+    if (typeof DashboardAccountScope !== 'undefined') {
+        DashboardAccountScope.activateAccountScope(accountId, {
+            forceReset: _dashboardPanelsAccountId != null && Number(_dashboardPanelsAccountId) !== Number(accountId)
+        });
+    } else {
+        State.accountId = accountId;
+        window.__ACTIVE_ACCOUNT_ID = accountId;
+    }
     if (typeof syncDashboardTestAccountFlag === 'function') syncDashboardTestAccountFlag();
     else if (/^TEST/i.test(String(accountCode || '').trim())) State.isTestAccount = true;
     if (typeof updateKpiCuzdanLiveStatus === 'function') updateKpiCuzdanLiveStatus();
@@ -4217,6 +4245,9 @@ async function initDashboard() {
         _botPerformanceLastPeriod = null;
         if (typeof resetTxHistoryClientState === 'function') resetTxHistoryClientState();
         if (typeof clearBotsTabCache === 'function') clearBotsTabCache();
+        if (typeof DashboardAccountScope === 'undefined' && typeof clearFinanceBotsUiState === 'function') {
+            clearFinanceBotsUiState(accountId);
+        }
         _dashboardPanelsAccountId = accountId;
     }
     if (typeof hydrateWalletFromStorageCache === 'function') hydrateWalletFromStorageCache(accountId);

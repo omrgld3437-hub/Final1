@@ -64,6 +64,7 @@ def apply_safety_gates(
     profile_name: str = "",
     current_price: Optional[float] = None,
     risk_state: str = "",
+    route_key: str = "",
 ) -> Tuple[
     Optional[BotParams],
     str,
@@ -78,6 +79,8 @@ def apply_safety_gates(
     blocking: List[str] = []
     warnings: List[str] = []
     feasibility_meta: dict = {}
+    if route_key:
+        feasibility_meta["route_key"] = route_key
     action = final_action
     consumer = policy_for_context(context)
     spread_pct = float(getattr(ind, "orderbook_spread_pct", 0.0) or 0.0) if ind else 0.0
@@ -174,6 +177,7 @@ def apply_safety_gates(
         risk_state=risk_state,
         sub=sub,
         ind=ind,
+        route_key=route_key,
     )
 
     has_sellable, _sellable_val = has_sellable_base_feasible(
@@ -295,11 +299,18 @@ def apply_safety_gates(
 
     for i, w in enumerate(p.buy_qty_distribution):
         if w > C.MAX_QUOTE_PER_BUY_FRAC:
-            from app.services.dynamic_param_score.utils import distribute_weights
-
-            p.buy_qty_distribution = distribute_weights(
-                p.buy_grid_count, C.MAX_SINGLE_LEVEL_WEIGHT
+            from app.services.dynamic_param_score.atmosphere import (
+                build_distribution_context,
+                enforce_buy_distribution_on_params,
             )
+
+            dist_ctx = build_distribution_context(
+                sub=sub,
+                ind=ind,
+                risk_state=risk_state,
+                route_key=route_key,
+            )
+            enforce_buy_distribution_on_params(p, dist_ctx)
             gates.append(
                 _gate(
                     "single_buy",
@@ -355,6 +366,18 @@ def apply_safety_gates(
             portfolio, constraints, price=current_price
         )[0]:
             action = FinalAction.SELL_MANAGEMENT_ONLY.value
+        elif (
+            consumer.soften_extreme_safety_for_ui
+            and p is not None
+            and int(p.buy_grid_count or 0) >= 2
+            and not {str(b).upper() for b in blocking} & {
+                "SPREAD_HIGH",
+                "LIQUIDITY_LOW",
+                "DUMP_RISK",
+                "DATA_QUALITY_LOW",
+            }
+        ):
+            warnings.append("EXPOSURE_PENDING_CONTROLLED_TRIM")
         else:
             action = FinalAction.WAIT_SAFETY.value
             blocking.append(
@@ -371,9 +394,62 @@ def apply_safety_gates(
     )
     deployable = is_deployable(action, p, feasibility_meta)
 
+    fee_data_available = bool(
+        (ind and float(getattr(ind, "total_friction_pct", 0) or 0) > 0)
+        or sub.fee_efficiency_score >= C.FEE_EFF_CAUTIOUS
+    )
+    if sub.fee_efficiency_score < C.FEE_EFF_CAUTIOUS:
+        feasibility_meta["fee_bad_rebalance_deferred"] = True
+
+    if not deployable and consumer.soften_extreme_safety_for_ui:
+        from app.services.dynamic_param_score.deploy_decision import apply_deploy_decision_layer
+
+        feasibility_meta["param_score"] = param_score
+        p, action, deployable, feasibility_meta = apply_deploy_decision_layer(
+            p,
+            action,
+            deployable,
+            sub=sub,
+            ind=ind,
+            portfolio=portfolio,
+            constraints=constraints,
+            context=context,
+            risk_state=risk_state,
+            blocking=blocking,
+            feasibility_meta=feasibility_meta,
+            param_score=param_score,
+            route_key=route_key,
+            current_price=current_price,
+            fee_data_available=fee_data_available,
+            soften_for_ui=True,
+        )
+    elif consumer.soften_extreme_safety_for_ui and deployable:
+        from app.services.dynamic_param_score.deploy_decision import apply_deploy_decision_layer
+
+        feasibility_meta["param_score"] = param_score
+        p, action, deployable, feasibility_meta = apply_deploy_decision_layer(
+            p,
+            action,
+            deployable,
+            sub=sub,
+            ind=ind,
+            portfolio=portfolio,
+            constraints=constraints,
+            context=context,
+            risk_state=risk_state,
+            blocking=blocking,
+            feasibility_meta=feasibility_meta,
+            param_score=param_score,
+            route_key=route_key,
+            current_price=current_price,
+            fee_data_available=fee_data_available,
+            soften_for_ui=True,
+        )
+
     feasibility_meta["fee_floor_pct"] = round(required_min, 4)
     feasibility_meta["total_friction_pct"] = round(friction, 4)
     feasibility_meta["execution_exposure_cap_enabled"] = True
-    feasibility_meta["live_parity_ok"] = True
+    if not consumer.soften_extreme_safety_for_ui:
+        feasibility_meta["live_parity_ok"] = True
     gates.append(_gate("live_parity", True, "PASS", "LIVE_PARITY_OK", "Güvenlik kapıları tamamlandı."))
     return p, action, deployable, gates, blocking, warnings, feasibility_meta

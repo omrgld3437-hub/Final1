@@ -56,27 +56,54 @@
         return out;
     }
 
-    function resolvePriceDecimals(symbol, priceHints) {
-        symbol = String(symbol || '').toUpperCase();
-        var hints = positiveHints(priceHints);
+    function magnitudeDecimalsFromHints(hints) {
         var dec = null;
-
-        if (symbol && _tickDecimalsBySymbol[symbol] != null) {
-            dec = _tickDecimalsBySymbol[symbol];
-        }
-
         hints.forEach(function (v) {
             var need = inferPriceDecimalsFromMagnitude(v);
             dec = dec != null ? Math.max(dec, need) : need;
         });
+        return dec;
+    }
 
-        if (hints.length >= 2) {
-            for (var i = 1; i < hints.length; i++) {
-                dec = Math.max(dec || 2, decimalsNeededToDiffer(hints[0], hints[i], dec || 2));
-            }
+    /** Pozitif fiyat 0.00 görünmesin diye gereken minimum ondalık (en az 2). */
+    function minimumDecimalsForPrice(price) {
+        var p = Number(price);
+        if (!Number.isFinite(p) || p <= 0) return 2;
+        for (var d = 0; d <= 8; d++) {
+            if (Math.round(p * Math.pow(10, d)) > 0) return Math.max(2, d);
         }
+        return 8;
+    }
 
-        if (dec == null) dec = 8;
+    function minimumDecimalsFromHints(hints) {
+        var min = 2;
+        hints.forEach(function (v) {
+            min = Math.max(min, minimumDecimalsForPrice(v));
+        });
+        return min;
+    }
+
+    function resolvePriceDecimals(symbol, priceHints) {
+        symbol = String(symbol || '').toUpperCase();
+        var hints = positiveHints(priceHints);
+        var tickDec = symbol && _tickDecimalsBySymbol[symbol] != null ? _tickDecimalsBySymbol[symbol] : null;
+        var magDec = magnitudeDecimalsFromHints(hints);
+        var needDec = minimumDecimalsFromHints(hints);
+
+        var dec;
+        if (tickDec != null && magDec != null) {
+            // Tick çok yüksek (majörde 8 hane) → magnitude; aksi halde tick + magnitude birleşimi
+            if (tickDec > magDec + 1) {
+                dec = magDec;
+            } else {
+                dec = Math.max(tickDec, magDec);
+            }
+        } else if (tickDec != null) {
+            dec = Math.max(tickDec, needDec);
+        } else {
+            dec = magDec != null ? magDec : 8;
+        }
+        dec = Math.max(dec, needDec);
         return Math.min(8, Math.max(2, dec));
     }
 
@@ -118,7 +145,7 @@
         var n = Number(price);
         if (!Number.isFinite(n)) return '—';
         var dec = decimals != null ? decimals : 8;
-        return n.toLocaleString('en-US', {
+        return n.toLocaleString('tr-TR', {
             minimumFractionDigits: dec,
             maximumFractionDigits: dec
         });
@@ -143,6 +170,8 @@
         decimalPlacesFromTickSize: decimalPlacesFromTickSize,
         inferPriceDecimalsFromMagnitude: inferPriceDecimalsFromMagnitude,
         decimalsNeededToDiffer: decimalsNeededToDiffer,
+        minimumDecimalsForPrice: minimumDecimalsForPrice,
+        minimumDecimalsFromHints: minimumDecimalsFromHints,
         resolvePriceDecimals: resolvePriceDecimals,
         setSymbolTickDecimals: setSymbolTickDecimals,
         getSymbolTickDecimals: getSymbolTickDecimals,

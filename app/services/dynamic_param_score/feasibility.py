@@ -254,6 +254,7 @@ def apply_exposure_and_notional_feasibility(
     risk_state: str = "",
     sub: Optional[SubScores] = None,
     ind: Optional[IndicatorSnapshot] = None,
+    route_key: str = "",
 ) -> Tuple[BotParams, Dict[str, Any]]:
     """Cap buy ladder to exposure headroom; shrink grids for min-notional."""
     meta: Dict[str, Any] = {
@@ -282,9 +283,13 @@ def apply_exposure_and_notional_feasibility(
         resolve_two_grid_weights,
     )
 
+    from app.services.dynamic_param_score.atmosphere import regime_code_from_route
+
+    regime_code = regime_code_from_route(route_key)
     dist_ctx = distribution_context_from_mapping(
         {
             "risk_state": risk_state or ("DEFENSIVE" if defensive else "NORMAL"),
+            "regime_code": regime_code,
             "liquidity_score": int(sub.liquidity_score if sub else 50),
             "spread_score": int(sub.spread_score if sub else 50),
             "btc_market_risk_score": int(sub.btc_market_risk_score if sub else 50),
@@ -578,27 +583,43 @@ def _finalize_post_grid_safety(
     meta["worst_case_base_exposure_frac"] = round(worst, 6)
 
     if worst > max_exp + tol and buy_n > 0:
-        meta["exposure_hard_cap_breach"] = True
-        meta["deploy_blocked_reason"] = "EXPOSURE_HARD_CAP_BREACH"
-        p.emergency_no_buy = True
-        p.buy_grid_count = 0
-        p.buy_qty_distribution = []
-        budget = 0.0
-        meta["buy_ladder_budget_usdt"] = 0.0
-        warnings.append("EXPOSURE_HARD_CAP_BREACH")
-        gates.append(
-            SafetyGateResult(
-                gate_id="worst_case_exposure_hard",
-                passed=False,
-                action="WAIT",
-                reason_code="EXPOSURE_HARD_CAP_BREACH",
-                message="Worst-case maruziyet max exposure üstünde; yeni alış engellendi.",
+        trimmed = False
+        if ladder_budget > min_n * 1.5:
+            ladder_budget *= 0.88
+            trimmed = True
+            worst = simulate_worst_case_exposure(
+                portfolio, p, ladder_budget, context, current_price
             )
-        )
-        worst = simulate_worst_case_exposure(
-            portfolio, p, budget, context, current_price
-        )
-        meta["worst_case_base_exposure_frac"] = round(worst, 6)
+            meta["worst_case_base_exposure_frac"] = round(worst, 6)
+            meta["buy_ladder_budget_usdt"] = round(ladder_budget, 4)
+        if worst > max_exp + tol and trimmed:
+            meta["exposure_gate_adjusted"] = True
+        if worst > max_exp + tol:
+            meta["exposure_hard_cap_breach"] = True
+            meta["deploy_blocked_reason"] = "EXPOSURE_HARD_CAP_BREACH"
+            from app.services.dynamic_param_score.consumer_policy import policy_for_context
+
+            soften = policy_for_context(context).soften_extreme_safety_for_ui
+            if not soften:
+                p.emergency_no_buy = True
+                p.buy_grid_count = 0
+                p.buy_qty_distribution = []
+                budget = 0.0
+                meta["buy_ladder_budget_usdt"] = 0.0
+            warnings.append("EXPOSURE_HARD_CAP_BREACH")
+            gates.append(
+                SafetyGateResult(
+                    gate_id="worst_case_exposure_hard",
+                    passed=False,
+                    action="WAIT" if not soften else "ADJUST",
+                    reason_code="EXPOSURE_HARD_CAP_BREACH",
+                    message="Worst-case maruziyet max exposure üstünde; yeni alış engellendi.",
+                )
+            )
+            worst = simulate_worst_case_exposure(
+                portfolio, p, budget, context, current_price
+            )
+            meta["worst_case_base_exposure_frac"] = round(worst, 6)
 
     if (
         buy_n == 1

@@ -218,6 +218,25 @@ def _planned_buy_usd_display(
     return q if q > 0 else None
 
 
+def _grid_point_status(
+    *,
+    fired: bool,
+    disabled: bool,
+    th_num: Optional[float],
+) -> str:
+    if disabled:
+        return "devre_disi"
+    if fired:
+        return "tamamlandi"
+    if th_num is not None:
+        try:
+            if float(th_num) > 0:
+                return "tetiklendi"
+        except (TypeError, ValueError):
+            pass
+    return "bekliyor"
+
+
 def compute_grid_profit_view(
     state: Dict[str, Any],
     config: Dict[str, Any],
@@ -384,6 +403,11 @@ def compute_grid_profit_view(
                 "active": active,
                 "enabled": sell_grids_enabled or fired,
                 "disabled": not sell_grids_enabled and not fired,
+                "status": _grid_point_status(
+                    fired=fired,
+                    disabled=not sell_grids_enabled and not fired,
+                    th_num=th_num,
+                ),
                 "qty_pct": round(qty_pct, 1) if qty_pct else None,
                 "planned_base_qty": round(planned_base_qty, 8)
                 if planned_base_qty
@@ -448,6 +472,11 @@ def compute_grid_profit_view(
                 "active": active,
                 "enabled": buy_grids_enabled or fired,
                 "disabled": not buy_grids_enabled and not fired,
+                "status": _grid_point_status(
+                    fired=fired,
+                    disabled=not buy_grids_enabled and not fired,
+                    th_num=th_num,
+                ),
                 "qty_pct": round(qty_pct, 1) if qty_pct else None,
                 "planned_usd": round(planned_usd, 2) if planned_usd else None,
             }

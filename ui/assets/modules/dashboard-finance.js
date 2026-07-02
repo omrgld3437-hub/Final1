@@ -1454,6 +1454,10 @@ function hydrateBotsWithMetricsCache(bots) {
 
 function persistFinanceBotsSessionCache(bots) {
     if (!State.accountId || !Array.isArray(bots) || !bots.length) return;
+    if (typeof DashboardAccountScope !== 'undefined') {
+        bots = DashboardAccountScope.filterBotsForAccount(bots, State.accountId);
+        if (!bots.length) return;
+    }
     try {
         var metrics = {};
         bots.forEach(function (bot) {
@@ -1508,6 +1512,7 @@ function persistFinanceBotsSessionCache(bots) {
 
 function restoreFinanceBotsFromSessionCache(accountId) {
     if (!accountId) return false;
+    if (typeof DashboardAccountScope !== 'undefined' && !DashboardAccountScope.isActiveAccount(accountId)) return false;
     try {
         var raw = sessionStorage.getItem(financeBotsSessionCacheKey(accountId))
             || localStorage.getItem(financeBotsSessionCacheKey(accountId));
@@ -1524,7 +1529,14 @@ function restoreFinanceBotsFromSessionCache(accountId) {
             _financeBotsMetricsCache = data.metrics;
         }
         if (data.bots && Array.isArray(data.bots) && data.bots.length) {
-            State.bots = hydrateBotsWithMetricsCache(data.bots.map(function (bot) {
+            var scopedBots = (typeof DashboardAccountScope !== 'undefined')
+                ? DashboardAccountScope.filterBotsForAccount(data.bots, accountId)
+                : data.bots;
+            if (!scopedBots.length) {
+                clearFinanceBotsSessionCache(accountId);
+                return false;
+            }
+            State.bots = hydrateBotsWithMetricsCache(scopedBots.map(function (bot) {
                 return Object.assign({}, bot, {
                     health_alert_level: null,
                     health_alerts: []
@@ -2266,7 +2278,11 @@ function patchFinanceBotsMetrics(bots) {
 
 function renderFinanceBots(bots, opts) {
     opts = opts || {};
-    bots = hydrateBotsWithMetricsCache(Array.isArray(bots) ? bots : []);
+    bots = Array.isArray(bots) ? bots : [];
+    if (typeof DashboardAccountScope !== 'undefined') {
+        bots = DashboardAccountScope.guardBotsBeforeRender(bots, State.accountId, 'renderFinanceBots');
+    }
+    bots = hydrateBotsWithMetricsCache(bots);
     hydrateFinanceBotsInlineHealthAlerts(bots);
     const containerAnasayfa = document.getElementById('financeBotsList');
     const containerBotsTab = document.getElementById('financeBotsListBots');

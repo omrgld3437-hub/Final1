@@ -14,6 +14,7 @@ BILATERAL_GRID_ACTIONS = frozenset(
         FinalAction.BALANCED_GRID.value,
         FinalAction.ACTIVE_GRID.value,
         FinalAction.ACTIVE_DEFENSIVE_GRID.value,
+        FinalAction.CONTROLLED_GRID.value,
         FinalAction.LOW_FEE_WIDE_GRID.value,
         FinalAction.TREND_TRAILING.value,
     }
@@ -124,6 +125,14 @@ def is_deployable(
     feasibility_meta: Optional[Dict[str, Any]] = None,
 ) -> bool:
     meta = feasibility_meta or {}
+    fa = str(final_action or "").upper()
+    if meta.get("fee_bad_rebalance_deferred") and fa != FinalAction.CONTROLLED_GRID.value:
+        return False
+    if meta.get("full_deployable") is False and fa not in (
+        FinalAction.CONTROLLED_GRID.value,
+        FinalAction.SELL_MANAGEMENT_ONLY.value,
+    ):
+        return False
     if meta.get("exposure_hard_cap_breach") or meta.get("deploy_blocked_reason"):
         if final_action == FinalAction.SELL_MANAGEMENT_ONLY.value:
             return is_sell_management_only(params)
@@ -134,6 +143,8 @@ def is_deployable(
         return False
     worst = float(meta.get("worst_case_base_exposure_frac") or 0.0)
     max_exp = float(meta.get("max_base_exposure_frac") or 0.0)
+    if params is not None and max_exp > 0 and worst > max_exp:
+        return False
     if params is not None and max_exp > 0 and worst > max_exp + float(C.WORST_CASE_EXPOSURE_TOLERANCE):
         return False
     if final_action in (
@@ -143,6 +154,9 @@ def is_deployable(
         FinalAction.SAFE_WAIT.value,
     ):
         return False
+    if final_action == FinalAction.CONTROLLED_GRID.value and meta.get("controlled_grid"):
+        buy_n = int(params.buy_grid_count or 0) if params else 0
+        return buy_n >= int(C.MIN_GRID_COUNT_DEPLOYABLE)
     if final_action == FinalAction.SELL_MANAGEMENT_ONLY.value:
         return is_sell_management_only(params)
     buy_n = int(params.buy_grid_count or 0) if params else 0

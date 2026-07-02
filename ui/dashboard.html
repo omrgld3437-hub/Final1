@@ -92,7 +92,7 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
     <link rel="stylesheet" href="/ui/assets/theme.css?v=clean1">
     <link rel="stylesheet" href="/ui/assets/ui.css?v=footer-sticky1">
     <link rel="stylesheet" href="/ui/assets/design.css?v=footer-sticky2">
-    <link rel="stylesheet" href="/ui/assets/dashboard.css?v=pa-cancel2">
+    <link rel="stylesheet" href="/ui/assets/dashboard.css?v=pa-ai-apply1">
     <link rel="stylesheet" href="/ui/assets/binance-colors.css?v=bin1">
     <link rel="stylesheet" href="/ui/assets/blink.css?v=1">
     <link rel="stylesheet" href="/ui/assets/dashboard-login-theme.css?v=spot-modal-chart1">
@@ -1367,7 +1367,7 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
         <div class="modal-panel parametreler-modal-panel perf-summary-modal-panel dm-param-assistant-panel">
             <div class="modal-panel-head dm-param-assistant-head">
                 <div class="dm-pa-head-left">
-                    <div class="dm-param-assistant-kicker" id="dmParamAssistantKicker">AI · V5 exact shelf motoru</div>
+                    <div class="dm-param-assistant-kicker" id="dmParamAssistantKicker">V6 exact shelf engine</div>
                     <h3 class="modal-title dm-param-assistant-title" id="dmParamAssistantTitle">Parametre Asistanı</h3>
                 </div>
                 <button type="button" class="parametreler-modal-close" id="dmParamAssistantCloseBtn" aria-label="Kapat">&times;</button>
@@ -2156,7 +2156,7 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
     <script src="/ui/assets/stores/botStore.js?v=refactor1"></script>
     <script src="/ui/assets/stores/dashboardStore.js?v=boot1"></script>
     <!-- Single boot path (desktop + mobile). No tab gating. -->
-    <script src="/ui/assets/appBoot.js?v=admin-account-refresh1"></script>
+    <script src="/ui/assets/appBoot.js?v=account-scope1"></script>
     <!-- Services -->
     <script src="/ui/assets/services/marketDataService.js?v=refactor1"></script>
     <script src="/ui/assets/services/financeService.js?v=refactor1"></script>
@@ -2175,22 +2175,23 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
     <!-- [1] Önce: State/DOM bağımsız format/utility fonksiyonları -->
     <script src="/ui/assets/modules/dashboard-format.js?v=1"></script>
     <!-- [2] Ana dashboard: State, assetsState, normalizeAndApplyWallet vb. tanımlar -->
-    <script src="/ui/assets/dashboard.js?v=wallet-stale-truth1"></script>
+    <script src="/ui/assets/dashboard.js?v=account-scope1"></script>
+    <script src="/ui/assets/utils/dashboardAccountScope.js?v=account-scope1"></script>
     <!-- [3] Sonra: State'e runtime erişen modüller (DOMContentLoaded öncesi hazır olurlar) -->
     <script src="/ui/assets/modules/dashboard-appbar.js?v=1"></script>
     <script src="/ui/assets/modules/dashboard-wallet-state.js?v=wallet-status-stable1"></script>
-    <script src="/ui/assets/utils/dynamicModeParamsView.js?v=param-dyn-regime-dir1"></script>
+    <script src="/ui/assets/utils/dynamicModeParamsView.js?v=param-dyn-general-alloc1"></script>
     <script src="/ui/assets/modules/dashboard-bot-perf.js?v=grid-qtysum-seed1"></script>
     <script src="/ui/assets/modules/dashboard-leaderboard.js?v=12"></script>
     <script src="/ui/assets/modules/dashboard-tx-history.js?v=1"></script>
-    <script src="/ui/assets/modules/dashboard-bots.js?v=bots-shell1"></script>
+    <script src="/ui/assets/modules/dashboard-bots.js?v=account-scope1"></script>
     <script src="/ui/assets/modules/dashboard-bot-create.js?v=param-assistant3"></script>
     <script src="/ui/assets/modules/dashboard-tabs.js?v=4"></script>
     <script src="/ui/assets/modules/user-activity-beacon.js?v=1"></script>
     <script src="/ui/assets/modules/ai-assistant-spec.js?v=20260626pa34"></script>
-    <script src="/ui/assets/modules/dashboard-create-modal.js?v=20260626pa34"></script>
+    <script src="/ui/assets/modules/dashboard-create-modal.js?v=20260702-pa-ai-apply2"></script>
     <script src="/ui/assets/modules/dashboard-spot-trade.js?v=2"></script>
-    <script src="/ui/assets/modules/dashboard-finance.js?v=bots-shell1"></script>
+    <script src="/ui/assets/modules/dashboard-finance.js?v=account-scope1"></script>
     <script src="/ui/assets/ticker.js?v=chg-pct1" defer></script>
 </body>
 </html>

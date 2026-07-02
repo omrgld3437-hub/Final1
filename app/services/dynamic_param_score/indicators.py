@@ -241,7 +241,11 @@ def compute_indicators(
     # Drawdown
     if closes_1h:
         snap.drawdown_7d_pct = _drawdown_from_high(closes_1h[-168:]) if len(closes_1h) >= 24 else None
-        snap.drawdown_30d_pct = _drawdown_from_high(closes_1h)
+        snap.drawdown_30d_pct = (
+            _drawdown_from_high(closes_1h[-168:])
+            if len(closes_1h) >= 168
+            else _drawdown_from_high(closes_1h)
+        )
     snap.crash_velocity = _crash_velocity(closes_5m) if closes_5m else None
     snap.consecutive_red_pressure = _consecutive_red(c5) if c5 else 0.0
 

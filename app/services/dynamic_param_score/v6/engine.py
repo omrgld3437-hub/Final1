@@ -32,10 +32,15 @@ from app.services.dynamic_param_score.v6.v6_botparams_adapter import (
     v6_final_to_bot_params,
     v6_final_to_telemetry_extras,
 )
+from app.services.dynamic_param_score.v6.v6_pa_display import enrich_v6_display
+from app.services.dynamic_param_score.v6.v6_ui_explainer import build_profile_ids
 from app.services.dynamic_param_score.v6.v6_scenario_classifier import classify_scenario, to_scenario_identity
 from app.services.dynamic_param_score.v6.v6_scenario_tree import find_terminal_for_classifier
 from app.services.dynamic_param_score.v6.v6_severity_resolver import apply_severity_override, resolve_severity
-from app.services.dynamic_param_score.v6.v6_ui_explainer import build_profile_ids
+from app.services.dynamic_param_score.v6.v6_opportunity import (
+    apply_v6_opportunity_postprocess,
+    build_v6_opportunity_explain,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +119,31 @@ class V6Engine:
 
         adjusted, budget_notes = exchange_validate(adjusted, inp)
         exchange_notes = list(budget_notes or [])
+        opportunity_notes: Dict[str, Any] = {}
+        adjusted, opportunity_notes = apply_v6_opportunity_postprocess(
+            adjusted, inp, adjuster_trace, scenario.regime_id,
+            severity=severity,
+            sub_profile_hint=getattr(classified, "sub_profile_hint", "") or "",
+        )
+        val_errors = validate_profile(adjusted)
+        if val_errors:
+            logger.warning("V6 profile validation after opportunity: %s", val_errors)
+        from app.services.dynamic_param_score.v6.v6_opportunity import (
+            assess_operational_validity,
+            is_profile_operational,
+        )
+
+        validity = assess_operational_validity(adjusted)
+        opportunity_notes["operational_validity"] = validity.to_dict()
+        has_trade_surface = validity.valid
+        deployable = "price_valid_false" not in errors and has_trade_surface
+        block_reason = "price_valid_false" if not inp.price_valid else None
+        if not has_trade_surface:
+            deployable = False
+            block_reason = block_reason or "technical_block"
+        elif val_errors and not has_trade_surface:
+            deployable = False
+            block_reason = block_reason or "profile_validation_failed"
         adjuster_trace = append_post_pipeline_trace(
             adjuster_trace,
             delta_pre=delta_pre,
@@ -122,12 +152,6 @@ class V6Engine:
             exchange_notes=exchange_notes,
         )
         catalog_id, final_id, full_id = build_profile_ids(adjusted, delta.tags)
-
-        deployable = "price_valid_false" not in errors
-        block_reason = "price_valid_false" if not inp.price_valid else None
-        if val_errors:
-            deployable = False
-            block_reason = block_reason or "profile_validation_failed"
 
         return V6FinalProfile(
             catalog_profile_id=catalog_id,
@@ -147,12 +171,14 @@ class V6Engine:
                     "behavior_id": behavior_id,
                     "severity": severity,
                     "label": classified.label,
+                    "sub_profile_hint": getattr(classified, "sub_profile_hint", "") or "",
                 },
                 "budget": budget_scale(adjusted, inp),
                 "validation_errors": val_errors,
                 "input_errors": errors,
                 "budget_notes": budget_notes,
                 "delta": delta.__dict__,
+                "opportunity_notes": opportunity_notes,
             },
         )
 
@@ -180,10 +206,41 @@ def calculate_decision_v6(
     result = V6Engine().run(inp)
     scenario = result.telemetry.get("scenario") or {}
     bot_params = v6_final_to_bot_params(result, bot_budget_usdt=budget)
-    v6_display = v6_final_to_telemetry_extras(
-        result,
-        bot_budget_usdt=budget,
+    opp = result.telemetry.get("opportunity_notes") or {}
+    v6_display = enrich_v6_display(
+        v6_final_to_telemetry_extras(
+            result,
+            bot_budget_usdt=budget,
+            adjuster_trace=result.telemetry.get("adjuster_trace") or [],
+        ),
         adjuster_trace=result.telemetry.get("adjuster_trace") or [],
+        deployable=result.deployable,
+        deploy_block_reason=result.deploy_block_reason,
+        opportunity_notes=opp,
+    )
+    explain = build_v6_opportunity_explain(
+        symbol,
+        str(scenario.get("regime_id", "R2")),
+        str(scenario.get("label", "")),
+        result.profile,
+        result.telemetry.get("adjuster_trace") or [],
+        opp,
+    )
+    from app.services.dynamic_param_score.v6.v6_opportunity import resolve_v6_apply_policy
+
+    final_action = "CONTROLLED_GRID"
+    pa_soft = bool(
+        bot_params
+        and (
+            bot_params.sell_grid_count
+            or bot_params.buy_grid_count
+            or bot_params.rebuy_enabled
+        )
+    )
+    policy = resolve_v6_apply_policy(
+        deployable=result.deployable,
+        params=bot_params,
+        final_action=final_action,
     )
     logger.info("V6 BotParams mapped profile=%s rebuy=%s", result.catalog_profile_id, bot_params.rebuy_enabled)
     return DynamicParamDecision(
@@ -191,7 +248,7 @@ def calculate_decision_v6(
         symbol=symbol.upper(),
         timestamp=int(time.time() * 1000),
         run_source=bot_context.run_source,
-        final_action="CONTROLLED_GRID" if result.deployable else "WAIT",
+        final_action=final_action,
         deployable=result.deployable,
         param_score=70,
         confidence_score=70,
@@ -204,10 +261,12 @@ def calculate_decision_v6(
         safety_gates=[],
         blocking_reasons=[result.deploy_block_reason] if result.deploy_block_reason else [],
         warnings=[],
-        explain=f"V6 {scenario.get('label', '')} · {result.final_profile_id}",
+        explain=explain,
         telemetry={
             "engine_version": ENGINE_VERSION,
             "pool_version": POOL_VERSION_V6,
+            "apply_policy": policy,
+            "pa_soft_deployable": pa_soft,
             "v6_display": v6_display,
             "v6_final": {
                 "catalog_profile_id": result.catalog_profile_id,

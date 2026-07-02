@@ -40,23 +40,107 @@ def gap_threshold_sec(config: DcaGridTrailingConfig) -> float:
     return max(30.0, tick * 3.0)
 
 
-def seconds_since_last_tick(state: Dict[str, Any]) -> Optional[float]:
-    lt = state.get("last_tick_at")
-    if lt is None:
+def _parse_state_dt(value: Any) -> Optional[datetime]:
+    if value is None:
         return None
-    now = datetime.now(timezone.utc)
-    if isinstance(lt, datetime):
-        dt = lt if lt.tzinfo else lt.replace(tzinfo=timezone.utc)
-    elif isinstance(lt, str):
+    if isinstance(value, datetime):
+        dt = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        return dt
+    if isinstance(value, str):
         try:
-            dt = datetime.fromisoformat(lt.replace("Z", "+00:00"))
+            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
             if dt.tzinfo is None:
                 dt = dt.replace(tzinfo=timezone.utc)
+            return dt
         except ValueError:
             return None
-    else:
+    return None
+
+
+def seconds_since_last_tick(state: Dict[str, Any]) -> Optional[float]:
+    dt = _parse_state_dt(state.get("last_tick_at"))
+    if dt is None:
         return None
+    now = datetime.now(timezone.utc)
     return max(0.0, (now - dt).total_seconds())
+
+
+def is_cold_run_start(state: Dict[str, Any]) -> bool:
+    """STOP sonrası yeni START — son tick önceki oturuma ait; outage recovery değil."""
+    run_dt = _parse_state_dt(state.get("bot_run_started_at"))
+    tick_dt = _parse_state_dt(state.get("last_tick_at"))
+    if run_dt is None or tick_dt is None:
+        return False
+    return tick_dt < run_dt
+
+
+def clear_pending_grid_triggers(
+    state: Dict[str, Any], config: DcaGridTrailingConfig
+) -> None:
+    """Armed (tetiklenmiş) ama henüz fired olmamış grid tetiklerini sıfırla."""
+    n = len(config.sell_grids)
+    m = len(config.buy_grids)
+    sell_fired = state.get("sell_grid_fired") or []
+    buy_fired = state.get("buy_grid_fired") or []
+    sell_trig = list(state.get("sell_grid_trigger_price") or [])
+    buy_trig = list(state.get("buy_grid_trigger_price") or [])
+    sell_peak = list(state.get("sell_grid_peak_price") or [])
+    buy_trough = list(state.get("buy_grid_trough_price") or [])
+    cleared = False
+    for i in range(n):
+        if i < len(sell_fired) and sell_fired[i]:
+            continue
+        if i < len(sell_trig) and sell_trig[i] is not None:
+            sell_trig[i] = None
+            cleared = True
+        if i < len(sell_peak) and sell_peak[i] is not None:
+            sell_peak[i] = None
+    for j in range(m):
+        if j < len(buy_fired) and buy_fired[j]:
+            continue
+        if j < len(buy_trig) and buy_trig[j] is not None:
+            buy_trig[j] = None
+            cleared = True
+        if j < len(buy_trough) and buy_trough[j] is not None:
+            buy_trough[j] = None
+    state["sell_grid_trigger_price"] = sell_trig
+    state["buy_grid_trigger_price"] = buy_trig
+    state["sell_grid_peak_price"] = sell_peak
+    state["buy_grid_trough_price"] = buy_trough
+    if cleared:
+        mode = state.get("mode") or BotEngineMode.IDLE.value
+        if mode in (
+            BotEngineMode.TRAIL_SELL_GRID.value,
+            BotEngineMode.TRAIL_BUY_GRID.value,
+        ):
+            state["mode"] = BotEngineMode.IDLE.value
+        logger.info(
+            "BOT_COLD_START_GRID_RESET bot_id=%s cycle_id=%s",
+            state.get("bot_id"),
+            state.get("cycle_id"),
+        )
+
+
+def maybe_reset_cold_start_grids(
+    state: Dict[str, Any], config: DcaGridTrailingConfig
+) -> None:
+    if not is_cold_run_start(state):
+        return
+    if state.get("_cold_start_grids_cleared"):
+        return
+    clear_pending_grid_triggers(state, config)
+    state["_cold_start_grids_cleared"] = True
+
+
+def prepare_grids_for_cold_run_start(
+    state: Dict[str, Any], config_raw: Dict[str, Any]
+) -> None:
+    """STOP→START sonrası bekleyen grid tetiklerini temizle (UI + ilk tick)."""
+    try:
+        cfg = DcaGridTrailingConfig(config_raw)
+    except Exception:
+        return
+    maybe_reset_cold_start_grids(state, cfg)
 
 
 def should_apply_outage_recovery(
@@ -66,6 +150,8 @@ def should_apply_outage_recovery(
     gap = seconds_since_last_tick(state)
     if gap is None:
         return False, None
+    if is_cold_run_start(state):
+        return False, gap
     threshold = gap_threshold_sec(config)
     if gap < threshold:
         return False, gap

@@ -616,7 +616,7 @@ async function openLeaderboardParamsModal(rank, structureName, params, createdAt
             {},
             symbol,
             resolved,
-            { showBalances: false }
+            { showBalances: false, hideBudget: true, referencePrice: ref }
         );
     }
     _leaderboardParamActiveTab = 'genel';

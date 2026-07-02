@@ -1166,7 +1166,8 @@
         },
         cache: {
             marketHistoryTtlMs: 10 * 60 * 1000,
-            marketHistoryTimeoutMs: 9000
+            marketHistoryTimeoutMs: 9000,
+            backendResultTtlMs: 45 * 60 * 1000
         },
         api: {
             tiers: "/api/param-assistant/tiers",

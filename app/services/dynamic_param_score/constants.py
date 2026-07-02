@@ -89,13 +89,14 @@ DUMP_RETURN_24H_PCT = -10.0
 ATR_PERCENTILE_HIGH = 85
 ADX_TREND_THRESHOLD = 22.0
 
-# Klines limits — 7-day windows (5m×2016 ≈ 7d, 15m×672 ≈ 7d, 1h×168 = 7d)
+# Klines limits — 7-day decision window; 1h extended to 240 (~10d) for EMA200 (needs 200 bars)
 KLINES_LIMIT_5M = 2016
 KLINES_LIMIT_15M = 672
-KLINES_LIMIT_1H = 168
+KLINES_LIMIT_1H = 240
 KLINES_LIMIT_4H = 42
 KLINES_LIMIT_1M = 240
 DATA_WINDOW_DAYS = 7
+DATA_WINDOW_1H_DAYS = 10  # fetch window for EMA200 / trend structure
 BINANCE_KLINES_MAX_PER_REQUEST = 1000
 
 # Selector latency budget

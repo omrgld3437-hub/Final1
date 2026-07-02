@@ -178,6 +178,11 @@
                 }
                 var data = (res && res.data) ? res.data : {};
                 var meta = (res && res.meta) ? res.meta : {};
+                if (typeof DashboardAccountScope !== 'undefined' && !DashboardAccountScope.isActiveAccount(accountId)) {
+                    _bootDone = true;
+                    window.__BOOT_V2_DONE = true;
+                    return;
+                }
                 if (window.dashboardStore) {
                     window.dashboardStore.setPrices(Object.assign({}, data, { request_id: meta.request_id }));
                     window.dashboardStore.setWallet(Object.assign({}, data, { request_id: meta.request_id }));

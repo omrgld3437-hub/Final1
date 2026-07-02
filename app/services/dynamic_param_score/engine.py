@@ -50,6 +50,15 @@ class DynamicParamScoreEngine:
             bot_context,
         )
         ind = compute_indicators(market_data, portfolio_state)
+        from app.services.dynamic_param_score.v6.v6_pa_telemetry import enrich_v6_decision_for_pa
+
+        decision = enrich_v6_decision_for_pa(
+            decision,
+            market_data=market_data,
+            portfolio=portfolio_state,
+            constraints=exchange_constraints,
+            indicators=ind,
+        )
         action_detail = build_action_detail(
             decision.params,
             decision.final_action,

@@ -45,6 +45,7 @@ class FinalAction(str, Enum):
     ACTIVE_GRID = "ACTIVE_GRID"
     TREND_TRAILING = "TREND_TRAILING"
     INITIAL_ENTRY = "INITIAL_ENTRY"
+    CONTROLLED_GRID = "CONTROLLED_GRID"
 
 
 class ScoreBucket(str, Enum):

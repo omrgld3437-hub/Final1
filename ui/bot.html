@@ -1891,14 +1891,14 @@
     <script src="/ui/assets/utils/trTime.js?v=utc-naive1"></script>
     <script src="/ui/assets/utils/coinLogo.js?v=5"></script>
     <script src="/ui/assets/core/apiClient.js?v=refactor1"></script>
-    <script src="/ui/assets/utils/coinPriceFormat.js?v=1"></script>
+    <script src="/ui/assets/utils/coinPriceFormat.js?v=3"></script>
     <script src="/ui/assets/utils/gridTrailEnvelope.js?v=2"></script>
     <script src="/ui/assets/utils/engineLogAccess.js?v=2"></script>
     <script src="/ui/assets/utils/engineLogArchive.js?v=1"></script>
     <script src="/ui/assets/utils/botHealthAlerts.js?v=35"></script>
     <script src="/ui/assets/modules/ai-assistant-spec.js?v=20260626pa34"></script>
     <script src="/ui/assets/modules/bot-error-assistant.js?v=healthy-quiet1"></script>
-    <script src="/ui/assets/utils/dynamicModeParamsView.js?v=param-dyn-regime-dir1"></script>
+    <script src="/ui/assets/utils/dynamicModeParamsView.js?v=param-dyn-general-alloc1"></script>
 <script src="/ui/assets/utils/engineLogFormat.js?v=70"></script>
 <script src="/ui/assets/utils/perfSummaryIntros.js?v=1"></script>
 <script src="/ui/assets/utils/engineLogLive.js?v=37"></script>
@@ -2192,7 +2192,15 @@
                     }
                     if (perfMetrics && / —/.test(perfMetrics.textContent || '')) _lastPerfRenderFp = '';
                 }
-                if (botPriceEl && o.botPrice) botPriceEl.textContent = o.botPrice;
+                if (botPriceEl && o.botPrice) {
+                    var restoredPx = parseFloat(String(o.botPrice).replace(/,/g, '').trim());
+                    if (Number.isFinite(restoredPx) && restoredPx > 0) {
+                        lastPriceForBlink = restoredPx;
+                        botPriceEl.textContent = fmtBotPrice(restoredPx);
+                    } else {
+                        botPriceEl.textContent = o.botPrice;
+                    }
+                }
                 if (bot24hEl && o.bot24h) {
                     bot24hEl.textContent = o.bot24h;
                     if (o.bot24hClass) bot24hEl.className = o.bot24hClass;
@@ -2435,14 +2443,28 @@
         function ensureBotSymbolPriceDecimals(symbol, onLoaded) {
             if (!symbol || !accountId) return;
             symbol = String(symbol).toUpperCase();
-            if (_cpf().ensureSymbolTickDecimals) {
-                _cpf().ensureSymbolTickDecimals(symbol, accountId, function () {
-                    if (typeof onLoaded === 'function') onLoaded();
-                    else if (lastBotDetail && lastBotDetail.symbol) {
-                        patchGridDisplayCellsStatic(lastBotDetail);
+            var afterTick = function () {
+                if (typeof onLoaded === 'function') {
+                    onLoaded();
+                    return;
+                }
+                if (lastBotDetail && lastBotDetail.symbol) {
+                    if (lastPriceForBlink == null && botPriceEl && botPriceEl.textContent) {
+                        var cachedPx = parseFloat(String(botPriceEl.textContent).replace(/,/g, '').trim());
+                        if (Number.isFinite(cachedPx) && cachedPx > 0) lastPriceForBlink = cachedPx;
+                    }
+                    if (botPriceEl && lastPriceForBlink != null) {
+                        botPriceEl.textContent = fmtBotPrice(lastPriceForBlink);
+                    }
+                    patchGridDisplayCellsStatic(lastBotDetail);
+                    if (typeof renderProfitPointsPanel === 'function') {
                         renderProfitPointsPanel(lastBotDetail);
                     }
-                });
+                    updateGridPointsRefPriceLine(lastPriceForBlink);
+                }
+            };
+            if (_cpf().ensureSymbolTickDecimals) {
+                _cpf().ensureSymbolTickDecimals(symbol, accountId, afterTick);
             }
         }
         function priceDecimalsForModal(symbol, priceHints) {
@@ -3452,11 +3474,16 @@
         function buildParamModalDynHtml(detail) {
             detail = detail || lastBotDetail || {};
             if (!window.DynModeParamsView) return '';
+            var ref = detail.reference_price != null && !isNaN(Number(detail.reference_price))
+                ? Number(detail.reference_price)
+                : (detail.config && detail.config.reference_price != null && !isNaN(Number(detail.config.reference_price))
+                    ? Number(detail.config.reference_price) : null);
             return window.DynModeParamsView.renderBotDetailDynamicTab(
                 detail.dynamic_mode || {},
                 detail.state || {},
                 detail.symbol || (botSymbolEl && botSymbolEl.textContent) || '',
-                detail.config || {}
+                detail.config || {},
+                { showBalances: true, referencePrice: ref }
             );
         }
 
@@ -3505,6 +3532,7 @@
             _paramModalDynHtml = buildParamModalDynHtml({
                 config: cfg,
                 symbol: symbol,
+                reference_price: ref,
                 dynamic_mode: lastBotDetail && lastBotDetail.dynamic_mode,
                 state: lastBotDetail && lastBotDetail.state
             });
@@ -4491,7 +4519,7 @@
         }
         function gridPlainPriceHtml(priceVal) {
             if (priceVal == null || isNaN(priceVal)) return '—';
-            return fmtGridPrice(priceVal, [priceVal]);
+            return fmtGridPrice(priceVal);
         }
         function gridTepeDipCellHtml(priceVal, refPrice) {
             if (priceVal == null || isNaN(priceVal)) return '—';
@@ -4910,9 +4938,17 @@
             applyGridSectionVisibility(cycleSide);
             applyGridProfitPanelLayout(cycleSide);
             function gridStatusBadge(p) {
-                if (p.disabled) return { text: 'Devre dışı', cls: 'grid-status-disabled' };
+                if (!p) return { text: 'Bekliyor', cls: 'grid-status-bekliyor' };
+                var st = (p.status || '').toLowerCase();
+                if (st === 'devre_disi' || p.disabled) return { text: 'Devre dışı', cls: 'grid-status-disabled' };
+                if (st === 'tamamlandi' || p.fired) return { text: 'Tamamlandı', cls: 'grid-status-tamamlandi' };
+                if (st === 'tetiklendi') return { text: 'Tetiklendi', cls: 'grid-status-tetiklendi' };
+                if (st === 'bekliyor') return { text: 'Bekliyor', cls: 'grid-status-bekliyor' };
                 if (p.fired) return { text: 'Tamamlandı', cls: 'grid-status-tamamlandi' };
-                if (p.anchor != null || p.trigger_hit_price != null) return { text: 'Tetiklendi', cls: 'grid-status-tetiklendi' };
+                var hit = p.trigger_hit_price;
+                if (hit != null && !isNaN(Number(hit)) && Number(hit) > 0) {
+                    return { text: 'Tetiklendi', cls: 'grid-status-tetiklendi' };
+                }
                 return { text: 'Bekliyor', cls: 'grid-status-bekliyor' };
             }
             gridSellBody.innerHTML = '';
@@ -5095,7 +5131,8 @@
             var gps = data.grid_points || [];
             for (var gi = 0; gi < gps.length; gi++) {
                 var gp = gps[gi];
-                if (!gp.fired && (gp.anchor != null || gp.trigger_hit_price != null)) return true;
+                var gpSt = (gp.status || '').toLowerCase();
+                if (!gp.fired && gpSt === 'tetiklendi') return true;
             }
             var pps = data.profit_points || [];
             for (var pi = 0; pi < pps.length; pi++) {
@@ -8097,12 +8134,8 @@
         }
         function formatPriceWithChangeFromRef(price, refPrice, decimals, pctSep, symbol) {
             if (price == null || isNaN(Number(price))) return '—';
-            var dec = decimals != null ? decimals : priceDecimalsForModal(symbol, [price, refPrice]);
-            if (refPrice != null && !isNaN(Number(refPrice)) && Number(refPrice) > 0) {
-                dec = Math.min(8, Math.max(dec, decimalsNeededToDiffer(price, refPrice, dec)));
-            }
             var sep = pctSep != null ? pctSep : ' · ';
-            var s = fmtNum(price, dec);
+            var s = fmtBotPrice(price, [refPrice]);
             if (refPrice == null || isNaN(Number(refPrice)) || Number(refPrice) <= 0) return s;
             var pct = (Number(price) - Number(refPrice)) / Number(refPrice) * 100;
             s += sep + (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%';

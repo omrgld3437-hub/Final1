@@ -89,6 +89,31 @@ def _score_for(name: str, extra: Dict[str, Any], inp: V6InputContract) -> int:
     return 0
 
 
+_RISK_SCORE_FIELD = {
+    "data_quality": "data_quality_risk_score",
+    "btc_context": "btc_market_risk_score",
+    "asset_fragility": "fragility_risk_score",
+    "volatility": "volatility_risk_score",
+    "liquidity": "liquidity_risk_score",
+}
+
+
+def _trace_entry(name: str, extra: Dict[str, Any], delta: AdjusterDelta, inp: V6InputContract) -> Dict[str, Any]:
+    score = _score_for(name, extra, inp)
+    entry: Dict[str, Any] = {
+        "name": name,
+        "class": _class_for(name, extra, delta),
+        "score": score,
+        "delta": _delta_dict(delta),
+    }
+    risk_field = _RISK_SCORE_FIELD.get(name)
+    if risk_field:
+        entry[risk_field] = score
+    if name == "btc_context" and extra.get("btc_context_delta_multiplier") is not None:
+        entry["delta_multiplier"] = extra.get("btc_context_delta_multiplier")
+    return entry
+
+
 def run_adjusters_with_trace(inp: V6InputContract) -> Tuple[AdjusterDelta, int, List[Dict[str, Any]]]:
     total = AdjusterDelta()
     trace: List[Dict[str, Any]] = []
@@ -97,14 +122,7 @@ def run_adjusters_with_trace(inp: V6InputContract) -> Tuple[AdjusterDelta, int, 
         delta, extra = fn(inp)
         if extra.get("data_quality_risk") is not None:
             data_quality_risk = int(extra["data_quality_risk"])
-        trace.append(
-            {
-                "name": name,
-                "class": _class_for(name, extra, delta),
-                "score": _score_for(name, extra, inp),
-                "delta": _delta_dict(delta),
-            }
-        )
+        trace.append(_trace_entry(name, extra, delta, inp))
         total.merge(delta)
     return total, data_quality_risk, trace
 

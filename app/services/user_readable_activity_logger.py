@@ -148,12 +148,126 @@ def build_log_filename(
     return f"user_{user_id}.log"
 
 
+def _generic_log_path(user_id: int) -> Path:
+    return user_log_dir() / f"user_{user_id}.log"
+
+
+def _find_named_log_paths(user_id: int) -> List[Path]:
+    base = user_log_dir()
+    if not base.exists():
+        return []
+    return sorted(base.glob(f"*__{user_id}.log"))
+
+
+_HEADER_PREFIXES = (
+    "Kullanıcı İşlem Geçmişi",
+    "Kullanıcı:",
+    "Kullanıcı ID:",
+    "Log Başlangıç",
+    "Saat Dilimi:",
+)
+
+
+def _is_header_line(line: str) -> bool:
+    s = line.strip()
+    if not s:
+        return True
+    return any(s.startswith(p) for p in _HEADER_PREFIXES)
+
+
+def _read_body_lines(path: Path) -> List[str]:
+    if not path.exists():
+        return []
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return [
+                ln.rstrip("\n")
+                for ln in f
+                if ln.strip() and not _is_header_line(ln.rstrip("\n"))
+            ]
+    except OSError:
+        return []
+
+
+def _merge_log_file_into(target: Path, source: Path) -> None:
+    """Append *source* body lines into *target*, then remove *source*."""
+    if not source.exists() or source.resolve() == target.resolve():
+        return
+    extra = _read_body_lines(source)
+    if not extra:
+        try:
+            source.unlink()
+        except OSError:
+            pass
+        return
+    lock = _get_file_lock(str(target))
+    with lock:
+        existing = set(_read_body_lines(target))
+        with open(target, "a", encoding="utf-8") as f:
+            for line in extra:
+                if line not in existing:
+                    f.write(line + "\n")
+                    existing.add(line)
+    try:
+        source.unlink()
+    except OSError:
+        pass
+
+
+def _rename_log_file(src: Path, dst: Path) -> Path:
+    if not src.exists() or src.resolve() == dst.resolve():
+        return dst
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    if dst.exists():
+        _merge_log_file_into(dst, src)
+        return dst
+    try:
+        src.rename(dst)
+    except OSError:
+        _merge_log_file_into(dst, src)
+    return dst
+
+
 def resolve_log_path(
     user_id: int,
     name: Optional[str] = None,
     surname: Optional[str] = None,
 ) -> Path:
-    return user_log_dir() / build_log_filename(user_id, name, surname)
+    """Tek kullanıcı → tek dosya; generic ve adlı dosyalar birleştirilir."""
+    _ensure_dirs()
+    uid = int(user_id)
+    generic = _generic_log_path(uid)
+    preferred_name = build_log_filename(uid, name, surname)
+    preferred = user_log_dir() / preferred_name
+    named_existing = _find_named_log_paths(uid)
+
+    # Ad/soyadlı hedef dosya varsa onu kullan; generic varsa içine birleştir.
+    if preferred_name != f"user_{uid}.log":
+        if preferred.exists():
+            if generic.exists():
+                _merge_log_file_into(preferred, generic)
+            return preferred
+        for p in named_existing:
+            if p.name == preferred_name:
+                if generic.exists():
+                    _merge_log_file_into(p, generic)
+                return p
+        if named_existing:
+            canonical = named_existing[0]
+            if generic.exists():
+                _merge_log_file_into(canonical, generic)
+            return canonical
+        if generic.exists():
+            return _rename_log_file(generic, preferred)
+        return preferred
+
+    # Ad/soyad yok — mevcut adlı dosyaya yaz (generic açılmasın).
+    if named_existing:
+        canonical = named_existing[0]
+        if generic.exists():
+            _merge_log_file_into(canonical, generic)
+        return canonical
+    return generic
 
 
 def _format_timestamp(dt: Optional[datetime] = None) -> str:
@@ -454,11 +568,13 @@ def read_user_log_lines(
     base = user_log_dir()
     if not base.exists():
         return []
-    paths = list(base.glob(f"*__{user_id}.log")) + list(base.glob(f"user_{user_id}.log"))
+    path = resolve_log_path(user_id, name, surname)
+    paths = [path] if path.exists() else []
     if not paths:
-        p = resolve_log_path(user_id, name, surname)
-        if p.exists():
-            paths = [p]
+        paths = _find_named_log_paths(user_id)
+        generic = _generic_log_path(user_id)
+        if generic.exists() and generic not in paths:
+            paths.append(generic)
     lines: List[str] = []
     for path in sorted(paths):
         try:

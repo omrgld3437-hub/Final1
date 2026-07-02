@@ -3107,7 +3107,8 @@ function checkFullscreenBlockers() {
     const h = window.innerHeight;
     
     children.forEach(el => {
-        if (!el || el.id === "topTicker" || el.id === "dmModal" || el.id === "dmBackdrop") return;
+        if (!el || el.id === "topTicker" || el.id === "dmModal" || el.id === "dmBackdrop" ||
+            el.id === "dmParamAssistantModal" || el.id === "dmParamAssistantBackdrop") return;
         
         const cs = getComputedStyle(el);
         const rect = el.getBoundingClientRect();
