@@ -1,0 +1,15 @@
+{
+  "generated_at_utc": "2026-07-03T17:41:50.418286+00:00",
+  "status": "LIVE_FETCH_BLOCKED",
+  "error": "node_binance_fetch_failed:/api/v3/exchangeInfo:None:fetch failed",
+  "selected_symbols": [],
+  "summary": {
+    "total_cases": 0,
+    "pass": 0,
+    "warning": 0,
+    "fail": 0,
+    "critical_fail": 1,
+    "average_score": 0
+  },
+  "cases": []
+}

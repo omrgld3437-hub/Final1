@@ -60,7 +60,7 @@ def test_post_sell_buyback_enabled_without_normal_buy_grids():
     p = get_profile_by_regime_behavior("R6", "PB06", "STD")
     assert p is not None
     bp = v6_profile_to_bot_params(p)
-    assert bp.buy_grid_count == 0
+    assert bp.buy_grid_count == 1
     assert bp.sell_grid_count >= 1
     assert bp.rebuy_enabled is True
     cfg = _grid_cfg(bp)
@@ -72,15 +72,16 @@ def test_pb11_post_sell_buyback_keeps_profit_loop():
     p = get_profile_by_regime_behavior("R8", "PB11", "STD")
     assert p is not None
     bp = v6_profile_to_bot_params(p)
-    assert bp.buy_grid_count == 0
+    assert bp.buy_grid_count == 1
     assert bp.rebuy_enabled is True
     assert bp.resell_enabled is True
 
 
-def test_normal_buy_disabled_implies_zero_buy_grids():
+def test_normal_buy_surface_is_kept_for_protective_profiles():
     p = get_profile_by_regime_behavior("R6", "PB06", "STD")
     bp = v6_profile_to_bot_params(p)
-    assert bp.buy_grid_count == 0
+    assert bp.buy_grid_count == 1
+    assert bp.buy_grid_ladder_pcts == [16]
 
 
 def test_v6_pa_result_has_no_legacy_v5_display_strings():

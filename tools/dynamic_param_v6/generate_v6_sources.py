@@ -32,17 +32,17 @@ BEHAVIOR_FAMILIES: List[Dict[str, Any]] = [
     {"behavior_id": "PB03", "name": "SUPPORT_NEAR_BUY_WEIGHTED_GRID", "regimes": ["R2", "R5"], "modules": {"initial_base_allocation": True, "normal_buy_grid": True, "sell_grid": True, "profit_buyback_after_sell": True, "profit_sell_after_buyback": True}},
     {"behavior_id": "PB04", "name": "RESISTANCE_NEAR_SELL_WEIGHTED_GRID", "regimes": ["R6"], "modules": {"initial_base_allocation": True, "normal_buy_grid": True, "sell_grid": True, "profit_buyback_after_sell": True, "profit_sell_after_buyback": True}},
     {"behavior_id": "PB05", "name": "BREAKOUT_FOLLOW", "regimes": ["R1", "R5"], "modules": {"initial_base_allocation": True, "normal_buy_grid": True, "sell_grid": True, "profit_buyback_after_sell": True, "profit_sell_after_buyback": True}},
-    {"behavior_id": "PB06", "name": "FAKE_BREAKOUT_PROTECT", "regimes": ["R4", "R6"], "modules": {"initial_base_allocation": True, "normal_buy_grid": False, "sell_grid": True, "profit_buyback_after_sell": True, "profit_sell_after_buyback": True}},
+    {"behavior_id": "PB06", "name": "FAKE_BREAKOUT_PROTECT", "regimes": ["R4", "R6"], "modules": {"initial_base_allocation": True, "normal_buy_grid": True, "sell_grid": True, "profit_buyback_after_sell": True, "profit_sell_after_buyback": True}},
     {"behavior_id": "PB07", "name": "CLEAN_RECOVERY", "regimes": ["R5"], "modules": {"initial_base_allocation": True, "normal_buy_grid": True, "sell_grid": True, "profit_buyback_after_sell": True, "profit_sell_after_buyback": True}},
     {"behavior_id": "PB08", "name": "DEEP_DIP_RECOVERY_BUY", "regimes": ["R5", "R7"], "modules": {"initial_base_allocation": True, "normal_buy_grid": True, "sell_grid": True, "profit_buyback_after_sell": True, "profit_sell_after_buyback": True}},
-    {"behavior_id": "PB09", "name": "PUMP_PULLBACK_MANAGE", "regimes": ["R1", "R6"], "modules": {"initial_base_allocation": True, "normal_buy_grid": False, "sell_grid": True, "profit_buyback_after_sell": True, "profit_sell_after_buyback": True}},
+    {"behavior_id": "PB09", "name": "PUMP_PULLBACK_MANAGE", "regimes": ["R1", "R6"], "modules": {"initial_base_allocation": True, "normal_buy_grid": True, "sell_grid": True, "profit_buyback_after_sell": True, "profit_sell_after_buyback": True}},
     {"behavior_id": "PB10", "name": "DOWNTREND_DEFENSIVE_GRID", "regimes": ["R7"], "modules": {"initial_base_allocation": True, "normal_buy_grid": True, "sell_grid": True, "profit_buyback_after_sell": True, "profit_sell_after_buyback": True}},
-    {"behavior_id": "PB11", "name": "CRASH_SELL_GRID_WITH_POST_SELL_BUYBACK", "regimes": ["R8"], "modules": {"initial_base_allocation": True, "normal_buy_grid": False, "sell_grid": True, "profit_buyback_after_sell": True, "profit_sell_after_buyback": True}},
+    {"behavior_id": "PB11", "name": "CRASH_SELL_GRID_WITH_POST_SELL_BUYBACK", "regimes": ["R8"], "modules": {"initial_base_allocation": True, "normal_buy_grid": True, "sell_grid": True, "profit_buyback_after_sell": True, "profit_sell_after_buyback": True}},
     {"behavior_id": "PB12", "name": "CRASH_DEEP_CATCH", "regimes": ["R8"], "modules": {"initial_base_allocation": True, "normal_buy_grid": True, "sell_grid": True, "profit_buyback_after_sell": True, "profit_sell_after_buyback": True}},
-    {"behavior_id": "PB13", "name": "BREAKDOWN_BASE_PROTECT", "regimes": ["R7", "R8"], "modules": {"initial_base_allocation": True, "normal_buy_grid": False, "sell_grid": True, "profit_buyback_after_sell": True, "profit_sell_after_buyback": True}},
-    {"behavior_id": "PB14", "name": "DUMP_BOUNCE_SELL", "regimes": ["R8"], "modules": {"initial_base_allocation": True, "normal_buy_grid": False, "sell_grid": True, "profit_buyback_after_sell": True, "profit_sell_after_buyback": True}},
-    {"behavior_id": "PB15", "name": "LOW_LIQUIDITY_FRAGILE_PROTECT", "regimes": ["R3", "R4"], "modules": {"initial_base_allocation": True, "normal_buy_grid": False, "sell_grid": True, "profit_buyback_after_sell": False, "profit_sell_after_buyback": False}},
-    {"behavior_id": "PB16", "name": "DATA_QUALITY_SAFE_PROFILE", "regimes": ["R2", "R3", "R4", "R7", "R8"], "modules": {"initial_base_allocation": True, "normal_buy_grid": False, "sell_grid": True, "profit_buyback_after_sell": False, "profit_sell_after_buyback": False}},
+    {"behavior_id": "PB13", "name": "BREAKDOWN_BASE_PROTECT", "regimes": ["R7", "R8"], "modules": {"initial_base_allocation": True, "normal_buy_grid": True, "sell_grid": True, "profit_buyback_after_sell": True, "profit_sell_after_buyback": True}},
+    {"behavior_id": "PB14", "name": "DUMP_BOUNCE_SELL", "regimes": ["R8"], "modules": {"initial_base_allocation": True, "normal_buy_grid": True, "sell_grid": True, "profit_buyback_after_sell": True, "profit_sell_after_buyback": True}},
+    {"behavior_id": "PB15", "name": "LOW_LIQUIDITY_FRAGILE_PROTECT", "regimes": ["R3", "R4"], "modules": {"initial_base_allocation": True, "normal_buy_grid": True, "sell_grid": True, "profit_buyback_after_sell": False, "profit_sell_after_buyback": False}},
+    {"behavior_id": "PB16", "name": "DATA_QUALITY_SAFE_PROFILE", "regimes": ["R2", "R3", "R4", "R7", "R8"], "modules": {"initial_base_allocation": True, "normal_buy_grid": True, "sell_grid": True, "profit_buyback_after_sell": False, "profit_sell_after_buyback": False}},
 ]
 
 
@@ -70,10 +70,10 @@ def _behavior_rules() -> Dict[str, Dict[str, Dict[str, Any]]]:
             "profit_sell_trailing_code": st,
         }
 
-    def sell_only(dist, st, kbb, kps, base):
+    def sell_only(dist, st, kbb, kps, base, buy_dist):
         return {
-            "normal_buy_enabled": False,
-            "buy_grids": [],
+            "normal_buy_enabled": True,
+            "buy_grids": [{"distance_pct": -abs(buy_dist), "amount_pct": 100}],
             "sell_grids": [{"distance_pct": dist, "amount_pct": 100}],
             "buy_trailing_code": "T2",
             "sell_trailing_code": st,
@@ -86,11 +86,11 @@ def _behavior_rules() -> Dict[str, Dict[str, Dict[str, Any]]]:
             "base_allocation_pct": base,
         }
 
-    def safe_sell(base, dist, st):
+    def safe_sell(base, dist, st, buy_dist):
         return {
             "normal_base_allocation": True,
-            "normal_buy_enabled": False,
-            "buy_grids": [],
+            "normal_buy_enabled": True,
+            "buy_grids": [{"distance_pct": -abs(buy_dist), "amount_pct": 100}],
             "sell_grids": [{"distance_pct": dist, "amount_pct": 100}],
             "buy_trailing_code": "T2",
             "sell_trailing_code": st,
@@ -126,9 +126,9 @@ def _behavior_rules() -> Dict[str, Dict[str, Dict[str, Any]]]:
         "ACT": {"base_allocation_pct": 45, **two_buy([-5, -8], [4, 7], [30, 70, 60, 40], "T2", "T2", "K09", "K09")},
     }
     rules["PB06"] = {
-        "DEF": sell_only(9, "T3", "K12", "K12", 15),
-        "STD": sell_only(8, "T2", "K11", "K11", 20),
-        "ACT": sell_only(7, "T2", "K10", "K10", 25),
+        "DEF": sell_only(9, "T3", "K12", "K12", 15, 18),
+        "STD": sell_only(8, "T2", "K11", "K11", 20, 16),
+        "ACT": sell_only(7, "T2", "K10", "K10", 25, 14),
     }
     rules["PB07"] = {
         "DEF": {"base_allocation_pct": 25, **two_buy([-7, -11], [5, 9], [40, 60, 60, 40], "T3", "T3", "K11", "K11")},
@@ -141,9 +141,9 @@ def _behavior_rules() -> Dict[str, Dict[str, Dict[str, Any]]]:
         "ACT": {"base_allocation_pct": 30, **two_buy([-8, -14], [4, 9], [30, 70, 60, 40], "T3", "T2", "K10", "K10")},
     }
     rules["PB09"] = {
-        "DEF": sell_only(8, "T3", "K11", "K11", 15),
-        "STD": sell_only(7, "T2", "K10", "K10", 20),
-        "ACT": sell_only(6, "T2", "K09", "K09", 25),
+        "DEF": sell_only(8, "T3", "K11", "K11", 15, 22),
+        "STD": sell_only(7, "T2", "K10", "K10", 20, 20),
+        "ACT": sell_only(6, "T2", "K09", "K09", 25, 18),
     }
     rules["PB10"] = {
         "DEF": {"base_allocation_pct": 15, **two_buy([-9, -15], [5, 9], [40, 60, 70, 30], "T4", "T4", "K12", "K12")},
@@ -151,9 +151,9 @@ def _behavior_rules() -> Dict[str, Dict[str, Dict[str, Any]]]:
         "ACT": {"base_allocation_pct": 25, **two_buy([-7, -12], [4, 7], [30, 70, 60, 40], "T3", "T2", "K10", "K10")},
     }
     rules["PB11"] = {
-        "DEF": sell_only(9, "T3", "K10", "K10", 5),
-        "STD": sell_only(8, "T2", "K09", "K10", 10),
-        "ACT": sell_only(7, "T2", "K08", "K09", 15),
+        "DEF": sell_only(9, "T3", "K10", "K10", 5, 35),
+        "STD": sell_only(8, "T2", "K09", "K10", 10, 32),
+        "ACT": sell_only(7, "T2", "K08", "K09", 15, 28),
     }
     rules["PB12"] = {
         "DEF": {"base_allocation_pct": 10, **two_buy([-12, -20], [6, 12], [40, 60, 60, 40], "T4", "T4", "K12", "K12")},
@@ -161,24 +161,24 @@ def _behavior_rules() -> Dict[str, Dict[str, Dict[str, Any]]]:
         "ACT": {"base_allocation_pct": 20, **two_buy([-10, -16], [4, 9], [30, 70, 60, 40], "T3", "T2", "K10", "K10")},
     }
     rules["PB13"] = {
-        "DEF": sell_only(7, "T3", "K11", "K11", 10),
-        "STD": sell_only(6, "T2", "K10", "K10", 15),
-        "ACT": sell_only(5, "T2", "K09", "K09", 20),
+        "DEF": sell_only(7, "T3", "K11", "K11", 10, 28),
+        "STD": sell_only(6, "T2", "K10", "K10", 15, 24),
+        "ACT": sell_only(5, "T2", "K09", "K09", 20, 20),
     }
     rules["PB14"] = {
-        "DEF": sell_only(6, "T3", "K10", "K10", 10),
-        "STD": sell_only(5, "T2", "K09", "K10", 15),
-        "ACT": sell_only(4, "T2", "K08", "K09", 20),
+        "DEF": sell_only(6, "T3", "K10", "K10", 10, 30),
+        "STD": sell_only(5, "T2", "K09", "K10", 15, 26),
+        "ACT": sell_only(4, "T2", "K08", "K09", 20, 22),
     }
     rules["PB15"] = {
-        "DEF": safe_sell(10, 10, "T4"),
-        "STD": safe_sell(15, 9, "T3"),
-        "ACT": safe_sell(20, 8, "T3"),
+        "DEF": safe_sell(10, 10, "T4", 25),
+        "STD": safe_sell(15, 9, "T3", 22),
+        "ACT": safe_sell(20, 8, "T3", 18),
     }
     rules["PB16"] = {
-        "DEF": safe_sell(5, 12, "T4"),
-        "STD": safe_sell(10, 10, "T3"),
-        "ACT": safe_sell(15, 9, "T3"),
+        "DEF": safe_sell(5, 12, "T4", 30),
+        "STD": safe_sell(10, 10, "T3", 25),
+        "ACT": safe_sell(15, 9, "T3", 20),
     }
     return rules
 

@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import pytest
 
+from app.core.constants import DEFAULT_MIN_NOTIONAL_USDT
 from app.services.dynamic_param_score.v6.constants import TRAILING_CODES
-from app.services.dynamic_param_score.v6.engine import V6Engine
+from app.services.dynamic_param_score.v6.domain.types import GridLevel, ScenarioIdentity, V6CatalogProfile
+from app.services.dynamic_param_score.v6.engine import V6Engine, _apply_v4_host_base_cap, _low_liq_reason_codes
 from app.services.dynamic_param_score.v6.v6_quantizer import profit_pct_from_code, trailing_pct_from_code
 from app.services.dynamic_param_score.v6.v6_regime_behavior_spec import (
     apply_regime_behavior_spec,
@@ -44,6 +46,18 @@ def _eth_like_inp() -> object:
         spread_pct=0.02,
         volume_24h=500_000_000.0,
         asset_fragility_class="F1",
+    )
+
+
+def _profile_for_host_cap(regime: str, behavior: str, severity: str, base: int) -> V6CatalogProfile:
+    return V6CatalogProfile(
+        profile_id=f"{regime}_{behavior}_{severity}",
+        scenario=ScenarioIdentity(regime, "01", "001", behavior, severity),
+        base_allocation_pct=base,
+        quote_allocation_pct=100 - base,
+        normal_buy_enabled=True,
+        buy_grids=[GridLevel(-10, 100)],
+        sell_grids=[GridLevel(6, 100)],
     )
 
 
@@ -161,6 +175,61 @@ def _sol_pullback_inp() -> object:
     )
 
 
+def _bnb_overheat_cooldown_inp() -> object:
+    return _base_inp(
+        symbol="BNBUSDT",
+        bot_budget_usdt=500.0,
+        current_price=573.0,
+        adx_1h=44.2,
+        rsi_5m=59.1,
+        rsi_1h=73.7,
+        ema20_slope=0.08,
+        ema50_slope=0.09,
+        ema20_5m=572.77,
+        ema50_5m=571.12,
+        ema200_1h=559.88,
+        price_vs_ema200_pct=2.42,
+        roc_5m=-0.11,
+        higher_highs=False,
+        lower_lows=False,
+        atr_5m_pct=0.16,
+        atr_1h_pct=0.52,
+        vol_24h=0.10,
+        vol_7d=0.36,
+        volatility_percentile=61.62,
+        bb_width=0.45,
+        bb_position=0.61,
+        z_score=0.44,
+        mean_reversion_score=0.1,
+        range_stability=0.53,
+        hl_range_pct=0.19,
+        return_1h_pct=-0.11,
+        return_4h_pct=0.92,
+        return_24h_pct=2.88,
+        drawdown_7d_pct=0.09,
+        drawdown_30d_pct=0.09,
+        crash_velocity=-0.09,
+        red_pressure=0.2,
+        spread_pct=0.0,
+        volume_24h=59_700_000.0,
+        volume_consistency=0.66,
+        volume_spike=3.81,
+        zero_volume_flag=0,
+        btc_return_1h_pct=-0.03,
+        btc_return_4h_pct=0.81,
+        btc_return_24h_pct=2.03,
+        btc_crash_velocity=-0.07,
+        btc_ema200_below=False,
+        data_freshness_sec=212,
+        data_gap_sec=0,
+        candles_5m=2016,
+        candles_15m=672,
+        candles_1h=240,
+        price_valid=True,
+        asset_fragility_class="F0",
+    )
+
+
 def _tlm_parabolic_pump_inp() -> object:
     return _base_inp(
         symbol="TLMUSDT",
@@ -209,6 +278,102 @@ def _dydx_deep_drawdown_inp() -> object:
         zero_volume_flag=0,
         crash_velocity=-2.0,
         asset_fragility_class="F1",
+    )
+
+
+def _avax_upper_band_spike_inp() -> object:
+    return _base_inp(
+        symbol="AVAXUSDT",
+        adx_1h=20.2,
+        rsi_5m=64.2,
+        rsi_1h=49.4,
+        price_vs_ema200_pct=3.8,
+        bb_position=0.83,
+        z_score=1.37,
+        volume_spike=7.37,
+        range_stability=0.58,
+        volatility_percentile=38.0,
+        atr_1h_pct=0.68,
+        spread_pct=0.01,
+        volume_24h=70_000_000.0,
+        volume_consistency=0.39,
+        asset_fragility_class="F1",
+    )
+
+
+def _doge_live_cooldown_inp() -> object:
+    return _base_inp(
+        symbol="DOGEUSDT",
+        adx_1h=43.0,
+        rsi_5m=47.6,
+        rsi_1h=53.3,
+        ema20_slope=-0.03,
+        ema50_slope=-0.02,
+        price_vs_ema200_pct=3.02,
+        bb_position=0.31,
+        z_score=-0.8,
+        return_24h_pct=1.2,
+        return_4h_pct=-0.2,
+        roc_5m=-0.15,
+        higher_highs=False,
+        lower_lows=False,
+        volume_spike=7.25,
+        spread_pct=0.01,
+        volume_24h=41_300_000.0,
+        volume_consistency=0.25,
+        zero_volume_flag=0,
+        asset_fragility_class="F1",
+    )
+
+
+def _alcx_hard_block_inp() -> object:
+    return _base_inp(
+        symbol="ALCXUSDT",
+        rsi_5m=35.1,
+        rsi_1h=32.0,
+        ema20_slope=-0.54,
+        ema50_slope=-0.30,
+        price_vs_ema200_pct=-12.0,
+        roc_5m=-2.6,
+        lower_lows=True,
+        higher_highs=False,
+        atr_1h_pct=3.32,
+        bb_position=0.03,
+        z_score=-1.93,
+        return_24h_pct=-6.25,
+        drawdown_7d_pct=31.4,
+        drawdown_30d_pct=31.4,
+        spread_pct=0.44,
+        zero_volume_flag=1,
+        volume_24h=500_000.0,
+        volume_consistency=0.2,
+        crash_velocity=-1.2,
+        asset_fragility_class="F3",
+    )
+
+
+def _nfp_crash_block_inp() -> object:
+    return _base_inp(
+        symbol="NFPUSDT",
+        rsi_5m=30.0,
+        rsi_1h=31.3,
+        ema20_slope=-1.26,
+        ema50_slope=-0.71,
+        price_vs_ema200_pct=-20.02,
+        roc_5m=-4.58,
+        return_4h_pct=-6.64,
+        return_24h_pct=-22.16,
+        drawdown_7d_pct=85.89,
+        drawdown_30d_pct=85.89,
+        crash_velocity=-3.64,
+        atr_1h_pct=8.42,
+        spread_pct=0.54,
+        lower_lows=True,
+        higher_highs=False,
+        volume_24h=800_000.0,
+        volume_consistency=0.2,
+        zero_volume_flag=1,
+        asset_fragility_class="F3",
     )
 
 
@@ -273,11 +438,144 @@ def test_sol_strong_uptrend_pullback_uses_r1_std_pullback():
     assert params.rebuy_trigger_pct == pytest.approx(3.5)
     assert params.rebuy_trail_pct == pytest.approx(1.1)
     assert params.resell_trigger_pct == pytest.approx(3.0)
+
+
+def test_sol_r1_act_blocked_when_short_term_structure_is_pullback():
+    inp = _base_inp(
+        symbol="SOLUSDT",
+        adx_1h=41.9,
+        rsi_5m=51.1,
+        rsi_1h=66.1,
+        ema20_slope=0.04,
+        ema50_slope=0.07,
+        price_vs_ema200_pct=10.25,
+        roc_5m=-0.3,
+        higher_highs=False,
+        lower_lows=True,
+        atr_5m_pct=0.28,
+        atr_1h_pct=0.87,
+        volatility_percentile=51.1,
+        bb_width=0.78,
+        bb_position=0.41,
+        z_score=-0.38,
+        mean_reversion_score=0.2,
+        range_stability=0.59,
+        return_1h_pct=-0.3,
+        return_4h_pct=1.03,
+        return_24h_pct=2.33,
+        drawdown_7d_pct=0.22,
+        drawdown_30d_pct=0.22,
+        crash_velocity=-0.15,
+        red_pressure=0.2,
+        spread_pct=0.01,
+        volume_24h=149_900_000,
+        volume_consistency=0.4,
+        volume_spike=7.34,
+        zero_volume_flag=0,
+        asset_fragility_class="F1",
+    )
+    classified = classify_scenario(inp)
+    assert classified.regime_id == "R1"
+    assert classified.sub_profile_hint == "R1_STD_PULLBACK"
+
+    decision = _decision_from_inp(inp)
+    params = decision.params
+    assert params is not None
+    scenario = (decision.telemetry.get("v6_display") or {}).get("scenario_identity") or {}
+    notes = ((decision.telemetry.get("v6_final") or {}).get("opportunity_notes") or {})
+    assert scenario["regime_id"] == "R1"
+    assert scenario["severity"] == "STD"
+    assert notes["sub_profile_hint"] == "R1_STD_PULLBACK"
+    assert decision.selected_profile_name.endswith("_STD")
+    assert params.base_alloc_frac == pytest.approx(0.60)
+    assert params.quote_alloc_frac == pytest.approx(0.40)
+    assert params.buy_grid_ladder_pcts == [2, 5, 9]
+    assert params.sell_grid_ladder_pcts == [3, 6, 10, 15, 21]
     assert params.resell_trail_pct == pytest.approx(1.1)
+    v6d = decision.telemetry.get("v6_display") or {}
+    display_blob = " ".join(
+        str(v6d.get(key) or "").lower()
+        for key in ("market_status_plain", "regime_strategy_why", "grid_plan_plain")
+    )
+    assert "pullback" in display_blob or "geri çekilme" in display_blob
+    assert "aktif fırsat" not in display_blob
+    assert "coin tarafı orta-yüksek" in display_blob
 
     ui = pa_dm_adapter(decision)["ui_config"]
     assert ui["down"]["trail_pct"] == pytest.approx(1.1)
     assert ui["up"]["trail_pct"] == pytest.approx(1.1)
+
+
+def test_min_notional_default_is_not_changed_by_v6_profile_rules():
+    assert DEFAULT_MIN_NOTIONAL_USDT == pytest.approx(10.0)
+
+
+def test_avax_upper_band_volume_spike_rejects_easy_r2_and_locks_profit_profile():
+    inp = _avax_upper_band_spike_inp()
+    classified = classify_scenario(inp)
+    assert classified.regime_id == "R3"
+    assert classified.sub_profile_hint == "R3_STD_UPPER_BAND_PROFIT_LOCK"
+
+    decision = _decision_from_inp(inp)
+    params = decision.params
+    assert params is not None
+    assert params.base_alloc_frac == pytest.approx(0.50)
+    assert params.quote_alloc_frac == pytest.approx(0.50)
+    assert params.buy_grid_ladder_pcts == [2, 4, 7, 11]
+    assert params.buy_qty_distribution == [0.15, 0.25, 0.30, 0.30]
+    assert params.sell_grid_ladder_pcts == [2, 4, 7, 10, 14]
+    assert params.sell_qty_distribution == [0.25, 0.25, 0.20, 0.15, 0.15]
+    notes = ((decision.telemetry.get("v6_final") or {}).get("opportunity_notes") or {})
+    assert "UPPER_BAND_PROFIT_LOCK" in notes.get("reason_codes", [])
+
+
+def test_doge_high_volume_low_spread_is_not_low_liq_restricted():
+    decision = _decision_from_inp(_doge_live_cooldown_inp())
+    params = decision.params
+    assert params is not None
+    notes = ((decision.telemetry.get("v6_final") or {}).get("opportunity_notes") or {})
+    assert "LOW_LIQUIDITY_RESTRICTED" not in set(notes.get("reason_codes") or [])
+    assert decision.deployable is True
+    assert params.base_alloc_frac >= 0.30
+    assert params.buy_grid_count > 0
+
+
+def test_bnb_low_realized_vol_overheat_cooldown_avoids_dead_r4_grid():
+    inp = _bnb_overheat_cooldown_inp()
+    classified = classify_scenario(inp)
+    assert classified.regime_id == "R3"
+    assert classified.sub_profile_hint == "R3_STD_UPTREND_OVERHEAT_COOLDOWN"
+
+    decision = _decision_from_inp(inp)
+    params = decision.params
+    assert params is not None
+    scenario = (decision.telemetry.get("v6_display") or {}).get("scenario_identity") or {}
+    notes = ((decision.telemetry.get("v6_final") or {}).get("opportunity_notes") or {})
+    assert scenario["regime_id"] == "R3"
+    assert scenario["severity"] == "STD"
+    assert notes["sub_profile_hint"] == "R3_STD_UPTREND_OVERHEAT_COOLDOWN"
+    assert decision.selected_profile_name.endswith("_STD")
+    assert params.base_alloc_frac == pytest.approx(0.50)
+    assert params.quote_alloc_frac == pytest.approx(0.50)
+    assert params.buy_grid_ladder_pcts == [2, 4, 7, 11]
+    assert params.buy_qty_distribution == [0.10, 0.20, 0.30, 0.40]
+    assert params.sell_grid_ladder_pcts == [2, 4, 7, 11, 16]
+    assert params.sell_qty_distribution == [0.10, 0.15, 0.20, 0.25, 0.30]
+    assert params.rebuy_trigger_pct == pytest.approx(3.0)
+    assert params.rebuy_trail_pct == pytest.approx(1.1)
+    assert params.resell_trigger_pct == pytest.approx(2.5)
+    assert params.resell_trail_pct == pytest.approx(0.8)
+
+    v6d = decision.telemetry.get("v6_display") or {}
+    display_blob = " ".join(
+        str(v6d.get(key) or "").lower()
+        for key in ("market_status_plain", "regime_strategy_why", "grid_plan_plain")
+    )
+    assert "rsi yüksek" in display_blob
+    assert "momentum soğuyor" in display_blob
+    assert "sert yukarı-aşağı" not in display_blob
+    assert "+21%" not in display_blob
+    assert "-20%" not in display_blob
 
 
 def test_tlm_parabolic_pump_vetoes_r8_and_uses_micro_profile():
@@ -294,17 +592,46 @@ def test_tlm_parabolic_pump_vetoes_r8_and_uses_micro_profile():
     assert scenario.get("regime_id") == "R5"
     assert profile.base_allocation_pct == 5
     assert profile.quote_allocation_pct == 95
-    assert profile.normal_buy_enabled is False
-    assert profile.buy_grids == []
-    assert [g.distance_pct for g in profile.sell_grids] == [5, 10, 18]
-    assert [g.amount_pct for g in profile.sell_grids] == [45, 35, 20]
+    assert profile.normal_buy_enabled is True
+    assert [(g.distance_pct, g.amount_pct) for g in profile.buy_grids] == [(-35, 100)]
+    assert [g.distance_pct for g in profile.sell_grids] == [6, 14]
+    assert [g.amount_pct for g in profile.sell_grids] == [60, 40]
     assert profit_pct_from_code(profile.buyback_trigger_code) == pytest.approx(8.0)
     assert trailing_pct_from_code(profile.buyback_trailing_code) == pytest.approx(1.4)
     assert profit_pct_from_code(profile.profit_sell_trigger_code) == pytest.approx(5.0)
     assert trailing_pct_from_code(profile.profit_sell_trailing_code) == pytest.approx(1.4)
     assert notes.get("params_valid") is True
     assert "PARABOLIC_PUMP" in (notes.get("reason_codes") or [])
-    assert notes.get("new_buys_status") == "paused"
+    assert notes.get("new_buys_status") == "deep_probe"
+    assert notes.get("mandatory_deep_buy_applied") is True
+    assert notes.get("micro_base_sell_grid_compacted") is True
+
+
+def test_r8_hard_block_disables_buys_profit_loop_and_deploy():
+    from app.services.dynamic_param_score.v6.v6_botparams_adapter import v6_final_to_bot_params
+
+    for inp in (_alcx_hard_block_inp(), _nfp_crash_block_inp()):
+        classified = classify_scenario(inp)
+        assert classified.regime_id == "R8"
+        assert classified.sub_profile_hint == "R8_HARD_BLOCK"
+
+        result = V6Engine().run(inp)
+        params = v6_final_to_bot_params(result, bot_budget_usdt=float(inp.bot_budget_usdt or 0))
+        notes = result.telemetry.get("opportunity_notes") or {}
+        assert result.deployable is False
+        assert result.deploy_block_reason == "technical_block"
+        assert result.profile.base_allocation_pct == 0
+        assert result.profile.quote_allocation_pct == 100
+        assert result.profile.normal_buy_enabled is False
+        assert result.profile.buy_grids == []
+        assert result.profile.sell_grids == []
+        assert result.profile.buyback_after_sell_enabled is False
+        assert result.profile.profit_sell_after_buyback_enabled is False
+        assert params.buy_grid_count == 0
+        assert params.sell_grid_count == 0
+        assert params.rebuy_enabled is False
+        assert params.resell_enabled is False
+        assert notes.get("semantic_role") == "R8_HARD_BLOCK"
 
 
 def test_dydx_deep_drawdown_uses_r8_def_standard_grid():
@@ -319,8 +646,8 @@ def test_dydx_deep_drawdown_uses_r8_def_standard_grid():
     assert scenario.get("regime_id") == "R8"
     assert profile.base_allocation_pct == 5
     assert profile.quote_allocation_pct == 95
-    assert profile.normal_buy_enabled is False
-    assert profile.buy_grids == []
+    assert profile.normal_buy_enabled is True
+    assert [(g.distance_pct, g.amount_pct) for g in profile.buy_grids] == [(-28, 100)]
     assert [g.distance_pct for g in profile.sell_grids] == [2, 5, 9]
     assert [g.amount_pct for g in profile.sell_grids] == [45, 35, 20]
     assert profit_pct_from_code(profile.buyback_trigger_code) == pytest.approx(6.0)
@@ -328,7 +655,8 @@ def test_dydx_deep_drawdown_uses_r8_def_standard_grid():
     assert profit_pct_from_code(profile.profit_sell_trigger_code) == pytest.approx(2.5)
     assert trailing_pct_from_code(profile.profit_sell_trailing_code) == pytest.approx(0.5)
     assert notes.get("params_valid") is True
-    assert notes.get("new_buys_status") == "paused"
+    assert notes.get("new_buys_status") == "deep_probe"
+    assert notes.get("mandatory_deep_buy_applied") is True
 
 
 def test_trailing_values_always_on_lattice():
@@ -360,6 +688,88 @@ def test_trailing_values_always_on_lattice():
                 assert float(val) in valid
 
 
+def test_v4_trailing_tier_map_is_fixed():
+    assert TRAILING_CODES["T1"] == pytest.approx(0.5)
+    assert TRAILING_CODES["T2"] == pytest.approx(0.8)
+    assert TRAILING_CODES["T3"] == pytest.approx(1.1)
+    assert TRAILING_CODES["T4"] == pytest.approx(1.4)
+    assert max(TRAILING_CODES.values()) <= 2.5
+
+
+def test_v4_host_base_cap_for_r7_and_r8_profiles():
+    inp = _base_inp(
+        symbol="CAPUSDT",
+        price_valid=True,
+        data_gap_sec=0,
+        data_freshness_sec=120,
+        candles_5m=288,
+        spread_pct=0.2,
+        crash_velocity=-0.9,
+        return_4h_pct=-3.0,
+    )
+
+    r7, r7_notes = _apply_v4_host_base_cap(_profile_for_host_cap("R7", "PB08", "ACT", 30), inp, {})
+    assert r7.base_allocation_pct == 25
+    assert r7.quote_allocation_pct == 75
+    assert r7_notes["v4_host_base_cap"]["reason"] == "V4_HOST_R7_BASE_CAP"
+
+    r8_pb13, r8_notes = _apply_v4_host_base_cap(_profile_for_host_cap("R8", "PB13", "ACT", 20), inp, {})
+    assert r8_pb13.base_allocation_pct == 15
+    assert r8_pb13.quote_allocation_pct == 85
+    assert r8_notes["v4_host_base_cap"]["reason"] == "V4_HOST_R8_PB13_BASE_CAP"
+
+    r8_pb12, pb12_notes = _apply_v4_host_base_cap(_profile_for_host_cap("R8", "PB12", "ACT", 20), inp, {})
+    assert r8_pb12.base_allocation_pct == 15
+    assert r8_pb12.quote_allocation_pct == 85
+    assert pb12_notes["v4_host_base_cap"]["reason"] == "V4_HOST_R8_PB12_ACT_CONDITIONAL_BASE_CAP"
+
+    allowed_inp = _base_inp(
+        symbol="CAPUSDT",
+        price_valid=True,
+        data_gap_sec=0,
+        data_freshness_sec=120,
+        candles_5m=288,
+        spread_pct=0.1,
+        crash_velocity=-0.3,
+        return_1h_pct=0.4,
+        return_4h_pct=-1.2,
+        fake_bounce_score=70,
+    )
+    allowed, allowed_notes = _apply_v4_host_base_cap(_profile_for_host_cap("R8", "PB12", "ACT", 20), allowed_inp, {})
+    assert allowed.base_allocation_pct == 20
+    assert "v4_host_base_cap" not in allowed_notes
+
+
+def test_f3_low_volume_consistency_is_restricted_even_with_mid_volume():
+    inp = _base_inp(
+        symbol="FRAGUSDT",
+        asset_fragility_class="F3",
+        volume_24h=5_500_000,
+        volume_consistency=0.14,
+        spread_pct=0.03,
+        zero_volume_flag=0,
+    )
+    reasons = _low_liq_reason_codes(inp)
+    assert "F3_FRAGILITY" in reasons
+    assert "LOW_VOLUME_CONSISTENCY" in reasons
+    assert "LOW_LIQUIDITY_RESTRICTED" in reasons
+
+
+def test_f2_zero_volume_consistency_is_restricted_with_low_mid_volume():
+    inp = _base_inp(
+        symbol="FRAG2USDT",
+        asset_fragility_class="F2",
+        volume_24h=3_300_000,
+        volume_consistency=0.0,
+        spread_pct=0.02,
+        zero_volume_flag=0,
+    )
+    reasons = _low_liq_reason_codes(inp)
+    assert "F2_FRAGILITY" in reasons
+    assert "LOW_VOLUME_CONSISTENCY" in reasons
+    assert "LOW_LIQUIDITY_RESTRICTED" in reasons
+
+
 def test_output_allocation_summary_matches_detail():
     decision = _decision_from_inp(_eth_like_inp())
     v6d = decision.telemetry.get("v6_display") or {}
@@ -384,7 +794,7 @@ def test_r8_buy_disabled_text_not_bilateral():
     v6d = decision.telemetry.get("v6_display") or {}
     op = str(v6d.get("operational_mode_plain") or "")
     assert "iki yönlü" not in op.lower()
-    assert "alış kapalı" in op.lower() or "satış" in op.lower()
+    assert "alış kapalı" in op.lower() or "satış" in op.lower() or "izleme" in op.lower()
 
 
 def test_r8_trailing_sell_at_least_half_pct():

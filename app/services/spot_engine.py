@@ -13,11 +13,14 @@ import time
 import logging
 from dataclasses import dataclass
 
-import httpx
-
 from app.services.binance_assets import BinanceKeys
 from app.core.constants import DEFAULT_MIN_NOTIONAL_USDT
-from app.services.binance_spot import BINANCE_API, BINANCE_TESTNET, _signed_request
+from app.services.binance_spot import (
+    BINANCE_API,
+    BINANCE_TESTNET,
+    _signed_request,
+    make_binance_async_client,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -161,7 +164,7 @@ class SpotEngine:
         self.client = None
 
     async def __aenter__(self):
-        self.client = httpx.AsyncClient(timeout=10.0)
+        self.client = make_binance_async_client(timeout=10.0)
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):

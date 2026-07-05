@@ -10,6 +10,9 @@ import hashlib
 import hmac
 import json
 import logging
+import os
+from pathlib import Path
+import shutil
 import sys
 import time
 import traceback
@@ -24,6 +27,9 @@ logger = logging.getLogger(__name__)
 # Binance error log throttle: aynı (path, status/code) 5 dk içinde tekrar loglanmasın (tradeFee 400 vb. patlamayı keser)
 _binance_error_log_throttle: Dict[Tuple[str, ...], float] = {}
 _BINANCE_ERROR_THROTTLE_SEC = 300.0
+_BINANCE_NODE_FALLBACK_TIMEOUT_SEC = 12.0
+_LAST_NODE_FALLBACK_LOG: float = 0.0
+_NODE_FALLBACK_LOG_INTERVAL: float = 300.0
 
 
 def _should_log_binance_error(key: Tuple[str, ...]) -> bool:
@@ -48,6 +54,120 @@ BINANCE_REQUEST_TIMEOUT_SEC = (
 
 # Per-request HTTP timeout
 BINANCE_HTTP_TIMEOUT = httpx.Timeout(3.0, connect=2.0)
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _binance_http_trust_env() -> bool:
+    """Binance calls default to direct sockets; opt in when an env proxy is intentional."""
+    return _env_flag("BINANCE_HTTP_USE_PROXY", False)
+
+
+def make_binance_async_client(timeout: Any = BINANCE_HTTP_TIMEOUT) -> httpx.AsyncClient:
+    return httpx.AsyncClient(timeout=timeout, trust_env=_binance_http_trust_env())
+
+
+def _is_ssl_wrong_version_error(exc: BaseException) -> bool:
+    msg = str(exc).lower()
+    return "wrong_version_number" in msg or "wrong version number" in msg
+
+
+def _binance_public_node_fallback_enabled() -> bool:
+    return _env_flag("BINANCE_PUBLIC_NODE_FALLBACK", True)
+
+
+def _node_fetch_script_path() -> Path:
+    return Path(__file__).resolve().parents[2] / "scripts" / "binance_public_fetch_node.js"
+
+
+def _node_base_url(testnet: bool) -> str:
+    return BINANCE_TESTNET if testnet else BINANCE_API
+
+
+async def _node_public_get_json(
+    path: str,
+    params: Optional[Dict[str, Any]],
+    testnet: bool,
+) -> Any:
+    if not _binance_public_node_fallback_enabled():
+        raise DependencyFailure("Binance Node public fallback disabled")
+    node = shutil.which("node")
+    script = _node_fetch_script_path()
+    if not node or not script.exists():
+        raise DependencyFailure("Binance Node public fallback unavailable")
+    payload = json.dumps(
+        {
+            "id": 1,
+            "base": _node_base_url(testnet),
+            "path": path,
+            "params": params or {},
+        },
+        separators=(",", ":"),
+    )
+    proc = await asyncio.create_subprocess_exec(
+        node,
+        str(script),
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(
+            proc.communicate((payload + "\n").encode("utf-8")),
+            timeout=_BINANCE_NODE_FALLBACK_TIMEOUT_SEC,
+        )
+    except asyncio.TimeoutError as exc:
+        proc.kill()
+        await proc.wait()
+        raise DependencyFailure("Binance Node public fallback timeout") from exc
+    if proc.returncode not in (0, None):
+        detail = stderr.decode("utf-8", "replace")[:300]
+        raise DependencyFailure(f"Binance Node public fallback exited: {detail}")
+    line = stdout.decode("utf-8", "replace").strip().splitlines()
+    if not line:
+        detail = stderr.decode("utf-8", "replace")[:300]
+        raise DependencyFailure(f"Binance Node public fallback empty response: {detail}")
+    try:
+        response = json.loads(line[-1])
+    except json.JSONDecodeError as exc:
+        raise DependencyFailure("Binance Node public fallback invalid JSON") from exc
+    if not response.get("ok"):
+        raise DependencyFailure(
+            "Binance Node public fallback failed: "
+            f"{response.get('status') or '-'} {response.get('error')}"
+        )
+    return response.get("data")
+
+
+async def _maybe_node_public_fallback(
+    exc: BaseException,
+    path: str,
+    params: Optional[Dict[str, Any]],
+    testnet: bool,
+) -> Any:
+    global _LAST_NODE_FALLBACK_LOG
+    if not _is_ssl_wrong_version_error(exc):
+        raise exc
+    data = await _node_public_get_json(path, params, testnet)
+    now = time.monotonic()
+    if now - _LAST_NODE_FALLBACK_LOG >= _NODE_FALLBACK_LOG_INTERVAL:
+        _LAST_NODE_FALLBACK_LOG = now
+        logger.warning(
+            "binance_spot public_get path=%s Python TLS wrong-version; "
+            "Node public fallback succeeded",
+            path,
+        )
+    else:
+        logger.debug(
+            "binance_spot public_get path=%s Node fallback succeeded after TLS error",
+            path,
+        )
+    return data
 
 
 class DependencyFailure(Exception):
@@ -365,6 +485,24 @@ async def _public_get_json_impl(
             )
             return data
         except Exception as e:
+            if _is_ssl_wrong_version_error(e):
+                try:
+                    data = await _maybe_node_public_fallback(e, path, params, testnet)
+                    CircuitBreaker.record_success()
+                    elapsed_ms = (time.perf_counter() - t0) * 1000
+                    try:
+                        from app.services.binance_metrics import BinanceMetrics
+
+                        BinanceMetrics.record(path, elapsed_ms, retry_count)
+                    except Exception:
+                        pass
+                    return data
+                except Exception as fallback_exc:
+                    logger.debug(
+                        "binance_spot public_get path=%s Node fallback failed: %s",
+                        path,
+                        fallback_exc,
+                    )
             last_exc = e
             retry_count = attempt
             status = getattr(getattr(e, "response", None), "status_code", None)
@@ -552,7 +690,7 @@ async def _public_get(
     for attempt in range(MAX_RETRIES + 1):
         try:
             if client is None:
-                async with httpx.AsyncClient(timeout=BINANCE_HTTP_TIMEOUT) as c:
+                async with make_binance_async_client(timeout=BINANCE_HTTP_TIMEOUT) as c:
                     r = await c.get(url, params=params)
             else:
                 r = await client.get(url, params=params)
@@ -627,6 +765,33 @@ async def _public_get(
             raise
         except Exception as e:
             last_exc = e
+            if _is_ssl_wrong_version_error(e):
+                try:
+                    data = await _maybe_node_public_fallback(e, path, params, testnet)
+                    try:
+                        from app.services.binance_rest_log import record_rest
+                        from app.services.binance_weight import record_weight_used
+
+                        elapsed_ms = (time.perf_counter() - t0) * 1000
+                        record_rest(
+                            "GET",
+                            path,
+                            params=params,
+                            weight=weight,
+                            latency_ms=elapsed_ms,
+                            outcome="ok",
+                            detail="node_public_fallback",
+                        )
+                        record_weight_used(None, None, weight, elapsed_ms)
+                    except Exception:
+                        pass
+                    return data
+                except Exception as fallback_exc:
+                    logger.debug(
+                        "binance_spot public_get path=%s Node fallback failed: %s",
+                        path,
+                        fallback_exc,
+                    )
             if attempt < MAX_RETRIES:
                 await _asyncio_sleep(backoff)
                 backoff *= BACKOFF_MULTIPLIER
@@ -690,7 +855,7 @@ async def _get_binance_timestamp(
             if client is not None:
                 r = await client.get(url, timeout=_BINANCE_TIME_FETCH_TIMEOUT)
             else:
-                async with httpx.AsyncClient(timeout=_BINANCE_TIME_FETCH_TIMEOUT) as c:
+                async with make_binance_async_client(timeout=_BINANCE_TIME_FETCH_TIMEOUT) as c:
                     r = await c.get(url)
             r.raise_for_status()
             data = r.json()
@@ -854,7 +1019,7 @@ async def _signed_request_impl(
         )
         try:
             if client is None:
-                async with httpx.AsyncClient(timeout=BINANCE_HTTP_TIMEOUT) as c:
+                async with make_binance_async_client(timeout=BINANCE_HTTP_TIMEOUT) as c:
                     if http_method == "GET":
                         r = await c.get(req_url, headers=headers)
                     elif http_method == "DELETE":
@@ -1520,7 +1685,7 @@ async def _ensure_exchange_compact(
         else:
 
             async def _fetch():
-                async with httpx.AsyncClient(timeout=BINANCE_HTTP_TIMEOUT) as c:
+                async with make_binance_async_client(timeout=BINANCE_HTTP_TIMEOUT) as c:
                     with rest_source("binance.exchange_info"):
                         return await _public_get(
                             c, "/api/v3/exchangeInfo", None, testnet
@@ -1597,7 +1762,7 @@ async def ticker_price_all(testnet: bool = False) -> List[Dict]:
     _assert_market_ingest_caller()
     from app.services.binance_rest_log import rest_source
 
-    async with httpx.AsyncClient(timeout=BINANCE_HTTP_TIMEOUT) as c:
+    async with make_binance_async_client(timeout=BINANCE_HTTP_TIMEOUT) as c:
         with rest_source("binance.ticker_price_all"):
             data = await _public_get(c, "/api/v3/ticker/price", None, testnet)
     return data if isinstance(data, list) else [data]
@@ -1612,7 +1777,7 @@ async def ticker_24h_all(testnet: bool = False, symbol: Optional[str] = None) ->
     src = "binance.ticker_24h_single" if symbol else "binance.ticker_24h_bulk"
     if symbol:
         params["symbol"] = symbol.upper()
-    async with httpx.AsyncClient(timeout=BINANCE_HTTP_TIMEOUT) as c:
+    async with make_binance_async_client(timeout=BINANCE_HTTP_TIMEOUT) as c:
         with rest_source(src):
             data = await _public_get(c, "/api/v3/ticker/24hr", params or None, testnet)
     return data

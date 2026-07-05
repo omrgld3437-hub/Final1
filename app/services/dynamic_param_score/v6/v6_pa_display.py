@@ -91,6 +91,10 @@ def safety_result_label_v6(
         return "Düşük likidite · restricted teknik profil gösteriliyor"
     if deploy_block_reason == "conditional_probe_only":
         return "Conditional probe · otomatik deploy kapalı"
+    if deploy_block_reason == "order_feasibility_restricted":
+        return "Bütçe/minNotional nedeniyle otomatik deploy kapalı"
+    if deploy_block_reason == "technical_block" and buy_grid_count == 0 and sell_grid_count == 0:
+        return "İşlem yok · izleme modu"
     if sell_grid_count > 0 and buy_grid_count == 0 and not normal_buy_enabled:
         if rebuy_enabled:
             return "Alış kapalı · Satış ve kâr döngüsü aktif"
@@ -128,8 +132,8 @@ def _semantic_role_from_notes(opp: Optional[Dict[str, Any]]) -> str:
     if role:
         return role
     codes = {str(c) for c in (opp.get("reason_codes") or [])}
-    if "LOW_LIQUIDITY_RESTRICTED" in codes:
-        return "LOW_LIQUIDITY_RESTRICTED"
+    if "R8_HARD_BLOCK" in codes:
+        return "R8_HARD_BLOCK"
     if "CONDITIONAL_PROBE_ONLY" in codes:
         return "R8_CAPITULATION_CONDITIONAL_PROBE"
     if "R5_ACT_CLEAN_BREAKOUT" in codes:
@@ -140,7 +144,13 @@ def _semantic_role_from_notes(opp: Optional[Dict[str, Any]]) -> str:
         return "PARABOLIC_OVEREXTENDED"
     if "R5_DEF_OVEREXTENDED" in codes:
         return "OVEREXTENDED_MOMENTUM"
+    if "LOW_LIQUIDITY_RESTRICTED" in codes:
+        return "LOW_LIQUIDITY_RESTRICTED"
     return ""
+
+
+def _is_recovery_semantic(role: str) -> bool:
+    return str(role or "").upper() in {"RECOVERY", "RECOVERY_BREAKOUT", "R6_RECOVERY_BREAKOUT"}
 
 
 _R3_BUY_GRID_STATUS = (
@@ -153,9 +163,19 @@ def _r3_uptrend_compression_context(
     sub_profile_hint: str = "",
     scenario_name: str = "",
 ) -> bool:
-    if "UPTREND_COMPRESSION" in str(sub_profile_hint or ""):
+    hint = str(sub_profile_hint or "")
+    if "UPTREND_COMPRESSION" in hint or "UPTREND_OVERHEAT_COOLDOWN" in hint:
         return True
     return "yukarı eğilimli sıkışma" in str(scenario_name or "").lower()
+
+
+def _r3_uptrend_overheat_cooldown_context(
+    *,
+    sub_profile_hint: str = "",
+    scenario_name: str = "",
+) -> bool:
+    text = " ".join([str(sub_profile_hint or ""), str(scenario_name or "")]).lower()
+    return "uptrend_overheat_cooldown" in text or "rsi yüksek cooldown" in text
 
 
 def contextual_market_status_plain(
@@ -176,6 +196,11 @@ def contextual_market_status_plain(
     if rid == "R2" and vol in ("V1",):
         return "Sakin yatay bölge; gridler 1 haftalık bot için yakın"
     if rid == "R3" and vol in ("V1", "V2"):
+        if _r3_uptrend_overheat_cooldown_context(
+            sub_profile_hint=sub_profile_hint,
+            scenario_name=scenario_name,
+        ):
+            return "Ana eğilim güçlü ve likit; RSI yüksek, kısa vadede momentum soğuyor"
         if _r3_uptrend_compression_context(
             sub_profile_hint=sub_profile_hint,
             scenario_name=scenario_name,
@@ -214,15 +239,25 @@ def build_regime_strategy_why(
     quote = int(display.get("quote_allocation_pct") or 100 - base)
     op_mode = build_operational_mode_plain(display, opportunity_notes)
     semantic_role = _semantic_role_from_notes(opp)
+    scen = display.get("scenario_identity") or {}
+    headline_context = " ".join(
+        [str(scen.get("name") or ""), str(scen.get("sub_profile_hint") or "")]
+    ).lower()
 
     if semantic_role in (
         "LOW_LIQUIDITY_RESTRICTED",
         "OVEREXTENDED_LOW_LIQUIDITY",
         "R3_RESTRICTED_LOW_LIQUIDITY_COMPRESSION",
+        "R8_LOW_LIQUIDITY_RESTRICTED",
     ):
         return (
             "Likidite/spread riski normal grid için uygun değil; profil restricted tutuldu. "
             f"Plan: {grid}. Dağılım coin %{base} · USDT %{quote}. Mod: {op_mode}."
+        )
+    if semantic_role == "R8_HARD_BLOCK":
+        return (
+            "Spread, crash veya drawdown koşulu çok sert; yeni alış, satış sonrası geri alım ve kâr döngüsü kapalı. "
+            f"Dağılım coin %{base} · USDT %{quote}. Mod: {op_mode}."
         )
 
     if rid == "R4":
@@ -236,6 +271,16 @@ def build_regime_strategy_why(
             "Amaç fitillerde al-sat döngüsünü çalıştırmak ve USDT rezervini erken tüketmemektir."
         )
     if rid == "R1":
+        if semantic_role == "R1_STD_PULLBACK" or "geri çekilme" in headline_context or "pullback" in headline_context:
+            return (
+                "Ana trend yukarı ancak kısa vadede pullback sinyali var; coin tarafı orta-yüksek tutuldu, "
+                f"USDT %{quote} geri çekilme alımları için korundu. Plan: {grid}."
+            )
+        if semantic_role == "R1_STD_TREND_COOLDOWN" or "soğuma" in headline_context or "cooldown" in headline_context:
+            return (
+                "Ana trend yukarı ancak momentum soğuyor; coin tarafı orta-yüksek tutuldu, "
+                f"USDT %{quote} fiyat kovalamadan geri çekilme için ayrıldı. Plan: {grid}."
+            )
         return (
             f"Yükseliş trendinde satış gridleri ve kâr döngüsü için coin tabanı %{base}'e yükseltildi "
             f"(USDT %{quote} dip alışları için). Amaç nakitte park etmek değil, al-sat devir hızı — plan: {grid}."
@@ -246,6 +291,15 @@ def build_regime_strategy_why(
             "1 haftalık botta fiyatın gridlere ulaşması hedeflendi."
         )
     if rid == "R3":
+        if _r3_uptrend_overheat_cooldown_context(
+            sub_profile_hint=str(scen.get("sub_profile_hint") or ""),
+            scenario_name=str(scen.get("name") or ""),
+        ):
+            return (
+                "Ana eğilim güçlü ve likit, ancak RSI yüksek ve kısa momentum soğuyor; "
+                f"gridler yakın/orta tutuldu, USDT %{quote} rezervi korunurken küçük/orta salınımlarda "
+                f"kâr döngüsü hedeflenir. Plan: {grid}."
+            )
         return (
             f"Hareket dar; gridler yakın tutulur: {grid}. "
             "Amaç küçük ama tekrarlanabilir kâr döngüsü üretmektir."
@@ -289,6 +343,8 @@ def build_regime_strategy_why(
         )
     if rid == "R8":
         mode = str(opp.get("pb11_operational_mode") or "")
+        if semantic_role == "R8_HARD_BLOCK" or mode == "no_trade_monitor" or "hard block" in headline_context:
+            return "Hard block: yeni işlem yok; profil izleme modunda tutulur."
         if semantic_role == "R8_CAPITULATION_CONDITIONAL_PROBE":
             return (
                 "Derin crash koşulu var; ana profil micro-base satış/geri alımda kalır, "
@@ -336,10 +392,13 @@ def build_operational_mode_plain(
         "LOW_LIQUIDITY_RESTRICTED",
         "OVEREXTENDED_LOW_LIQUIDITY",
         "R3_RESTRICTED_LOW_LIQUIDITY_COMPRESSION",
+        "R8_LOW_LIQUIDITY_RESTRICTED",
     ):
         return "Restricted · otomatik deploy kapalı"
     if semantic_role == "R8_CAPITULATION_CONDITIONAL_PROBE":
         return "Conditional probe · otomatik deploy kapalı"
+    if semantic_role == "R8_HARD_BLOCK":
+        return "İşlem yok · izleme modu"
     mapping = {
         "bilateral_grid": "İki yönlü grid aktif",
         "sell_management": "Satış yönetimi + geri alım",
@@ -354,6 +413,9 @@ def build_operational_mode_plain(
     buy_on = bool(display.get("normal_buy_enabled"))
     scen = display.get("scenario_identity") or {}
     rid = str(scen.get("regime_id") or "").upper()
+    scenario_name = str(scen.get("name") or "").lower()
+    if rid == "R8" and "hard block" in scenario_name:
+        return "İşlem yok · izleme modu"
     if rid == "R8" and sell_n > 0 and (not buy_on or buy_n == 0):
         return "Yeni alış kapalı · satış ve kontrollü kâr döngüsü aktif"
     if buy_n and sell_n:
@@ -493,10 +555,20 @@ def enrich_v6_display(
         scenario_name=scenario_name,
     )
     semantic_role = _semantic_role_from_notes(opportunity_notes)
+    headline_context = " ".join([str(scenario_name or ""), str(sub_hint or "")]).lower()
+    r1_pullback_context = (
+        regime_id == "R1"
+        and ("geri çekilme" in headline_context or "pullback" in headline_context)
+    )
+    r1_cooldown_context = (
+        regime_id == "R1"
+        and ("soğuma" in headline_context or "cooldown" in headline_context)
+    )
     if semantic_role in (
         "LOW_LIQUIDITY_RESTRICTED",
         "OVEREXTENDED_LOW_LIQUIDITY",
         "R3_RESTRICTED_LOW_LIQUIDITY_COMPRESSION",
+        "R8_LOW_LIQUIDITY_RESTRICTED",
     ):
         out["market_status_plain"] = "Likidite/spread riski yüksek; restricted teknik profil"
     elif regime_id == "R5" and semantic_role == "POST_BREAKOUT_COOLDOWN":
@@ -505,9 +577,31 @@ def enrich_v6_display(
         out["market_status_plain"] = "Temiz breakout; trend devamı kontrollü takip edilir"
     elif regime_id == "R5" and semantic_role in ("OVEREXTENDED_MOMENTUM", "PARABOLIC_OVEREXTENDED"):
         out["market_status_plain"] = "Üst bölgede momentum; yeni alımlar kısılır, satış/kâr yönetimi öne çıkar"
+    elif regime_id == "R1" and (semantic_role == "R1_STD_PULLBACK" or r1_pullback_context):
+        out["market_status_plain"] = "Ana trend yukarı; kısa vadede pullback/cooldown sinyali var"
+    elif regime_id == "R1" and (semantic_role == "R1_STD_TREND_COOLDOWN" or r1_cooldown_context):
+        out["market_status_plain"] = "Ana trend yukarı; momentum soğuyor, USDT rezervi korunur"
+    elif regime_id == "R3" and _r3_uptrend_overheat_cooldown_context(
+        sub_profile_hint=sub_hint,
+        scenario_name=scenario_name,
+    ):
+        out["market_status_plain"] = "Ana eğilim güçlü ve likit; RSI yüksek, kısa vadede momentum soğuyor"
     elif regime_id == "R8" and semantic_role == "R8_CAPITULATION_CONDITIONAL_PROBE":
         out["market_status_plain"] = "Derin crash; conditional probe metadata var, deploy kapalı"
+    elif regime_id == "R8" and (semantic_role == "R8_HARD_BLOCK" or "hard block" in scenario_name.lower()):
+        out["market_status_plain"] = "Hard block; yeni işlem yok, izleme modu"
     out["regime_headline"] = build_regime_headline(scen)
+    if regime_id == "R8" and semantic_role == "R8_LOW_LIQUIDITY_RESTRICTED":
+        out["regime_headline"] = "R8 · Likidite/spread restricted"
+    if regime_id == "R8" and (semantic_role == "R8_HARD_BLOCK" or "hard block" in scenario_name.lower()):
+        out["regime_headline"] = "R8 · Hard block / işlem yok"
+    if regime_id == "R5" and not _is_recovery_semantic(semantic_role):
+        headline_lc = str(out.get("regime_headline") or "").lower()
+        if "toparlan" in headline_lc or "recovery" in headline_lc:
+            out["regime_headline"] = "R5 · Breakout / momentum"
+        status_lc = str(out.get("market_status_plain") or "").lower()
+        if "toparlan" in status_lc or "recovery" in status_lc:
+            out["market_status_plain"] = "Breakout / momentum; kontrollü trend takibi"
     out["display_regime_technical"] = build_regime_technical_label(scen)
     out["risk_tone_plain"] = risk_tone_plain(out["risk_display_label"])
     out["grid_plan_plain"] = build_grid_plan_plain(out)

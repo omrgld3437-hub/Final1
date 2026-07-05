@@ -83,6 +83,22 @@ _RUN_DIR = _PROJECT_ROOT / ".run"
 _LOGS_DIR.mkdir(parents=True, exist_ok=True)
 _RUN_DIR.mkdir(parents=True, exist_ok=True)
 
+
+def is_worker_running() -> bool:
+    """Health endpoint helper: worker PID dosyası canlı prosesi göstermeli."""
+    try:
+        pid_path = _RUN_DIR / "worker.pid"
+        if not pid_path.is_file():
+            return False
+        raw_pid = pid_path.read_text(encoding="utf-8").strip()
+        pid = int(raw_pid)
+        if pid <= 0:
+            return False
+        os.kill(pid, 0)
+        return True
+    except (OSError, ValueError, ProcessLookupError):
+        return False
+
 # Engine metrics for Manager v3: bounded, written every 2s
 _ENGINE_METRICS_TICK_TIMES: deque = deque(
     maxlen=5000

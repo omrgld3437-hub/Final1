@@ -48,6 +48,16 @@ def test_catalog_seed_loads():
     assert len(cat) >= 2295
 
 
+def test_catalog_profiles_keep_minimum_buy_surface():
+    cat = load_catalog()
+    closed = [
+        profile.profile_id
+        for profile in cat.values()
+        if not profile.normal_buy_enabled or not profile.buy_grids
+    ]
+    assert closed == []
+
+
 def test_engine_runs_with_seed_catalog():
     inp = V6InputContract(
         symbol="MANTAUSDT",

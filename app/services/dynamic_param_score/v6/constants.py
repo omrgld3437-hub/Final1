@@ -16,18 +16,17 @@ GRID_DISTANCE_STEP_PCT = 1
 # Grid amount: 5% steps
 GRID_AMOUNT_STEP_PCT = 5
 
-# Trailing ladder T0..T9
+# V4 audit overlay: symbolic T1..T4 tiers are fixed at 0.5/0.8/1.1/1.4%.
+# Higher tiers remain available for adjusters, clamped by the quantizer.
 TRAILING_CODES: Dict[str, float] = {
-    "T0": 0.5,
-    "T1": 0.8,
-    "T2": 1.1,
-    "T3": 1.4,
-    "T4": 1.7,
-    "T5": 2.0,
-    "T6": 2.3,
-    "T7": 2.6,
-    "T8": 2.9,
-    "T9": 3.2,
+    "T1": 0.5,
+    "T2": 0.8,
+    "T3": 1.1,
+    "T4": 1.4,
+    "T5": 1.7,
+    "T6": 2.0,
+    "T7": 2.3,
+    "T8": 2.5,
 }
 TRAILING_PCT_TO_CODE: Dict[float, str] = {v: k for k, v in TRAILING_CODES.items()}
 

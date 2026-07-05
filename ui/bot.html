@@ -3215,7 +3215,7 @@
                 metaEl.innerHTML = '<span class="state-hero-meta-start">' + escapeHtml(o.start) + '</span>';
             }
         }
-        function escapeHtml(s) { return (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+        function escapeHtml(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
 
         function cycleTradesListPlaceholder(msg) {
             return '<div class="cycle-pnl-item cycle-pnl-item--empty"><span class="muted">' + escapeHtml(msg || '') + '</span></div>';
@@ -5602,33 +5602,41 @@
                 }
                 trades.forEach(function(t) {
                     var div = document.createElement('div');
-                    var isDetail = isTradeDetailRow(t);
-                    div.className = 'cycle-pnl-item' + (isDetail ? ' cycle-trade-clickable' : '');
-                    var reason = tradeReason(t);
-                    var refP = resolveTradeReferencePrice(t);
-                    var priceNum = t.price != null && !isNaN(Number(t.price)) ? Number(t.price) : null;
-                    var realizedPctStr = '';
-                    var realizedPctCls = '';
-                    var skipRealizedPct = (reason === 'Tur başlangıç (Base)' || reason === 'İlk base alımı' || isInitialAllocationTradeRow(t));
-                    if (!skipRealizedPct && refP != null && refP > 0 && priceNum != null) {
-                        var pct = ((priceNum - refP) / refP * 100);
-                        realizedPctStr = 'Gerçekleşme ' + (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%';
-                        realizedPctCls = pct >= 0 ? 'cycle-trade-chip--pct-pos' : 'cycle-trade-chip--pct-neg';
-                    }
-                    div.innerHTML = buildCycleTradeItemHtml(t, {
-                        botSymbol: botSymbolForTrades,
-                        reason: reason,
-                        realizedPctStr: realizedPctStr,
-                        realizedPctCls: realizedPctCls
-                    });
-                    if (isDetail) {
-                        div.setAttribute('role', 'button');
-                        div.setAttribute('tabindex', '0');
-                        div.title = isCycleCloseTradeRow(t) ? 'İşlem detayını göster' : 'Grid detayını göster';
-                        div.addEventListener('click', function() { openGridTradeDetailModal(t, tradeReason, botSymbolForTrades, cycleNum); });
-                        div.addEventListener('keydown', function(ev) {
-                            if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); openGridTradeDetailModal(t, tradeReason, botSymbolForTrades, cycleNum); }
+                    try {
+                        var isDetail = isTradeDetailRow(t);
+                        div.className = 'cycle-pnl-item' + (isDetail ? ' cycle-trade-clickable' : '');
+                        var reason = tradeReason(t);
+                        var refP = resolveTradeReferencePrice(t);
+                        var priceNum = t.price != null && !isNaN(Number(t.price)) ? Number(t.price) : null;
+                        var realizedPctStr = '';
+                        var realizedPctCls = '';
+                        var skipRealizedPct = (reason === 'Tur başlangıç (Base)' || reason === 'İlk base alımı' || isInitialAllocationTradeRow(t));
+                        if (!skipRealizedPct && refP != null && refP > 0 && priceNum != null) {
+                            var pct = ((priceNum - refP) / refP * 100);
+                            realizedPctStr = 'Gerçekleşme ' + (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%';
+                            realizedPctCls = pct >= 0 ? 'cycle-trade-chip--pct-pos' : 'cycle-trade-chip--pct-neg';
+                        }
+                        div.innerHTML = buildCycleTradeItemHtml(t, {
+                            botSymbol: botSymbolForTrades,
+                            reason: reason,
+                            realizedPctStr: realizedPctStr,
+                            realizedPctCls: realizedPctCls
                         });
+                        if (isDetail) {
+                            div.setAttribute('role', 'button');
+                            div.setAttribute('tabindex', '0');
+                            div.title = isCycleCloseTradeRow(t) ? 'İşlem detayını göster' : 'Grid detayını göster';
+                            div.addEventListener('click', function() { openGridTradeDetailModal(t, tradeReason, botSymbolForTrades, cycleNum); });
+                            div.addEventListener('keydown', function(ev) {
+                                if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); openGridTradeDetailModal(t, tradeReason, botSymbolForTrades, cycleNum); }
+                            });
+                        }
+                    } catch (rowErr) {
+                        try { console.warn('cycle trade row render', rowErr, t); } catch (e) {}
+                        div.className = 'cycle-pnl-item';
+                        var sideFallback = (t && String(t.side || '').toUpperCase()) === 'BUY' ? 'Alış' : ((t && String(t.side || '').toUpperCase()) === 'SELL' ? 'Satış' : 'İşlem');
+                        div.innerHTML = '<div class="cycle-trade-bar__main"><span class="cycle-trade-chip cycle-trade-chip--muted">' +
+                            escapeHtml(sideFallback) + '</span><span class="cycle-trade-line">İşlem satırı okunamadı; ham kayıt korundu.</span></div>';
                     }
                     cycleTradesList.appendChild(div);
                 });

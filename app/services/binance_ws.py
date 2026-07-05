@@ -6,11 +6,14 @@ Reconnect + exponential backoff + jitter; ping/heartbeat; clean shutdown.
 
 from __future__ import annotations
 import asyncio
+import inspect
 import json
 import logging
+import os
 import random
+import ssl
 import time
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +23,10 @@ _DNS_ERROR_LOG_INTERVAL: float = 300.0  # seconds
 # Handshake timeout: log WARNING at most once per interval (avoid flood when Binance/firewall slow)
 _LAST_HANDSHAKE_TIMEOUT_LOG: float = 0.0
 _HANDSHAKE_TIMEOUT_LOG_INTERVAL: float = 300.0  # seconds
+# TLS/proxy protocol mismatch: log once per interval to avoid flood when a proxy
+# or blocked 9443 endpoint returns non-TLS bytes to the TLS client.
+_LAST_TLS_PROTOCOL_ERROR_LOG: float = 0.0
+_TLS_PROTOCOL_ERROR_LOG_INTERVAL: float = 300.0  # seconds
 
 
 def _is_dns_or_network_error(exc: BaseException) -> bool:
@@ -42,8 +49,32 @@ def _is_handshake_timeout(exc: BaseException) -> bool:
     return "timed out during opening handshake" in str(exc).lower()
 
 
+def _is_ssl_wrong_version(exc: BaseException) -> bool:
+    """True if TLS saw plain HTTP/proxy bytes or an incompatible protocol."""
+    msg = str(exc).lower()
+    return isinstance(exc, ssl.SSLError) and (
+        "wrong_version_number" in msg or "wrong version number" in msg
+    )
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _ws_proxy_arg() -> object:
+    """Public price stream defaults to direct connection; opt in to proxy if needed."""
+    explicit = (os.getenv("BINANCE_WS_PROXY") or "").strip()
+    if explicit:
+        return explicit
+    return True if _env_flag("BINANCE_WS_USE_PROXY", False) else None
+
+
 # Combined stream: all symbols mini ticker (array)
-BINANCE_WS_LIVE = "wss://stream.binance.com:9443/stream?streams=!miniTicker@arr"
+BINANCE_WS_LIVE = "wss://stream.binance.com/stream?streams=!miniTicker@arr"
+BINANCE_WS_LIVE_9443 = "wss://stream.binance.com:9443/stream?streams=!miniTicker@arr"
 BINANCE_WS_TESTNET = "wss://testnet.binance.vision/stream?streams=!miniTicker@arr"
 
 RECONNECT_INITIAL = 1.0
@@ -56,8 +87,14 @@ PING_TIMEOUT = 20.0
 OPEN_HANDSHAKE_TIMEOUT = 20.0
 
 
+def _ws_urls(testnet: bool) -> Tuple[str, ...]:
+    if testnet:
+        return (BINANCE_WS_TESTNET,)
+    return (BINANCE_WS_LIVE, BINANCE_WS_LIVE_9443)
+
+
 def _ws_url(testnet: bool) -> str:
-    return BINANCE_WS_TESTNET if testnet else BINANCE_WS_LIVE
+    return _ws_urls(testnet)[0]
 
 
 class BinanceWSClient:
@@ -73,6 +110,7 @@ class BinanceWSClient:
         self._task: Optional[asyncio.Task] = None
         self._stop = asyncio.Event()
         self._reconnect_delay = RECONNECT_INITIAL
+        self._url_index = 0
 
     def start(self) -> None:
         if self._task and not self._task.done():
@@ -93,7 +131,9 @@ class BinanceWSClient:
         logger.info("[BinanceWS] Stopped")
 
     async def _run(self) -> None:
-        global _LAST_DNS_ERROR_LOG, _LAST_HANDSHAKE_TIMEOUT_LOG
+        global _LAST_DNS_ERROR_LOG
+        global _LAST_HANDSHAKE_TIMEOUT_LOG
+        global _LAST_TLS_PROTOCOL_ERROR_LOG
         while not self._stop.is_set():
             try:
                 await self._connect_and_listen()
@@ -118,6 +158,26 @@ class BinanceWSClient:
                         )
                     else:
                         logger.debug("[BinanceWS] Run error (handshake timeout): %s", e)
+                elif _is_ssl_wrong_version(e):
+                    urls = _ws_urls(self.testnet)
+                    if len(urls) > 1:
+                        self._url_index = (self._url_index + 1) % len(urls)
+                    now = time.monotonic()
+                    if (
+                        now - _LAST_TLS_PROTOCOL_ERROR_LOG
+                        >= _TLS_PROTOCOL_ERROR_LOG_INTERVAL
+                    ):
+                        _LAST_TLS_PROTOCOL_ERROR_LOG = now
+                        logger.warning(
+                            "[BinanceWS] TLS/proxy protokol hatası: canlı fiyat "
+                            "stream'i yanlış TLS yanıtı aldı. 443/9443 alternatif "
+                            "endpoint ile tekrar denenecek; ortam proxy'si gerekiyorsa "
+                            "BINANCE_WS_USE_PROXY=1 veya BINANCE_WS_PROXY ayarlayın. "
+                            "Detail: %s",
+                            e,
+                        )
+                    else:
+                        logger.debug("[BinanceWS] Run error (TLS/proxy): %s", e)
                 elif _is_dns_or_network_error(e):
                     now = time.monotonic()
                     if now - _LAST_DNS_ERROR_LOG >= _DNS_ERROR_LOG_INTERVAL:
@@ -143,14 +203,20 @@ class BinanceWSClient:
     async def _connect_and_listen(self) -> None:
         import websockets
 
-        url = _ws_url(self.testnet)
+        urls = _ws_urls(self.testnet)
+        url = urls[self._url_index % len(urls)]
         self._reconnect_delay = RECONNECT_INITIAL
+        connect_kwargs = {
+            "ping_interval": PING_INTERVAL,
+            "ping_timeout": PING_TIMEOUT,
+            "close_timeout": 5,
+            "open_timeout": OPEN_HANDSHAKE_TIMEOUT,
+        }
+        if "proxy" in inspect.signature(websockets.connect).parameters:
+            connect_kwargs["proxy"] = _ws_proxy_arg()
         async with websockets.connect(
             url,
-            ping_interval=PING_INTERVAL,
-            ping_timeout=PING_TIMEOUT,
-            close_timeout=5,
-            open_timeout=OPEN_HANDSHAKE_TIMEOUT,
+            **connect_kwargs,
         ) as ws:
             logger.info("[BinanceWS] Connected to %s", url)
             while not self._stop.is_set():

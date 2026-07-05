@@ -4215,10 +4215,16 @@ h1, h2, h3, h4 {
 
 .page-dashboard #dmModal input.dm-ai-input-writing,
 .page-dashboard #dmModal input.form-input.dm-ai-input-writing {
+    position: relative;
+    background-color: rgba(6, 255, 165, 0.12) !important;
+    background-image: linear-gradient(90deg, rgba(6, 255, 165, 0.05), rgba(14, 203, 129, 0.24), rgba(6, 255, 165, 0.05)) !important;
+    background-size: 240% 100% !important;
     border-color: rgba(14, 203, 129, 0.95) !important;
-    box-shadow: 0 0 0 3px rgba(14, 203, 129, 0.14), 0 0 18px rgba(14, 203, 129, 0.16) !important;
-    animation: dmAiInputGlow 0.7s ease-in-out infinite alternate;
+    outline: 2px solid rgba(6, 255, 165, 0.55) !important;
+    box-shadow: 0 0 0 4px rgba(14, 203, 129, 0.22), 0 0 30px rgba(6, 255, 165, 0.36) !important;
+    animation: dmAiInputGlow 0.62s ease-in-out infinite alternate, dmAiInputSweep 0.9s linear infinite;
     color: #0ecb81 !important;
+    caret-color: #06ffa5 !important;
 }
 
 .page-dashboard #dmModal input.dm-ai-input-done,
@@ -4275,8 +4281,13 @@ h1, h2, h3, h4 {
 }
 
 @keyframes dmAiInputGlow {
-    from { box-shadow: 0 0 0 2px rgba(14, 203, 129, 0.12), 0 0 12px rgba(14, 203, 129, 0.1); }
-    to { box-shadow: 0 0 0 4px rgba(240, 185, 11, 0.13), 0 0 20px rgba(240, 185, 11, 0.14); }
+    from { box-shadow: 0 0 0 2px rgba(14, 203, 129, 0.18), 0 0 12px rgba(14, 203, 129, 0.18); }
+    to { box-shadow: 0 0 0 5px rgba(6, 255, 165, 0.20), 0 0 26px rgba(6, 255, 165, 0.32); }
+}
+
+@keyframes dmAiInputSweep {
+    from { background-position: 120% 0; }
+    to { background-position: -120% 0; }
 }
 
 @keyframes dmAiCreatePulse {

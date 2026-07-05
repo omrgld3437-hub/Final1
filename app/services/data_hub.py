@@ -17,6 +17,16 @@ logger = logging.getLogger(__name__)
 _DATAHUB_REST_LOCK_TIMEOUT = 55.0
 
 
+def _pid_is_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
 def try_acquire_datahub_rest_leader() -> bool:
     """Çoklu uvicorn worker: REST döngüsünü tek proses çalıştırır (rest.log çift yük önleme)."""
     root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -28,7 +38,15 @@ def try_acquire_datahub_rest_leader() -> bool:
     now = time.time()
     if os.path.isfile(lock_path):
         try:
-            if now - os.path.getmtime(lock_path) < _DATAHUB_REST_LOCK_TIMEOUT:
+            raw_pid = ""
+            try:
+                with open(lock_path, "r", encoding="utf-8") as f:
+                    raw_pid = f.read().strip()
+            except Exception:
+                raw_pid = ""
+            lock_pid = int(raw_pid) if raw_pid.isdigit() else 0
+            lock_fresh = now - os.path.getmtime(lock_path) < _DATAHUB_REST_LOCK_TIMEOUT
+            if lock_fresh and _pid_is_alive(lock_pid):
                 return False
             os.unlink(lock_path)
         except Exception:

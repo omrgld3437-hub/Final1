@@ -1,0 +1,25 @@
+---
+description: Her uygulama sonrası zorunlu 8 maddelik rapor formatı
+alwaysApply: true
+---
+
+# Uygulama Sonrası Rapor Formatı
+
+Her kod uygulaması, düzeltme veya özellik tamamlandığında kullanıcıya **aşağıdaki 8 başlık sırasıyla** cevap ver. Başlıkları atlamadan numaralandır; ilgili madde yoksa kısaça "Yok" yaz.
+
+## Zorunlu format
+
+1. **Değişen dosyalar** — Değiştirilen/eklenen/silinen dosya yolları (kısa liste).
+2. **Değişen ana mantık** — Davranış veya mimaride ne değişti (1–3 cümle, net).
+3. **Eklenen testler** — Yeni test dosyası veya test fonksiyonları; yoksa "Yok".
+4. **Çalıştırılan test komutları** — Tam komut satırları.
+5. **Test sonucu** — Geçti/kaldı, sayılar veya özet.
+6. **Başarısız kalan test varsa sebebi** — Yoksa "Yok".
+7. **V6 final regime/grid/profit/trailing davranışını etkileyen açık risk var mı?** — Evet/Hayır + kısa gerekçe; risk yoksa "Hayır — …".
+8. **Commit/push bilgisi** — Commit yapıldı mı, mesaj, push durumu; yapılmadıysa açıkça belirt.
+
+## Kurallar
+
+- Sadece soru/inceleme yanıtında bu format **gerekmez**; kod veya davranış değişikliği yapan uygulamalarda **zorunludur**.
+- Test çalıştırılmadıysa 4–6 maddelerinde bunu açıkça yaz; uydurma sonuç verme.
+- Commit/push yalnızca kullanıcı istediğinde yapılır; madde 8'de gerçek durumu yansıt.

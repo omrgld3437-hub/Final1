@@ -161,7 +161,7 @@ def test_post_sell_buyback_profile_maps_to_bot_params():
     p = get_profile_by_regime_behavior("R8", "PB11", "STD")
     assert p is not None
     bp = v6_profile_to_bot_params(p)
-    assert bp.buy_grid_count == 0
+    assert bp.buy_grid_count == 1
     assert bp.sell_grid_count >= 1
     assert bp.rebuy_enabled is True
     assert bp.rebuy_trigger_pct is not None

@@ -38,8 +38,9 @@ var DM_MODAL_LIVE_PRICE_MS = 1500;
 var DM_MODAL_TAHMIN_MIN_MS = 30000;  // Tahmin (high/low) en fazla 30s'de bir yenilensin
 var AI_ASSISTANT_SPEC = window.AIAssistantSpec || {};
 var DM_PARAM_ASSISTANT_TEXT_MS = (AI_ASSISTANT_SPEC.timing && AI_ASSISTANT_SPEC.timing.textMs) || 14;
-var DM_PARAM_ASSISTANT_INPUT_MS = (AI_ASSISTANT_SPEC.timing && AI_ASSISTANT_SPEC.timing.inputMs) || 52;
-var DM_PARAM_ASSISTANT_FIELD_PAUSE_MS = (AI_ASSISTANT_SPEC.timing && AI_ASSISTANT_SPEC.timing.fieldPauseMs) || 160;
+var DM_PARAM_ASSISTANT_INPUT_MS = (AI_ASSISTANT_SPEC.timing && AI_ASSISTANT_SPEC.timing.inputMs) || 18;
+var DM_PARAM_ASSISTANT_FIELD_PAUSE_MS = (AI_ASSISTANT_SPEC.timing && AI_ASSISTANT_SPEC.timing.fieldPauseMs) || 45;
+var DM_PARAM_ASSISTANT_FIELD_MIN_MS = (AI_ASSISTANT_SPEC.timing && AI_ASSISTANT_SPEC.timing.fieldMinMs) || (AI_ASSISTANT_SPEC.timing && AI_ASSISTANT_SPEC.timing.gridFieldMinMs) || 190;
 var dmParamAssistantTimers = [];
 var dmParamAssistantRecommendation = null;
 var dmParamAssistantTyping = false;
@@ -60,10 +61,20 @@ var dmParamAssistantLastSnapshot = null;
 var dmParamAssistantLastTierStartFn = null;
 var dmParamAssistantApplyTimers = [];
 var dmParamAssistantApplying = false;
+var dmParamAssistantSuppressLastCreateParamsUntil = 0;
 
 function dmParamAssistantIsOpen() {
     var modal = document.getElementById('dmParamAssistantModal');
     return !!(modal && modal.getAttribute('aria-hidden') === 'false');
+}
+
+function dmParamAssistantSuppressLastCreateParams(ms) {
+    var until = Date.now() + Math.max(1000, ms || 600000);
+    dmParamAssistantSuppressLastCreateParamsUntil = Math.max(dmParamAssistantSuppressLastCreateParamsUntil || 0, until);
+}
+
+function dmParamAssistantShouldSuppressLastCreateParams() {
+    return dmParamAssistantApplying || Date.now() < (dmParamAssistantSuppressLastCreateParamsUntil || 0);
 }
 
 function dmParamAssistantShieldParentModals(shield) {
@@ -339,6 +350,7 @@ function resetParamAssistantSymbolIsolation(prevSym, newSym) {
 /** Son oluşturulan bot parametrelerini forma uygula — yalnızca aynı parite + hesap. */
 function applyLastCreateParamsToForm() {
     try {
+        if (typeof dmParamAssistantShouldSuppressLastCreateParams === "function" && dmParamAssistantShouldSuppressLastCreateParams()) return;
         var accountId = State.accountId;
         if (!accountId) return;
         var symEl = document.getElementById("fSymbol");
@@ -374,8 +386,8 @@ function applyLastCreateParamsToForm() {
         var downCountEl = document.getElementById("fDownCount");
         var upGrids = up.grids || [];
         var downGrids = down.grids || [];
-        if (upCountEl && upGrids.length > 0) { upCountEl.value = upGrids.length; buildGridRows("upGridRows", upGrids.length, "up", upGrids); }
-        if (downCountEl && downGrids.length > 0) { downCountEl.value = downGrids.length; buildGridRows("downGridRows", downGrids.length, "down", downGrids); }
+        if (upCountEl && up.grids) { upCountEl.value = upGrids.length; buildGridRows("upGridRows", upGrids.length, "up", upGrids, { preserveExistingValues: false }); }
+        if (downCountEl && down.grids) { downCountEl.value = downGrids.length; buildGridRows("downGridRows", downGrids.length, "down", downGrids, { preserveExistingValues: false }); }
         var upTrailEl = document.getElementById("fUpTrail");
         var downTrailEl = document.getElementById("fDownTrail");
         var maxBuyEl = document.getElementById("fMaxBuyLevels");
@@ -388,14 +400,14 @@ function applyLastCreateParamsToForm() {
             if (tEl && upGrids[i].trigger_pct != null) tEl.value = dmParamAssistantInputTextTr(upGrids[i].trigger_pct, 2);
             if (qEl && upGrids[i].qty_pct != null) qEl.value = dmParamAssistantInputTextTr(upGrids[i].qty_pct, 1);
         }
-        if (upGrids.length > 0) _updateGridQtySum("upGridRows", "up");
+        _updateGridQtySum("upGridRows", "up");
         for (var j = 0; j < downGrids.length; j++) {
             var t2 = document.getElementById("downGrid_" + j + "_trigger");
             var q2 = document.getElementById("downGrid_" + j + "_qty");
             if (t2 && downGrids[j].trigger_pct != null) t2.value = dmParamAssistantInputTextTr(downGrids[j].trigger_pct, 2);
             if (q2 && downGrids[j].qty_pct != null) q2.value = dmParamAssistantInputTextTr(downGrids[j].qty_pct, 1);
         }
-        if (downGrids.length > 0) _updateGridQtySum("downGridRows", "down");
+        _updateGridQtySum("downGridRows", "down");
         var rebuyT = document.getElementById("fRebuyTrigger");
         var rebuyTrail = document.getElementById("fRebuyTrail");
         var resellT = document.getElementById("fResellTrigger");
@@ -487,7 +499,12 @@ function openCreateBotModal(botId = null, accountId = null, skipLastCreateParams
         const firstInput = modal.querySelector("input, select, textarea");
         if (firstInput) setTimeout(() => firstInput.focus(), 100);
     }
-    if (!botId && !skipLastCreateParams && typeof applyLastCreateParamsToForm === "function") setTimeout(applyLastCreateParamsToForm, 80);
+    if (!botId && !skipLastCreateParams && typeof applyLastCreateParamsToForm === "function") {
+        setTimeout(function () {
+            if (typeof dmParamAssistantShouldSuppressLastCreateParams === "function" && dmParamAssistantShouldSuppressLastCreateParams()) return;
+            applyLastCreateParamsToForm();
+        }, 80);
+    }
 }
 
 function closeCreateBotModal() {
@@ -502,6 +519,7 @@ function closeCreateBotModal() {
     modal.style.display = "none";
     backdrop.style.display = "none";
     document.body.style.overflow = "";
+    dmParamAssistantSuppressLastCreateParamsUntil = 0;
     
     // Reset edit mode
     createModalEditMode = { botId: null, accountId: null, isEdit: false };
@@ -704,17 +722,20 @@ function bindCreateBotModal() {
     const fSymbol = document.getElementById("fSymbol");
     const dmSymbolSearchDropdown = document.getElementById("dmSymbolSearchDropdown");
     if (fSymbol) {
+        dmCreateModalHardenSymbolAutofill(fSymbol);
         let dmSymbolInputDebounce = null;
         var symWrap = fSymbol.closest(".coin-list-search-wrap");
         if (symWrap) {
             symWrap.addEventListener("pointerdown", function (e) {
                 if (e.target.closest("#dmSymbolSearchDropdown")) return;
+                dmCreateModalArmSymbolReadonlyGuard(fSymbol);
                 if (document.activeElement !== fSymbol) {
                     fSymbol.focus({ preventScroll: true });
                 }
             });
         }
         fSymbol.addEventListener("focus", function () {
+            dmCreateModalArmSymbolReadonlyGuard(fSymbol);
             var v = (fSymbol.value || "").trim();
             if (coinListSearchAllSymbols.length > 0) {
                 if (v.length >= 2) showCreateModalSymbolDropdown(v);
@@ -941,13 +962,17 @@ function bindCreateBotModal() {
     // Submit: openCreateBotModal sets dmSubmitBtn.onclick → createAndStartBot (do not add createBot listener — it skips engine start)
 }
 
-function buildGridRows(containerId, count, mode, seedGrids) {
+function buildGridRows(containerId, count, mode, seedGrids, opts) {
     const container = document.getElementById(containerId);
     if (!container) return;
+    opts = opts || {};
+    var preserveExistingValues = opts.preserveExistingValues !== false;
 
     // Mevcut değerleri koru (count azaldığında kaybetme)
     const prev = {};
-    container.querySelectorAll('input[id]').forEach(function(el) { prev[el.id] = el.value; });
+    if (preserveExistingValues) {
+        container.querySelectorAll('input[id]').forEach(function(el) { prev[el.id] = el.value; });
+    }
     var seeds = Array.isArray(seedGrids) ? seedGrids : [];
     function seedNumber(grid, keys) {
         if (!grid) return null;
@@ -1008,10 +1033,12 @@ function buildGridRows(containerId, count, mode, seedGrids) {
         if (qEl && qty != null) qEl.value = seedDisplay(qty, 1);
     });
 
-    // Önceki değerleri geri yaz
-    container.querySelectorAll('input[id]').forEach(function(el) {
-        if (prev[el.id] != null && prev[el.id] !== '') el.value = prev[el.id];
-    });
+    // Önceki değerleri yalnız manuel kullanımda geri yaz; Parametre Asistanı önerisi birebir uygulanır.
+    if (preserveExistingValues) {
+        container.querySelectorAll('input[id]').forEach(function(el) {
+            if (prev[el.id] != null && prev[el.id] !== '') el.value = prev[el.id];
+        });
+    }
 
     // Qty değişince toplamı göster
     container.addEventListener('input', function(e) {
@@ -1027,7 +1054,7 @@ function _updateGridQtySum(containerId, mode) {
     if (!container) return;
     var inputs = container.querySelectorAll('input[id$="_qty"]');
     var sum = 0;
-    inputs.forEach(function(el) { sum += parseDecimal(el.value, 0) || 0; });
+    inputs.forEach(function(el) { sum += dmCreateModalParseDecimal(el.value, 0) || 0; });
     sum = Math.round(sum * 10) / 10;
 
     var summaryId = containerId + '_qtysum';
@@ -1237,8 +1264,12 @@ function updateCreateBotModalPairStrip(symbol, opts) {
     if (needTicker) fetchCreateBotModalTicker24h(sym, { force: sym !== _dmModalLastTickerFetchSymbol });
     var fSymApply = document.getElementById('fSymbol');
     if (fSymApply && sym) fSymApply.value = sym;
-    if (typeof applyLastCreateParamsToForm === 'function') {
-        setTimeout(applyLastCreateParamsToForm, 0);
+    if (typeof applyLastCreateParamsToForm === 'function'
+        && !(typeof dmParamAssistantShouldSuppressLastCreateParams === 'function' && dmParamAssistantShouldSuppressLastCreateParams())) {
+        setTimeout(function () {
+            if (typeof dmParamAssistantShouldSuppressLastCreateParams === 'function' && dmParamAssistantShouldSuppressLastCreateParams()) return;
+            applyLastCreateParamsToForm();
+        }, 0);
     }
     // Canlı fiyat: modal açık ve sembol seçiliyse periyodik güncelleme başlat
     if (!dmModalLivePriceIntervalId && document.getElementById('dmModal') && document.getElementById('dmModal').style.display !== 'none') {
@@ -1401,7 +1432,11 @@ function dmParamAssistantStartMicroSteps(runId, ticks, intervalMs) {
 function dmParamAssistantSetApplyTimer(fn, ms) {
     var id = setTimeout(function () {
         dmParamAssistantApplyTimers = dmParamAssistantApplyTimers.filter(function (x) { return x !== id; });
-        fn();
+        try {
+            fn();
+        } catch (err) {
+            dmParamAssistantApplyFailed(err);
+        }
     }, ms);
     dmParamAssistantApplyTimers.push(id);
     return id;
@@ -1420,6 +1455,18 @@ function dmParamAssistantClearApplyTimers(opts) {
                 el.classList.remove('dm-ai-input-writing', 'dm-ai-input-done');
             });
         } catch (e) {}
+    }
+}
+
+function dmParamAssistantApplyFailed(err) {
+    dmParamAssistantClearApplyTimers({ keepFieldStyles: false });
+    dmParamAssistantApplying = false;
+    try { console.error('[paramAssistant] apply failed:', err); } catch (e) {}
+    dmParamAssistantEnsureCreateModalVisibleForApply();
+    var status = document.getElementById('dmParamAssistantStatus');
+    if (status) status.textContent = 'Öneri forma işlenemedi. Lütfen tekrar deneyin.';
+    if (window.Toast && window.Toast.error) {
+        try { window.Toast.error('Öneri forma işlenemedi. Lütfen tekrar deneyin.'); } catch (e2) {}
     }
 }
 
@@ -1449,8 +1496,7 @@ function dmParamAssistantBeginInputTyping(el) {
                 el.type = 'number';
                 el.removeAttribute('inputmode');
             }
-            el.classList.remove('dm-ai-input-writing');
-            el.classList.add('dm-ai-input-done');
+            el.classList.remove('dm-ai-input-writing', 'dm-ai-input-done');
         }
     };
 }
@@ -1503,6 +1549,13 @@ function dmParamAssistantInputText(v, digits) {
 
 function dmParamAssistantInputTextTr(v, digits) {
     return dmParamAssistantInputText(v, digits).replace('.', ',');
+}
+
+function dmCreateModalParseDecimal(str, defaultVal) {
+    if (typeof parseDecimal === 'function') return parseDecimal(str, defaultVal);
+    if (str == null || str === '') return defaultVal;
+    var n = parseFloat(String(str).trim().replace(',', '.'));
+    return Number.isFinite(n) ? n : defaultVal;
 }
 
 /** Form dağılımı: %100 ölçeğinde, base+quote=100 (PA / önbellek / fraksiyon düzeltmesi). */
@@ -1567,7 +1620,7 @@ function dmParamAssistantTextChunkSize() {
 }
 
 function dmParamAssistantInputChunkSize() {
-    return document.hidden ? 2 : 1;
+    return document.hidden ? 6 : 3;
 }
 
 function dmParamAssistantIsNumberInput(el) {
@@ -2439,7 +2492,8 @@ function dmParamAssistantBuildRecommendation(snapshot, marketCtx) {
 
 function dmParamAssistantGridText(grids, sign) {
     return grids.map(function (g, idx) {
-        return '#' + (idx + 1) + ' ' + sign + dmParamAssistantInputTextTr(g.trigger_pct, 2) + '% / miktar %' + dmParamAssistantInputTextTr(g.qty_pct, 1);
+        var norm = dmParamAssistantNormalizeGridForApply(g, sign === '+' ? 'up' : 'down');
+        return '#' + (idx + 1) + ' ' + sign + dmParamAssistantInputTextTr(norm.trigger_pct, 2) + '% / miktar %' + dmParamAssistantInputTextTr(norm.qty_pct, 1);
     }).join(', ');
 }
 
@@ -2899,10 +2953,11 @@ function dmParamAssistantRenderV6StrategyHero(rec) {
 function dmParamAssistantStaggerReveal(root, selector, baseDelayMs, stepMs) {
     if (!root || !root.querySelectorAll) return;
     var delay = baseDelayMs || 0;
-    var step = stepMs != null ? stepMs : 55;
-    root.querySelectorAll(selector).forEach(function (node, idx) {
+    var step = Math.min(stepMs != null ? stepMs : 32, document.hidden ? 8 : 14);
+    var nodes = Array.prototype.slice.call(root.querySelectorAll(selector));
+    nodes.forEach(function (node, idx) {
         node.classList.add('dm-pa-summary-reveal');
-        node.style.animationDelay = (delay + idx * step) + 'ms';
+        node.style.animationDelay = (delay + Math.min(idx, 18) * step) + 'ms';
     });
 }
 
@@ -2957,6 +3012,18 @@ function dmParamAssistantRegimePlainStory(rec) {
     var r = (rec && rec.backend) || {};
     var v6d = (r.telemetry && r.telemetry.v6_display) || {};
     var regimeId = String(r.regime_tag || (v6d.scenario_identity && v6d.scenario_identity.regime_id) || '').toUpperCase();
+    var opMode = String(v6d.operational_mode_plain || '').toLowerCase();
+    var blockReason = String(r.deploy_block_reason || r.deployBlockReason || '').toLowerCase();
+    var headlineLc = String(v6d.regime_headline || '').toLowerCase();
+    if (v6d.market_status_plain && (
+        opMode.indexOf('restricted') >= 0 ||
+        blockReason.indexOf('restricted') >= 0 ||
+        headlineLc.indexOf('restricted') >= 0 ||
+        headlineLc.indexOf('geri çekilme') >= 0 ||
+        headlineLc.indexOf('soğuma') >= 0
+    )) {
+        return v6d.market_status_plain;
+    }
     return DM_PA_REGIME_PLAIN_STORY[regimeId] || v6d.market_status_plain || dmParamAssistantMarketStatusPlain(rec);
 }
 
@@ -2989,9 +3056,14 @@ function dmParamAssistantRenderRegimeStoryCard(rec) {
     var sellN = (rec.upGrids && rec.upGrids.length) || 0;
     var opMode = v6d.operational_mode_plain || 'İki yönlü grid';
     var buyDisabled = r.ui_config && r.ui_config.buy_disabled === true;
-    var allocNote = (buyDisabled || buyN === 0) && sellN > 0
-        ? 'yeni alış kapalı, satış ve kontrollü kâr döngüsü aktif'
-        : 'iki bacak da işlem yapabilir';
+    var opModeLc = String(opMode || '').toLowerCase();
+    var deployBlock = String(r.deploy_block_reason || r.deployBlockReason || '').toLowerCase();
+    var autoDeployOff = opModeLc.indexOf('otomatik deploy kapalı') >= 0 || deployBlock.indexOf('restricted') >= 0 || r.deployable === false;
+    var allocNote = autoDeployOff && buyN > 0 && sellN > 0
+        ? 'iki bacak teknik olarak hazır, otomatik deploy kapalı'
+        : (buyDisabled || buyN === 0) && sellN > 0
+            ? 'yeni alış kapalı, satış ve kontrollü kâr döngüsü aktif'
+            : 'iki bacak da işlem yapabilir';
     var score = r.param_score != null ? r.param_score : rec.paramScore;
     var slug = dmParamAssistantRegimeSlugForRec(rec);
     var html = '<section class="dm-pa-regime-story dm-pa-regime--' + dmParamAssistantEscape(slug) + ' dm-pa-summary-reveal">';
@@ -3474,9 +3546,9 @@ function dmParamAssistantPresentBackendResultUi(snapshot, rec, lines) {
         details.innerHTML = dmParamAssistantRenderDataCardsHtml(rec);
         details.style.display = details.innerHTML.trim() ? 'block' : 'none';
         if (details.innerHTML.trim()) {
-            dmParamAssistantStaggerReveal(details, '.dm-pa-data-panel, .dm-pa-data-group-card, .dm-pa-data-tile, .dm-pa-score-row', 0, 18);
+            dmParamAssistantStaggerReveal(details, '.dm-pa-data-panel, .dm-pa-data-group-card, .dm-pa-data-tile, .dm-pa-score-row', 0, 10);
             dmParamAssistantMaybeScrollToBottom();
-            dmParamAssistantSetTimer(finishPresentation, 320);
+            dmParamAssistantSetTimer(finishPresentation, 130);
         } else {
             finishPresentation();
         }
@@ -3486,10 +3558,10 @@ function dmParamAssistantPresentBackendResultUi(snapshot, rec, lines) {
         if (presentSeq !== dmParamAssistantResultPresentSeq) return;
         if (summary) {
             summary.innerHTML += dmParamAssistantRenderUserParamsHtml(rec);
-            dmParamAssistantStaggerReveal(summary, '.dm-pa-params-card, .dm-pa-param-group-title, .dm-pa-param-row', 0, 26);
+            dmParamAssistantStaggerReveal(summary, '.dm-pa-params-card, .dm-pa-param-group-title, .dm-pa-param-row', 0, 12);
             dmParamAssistantMaybeScrollToBottom();
         }
-        dmParamAssistantSetTimer(revealDataStage, 260);
+        dmParamAssistantSetTimer(revealDataStage, 90);
     }
 
     function revealRegimeStage() {
@@ -3497,16 +3569,16 @@ function dmParamAssistantPresentBackendResultUi(snapshot, rec, lines) {
         if (summary) {
             summary.innerHTML = dmParamAssistantRenderRegimeStoryCard(rec);
             summary.style.display = 'block';
-            dmParamAssistantStaggerReveal(summary, '.dm-pa-regime-story, .dm-pa-story-row, .dm-pa-story-grid, .dm-pa-grid-chip', 0, 30);
+            dmParamAssistantStaggerReveal(summary, '.dm-pa-regime-story, .dm-pa-story-row, .dm-pa-story-grid, .dm-pa-grid-chip', 0, 12);
             dmParamAssistantMaybeScrollToBottom();
         }
-        dmParamAssistantSetTimer(revealParamsStage, 240);
+        dmParamAssistantSetTimer(revealParamsStage, 80);
     }
 
     dmParamAssistantTypeIntroText(narrative, function () {
         if (presentSeq !== dmParamAssistantResultPresentSeq) return;
         dmParamAssistantWrapIntroAsRichBox();
-        dmParamAssistantSetTimer(revealRegimeStage, 120);
+        dmParamAssistantSetTimer(revealRegimeStage, 50);
     }, { fast: true });
 }
 
@@ -3893,17 +3965,14 @@ function dmParamAssistantBuildParamTileMap(rec) {
     var allocText = 'Hedef: coin %' + dmParamAssistantInputTextTr(targetBase, 1) +
         ' · USDT %' + dmParamAssistantInputTextTr(targetQuote, 1);
     map.allocation = dmParamAssistantMakeTile('Dağılım', allocText, DM_PA_PARAM_TIPS.allocation);
-    var sellGrids = (ladderDisp.planned_sell_ladder && ladderDisp.planned_sell_ladder.length)
-        ? ladderDisp.planned_sell_ladder
-        : ((ladderDisp.active_sell_ladder && ladderDisp.active_sell_ladder.length)
-            ? ladderDisp.active_sell_ladder
-            : rec.upGrids);
+    var displayGrids = dmParamAssistantDisplayedGridLists(rec);
+    var sellGrids = displayGrids.upGrids;
     map.sell_grid = dmParamAssistantMakeTile(
         'Satış grid',
         sellGrids.length ? dmParamAssistantGridText(sellGrids, '+') : 'Kapalı',
         DM_PA_PARAM_TIPS.sell_grid
     );
-    var activeBuy = ladderDisp.active_buy_ladder || rec.downGrids;
+    var activeBuy = displayGrids.downGrids;
     map.buy_grid = dmParamAssistantMakeTile(
         'Alış grid',
         activeBuy.length ? dmParamAssistantGridText(activeBuy, '-') : 'Kapalı',
@@ -4688,14 +4757,19 @@ function dmParamAssistantTypeIntroText(text, done, opts) {
     dmParamAssistantSetCursorVisible(true);
     status.textContent = '';
     var idx = 0;
-    var ms = opts.fast ? 5 : DM_PARAM_ASSISTANT_TEXT_MS;
-    var chunkMult = opts.fast ? 5 : 1;
+    var ms = opts.fast ? 8 : DM_PARAM_ASSISTANT_TEXT_MS;
+    var chunkMult = opts.fast ? 10 : 1;
+    var lastScrollAt = 0;
     function step() {
         if (!dmParamAssistantTyping) return;
         var chunk = dmParamAssistantTextChunkSize() * chunkMult;
         status.textContent += String(text || '').slice(idx, idx + chunk);
         idx += chunk;
-        dmParamAssistantMaybeScrollToBottom({ followTyping: true, anchorEl: status });
+        var now = Date.now();
+        if (!opts.fast || now - lastScrollAt > 220) {
+            lastScrollAt = now;
+            dmParamAssistantMaybeScrollToBottom({ followTyping: true, anchorEl: status });
+        }
         if (idx < String(text || '').length) {
             dmParamAssistantSetTimer(step, ms);
             return;
@@ -5711,13 +5785,10 @@ function dmParamAssistantBuildBackendRec(snapshot, result) {
     var up = ui.up || {};
     var down = ui.down || {};
     var profit = ui.profit || {};
-    function grids(list) {
-        return (list || []).map(function (g) { return { trigger_pct: Number(g.trigger_pct), qty_pct: Number(g.qty_pct) }; });
-    }
     var allocDisp = ui.allocation_display || {};
     var strat = allocDisp.strategic_target || {};
-    var upGridList = grids(up.grids);
-    var downGridList = grids(down.grids);
+    var upGridList = dmParamAssistantNormalizeGridListForApply(up.grids, 'up');
+    var downGridList = dmParamAssistantNormalizeGridListForApply(down.grids, 'down');
     var sellOnlyUi = ui.sell_management_only === true || result.sell_management_only === true;
     var allocNorm = resolveCreateFormAllocation(
         strat.base_pct != null ? strat.base_pct : ui.base_alloc_pct,
@@ -6363,9 +6434,251 @@ function closeParamAssistantModal(opts) {
     dmParamAssistantSetTimer(hide, 180);
 }
 
+function dmCreateModalHardenSymbolAutofill(fSymbol) {
+    if (!fSymbol) return;
+    try {
+        fSymbol.setAttribute("type", "search");
+        fSymbol.setAttribute("name", "search_crypto_pair");
+        fSymbol.setAttribute("autocomplete", "new-password");
+        fSymbol.setAttribute("autocapitalize", "characters");
+        fSymbol.setAttribute("autocorrect", "off");
+        fSymbol.setAttribute("spellcheck", "false");
+        fSymbol.setAttribute("inputmode", "search");
+        fSymbol.setAttribute("enterkeyhint", "search");
+        fSymbol.setAttribute("data-lpignore", "true");
+        fSymbol.setAttribute("data-1p-ignore", "true");
+        fSymbol.setAttribute("data-form-type", "other");
+        fSymbol.setAttribute("data-protonpass-ignore", "true");
+        fSymbol.setAttribute("data-chrome-autofill-guard", "true");
+    } catch (e) {}
+}
+
+function dmCreateModalArmSymbolReadonlyGuard(fSymbol) {
+    if (!fSymbol) return;
+    try {
+        fSymbol.readOnly = true;
+        clearTimeout(fSymbol.__dmChromeAutofillGuardTimer);
+        fSymbol.__dmChromeAutofillGuardTimer = setTimeout(function () {
+            try { fSymbol.readOnly = false; } catch (e) {}
+        }, 120);
+    } catch (e) {}
+}
+
 function dmParamAssistantDispatch(el, type) {
     if (!el) return;
     try { el.dispatchEvent(new Event(type, { bubbles: true })); } catch (e) {}
+}
+
+function dmParamAssistantIsFiniteValue(v) {
+    return v != null && v !== '' && Number.isFinite(Number(v));
+}
+
+function dmParamAssistantFirstFinite(obj, keys) {
+    for (var i = 0; i < keys.length; i++) {
+        if (obj && dmParamAssistantIsFiniteValue(obj[keys[i]])) return Number(obj[keys[i]]);
+    }
+    return null;
+}
+
+function dmParamAssistantNormalizeGridForApply(g, side) {
+    var triggerKeys = side === 'up'
+        ? ['trigger_pct', 'sell_grid_pct', 'grid_pct', 'pct', 'distance_pct']
+        : ['trigger_pct', 'buy_grid_pct', 'grid_pct', 'pct', 'distance_pct'];
+    var qtyKeys = side === 'up'
+        ? ['qty_pct', 'sell_qty_pct_of_base', 'amount_pct', 'size_pct']
+        : ['qty_pct', 'buy_qty_pct_of_quote', 'amount_pct', 'size_pct'];
+    return {
+        trigger_pct: dmParamAssistantFirstFinite(g, triggerKeys),
+        qty_pct: dmParamAssistantFirstFinite(g, qtyKeys)
+    };
+}
+
+function dmParamAssistantNormalizeGridListForApply(list, side) {
+    return (Array.isArray(list) ? list : []).map(function (g) {
+        return dmParamAssistantNormalizeGridForApply(g, side);
+    }).filter(function (g) {
+        return dmParamAssistantIsFiniteValue(g.trigger_pct) && dmParamAssistantIsFiniteValue(g.qty_pct);
+    });
+}
+
+function dmParamAssistantDisplayedGridLists(rec) {
+    rec = rec || {};
+    if (rec._applyLocked === true) {
+        return {
+            upGrids: dmParamAssistantNormalizeGridListForApply(rec.upGrids, 'up'),
+            downGrids: dmParamAssistantNormalizeGridListForApply(rec.downGrids, 'down')
+        };
+    }
+    var r = rec.backend || {};
+    var ui = r.ui_config || {};
+    var ladder = rec.ladderDisplay || ui.ladder_display || {};
+    var sellList = [];
+    if (Array.isArray(ladder.active_sell_ladder) && ladder.active_sell_ladder.length) sellList = ladder.active_sell_ladder;
+    else if (Array.isArray(ladder.planned_sell_ladder) && ladder.planned_sell_ladder.length) sellList = ladder.planned_sell_ladder;
+    else sellList = rec.upGrids || [];
+
+    var buyList = [];
+    if (ui.buy_disabled === true) buyList = [];
+    else if (Array.isArray(ladder.active_buy_ladder)) buyList = ladder.active_buy_ladder;
+    else if (Array.isArray(ladder.planned_buy_ladder)) buyList = ladder.planned_buy_ladder;
+    else buyList = rec.downGrids || [];
+
+    return {
+        upGrids: dmParamAssistantNormalizeGridListForApply(sellList, 'up'),
+        downGrids: dmParamAssistantNormalizeGridListForApply(buyList, 'down')
+    };
+}
+
+function dmParamAssistantCloneApplyRec(rec) {
+    rec = rec || {};
+    var grids = dmParamAssistantDisplayedGridLists(rec);
+    var copy = Object.assign({}, rec, {
+        upGrids: grids.upGrids.map(function (g) { return Object.assign({}, g); }),
+        downGrids: grids.downGrids.map(function (g) { return Object.assign({}, g); }),
+        backend: rec.backend || null,
+        allocationDisplay: rec.allocationDisplay || {},
+        ladderDisplay: rec.ladderDisplay || {},
+        scoreLabels: rec.scoreLabels || {},
+        _applyLocked: true
+    });
+    copy._applySignature = dmParamAssistantApplySignature(copy);
+    return copy;
+}
+
+function dmParamAssistantNormalizeApplyRec(rec) {
+    if (rec && rec._applyLocked === true) {
+        var locked = Object.assign({}, rec, {
+            upGrids: dmParamAssistantNormalizeGridListForApply(rec.upGrids, 'up'),
+            downGrids: dmParamAssistantNormalizeGridListForApply(rec.downGrids, 'down'),
+            _applyLocked: true
+        });
+        locked._applySignature = locked._applySignature || dmParamAssistantApplySignature(locked);
+        return locked;
+    }
+    rec = dmParamAssistantCloneApplyRec(rec || {});
+    return rec;
+}
+
+function dmParamAssistantApplySignature(rec) {
+    rec = rec || {};
+    function n(v, d) {
+        var num = Number(v);
+        return Number.isFinite(num) ? Number(num.toFixed(d == null ? 4 : d)) : null;
+    }
+    function grids(list) {
+        return (Array.isArray(list) ? list : []).map(function (g) {
+            return [n(g.trigger_pct, 4), n(g.qty_pct, 4)];
+        });
+    }
+    return JSON.stringify({
+        budget: n(rec.budget, 4),
+        basePct: n(rec.basePct, 4),
+        quotePct: n(rec.quotePct, 4),
+        upTrail: n(rec.upTrail, 4),
+        downTrail: n(rec.downTrail, 4),
+        upGrids: grids(rec.upGrids),
+        downGrids: grids(rec.downGrids),
+        rebuyTrigger: n(rec.rebuyTrigger, 4),
+        rebuyTrail: n(rec.rebuyTrail, 4),
+        resellTrigger: n(rec.resellTrigger, 4),
+        resellTrail: n(rec.resellTrail, 4)
+    });
+}
+
+function dmParamAssistantFormSignature() {
+    try {
+        var payload = collectForm();
+        return dmParamAssistantApplySignature({
+            budget: payload.budget_usd,
+            basePct: payload.allocation && payload.allocation.base_pct,
+            quotePct: payload.allocation && payload.allocation.quote_pct,
+            upTrail: payload.up && payload.up.trail_pct,
+            downTrail: payload.down && payload.down.trail_pct,
+            upGrids: payload.up && payload.up.grids,
+            downGrids: payload.down && payload.down.grids,
+            rebuyTrigger: payload.profit && payload.profit.rebuy_trigger_pct,
+            rebuyTrail: payload.profit && payload.profit.rebuy_trail_pct,
+            resellTrigger: payload.profit && payload.profit.resell_trigger_pct,
+            resellTrail: payload.profit && payload.profit.resell_trail_pct
+        });
+    } catch (e) {
+        return '';
+    }
+}
+
+function dmParamAssistantSetFieldExact(id, value, opts) {
+    opts = opts || {};
+    var el = document.getElementById(id);
+    if (!el || !dmParamAssistantIsFiniteValue(value) && !opts.allowText) return false;
+    var text = opts.text != null ? String(opts.text) : String(value);
+    var oldReadonly = el.readOnly;
+    if (opts.allowReadonly) el.readOnly = false;
+    el.value = text;
+    dmParamAssistantDispatch(el, 'input');
+    dmParamAssistantDispatch(el, 'change');
+    if (opts.allowReadonly) el.readOnly = oldReadonly;
+    el.classList.remove('dm-ai-input-writing', 'dm-ai-input-done');
+    return true;
+}
+
+function dmParamAssistantBuildGridRowsExact(containerId, count, mode, grids) {
+    buildGridRows(containerId, count, mode, grids || [], { preserveExistingValues: false });
+    _updateGridQtySum(containerId, mode);
+}
+
+function dmParamAssistantBuildGridRowsForTyping(containerId, count, mode) {
+    buildGridRows(containerId, count, mode, [], { preserveExistingValues: true });
+    _updateGridQtySum(containerId, mode);
+}
+
+function dmParamAssistantApplyRecommendationExactValues(rec) {
+    if (!rec) return;
+    rec = dmParamAssistantNormalizeApplyRec(rec);
+    var upGrids = Array.isArray(rec.upGrids) ? rec.upGrids : [];
+    var downGrids = Array.isArray(rec.downGrids) ? rec.downGrids : [];
+    dmParamAssistantSetFieldExact('fBudget', dmParamAssistantInputText(rec.budget, 2), { allowText: true });
+    dmParamAssistantSetFieldExact('fBasePct', dmParamAssistantInputText(rec.basePct, 1), { allowText: true });
+    dmParamAssistantSetFieldExact('fQuotePct', dmParamAssistantInputText(rec.quotePct, 1), { allowText: true, allowReadonly: true });
+    dmParamAssistantSetFieldExact('fUpCount', String(upGrids.length), { allowText: true });
+    dmParamAssistantBuildGridRowsExact('upGridRows', upGrids.length, 'up', upGrids);
+    dmParamAssistantSetFieldExact('fDownCount', String(downGrids.length), { allowText: true });
+    dmParamAssistantBuildGridRowsExact('downGridRows', downGrids.length, 'down', downGrids);
+    syncMaxBuyLevelsWithDownCount(Math.max(downGrids.length, 1));
+    if (dmParamAssistantIsFiniteValue(rec.upTrail)) {
+        dmParamAssistantSetFieldExact('fUpTrail', dmParamAssistantInputTextTr(rec.upTrail, 2), { allowText: true });
+    }
+    if (dmParamAssistantIsFiniteValue(rec.downTrail)) {
+        dmParamAssistantSetFieldExact('fDownTrail', dmParamAssistantInputTextTr(rec.downTrail, 2), { allowText: true });
+    }
+    upGrids.forEach(function (g, idx) {
+        dmParamAssistantSetFieldExact('upGrid_' + idx + '_trigger', dmParamAssistantInputTextTr(g.trigger_pct, 2), { allowText: true });
+        dmParamAssistantSetFieldExact('upGrid_' + idx + '_qty', dmParamAssistantInputTextTr(g.qty_pct, 1), { allowText: true });
+    });
+    downGrids.forEach(function (g, idx) {
+        dmParamAssistantSetFieldExact('downGrid_' + idx + '_trigger', dmParamAssistantInputTextTr(g.trigger_pct, 2), { allowText: true });
+        dmParamAssistantSetFieldExact('downGrid_' + idx + '_qty', dmParamAssistantInputTextTr(g.qty_pct, 1), { allowText: true });
+    });
+    _updateGridQtySum('upGridRows', 'up');
+    _updateGridQtySum('downGridRows', 'down');
+    if (rec.rebuyEnabled === true || dmParamAssistantIsFiniteValue(rec.rebuyTrigger)) {
+        dmParamAssistantSetFieldExact('fRebuyTrigger', dmParamAssistantInputTextTr(rec.rebuyTrigger, 2), { allowText: true });
+        dmParamAssistantSetFieldExact('fRebuyTrail', dmParamAssistantInputTextTr(rec.rebuyTrail, 2), { allowText: true });
+    }
+    if (rec.resellEnabled === true || dmParamAssistantIsFiniteValue(rec.resellTrigger)) {
+        dmParamAssistantSetFieldExact('fResellTrigger', dmParamAssistantInputTextTr(rec.resellTrigger, 2), { allowText: true });
+        dmParamAssistantSetFieldExact('fResellTrail', dmParamAssistantInputTextTr(rec.resellTrail, 2), { allowText: true });
+    }
+}
+
+function dmParamAssistantVerifyAppliedRecommendation(rec) {
+    var expected = rec && (rec._applySignature || dmParamAssistantApplySignature(rec));
+    var actual = dmParamAssistantFormSignature();
+    if (expected && actual && expected !== actual) {
+        try { console.warn('[paramAssistant] apply signature mismatch; forcing exact recommendation values', { expected: expected, actual: actual }); } catch (e) {}
+        dmParamAssistantApplyRecommendationExactValues(rec);
+        actual = dmParamAssistantFormSignature();
+    }
+    return !!(expected && actual && expected === actual);
 }
 
 function dmParamAssistantTypeInput(task, done) {
@@ -6378,16 +6691,36 @@ function dmParamAssistantTypeInput(task, done) {
     var oldReadonly = el.readOnly;
     if (task.allowReadonly) el.readOnly = false;
     var typing = dmParamAssistantBeginInputTyping(el);
+    var typingStartedAt = Date.now();
+
+    if (task.nonDestructive) {
+        if (value !== 'undefined' && value !== 'NaN') {
+            if (task.allowReadonly) el.readOnly = false;
+            el.value = value;
+        }
+        dmParamAssistantSetApplyTimer(function () {
+            typing.finish(value);
+            dmParamAssistantDispatch(el, 'change');
+            if (task.allowReadonly) el.readOnly = oldReadonly;
+            if (typeof task.after === 'function') task.after();
+            dmParamAssistantSetApplyTimer(done, DM_PARAM_ASSISTANT_FIELD_PAUSE_MS);
+        }, Math.max(90, DM_PARAM_ASSISTANT_INPUT_MS * 2));
+        return;
+    }
 
     el.value = '';
     dmParamAssistantDispatch(el, 'input');
     var idx = 0;
     function finishField() {
-        typing.finish(value);
-        dmParamAssistantDispatch(el, 'change');
-        if (task.allowReadonly) el.readOnly = oldReadonly;
-        if (typeof task.after === 'function') task.after();
-        dmParamAssistantSetApplyTimer(done, DM_PARAM_ASSISTANT_FIELD_PAUSE_MS);
+        var minActiveMs = Number(task.minActiveMs != null ? task.minActiveMs : DM_PARAM_ASSISTANT_FIELD_MIN_MS);
+        var waitMs = Math.max(0, minActiveMs - (Date.now() - typingStartedAt));
+        dmParamAssistantSetApplyTimer(function () {
+            typing.finish(value);
+            dmParamAssistantDispatch(el, 'change');
+            if (task.allowReadonly) el.readOnly = oldReadonly;
+            if (typeof task.after === 'function') task.after();
+            dmParamAssistantSetApplyTimer(done, DM_PARAM_ASSISTANT_FIELD_PAUSE_MS);
+        }, waitMs);
     }
     function step() {
         var chunk = dmParamAssistantInputChunkSize();
@@ -6404,7 +6737,13 @@ function dmParamAssistantTypeInput(task, done) {
 }
 
 function applyParamAssistantRecommendation(rec, onDone) {
-    if (!rec) return;
+    if (!rec) {
+        dmParamAssistantApplying = false;
+        if (typeof onDone === 'function') onDone();
+        return;
+    }
+    dmParamAssistantSuppressLastCreateParams(600000);
+    rec = dmParamAssistantNormalizeApplyRec(rec);
     // P0-4: yalnız BACKEND (param asistanı) önerisi uygulanınca kaynağı işaretle;
     // yerel/heuristik öneri uygulanırsa temizle (bot manuel sayılır).
     if (rec.backend && rec.backend.ok) {
@@ -6438,11 +6777,12 @@ function applyParamAssistantRecommendation(rec, onDone) {
     var allocApply = dmParamAssistantAllocationForApply(rec);
     rec.basePct = allocApply.basePct;
     rec.quotePct = allocApply.quotePct;
+    rec._applySignature = dmParamAssistantApplySignature(rec);
     var tasks = [
         { id: 'fBudget', value: dmParamAssistantInputText(rec.budget, 2) },
-        { id: 'fBasePct', value: dmParamAssistantInputText(rec.basePct, 1), after: syncQuotePctFromBaseInput },
+        { id: 'fBasePct', value: dmParamAssistantInputText(rec.basePct, 1) },
         { id: 'fQuotePct', value: dmParamAssistantInputText(rec.quotePct, 1), allowReadonly: true },
-        { id: 'fUpCount', value: String(rec.upGrids.length), after: function () { buildGridRows('upGridRows', rec.upGrids.length, 'up'); } },
+        { id: 'fUpCount', value: String(rec.upGrids.length), after: function () { dmParamAssistantBuildGridRowsForTyping('upGridRows', rec.upGrids.length, 'up'); } },
         { id: 'fUpTrail', value: dmParamAssistantInputTextTr(rec.upTrail, 2) }
     ];
     rec.upGrids.forEach(function (g, idx) {
@@ -6450,7 +6790,7 @@ function applyParamAssistantRecommendation(rec, onDone) {
         tasks.push({ id: 'upGrid_' + idx + '_qty', value: dmParamAssistantInputTextTr(g.qty_pct, 1), after: function () { _updateGridQtySum('upGridRows', 'up'); } });
     });
     tasks.push({ id: 'fDownCount', value: String(rec.downGrids.length), after: function () {
-        buildGridRows('downGridRows', rec.downGrids.length, 'down');
+        dmParamAssistantBuildGridRowsForTyping('downGridRows', rec.downGrids.length, 'down');
         syncMaxBuyLevelsWithDownCount(Math.max(rec.downGrids.length, 1));
     } });
     tasks.push({ id: 'fDownTrail', value: dmParamAssistantInputTextTr(rec.downTrail, 2) });
@@ -6458,17 +6798,19 @@ function applyParamAssistantRecommendation(rec, onDone) {
         tasks.push({ id: 'downGrid_' + idx + '_trigger', value: dmParamAssistantInputTextTr(g.trigger_pct, 2) });
         tasks.push({ id: 'downGrid_' + idx + '_qty', value: dmParamAssistantInputTextTr(g.qty_pct, 1), after: function () { _updateGridQtySum('downGridRows', 'down'); } });
     });
-    if (!rec.sellManagementOnly && rec.downGrids.length > 0) {
+    if (rec.rebuyEnabled === true || dmParamAssistantIsFiniteValue(rec.rebuyTrigger)) {
         tasks.push({ id: 'fRebuyTrigger', value: dmParamAssistantInputTextTr(rec.rebuyTrigger, 2) });
         tasks.push({ id: 'fRebuyTrail', value: dmParamAssistantInputTextTr(rec.rebuyTrail, 2) });
     }
-    if (rec.upGrids.length > 0) {
+    if (rec.resellEnabled === true || dmParamAssistantIsFiniteValue(rec.resellTrigger)) {
         tasks.push({ id: 'fResellTrigger', value: dmParamAssistantInputTextTr(rec.resellTrigger, 2) });
         tasks.push({ id: 'fResellTrail', value: dmParamAssistantInputTextTr(rec.resellTrail, 2) });
     }
 
     function run(i) {
         if (i >= tasks.length) {
+            dmParamAssistantApplyRecommendationExactValues(rec);
+            dmParamAssistantVerifyAppliedRecommendation(rec);
             dmParamAssistantFinalizeFormAllocation(rec.basePct, rec.quotePct);
             if (submitBtn) {
                 submitBtn.classList.add('dm-ai-create-pulse');
@@ -6476,6 +6818,7 @@ function applyParamAssistantRecommendation(rec, onDone) {
                 try { submitBtn.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) {}
             }
             dmParamAssistantApplying = false;
+            dmParamAssistantSuppressLastCreateParams(600000);
             if (typeof onDone === 'function') onDone();
             return;
         }
@@ -6486,8 +6829,16 @@ function applyParamAssistantRecommendation(rec, onDone) {
 
 function acceptParamAssistantRecommendation() {
     if (dmParamAssistantApplying) return;
-    var rec = dmParamAssistantRecommendation;
+    var rec = dmParamAssistantRecommendation ? dmParamAssistantCloneApplyRec(dmParamAssistantRecommendation) : null;
     var status = document.getElementById('dmParamAssistantStatus');
+    if (!rec) {
+        if (status) status.textContent = 'Öneri henüz hazır değil. Hesaplama tamamlanınca tekrar deneyin.';
+        if (window.Toast && window.Toast.warning) {
+            try { window.Toast.warning('Öneri henüz hazır değil.'); } catch (e) {}
+        }
+        return;
+    }
+    dmParamAssistantSuppressLastCreateParams(600000);
     if (status) status.textContent = 'Parametreler forma işleniyor...';
     closeParamAssistantModal({
         immediate: true,
@@ -6933,31 +7284,31 @@ function collectForm() {
     const quotePct = parseFloat(document.getElementById("fQuotePct").value);
     
     const upCount = parseInt(document.getElementById("fUpCount").value) || 0;
-    const upTrail = parseDecimal(document.getElementById("fUpTrail")?.value, 0.5);
+    const upTrail = dmCreateModalParseDecimal(document.getElementById("fUpTrail")?.value, 0.5);
     const upGrids = [];
     for (let i = 0; i < upCount; i++) {
-        const trigger = parseDecimal(document.getElementById(`upGrid_${i}_trigger`)?.value, NaN);
-        const qty = parseDecimal(document.getElementById(`upGrid_${i}_qty`)?.value, NaN);
+        const trigger = dmCreateModalParseDecimal(document.getElementById(`upGrid_${i}_trigger`)?.value, NaN);
+        const qty = dmCreateModalParseDecimal(document.getElementById(`upGrid_${i}_qty`)?.value, NaN);
         if (Number.isFinite(trigger) && Number.isFinite(qty)) {
             upGrids.push({ trigger_pct: trigger, qty_pct: qty });
         }
     }
 
     const downCount = parseInt(document.getElementById("fDownCount").value) || 0;
-    const downTrail = parseDecimal(document.getElementById("fDownTrail")?.value, 0.5);
+    const downTrail = dmCreateModalParseDecimal(document.getElementById("fDownTrail")?.value, 0.5);
     const downGrids = [];
     for (let i = 0; i < downCount; i++) {
-        const trigger = parseDecimal(document.getElementById(`downGrid_${i}_trigger`)?.value, NaN);
-        const qty = parseDecimal(document.getElementById(`downGrid_${i}_qty`)?.value, NaN);
+        const trigger = dmCreateModalParseDecimal(document.getElementById(`downGrid_${i}_trigger`)?.value, NaN);
+        const qty = dmCreateModalParseDecimal(document.getElementById(`downGrid_${i}_qty`)?.value, NaN);
         if (Number.isFinite(trigger) && Number.isFinite(qty)) {
             downGrids.push({ trigger_pct: trigger, qty_pct: qty });
         }
     }
     
-    const rebuyTrigger = parseDecimal(document.getElementById("fRebuyTrigger")?.value, 1.5);
-    const rebuyTrail = parseDecimal(document.getElementById("fRebuyTrail")?.value, 0.3);
-    const resellTrigger = parseDecimal(document.getElementById("fResellTrigger")?.value, 1.5);
-    const resellTrail = parseDecimal(document.getElementById("fResellTrail")?.value, 0.5);
+    const rebuyTrigger = dmCreateModalParseDecimal(document.getElementById("fRebuyTrigger")?.value, 1.5);
+    const rebuyTrail = dmCreateModalParseDecimal(document.getElementById("fRebuyTrail")?.value, 0.3);
+    const resellTrigger = dmCreateModalParseDecimal(document.getElementById("fResellTrigger")?.value, 1.5);
+    const resellTrail = dmCreateModalParseDecimal(document.getElementById("fResellTrail")?.value, 0.5);
     
     // Dynamic Mode: toggle açıksa payload'a bayrak ekle. Günlük kayıp limiti
     // devre dışı; otomatik bütçe×%5 default gönderilmez.

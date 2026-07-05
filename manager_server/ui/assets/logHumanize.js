@@ -1412,6 +1412,20 @@
       }
     },
     {
+      test: function (msg) {
+        return /\[BinanceWS\]\s*TLS\/proxy protokol hatası/i.test(msg)
+          || /\[SSL:\s*WRONG_VERSION_NUMBER\]|wrong version number/i.test(msg);
+      },
+      apply: function () {
+        return {
+          konu: 'Binance canlı fiyat WebSocket TLS/proxy uyarısı',
+          sebep: 'Public miniTicker WebSocket TLS katmanında beklediği yanıtı alamadı; genelde 9443 portunun proxy/firewall tarafından düz HTTP yanıtına çevrilmesi veya otomatik proxy ayarıdır.',
+          etki: 'Emir gönderimini doğrudan etkilemez. Dashboard fiyatları REST/cache ile sürebilir; WS 443/9443 alternatifleriyle yeniden bağlanmayı dener.',
+          oneri: 'Servisi yeni kodla yeniden başlatın. Ortam bilinçli proxy kullanıyorsa BINANCE_WS_USE_PROXY=1 veya BINANCE_WS_PROXY ayarlayın; değilse varsayılan doğrudan bağlantı kullanılacak.'
+        };
+      }
+    },
+    {
       test: function (msg) { return /\[BinanceWS\]\s*Açılış el sıkışması zaman aşımı/i.test(msg); },
       apply: function () {
         return {

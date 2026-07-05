@@ -166,6 +166,16 @@ _R3_STD_CONTROLLED_COMPRESSION = _tpl(
     3, [1, 2, 4], list(SELL_AMOUNTS_NAMED["LOW_LIQUIDITY_SELL_3"]),
     1.5, 0.5, 1.5, 0.5, ps_mode="staged_plus_tight_trailing",
 )
+_R3_STD_UPTREND_OVERHEAT_COOLDOWN = _tpl(
+    50, 50, 65, 25, 35, 4, [2, 4, 7, 11], [10, 20, 30, 40],
+    5, [2, 4, 7, 11, 16], [10, 15, 20, 25, 30],
+    2.5, 0.8, 3.0, 1.1, ps_mode="staged_plus_trailing",
+)
+_R3_STD_UPPER_BAND_PROFIT_LOCK = _tpl(
+    50, 50, 65, 30, 35, 4, [2, 4, 7, 11], [15, 25, 30, 30],
+    5, [2, 4, 7, 10, 14], [25, 25, 20, 15, 15],
+    2.5, 0.8, 3.0, 0.8, ps_mode="staged_plus_trailing",
+)
 
 # --- R4 Yüksek volatilite range ---
 _R4: Dict[SeverityMode, RegimeBehaviorTemplate] = {
@@ -260,6 +270,35 @@ _R8_RECOVERY_RESTRICTED = _tpl(
     new_buys="restricted", pb_mode="restricted_trailing_rebuy", buyback_restricted=True, max_buyback_pct=50,
     ps_mode="risk_reduce_trailing",
 )
+_R8_HARD_BLOCK = RegimeBehaviorTemplate(
+    initial_base_pct=0,
+    initial_quote_pct=100,
+    max_total_exposure_pct=0,
+    active_buy_ladder_pct=0,
+    reserved_quote_pct=100,
+    buy_grid_enabled=False,
+    buy_grid_count=0,
+    buy_distances_pct=(),
+    buy_amounts_pct=(),
+    sell_grid_enabled=False,
+    sell_grid_count=0,
+    sell_distances_pct=(),
+    sell_amounts_pct=(),
+    profit_sell_enabled=False,
+    profit_sell_trigger_pct=0.0,
+    profit_sell_mode="disabled",
+    trailing_sell_pct=0.5,
+    profit_buyback_enabled=False,
+    profit_buyback_trigger_pct=0.0,
+    profit_buyback_mode="disabled",
+    trailing_buyback_pct=0.5,
+    new_buys_status="paused",
+    new_buys_paused=True,
+    buyback_restricted=True,
+    max_buyback_of_sold_pct=0,
+    max_single_profit_sell_pct=0,
+    trend_tail_base_reserve_pct=0,
+)
 
 _R8: Dict[SeverityMode, RegimeBehaviorTemplate] = {
     "DEF": _R8_DEF_PANIC,
@@ -349,6 +388,13 @@ def _is_r1_pullback_setup(inp: V6InputContract) -> bool:
         votes += 1
     if (inp.rsi_5m or 50) < 45:
         votes += 1
+    if (
+        (inp.roc_5m or 0) < 0
+        and inp.higher_highs is False
+        and inp.lower_lows is True
+        and votes >= 3
+    ):
+        return True
     return votes >= 4
 
 
@@ -396,6 +442,7 @@ _R4_SUB_TEMPLATES: Dict[str, RegimeBehaviorTemplate] = {
 _R8_SUB_TEMPLATES: Dict[str, RegimeBehaviorTemplate] = {
     "R8_DEF_PANIC": _R8_DEF_PANIC,
     "R8_RECOVERY_RESTRICTED": _R8_RECOVERY_RESTRICTED,
+    "R8_HARD_BLOCK": _R8_HARD_BLOCK,
 }
 
 
@@ -433,6 +480,9 @@ def resolve_regime_template(
         hint = sub_profile_hint or _infer_r8_sub_profile(inp)
         tpl = _R8_SUB_TEMPLATES.get(hint, _R8_DEF_PANIC)
         reasons.append(hint)
+        if hint == "R8_HARD_BLOCK":
+            reasons.extend(["HARD_BLOCK", "NO_TRADE", "NEW_BUYS_PAUSED", "PROFIT_LOOP_DISABLED"])
+            deployable = False
         if hint == "R8_CAPITULATION_CONDITIONAL_PROBE":
             tpl = _R8_DEF_PANIC
             reasons.extend(["DEEP_CRASH", "CAPITULATION", "CONDITIONAL_PROBE_ONLY"])
@@ -440,6 +490,12 @@ def resolve_regime_template(
         if hint == "R8_RECOVERY_RESTRICTED":
             reasons.append("CRASH_RECOVERY")
             deployable = False
+    elif rid == "R3" and sub_profile_hint == "R3_STD_UPTREND_OVERHEAT_COOLDOWN":
+        tpl = _R3_STD_UPTREND_OVERHEAT_COOLDOWN
+        reasons.append(sub_profile_hint)
+    elif rid == "R3" and sub_profile_hint == "R3_STD_UPPER_BAND_PROFIT_LOCK":
+        tpl = _R3_STD_UPPER_BAND_PROFIT_LOCK
+        reasons.extend([sub_profile_hint, "UPPER_BAND_PROFIT_LOCK"])
     elif rid == "R3" and sub_profile_hint in ("R3_STD_CONTROLLED_COMPRESSION", "R3_STD_UPTREND_COMPRESSION"):
         tpl = _R3_STD_CONTROLLED_COMPRESSION
         reasons.append(sub_profile_hint)
@@ -555,6 +611,13 @@ def _apply_fragility_to_template(
     if tpl.initial_base_pct <= 5 and tpl.new_buys_paused and not tpl.buy_grid_enabled:
         return tpl
     if frag == "F0":
+        if (
+            rid == "R3"
+            and tpl.initial_base_pct == 50
+            and tpl.buy_distances_pct == (2, 4, 7, 11)
+            and tpl.sell_distances_pct == (2, 4, 7, 11, 16)
+        ):
+            return tpl
         base = min(95, tpl.initial_base_pct + 5)
         quote = 100 - base
         return RegimeBehaviorTemplate(**{**tpl.__dict__, "initial_base_pct": base, "initial_quote_pct": quote})
@@ -670,16 +733,16 @@ def _validate_layers(
         errors.append("L1:R3_buy_too_far")
     if rid == "R8" and base > 30:
         errors.append("L1:R8_base_cap")
-    if rid == "R8" and not sell:
+    if rid == "R8" and not sell and not (base == 0 and tpl.max_total_exposure_pct == 0):
         errors.append("L1:R8_sell_required")
 
     if tpl.trailing_sell_pct > (sell[0].distance_pct if sell else 99) * 0.45:
         errors.append("L5:trailing_sell_cap")
-    if tpl.trailing_buyback_pct > tpl.profit_buyback_trigger_pct * 0.45:
+    if tpl.profit_buyback_enabled and tpl.trailing_buyback_pct > tpl.profit_buyback_trigger_pct * 0.45:
         errors.append("L5:trailing_buyback_cap")
 
     floor = _effective_profit_floor(inp)
-    if tpl.profit_sell_trigger_pct < floor and rid not in ("R2", "R3"):
+    if tpl.profit_sell_enabled and tpl.profit_sell_trigger_pct < floor and rid not in ("R2", "R3"):
         errors.append("L5:profit_sell_floor")
 
     if errors:
@@ -733,6 +796,11 @@ def _template_to_profile(
             "params_valid": True,
         }
     )
+    if tpl.max_total_exposure_pct == 0 and not buy and not sell:
+        modules["hard_block_no_trade"] = True
+        modules["initial_base_allocation"] = False
+        modules["profit_buyback_after_sell"] = False
+        modules["profit_sell_after_buyback"] = False
     if tpl.buyback_restricted:
         modules["profit_buyback_restricted"] = True
     if tpl.max_buyback_of_sold_pct is not None:

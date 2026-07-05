@@ -101,7 +101,11 @@ def _downtrend(inp: V6InputContract) -> bool:
 def _volatile_vol_ok(inp: V6InputContract) -> bool:
     vp = inp.volatility_percentile or 0
     atr = inp.atr_1h_pct or 0
-    return vp >= 60 or atr >= 1.2
+    bb = inp.bb_width or 0
+    hl = inp.hl_range_pct or 0
+    strong_realized_wide = (vp >= 45 and (atr >= 1.2 or bb >= 1.5 or hl >= 0.8)) or atr >= 2.0 or bb >= 3.0
+    percentile_confirmed = vp >= 60 and (atr >= 0.9 or bb >= 1.2 or hl >= 0.6)
+    return strong_realized_wide or percentile_confirmed
 
 
 def _range_score(inp: V6InputContract) -> int:
@@ -262,6 +266,30 @@ def _r8_capitulation_probe(inp: V6InputContract) -> bool:
         and float(inp.spread_pct or 0) < 0.30
         and float(inp.volume_24h or 0) >= 1_000_000
     )
+
+
+def _r8_hard_block(inp: V6InputContract) -> bool:
+    spread = float(inp.spread_pct or 0)
+    ret24 = float(inp.return_24h_pct or 0)
+    crash = float(inp.crash_velocity or 0)
+    dd = max(float(inp.drawdown_7d_pct or 0), float(inp.drawdown_30d_pct or 0))
+    pve = float(inp.price_vs_ema200_pct or 0)
+    atr = float(inp.atr_1h_pct or 0)
+
+    if spread > 0.30 and (ret24 < 0 or pve < -5 or (inp.lower_lows and inp.higher_highs is False)):
+        return True
+    severe_crash_votes = 0
+    if ret24 < -10:
+        severe_crash_votes += 1
+    if crash < -3:
+        severe_crash_votes += 1
+    if dd > 50:
+        severe_crash_votes += 1
+    if atr > 5:
+        severe_crash_votes += 1
+    if pve < -15:
+        severe_crash_votes += 1
+    return severe_crash_votes >= 2
 
 
 def _trend_cooldown(inp: V6InputContract, *, trend: int, momentum: int) -> bool:
@@ -470,6 +498,13 @@ def _strong_uptrend_pullback(inp: V6InputContract) -> bool:
         pullback_votes += 1
     if (inp.rsi_5m or 50) < 45:
         pullback_votes += 1
+    if (
+        (inp.roc_5m or 0) < 0
+        and inp.higher_highs is False
+        and inp.lower_lows is True
+        and pullback_votes >= 3
+    ):
+        return True
     return pullback_votes >= 4
 
 
@@ -506,6 +541,45 @@ def _controlled_compression(inp: V6InputContract) -> bool:
     )
 
 
+def _uptrend_overheat_cooldown(inp: V6InputContract) -> bool:
+    return (
+        _uptrend_compression(inp)
+        and (inp.adx_1h or 0) >= 35
+        and (inp.rsi_1h or 0) >= 70
+        and (inp.roc_5m or 0) <= 0
+        and (inp.bb_width or 99) <= 1.0
+        and (inp.atr_1h_pct or 99) <= 0.9
+    )
+
+
+def _r2_balanced_range_ok(inp: V6InputContract) -> bool:
+    adx = inp.adx_1h
+    rsi1 = inp.rsi_1h
+    rsi5 = inp.rsi_5m
+    bb = inp.bb_position
+    z = inp.z_score
+    pve = inp.price_vs_ema200_pct
+    return (
+        (adx is None or adx < 23)
+        and (rsi1 is None or 45 <= rsi1 <= 55)
+        and (rsi5 is None or 40 <= rsi5 <= 60)
+        and (bb is None or 0.25 <= bb <= 0.75)
+        and (z is None or -1 <= z <= 1)
+        and (inp.range_stability or 0) > 0.55
+        and (inp.volume_spike is None or inp.volume_spike < 3)
+        and (pve is None or abs(pve) <= 5)
+    )
+
+
+def _r2_upper_band_reject(inp: V6InputContract) -> bool:
+    return (
+        (inp.bb_position or 0) > 0.80
+        or (inp.rsi_5m or 0) > 62
+        or (inp.z_score or 0) > 1.20
+        or (inp.volume_spike or 0) > 5
+    )
+
+
 def classify_scenario(inp: V6InputContract) -> ClassifiedScenario:
     """Priority cascade: crash → downtrend → trend/breakout → recovery → true range → …"""
     range_sc = _range_score(inp)
@@ -517,6 +591,10 @@ def classify_scenario(inp: V6InputContract) -> ClassifiedScenario:
         regime, sub, micro, behavior = "R5", "01", "002", "PB07"
         label = "Parabolik pump / aşırı uzamış momentum"
         sub_profile_hint = "R5_DEF_PARABOLIC_OVEREXTENDED"
+    elif _r8_hard_block(inp) and not _r8_capitulation_probe(inp):
+        regime, sub, micro, behavior = "R8", "01", "004", "PB11"
+        label = "Hard block / işlem yok"
+        sub_profile_hint = "R8_HARD_BLOCK"
     elif _crash_like(inp):
         if _r8_capitulation_probe(inp):
             regime, sub, micro, behavior = "R8", "02", "003", "PB11"
@@ -610,12 +688,19 @@ def classify_scenario(inp: V6InputContract) -> ClassifiedScenario:
             sub_profile_hint = "R1_STD_PULLBACK"
         else:
             label = "Güçlü yükseliş trendi"
-    elif (inp.range_stability or 0) >= 0.55 and (inp.volatility_percentile or 50) < 45:
+    elif _r2_balanced_range_ok(inp) and (inp.volatility_percentile or 50) < 45:
         regime, sub, micro, behavior = "R2", "01", "001", "PB01"
         label = "Dengeli aralık"
+    elif (inp.range_stability or 0) >= 0.55 and (inp.volatility_percentile or 50) < 45 and _r2_upper_band_reject(inp):
+        regime, sub, micro, behavior = "R3", "01", "001", "PB01"
+        label = "Üst banda yakın sıkışma / kontrollü kâr alma"
+        sub_profile_hint = "R3_STD_UPPER_BAND_PROFIT_LOCK"
     elif (inp.volatility_percentile or 0) < 35:
         regime, sub, micro, behavior = "R3", "01", "001", "PB01"
-        if _uptrend_compression(inp):
+        if _uptrend_overheat_cooldown(inp):
+            label = "Yukarı trendde sıkışma / RSI yüksek cooldown"
+            sub_profile_hint = "R3_STD_UPTREND_OVERHEAT_COOLDOWN"
+        elif _uptrend_compression(inp):
             label = "Yukarı eğilimli sıkışma / kontrollü soğuma"
             sub_profile_hint = "R3_STD_UPTREND_COMPRESSION"
         elif _controlled_compression(inp):
@@ -632,7 +717,10 @@ def classify_scenario(inp: V6InputContract) -> ClassifiedScenario:
         sub_profile_hint = "R4_DEF_OVERHEATED"
     else:
         regime, sub, micro, behavior = "R3", "01", "001", "PB01"
-        if _uptrend_compression(inp):
+        if _uptrend_overheat_cooldown(inp):
+            label = "Yukarı trendde sıkışma / RSI yüksek cooldown"
+            sub_profile_hint = "R3_STD_UPTREND_OVERHEAT_COOLDOWN"
+        elif _uptrend_compression(inp):
             label = "Yukarı eğilimli sıkışma / kontrollü soğuma"
             sub_profile_hint = "R3_STD_UPTREND_COMPRESSION"
         else:

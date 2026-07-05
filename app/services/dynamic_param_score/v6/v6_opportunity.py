@@ -459,6 +459,9 @@ def assess_operational_validity(profile: V6CatalogProfile) -> OperationalValidit
     behavior = str(profile.scenario.behavior_id or "")
     errors: List[str] = []
 
+    if (profile.modules or {}).get("hard_block_no_trade"):
+        return OperationalValidity(valid=False, mode="no_trade_monitor", errors=["NO_TRADE_MONITOR_ONLY"])
+
     if base == 0 and buy_n == 0 and sell_n == 0:
         errors.append("ERROR_NON_OPERATIONAL_PARAMS")
         return OperationalValidity(valid=False, mode="empty", errors=errors)
@@ -551,6 +554,10 @@ def ensure_profile_operational(
     p = profile
     behavior = str(p.scenario.behavior_id or "")
     regime = str(regime_id or "")
+
+    if (p.modules or {}).get("hard_block_no_trade"):
+        notes["pb11_operational_mode"] = "no_trade_monitor"
+        return p, notes
 
     if is_profile_operational(p):
         return p, notes
@@ -769,6 +776,10 @@ def build_v6_opportunity_explain(
     elif r6_mode == R6_PROTECTIVE_SELL_ONLY:
         parts.append(
             "Zayıf recovery nedeniyle normal alış kapalı; kontrollü satış ve satış sonrası geri alım döngüsü aktif."
+        )
+    elif (profile.modules or {}).get("hard_block_no_trade"):
+        parts.append(
+            "Hard block: yeni alış, satış sonrası geri alım ve kâr döngüsü kapalı; profil izleme modundadır."
         )
     elif profile.scenario.behavior_id == "PB11":
         parts.append(

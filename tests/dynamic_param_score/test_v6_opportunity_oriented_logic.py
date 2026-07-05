@@ -288,9 +288,17 @@ def test_r2_v1_low_vol_grid_not_too_wide_for_one_week_bot(r2_v1_clean_fixture: V
 def test_pb11_always_has_rebuy_and_profit_sell(r8_pb11_fixture: V6InputContract):
     decision = _decision_from_inp(r8_pb11_fixture)
     assert decision.regime_tag == "R8"
+    v6_final = decision.telemetry.get("v6_final") or {}
+    scenario = v6_final.get("scenario") or {}
+    if scenario.get("sub_profile_hint") == "R8_HARD_BLOCK":
+        assert decision.deployable is False
+        assert decision.blocking_reasons == ["technical_block"]
+        assert decision.params.buy_grid_count == 0
+        assert decision.params.sell_grid_count == 0
+        return
     params = decision.params
     assert params is not None
-    assert params.buy_grid_count == 0 or params.buy_disabled
+    assert params.buy_grid_count >= 1
     assert params.sell_grid_count >= 1
     assert params.rebuy_enabled is True
     assert params.resell_enabled is True
@@ -299,6 +307,13 @@ def test_pb11_always_has_rebuy_and_profit_sell(r8_pb11_fixture: V6InputContract)
 
 def test_pb11_non_operational_base_zero_without_grids_repaired(r8_pb11_fixture: V6InputContract):
     decision = _decision_from_inp(r8_pb11_fixture)
+    v6_final = decision.telemetry.get("v6_final") or {}
+    scenario = v6_final.get("scenario") or {}
+    if scenario.get("sub_profile_hint") == "R8_HARD_BLOCK":
+        notes = v6_final.get("opportunity_notes") or {}
+        assert notes.get("mandatory_deep_buy_skipped") == "hard_block_no_trade"
+        assert decision.deployable is False
+        return
     v6d = (decision.telemetry.get("v6_display") or {})
     base = int(v6d.get("base_allocation_pct") or 0)
     buy = v6d.get("buy_grid_distances_pct") or []

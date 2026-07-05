@@ -118,15 +118,15 @@ def test_v6_golden_tlm_parabolic_pump_locked():
     assert scenario["sub_profile_hint"] == "R5_DEF_PARABOLIC_OVEREXTENDED"
     assert scenario["regime_id"] != "R8"
     assert (profile.base_allocation_pct, profile.quote_allocation_pct) == (5, 95)
-    assert profile.normal_buy_enabled is False
-    assert profile.modules.get("new_buys_status") == "paused"
+    assert profile.normal_buy_enabled is True
+    assert profile.modules.get("new_buys_status") == "deep_probe"
+    assert [(g.distance_pct, g.amount_pct) for g in profile.buy_grids] == [(-35, 100)]
     assert [(g.distance_pct, g.amount_pct) for g in profile.sell_grids] == [
-        (5, 45),
-        (10, 35),
-        (18, 20),
+        (6, 60),
+        (14, 40),
     ]
-    assert params.buy_grid_count == 0
-    assert params.sell_grid_count == 3
+    assert params.buy_grid_count == 1
+    assert params.sell_grid_count == 2
     assert (params.rebuy_trigger_pct, params.rebuy_trail_pct) == (8.0, 1.4)
     assert (params.resell_trigger_pct, params.resell_trail_pct) == (5.0, 1.4)
 
@@ -137,14 +137,15 @@ def test_v6_golden_dydx_deep_drawdown_locked():
     profile = result.profile
     assert scenario["regime_id"] == "R8"
     assert (profile.base_allocation_pct, profile.quote_allocation_pct) == (5, 95)
-    assert profile.normal_buy_enabled is False
-    assert profile.modules.get("new_buys_status") == "paused"
+    assert profile.normal_buy_enabled is True
+    assert profile.modules.get("new_buys_status") == "deep_probe"
+    assert [(g.distance_pct, g.amount_pct) for g in profile.buy_grids] == [(-28, 100)]
     assert [(g.distance_pct, g.amount_pct) for g in profile.sell_grids] == [
         (2, 45),
         (5, 35),
         (9, 20),
     ]
-    assert params.buy_grid_count == 0
+    assert params.buy_grid_count == 1
     assert params.sell_grid_count == 3
     assert (params.rebuy_trigger_pct, params.rebuy_trail_pct) == (6.0, 1.4)
     assert (params.resell_trigger_pct, params.resell_trail_pct) == (2.5, 0.5)
@@ -660,6 +661,42 @@ def _r8_deep_crash_probe_inp():
     )
 
 
+def _r8_low_liq_fragile_inp():
+    return _base_inp(
+        symbol="LOWLIQR8USDT",
+        adx_1h=52,
+        rsi_5m=38.8,
+        rsi_1h=48.2,
+        ema20_slope=-0.19,
+        ema50_slope=-0.05,
+        price_vs_ema200_pct=0.28,
+        roc_5m=-1.53,
+        higher_highs=True,
+        lower_lows=True,
+        atr_5m_pct=0.86,
+        atr_1h_pct=3.03,
+        volatility_percentile=58.57,
+        bb_width=2.21,
+        bb_position=-0.09,
+        z_score=-2.41,
+        mean_reversion_score=0.27,
+        range_stability=0.0,
+        return_1h_pct=-1.53,
+        return_4h_pct=-0.57,
+        return_24h_pct=0.12,
+        drawdown_7d_pct=22.55,
+        drawdown_30d_pct=22.55,
+        crash_velocity=-1.85,
+        red_pressure=0.1,
+        spread_pct=0.73,
+        volume_24h=144_300,
+        volume_consistency=0.21,
+        volume_spike=6.54,
+        zero_volume_flag=1,
+        asset_fragility_class="F3",
+    )
+
+
 def test_bnb_r3_compression_display_not_deep_buy_label():
     result, params, display, notes, scenario = _run(_bnb_r3_compression_inp())
     _assert_global_invariants("BNB R3 compression", result, params, display, notes)
@@ -704,7 +741,9 @@ def test_r5_high_spread_overextended_becomes_restricted():
     assert result.deployable is False
     assert result.deploy_block_reason == "restricted_by_liquidity"
     assert result.profile.base_allocation_pct <= 15
-    assert result.profile.normal_buy_enabled is False
+    assert result.profile.normal_buy_enabled is True
+    assert [(g.distance_pct, g.amount_pct) for g in result.profile.buy_grids] == [(-20, 100)]
+    assert notes.get("mandatory_deep_buy_applied") is True
     assert notes["semantic_role"] == "OVEREXTENDED_LOW_LIQUIDITY"
     assert {"LOW_LIQUIDITY_RESTRICTED", "RESTRICTED_DEPLOY"}.issubset(set(notes["reason_codes"]))
     assert "restricted" in _display_blob(display, scenario, notes)
@@ -756,12 +795,33 @@ def test_r8_deep_crash_supports_conditional_probe_metadata():
     assert result.deployable is False
     assert result.deploy_block_reason == "conditional_probe_only"
     assert result.profile.base_allocation_pct == 5
-    assert result.profile.normal_buy_enabled is False
-    assert params.buy_grid_count == 0
+    assert result.profile.normal_buy_enabled is True
+    assert [(g.distance_pct, g.amount_pct) for g in result.profile.buy_grids] == [(-35, 100)]
+    assert params.buy_grid_count == 1
+    assert notes.get("mandatory_deep_buy_applied") is True
     probe = notes.get("conditional_probe") or {}
     assert probe.get("enabled") is True
     assert probe.get("buy_distances_pct") == [12, 22, 35]
     assert "conditional probe" in _display_blob(display, scenario, notes)
+
+
+def test_r8_low_liq_restricted_uses_deeper_grid_and_not_crash_copy():
+    result, params, display, notes, scenario = _run(_r8_low_liq_fragile_inp())
+    _assert_global_invariants("R8 low-liq restricted", result, params, display, notes)
+    assert scenario["regime_id"] == "R8"
+    assert result.deployable is False
+    assert result.deploy_block_reason == "restricted_by_liquidity"
+    assert notes["semantic_role"] == "R8_LOW_LIQUIDITY_RESTRICTED"
+    assert result.profile.base_allocation_pct == 10
+    assert result.profile.quote_allocation_pct == 90
+    assert params.buy_grid_ladder_pcts == [6, 12, 20]
+    assert params.sell_grid_ladder_pcts == [3, 6, 10]
+    assert display["regime_headline"] == "R8 · Likidite/spread restricted"
+    blob = _display_blob(display, scenario, notes)
+    assert "likidite/spread riski yüksek" in blob
+    assert "restricted" in blob
+    assert "crash profilinde" not in blob
+    assert "sert düşüşte micro base" not in blob
 
 
 def test_no_r5_base_le_50_says_coin_pay_increased():
