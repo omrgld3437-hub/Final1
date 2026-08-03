@@ -9,7 +9,7 @@ from app.services.dynamic_param_score.engine import DynamicParamScoreEngine
 from app.services.dynamic_param_score.models import FinalAction
 from tests.dynamic_param_score.conftest import mk_candles, market_bundle
 from tests.dynamic_param_score.conftest import constraints, ctx, portfolio
-from tests.dynamic_param_score.test_sol_50_budget import _sol_market
+from tests.dynamic_param_score.sol_market_fixture import _sol_market
 
 
 def test_wait_never_has_one_sided_grids():

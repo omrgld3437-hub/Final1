@@ -70,7 +70,7 @@ def apply_delta(profile: V6CatalogProfile, delta: AdjusterDelta) -> V6CatalogPro
     p.quote_allocation_pct = 100 - base
     if delta.normal_buy_override is not None:
         p.normal_buy_enabled = not delta.normal_buy_override
-        if not p.normal_buy_enabled:
+        if not p.normal_buy_enabled and not bool((p.modules or {}).get("reference_plan_only")):
             p.buy_grids = []
     p.buy_grids = _shift_grids(p.buy_grids, delta.buy_grid_distance_delta, is_buy=True)
     p.sell_grids = _shift_grids(p.sell_grids, delta.sell_grid_distance_delta, is_buy=False)

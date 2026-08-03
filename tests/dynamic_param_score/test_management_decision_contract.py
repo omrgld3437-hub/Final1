@@ -28,7 +28,7 @@ from app.services.dynamic_param_score.safe_overlay import (
 )
 from app.botengine.dynamic.cycle_manager import _OVERLAY_FIELDS
 from tests.dynamic_param_score.conftest import constraints, ctx, mk_candles, portfolio
-from tests.dynamic_param_score.test_sol_50_budget import _sol_market
+from tests.dynamic_param_score.sol_market_fixture import _sol_market
 
 
 def _decision(final_action: str, deployable: bool = False):

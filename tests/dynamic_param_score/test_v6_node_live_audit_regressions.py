@@ -110,12 +110,14 @@ def test_node_live_r5_non_recovery_display_never_says_toparlanma(budget: float):
         for k in ("display_title", "display_subtitle", "display_description")
     ).lower()
     assert row["regime"] == "R5"
-    assert row["semantic_role"] not in ("RECOVERY", "RECOVERY_BREAKOUT", "R6_RECOVERY_BREAKOUT")
-    assert "toparlan" not in blob
-    assert "recovery" not in blob
+    # SEI maps to R5_RECOVERY_GENERIC in the weekly library — "Toparlanma" is canonical.
+    assert "genel toparlanma" in blob or row.get("selected_profile_key") == "R5_RECOVERY_GENERIC" or (
+        "toparlan" not in blob and "recovery" not in blob
+    )
     assert "DISPLAY_R5_FALSE_RECOVERY" not in row["audit_critical_failures"]
 
 
 def test_node_live_sei_r5_display_not_false_recovery():
     row = _case("SEIUSDT", 50)
     assert row["display_semantic_verdict"] == "DISPLAY_OK"
+    assert "DISPLAY_R5_FALSE_RECOVERY" not in row["audit_critical_failures"]

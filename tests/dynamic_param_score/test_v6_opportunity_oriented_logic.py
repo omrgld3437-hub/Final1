@@ -54,11 +54,29 @@ def _decision_from_inp(inp: V6InputContract) -> DynamicParamDecision:
     budget = float(inp.bot_budget_usdt or 500)
     bot_params = v6_final_to_bot_params(result, bot_budget_usdt=budget)
     trace = result.telemetry.get("adjuster_trace") or []
+    opp = result.telemetry.get("opportunity_notes") or {}
+    display_base = v6_final_to_telemetry_extras(
+        result, bot_budget_usdt=budget, adjuster_trace=trace
+    )
+    scen_id = dict(display_base.get("scenario_identity") or {})
+    scen_id.update(
+        {
+            "canonical_headline": scenario.get("canonical_headline") or scen_id.get("canonical_headline"),
+            "headline": scenario.get("headline") or scen_id.get("headline"),
+            "selected_profile_key": scenario.get("selected_profile_key")
+            or scenario.get("net_profile_key")
+            or scen_id.get("selected_profile_key"),
+            "net_profile_key": scenario.get("net_profile_key") or scen_id.get("net_profile_key"),
+            "sub_profile_hint": scenario.get("sub_profile_hint") or "",
+        }
+    )
+    display_base["scenario_identity"] = scen_id
     v6_display = enrich_v6_display(
-        v6_final_to_telemetry_extras(result, bot_budget_usdt=budget, adjuster_trace=trace),
+        display_base,
         adjuster_trace=trace,
         deployable=result.deployable,
         deploy_block_reason=result.deploy_block_reason,
+        opportunity_notes=opp,
     )
     final_action = "CONTROLLED_GRID" if result.deployable else "WAIT"
     policy = resolve_v6_apply_policy(
@@ -269,8 +287,10 @@ def test_r6_high_risk_uses_defensive_profile_not_empty(r6_f3_v5_l3_fixture: V6In
     assert decision.regime_tag == "R4"
     params = decision.params
     assert params is not None
-    assert params.base_alloc_frac <= 0.25
-    assert params.sell_grid_count >= 1
+    # Sealed weekly library: R4_OVERHEATED is 40/60 with fixed 4+4.
+    assert params.base_alloc_frac <= 0.40
+    assert params.sell_grid_count == 4
+    assert params.buy_grid_count == 4
     assert params.rebuy_enabled
 
 
@@ -311,7 +331,11 @@ def test_pb11_non_operational_base_zero_without_grids_repaired(r8_pb11_fixture: 
     scenario = v6_final.get("scenario") or {}
     if scenario.get("sub_profile_hint") == "R8_HARD_BLOCK":
         notes = v6_final.get("opportunity_notes") or {}
-        assert notes.get("mandatory_deep_buy_skipped") == "hard_block_no_trade"
+        assert notes.get("mandatory_deep_buy_skipped") in (
+            "hard_block_no_trade",
+            "net_profile_buy_closed",
+            "net_profile_sealed_4x4",
+        )
         assert decision.deployable is False
         return
     v6d = (decision.telemetry.get("v6_display") or {})

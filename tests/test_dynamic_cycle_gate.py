@@ -1,13 +1,13 @@
 """
-Tests for the Dynamic Mode cycle-entry risk gate (cycle_gate.py) and the
-behaviour stance (strategy_engine.compute_stance).
+Tests for the Dynamic Mode cycle-entry risk gate (cycle_gate.py).
 
 Covers:
   * risk model: high on a flash drop / DUMP, low on a calm range
   * hold state machine: start at HOLD_ON, hysteresis release after
     RELEASE_CONFIRM low-risk checks, max-hold ceiling, not-applicable guards
   * action filtering: withholds fresh buys, keeps de-risking, engages cycle
-  * stance: directionally correct + only reinforces the regime bias
+
+Legacy strategy_engine stance tests were removed with that module.
 """
 
 from __future__ import annotations
@@ -18,8 +18,6 @@ import pytest
 
 from app.botengine.dynamic import cycle_gate as cg
 from app.botengine.dynamic import regime as reg
-from app.botengine.dynamic import strategy_engine as se
-from app.botengine.dynamic.features import MarketFeatures
 
 
 @pytest.fixture(autouse=True)
@@ -201,57 +199,3 @@ def test_filter_marks_engaged_when_not_holding():
     kept, blocked = cg.filter_actions(st, [{"reason": "trail_buy_grid"}])
     assert blocked == 0
     assert cg.cycle_engaged(st) is True
-
-
-# ---- stance -----------------------------------------------------------------
-
-def _mf(**over) -> MarketFeatures:
-    base = dict(
-        symbol="BTCUSDT", price=100.0, atr_pct_5m=1.0, adx_1h=15.0,
-        ema_slope_1h_pct=0.1, realized_vol_5m=0.8, spread_pct=0.02,
-        rsi_1h=50.0, rsi_5m=50.0,
-    )
-    base.update(over)
-    return MarketFeatures(**base)
-
-
-def test_stance_defensive_in_downtrend():
-    f = _mf(adx_1h=40.0, ema_slope_1h_pct=-1.2, realized_vol_5m=2.5)
-    s = se.compute_stance(f, reg.RegimeResult(reg.TRENDING_DOWN, reg.TRENDING_DOWN, 0.8, {}))
-    assert s.label == se.STANCE_DEFENSIVE
-    assert s.score < 0
-
-
-def test_stance_aggressive_in_calm_range():
-    f = _mf(adx_1h=12.0, ema_slope_1h_pct=0.1, realized_vol_5m=0.6, atr_pct_5m=1.0)
-    s = se.compute_stance(f, reg.RegimeResult(reg.LOW_VOL_RANGING, reg.LOW_VOL_RANGING, 0.7, {}))
-    assert s.label == se.STANCE_AGGRESSIVE
-    assert s.score > 0
-
-
-def test_stance_reduces_base_in_dump_vs_calm():
-    base_cfg = {
-        "base_alloc_pct": 50.0, "quote_alloc_pct": 50.0,
-        "sell_grids": [{"sell_grid_pct": 2.0, "sell_qty_pct_of_base": 100.0}],
-        "buy_grids": [{"buy_grid_pct": 2.0, "buy_qty_pct_of_quote": 100.0}],
-        "fee_rate": 0.001,
-    }
-    calm = _mf(adx_1h=12.0, ema_slope_1h_pct=0.1, realized_vol_5m=0.6)
-    dump = _mf(adx_1h=40.0, ema_slope_1h_pct=-1.5, realized_vol_5m=3.0, ret_5m_last=-4.0)
-    sug_calm = se.suggest(calm, reg.RegimeResult(reg.LOW_VOL_RANGING, reg.LOW_VOL_RANGING, 0.7, {}), base_cfg)
-    sug_dump = se.suggest(dump, reg.RegimeResult(reg.DUMP_RISK, reg.DUMP_RISK, 0.9, {}), base_cfg)
-    assert sug_dump.base_alloc_pct < sug_calm.base_alloc_pct
-    assert sug_calm.stance is not None and sug_dump.stance is not None
-    assert sug_dump.stance["label"] == se.STANCE_DEFENSIVE
-
-
-def test_suggest_exposes_stance_dict():
-    base_cfg = {
-        "base_alloc_pct": 50.0, "quote_alloc_pct": 50.0,
-        "sell_grids": [{"sell_grid_pct": 2.0, "sell_qty_pct_of_base": 100.0}],
-        "buy_grids": [{"buy_grid_pct": 2.0, "buy_qty_pct_of_quote": 100.0}],
-    }
-    f = _mf()
-    sug = se.suggest(f, reg.RegimeResult(reg.LOW_VOL_RANGING, reg.LOW_VOL_RANGING, 0.6, {}), base_cfg)
-    assert isinstance(sug.stance, dict)
-    assert {"score", "label", "reward_score", "risk_score"} <= set(sug.stance)

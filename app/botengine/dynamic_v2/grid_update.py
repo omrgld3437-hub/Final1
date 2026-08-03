@@ -323,6 +323,10 @@ class GridUpdateCoordinator:
             "decision_id": candidate.decision_id,
             "analysis_run_id": candidate.analysis_run_id,
         }
+        # Churn kontrollerinin karşılaştırma noktası. Ayrı bir anahtarda
+        # tutulur çünkü ``dynamic_v2_snapshot`` sonraki shadow/reddedilen
+        # turlarda üzerine yazılır ve son canlı paketin izi kaybolur.
+        state["_dynamic_v2_last_applied_candidate"] = candidate.to_dict()
         applied_keys.append(candidate.idempotency_key)
         state["_dynamic_v2_idempotency_keys"] = applied_keys[-100:]
         return {

@@ -22,7 +22,8 @@ def validate_profile(profile: V6CatalogProfile) -> List[str]:
         errors.append("quote_mismatch")
     if has_fractional_violation(profile):
         errors.append("fractional_lattice_violation")
-    if not profile.normal_buy_enabled and profile.buy_grids:
+    reference_plan = bool((profile.modules or {}).get("reference_plan_only"))
+    if not profile.normal_buy_enabled and profile.buy_grids and not reference_plan:
         errors.append("buy_grids_when_normal_buy_disabled")
     for side, grids in (("buy", profile.buy_grids), ("sell", profile.sell_grids)):
         if not grids:

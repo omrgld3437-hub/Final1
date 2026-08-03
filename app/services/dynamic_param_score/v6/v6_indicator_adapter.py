@@ -132,9 +132,9 @@ def build_v6_input_contract(
         resistance_distance_pct=getattr(ind, "resistance_distance_pct", None),
         support_strength_score=getattr(ind, "support_strength_score", None),
         resistance_strength_score=getattr(ind, "resistance_strength_score", None),
-        pump_score=float(getattr(ind, "pump_score", 0) or 0),
-        dump_score=float(getattr(ind, "dump_score", 0) or 0),
-        fake_bounce_score=float(getattr(ind, "fake_bounce_score", 0) or 0),
-        fake_breakout_score=float(getattr(ind, "fake_breakout_score", 0) or 0),
+        pump_score=ind.pump_score,
+        dump_score=ind.dump_score,
+        fake_bounce_score=ind.fake_bounce_score,
+        fake_breakout_score=ind.fake_breakout_score,
         asset_fragility_class=_fragility_class(ind, spread, ind.volatility_percentile, symbol=symbol),
     )

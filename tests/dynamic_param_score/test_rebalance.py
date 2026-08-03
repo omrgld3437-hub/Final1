@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
-from app.services.dynamic_param_score.models import FinalAction, RegimeTag, RiskState, SubScores
+from app.services.dynamic_param_score.models import (
+    BotParams,
+    FinalAction,
+    RegimeTag,
+    RiskState,
+    SubScores,
+)
 from app.services.dynamic_param_score.rebalance import (
     RebalanceMode,
     SafetyContext,
@@ -11,8 +17,6 @@ from app.services.dynamic_param_score.rebalance import (
     plan_rebalance,
     rebalance_delta_total_pp,
 )
-from app.services.dynamic_param_score.order_intent import IntentKind, plan_order_intents
-from app.services.dynamic_param_score.models import BotContext, BotParams
 from tests.dynamic_param_score.conftest import constraints, portfolio
 
 
@@ -124,13 +128,12 @@ def test_overweight_triggers_sell_rebalance():
     assert len(plan.orders) == 1
 
 
-def test_rebalance_oneshot_intent_not_grid():
-    from app.services.dynamic_param_score.order_intent import _rebalance_intents
-
+def test_rebalance_oneshot_is_single_order_not_grid_ladder():
+    """order_intent katmanı kaldırıldı; rebalance planı tek seferlik emir üretir."""
     pf = portfolio(1000, 0.50)
     plan = plan_rebalance(0.70, 0.50, pf, None, constraints(), _ctx(headroom_usdt=300.0))
-    rb = _rebalance_intents(plan)
-    if rb:
-        assert rb[0].kind in (IntentKind.REBALANCE_ONESHOT_BUY.value, IntentKind.REBALANCE_ONESHOT_SELL.value)
-        assert rb[0].source == "rebalance_oneshot"
-        assert len(rb) == 1
+    if plan.orders:
+        assert len(plan.orders) == 1
+        assert "ONESHOT" in str(plan.rebalance_action).upper() or "BUY" in str(
+            plan.rebalance_action
+        ).upper()

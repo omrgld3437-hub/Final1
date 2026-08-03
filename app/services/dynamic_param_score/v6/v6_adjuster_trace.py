@@ -85,7 +85,17 @@ def _score_for(name: str, extra: Dict[str, Any], inp: V6InputContract) -> int:
     if name == "support_resistance":
         return int(inp.support_strength_score or 0)
     if name == "fake_move":
-        return int(max(inp.pump_score, inp.dump_score, inp.fake_bounce_score, inp.fake_breakout_score))
+        vals = [
+            float(v)
+            for v in (
+                inp.pump_score,
+                inp.dump_score,
+                inp.fake_bounce_score,
+                inp.fake_breakout_score,
+            )
+            if v is not None
+        ]
+        return int(max(vals)) if vals else 0
     return 0
 
 

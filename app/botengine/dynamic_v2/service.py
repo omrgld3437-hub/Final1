@@ -81,6 +81,100 @@ class DynamicModeV2:
         except ValueError:
             return D(default)
 
+    # Churn kontrollerini kapatmak için acil çıkış. Üretimde beklenmeyen bir
+    # yumuşatma davranışı görülürse kod değişikliği olmadan devre dışı bırakılır.
+    @staticmethod
+    def _churn_controls_enabled() -> bool:
+        import os
+
+        return os.getenv("DYNAMIC_V2_CHURN_CONTROLS", "1").strip().lower() not in (
+            "0",
+            "false",
+            "no",
+        )
+
+    def previous_applied_candidate(
+        self, state: Mapping[str, Any]
+    ) -> Optional[DynamicParameterCandidate]:
+        """Son GERÇEKTEN uygulanmış adayı geri oku; yoksa None.
+
+        Churn kontrolleri (saatlik değişim limitleri + deadband'ler) bir
+        karşılaştırma noktası gerektirir. Referans olarak yalnızca ``APPLIED``
+        kararı kullanılır: shadow modda hiçbir şey canlıya geçmediği için gölge
+        adaya göre kısıtlamak, gerçekte var olmayan bir geçmişe göre yumuşatma
+        yapmak olurdu. Böylece shadow modda davranış birebir korunur.
+
+        Herhangi bir alan eksik/bozuksa None döner ve churn kontrolleri o tur
+        atlanır; yarım okunmuş bir geçmişe göre kırpmak sessizce yanlış
+        parametre üretmekten daha kötüdür.
+        """
+        if not self._churn_controls_enabled():
+            return None
+        raw = state.get("_dynamic_v2_last_applied_candidate")
+        if not isinstance(raw, Mapping):
+            # Geriye dönük uyum: bu anahtar eklenmeden önce uygulanmış botlarda
+            # snapshot hâlâ APPLIED kararını taşıyor olabilir.
+            snapshot = state.get("dynamic_v2_snapshot")
+            if not isinstance(snapshot, Mapping):
+                return None
+            if str(snapshot.get("decision") or "").upper() != "APPLIED":
+                return None
+            raw = snapshot.get("candidate")
+            if not isinstance(raw, Mapping):
+                return None
+        try:
+            return self._candidate_from_dict(raw)
+        except (ValueError, TypeError, KeyError, ArithmeticError):
+            return None
+
+    def _candidate_from_dict(
+        self, raw: Mapping[str, Any]
+    ) -> Optional[DynamicParameterCandidate]:
+        """Snapshot sözlüğünden churn karşılaştırması için aday kur.
+
+        Yalnızca ``_apply_churn_controls``'un okuduğu alanlar gerekir. Bir
+        skaler alan eksikse geçmiş güvenilir değildir → None.
+        """
+        scalars = (
+            "target_base_ratio",
+            "buy_grid_trailing_percentage",
+            "sell_grid_trailing_percentage",
+            "profit_buy_trigger_percentage",
+            "profit_sell_trigger_percentage",
+            "profit_buy_trailing_percentage",
+            "profit_sell_trailing_percentage",
+        )
+        values: Dict[str, Decimal] = {}
+        for name in scalars:
+            if raw.get(name) is None:
+                return None
+            values[name] = decimal_value(raw[name])
+
+        def series(name: str) -> list:
+            items = raw.get(name)
+            if not isinstance(items, (list, tuple)):
+                return []
+            return [decimal_value(item) for item in items]
+
+        base = values["target_base_ratio"]
+        return DynamicParameterCandidate(
+            target_base_ratio=base,
+            target_quote_ratio=D("1") - base,
+            buy_grid_trigger_percentages=series("buy_grid_trigger_percentages"),
+            sell_grid_trigger_percentages=series("sell_grid_trigger_percentages"),
+            buy_grid_amount_weights=series("buy_grid_amount_weights"),
+            sell_grid_amount_weights=series("sell_grid_amount_weights"),
+            buy_grid_amounts=series("buy_grid_amounts"),
+            sell_grid_amounts=series("sell_grid_amounts"),
+            buy_grid_trailing_percentage=values["buy_grid_trailing_percentage"],
+            sell_grid_trailing_percentage=values["sell_grid_trailing_percentage"],
+            profit_buy_trigger_percentage=values["profit_buy_trigger_percentage"],
+            profit_sell_trigger_percentage=values["profit_sell_trigger_percentage"],
+            profit_buy_trailing_percentage=values["profit_buy_trailing_percentage"],
+            profit_sell_trailing_percentage=values["profit_sell_trailing_percentage"],
+            confidence=self._d(raw.get("confidence"), "0"),
+        )
+
     def capture_reference(
         self,
         state: Dict[str, Any],
@@ -360,6 +454,11 @@ class DynamicModeV2:
             spread_pct=spread_percentage_points,
             atr_pct=atr_percentage_points,
             exchange_tick_gap_pct=tick_gap_pct,
+            # Saatlik değişim limitleri ve deadband'ler yalnızca bir önceki
+            # uygulanmış paket varsa devreye girer. Bu argüman geçirilmediği
+            # sürece config'te tanımlı tüm churn limitleri ölüydü: her tam
+            # analiz parametreleri sınırsız oynatabiliyordu.
+            current=self.previous_applied_candidate(state),
         )
         balances = self._balance_snapshot(
             state, data.mid_price, balance_limits

@@ -213,13 +213,34 @@ def contextual_market_status_plain(
 
 
 def build_regime_headline(scen: Optional[Dict[str, Any]]) -> str:
+    """Format canonical profile headline; never reclassify regime/profile meaning."""
     scen = scen or {}
     regime_id = str(scen.get("regime_id") or "").upper()
-    scenario_name = str(scen.get("name") or "").strip()
-    label = scenario_name if scenario_name and " / alt-" not in scenario_name else V6_REGIME_LABELS.get(regime_id, regime_id)
-    if regime_id and label:
-        return f"{regime_id} · {label}"
-    return label or regime_id or "—"
+    canonical = str(
+        scen.get("canonical_headline")
+        or scen.get("headline")
+        or scen.get("name")
+        or ""
+    ).strip()
+    if not canonical:
+        profile_key = str(scen.get("selected_profile_key") or scen.get("net_profile_key") or "")
+        if profile_key:
+            try:
+                from app.services.dynamic_param_score.v6.net_profile_library import (
+                    canonical_headline_for_key,
+                )
+
+                canonical = canonical_headline_for_key(profile_key)
+            except Exception:
+                canonical = ""
+    if not canonical:
+        canonical = V6_REGIME_LABELS.get(regime_id, regime_id)
+    if regime_id and canonical:
+        # Avoid "R5 · R5 · …" if canonical already prefixed.
+        if canonical.upper().startswith(f"{regime_id} ·") or canonical.upper().startswith(f"{regime_id}·"):
+            return canonical
+        return f"{regime_id} · {canonical}"
+    return canonical or regime_id or "—"
 
 
 def build_regime_strategy_why(
@@ -590,18 +611,19 @@ def enrich_v6_display(
         out["market_status_plain"] = "Derin crash; conditional probe metadata var, deploy kapalı"
     elif regime_id == "R8" and (semantic_role == "R8_HARD_BLOCK" or "hard block" in scenario_name.lower()):
         out["market_status_plain"] = "Hard block; yeni işlem yok, izleme modu"
+    # Primary headline is locked to PROFILE_COPY via selected_profile_key.
+    # Display may add secondary status/why text, but must not rewrite the headline.
     out["regime_headline"] = build_regime_headline(scen)
-    if regime_id == "R8" and semantic_role == "R8_LOW_LIQUIDITY_RESTRICTED":
-        out["regime_headline"] = "R8 · Likidite/spread restricted"
-    if regime_id == "R8" and (semantic_role == "R8_HARD_BLOCK" or "hard block" in scenario_name.lower()):
-        out["regime_headline"] = "R8 · Hard block / işlem yok"
-    if regime_id == "R5" and not _is_recovery_semantic(semantic_role):
-        headline_lc = str(out.get("regime_headline") or "").lower()
-        if "toparlan" in headline_lc or "recovery" in headline_lc:
-            out["regime_headline"] = "R5 · Breakout / momentum"
-        status_lc = str(out.get("market_status_plain") or "").lower()
-        if "toparlan" in status_lc or "recovery" in status_lc:
-            out["market_status_plain"] = "Breakout / momentum; kontrollü trend takibi"
+    out["canonical_headline"] = str(
+        scen.get("canonical_headline") or scen.get("headline") or scen.get("name") or ""
+    )
+    out["selected_profile_key"] = str(
+        scen.get("selected_profile_key")
+        or scen.get("net_profile_key")
+        or out.get("profile_id")
+        or out.get("catalog_profile_id")
+        or ""
+    )
     out["display_regime_technical"] = build_regime_technical_label(scen)
     out["risk_tone_plain"] = risk_tone_plain(out["risk_display_label"])
     out["grid_plan_plain"] = build_grid_plan_plain(out)

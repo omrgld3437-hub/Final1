@@ -1117,8 +1117,21 @@ def display_verdict(display_blob: str, row: Dict[str, Any]) -> Tuple[str, List[s
     semantic = str(row.get("semantic_role") or "")
     if base <= 50 and ("coin payı artır" in blob or "coin tabanı tercih edildi" in blob):
         failures.append("DISPLAY_BASE_LOW_COIN_INCREASE")
-    if regime == "R5" and semantic not in ("RECOVERY", "RECOVERY_BREAKOUT", "R6_RECOVERY_BREAKOUT") and (
-        "toparlan" in blob or "recovery" in blob
+    profile_key = str(
+        row.get("selected_profile_key")
+        or row.get("net_profile_key")
+        or row.get("profile_id")
+        or ""
+    ).upper()
+    true_r5_recovery = (
+        semantic in ("RECOVERY", "RECOVERY_BREAKOUT", "R6_RECOVERY_BREAKOUT", "R5_RECOVERY_GENERIC")
+        or profile_key == "R5_RECOVERY_GENERIC"
+        or "genel toparlanma" in blob
+    )
+    if (
+        regime == "R5"
+        and not true_r5_recovery
+        and ("toparlan" in blob or "recovery" in blob)
     ):
         failures.append("DISPLAY_R5_FALSE_RECOVERY")
     if row.get("restricted") and "normal iki yönlü grid aktif" in blob:

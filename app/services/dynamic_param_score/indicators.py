@@ -24,12 +24,31 @@ def _candles_to_dicts(candles: Optional[Sequence[Candle]]) -> List[dict]:
 
 
 def _returns_pct(closes: List[float], n: int) -> Optional[float]:
-    if len(closes) < n + 1:
+    """Percent change from closes[-n-1] → closes[-1] (oldest→newest series).
+
+    ``n=1`` → last bar vs previous bar (5m ROC on 5m closes).
+    ``n=12`` → last bar vs 12 bars earlier (~1h on 5m closes).
+    Returns None when data is insufficient or invalid (never invents 0.0).
+    """
+    if n < 1 or len(closes) < n + 1:
         return None
     a, b = closes[-n - 1], closes[-1]
-    if a <= 0:
+    if not math.isfinite(a) or not math.isfinite(b) or a <= 0 or b <= 0:
         return None
     return (b - a) / a * 100.0
+
+
+def _valid_closes(closes: List[float]) -> List[float]:
+    """Keep finite positive closes; preserve order (oldest→newest)."""
+    out: List[float] = []
+    for c in closes:
+        try:
+            v = float(c)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(v) and v > 0:
+            out.append(v)
+    return out
 
 
 def _realized_vol(closes: List[float], window: int) -> Optional[float]:
@@ -254,13 +273,22 @@ def compute_indicators(
     snap.z_score_5m = _z_score(closes_5m) if closes_5m else None
     snap.range_stability = _range_stability(c5) if c5 else None
 
-    # Momentum
+    # Momentum — independent lookbacks on the same oldest→newest 5m close series.
+    # Policy: use the exchange candle window as returned (last bar may be forming);
+    # invalid/non-positive closes are dropped before return math.
     snap.rsi14_5m = dyn_ind.rsi(c5, 14) if c5 else None
     snap.rsi14_1h = dyn_ind.rsi(c1h, 14) if c1h else None
-    snap.roc_5m = _returns_pct(closes_5m, 12) if closes_5m else None
-    snap.return_1h_pct = _returns_pct(closes_5m, 12) if closes_5m else None
-    snap.return_4h_pct = _returns_pct(closes_15m, 16) if closes_15m else _returns_pct(closes_5m, 48) if closes_5m else None
-    snap.return_24h_pct = _returns_pct(closes_1h, 24) if closes_1h else None
+    closes_5m_valid = _valid_closes(closes_5m)
+    closes_15m_valid = _valid_closes(closes_15m)
+    closes_1h_valid = _valid_closes(closes_1h)
+    snap.roc_5m = _returns_pct(closes_5m_valid, 1)  # last 5m bar vs previous 5m bar
+    snap.return_1h_pct = _returns_pct(closes_5m_valid, 12)  # ~1h on 5m bars
+    snap.return_4h_pct = (
+        _returns_pct(closes_15m_valid, 16)
+        if closes_15m_valid
+        else _returns_pct(closes_5m_valid, 48)
+    )
+    snap.return_24h_pct = _returns_pct(closes_1h_valid, 24)
 
     # Liquidity
     snap.quote_volume_24h = market.quote_volume_24h
@@ -277,17 +305,23 @@ def compute_indicators(
         ask = float(market.orderbook_top.get("ask") or 0)
         if bid > 0 and ask > bid:
             snap.orderbook_spread_pct = (ask - bid) / ((ask + bid) / 2) * 100.0
-    snap.total_friction_pct = snap.orderbook_spread_pct or 0.05
+        snap.total_friction_pct = snap.orderbook_spread_pct or 0.05
 
-    # Drawdown
-    if closes_1h:
-        snap.drawdown_7d_pct = _drawdown_from_high(closes_1h[-168:]) if len(closes_1h) >= 24 else None
-        snap.drawdown_30d_pct = (
-            _drawdown_from_high(closes_1h[-168:])
-            if len(closes_1h) >= 168
-            else _drawdown_from_high(closes_1h)
+    # Drawdown — kısa pencere (7 gün) ve uzun pencere.
+    #
+    # ``drawdown_30d_pct`` adı legacy: sistemin veri penceresi bilinçli olarak
+    # 7 gün karar + ~10 gün trend (KLINES_LIMIT_1H=240), yani 30 günlük veri hiç
+    # çekilmiyor. Önceden bu alan da 168 bar (7 gün) üzerinden hesaplanıyordu;
+    # dd7 ile birebir aynı çıktığı için senaryo sınıflandırmasındaki
+    # ``max(dd7, dd30)`` ve dd30'a özel kural işlevsiz kalıyordu. Artık eldeki en
+    # uzun 1h penceresi kullanılır, böylece uzun pencere gerçekten daha derin bir
+    # düşüşü görebilir.
+    if closes_1h_valid:
+        snap.drawdown_7d_pct = (
+            _drawdown_from_high(closes_1h_valid[-168:]) if len(closes_1h_valid) >= 24 else None
         )
-    snap.crash_velocity = _crash_velocity(closes_5m) if closes_5m else None
+        snap.drawdown_30d_pct = _drawdown_from_high(closes_1h_valid)
+    snap.crash_velocity = _crash_velocity(closes_5m_valid) if closes_5m_valid else None
     snap.consecutive_red_pressure = _consecutive_red(c5) if c5 else 0.0
 
     # BTC
@@ -299,6 +333,26 @@ def compute_indicators(
         if btc.ema200_1h and btc.price:
             snap.btc_below_ema200 = btc.price < btc.ema200_1h
         snap.btc_crash_velocity = btc.crash_velocity
+
+    # Pump / dump / fake-move scores (0–100, None when under-specified)
+    from app.services.dynamic_param_score.move_scores import compute_move_scores
+
+    move = compute_move_scores(
+        candles_5m=c5,
+        roc_5m=snap.roc_5m,
+        return_1h_pct=snap.return_1h_pct,
+        volume_spike=snap.volume_spike_abnormality,
+        rsi_5m=snap.rsi14_5m,
+        z_score=snap.z_score_5m,
+        bb_position=snap.price_in_bb,
+        ema20_slope=snap.ema20_slope_5m,
+        range_stability=snap.range_stability,
+        lower_lows=snap.lower_lows,
+    )
+    snap.pump_score = move["pump_score"]
+    snap.dump_score = move["dump_score"]
+    snap.fake_bounce_score = move["fake_bounce_score"]
+    snap.fake_breakout_score = move["fake_breakout_score"]
 
     return snap
 

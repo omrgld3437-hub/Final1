@@ -26,7 +26,7 @@ from app.services.dynamic_param_score.param_pool.selector import (
 from app.services.dynamic_param_score.param_pool.defaults import _pinned_templates
 from app.services.dynamic_param_score.engine import DynamicParamScoreEngine
 from tests.dynamic_param_score.conftest import constraints, ctx, portfolio
-from tests.dynamic_param_score.test_sol_50_budget import _sol_market
+from tests.dynamic_param_score.sol_market_fixture import _sol_market
 
 
 def _sub_fee_bad() -> SubScores:

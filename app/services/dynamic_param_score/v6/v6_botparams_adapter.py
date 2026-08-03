@@ -37,7 +37,8 @@ def v6_profile_to_display_dict(
         "initial_base_budget_usdt": round(budget * base_pct / 100.0, 2),
         "quote_budget_usdt": round(budget * quote_pct / 100.0, 2),
         "normal_buy_enabled": profile.normal_buy_enabled,
-        "buy_grid_count": len(profile.buy_grids) if profile.normal_buy_enabled else 0,
+        # Always expose authored ladders (Kapalı profiles keep 4+4 as reference).
+        "buy_grid_count": len(profile.buy_grids),
         "buy_grid_distances_pct": buy_dist,
         "buy_grid_amounts_pct": buy_amt,
         "buy_trailing_pct": buy_trail,
@@ -68,11 +69,22 @@ def v6_profile_to_display_dict(
             "behavior_id": profile.scenario.behavior_id,
             "severity": profile.scenario.severity,
             "name": profile.scenario.name,
+            "canonical_headline": (profile.modules or {}).get("canonical_headline")
+            or (profile.modules or {}).get("headline")
+            or profile.scenario.name,
+            "headline": (profile.modules or {}).get("headline") or profile.scenario.name,
+            "selected_profile_key": profile.profile_id,
+            "net_profile_key": profile.profile_id,
+            "sub_profile_hint": (profile.modules or {}).get("sub_profile_hint") or "",
         },
         "behavior_id": profile.scenario.behavior_id,
         "severity": profile.scenario.severity,
         "adjuster_trace": list(adjuster_trace or []),
         "profile_id": profile.profile_id,
+        "selected_profile_key": profile.profile_id,
+        "canonical_headline": (profile.modules or {}).get("canonical_headline")
+        or (profile.modules or {}).get("headline")
+        or profile.scenario.name,
         "final_profile_id": final_profile_id or profile.profile_id,
         "catalog_profile_id": catalog_profile_id or profile.profile_id,
         # PA/DM alias fields (staging contract)
@@ -99,12 +111,16 @@ def v6_profile_to_bot_params(
     catalog_profile_id: str = "",
 ) -> BotParams:
     """Map V6 lattice profile to legacy BotParams (profit loop: sell → buyback → profit sell)."""
-    buy_n = len(profile.buy_grids) if profile.normal_buy_enabled else 0
-    sell_n = len(profile.sell_grids)
-    buy_dist = [abs(g.distance_pct) for g in profile.buy_grids]
-    sell_dist = [g.distance_pct for g in profile.sell_grids]
-    buy_weights = [g.amount_pct / 100.0 for g in profile.buy_grids]
-    sell_weights = [g.amount_pct / 100.0 for g in profile.sell_grids]
+    # Live BotParams: Kapalı / reference-only ladders are display-only.
+    reference_only = bool((profile.modules or {}).get("reference_plan_only")) or not bool(
+        (profile.modules or {}).get("automatic_apply", True)
+    )
+    buy_n = 0 if reference_only or not profile.normal_buy_enabled else len(profile.buy_grids)
+    sell_n = 0 if reference_only else len(profile.sell_grids)
+    buy_dist = [abs(g.distance_pct) for g in profile.buy_grids] if buy_n else []
+    sell_dist = [g.distance_pct for g in profile.sell_grids] if sell_n else []
+    buy_weights = [g.amount_pct / 100.0 for g in profile.buy_grids] if buy_n else []
+    sell_weights = [g.amount_pct / 100.0 for g in profile.sell_grids] if sell_n else []
 
     sell_trail = trailing_pct_from_code(profile.sell_trailing_code)
     buy_trail = trailing_pct_from_code(profile.buy_trailing_code)

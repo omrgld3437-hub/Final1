@@ -114,7 +114,7 @@ def resolve_r6_mode(
         or vol in ("V4", "V5")
         or liq in ("L2", "L3")
         or btc == "B3"
-        or (inp.fake_breakout_score or 0) >= 70
+        or (inp.fake_breakout_score is not None and inp.fake_breakout_score >= 70)
         or dq >= 50
         or (inp.spread_pct or 0) > 0.25
         or (inp.zero_volume_flag is True)

@@ -13,7 +13,7 @@ from app.services.dynamic_param_score.models import FinalAction
 from app.services.dynamic_param_score.action_detail import BILATERAL_GRID_ACTIONS, requires_bilateral_grids
 from tests.dynamic_param_score.conftest import constraints, ctx, mk_candles
 from tests.dynamic_param_score.factories import make_market_bundle, make_portfolio_state
-from tests.dynamic_param_score.test_sol_50_budget import _sol_market
+from tests.dynamic_param_score.sol_market_fixture import _sol_market
 
 
 def _sol_portfolio_with_base():

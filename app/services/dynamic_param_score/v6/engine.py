@@ -32,7 +32,10 @@ from app.services.dynamic_param_score.v6.v6_exchange_validator import exchange_v
 from app.services.dynamic_param_score.v6.v6_indicator_adapter import build_v6_input_contract
 from app.services.dynamic_param_score.v6.v6_input_contract import validate_input_contract
 from app.services.dynamic_param_score.v6.v6_mandatory_buy_guard import enforce_mandatory_deep_buy
-from app.services.dynamic_param_score.v6.net_profile_library import resolve_net_profile
+from app.services.dynamic_param_score.v6.net_profile_library import (
+    resolve_net_profile,
+    seal_net_profile_shape,
+)
 from app.services.dynamic_param_score.v6.v6_profile_validator import validate_profile
 from app.services.dynamic_param_score.v6.v6_quantizer import profit_code_from_pct, quantize_profile, trailing_code_from_pct
 from app.services.dynamic_param_score.v6.v6_botparams_adapter import (
@@ -126,7 +129,7 @@ def _compact_micro_base_sell_grids(profile, inp: V6InputContract, opportunity_no
 
 def _r8_pb12_act_base_20_allowed(inp: V6InputContract) -> bool:
     bounce_confirmed = (
-        (inp.fake_bounce_score or 0) >= 60
+        (inp.fake_bounce_score is not None and inp.fake_bounce_score >= 60)
         or (inp.support_strength_score or 0) >= 60
         or ((inp.return_1h_pct or 0) > 0 and (inp.return_4h_pct or 0) >= -2.0)
     )
@@ -517,10 +520,21 @@ class V6Engine:
         # The former generated shelf/catalog library remains on disk only for
         # rollback tooling. Live PA/DM resolution never reads or records it.
         profile = resolve_net_profile(classified, inp, severity)
+        from app.services.dynamic_param_score.v6.net_profile_library import (
+            build_classification_trace,
+            canonical_headline_for_key,
+        )
+
+        classification_trace = build_classification_trace(
+            classified,
+            inp,
+            selected_profile_key=profile.profile_id,
+        )
         logger.info(
-            "V6 profile selected id=%s severity=%s",
+            "V6 profile selected id=%s severity=%s headline=%s",
             profile.profile_id,
             severity,
+            classification_trace.get("canonical_headline"),
         )
 
         btc_risk = next((int(t.split("_")[1][1:]) * 25 for t in delta_pre.tags if t.startswith("BTC_B")), 0)
@@ -573,19 +587,27 @@ class V6Engine:
                 reason_codes.update(final_budget_notes)
                 opportunity_notes["reason_codes"] = sorted(reason_codes)
                 opportunity_notes["budget_adjusted_final"] = True
-        adjusted, buy_guard_notes = enforce_mandatory_deep_buy(
-            adjusted,
-            inp,
-            reason="FINAL_OUTPUT_BUY_SURFACE",
-        )
-        # Explicitly closed sides in the operator library are contractual. Old
-        # opportunity/mandatory-probe helpers may advise, but cannot reopen them.
-        if not profile.normal_buy_enabled:
-            adjusted.normal_buy_enabled = False
-            adjusted.buy_grids = []
-            buy_guard_notes = {"mandatory_deep_buy_skipped": "net_profile_buy_closed"}
-        if not profile.sell_grids:
-            adjusted.sell_grids = []
+        sealed_library = bool((profile.modules or {}).get("net_profile_library"))
+        buy_guard_notes: Dict[str, Any] = {}
+        if sealed_library:
+            # Operator 4+4 contract is authoritative; skip mandatory-buy reshape.
+            buy_guard_notes = {"mandatory_deep_buy_skipped": "net_profile_sealed_4x4"}
+        else:
+            adjusted, buy_guard_notes = enforce_mandatory_deep_buy(
+                adjusted,
+                inp,
+                reason="FINAL_OUTPUT_BUY_SURFACE",
+            )
+            # Explicitly closed sides in the operator library are contractual.
+            if not profile.normal_buy_enabled:
+                adjusted.normal_buy_enabled = False
+                adjusted.buy_grids = []
+                buy_guard_notes = {"mandatory_deep_buy_skipped": "net_profile_buy_closed"}
+            if not profile.sell_grids:
+                adjusted.sell_grids = []
+        if sealed_library:
+            # Restore authored ladders after opportunity / host-cap / compact steps.
+            adjusted = seal_net_profile_shape(adjusted, profile)
         if buy_guard_notes:
             opportunity_notes.update(buy_guard_notes)
             if buy_guard_notes.get("mandatory_deep_buy_applied"):
@@ -697,10 +719,15 @@ class V6Engine:
                     "label": classified.label,
                     "sub_profile_hint": getattr(classified, "sub_profile_hint", "") or "",
                     "net_profile_key": adjusted.profile_id,
+                    "selected_profile_key": adjusted.profile_id,
+                    "canonical_headline": canonical_headline_for_key(adjusted.profile_id),
                     "headline": (adjusted.modules or {}).get("headline"),
                     "why": (adjusted.modules or {}).get("why"),
                     "automatic_apply_label": (adjusted.modules or {}).get("automatic_apply_label"),
+                    "hard_block": bool(getattr(classified, "hard_block", False)),
+                    "hard_block_reason": list(getattr(classified, "hard_block_reasons", ()) or ()),
                 },
+                "classification_trace": classification_trace,
                 "budget": budget_scale(adjusted, inp),
                 "validation_errors": val_errors,
                 "input_errors": errors,
@@ -735,12 +762,29 @@ def calculate_decision_v6(
     scenario = result.telemetry.get("scenario") or {}
     bot_params = v6_final_to_bot_params(result, bot_budget_usdt=budget)
     opp = result.telemetry.get("opportunity_notes") or {}
+    display_base = v6_final_to_telemetry_extras(
+        result,
+        bot_budget_usdt=budget,
+        adjuster_trace=result.telemetry.get("adjuster_trace") or [],
+    )
+    scen_id = dict(display_base.get("scenario_identity") or {})
+    scen_id.update(
+        {
+            "canonical_headline": scenario.get("canonical_headline") or scen_id.get("canonical_headline"),
+            "headline": scenario.get("headline") or scen_id.get("headline"),
+            "selected_profile_key": scenario.get("selected_profile_key")
+            or scenario.get("net_profile_key")
+            or scen_id.get("selected_profile_key"),
+            "net_profile_key": scenario.get("net_profile_key") or scen_id.get("net_profile_key"),
+            "sub_profile_hint": scenario.get("sub_profile_hint") or scen_id.get("sub_profile_hint") or "",
+            "hard_block": scenario.get("hard_block"),
+            "hard_block_reason": scenario.get("hard_block_reason") or [],
+        }
+    )
+    display_base["scenario_identity"] = scen_id
+    display_base["classification_trace"] = result.telemetry.get("classification_trace") or {}
     v6_display = enrich_v6_display(
-        v6_final_to_telemetry_extras(
-            result,
-            bot_budget_usdt=budget,
-            adjuster_trace=result.telemetry.get("adjuster_trace") or [],
-        ),
+        display_base,
         adjuster_trace=result.telemetry.get("adjuster_trace") or [],
         deployable=result.deployable,
         deploy_block_reason=result.deploy_block_reason,
@@ -803,6 +847,7 @@ def calculate_decision_v6(
             },
             "apply_policy": policy,
             "pa_soft_deployable": pa_soft,
+            "classification_trace": result.telemetry.get("classification_trace") or {},
             "v6_display": v6_display,
             "v6_final": {
                 "catalog_profile_id": result.catalog_profile_id,

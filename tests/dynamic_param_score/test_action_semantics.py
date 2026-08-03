@@ -8,7 +8,7 @@ from app.services.dynamic_param_score.engine import DynamicParamScoreEngine
 from app.services.dynamic_param_score.models import FinalAction
 from tests.dynamic_param_score.conftest import constraints, ctx, mk_candles, portfolio
 from tests.dynamic_param_score.factories import make_portfolio_state
-from tests.dynamic_param_score.test_sol_50_budget import _sol_market
+from tests.dynamic_param_score.sol_market_fixture import _sol_market
 
 
 def test_sell_management_only_when_buy_blocked_sell_feasible():

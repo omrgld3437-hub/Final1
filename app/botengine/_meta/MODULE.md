@@ -26,7 +26,8 @@ python -m app.botengine.worker_main
 | `engine_log_ack.py` | Reset/ack sonrası motor log event filtreleme |
 | `order_qty.py` | Decimal `stepSize` floor + `validate_market_sell_qty` |
 | `health_watch.py` | Sağlık uyarıları (otomatik durdurmaz) |
-| `dynamic/` | Dinamik mod: features → regime → strategy → risk → snapshot (`cycle_manager`); `safety_gate` max_buy_levels gate + kapalı fren bayrakları; bkz. `docs/DYNAMIC_MODE_TECHNICAL.md` |
+| `dynamic/` | Dinamik mod (canlı): `cycle_manager` → DPS V6 → `regime_multiplier` overlay; `safety_gate` max_buy_levels gate + kapalı fren bayrakları. Legacy `strategy_engine` / `risk_engine` / `cycle_duration` kaldırıldı. |
+| `dynamic_v2/` | Opt-in alternatif motor (`dynamic_mode_v2`); varsayılan shadow. Kill switch sağlık dönünce açılır; `RUNTIME_EXCEPTION` 15 dk cooldown. Churn limitleri son APPLIED adaya göre. |
 | `intent_ledger.py` | Exactly-once intent |
 | `locks.py` | Hesap kilidi, lease 10s |
 | `reconcile.py` | Binance truth |

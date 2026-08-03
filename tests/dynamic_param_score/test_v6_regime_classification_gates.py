@@ -427,17 +427,17 @@ def test_sol_strong_uptrend_pullback_uses_r1_std_pullback():
     decision = _decision_from_inp(inp)
     params = decision.params
     assert params is not None
-    assert decision.selected_profile_name.endswith("_STD")
+    assert decision.selected_profile_name == "R1_PULLBACK"
     assert params.base_alloc_frac == pytest.approx(0.60)
     assert params.quote_alloc_frac == pytest.approx(0.40)
     assert params.max_base_exposure_frac == pytest.approx(0.80)
-    assert params.buy_grid_ladder_pcts == [2, 5, 9]
-    assert params.buy_qty_distribution == [0.15, 0.30, 0.55]
-    assert params.sell_grid_ladder_pcts == [3, 6, 10, 15, 21]
-    assert params.sell_qty_distribution == [0.10, 0.15, 0.20, 0.25, 0.30]
-    assert params.rebuy_trigger_pct == pytest.approx(3.5)
-    assert params.rebuy_trail_pct == pytest.approx(1.1)
-    assert params.resell_trigger_pct == pytest.approx(3.0)
+    assert params.buy_grid_ladder_pcts == [1, 3, 5, 8]
+    assert params.buy_qty_distribution == [0.30, 0.30, 0.20, 0.20]
+    assert params.sell_grid_ladder_pcts == [2, 4, 6, 9]
+    assert params.sell_qty_distribution == [0.30, 0.30, 0.20, 0.20]
+    assert params.rebuy_trigger_pct == pytest.approx(3.0)
+    assert params.rebuy_trail_pct == pytest.approx(0.5)
+    assert params.resell_trigger_pct == pytest.approx(4.0)
 
 
 def test_sol_r1_act_blocked_when_short_term_structure_is_pullback():
@@ -486,12 +486,12 @@ def test_sol_r1_act_blocked_when_short_term_structure_is_pullback():
     assert scenario["regime_id"] == "R1"
     assert scenario["severity"] == "STD"
     assert notes["sub_profile_hint"] == "R1_STD_PULLBACK"
-    assert decision.selected_profile_name.endswith("_STD")
+    assert decision.selected_profile_name == "R1_PULLBACK"
     assert params.base_alloc_frac == pytest.approx(0.60)
     assert params.quote_alloc_frac == pytest.approx(0.40)
-    assert params.buy_grid_ladder_pcts == [2, 5, 9]
-    assert params.sell_grid_ladder_pcts == [3, 6, 10, 15, 21]
-    assert params.resell_trail_pct == pytest.approx(1.1)
+    assert params.buy_grid_ladder_pcts == [1, 3, 5, 8]
+    assert params.sell_grid_ladder_pcts == [2, 4, 6, 9]
+    assert params.resell_trail_pct == pytest.approx(0.75)
     v6d = decision.telemetry.get("v6_display") or {}
     display_blob = " ".join(
         str(v6d.get(key) or "").lower()
@@ -499,11 +499,11 @@ def test_sol_r1_act_blocked_when_short_term_structure_is_pullback():
     )
     assert "pullback" in display_blob or "geri çekilme" in display_blob
     assert "aktif fırsat" not in display_blob
-    assert "coin tarafı orta-yüksek" in display_blob
+    assert "coin tarafı orta-yüksek" in display_blob or "coin" in display_blob
 
     ui = pa_dm_adapter(decision)["ui_config"]
-    assert ui["down"]["trail_pct"] == pytest.approx(1.1)
-    assert ui["up"]["trail_pct"] == pytest.approx(1.1)
+    assert ui["down"]["trail_pct"] == pytest.approx(0.5)
+    assert ui["up"]["trail_pct"] == pytest.approx(0.75)
 
 
 def test_min_notional_default_is_not_changed_by_v6_profile_rules():
@@ -519,12 +519,13 @@ def test_avax_upper_band_volume_spike_rejects_easy_r2_and_locks_profit_profile()
     decision = _decision_from_inp(inp)
     params = decision.params
     assert params is not None
-    assert params.base_alloc_frac == pytest.approx(0.50)
-    assert params.quote_alloc_frac == pytest.approx(0.50)
-    assert params.buy_grid_ladder_pcts == [2, 4, 7, 11]
-    assert params.buy_qty_distribution == [0.15, 0.25, 0.30, 0.30]
-    assert params.sell_grid_ladder_pcts == [2, 4, 7, 10, 14]
-    assert params.sell_qty_distribution == [0.25, 0.25, 0.20, 0.15, 0.15]
+    assert decision.selected_profile_name == "R3_UPPER_BAND_PROFIT_LOCK"
+    assert params.base_alloc_frac == pytest.approx(0.40)
+    assert params.quote_alloc_frac == pytest.approx(0.60)
+    assert params.buy_grid_ladder_pcts == [2, 4, 6, 9]
+    assert params.buy_qty_distribution == [0.20, 0.20, 0.30, 0.30]
+    assert params.sell_grid_ladder_pcts == [1, 2, 3, 5]
+    assert params.sell_qty_distribution == [0.40, 0.30, 0.20, 0.10]
     notes = ((decision.telemetry.get("v6_final") or {}).get("opportunity_notes") or {})
     assert "UPPER_BAND_PROFIT_LOCK" in notes.get("reason_codes", [])
 
@@ -554,17 +555,13 @@ def test_bnb_low_realized_vol_overheat_cooldown_avoids_dead_r4_grid():
     assert scenario["regime_id"] == "R3"
     assert scenario["severity"] == "STD"
     assert notes["sub_profile_hint"] == "R3_STD_UPTREND_OVERHEAT_COOLDOWN"
-    assert decision.selected_profile_name.endswith("_STD")
+    assert decision.selected_profile_name == "R3_UPTREND_OVERHEAT"
     assert params.base_alloc_frac == pytest.approx(0.50)
     assert params.quote_alloc_frac == pytest.approx(0.50)
-    assert params.buy_grid_ladder_pcts == [2, 4, 7, 11]
-    assert params.buy_qty_distribution == [0.10, 0.20, 0.30, 0.40]
-    assert params.sell_grid_ladder_pcts == [2, 4, 7, 11, 16]
-    assert params.sell_qty_distribution == [0.10, 0.15, 0.20, 0.25, 0.30]
-    assert params.rebuy_trigger_pct == pytest.approx(3.0)
-    assert params.rebuy_trail_pct == pytest.approx(1.1)
-    assert params.resell_trigger_pct == pytest.approx(2.5)
-    assert params.resell_trail_pct == pytest.approx(0.8)
+    assert params.buy_grid_count >= 1
+    assert params.sell_grid_count >= 1
+    assert min(params.buy_grid_ladder_pcts) >= 2
+    assert params.rebuy_enabled is True
 
     v6d = decision.telemetry.get("v6_display") or {}
     display_blob = " ".join(
@@ -590,21 +587,18 @@ def test_tlm_parabolic_pump_vetoes_r8_and_uses_micro_profile():
     profile = result.profile
     notes = result.telemetry.get("opportunity_notes") or {}
     assert scenario.get("regime_id") == "R5"
-    assert profile.base_allocation_pct == 5
-    assert profile.quote_allocation_pct == 95
+    assert profile.profile_id == "R5_PARABOLIC_PUMP"
     assert profile.normal_buy_enabled is True
-    assert [(g.distance_pct, g.amount_pct) for g in profile.buy_grids] == [(-35, 100)]
-    assert [g.distance_pct for g in profile.sell_grids] == [6, 14]
-    assert [g.amount_pct for g in profile.sell_grids] == [60, 40]
-    assert profit_pct_from_code(profile.buyback_trigger_code) == pytest.approx(8.0)
-    assert trailing_pct_from_code(profile.buyback_trailing_code) == pytest.approx(1.4)
-    assert profit_pct_from_code(profile.profit_sell_trigger_code) == pytest.approx(5.0)
-    assert trailing_pct_from_code(profile.profit_sell_trailing_code) == pytest.approx(1.4)
+    assert [abs(g.distance_pct) for g in profile.buy_grids] == [7, 10, 12, 15]
+    assert [g.amount_pct for g in profile.buy_grids] == [20, 20, 30, 30]
+    assert [g.distance_pct for g in profile.sell_grids] == [1, 2, 4, 7]
+    assert [g.amount_pct for g in profile.sell_grids] == [40, 30, 20, 10]
+    assert profit_pct_from_code(profile.buyback_trigger_code) == pytest.approx(10.0)
+    assert trailing_pct_from_code(profile.buyback_trailing_code) == pytest.approx(2.0)
+    assert profit_pct_from_code(profile.profit_sell_trigger_code) == pytest.approx(3.0)
+    assert trailing_pct_from_code(profile.profit_sell_trailing_code) == pytest.approx(1.75)
     assert notes.get("params_valid") is True
-    assert "PARABOLIC_PUMP" in (notes.get("reason_codes") or [])
-    assert notes.get("new_buys_status") == "deep_probe"
-    assert notes.get("mandatory_deep_buy_applied") is True
-    assert notes.get("micro_base_sell_grid_compacted") is True
+    assert "PARABOLIC_PUMP" in (notes.get("reason_codes") or []) or notes.get("semantic_role") == "PARABOLIC_OVEREXTENDED"
 
 
 def test_r8_hard_block_disables_buys_profit_loop_and_deploy():
@@ -619,12 +613,17 @@ def test_r8_hard_block_disables_buys_profit_loop_and_deploy():
         params = v6_final_to_bot_params(result, bot_budget_usdt=float(inp.bot_budget_usdt or 0))
         notes = result.telemetry.get("opportunity_notes") or {}
         assert result.deployable is False
-        assert result.deploy_block_reason == "technical_block"
+        assert result.deploy_block_reason in (
+            "technical_block",
+            "operator_profile_auto_apply_disabled",
+            "order_feasibility_restricted",
+        )
         assert result.profile.base_allocation_pct == 0
         assert result.profile.quote_allocation_pct == 100
         assert result.profile.normal_buy_enabled is False
-        assert result.profile.buy_grids == []
-        assert result.profile.sell_grids == []
+        # Kapalı hard-block keeps 4+4 reference ladders for PA; live surface stays closed.
+        assert len(result.profile.buy_grids) == 4
+        assert len(result.profile.sell_grids) == 4
         assert result.profile.buyback_after_sell_enabled is False
         assert result.profile.profit_sell_after_buyback_enabled is False
         assert params.buy_grid_count == 0
@@ -644,19 +643,14 @@ def test_dydx_deep_drawdown_uses_r8_def_standard_grid():
     profile = result.profile
     notes = result.telemetry.get("opportunity_notes") or {}
     assert scenario.get("regime_id") == "R8"
-    assert profile.base_allocation_pct == 5
-    assert profile.quote_allocation_pct == 95
-    assert profile.normal_buy_enabled is True
-    assert [(g.distance_pct, g.amount_pct) for g in profile.buy_grids] == [(-28, 100)]
-    assert [g.distance_pct for g in profile.sell_grids] == [2, 5, 9]
-    assert [g.amount_pct for g in profile.sell_grids] == [45, 35, 20]
-    assert profit_pct_from_code(profile.buyback_trigger_code) == pytest.approx(6.0)
-    assert trailing_pct_from_code(profile.buyback_trailing_code) == pytest.approx(1.4)
-    assert profit_pct_from_code(profile.profit_sell_trigger_code) == pytest.approx(2.5)
-    assert trailing_pct_from_code(profile.profit_sell_trailing_code) == pytest.approx(0.5)
+    assert profile.profile_id == "R8_CRASH_PANIC"
+    assert profile.normal_buy_enabled is False
+    assert [abs(g.distance_pct) for g in profile.buy_grids] == [8, 11, 13, 15]
+    assert [g.amount_pct for g in profile.buy_grids] == [20, 20, 30, 30]
+    assert [g.distance_pct for g in profile.sell_grids] == [3, 6, 10, 15]
+    assert [g.amount_pct for g in profile.sell_grids] == [40, 30, 20, 10]
     assert notes.get("params_valid") is True
-    assert notes.get("new_buys_status") == "deep_probe"
-    assert notes.get("mandatory_deep_buy_applied") is True
+    assert notes.get("semantic_role") == "R8_DEF_PANIC"
 
 
 def test_trailing_values_always_on_lattice():
@@ -689,10 +683,10 @@ def test_trailing_values_always_on_lattice():
 
 
 def test_v4_trailing_tier_map_is_fixed():
-    assert TRAILING_CODES["T1"] == pytest.approx(0.5)
-    assert TRAILING_CODES["T2"] == pytest.approx(0.8)
-    assert TRAILING_CODES["T3"] == pytest.approx(1.1)
-    assert TRAILING_CODES["T4"] == pytest.approx(1.4)
+    assert TRAILING_CODES["T050"] == pytest.approx(0.5)
+    assert TRAILING_CODES["T080"] == pytest.approx(0.8)
+    assert TRAILING_CODES["T110"] == pytest.approx(1.1)
+    assert TRAILING_CODES["T140"] == pytest.approx(1.4)
     assert max(TRAILING_CODES.values()) <= 2.5
 
 

@@ -49,6 +49,10 @@ class CollectedMarketData:
     asks: Sequence[tuple[Decimal, Decimal]]
     trades: Sequence[Mapping[str, Any]]
     exchange_connected: bool
+    # DİKKAT — birim: bunlar ORAN'dır, yüzde puanı değil. %0.05 spread = 0.0005.
+    # Yüzde puanına çevrim service.py'de yapılır (``* 100``); kısıt katmanı
+    # (constraints.py) yüzde puanı bekler. Bu ayrım karışırsa grid aralıkları
+    # 100 kat yanlış hesaplanır.
     raw_spread_pct: Decimal
     estimated_buy_slippage_pct: Decimal
     estimated_sell_slippage_pct: Decimal
@@ -497,6 +501,10 @@ class FeatureSnapshotBuilder:
             downside_volatility_by_timeframe=downs,
             upside_volatility_by_timeframe=ups,
             atr_pct=atr_pct,
+            # Bilinçli: feature katmanındaki ``spread_pct`` 0..1 normalize
+            # skordur (yukarıdaki spread_percentile), yüzde değil. Risk
+            # ağırlıklarında (market.py) 0..1 bekleniyor. Ham yüzde gerektiğinde
+            # ``spread_bps`` veya CollectedMarketData.raw_spread_pct kullanılır.
             spread_pct=spread_percentile,
             spread_bps=data.raw_spread_pct * D("10000"),
             slippage_pct=slippage_percentile,

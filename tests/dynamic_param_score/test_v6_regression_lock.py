@@ -27,7 +27,9 @@ from tests.dynamic_param_score.test_v6_regime_classification_gates import (
 )
 
 
-FORBIDDEN_TRAILING_VALUES = {0.35, 0.6, 0.88, 0.9, 1.2}
+# Net profile library intentionally uses 0.35 / 0.6 / 0.9 / 1.2 trails.
+# Only keep values that are not on the live trailing lattice.
+FORBIDDEN_TRAILING_VALUES = {0.88}
 FORBIDDEN_DISTRIBUTIONS = {
     (50, 50),
     (33, 33, 34),
@@ -40,27 +42,42 @@ def _run(inp):
     params = v6_final_to_bot_params(result, bot_budget_usdt=float(inp.bot_budget_usdt or 0))
     trace = result.telemetry.get("adjuster_trace") or []
     notes = result.telemetry.get("opportunity_notes") or {}
+    scenario = result.telemetry.get("scenario") or {}
+    display_base = v6_final_to_telemetry_extras(
+        result,
+        bot_budget_usdt=float(inp.bot_budget_usdt or 0),
+        adjuster_trace=trace,
+    )
+    scen_id = dict(display_base.get("scenario_identity") or {})
+    scen_id.update(
+        {
+            "canonical_headline": scenario.get("canonical_headline") or scen_id.get("canonical_headline"),
+            "headline": scenario.get("headline") or scen_id.get("headline"),
+            "selected_profile_key": scenario.get("selected_profile_key")
+            or scenario.get("net_profile_key")
+            or scen_id.get("selected_profile_key"),
+            "net_profile_key": scenario.get("net_profile_key") or scen_id.get("net_profile_key"),
+            "sub_profile_hint": scenario.get("sub_profile_hint") or "",
+        }
+    )
+    display_base["scenario_identity"] = scen_id
     display = enrich_v6_display(
-        v6_final_to_telemetry_extras(
-            result,
-            bot_budget_usdt=float(inp.bot_budget_usdt or 0),
-            adjuster_trace=trace,
-        ),
+        display_base,
         adjuster_trace=trace,
         deployable=result.deployable,
         deploy_block_reason=result.deploy_block_reason,
         opportunity_notes=notes,
     )
-    return result, params, display, notes, result.telemetry.get("scenario") or {}
+    return result, params, display, notes, scenario
 
 
 def _pct_on_half_step(value: float) -> bool:
     return abs((float(value) * 2) - round(float(value) * 2)) < 1e-9
 
 
-def _assert_grid_side(levels, *, enabled: bool) -> None:
+def _assert_grid_side(levels, *, enabled: bool, allow_reference: bool = False) -> None:
     assert 0 <= len(levels) <= 5
-    if not enabled:
+    if not enabled and not (allow_reference and levels):
         assert levels == []
         return
     if not levels:
@@ -82,8 +99,17 @@ def _assert_global_invariants(name: str, result, params, display, notes) -> None
     assert profile.base_allocation_pct + profile.quote_allocation_pct == 100, name
     assert profile.base_allocation_pct % 5 == 0, name
     assert profile.quote_allocation_pct % 5 == 0, name
-    _assert_grid_side(profile.buy_grids, enabled=profile.normal_buy_enabled)
+    reference = bool((profile.modules or {}).get("reference_plan_only"))
+    _assert_grid_side(
+        profile.buy_grids,
+        enabled=profile.normal_buy_enabled,
+        allow_reference=reference,
+    )
     _assert_grid_side(profile.sell_grids, enabled=bool(profile.sell_grids))
+    # Fixed weekly 4+4 library contract.
+    if (profile.modules or {}).get("grid_contract") == "fixed_4x4":
+        assert len(profile.buy_grids) == 4, name
+        assert len(profile.sell_grids) == 4, name
 
     trailing_values = [
         trailing_pct_from_code(profile.sell_trailing_code),
@@ -99,14 +125,29 @@ def _assert_global_invariants(name: str, result, params, display, notes) -> None
         profit_pct_from_code(profile.profit_sell_trigger_code),
     ]
     assert all(_pct_on_half_step(v) for v in profit_values), name
-    assert all(0.5 <= float(v) <= 8.0 for v in profit_values), name
+    assert all(0.5 <= float(v) <= 10.0 for v in profit_values), name
 
     assert int(display["base_allocation_pct"]) == profile.base_allocation_pct, name
     assert int(display["quote_allocation_pct"]) == profile.quote_allocation_pct, name
-    assert int(display["buy_grid_count"]) == params.buy_grid_count, name
-    assert int(display["sell_grid_count"]) == params.sell_grid_count, name
-    assert display["buy_grid_distances_pct"] == params.buy_grid_ladder_pcts, name
-    assert display["sell_grid_distances_pct"] == params.sell_grid_ladder_pcts, name
+    # PA display always shows authored ladders; live BotParams zeros buys when closed.
+    assert int(display["buy_grid_count"]) == len(profile.buy_grids), name
+    assert int(display["sell_grid_count"]) == len(profile.sell_grids), name
+    assert display["buy_grid_distances_pct"] == [abs(g.distance_pct) for g in profile.buy_grids], name
+    assert display["sell_grid_distances_pct"] == [g.distance_pct for g in profile.sell_grids], name
+    reference = bool((profile.modules or {}).get("reference_plan_only"))
+    if reference:
+        assert params.buy_grid_count == 0, name
+        assert params.sell_grid_count == 0, name
+        assert params.buy_grid_ladder_pcts == [], name
+        assert params.sell_grid_ladder_pcts == [], name
+    elif profile.normal_buy_enabled:
+        assert int(display["buy_grid_count"]) == params.buy_grid_count, name
+        assert display["buy_grid_distances_pct"] == params.buy_grid_ladder_pcts, name
+        assert display["sell_grid_distances_pct"] == params.sell_grid_ladder_pcts, name
+    else:
+        assert params.buy_grid_count == 0, name
+        assert params.buy_grid_ladder_pcts == [], name
+        assert display["sell_grid_distances_pct"] == params.sell_grid_ladder_pcts, name
     assert params.buy_disabled is (not profile.normal_buy_enabled), name
 
 
@@ -117,18 +158,25 @@ def test_v6_golden_tlm_parabolic_pump_locked():
     assert scenario["regime_id"] == "R5"
     assert scenario["sub_profile_hint"] == "R5_DEF_PARABOLIC_OVEREXTENDED"
     assert scenario["regime_id"] != "R8"
-    assert (profile.base_allocation_pct, profile.quote_allocation_pct) == (5, 95)
+    assert profile.profile_id == "R5_PARABOLIC_PUMP"
+    assert (profile.base_allocation_pct, profile.quote_allocation_pct) == (20, 80)
     assert profile.normal_buy_enabled is True
-    assert profile.modules.get("new_buys_status") == "deep_probe"
-    assert [(g.distance_pct, g.amount_pct) for g in profile.buy_grids] == [(-35, 100)]
-    assert [(g.distance_pct, g.amount_pct) for g in profile.sell_grids] == [
-        (6, 60),
-        (14, 40),
+    assert [(abs(g.distance_pct), g.amount_pct) for g in profile.buy_grids] == [
+        (7, 20),
+        (10, 20),
+        (12, 30),
+        (15, 30),
     ]
-    assert params.buy_grid_count == 1
-    assert params.sell_grid_count == 2
-    assert (params.rebuy_trigger_pct, params.rebuy_trail_pct) == (8.0, 1.4)
-    assert (params.resell_trigger_pct, params.resell_trail_pct) == (5.0, 1.4)
+    assert [(g.distance_pct, g.amount_pct) for g in profile.sell_grids] == [
+        (1, 40),
+        (2, 30),
+        (4, 20),
+        (7, 10),
+    ]
+    assert params.buy_grid_count == 4
+    assert params.sell_grid_count == 4
+    assert (params.rebuy_trigger_pct, params.rebuy_trail_pct) == (10.0, 2.0)
+    assert (params.resell_trigger_pct, params.resell_trail_pct) == (3.0, 1.75)
 
 
 def test_v6_golden_dydx_deep_drawdown_locked():
@@ -136,19 +184,25 @@ def test_v6_golden_dydx_deep_drawdown_locked():
     _assert_global_invariants("DYDX", result, params, display, notes)
     profile = result.profile
     assert scenario["regime_id"] == "R8"
-    assert (profile.base_allocation_pct, profile.quote_allocation_pct) == (5, 95)
-    assert profile.normal_buy_enabled is True
-    assert profile.modules.get("new_buys_status") == "deep_probe"
-    assert [(g.distance_pct, g.amount_pct) for g in profile.buy_grids] == [(-28, 100)]
-    assert [(g.distance_pct, g.amount_pct) for g in profile.sell_grids] == [
-        (2, 45),
-        (5, 35),
-        (9, 20),
+    assert scenario["sub_profile_hint"] == "R8_DEF_PANIC"
+    assert profile.profile_id == "R8_CRASH_PANIC"
+    assert profile.normal_buy_enabled is False
+    assert bool((profile.modules or {}).get("reference_plan_only")) is True
+    assert [(abs(g.distance_pct), g.amount_pct) for g in profile.buy_grids] == [
+        (8, 20),
+        (11, 20),
+        (13, 30),
+        (15, 30),
     ]
-    assert params.buy_grid_count == 1
-    assert params.sell_grid_count == 3
-    assert (params.rebuy_trigger_pct, params.rebuy_trail_pct) == (6.0, 1.4)
-    assert (params.resell_trigger_pct, params.resell_trail_pct) == (2.5, 0.5)
+    assert [(g.distance_pct, g.amount_pct) for g in profile.sell_grids] == [
+        (3, 40),
+        (6, 30),
+        (10, 20),
+        (15, 10),
+    ]
+    assert params.buy_grid_count == 0
+    assert params.sell_grid_count == 0
+    assert result.deployable is False
 
 
 def _r2_range_inp():
@@ -277,25 +331,26 @@ def test_btc_trend_cooldown_not_r6_top_distribution_act():
     assert scenario["regime_id"] not in ("R6", "R8")
     assert scenario["sub_profile_hint"] != "R5_DEF_PARABOLIC_OVEREXTENDED"
     assert not (scenario["severity"] == "ACT" and profile.base_allocation_pct >= 70)
-    assert profile.base_allocation_pct in (55, 60, 65)
-    assert profile.quote_allocation_pct in (35, 40, 45)
+    assert profile.profile_id == "R1_TREND_COOLDOWN"
+    assert profile.base_allocation_pct == 50
+    assert profile.quote_allocation_pct == 50
     assert params.max_base_exposure_frac <= 0.80
     assert [(abs(g.distance_pct), g.amount_pct) for g in profile.buy_grids] == [
-        (2, 15),
+        (2, 30),
         (4, 30),
-        (7, 55),
+        (7, 20),
+        (10, 20),
     ]
     assert [(g.distance_pct, g.amount_pct) for g in profile.sell_grids] == [
-        (2, 10),
-        (4, 15),
-        (7, 20),
-        (11, 25),
-        (16, 30),
+        (1, 30),
+        (3, 30),
+        (5, 20),
+        (8, 20),
     ]
-    assert params.rebuy_trigger_pct in (2.5, 3.0)
-    assert params.rebuy_trail_pct in (0.8, 1.1)
-    assert params.resell_trigger_pct in (2.0, 2.5)
-    assert params.resell_trail_pct in (0.8, 1.1)
+    assert params.rebuy_trigger_pct == 4.0
+    assert params.rebuy_trail_pct == 0.75
+    assert params.resell_trigger_pct == 3.0
+    assert params.resell_trail_pct == 0.75
     assert "düşüş sonrası toparlanma" not in title_blob
     assert "tepe" not in title_blob
     assert "dağılım" not in title_blob
@@ -355,9 +410,11 @@ def test_clean_breakout_act_not_capped_by_overextended_guard():
     assert scenario["regime_id"] in ("R5", "R1")
     assert scenario["sub_profile_hint"] == "R5_ACT_CLEAN_BREAKOUT"
     assert scenario["severity"] == "ACT"
-    assert 70 <= result.profile.base_allocation_pct <= 75
-    assert params.sell_grid_count >= 5
-    assert "Temiz breakout" in display["regime_headline"]
+    assert result.profile.profile_id == "R5_CLEAN_BREAKOUT"
+    assert result.profile.base_allocation_pct == 70
+    assert params.sell_grid_count == 4
+    assert params.buy_grid_count == 4
+    assert "Temiz Breakout" in display["regime_headline"] or "temiz breakout" in display["regime_headline"].lower()
 
 
 @pytest.mark.parametrize(
@@ -394,35 +451,37 @@ def test_v6_live_and_regime_cases_locked(name, factory):
         assert profile.normal_buy_enabled is True
     elif name == "DOGE":
         assert scenario["regime_id"] == "R4"
+        assert profile.profile_id == "R4_LIQUID_VOLATILE_RANGE"
         assert profile.modules.get("new_buys_status") == "active"
-        assert abs(profile.buy_grids[0].distance_pct) <= 4
-        assert 30 <= profile.base_allocation_pct <= 40
+        assert abs(profile.buy_grids[0].distance_pct) <= 2
+        assert profile.base_allocation_pct == 50
     elif name == "ARPA":
         assert scenario["regime_id"] == "R4"
         assert scenario["sub_profile_hint"] == "R4_RESTRICTED_UNSTABLE"
         assert result.deployable is False
         assert result.deploy_block_reason == "restricted_by_liquidity"
         assert profile.modules.get("new_buys_status") == "restricted"
-        assert profile.base_allocation_pct <= 15
+        assert profile.base_allocation_pct == 20
+        assert len(profile.buy_grids) == 4
         assert {"HIGH_SPREAD", "LOW_VOLUME", "UNSTABLE_RANGE"}.issubset(
             set(notes.get("reason_codes") or [])
         )
     elif name == "R2":
         assert scenario["regime_id"] == "R2"
-        assert params.buy_grid_count >= 3
-        assert params.sell_grid_count >= 3
-        assert params.rebuy_trigger_pct <= 2.0
-        assert params.resell_trigger_pct <= 2.0
+        assert params.buy_grid_count == 4
+        assert params.sell_grid_count == 4
+        assert params.rebuy_trigger_pct == 3.0
+        assert params.resell_trigger_pct == 3.0
     elif name == "R3":
         assert scenario["regime_id"] == "R3"
         assert abs(profile.buy_grids[0].distance_pct) <= 2
         assert profile.sell_grids[0].distance_pct <= 2
-        assert params.resell_trigger_pct <= 1.5
+        assert params.resell_trigger_pct == 3.0
     elif name == "R7":
         assert scenario["regime_id"] == "R7"
-        assert profile.base_allocation_pct <= 35
+        assert profile.base_allocation_pct == 20
         assert profile.modules.get("new_buys_status") == "restricted"
-        assert params.resell_trigger_pct <= 1.5
+        assert params.resell_trigger_pct == 3.0
 
 
 def _display_blob(display, scenario, notes):
@@ -702,8 +761,10 @@ def test_bnb_r3_compression_display_not_deep_buy_label():
     _assert_global_invariants("BNB R3 compression", result, params, display, notes)
     assert scenario["regime_id"] == "R3"
     assert scenario["sub_profile_hint"] in ("R3_STD_CONTROLLED_COMPRESSION", "R3_STD_UPTREND_COMPRESSION")
-    assert result.profile.base_allocation_pct <= 40
-    assert params.buy_grid_ladder_pcts == [1, 3, 6]
+    assert result.profile.profile_id in ("R3_CONTROLLED_COMPRESSION", "R3_UPTREND_COMPRESSION")
+    assert result.profile.base_allocation_pct in (50, 70)
+    assert params.buy_grid_count == 4
+    assert params.sell_grid_count == 4
     blob = _display_blob(display, scenario, notes)
     assert "derin alış açık" not in blob
     assert "yakın alış gridleri açık" in blob
@@ -728,7 +789,8 @@ def test_aigensyn_recovery_uses_recovery_semantic_not_generic_r5():
     assert scenario["regime_id"] == "R6"
     assert scenario["sub_profile_hint"] == "R6_RECOVERY_BREAKOUT"
     assert notes["semantic_role"] == "RECOVERY"
-    assert result.profile.base_allocation_pct <= 50
+    assert result.profile.profile_id == "R6_RECOVERY_BREAKOUT"
+    assert result.profile.base_allocation_pct == 70
     blob = _display_blob(display, scenario, notes)
     assert "recovery" in blob or "toparlanma" in blob
     assert "r5" not in blob
@@ -740,10 +802,12 @@ def test_r5_high_spread_overextended_becomes_restricted():
     assert scenario["regime_id"] == "R5"
     assert result.deployable is False
     assert result.deploy_block_reason == "restricted_by_liquidity"
-    assert result.profile.base_allocation_pct <= 15
+    # Sealed weekly library keeps authored shape; liquidity only blocks deploy.
+    assert result.profile.profile_id == "R5_OVEREXTENDED"
+    assert result.profile.base_allocation_pct == 40
     assert result.profile.normal_buy_enabled is True
-    assert [(g.distance_pct, g.amount_pct) for g in result.profile.buy_grids] == [(-20, 100)]
-    assert notes.get("mandatory_deep_buy_applied") is True
+    assert len(result.profile.buy_grids) == 4
+    assert notes.get("mandatory_deep_buy_skipped") == "net_profile_sealed_4x4"
     assert notes["semantic_role"] == "OVEREXTENDED_LOW_LIQUIDITY"
     assert {"LOW_LIQUIDITY_RESTRICTED", "RESTRICTED_DEPLOY"}.issubset(set(notes["reason_codes"]))
     assert "restricted" in _display_blob(display, scenario, notes)
@@ -765,10 +829,15 @@ def test_1000cat_r4_low_liq_not_std_display():
     result, params, display, notes, scenario = _run(_cat_low_liq_r4_inp())
     _assert_global_invariants("1000CAT low-liq", result, params, display, notes)
     assert scenario["regime_id"] == "R4"
+    assert scenario["sub_profile_hint"] == "R4_RESTRICTED_UNSTABLE"
+    assert result.profile.profile_id == "R4_RESTRICTED_UNSTABLE"
     assert result.deployable is False
     assert result.deploy_block_reason == "restricted_by_liquidity"
-    assert result.profile.base_allocation_pct == 5
-    assert params.buy_grid_ladder_pcts == [6, 12, 20]
+    assert result.profile.normal_buy_enabled is False
+    assert params.buy_grid_count == 0
+    assert params.sell_grid_count == 0
+    assert display["buy_grid_count"] == 4  # reference plan visible in PA
+    assert display["sell_grid_count"] == 4
     assert notes["semantic_role"] == "LOW_LIQUIDITY_RESTRICTED"
     blob = _display_blob(display, scenario, notes)
     assert "restricted" in blob
@@ -781,9 +850,10 @@ def test_1mbabydoge_r3_low_liq_compression_restricted():
     assert scenario["regime_id"] == "R3"
     assert result.deployable is False
     assert result.deploy_block_reason == "restricted_by_liquidity"
-    assert result.profile.base_allocation_pct <= 15
-    assert min(params.buy_grid_ladder_pcts) >= 3
-    assert params.resell_trigger_pct >= 3.0
+    # Sealed library keeps authored compression shape; liquidity blocks deploy only.
+    assert result.profile.base_allocation_pct in (40, 50)
+    assert params.buy_grid_count == 4
+    assert params.sell_grid_count == 4
     assert notes["semantic_role"] == "R3_RESTRICTED_LOW_LIQUIDITY_COMPRESSION"
 
 
@@ -792,16 +862,15 @@ def test_r8_deep_crash_supports_conditional_probe_metadata():
     _assert_global_invariants("R8 conditional probe", result, params, display, notes)
     assert scenario["regime_id"] == "R8"
     assert scenario["sub_profile_hint"] == "R8_CAPITULATION_CONDITIONAL_PROBE"
+    assert result.profile.profile_id == "R8_CAPITULATION_PROBE"
     assert result.deployable is False
     assert result.deploy_block_reason == "conditional_probe_only"
-    assert result.profile.base_allocation_pct == 5
-    assert result.profile.normal_buy_enabled is True
-    assert [(g.distance_pct, g.amount_pct) for g in result.profile.buy_grids] == [(-35, 100)]
-    assert params.buy_grid_count == 1
-    assert notes.get("mandatory_deep_buy_applied") is True
+    # Kapalı reference plan: buys off for live, but 4+4 ladders remain for PA.
+    assert result.profile.normal_buy_enabled is False
+    assert len(result.profile.buy_grids) == 4
+    assert params.buy_grid_count == 0
     probe = notes.get("conditional_probe") or {}
     assert probe.get("enabled") is True
-    assert probe.get("buy_distances_pct") == [12, 22, 35]
     assert "conditional probe" in _display_blob(display, scenario, notes)
 
 
@@ -810,16 +879,25 @@ def test_r8_low_liq_restricted_uses_deeper_grid_and_not_crash_copy():
     _assert_global_invariants("R8 low-liq restricted", result, params, display, notes)
     assert scenario["regime_id"] == "R8"
     assert result.deployable is False
-    assert result.deploy_block_reason == "restricted_by_liquidity"
+    # Fully closed operator profile → no trade surface (technical_block), not a
+    # deployable restricted grid. Semantic role still names liquidity.
+    assert result.deploy_block_reason in ("technical_block", "restricted_by_liquidity")
     assert notes["semantic_role"] == "R8_LOW_LIQUIDITY_RESTRICTED"
-    assert result.profile.base_allocation_pct == 10
-    assert result.profile.quote_allocation_pct == 90
-    assert params.buy_grid_ladder_pcts == [6, 12, 20]
-    assert params.sell_grid_ladder_pcts == [3, 6, 10]
-    assert display["regime_headline"] == "R8 · Likidite/spread restricted"
+    from app.services.dynamic_param_score.v6.net_profile_library import (
+        PROFILE_COPY,
+        canonical_headline_for_key,
+    )
+
+    expected_key = "R8_LOW_LIQUIDITY_RESTRICTED"
+    expected_headline = canonical_headline_for_key(expected_key)
+    assert result.profile.profile_id == expected_key
+    assert display["regime_headline"] == f"R8 · {expected_headline}"
+    assert display["canonical_headline"] == expected_headline
+    assert display["regime_headline"] == f"R8 · {PROFILE_COPY[expected_key][0]}"
+    assert result.profile.normal_buy_enabled is False
+    assert params.buy_grid_count == 0
     blob = _display_blob(display, scenario, notes)
-    assert "likidite/spread riski yüksek" in blob
-    assert "restricted" in blob
+    assert "likidite/spread riski yüksek" in blob or "restricted" in blob
     assert "crash profilinde" not in blob
     assert "sert düşüşte micro base" not in blob
 
@@ -841,7 +919,10 @@ def test_low_liq_veto_caps_base_and_deployable_across_regimes():
         _assert_global_invariants(str(factory), result, params, display, notes)
         assert result.deployable is False
         assert result.deploy_block_reason == "restricted_by_liquidity"
-        assert result.profile.base_allocation_pct <= 15
+        # Weekly sealed library preserves authored base; veto only blocks deploy.
+        assert result.profile.base_allocation_pct <= 50
+        assert len(result.profile.buy_grids) == 4
+        assert len(result.profile.sell_grids) == 4
         assert "LOW_LIQUIDITY_RESTRICTED" in set(notes["reason_codes"])
 
 
@@ -865,8 +946,8 @@ def test_v6_does_not_choose_safest_profile_when_reward_is_high():
     assert scenario["severity"] == "ACT"
     assert result.deployable is True
     assert result.profile.base_allocation_pct >= 70
-    assert params.buy_grid_count > 0
-    assert params.sell_grid_count >= 5
+    assert params.buy_grid_count == 4
+    assert params.sell_grid_count == 4
     assert rr["reward_score"] > rr["risk_score"]
     assert "safest" not in _display_blob(display, scenario, notes)
 
@@ -875,8 +956,9 @@ def test_v6_std_is_balanced_risk_reward_not_passive():
     result, params, display, notes, scenario = _run(_ada_post_breakout_cooldown_inp())
     _assert_global_invariants("STD balanced cooldown", result, params, display, notes)
     assert scenario["severity"] == "STD"
-    assert result.profile.base_allocation_pct == 45
-    assert params.buy_grid_count == 3
+    assert result.profile.profile_id == "R5_POST_BREAKOUT_COOLDOWN"
+    assert result.profile.base_allocation_pct == 50
+    assert params.buy_grid_count == 4
     assert params.sell_grid_count == 4
     _assert_profit_loop_filled(result, params)
     blob = _display_blob(display, scenario, notes)
@@ -900,10 +982,10 @@ def test_v6_low_vol_grids_are_triggerable():
     result, params, display, notes, scenario = _run(_bnb_r3_compression_inp())
     _assert_global_invariants("low-vol triggerable grids", result, params, display, notes)
     assert scenario["regime_id"] == "R3"
-    assert params.buy_grid_ladder_pcts[0] <= 1
-    assert params.sell_grid_ladder_pcts[0] <= 1
-    assert params.rebuy_trigger_pct <= 2.0
-    assert params.resell_trigger_pct <= 2.0
+    assert params.buy_grid_ladder_pcts[0] <= 2
+    assert params.sell_grid_ladder_pcts[0] <= 2
+    assert params.rebuy_trigger_pct <= 4.0
+    assert params.resell_trigger_pct <= 4.0
     blob = _display_blob(display, scenario, notes)
     assert "tekrarlanabilir" in blob
 
@@ -913,9 +995,9 @@ def test_v6_high_vol_grids_are_wide_but_not_dead():
     _assert_global_invariants("high-vol working grids", result, params, display, notes)
     assert scenario["regime_id"] == "R4"
     assert 2 <= params.buy_grid_ladder_pcts[0] <= 5
-    assert 3 <= params.sell_grid_ladder_pcts[0] <= 6
-    assert params.buy_grid_count >= 4
-    assert params.sell_grid_count >= 4
+    assert 2 <= params.sell_grid_ladder_pcts[0] <= 6
+    assert params.buy_grid_count == 4
+    assert params.sell_grid_count == 4
     assert result.profile.base_allocation_pct >= 30
     blob = _display_blob(display, scenario, notes)
     assert "aktif kalır" in blob or "fitillerde" in blob

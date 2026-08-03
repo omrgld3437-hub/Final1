@@ -174,11 +174,11 @@ class V6InputContract:
     resistance_distance_pct: Optional[float] = None
     support_strength_score: Optional[float] = None
     resistance_strength_score: Optional[float] = None
-    # Fake move scores 0-100
-    pump_score: float = 0.0
-    dump_score: float = 0.0
-    fake_bounce_score: float = 0.0
-    fake_breakout_score: float = 0.0
+    # Fake move scores 0-100; None = insufficient data (do not treat as real zero)
+    pump_score: Optional[float] = None
+    dump_score: Optional[float] = None
+    fake_bounce_score: Optional[float] = None
+    fake_breakout_score: Optional[float] = None
     asset_fragility_class: str = "F1"
 
 

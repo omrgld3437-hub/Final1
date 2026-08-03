@@ -961,7 +961,9 @@ async def _bot_loop(bot_id: int) -> None:
                         from app.utils.parse_utils import parse_bool as _parse_bool_v2
                         from app.botengine.dynamic_v2.runtime import (
                             get_engine as _get_dyn_v2_engine,
+                            kill_switch_active as _dyn_v2_kill_active,
                             micro_risk_check as _dyn_v2_micro_check,
+                            trip_kill_switch as _dyn_v2_trip,
                         )
 
                         _dyn_v2_enabled = _parse_bool_v2(
@@ -986,9 +988,7 @@ async def _bot_loop(bot_id: int) -> None:
                             if (
                                 _dyn_v2_schedule.run_full_analysis
                                 and state.get("initial_allocation_done")
-                                and not (
-                                    state.get("_dynamic_v2_kill_switch") or {}
-                                ).get("active")
+                                and not _dyn_v2_kill_active(state)
                             ):
                                 from app.botengine.intent_ledger import (
                                     get_sent_intents_for_bot,
@@ -1086,11 +1086,18 @@ async def _bot_loop(bot_id: int) -> None:
                                 save_state(db, bot_id, account_id, state)
                             _dyn_v2.coordinator.apply_overlay(cfg, state)
                     except Exception as _dyn_v2_error:
-                        state["_dynamic_v2_kill_switch"] = {
-                            "active": True,
-                            "reasons": ["RUNTIME_EXCEPTION"],
-                            "detail": str(_dyn_v2_error)[:300],
-                        }
+                        try:
+                            _dyn_v2_trip(
+                                state,
+                                ["RUNTIME_EXCEPTION"],
+                                detail=str(_dyn_v2_error),
+                            )
+                        except Exception:
+                            state["_dynamic_v2_kill_switch"] = {
+                                "active": True,
+                                "reasons": ["RUNTIME_EXCEPTION"],
+                                "detail": str(_dyn_v2_error)[:300],
+                            }
                         logger.exception(
                             "DYN_V2_RUNTIME_FAILED bot_id=%s err=%s",
                             bot_id,

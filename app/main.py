@@ -382,11 +382,14 @@ async def startup_event():
             logger.warning("Param pool warmup failed: %s", e)
 
     if os.environ.get("PARAM_POOL_WARMUP", "0").strip().lower() in ("1", "true", "yes"):
+        # Offline V4 kütüphanesi (data/param_pool). Canlı V6 yolu
+        # net_profile_library kullanır; warmup yalnızca eski araçlar / UI
+        # pinned-template fallback için isteğe bağlıdır.
         asyncio.create_task(_warm_param_pool())
     else:
         logger.info(
-            "Param pool warmup skipped (lazy shelf: route index only on first use). "
-            "Set PARAM_POOL_WARMUP=1 to preload index at startup."
+            "Param pool warmup skipped (V6 live path uses net_profile_library; "
+            "data/param_pool is offline-only). Set PARAM_POOL_WARMUP=1 to preload."
         )
 
     # Yerel test hesabı (test / 123) — yoksa oluştur; sadece localhost'tan giriş (girişten önce hazır olsun diye beklenir)

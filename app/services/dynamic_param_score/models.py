@@ -334,6 +334,11 @@ class IndicatorSnapshot:
     btc_return_24h: Optional[float] = None
     btc_below_ema200: Optional[bool] = None
     btc_crash_velocity: Optional[float] = None
+    # Move scores 0–100; None = insufficient data (never invent 0 as a real signal)
+    pump_score: Optional[float] = None
+    dump_score: Optional[float] = None
+    fake_bounce_score: Optional[float] = None
+    fake_breakout_score: Optional[float] = None
     candle_count_5m: int = 0
     candle_count_15m: int = 0
     candle_count_1h: int = 0

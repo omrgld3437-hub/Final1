@@ -9,6 +9,35 @@ from app.services.dynamic_param_score.utils import clamp, normalize_score
 from app.services.dynamic_param_score.v6.domain.types import ScenarioIdentity, V6InputContract
 
 
+# Every non-empty sub_profile_hint literal that classify_scenario can emit.
+# Integrity tests compare this set to net_profile_library._HINT_MAP.
+PRODUCED_SUB_PROFILE_HINTS = frozenset(
+    {
+        "R5_DEF_PARABOLIC_OVEREXTENDED",
+        "R8_HARD_BLOCK",
+        "R8_CAPITULATION_CONDITIONAL_PROBE",
+        "R8_RECOVERY_RESTRICTED",
+        "R8_DEF_PANIC",
+        "R6_RECOVERY_BREAKOUT",
+        "R1_STD_PULLBACK",
+        "R5_DEF_OVEREXTENDED",
+        "R5_STD_POST_BREAKOUT_COOLDOWN",
+        "R5_ACT_CLEAN_BREAKOUT",
+        "R1_STD_TREND_COOLDOWN",
+        "R6_RECOVERY_ACT",
+        "R4_DEF_OVERHEATED",
+        "R4_RESTRICTED_UNSTABLE",
+        "R4_DEF_LOW_LIQUIDITY",
+        "R4_ACT_LOWER_BAND_BOUNCE",
+        "R4_STD_LIQUID",
+        "R3_STD_UPPER_BAND_PROFIT_LOCK",
+        "R3_STD_UPTREND_OVERHEAT_COOLDOWN",
+        "R3_STD_UPTREND_COMPRESSION",
+        "R3_STD_CONTROLLED_COMPRESSION",
+    }
+)
+
+
 @dataclass
 class ClassifiedScenario:
     regime_id: str
@@ -17,6 +46,9 @@ class ClassifiedScenario:
     behavior_id: str
     label: str
     sub_profile_hint: str = ""
+    hard_block: bool = False
+    hard_block_reasons: tuple[str, ...] = ()
+    matched_gates: tuple[str, ...] = ()
 
 
 def _crash_like(inp: V6InputContract) -> bool:
@@ -190,8 +222,9 @@ def _clear_strong_trend(inp: V6InputContract, *, trend: int, momentum: int) -> b
 
 
 def _clear_breakout(inp: V6InputContract) -> bool:
-    if inp.fake_breakout_score >= 70:
-        return True
+    # High fake-breakout score vetoes a "clean" breakout confirmation.
+    if inp.fake_breakout_score is not None and inp.fake_breakout_score >= 70:
+        return False
     ret24 = inp.return_24h_pct or 0
     if ret24 >= 4 and inp.higher_highs and (inp.rsi_1h or 0) >= 65:
         return True
@@ -268,7 +301,9 @@ def _r8_capitulation_probe(inp: V6InputContract) -> bool:
     )
 
 
-def _r8_hard_block(inp: V6InputContract) -> bool:
+def _r8_hard_block_reasons(inp: V6InputContract) -> list[str]:
+    """Return concrete hard-block reason codes (empty ⇒ not hard-blocked)."""
+    reasons: list[str] = []
     spread = float(inp.spread_pct or 0)
     ret24 = float(inp.return_24h_pct or 0)
     crash = float(inp.crash_velocity or 0)
@@ -277,7 +312,7 @@ def _r8_hard_block(inp: V6InputContract) -> bool:
     atr = float(inp.atr_1h_pct or 0)
 
     if spread > 0.30 and (ret24 < 0 or pve < -5 or (inp.lower_lows and inp.higher_highs is False)):
-        return True
+        reasons.append("invalid_spread")
     severe_crash_votes = 0
     if ret24 < -10:
         severe_crash_votes += 1
@@ -289,7 +324,15 @@ def _r8_hard_block(inp: V6InputContract) -> bool:
         severe_crash_votes += 1
     if pve < -15:
         severe_crash_votes += 1
-    return severe_crash_votes >= 2
+    if severe_crash_votes >= 2:
+        reasons.append("market_integrity_failure")
+    if not inp.price_valid:
+        reasons.append("unsupported_state")
+    return reasons
+
+
+def _r8_hard_block(inp: V6InputContract) -> bool:
+    return bool(_r8_hard_block_reasons(inp))
 
 
 def _trend_cooldown(inp: V6InputContract, *, trend: int, momentum: int) -> bool:
@@ -581,20 +624,25 @@ def _r2_upper_band_reject(inp: V6InputContract) -> bool:
 
 
 def classify_scenario(inp: V6InputContract) -> ClassifiedScenario:
-    """Priority cascade: crash → downtrend → trend/breakout → recovery → true range → …"""
+    """Priority cascade: parabolic → hard-block → crash → downtrend → trend/breakout → …"""
     range_sc = _range_score(inp)
     trend = _trend_strength(inp)
     momentum = _directional_momentum(inp)
     sub_profile_hint = ""
+    matched_gates: list[str] = []
+    hard_block_reasons = tuple(_r8_hard_block_reasons(inp))
+    hard_block = bool(hard_block_reasons)
 
     if _parabolic_overextended_pump(inp):
         regime, sub, micro, behavior = "R5", "01", "002", "PB07"
         label = "Parabolik pump / aşırı uzamış momentum"
         sub_profile_hint = "R5_DEF_PARABOLIC_OVEREXTENDED"
-    elif _r8_hard_block(inp) and not _r8_capitulation_probe(inp):
+        matched_gates.append("parabolic_overextended_pump")
+    elif hard_block and not _r8_capitulation_probe(inp):
         regime, sub, micro, behavior = "R8", "01", "004", "PB11"
         label = "Hard block / işlem yok"
         sub_profile_hint = "R8_HARD_BLOCK"
+        matched_gates.append("r8_hard_block")
     elif _crash_like(inp):
         if _r8_capitulation_probe(inp):
             regime, sub, micro, behavior = "R8", "02", "003", "PB11"
@@ -726,13 +774,23 @@ def classify_scenario(inp: V6InputContract) -> ClassifiedScenario:
         else:
             label = "Yönsüz sıkışma / kontrollü soğuma"
 
-    # Fake breakout / pump micro overrides
-    if inp.fake_breakout_score >= 70 and regime not in ("R8", "R7"):
+    # Fake breakout / pump micro overrides (None scores never match)
+    if (
+        inp.fake_breakout_score is not None
+        and inp.fake_breakout_score >= 70
+        and regime not in ("R8", "R7")
+    ):
         micro, behavior = "003", "PB06"
+        matched_gates.append("fake_breakout_micro")
         if regime == "R4":
             sub_profile_hint = "R4_DEF_OVERHEATED"
-    elif inp.pump_score >= 70 and regime not in ("R8", "R7"):
+    elif inp.pump_score is not None and inp.pump_score >= 70 and regime not in ("R8", "R7"):
         micro, behavior = "002", "PB09"
+        matched_gates.append("pump_micro")
+
+    if sub_profile_hint and sub_profile_hint not in PRODUCED_SUB_PROFILE_HINTS:
+        # Defensive: keep classify running but surface mapping drift in tests.
+        matched_gates.append(f"unlisted_hint:{sub_profile_hint}")
 
     return ClassifiedScenario(
         regime_id=regime,
@@ -741,6 +799,9 @@ def classify_scenario(inp: V6InputContract) -> ClassifiedScenario:
         behavior_id=behavior,
         label=label,
         sub_profile_hint=sub_profile_hint,
+        hard_block=hard_block and sub_profile_hint == "R8_HARD_BLOCK",
+        hard_block_reasons=hard_block_reasons if sub_profile_hint == "R8_HARD_BLOCK" else (),
+        matched_gates=tuple(matched_gates),
     )
 
 

@@ -84,6 +84,35 @@ def project_distances(
     return projected
 
 
+def _limit_series(
+    old: Sequence[Decimal],
+    new: Sequence[Decimal],
+    *,
+    deadband: Decimal,
+    maximum_change: Decimal,
+) -> List[Decimal]:
+    """Seriyi eleman bazında sınırla; ``new``'in uzunluğunu asla değiştirme.
+
+    ``zip(old, new)`` kullanılamaz: önceki tur bu turdan az grid içeriyorsa
+    (kullanıcı grid ekledi ya da önceki paket kısaydı) sonuç listesi kısalır ve
+    aday gridler sessizce yok olur. Eşi olmayan yeni elemanlar kıyaslanacak bir
+    geçmişe sahip olmadığı için olduğu gibi bırakılır.
+    """
+    limited: List[Decimal] = []
+    for index, value in enumerate(new):
+        if index >= len(old):
+            limited.append(value)
+            continue
+        limited.append(
+            limit_relative_change(
+                old[index],
+                apply_deadband(old[index], value, deadband),
+                maximum_change,
+            )
+        )
+    return limited
+
+
 def project_amount_weights(
     weights: Sequence[Decimal],
     *,
@@ -150,6 +179,24 @@ class ParameterConstraintProjector:
         exchange_tick_gap_pct: Decimal,
         current: Optional[DynamicParameterCandidate] = None,
     ) -> DynamicParameterCandidate:
+        """Adayı borsa ve güvenlik kısıtlarına yansıt.
+
+        BİRİM SÖZLEŞMESİ: ``spread_pct``, ``atr_pct`` ve
+        ``exchange_tick_gap_pct`` **yüzde puanı** cinsindendir (%0.05 → 0.05),
+        oran değil. Aynı ölçekteki config sabitleriyle (``absolute_min_gap``,
+        ``min_distance``, ``max_grid_distance``) doğrudan karşılaştırıldıkları
+        için oran verilirse gridler 100 kat sıkışır. Çağıran service.py
+        çevrimi yapar; feature katmanındaki 0..1 normalize ``spread_pct``
+        buraya geçirilmemelidir.
+        """
+        # Churn kontrolleri sert kısıtlardan ÖNCE uygulanır. Sonra uygulanırsa
+        # her parametreyi bağımsız olarak kırptığı için hemen üstte kurulan
+        # invaryantları (gridlerin artan sıralaması, minimum gap, trailing <
+        # tetik) bozabilir ve borsa tarafında reddedilen ya da mantıksız bir
+        # paket üretir. Bu sırayla yumuşatma önce olur, sert sınırlar son sözü
+        # söyler.
+        if current is not None:
+            self._apply_churn_controls(candidate, current)
         gap = max(
             self.config.absolute_min_gap,
             spread_pct * self.config.spread_gap_factor,
@@ -210,8 +257,6 @@ class ParameterConstraintProjector:
             candidate.profit_sell_trigger_percentage
             * self.config.profit_trailing_trigger_ratio,
         )
-        if current is not None:
-            self._apply_churn_controls(candidate, current)
         candidate.explanations.append(
             f"minimum_grid_gap={format(gap, 'f')}"
         )
@@ -234,61 +279,33 @@ class ParameterConstraintProjector:
         )
         candidate.target_base_ratio = base
         candidate.target_quote_ratio = ONE - base
-        candidate.buy_grid_trigger_percentages = [
-            limit_relative_change(
-                old,
-                apply_deadband(
-                    old, new, self.config.relative_trigger_deadband
-                ),
-                self.config.hourly_trigger_change,
-            )
-            for old, new in zip(
-                current.buy_grid_trigger_percentages,
-                candidate.buy_grid_trigger_percentages,
-            )
-        ]
-        candidate.sell_grid_trigger_percentages = [
-            limit_relative_change(
-                old,
-                apply_deadband(
-                    old, new, self.config.relative_trigger_deadband
-                ),
-                self.config.hourly_trigger_change,
-            )
-            for old, new in zip(
-                current.sell_grid_trigger_percentages,
-                candidate.sell_grid_trigger_percentages,
-            )
-        ]
+        candidate.buy_grid_trigger_percentages = _limit_series(
+            current.buy_grid_trigger_percentages,
+            candidate.buy_grid_trigger_percentages,
+            deadband=self.config.relative_trigger_deadband,
+            maximum_change=self.config.hourly_trigger_change,
+        )
+        candidate.sell_grid_trigger_percentages = _limit_series(
+            current.sell_grid_trigger_percentages,
+            candidate.sell_grid_trigger_percentages,
+            deadband=self.config.relative_trigger_deadband,
+            maximum_change=self.config.hourly_trigger_change,
+        )
         candidate.buy_grid_amount_weights = normalize_weights(
-            [
-                limit_relative_change(
-                    old,
-                    apply_deadband(
-                        old, new, self.config.relative_amount_deadband
-                    ),
-                    self.config.hourly_amount_change,
-                )
-                for old, new in zip(
-                    current.buy_grid_amount_weights,
-                    candidate.buy_grid_amount_weights,
-                )
-            ]
+            _limit_series(
+                current.buy_grid_amount_weights,
+                candidate.buy_grid_amount_weights,
+                deadband=self.config.relative_amount_deadband,
+                maximum_change=self.config.hourly_amount_change,
+            )
         )
         candidate.sell_grid_amount_weights = normalize_weights(
-            [
-                limit_relative_change(
-                    old,
-                    apply_deadband(
-                        old, new, self.config.relative_amount_deadband
-                    ),
-                    self.config.hourly_amount_change,
-                )
-                for old, new in zip(
-                    current.sell_grid_amount_weights,
-                    candidate.sell_grid_amount_weights,
-                )
-            ]
+            _limit_series(
+                current.sell_grid_amount_weights,
+                candidate.sell_grid_amount_weights,
+                deadband=self.config.relative_amount_deadband,
+                maximum_change=self.config.hourly_amount_change,
+            )
         )
         scalar_fields = (
             (

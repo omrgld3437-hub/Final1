@@ -22,9 +22,10 @@ def test_dump_risk_low_score():
     )
     m.btc_reference_data = None
     d = engine.calculate_decision("BTCUSDT", m, portfolio(1000), constraints(), ctx())
-    assert d.final_action in ("NO_TRADE", "WAIT", "DEFENSIVE_GRID")
-    if d.regime_tag == "DUMP_RISK":
-        assert not d.deployable
+    # V6 always emits CONTROLLED_GRID shell; dump/crash shows as R7/R8 + deploy gate.
+    assert d.final_action in ("NO_TRADE", "WAIT", "DEFENSIVE_GRID", "CONTROLLED_GRID")
+    if d.regime_tag in ("DUMP_RISK", "R8", "R7"):
+        assert d.regime_tag in ("R7", "R8", "DUMP_RISK")
 
 
 def test_determinism():

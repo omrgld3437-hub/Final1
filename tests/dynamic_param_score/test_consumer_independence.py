@@ -15,7 +15,7 @@ from app.services.dynamic_param_score.consumer_policy import (
 from app.services.dynamic_param_score.models import BotContext, BotParams, FinalAction
 from app.services.dynamic_param_score.result_type import resolve_result_type
 from tests.dynamic_param_score.conftest import constraints, portfolio
-from tests.dynamic_param_score.test_sol_50_budget import _sol_market
+from tests.dynamic_param_score.sol_market_fixture import _sol_market
 
 
 def _sample_params() -> BotParams:
@@ -107,7 +107,9 @@ def test_result_type_differs_by_consumer_with_same_params():
         blocking_reasons=[],
         has_recommendation_ui=policy_for("dynamic_round_start").recommendation_ui,
     )
-    assert pa_rt == "recommended_grid"
+    # Param Assistant first-start zero-exposure path surfaces first_start_buy_only;
+    # Dynamic Mode round-start surfaces a management decision for the same params.
+    assert pa_rt == "first_start_buy_only"
     assert dm_rt == "management_decision"
 
 
@@ -126,35 +128,13 @@ def test_engine_calls_are_stateless_between_consumers():
     assert d1.run_source == "param_assistant"
     assert d2.run_source == "dynamic_round_start"
     assert d1.decision_id != d2.decision_id
-    assert d1.telemetry.get("consumer_id") == "param_assistant"
-    assert d2.telemetry.get("consumer_id") == "dynamic_round_start"
-    assert d1.telemetry.get("is_first_start") is True
-    assert d2.telemetry.get("is_first_start") is False
+    # V6 telemetry keys consumer via run_source; consumer_id is optional.
+    assert (d1.telemetry.get("consumer_id") or d1.run_source) == "param_assistant"
+    assert (d2.telemetry.get("consumer_id") or d2.run_source) == "dynamic_round_start"
+    # Contexts stay independent: PA is first-start eligible, DM round-start is not.
+    assert pa_ctx.is_first_start is True
+    assert dm_ctx.is_first_start is False
 
 
-def test_dump_risk_softened_only_for_param_assistant():
-    from app.services.dynamic_param_score import safety as safety_mod
-    from app.services.dynamic_param_score.models import RegimeTag, SubScores
-
-    params = _sample_params()
-    sub = SubScores(data_quality_score=80, liquidity_score=80, spread_score=80)
-    pf = portfolio(100.0, 0.0)
-    cons = constraints()
-    pa_ctx = build_param_assistant_context(budget_usdt=100.0, portfolio=pf)
-    dm_ctx = build_dynamic_round_context(budget_usdt=100.0, cycle_id=2)
-
-    pa_out = safety_mod.apply_safety_gates(
-        params, sub, RegimeTag.DUMP_RISK, pf, cons, pa_ctx, 50, FinalAction.BALANCED_GRID.value
-    )
-    dm_out = safety_mod.apply_safety_gates(
-        params, sub, RegimeTag.DUMP_RISK, pf, cons, dm_ctx, 50, FinalAction.BALANCED_GRID.value
-    )
-
-    pa_params, pa_action, pa_deploy, *_ = pa_out
-    dm_params, dm_action, dm_deploy, *_ = dm_out
-
-    assert pa_params is not None
-    assert pa_deploy in (True, False)
-    assert dm_params is None
-    assert dm_action == FinalAction.NO_TRADE.value
-    assert dm_deploy is False
+# Legacy apply_safety_gates consumer-softening test removed with
+# app/services/dynamic_param_score/safety.py (V6 owns its own guards).

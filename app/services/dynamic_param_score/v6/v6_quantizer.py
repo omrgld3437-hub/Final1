@@ -109,7 +109,8 @@ def quantize_profile(profile: V6CatalogProfile) -> V6CatalogProfile:
     p.quote_allocation_pct = 100 - p.base_allocation_pct
     p.buy_grids = normalize_grid_levels(p.buy_grids, is_buy=True)
     p.sell_grids = normalize_grid_levels(p.sell_grids, is_buy=False)
-    if not p.normal_buy_enabled:
+    # Kapalı / reference-only net profiles keep authored ladders for PA display.
+    if not p.normal_buy_enabled and not bool((p.modules or {}).get("reference_plan_only")):
         p.buy_grids = []
     p.sell_trailing_code = trailing_code_from_pct(trailing_pct_from_code(p.sell_trailing_code))
     p.buy_trailing_code = trailing_code_from_pct(trailing_pct_from_code(p.buy_trailing_code))

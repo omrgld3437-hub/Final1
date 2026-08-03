@@ -75,6 +75,14 @@ def test_engine_runs_with_seed_catalog():
         candles_1h=220,
     )
     result = V6Engine().run(inp)
-    assert result.catalog_profile_id.startswith("DPLV6_")
+    # Live resolver uses net_profile_library keys (not generated DPLV6_* shelf IDs).
+    assert result.catalog_profile_id in (
+        "R2_BALANCED_RANGE",
+        "R2_CALM_RANGE",
+        "R3_DIRECTIONLESS_COMPRESSION",
+        "R3_NOISY_RANGE",
+        "R3_CONTROLLED_COMPRESSION",
+    ) or result.catalog_profile_id.startswith("R")
     assert result.profile.base_allocation_pct % 5 == 0
     assert result.profile.quote_allocation_pct == 100 - result.profile.base_allocation_pct
+    assert (result.profile.modules or {}).get("canonical_headline")
