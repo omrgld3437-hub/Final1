@@ -1094,9 +1094,9 @@ function StrategyParametersCard({
             </h2>
             <p className="mt-2 max-w-2xl text-xs leading-5 text-neutral-500">
               {dynamicApplied
-                ? "Solda değişmez başlangıç değeri, sağda bu turda ana rejim ve çarpanlarla uygulanan gerçek değer bulunur."
+                ? "Solda oluşturma planı, sağda bu turda Parametre Asistanı motorunun birebir uyguladığı güncel plan bulunur."
                 : dynamicEnabled
-                  ? "Dinamik mod açık. İlk tur temel planla çalışır; ikinci turdan itibaren değişen değerler ok ve çarpanla burada gösterilir."
+                  ? "Dinamik mod açık. Her tur başında Parametre Asistanı ile aynı motor çalışır; uygulanamaz rejimde tur açılmaz ve 30 dk’da bir yeniden taranır."
                   : "Bot, oluşturulurken belirlenen sabit dağılım, grid, trailing ve kâr döngüsü değerlerini kullanır."}
             </p>
           </div>

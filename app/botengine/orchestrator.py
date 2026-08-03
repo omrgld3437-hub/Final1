@@ -1121,22 +1121,10 @@ async def _bot_loop(bot_id: int) -> None:
                             and dyn_gate.is_dynamic_mode_active(_cfg_dict_for_dyn)
                         ):
                             _dyn_snapshot_rebuilt = False
-                            if not dyn_cm.dynamic_overlay_allowed(state):
-                                if state.get("dynamic_snapshot"):
-                                    state.pop("dynamic_snapshot", None)
-                                state["_dynamic_first_cycle_manual"] = True
-                                logger.debug(
-                                    "DYN_FIRST_CYCLE_MANUAL bot_id=%s cycle=%s — using manual cfg",
-                                    bot_id,
-                                    state.get("cycle_id") or 1,
-                                )
-                            else:
-                                state.pop("_dynamic_first_cycle_manual", None)
+                            state.pop("_dynamic_first_cycle_manual", None)
                             if dyn_cm.dynamic_overlay_allowed(state) and dyn_cm.need_recompute(state):
-                                # Rebuild from pristine config_json before resolving
-                                # the immutable dynamic reference. `cfg` is cached
-                                # and mutated by apply_overlay; feeding it back here
-                                # would compound the previous round's multipliers.
+                                # Rebuild from pristine config_json, then apply the
+                                # absolute Param Assistant / V6 plan for this cycle.
                                 try:
                                     _dyn_base = DcaGridTrailingConfig(raw).to_dict()
                                 except Exception:
@@ -1148,10 +1136,11 @@ async def _bot_loop(bot_id: int) -> None:
                                 _diffs = dyn_cm.apply_overlay(cfg, _new_snap)
                                 _dyn_snapshot_rebuilt = True
                                 logger.info(
-                                    "DYN_SNAPSHOT_BUILT bot_id=%s cycle=%s regime=%s data_fresh=%s clamps=%s fallbacks=%s diffs=%s",
+                                    "DYN_SNAPSHOT_BUILT bot_id=%s cycle=%s regime=%s pending=%s data_fresh=%s clamps=%s fallbacks=%s diffs=%s",
                                     bot_id,
                                     _new_snap.get("cycle_id"),
                                     _new_snap.get("regime"),
+                                    _new_snap.get("round_pending"),
                                     _new_snap.get("data_fresh"),
                                     len(_new_snap.get("clamps") or []),
                                     len(_new_snap.get("fallbacks") or []),

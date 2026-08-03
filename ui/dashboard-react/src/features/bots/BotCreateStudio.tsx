@@ -532,7 +532,7 @@ export default function BotCreateStudio({
                       title="Dinamik mod"
                       value={
                         form.dynamic_mode
-                          ? "Açık · çarpanlı"
+                          ? "Açık · motor"
                           : "Kapalı · sabit"
                       }
                     />
@@ -906,12 +906,12 @@ function DynamicModeControl({
                   : "bg-white/5 text-neutral-500"
               }`}
             >
-              {enabled ? "ÇARPAN MODELİ AÇIK" : "SABİT MOD"}
+              {enabled ? "PARAMETRE MOTORU" : "SABİT MOD"}
             </span>
           </div>
           <p className="mt-2 max-w-2xl text-xs leading-5 text-neutral-400">
             {enabled
-              ? "Girdiğiniz sabit plan temel alınır; piyasa rejimine göre yalnızca yüzdesel çarpanlarla daraltılır veya genişletilir."
+              ? "Her tur başında Parametre Asistanı ile aynı motor çalışır; çıkan plan tura birebir uygulanır. Uygulanamaz rejimde tur açılmaz, 30 dk’da bir yeniden tarama yapılır."
               : "Bot her turda burada girdiğiniz dağılım, grid ve trailing değerlerini aynen kullanır."}
           </p>
         </div>

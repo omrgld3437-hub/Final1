@@ -1,4 +1,4 @@
-"""Dynamic round-start policy: active-by-default, 15m hard-safety retry, fresh params per tur."""
+"""Dynamic round-start policy: absolute PA apply + 30m non-deployable rescan."""
 
 from __future__ import annotations
 
@@ -64,7 +64,7 @@ def _decision(
 # ---- round_start_policy -----------------------------------------------------
 
 
-def test_hard_block_marks_pending_and_schedules_15m():
+def test_hard_block_marks_pending_and_schedules_30m():
     st = _state()
     rsp.mark_pending(st, cycle_id=2, reason="DUMP", codes=["DUMP_RISK"])
     p = rsp.get_pending(st)
@@ -73,6 +73,7 @@ def test_hard_block_marks_pending_and_schedules_15m():
     assert p["cycle_id"] == 2
     gap = int(p["next_retry_ms"]) - int(p["since_ms"])
     assert gap == int(rsp.ROUND_START_RETRY_SEC * 1000)
+    assert rsp.ROUND_START_RETRY_SEC == pytest.approx(1800.0)
 
 
 def test_retry_due_triggers_recompute():
@@ -187,14 +188,21 @@ def test_reset_for_new_cycle_clears_hold_and_pending():
 def test_resolve_hard_block_pending():
     st = _state()
     d = _decision(deployable=False, final_action=FinalAction.NO_TRADE.value, regime="DUMP_RISK", blocking=["DUMP_RISK"])
+    d.selected_profile_name = "R8_HARD_BLOCK"
+    d.telemetry = {"net_profile": {"key": "R8_HARD_BLOCK"}}
     ctx = cm._build_dps_context(st, _cfg(), 2, 500.0)
-    with patch.object(cm.get_dps_engine(), "decision_to_overlay", return_value={"buy_disabled": True, "buy_grids": []}):
-        applied, reasons, fallbacks, pending = cm._resolve_round_decision(
-            st, d, _cfg(), cycle_id=2, market=MagicMock(), portfolio=MagicMock(), constraints=MagicMock(), ctx=ctx
-        )
+    applied, reasons, fallbacks, pending, pa_meta = cm._resolve_round_decision(
+        st, d, _cfg(), cycle_id=2, market=MagicMock(), portfolio=MagicMock(), constraints=MagicMock(), ctx=ctx
+    )
     assert pending is True
-    assert rsp.get_pending(st) is not None
-    assert "dps_hard_safety_pending" in fallbacks
+    assert applied.get("buy_disabled") is True
+    assert "dps_non_deployable_round_paused" in fallbacks
+    assert pa_meta.get("profile_key") == "R8_HARD_BLOCK"
+    from app.botengine.dynamic import start_retry_policy as srp
+
+    wl = srp.get_watchlist(st)
+    assert wl is not None
+    assert float(wl["retry_after_minutes"]) == pytest.approx(30.0)
 
 
 def test_resolve_soft_wait_blocks_start_retry():
@@ -203,15 +211,17 @@ def test_resolve_soft_wait_blocks_start_retry():
     d.params = MagicMock()
     d.params.buy_grid_count = 2
     d.params.sell_grid_count = 2
+    d.selected_profile_name = "R2_BALANCED_RANGE"
+    d.telemetry = {}
     ctx = cm._build_dps_context(st, _cfg(), 2, 500.0)
-    with patch.object(cm.get_dps_engine(), "decision_to_overlay", return_value={"buy_disabled": True, "buy_grids": []}):
-        applied, reasons, fallbacks, pending = cm._resolve_round_decision(
-            st, d, _cfg(), cycle_id=2, market=MagicMock(), portfolio=MagicMock(), constraints=MagicMock(), ctx=ctx
-        )
+    applied, reasons, fallbacks, pending, pa_meta = cm._resolve_round_decision(
+        st, d, _cfg(), cycle_id=2, market=MagicMock(), portfolio=MagicMock(), constraints=MagicMock(), ctx=ctx
+    )
     from app.botengine.dynamic import start_retry_policy as srp
 
     assert pending is True
-    assert "start_blocked_retry_pending" in fallbacks
+    assert applied.get("buy_disabled") is True
+    assert "dps_non_deployable_round_paused" in fallbacks
     assert srp.get_watchlist(st) is not None
 
 
@@ -225,8 +235,9 @@ def test_need_recompute_respects_pending_until_retry():
     assert cm.need_recompute(st) is True
 
 
-@pytest.mark.asyncio
-async def test_stale_features_schedule_pending_retry():
+def test_stale_features_schedule_pending_retry():
+    import asyncio
+
     st = _state()
     cfg = _cfg()
     feats = MagicMock()
@@ -235,7 +246,7 @@ async def test_stale_features_schedule_pending_retry():
     feats.to_dict.return_value = {"data_fresh": False}
 
     with patch.object(cm, "collect_features", new=AsyncMock(return_value=feats)):
-        snap = await cm.build_snapshot(st, cfg, 50000.0)
+        snap = asyncio.run(cm.build_snapshot(st, cfg, 50000.0))
 
     assert snap["data_fresh"] is False
     assert snap.get("round_pending") is True
@@ -243,8 +254,9 @@ async def test_stale_features_schedule_pending_retry():
     assert snap["applied"].get("buy_disabled") is True
 
 
-@pytest.mark.asyncio
-async def test_fresh_round_clears_pending_on_deployable(monkeypatch):
+def test_fresh_round_clears_pending_on_deployable():
+    import asyncio
+
     st = _state()
     cfg = _cfg()
     feats = MagicMock()
@@ -259,19 +271,33 @@ async def test_fresh_round_clears_pending_on_deployable(monkeypatch):
     deploy.param_score = 65
     deploy.risk_state = "NORMAL"
     deploy.selected_profile_name = "TEST"
-    deploy.telemetry = {}
+    deploy.telemetry = {"pool_version": "v6"}
+
+    engine = MagicMock()
+    engine.calculate_decision.return_value = deploy
 
     with patch.object(cm, "collect_features", new=AsyncMock(return_value=feats)), patch.object(
         cm, "collect_market_data", new=AsyncMock(return_value=MagicMock(ticker_price=50000.0))
-    ), patch.object(cm, "portfolio_from_bot_state", return_value=MagicMock(total_equity_usdt=500.0, quote_value_usdt=500.0)), patch.object(
-        cm.get_dps_engine(), "calculate_decision", return_value=deploy
     ), patch.object(
-        cm.get_dps_engine(), "decision_to_overlay", return_value={"buy_grids": cfg["buy_grids"], "buy_disabled": False}
+        cm,
+        "portfolio_from_bot_state",
+        return_value=MagicMock(total_equity_usdt=500.0, quote_value_usdt=500.0),
+    ), patch.object(cm, "get_dps_engine", return_value=engine), patch.object(
+        cm.DynamicParamScoreEngine,
+        "decision_to_overlay",
+        return_value={
+            "buy_grids": cfg["buy_grids"],
+            "sell_grids": cfg["sell_grids"],
+            "base_alloc_pct": 50.0,
+            "quote_alloc_pct": 50.0,
+            "buy_disabled": False,
+        },
     ):
-        snap = await cm.build_snapshot(st, cfg, 50000.0)
+        snap = asyncio.run(cm.build_snapshot(st, cfg, 50000.0))
 
     assert rsp.get_pending(st) is None
     assert snap["dps"]["deployable"] is True
+    assert snap["applied"].get("plan_source") == "param_assistant_absolute"
 
 
 def test_independent_params_per_cycle_id_in_context():

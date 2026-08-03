@@ -333,13 +333,11 @@ def test_cycle_manager_uses_frozen_reference_and_updates_real_round_budgets():
     ):
         snapshot = asyncio.run(cm.build_snapshot(state, cfg, price=100.0))
 
-    engine.decision_to_overlay.assert_not_called()
-    assert len(snapshot["applied"]["buy_grids"]) == len(cfg["buy_grids"])
-    assert len(snapshot["applied"]["sell_grids"]) == len(cfg["sell_grids"])
-    assert snapshot["reference"]["schema_version"] == 2
-    assert snapshot["multiplier"]["source"] == "immutable_initial_reference_x_regime_multiplier"
-    assert state["_dynamic_reference"]["buy_grids"] == cfg["buy_grids"]
-    assert state["target_budgets"]["source"] == "dynamic_regime_multiplier"
+    # Live path uses absolute PA overlay (regime_multiplier no longer applied).
+    assert snapshot["applied"].get("plan_source") == "param_assistant_absolute"
+    assert snapshot["pa_plan"]["source"] == "param_assistant_absolute"
+    assert snapshot["round_pending"] is False
+    assert state["target_budgets"]["source"] == "param_assistant_absolute"
     assert state["target_budgets"]["target_base_usdt"] == pytest.approx(
         snapshot["applied"]["base_alloc_pct"] * 10.0,
         abs=0.02,

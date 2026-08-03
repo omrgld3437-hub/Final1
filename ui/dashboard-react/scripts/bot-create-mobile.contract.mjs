@@ -37,6 +37,10 @@ assert.match(studio, /entered === "0" \? "0," : entered/, "Ondalık kutusunda s�
 assert.match(studio, /label="Grid adeti"/, "Grid sayacı anlaşılır adla gösterilmeli.");
 assert.match(studio, /mt-4 hidden grid-cols-4.*sm:grid/, "Dört aşamalı grid bilgi şeridi mobilde gizlenmeli.");
 assert.doesNotMatch(studio, /title="Bakiye koruması"/, "Bakiye koruması özet kartı kaldırılmalı.");
+assert.match(studio, /PARAMETRE MOTORU/, "Dinamik mod PA motoru sözleşmesini göstermeli.");
+assert.doesNotMatch(studio, /ÇARPAN MODELİ AÇIK/);
+assert.doesNotMatch(studio, /çarpanlı/);
+assert.match(assistant, /ui_config values are already percent points/);
 assert.match(botsTab, /createPortal\(/, "Bot oluşturma penceresi sayfa yüzeyinden ayrılmalı.");
 assert.match(botsTab, /onStudioOpenChange/, "Pencere durumu üst yönlendirmeye bildirilmeli.");
 assert.match(botsTab, /useState<SortDirection>\("desc"\)/, "Botlar ilk açılışta en yüksek performans üstte başlamalı.");

@@ -3,16 +3,15 @@ Dynamic Mode Cycle Manager — builds and applies the per-cycle snapshot.
 
 Flow per cycle (called from orchestrator BEFORE strategy.tick()):
 
-    1. dynamic_overlay_allowed(state) -> False on cycle 1 (first tur manual)
-    2. need_recompute(state)  -> True if no snapshot, or _dynamic_recompute_needed flag set
-    2. build_snapshot(adapter, state, cfg)
+    1. dynamic_overlay_allowed(state) -> True for every cycle (Tur 1+)
+    2. need_recompute(state)  -> True if no snapshot, new cycle_id, or 30m retry due
+    3. build_snapshot(adapter, state, cfg)
          a. collect features (klines/spread)
-         b. obtain V6 regime, direction and safety telemetry
-         c. freeze/resolve the bot's immutable initial reference
-         d. calculate independent up/down regime multipliers
-         e. apply reference x multiplier and safety guards
-         f. record into state['dynamic_snapshot']
-    3. apply_overlay(cfg, snapshot)  -> mutate cfg in-place for THIS tick only
+         b. run the same DPS V6 engine as Param Assistant (dynamic_round_start)
+         c. on deployable: apply absolute V6/PA plan (grids, trails, alloc, profit)
+         d. on non-deployable / R8 Kapalı: do not start round; buy pause + 30m rescan
+         e. record into state['dynamic_snapshot']
+    4. apply_overlay(cfg, snapshot)  -> mutate cfg in-place for THIS tick only
 
 Snapshot schema (lives at state['dynamic_snapshot']):
 
@@ -22,20 +21,16 @@ Snapshot schema (lives at state['dynamic_snapshot']):
         "data_fresh": bool,
         "stale_reason": str | None,
         "regime": str,
-        "regime_state": {"current","candidate","candidate_streak"},
-        "features": {...},                 # MarketFeatures.to_dict()
-        "raw": {...},                      # V6 candidate (diagnostic only)
-        "baseline": {...},                 # immutable initial reference
-        "multiplier": {...},               # direction/confidence/factors
-        "applied": {...},                  # baseline x multiplier
-        "reasons": [str, ...],             # human-readable explanations
+        "features": {...},
+        "raw": {...},                      # V6 BotParams dict
+        "pa_plan": {...},                  # absolute plan metadata
+        "applied": {...},                  # absolute overlay (same shape as PA)
+        "reasons": [str, ...],
         "clamps": [str, ...],
         "fallbacks": [str, ...],
-        "history": [ {cycle_id, regime, atr_pct_5m, ...} ],  # ring buffer, max 20
+        "round_pending": bool,
+        "history": [ ... ],                # ring buffer, max 20
     }
-
-History gives the operator a "last 20 cycles" view to spot oscillation /
-drift without external tooling.
 """
 
 from __future__ import annotations
@@ -47,8 +42,10 @@ from typing import Any, Dict, Optional
 
 from app.botengine.dynamic import regime as reg
 from app.botengine.dynamic.features import collect_features, MarketFeatures
-from app.botengine.dynamic.regime_multiplier import build_regime_multiplier_overlay
-from app.services.dynamic_param_score.engine import get_engine as get_dps_engine
+from app.services.dynamic_param_score.engine import (
+    DynamicParamScoreEngine,
+    get_engine as get_dps_engine,
+)
 from app.services.dynamic_param_score.data_collector import (
     collect_market_data,
     default_exchange_constraints,
@@ -61,7 +58,8 @@ from app.botengine.dynamic import round_start_policy as rsp
 logger = logging.getLogger(__name__)
 
 HISTORY_MAX = 20
-FIRST_DYNAMIC_CYCLE_ID = 2
+# Absolute PA apply starts at Tur 1 (no manual-first-cycle exception).
+FIRST_DYNAMIC_CYCLE_ID = 1
 
 
 def _log_dynamic_event(
@@ -92,7 +90,7 @@ def _log_dynamic_event(
 
 
 def dynamic_overlay_allowed(state: Dict[str, Any]) -> bool:
-    """Dynamic overlay starts after the first manual cycle is complete."""
+    """Dynamic Mode uses the Param Assistant engine on every cycle, including Tur 1."""
     try:
         cycle_id = int(state.get("cycle_id") or 1)
     except (TypeError, ValueError):
@@ -266,35 +264,55 @@ def _build_dps_context(
     )
 
 
-def _build_round_multiplier_overlay(
+def _build_absolute_pa_overlay(decision: Any) -> Dict[str, Any]:
+    """Same absolute grid/alloc/profit plan Param Assistant would apply to the form."""
+    overlay = DynamicParamScoreEngine.decision_to_overlay(decision) or {}
+    tel = getattr(decision, "telemetry", None) or {}
+    if tel.get("rebalance_plan") is not None:
+        overlay["rebalance_plan"] = tel.get("rebalance_plan")
+    if tel.get("order_intent_plan") is not None:
+        overlay["order_intent_plan"] = tel.get("order_intent_plan")
+    if tel.get("target_allocation") is not None:
+        overlay["target_allocation"] = tel.get("target_allocation")
+    else:
+        overlay["target_allocation"] = {
+            "source": "param_assistant_absolute",
+            "base_alloc_pct": overlay.get("base_alloc_pct"),
+            "quote_alloc_pct": overlay.get("quote_alloc_pct"),
+        }
+    # Live DM must execute oneshot rebalance / order intents from the PA plan.
+    overlay["intent_execution_enabled"] = True
+    overlay["plan_source"] = "param_assistant_absolute"
+    net = tel.get("net_profile") or {}
+    overlay["selected_template_key"] = (
+        overlay.get("selected_template_key")
+        or net.get("key")
+        or getattr(decision, "selected_profile_name", None)
+    )
+    return overlay
+
+
+def _pause_round_overlay(
     state: Dict[str, Any],
-    decision: Any,
     cfg_dict: Dict[str, Any],
     *,
-    constraints: Any,
-    portfolio: Any,
+    reason: str,
 ) -> Dict[str, Any]:
-    """Apply V6 regime signals to the frozen initial config, never to last round."""
-    reference_cfg = _reference_cfg(state, cfg_dict)
-    applied, multiplier_meta = build_regime_multiplier_overlay(
-        reference_cfg,
-        decision,
-        constraints=constraints,
-        portfolio=portfolio,
-    )
-    telemetry = getattr(decision, "telemetry", None) or {}
-    applied["target_allocation"] = {
-        "source": "regime_multiplier",
-        "base_alloc_pct": applied.get("base_alloc_pct"),
-        "quote_alloc_pct": applied.get("quote_alloc_pct"),
-    }
-    # V6's absolute-profile order plan is deliberately not executed here. Its
-    # regime/safety signals are consumed, while all sizing stays reference-based.
+    """Do not start a trading round — keep prior absolute plan if any, buys off."""
+    prev = (state.get("dynamic_snapshot") or {}).get("applied") or {}
+    if isinstance(prev, dict) and (
+        prev.get("buy_grids") or prev.get("sell_grids") or prev.get("base_alloc_pct") is not None
+    ):
+        applied = copy.deepcopy(prev)
+    else:
+        applied = _fallback_from_base(_reference_cfg(state, cfg_dict))
+    applied["buy_disabled"] = True
+    applied["cancel_existing_buy_orders"] = True
+    applied["intent_execution_enabled"] = False
     applied["rebalance_plan"] = None
     applied["order_intent_plan"] = None
-    applied["intent_execution_enabled"] = False
-    multiplier_meta["candidate_v6_rebalance_plan"] = telemetry.get("rebalance_plan")
-    state["_dynamic_multiplier_current"] = multiplier_meta
+    applied["plan_source"] = "round_start_paused"
+    applied["pause_reason"] = reason
     return applied
 
 
@@ -333,7 +351,7 @@ def _sync_target_budgets(
         "target_quote_usdt": round(equity * quote_frac, 2),
         "target_base_usdt": round(equity * base_frac, 2),
         "cycle_id": int(cycle_id),
-        "source": "dynamic_regime_multiplier",
+        "source": "param_assistant_absolute",
         "ts": datetime.now(timezone.utc).isoformat(),
         "ts_ms": int(time.time() * 1000),
     }
@@ -350,132 +368,93 @@ def _resolve_round_decision(
     constraints,
     ctx: BotContext,
 ) -> tuple:
-    """Map DPS decision → (applied overlay, reasons, fallbacks, pending)."""
+    """Map DPS decision → (applied overlay, reasons, fallbacks, pending, pa_meta)."""
     from app.botengine.dynamic import start_retry_policy as srp
     from app.services.dynamic_param_score.result_type import result_type_from_decision
 
     fallbacks: list = []
-    reasons: list = [decision.explain]
-    pool_meta = (decision.telemetry or {}).get("param_pool") or {}
+    reasons: list = [getattr(decision, "explain", "") or ""]
+    tel = getattr(decision, "telemetry", None) or {}
+    if not isinstance(tel, dict):
+        tel = {}
+    pool_meta = tel.get("param_pool") or {}
+    if not isinstance(pool_meta, dict):
+        pool_meta = {}
     sel_ctx = pool_meta.get("selection_context") or {}
+    if not isinstance(sel_ctx, dict):
+        sel_ctx = {}
     route_key = str(sel_ctx.get("route_key") or "")
+    net = tel.get("net_profile") or {}
+    if not isinstance(net, dict):
+        net = {}
+    profile_key = str(
+        net.get("key") or getattr(decision, "selected_profile_name", None) or ""
+    )
     result_type = result_type_from_decision(decision, bot_context=ctx)
     deployable = bool(decision.deployable and decision.params)
+    pa_meta = {
+        "source": "param_assistant_absolute",
+        "profile_key": profile_key,
+        "deployable": deployable,
+        "result_type": result_type,
+        "headline": net.get("headline"),
+    }
 
     if deployable:
         srp.on_successful_deploy(state)
         rsp.on_deployable_round_start(state)
-        applied = _build_round_multiplier_overlay(
-            state,
-            decision,
-            cfg_dict,
-            constraints=constraints,
-            portfolio=portfolio,
-        )
-        multiplier = state.get("_dynamic_multiplier_current") or {}
-        scores = multiplier.get("direction_scores") or {}
-        factors = multiplier.get("multipliers") or {}
+        applied = _build_absolute_pa_overlay(decision)
         reasons.append(
-            "Başlangıç referansı × rejim çarpanı: "
-            f"{multiplier.get('regime') or 'UNKNOWN'} · "
-            f"yukarı {float(scores.get('up') or 0) * 100:.0f}% / "
-            f"aşağı {float(scores.get('down') or 0) * 100:.0f}% · "
-            f"alış mesafe ×{float(factors.get('buy_distance') or 1):.2f}, "
-            f"satış mesafe ×{float(factors.get('sell_distance') or 1):.2f}"
+            f"Parametre Asistanı planı birebir uygulandı: {profile_key or decision.selected_profile_name or '—'}"
         )
         _log_dynamic_event(
             state,
             "DYNAMIC_TURN_STARTED",
             symbol=str((cfg_dict.get("symbol") or "")).upper(),
-            context={"symbol": str((cfg_dict.get("symbol") or "")).upper()},
-        )
-        return applied, reasons, fallbacks, False
-
-    if rsp.is_hard_safety_block(decision):
-        codes = rsp.blocking_codes(decision)
-        srp.mark_start_blocked(
-            state,
-            cycle_id=cycle_id,
-            result_type=result_type,
-            deployable=deployable,
-            block_reasons=codes,
-            route_key=route_key,
-            risk_state=str(decision.risk_state or ""),
-        )
-        applied = _build_round_multiplier_overlay(
-            state,
-            decision,
-            cfg_dict,
-            constraints=constraints,
-            portfolio=portfolio,
-        )
-        applied["buy_disabled"] = True
-        applied["cancel_existing_buy_orders"] = True
-        applied["intent_execution_enabled"] = False
-        fallbacks = ["dps_hard_safety_pending"]
-        reasons.extend(decision.blocking_reasons or [])
-        primary = codes[0] if codes else "START_BLOCKED_RETRY_PENDING"
-        _log_dynamic_event(
-            state,
-            "DYNAMIC_TURN_BLOCKED",
-            symbol=str((cfg_dict.get("symbol") or "")).upper(),
             context={
                 "symbol": str((cfg_dict.get("symbol") or "")).upper(),
-                "technical_reason": primary,
+                "profile_key": profile_key,
             },
         )
-        return applied, reasons, fallbacks, True
+        return applied, reasons, fallbacks, False, pa_meta
 
-    if srp.is_turn_start_blocked(result_type=result_type, deployable=deployable):
-        codes = rsp.blocking_codes(decision) + list(decision.blocking_reasons or [])
-        entry = srp.mark_start_blocked(
-            state,
-            cycle_id=cycle_id,
-            result_type=result_type,
-            deployable=deployable,
-            block_reasons=codes,
-            route_key=route_key,
-            risk_state=str(decision.risk_state or ""),
-        )
-        applied = _build_round_multiplier_overlay(
-            state,
-            decision,
-            cfg_dict,
-            constraints=constraints,
-            portfolio=portfolio,
-        )
-        applied["buy_disabled"] = True
-        applied["cancel_existing_buy_orders"] = True
-        applied["intent_execution_enabled"] = False
-        fallbacks = ["start_blocked_retry_pending"]
-        reasons.append(srp.START_BLOCKED_RETRY_PENDING)
-        after_min = int((entry.get("retry_after_minutes") or 10))
-        _log_dynamic_event(
-            state,
-            "RETRY_PENDING",
-            symbol=str((cfg_dict.get("symbol") or "")).upper(),
-            context={
-                "symbol": str((cfg_dict.get("symbol") or "")).upper(),
-                "minutes": after_min,
-                "technical_reason": entry.get("last_block_reason"),
-            },
-        )
-        return applied, reasons, fallbacks, True
-
-    # Non-deployable but not blocked — show recommendation only, no auto deploy
-    applied = _build_round_multiplier_overlay(
+    # Non-deployable (R8 Kapalı, hard-block, WAIT/NO_TRADE, …): do not open the round.
+    codes = rsp.blocking_codes(decision) + list(decision.blocking_reasons or [])
+    if not codes:
+        codes = [str(result_type or "NON_DEPLOYABLE").upper()]
+    entry = srp.mark_start_blocked(
         state,
-        decision,
-        cfg_dict,
-        constraints=constraints,
-        portfolio=portfolio,
+        cycle_id=cycle_id,
+        result_type=result_type,
+        deployable=deployable,
+        block_reasons=codes,
+        route_key=route_key,
+        risk_state=str(decision.risk_state or ""),
+        fixed_retry_minutes=srp.NON_DEPLOYABLE_RETRY_MINUTES,
     )
-    applied["buy_disabled"] = True
-    applied["cancel_existing_buy_orders"] = True
-    applied["intent_execution_enabled"] = False
-    fallbacks = ["dps_non_deployable_reference"]
-    reasons.append(f"result_type={result_type}")
-    return applied, reasons, fallbacks, False
+    applied = _pause_round_overlay(
+        state,
+        cfg_dict,
+        reason=str(entry.get("last_block_reason") or "NON_DEPLOYABLE"),
+    )
+    fallbacks = ["dps_non_deployable_round_paused"]
+    reasons.extend(decision.blocking_reasons or [])
+    reasons.append(srp.START_BLOCKED_RETRY_PENDING)
+    after_min = int(entry.get("retry_after_minutes") or srp.NON_DEPLOYABLE_RETRY_MINUTES)
+    pa_meta["retry_after_minutes"] = after_min
+    pa_meta["next_retry_at_ms"] = entry.get("next_retry_at_ms")
+    _log_dynamic_event(
+        state,
+        "DYNAMIC_TURN_BLOCKED",
+        symbol=str((cfg_dict.get("symbol") or "")).upper(),
+        context={
+            "symbol": str((cfg_dict.get("symbol") or "")).upper(),
+            "technical_reason": entry.get("last_block_reason"),
+            "minutes": after_min,
+            "profile_key": profile_key,
+        },
+    )
+    return applied, reasons, fallbacks, True, pa_meta
 
 
 async def build_snapshot(
@@ -529,17 +508,17 @@ async def build_snapshot(
         applied["buy_disabled"] = True
         applied["cancel_existing_buy_orders"] = True
         applied["intent_execution_enabled"] = False
-        stale_multiplier = copy.deepcopy(prev_snap.get("multiplier") or {})
-        stale_multiplier["stale_reuse"] = True
-        stale_multiplier["grid_count_invariant"] = {
-            "buy_initial": reference_buy_count,
-            "buy_applied": len(applied.get("buy_grids") or []),
-            "sell_initial": reference_sell_count,
-            "sell_applied": len(applied.get("sell_grids") or []),
-            "preserved": (
-                len(applied.get("buy_grids") or []) == reference_buy_count
-                and len(applied.get("sell_grids") or []) == reference_sell_count
-            ),
+        applied["rebalance_plan"] = None
+        applied["order_intent_plan"] = None
+        pa_plan = {
+            "source": "data_stale_pause",
+            "stale_reuse": True,
+            "grid_counts": {
+                "buy_reference": reference_buy_count,
+                "buy_applied": len(applied.get("buy_grids") or []),
+                "sell_reference": reference_sell_count,
+                "sell_applied": len(applied.get("sell_grids") or []),
+            },
         }
         snap = {
             "cycle_id": cycle_id,
@@ -552,9 +531,11 @@ async def build_snapshot(
             "raw": None,
             "baseline": _fallback_from_base(reference_cfg),
             "applied": applied,
-            "multiplier": stale_multiplier,
+            "pa_plan": pa_plan,
+            "multiplier": {},  # legacy key retained empty for older UI readers
             "reasons": [
-                f"DATA_STALE: {features.error} — acil durum, {int(rsp.ROUND_START_RETRY_SEC / 60)}dk sonra yeniden denenecek"
+                f"DATA_STALE: {features.error} — tur açılmadı, "
+                f"{int(rsp.ROUND_START_RETRY_SEC / 60)}dk sonra yeniden denenecek"
             ],
             "clamps": ["DATA_STALE"],
             "fallbacks": ["data_stale_pending_retry"],
@@ -597,7 +578,7 @@ async def build_snapshot(
         bot_context=ctx,
     )
 
-    applied, reasons, fallbacks, round_pending = _resolve_round_decision(
+    applied, reasons, fallbacks, round_pending, pa_meta = _resolve_round_decision(
         state,
         decision,
         cfg_dict,
@@ -607,7 +588,7 @@ async def build_snapshot(
         constraints=constraints,
         ctx=ctx,
     )
-    multiplier_meta = state.pop("_dynamic_multiplier_current", None) or {}
+    state.pop("_dynamic_multiplier_current", None)
     if decision.deployable and not round_pending:
         _sync_target_budgets(
             state,
@@ -708,12 +689,13 @@ async def build_snapshot(
             "deployable": decision.deployable,
             "result_type": result_type,
             "profile": decision.selected_profile_name,
+            "profile_key": pa_meta.get("profile_key"),
             "route_key": (
                 ((decision.telemetry or {}).get("param_pool") or {}).get("selection_context") or {}
             ).get("route_key"),
             "telemetry": decision.telemetry,
-            "candidate_v6_rebalance_plan": (decision.telemetry or {}).get("rebalance_plan"),
-            "multiplier": multiplier_meta,
+            "rebalance_plan": (decision.telemetry or {}).get("rebalance_plan"),
+            "order_intent_plan": (decision.telemetry or {}).get("order_intent_plan"),
         },
         "start_watchlist": srp.get_watchlist(state),
         "churn_preserve_orders": preserve,
@@ -722,7 +704,8 @@ async def build_snapshot(
         "raw": decision.params.to_dict() if decision.params else None,
         "baseline": _fallback_from_base(reference_cfg),
         "applied": applied,
-        "multiplier": multiplier_meta,
+        "pa_plan": pa_meta,
+        "multiplier": {},  # legacy key retained empty for older UI readers
         "reasons": reasons,
         "clamps": clamps,
         "fallbacks": fallbacks,
@@ -735,14 +718,11 @@ async def build_snapshot(
                 "regime": decision.regime_tag,
                 "param_score": decision.param_score,
                 "final_action": decision.final_action,
+                "profile_key": pa_meta.get("profile_key"),
                 "applied_base_alloc_pct": applied.get("base_alloc_pct"),
-                "buy_distance_factor": (multiplier_meta.get("multipliers") or {}).get(
-                    "buy_distance"
-                ),
-                "sell_distance_factor": (multiplier_meta.get("multipliers") or {}).get(
-                    "sell_distance"
-                ),
+                "plan_source": applied.get("plan_source"),
                 "stale": False,
+                "pending": round_pending,
                 "ts": int(time.time() * 1000),
             },
         ),
@@ -863,8 +843,8 @@ def apply_overlay(cfg: Any, snapshot: Dict[str, Any]) -> Dict[str, Any]:
 
     SAFETY: daily_loss_limit_usd, dynamic_mode, paper_mode, symbol,
     initial_capital_usdt, fees, tick_interval_ms, max_orders_per_minute and
-    similar runtime safety fields are never overlaid. max_buy_levels is copied
-    from the immutable baseline only, so dynamic mode cannot alter grid count.
+    similar runtime safety fields are never overlaid. Grid counts / trails /
+    alloc come from the absolute Param Assistant plan for this cycle.
     """
     applied = snapshot.get("applied") or {}
     diffs: Dict[str, Any] = {}

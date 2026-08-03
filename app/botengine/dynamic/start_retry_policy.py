@@ -10,27 +10,32 @@ START_BLOCKED_RETRY_PENDING = "START_BLOCKED_RETRY_PENDING"
 WATCHLIST_PAUSED = "WATCHLIST_PAUSED"
 
 MAX_RETRY_MINUTES = float(os.getenv("DYN_MAX_RETRY_MINUTES", "30"))
+# Non-deployable / R8 Kapalı / WAIT → fixed 30 minute rescan (operator contract).
+NON_DEPLOYABLE_RETRY_MINUTES = float(os.getenv("DYN_NON_DEPLOYABLE_RETRY_MINUTES", "30"))
 REBALANCE_COOLDOWN_TURNS = int(os.getenv("DYN_REBALANCE_COOLDOWN_TURNS", "2"))
 
 # Minutes until next retry by primary block reason
 _REASON_RETRY_MINUTES: Dict[str, float] = {
-    "SPREAD_UNSAFE": 5.0,
-    "SPREAD_HIGH": 5.0,
-    "SPREAD_DANGEROUS": 5.0,
-    "LOW_LIQUIDITY": 5.0,
-    "LIQUIDITY_LOW": 5.0,
-    "DATA_STALE": 2.0,
-    "DATA_GAP": 2.0,
-    "DUMP_RISK": 20.0,
-    "CRASH_FILTER": 20.0,
-    "BTC_CRASH": 20.0,
-    "EXPOSURE_HARD_CAP_BREACH": 15.0,
-    "INVALID_DISTRIBUTION": 30.0,
-    "DISTRIBUTION_INVALID": 30.0,
-    "MIN_GRID_COUNT_NOT_MET": 30.0,
-    "NO_SELLABLE_BASE": 30.0,
-    "REBALANCE_SAFETY_BLOCKED": 15.0,
-    "NO_TRADE": 10.0,
+    "SPREAD_UNSAFE": NON_DEPLOYABLE_RETRY_MINUTES,
+    "SPREAD_HIGH": NON_DEPLOYABLE_RETRY_MINUTES,
+    "SPREAD_DANGEROUS": NON_DEPLOYABLE_RETRY_MINUTES,
+    "LOW_LIQUIDITY": NON_DEPLOYABLE_RETRY_MINUTES,
+    "LIQUIDITY_LOW": NON_DEPLOYABLE_RETRY_MINUTES,
+    "DATA_STALE": NON_DEPLOYABLE_RETRY_MINUTES,
+    "DATA_GAP": NON_DEPLOYABLE_RETRY_MINUTES,
+    "DUMP_RISK": NON_DEPLOYABLE_RETRY_MINUTES,
+    "CRASH_FILTER": NON_DEPLOYABLE_RETRY_MINUTES,
+    "BTC_CRASH": NON_DEPLOYABLE_RETRY_MINUTES,
+    "EXPOSURE_HARD_CAP_BREACH": NON_DEPLOYABLE_RETRY_MINUTES,
+    "INVALID_DISTRIBUTION": NON_DEPLOYABLE_RETRY_MINUTES,
+    "DISTRIBUTION_INVALID": NON_DEPLOYABLE_RETRY_MINUTES,
+    "MIN_GRID_COUNT_NOT_MET": NON_DEPLOYABLE_RETRY_MINUTES,
+    "NO_SELLABLE_BASE": NON_DEPLOYABLE_RETRY_MINUTES,
+    "REBALANCE_SAFETY_BLOCKED": NON_DEPLOYABLE_RETRY_MINUTES,
+    "NO_TRADE": NON_DEPLOYABLE_RETRY_MINUTES,
+    "OPERATOR_PROFILE_AUTO_APPLY_DISABLED": NON_DEPLOYABLE_RETRY_MINUTES,
+    "NON_DEPLOYABLE": NON_DEPLOYABLE_RETRY_MINUTES,
+    "START_BLOCKED": NON_DEPLOYABLE_RETRY_MINUTES,
 }
 
 _BLOCKED_RESULT_TYPES = frozenset(
@@ -104,17 +109,13 @@ def retry_after_minutes(
     *,
     result_type: str = "",
     retry_count: int = 1,
+    fixed_retry_minutes: Optional[float] = None,
 ) -> float:
+    if fixed_retry_minutes is not None:
+        return float(fixed_retry_minutes)
+    # Operator contract: non-deployable / R8 pause always rescans on a fixed 30m cadence.
     primary = primary_block_reason(block_reasons, result_type)
-    if primary == "NO_SELLABLE_BASE":
-        return MAX_RETRY_MINUTES
-    base = float(_REASON_RETRY_MINUTES.get(primary, 10.0))
-    if primary in ("DATA_STALE", "DATA_GAP"):
-        return min(base, 2.0)
-    # Exponential backoff: 5 → 10 → 15 → 30
-    mult = min(6, max(1, retry_count))
-    stepped = base * mult if mult <= 3 else MAX_RETRY_MINUTES
-    return min(MAX_RETRY_MINUTES, stepped)
+    return float(_REASON_RETRY_MINUTES.get(primary, NON_DEPLOYABLE_RETRY_MINUTES))
 
 
 def get_watchlist(state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -131,13 +132,23 @@ def mark_start_blocked(
     block_reasons: Optional[List[str]] = None,
     route_key: str = "",
     risk_state: str = "",
+    fixed_retry_minutes: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Queue coin for retry — no orders, no turn deploy."""
     now = _now_ms()
     prev = get_watchlist(state) or {}
     retry_count = int(prev.get("retry_count") or 0) + 1
     reasons = [str(r) for r in (block_reasons or [])]
-    after_min = retry_after_minutes(reasons, result_type=result_type, retry_count=retry_count)
+    after_min = retry_after_minutes(
+        reasons,
+        result_type=result_type,
+        retry_count=retry_count,
+        fixed_retry_minutes=(
+            fixed_retry_minutes
+            if fixed_retry_minutes is not None
+            else NON_DEPLOYABLE_RETRY_MINUTES
+        ),
+    )
     retry_ms = int(now + after_min * 60_000)
     entry = {
         "active": True,
@@ -228,6 +239,7 @@ def need_start_retry(state: Dict[str, Any]) -> bool:
             wl.get("block_reasons") or [],
             result_type=str(wl.get("result_type") or ""),
             retry_count=int(wl.get("retry_count") or 1) + 1,
+            fixed_retry_minutes=NON_DEPLOYABLE_RETRY_MINUTES,
         )
         wl["next_retry_at_ms"] = int(_now_ms() + after * 60_000)
         wl["retry_after_minutes"] = after

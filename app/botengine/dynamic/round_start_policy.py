@@ -1,11 +1,10 @@
 """
-Dynamic Mode round-start policy — active-by-default, hard-safety wait + 15m retry.
+Dynamic Mode round-start policy — Param Assistant absolute plan + 30m rescan.
 
 Philosophy:
-- Profit from volatility: deploy grids unless hard safety blocks.
-- Each tur gets independent DPS inputs (orchestrator rebuilds snapshot per cycle_id).
-- Soft WAIT/NO_TRADE from scoring → prefer ACTIVE_DEFENSIVE overlay when possible.
-- Hard safety (dump, stale data, dangerous spread) → pending retry every 15 minutes.
+- Same DPS V6 / net_profile_library engine as Param Assistant.
+- Deployable → apply absolute plan for the new round.
+- Non-deployable / R8 Kapalı / hard safety → do not open the round; rescan every 30 minutes.
 """
 
 from __future__ import annotations
@@ -16,8 +15,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from app.services.dynamic_param_score.models import DynamicParamDecision, FinalAction
 
-# 15 minutes — operator retry for blocked round starts
-ROUND_START_RETRY_SEC = float(os.getenv("DYN_ROUND_START_RETRY_SEC", "900"))
+# 30 minutes — operator retry for blocked / non-deployable round starts
+ROUND_START_RETRY_SEC = float(os.getenv("DYN_ROUND_START_RETRY_SEC", "1800"))
 
 HARD_BLOCKING_CODES = frozenset(
     {
@@ -124,7 +123,7 @@ def retry_due(state: Dict[str, Any], *, now_ms: Optional[int] = None) -> bool:
 
 
 def need_round_start_retry(state: Dict[str, Any]) -> bool:
-    """Orchestrator: force DPS rebuild when 15m retry elapsed."""
+    """Orchestrator: force DPS rebuild when 30m retry elapsed."""
     p = get_pending(state)
     if not p:
         return False

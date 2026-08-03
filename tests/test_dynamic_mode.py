@@ -1,7 +1,7 @@
 """
 Unit tests for live Dynamic Mode surfaces: indicators, safety gate, config,
 regime hysteresis. Legacy StrategyEngine / RiskEngine tests removed with those
-modules (decision path is now DPS V6 + regime_multiplier).
+modules (decision path is now DPS V6 absolute PA apply).
 """
 
 from __future__ import annotations

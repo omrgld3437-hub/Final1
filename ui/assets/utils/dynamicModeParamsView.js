@@ -369,29 +369,32 @@
 
     function renderRegimeMultiplierBlock(snap) {
         snap = snap || {};
-        var meta = snap.multiplier || (snap.dps && snap.dps.multiplier) || {};
-        var scores = meta.direction_scores || {};
-        var confidence = meta.confidence || {};
-        var factors = meta.multipliers || {};
-        var invariant = meta.grid_count_invariant || {};
-        if (!meta.contract_version && !Object.keys(factors).length) return '';
-
-        var html = '<div class="param-block dyn-param-cycle"><div class="param-block-title">Rejim çarpanları</div>';
-        html += paramRow('Yukarı yön kanıtı', scores.up != null ? fmtPct(Number(scores.up) * 100) : '—', 'param-sell');
-        html += paramRow('Aşağı yön kanıtı', scores.down != null ? fmtPct(Number(scores.down) * 100) : '—', 'param-buy');
-        html += paramRow('Uygulama güveni', confidence.effective != null ? fmtPct(Number(confidence.effective) * 100) : '—');
-        html += paramRow('Base / quote çarpanı', fmtMultiplier(factors.base_alloc) + ' / ' + fmtMultiplier(factors.quote_alloc));
-        html += paramRow('Alış / satış mesafe çarpanı', fmtMultiplier(factors.buy_distance) + ' / ' + fmtMultiplier(factors.sell_distance));
-        html += paramRow('Alış / satış trailing çarpanı', fmtMultiplier(factors.buy_trailing) + ' / ' + fmtMultiplier(factors.sell_trailing));
-        if (invariant.buy_initial != null || invariant.sell_initial != null) {
-            html += paramRow(
-                'Grid adedi (alış / satış)',
-                (invariant.buy_applied != null ? invariant.buy_applied : invariant.buy_initial) +
-                ' / ' +
-                (invariant.sell_applied != null ? invariant.sell_applied : invariant.sell_initial) +
-                (invariant.preserved === false ? ' · kontrol gerekli' : ' · sabit')
-            );
+        var pa = snap.pa_plan || {};
+        var dps = snap.dps || {};
+        var profileKey = pa.profile_key || dps.profile_key || dps.profile || '';
+        var applied = snap.applied || {};
+        var buyN = (applied.buy_grids || []).length;
+        var sellN = (applied.sell_grids || []).length;
+        if (!profileKey && !pa.source && buyN === 0 && sellN === 0) {
+            // Legacy multiplier snapshots (pre absolute-PA path).
+            var meta = snap.multiplier || dps.multiplier || {};
+            var factors = meta.multipliers || {};
+            if (!meta.contract_version && !Object.keys(factors).length) return '';
+            var htmlLegacy = '<div class="param-block dyn-param-cycle"><div class="param-block-title">Eski rejim çarpanı (legacy)</div>';
+            htmlLegacy += paramRow('Kaynak', 'baseline × multiplier');
+            htmlLegacy += '</div>';
+            return htmlLegacy;
         }
+
+        var html = '<div class="param-block dyn-param-cycle"><div class="param-block-title">Parametre motoru planı</div>';
+        html += paramRow('Profil', profileKey || '—');
+        if (pa.headline) html += paramRow('Başlık', String(pa.headline));
+        html += paramRow('Uygulanabilir', pa.deployable === false || snap.round_pending ? 'Hayır · tur bekleniyor' : 'Evet');
+        if (pa.retry_after_minutes != null) {
+            html += paramRow('Yeniden tarama', String(pa.retry_after_minutes) + ' dk');
+        }
+        html += paramRow('Grid adedi (alış / satış)', buyN + ' / ' + sellN);
+        html += paramRow('Plan kaynağı', pa.source || applied.plan_source || 'param_assistant_absolute');
         html += '</div>';
         return html;
     }
@@ -410,7 +413,7 @@
         }
 
         if (dyn.first_cycle_manual) {
-            html += '<p class="param-hint">İlk tur manuel başlangıç değerleriyle çalışıyor; dinamik değerler tur 2 başında hesaplanacak.</p></div>';
+            html += '<p class="param-hint">İlk tur için motor planı henüz uygulanmadı; bir sonraki analizde Parametre Asistanı planı birebir yazılacak.</p></div>';
             return html;
         }
 

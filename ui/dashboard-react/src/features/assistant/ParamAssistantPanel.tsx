@@ -85,17 +85,23 @@ type LadderRow = { trigger: number; qty: number };
 function asPctNumber(value: unknown): number | null {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return null;
-  return numeric <= 1 && numeric !== 0 ? numeric * 100 : numeric;
+  // ui_config values are already percent points (0.75 = %0.75, 70 = %70).
+  // Do not treat values ≤1 as 0–1 fractions.
+  return numeric;
 }
 
 function formatPct(value: unknown, digits = 2): string {
   const numeric = asPctNumber(value);
   if (numeric == null) return "—";
-  const fixed =
-    Number.isInteger(numeric) || Math.abs(numeric * 10 - Math.round(numeric * 10)) < 1e-9
-      ? numeric.toFixed(numeric % 1 === 0 ? 0 : 1)
-      : numeric.toFixed(digits);
-  return `%${fixed.replace(/\.0+$/, "").replace(/(\.\d)0$/, "$1")}`;
+  const abs = Math.abs(numeric);
+  const useDigits =
+    abs > 0 && abs < 10
+      ? Math.max(digits, abs < 1 ? 2 : 1)
+      : abs % 1 === 0
+        ? 0
+        : Math.min(digits, 2);
+  const fixed = numeric.toFixed(useDigits).replace(/\.?0+$/, "");
+  return `%${fixed}`;
 }
 
 function extractLadder(
