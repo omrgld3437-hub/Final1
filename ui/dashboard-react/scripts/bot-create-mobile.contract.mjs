@@ -41,6 +41,11 @@ assert.match(studio, /PARAMETRE MOTORU/, "Dinamik mod PA motoru sözleşmesini g
 assert.doesNotMatch(studio, /ÇARPAN MODELİ AÇIK/);
 assert.doesNotMatch(studio, /çarpanlı/);
 assert.match(assistant, /ui_config values are already percent points/);
+// Trailing is percent points (0.75 = %0.75). Never scale ≤1 values with ×100.
+assert.doesNotMatch(
+  assistant,
+  /numeric\s*<=\s*1\s*&&\s*numeric\s*!==\s*0\s*\?\s*numeric\s*\*\s*100/,
+);
 assert.match(botsTab, /createPortal\(/, "Bot oluşturma penceresi sayfa yüzeyinden ayrılmalı.");
 assert.match(botsTab, /onStudioOpenChange/, "Pencere durumu üst yönlendirmeye bildirilmeli.");
 assert.match(botsTab, /useState<SortDirection>\("desc"\)/, "Botlar ilk açılışta en yüksek performans üstte başlamalı.");

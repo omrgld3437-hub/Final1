@@ -100,7 +100,8 @@ function formatPct(value: unknown, digits = 2): string {
       : abs % 1 === 0
         ? 0
         : Math.min(digits, 2);
-  const fixed = numeric.toFixed(useDigits).replace(/\.?0+$/, "");
+  // Trim only fractional trailing zeros ("1.50" → "1.5"), never whole digits ("70").
+  const fixed = numeric.toFixed(useDigits).replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "");
   return `%${fixed}`;
 }
 
