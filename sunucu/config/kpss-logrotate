@@ -1,0 +1,11 @@
+/var/log/kpss/*.log {
+    daily
+    rotate 7
+    maxsize 5M
+    missingok
+    notifempty
+    compress
+    delaycompress
+    copytruncate
+    su kpssapp kpssapp
+}

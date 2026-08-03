@@ -109,16 +109,31 @@ async def dashboard_bootstrap(
             logger.debug("[bootstrap] wallet snapshot error: %s", e)
             return (None, None)
 
-    prices = await loop.run_in_executor(None, _get_prices)
-    wallet_cached, wallet_cached_at = await loop.run_in_executor(None, _get_wallet)
+    from app.services.dashboard_snapshot import fetch_bot_cards_fast
 
-    # KPIs: async (DB)
+    prices_task = loop.run_in_executor(None, _get_prices)
+    wallet_task = loop.run_in_executor(None, _get_wallet)
+    bots_task = asyncio.create_task(fetch_bot_cards_fast(account_id))
+    prices, wallet_result, bots = await asyncio.gather(
+        prices_task, wallet_task, bots_task
+    )
+    wallet_cached, wallet_cached_at = wallet_result
+
+    # İlk çizimde ağır geçmiş/KPI sorgusu yok; canlı kanal bunları arkada yeniler.
     try:
-        from app.api.routes.home import _get_kpis_minimal
-
-        kpis = await _get_kpis_minimal(account_id, db)
-    except Exception as e:
-        logger.debug("[bootstrap] kpis error: %s", e)
+        total_current = sum(float(bot.get("current_usd") or 0) for bot in bots)
+        total_initial = sum(float(bot.get("initial_usd") or 0) for bot in bots)
+        kpis = {
+            "total_bots": len(bots),
+            "active_bots": sum(
+                1
+                for bot in bots
+                if str(bot.get("display_status") or bot.get("status")).lower()
+                in ("running", "starting")
+            ),
+            "total_pnl_usd": round(total_current - total_initial, 2),
+        }
+    except Exception:
         kpis = {}
 
     server_ms = (time.perf_counter() - t0) * 1000
@@ -133,6 +148,7 @@ async def dashboard_bootstrap(
         "ok": True,
         "data": {
             "prices": prices,
+            "bots": bots,
             "kpis": kpis,
             "wallet_cached": wallet_cached,
             "wallet_cached_at": wallet_cached_at,

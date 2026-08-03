@@ -220,7 +220,7 @@ async def _admin_fetch_live_rows_parallel(
         *[_one(aid) for aid in account_ids], return_exceptions=True
     )
     for item in results:
-        if isinstance(item, Exception):
+        if isinstance(item, BaseException):
             logger.warning("[Admin] parallel live row failed: %s", item)
             continue
         aid, data = item
@@ -268,7 +268,11 @@ def _require_admin(current: dict = Depends(require_auth)) -> dict:
 async def get_admin_accounts(
     request: Request,
     current: dict = Depends(_require_admin),
-    suspended: bool = False,
+    suspended: Optional[bool] = Query(
+        None,
+        description="Filter by suspension state; omit to include every account",
+    ),
+    fresh: bool = Query(False, description="Bypass the short-lived full response cache"),
     lite: bool = Query(
         False,
         description="Skip live Binance/bot KPI; use cached snapshot for faster list",
@@ -278,7 +282,7 @@ async def get_admin_accounts(
     """Get all accounts with metrics for admin panel
 
     Args:
-        suspended: If True, only return accounts with suspended users
+        suspended: True for suspended, False for active, omitted for all accounts
         lite: If True, skip live Binance wallet and bot KPI fetches (cached snapshot only)
     """
     t0 = time.perf_counter()
@@ -286,8 +290,9 @@ async def get_admin_accounts(
         request.headers.get("X-Request-ID") or request.headers.get("X-Request-Id") or ""
     )
     admin_user_id = current.get("user_id")
-    cache_key = f"{admin_user_id}:{int(bool(suspended))}:{int(bool(lite))}"
-    if not lite and _ADMIN_ACCOUNTS_FULL_CACHE_TTL_SEC > 0:
+    suspension_key = "all" if suspended is None else str(int(suspended))
+    cache_key = f"{admin_user_id}:{suspension_key}:{int(bool(lite))}"
+    if not fresh and not lite and _ADMIN_ACCOUNTS_FULL_CACHE_TTL_SEC > 0:
         now_cache = time.time()
         async with _get_admin_accounts_full_cache_lock():
             cached = _admin_accounts_full_cache.get(cache_key)
@@ -299,7 +304,7 @@ async def get_admin_accounts(
     row_errors: List[Dict] = []
 
     try:
-        if suspended:
+        if suspended is True:
             accounts = (
                 db.query(Account)
                 .join(User, Account.user_id == User.id)
@@ -309,7 +314,7 @@ async def get_admin_accounts(
                 )
                 .all()
             )
-        else:
+        elif suspended is False:
             accounts = (
                 db.query(Account)
                 .outerjoin(User, Account.user_id == User.id)
@@ -317,6 +322,19 @@ async def get_admin_accounts(
                     or_(
                         User.is_suspended == False,
                         User.is_suspended.is_(None),
+                        Account.user_id.is_(None),
+                    )
+                )
+                .all()
+            )
+        else:
+            accounts = (
+                db.query(Account)
+                .outerjoin(User, Account.user_id == User.id)
+                .filter(
+                    or_(
+                        User.is_deleted == False,
+                        User.is_deleted.is_(None),
                         Account.user_id.is_(None),
                     )
                 )
@@ -344,6 +362,7 @@ async def get_admin_accounts(
     total_active_bots = 0
     total_bots_balance_usd = 0.0
     total_spot_balance_usd = 0.0
+    total_wallet_equity_usd = 0.0
     today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
 
     from app.services.test_account import is_test_account
@@ -410,6 +429,14 @@ async def get_admin_accounts(
                 spot_balance_status = live.get("spot_balance_status") or "error"
 
             bots_balance = float(bot_locked_usd or 0.0)
+            # Wallet total already includes assets allocated to bots. Expose the
+            # remaining spot balance separately, but never add bot equity to the
+            # wallet total a second time.
+            wallet_equity = max(
+                float(spot_balance or 0.0),
+                bots_balance,
+            )
+            available_spot_balance = max(0.0, wallet_equity - bots_balance)
 
             daily_pnl_usd = 0.0
             daily_pnl_pct = 0.0
@@ -458,8 +485,9 @@ async def get_admin_accounts(
 
             total_active_bots += active_bots_count
             total_bots_balance_usd += bots_balance
-            total_spot_balance_usd += spot_balance
-            total_usd = bots_balance + spot_balance
+            total_spot_balance_usd += available_spot_balance
+            total_wallet_equity_usd += wallet_equity
+            total_usd = wallet_equity
 
             daily_wallet_pnl_usd = None
             daily_wallet_pnl_pct = None
@@ -487,7 +515,7 @@ async def get_admin_accounts(
                         is not None
                     ):
                         ref_cuzdan = float(last_before_today.total_usd_value)
-                        daily_wallet_pnl_usd = spot_balance - ref_cuzdan
+                        daily_wallet_pnl_usd = wallet_equity - ref_cuzdan
                         daily_wallet_pnl_pct = (
                             (daily_wallet_pnl_usd / ref_cuzdan * 100.0)
                             if ref_cuzdan and ref_cuzdan > 0
@@ -509,7 +537,7 @@ async def get_admin_accounts(
                             is not None
                         ):
                             ref_cuzdan = float(first_today.total_usd_value)
-                            daily_wallet_pnl_usd = spot_balance - ref_cuzdan
+                            daily_wallet_pnl_usd = wallet_equity - ref_cuzdan
                             daily_wallet_pnl_pct = (
                                 (daily_wallet_pnl_usd / ref_cuzdan * 100.0)
                                 if ref_cuzdan and ref_cuzdan > 0
@@ -583,11 +611,26 @@ async def get_admin_accounts(
                     "total_bots": len(bots),
                     "bots_balance_usd": round(bots_balance, 2),
                     "bot_locked_usd": round(bots_balance, 2),
-                    "spot_balance_usd": round(spot_balance, 2),
-                    "spot_kpi_total_usd": round(spot_balance, 2)
+                    "spot_balance_usd": round(available_spot_balance, 2),
+                    "wallet_equity_usd": round(wallet_equity, 2),
+                    "spot_kpi_total_usd": round(wallet_equity, 2)
                     if acct_is_test
                     else None,
                     "spot_balance_status": spot_balance_status,
+                    "binance_connected": spot_balance_status == "ok",
+                    "binance_connection_label": (
+                        "Binance bağlantısı onaylandı"
+                        if spot_balance_status == "ok"
+                        else (
+                            "Binance'e bağlanmadı"
+                            if spot_balance_status == "no_keys"
+                            else (
+                                "Son kayıt gösteriliyor"
+                                if spot_balance_status in ("cached", "pending")
+                                else "Binance bağlantısı doğrulanamadı"
+                            )
+                        )
+                    ),
                     "total_usd": round(total_usd, 2),
                     "daily_pnl_usd": round(daily_pnl_usd, 2),
                     "daily_pnl_pct": round(daily_pnl_pct, 2),
@@ -678,7 +721,8 @@ async def get_admin_accounts(
                 "total_active_bots": total_active_bots,
                 "total_bots_balance_usd": round(total_bots_balance_usd, 2),
                 "total_spot_balance_usd": round(total_spot_balance_usd, 2),
-                "total_usd": round(total_bots_balance_usd + total_spot_balance_usd, 2),
+                "total_wallet_equity_usd": round(total_wallet_equity_usd, 2),
+                "total_usd": round(total_wallet_equity_usd, 2),
                 "last_update_ts": datetime.utcnow().isoformat() + "Z",
             },
             "lite": lite,

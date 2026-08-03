@@ -43,7 +43,7 @@ class V6CatalogProfile:
     profit_sell_after_buyback_enabled: bool = False
     profit_sell_trigger_code: str = "K10"
     profit_sell_trailing_code: str = "T2"
-    modules: Dict[str, bool] = field(default_factory=dict)
+    modules: Dict[str, Any] = field(default_factory=dict)
 
     def copy(self) -> "V6CatalogProfile":
         return V6CatalogProfile(

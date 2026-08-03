@@ -849,6 +849,7 @@ async def get_transaction_history(
     ),
     source_filter: str = Query("all", description="all | spot | bot"),
     page: int = Query(1, ge=1, description="Page number"),
+    per_page: int = Query(20, ge=5, le=100, description="Page size"),
     sync: int = Query(0, description="1 = sync trades from Binance first"),
     revision: Optional[str] = Query(
         None, description="İstemci revision — eşleşirse DB sync atlanır"
@@ -856,7 +857,7 @@ async def get_transaction_history(
     db: Session = Depends(get_db),
     current: dict = Depends(require_auth),
 ):
-    """İşlem geçmişi: günlük/haftalık/aylık/genel, tür ve kaynak filtresi, sayfalama (20 işlem/sayfa)."""
+    """İşlem geçmişi: dönem, tür ve kaynak filtresiyle sayfalı hareket listesi."""
     import os
     from app.core.security.endpoint_rate_limit import check_endpoint_rate_limit
 
@@ -996,18 +997,29 @@ async def get_transaction_history(
             type_filter=eff_tf,
             source_filter=sf,
             page=page,
-            per_page=TransactionHistoryService.PER_PAGE,
+            per_page=per_page,
         )
     # Test (paper) hesabı: Binance trade yok, Trade tablosundan paper bot işlemlerini döndür
     from app.services.test_account import is_test_account
 
     if is_test_account(account_id, db):
         return _get_test_account_tx_history(
-            db, account_id, period=p, type_filter=tf, page=page
+            db,
+            account_id,
+            period=p,
+            type_filter=tf,
+            page=page,
+            per_page=per_page,
         )
 
     return TransactionHistoryService.get_transactions(
-        db, account_id, period=p, type_filter=tf, source_filter=sf, page=page
+        db,
+        account_id,
+        period=p,
+        type_filter=tf,
+        source_filter=sf,
+        page=page,
+        per_page=per_page,
     )
 
 
@@ -2790,6 +2802,13 @@ async def api_dashboard_bootstrap(
         kpis = await _get_kpis_minimal(account_id, db)
     except Exception:
         pass
+    bots = []
+    try:
+        from app.services.dashboard_snapshot import fetch_bot_cards_fast
+
+        bots = await fetch_bot_cards_fast(account_id)
+    except Exception:
+        pass
     ek = getattr(account, "api_key_enc", None)
     es = getattr(account, "api_secret_enc", None)
     keys_configured = bool(
@@ -2802,6 +2821,7 @@ async def api_dashboard_bootstrap(
         "ok": True,
         "data": {
             "prices": prices,
+            "bots": bots,
             "kpis": kpis,
             "wallet_cached": wallet_cached,
             "wallet_cached_at": wallet_cached_at,
@@ -3456,6 +3476,7 @@ async def api_dashboard_snapshot(
 
     try:
         from app.services.dashboard_snapshot import (
+            fetch_bot_cards_fast,
             fetch_prices,
             fetch_bots_and_account_kpis,
             fetch_finance_pnl,
@@ -3504,7 +3525,10 @@ async def api_dashboard_snapshot(
     if need_prices:
         tasks.append(_safe(fetch_prices(), "prices"))
         task_names.append("prices")
-    if need_bots:
+    if need_bots and not need_pnl:
+        tasks.append(_safe(fetch_bot_cards_fast(account_id), "bot_cards"))
+        task_names.append("bot_cards")
+    elif need_bots:
         tasks.append(_safe(fetch_bots_and_account_kpis(account_id, db), "bots"))
         task_names.append("bots")
     if need_pnl:
@@ -3525,6 +3549,9 @@ async def api_dashboard_snapshot(
 
     prices_raw = by_name.get("prices", {})
     bots_raw = by_name.get("bots", {})
+    bot_cards_raw = by_name.get("bot_cards", [])
+    if isinstance(bot_cards_raw, list):
+        bots_raw = {"bots": bot_cards_raw, "account": {}}
     pnl_raw = by_name.get("pnl", {})
 
     prices = (
@@ -4468,7 +4495,13 @@ async def _fetch_open_orders_uncached(
     from app.services.test_account import is_test_account
 
     if is_test_account(account_id, db):
-        return _open_orders_response(account_id, [], True)
+        from app.services.test_spot_paper import list_test_paper_open_orders
+
+        return _open_orders_response(
+            account_id,
+            list_test_paper_open_orders(account_id, symbol),
+            True,
+        )
     from app.services.binance_assets import get_account_keys
     from app.services.binance_spot import get_open_orders
 
@@ -4708,11 +4741,28 @@ async def cancel_binance_order(
 ):
     """Binance emir iptali: DELETE /api/v3/order."""
     try:
+        from app.services.test_account import is_test_account
+
+        if is_test_account(account_id, db):
+            from app.services.test_spot_paper import cancel_test_paper_order
+
+            result = cancel_test_paper_order(account_id, symbol, order_id)
+            await invalidate_wallet_cache(account_id)
+            await invalidate_open_orders_cache(account_id)
+            return {
+                "success": True,
+                "status": result.get("status", "CANCELED"),
+                "symbol": result.get("symbol", symbol),
+                "orderId": result.get("orderId", order_id),
+                "message": "Test LIMIT emri iptal edildi",
+            }
         from app.services.binance_assets import get_account_keys
         from app.services.binance_spot import cancel_order
 
         keys = await get_account_keys(account_id, db)
         result = await cancel_order(keys, symbol, order_id)
+        await invalidate_wallet_cache(account_id)
+        await invalidate_open_orders_cache(account_id)
         return {
             "success": True,
             "status": result.get("status", "CANCELED"),

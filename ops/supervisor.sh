@@ -13,7 +13,7 @@
 # servisi yeniden baslatir. Bayraklari start.command (temizler) / stop.command
 # (yazar) yonetir -- boylece kasitli "durdur" kalici olur, supervisor onu hemen
 # geri getirmez.
-ROOT="/Users/omeraltin/Desktop/final1"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT" || exit 1
 PY="$ROOT/.venv/bin/python"
 [ -x "$PY" ] || PY="python3"

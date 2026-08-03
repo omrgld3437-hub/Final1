@@ -35,7 +35,7 @@ def _paper_path(account_id: int) -> Path:
 
 
 def _empty_state() -> Dict[str, Any]:
-    return {"manual_base": {}, "usdt_delta": 0.0}
+    return {"manual_base": {}, "usdt_delta": 0.0, "pending_orders": []}
 
 
 def load_paper_state(account_id: int) -> Dict[str, Any]:
@@ -57,6 +57,11 @@ def load_paper_state(account_id: int) -> Dict[str, Any]:
         return {
             "manual_base": manual_clean,
             "usdt_delta": float(raw.get("usdt_delta") or 0),
+            "pending_orders": [
+                row
+                for row in (raw.get("pending_orders") or [])
+                if isinstance(row, dict) and str(row.get("status") or "") == "NEW"
+            ],
         }
     except Exception as e:
         logger.warning("test_spot_paper load failed account_id=%s: %s", account_id, e)
@@ -69,6 +74,7 @@ def save_paper_state(account_id: int, state: Dict[str, Any]) -> None:
     payload = {
         "manual_base": state.get("manual_base") or {},
         "usdt_delta": round(float(state.get("usdt_delta") or 0), 8),
+        "pending_orders": state.get("pending_orders") or [],
         "updated_at": time.time(),
     }
     tmp = path.with_suffix(".tmp")
@@ -101,6 +107,7 @@ def apply_paper_to_test_wallet(wallet: Dict[str, Any], account_id: int) -> None:
     state = load_paper_state(account_id)
     usdt_delta = float(state.get("usdt_delta") or 0)
     manual_base: Dict[str, float] = state.get("manual_base") or {}
+    pending_orders = state.get("pending_orders") or []
 
     usdt_row = _find_asset_row(wallet, "USDT")
     if usdt_row is not None and abs(usdt_delta) > 1e-12:
@@ -141,6 +148,38 @@ def apply_paper_to_test_wallet(wallet: Dict[str, Any], account_id: int) -> None:
         row["free"] = round(manual_av + bot_bl, 8)
         row["total"] = round(manual_av + bot_bl + locked, 8)
 
+    # LIMIT emirler Binance gibi serbest bakiyeden düşülür ve emir kilidine
+    # taşınır. Bot kilidi ile emir kilidi birbirinden ayrı kalır.
+    for order in pending_orders:
+        if not isinstance(order, dict) or str(order.get("status") or "") != "NEW":
+            continue
+        symbol = str(order.get("symbol") or "").upper()
+        base = symbol[:-4] if symbol.endswith("USDT") else symbol
+        side = str(order.get("side") or "").upper()
+        qty = max(0.0, float(order.get("origQty") or 0))
+        limit_price = max(0.0, float(order.get("price") or 0))
+        if side == "BUY":
+            reserve_asset = "USDT"
+            reserve_qty = qty * limit_price
+        else:
+            reserve_asset = base
+            reserve_qty = qty
+        row = _find_asset_row(wallet, reserve_asset)
+        if row is None or reserve_qty <= 0:
+            continue
+        available_qty = max(0.0, float(row.get("available") or 0))
+        reserved = min(available_qty, reserve_qty)
+        row["available"] = round(max(0.0, available_qty - reserved), 8)
+        row["free"] = round(max(0.0, float(row.get("free") or 0) - reserved), 8)
+        row["locked"] = round(float(row.get("locked") or 0) + reserved, 8)
+        row["total"] = round(
+            float(row.get("free") or 0) + float(row.get("locked") or 0),
+            8,
+        )
+        if reserve_asset in STABLE_ASSETS:
+            row["available_usd"] = round(float(row.get("available") or 0), 2)
+            row["locked_usd"] = round(float(row.get("locked") or 0), 2)
+
     av_usd = 0.0
     bl_usd = 0.0
     for a in wallet.get("assets") or []:
@@ -168,6 +207,15 @@ def apply_paper_to_test_wallet(wallet: Dict[str, Any], account_id: int) -> None:
             if bl_val:
                 bl_usd += bl_val
     wallet["available_usd"] = round(av_usd, 2)
+    wallet["bot_locked_usd"] = round(bl_usd, 2)
+    wallet["locked_usd"] = round(
+        sum(
+            float(row.get("locked_usd") or 0)
+            for row in (wallet.get("assets") or [])
+            if isinstance(row, dict)
+        ),
+        2,
+    )
 
 
 def spot_balances_from_wallet(
@@ -225,6 +273,135 @@ def _quantize_step(qty: float, step: str = "0.00000001") -> float:
         return round(float(qty), 8)
 
 
+def list_test_paper_open_orders(
+    account_id: int, symbol: Optional[str] = None
+) -> list[Dict[str, Any]]:
+    sym = (symbol or "").strip().upper()
+    rows = load_paper_state(account_id).get("pending_orders") or []
+    return [
+        dict(row)
+        for row in rows
+        if isinstance(row, dict)
+        and str(row.get("status") or "") == "NEW"
+        and (not sym or str(row.get("symbol") or "").upper() == sym)
+    ]
+
+
+def cancel_test_paper_order(
+    account_id: int, symbol: str, order_id: int
+) -> Dict[str, Any]:
+    sym = (symbol or "").strip().upper()
+    with _account_lock(account_id):
+        state = load_paper_state(account_id)
+        rows = state.get("pending_orders") or []
+        found = None
+        kept = []
+        for row in rows:
+            matches = (
+                isinstance(row, dict)
+                and str(row.get("symbol") or "").upper() == sym
+                and str(row.get("orderId")) == str(order_id)
+                and str(row.get("status") or "") == "NEW"
+            )
+            if matches:
+                found = dict(row)
+            else:
+                kept.append(row)
+        if found is None:
+            raise ValueError("ORDER_NOT_FOUND")
+        state["pending_orders"] = kept
+        save_paper_state(account_id, state)
+    found["status"] = "CANCELED"
+    return found
+
+
+def _apply_paper_fill_to_state(
+    state: Dict[str, Any],
+    symbol: str,
+    side: str,
+    fill_resp: Dict[str, Any],
+) -> None:
+    base = symbol[:-4] if symbol.endswith("USDT") else symbol
+    manual_base: Dict[str, float] = dict(state.get("manual_base") or {})
+    executed_qty = float(fill_resp.get("executedQty") or 0)
+    executed_quote = float(fill_resp.get("cummulativeQuoteQty") or 0)
+    if side == "BUY":
+        manual_base[base] = round(
+            float(manual_base.get(base, 0) or 0) + executed_qty, 8
+        )
+        state["usdt_delta"] = round(
+            float(state.get("usdt_delta") or 0) - executed_quote, 8
+        )
+    else:
+        available = float(manual_base.get(base, 0) or 0)
+        remaining = round(max(0.0, available - executed_qty), 8)
+        if remaining <= 1e-12:
+            manual_base.pop(base, None)
+        else:
+            manual_base[base] = remaining
+        state["usdt_delta"] = round(
+            float(state.get("usdt_delta") or 0) + executed_quote, 8
+        )
+    state["manual_base"] = manual_base
+
+
+def process_test_paper_limit_orders(
+    account_id: int, prices: Optional[Dict[str, float]] = None
+) -> list[Dict[str, Any]]:
+    """Fill crossed GTC LIMIT orders at their limit price on the next price observation."""
+    from app.services.test_simulation import build_paper_market_fill
+
+    filled: list[Dict[str, Any]] = []
+    with _account_lock(account_id):
+        state = load_paper_state(account_id)
+        pending = state.get("pending_orders") or []
+        kept = []
+        for order in pending:
+            if not isinstance(order, dict) or str(order.get("status") or "") != "NEW":
+                continue
+            sym = str(order.get("symbol") or "").upper()
+            try:
+                market_price = float((prices or {}).get(sym) or _resolve_price(sym))
+                limit_price = float(order.get("price") or 0)
+                qty = float(order.get("origQty") or 0)
+            except (TypeError, ValueError):
+                kept.append(order)
+                continue
+            side = str(order.get("side") or "").upper()
+            crossed = (side == "BUY" and market_price <= limit_price) or (
+                side == "SELL" and market_price >= limit_price
+            )
+            if not crossed:
+                kept.append(order)
+                continue
+            if side == "BUY":
+                fill = build_paper_market_fill(
+                    sym,
+                    "BUY",
+                    quote_qty=qty * limit_price,
+                    mid_price=limit_price,
+                    slippage_bps=0,
+                )
+            else:
+                fill = build_paper_market_fill(
+                    sym,
+                    "SELL",
+                    base_qty=qty,
+                    mid_price=limit_price,
+                    slippage_bps=0,
+                )
+            fill["orderId"] = order.get("orderId")
+            fill["side"] = side
+            fill["type"] = "LIMIT"
+            fill["price"] = str(limit_price)
+            _apply_paper_fill_to_state(state, sym, side, fill)
+            filled.append(fill)
+        state["pending_orders"] = kept
+        if filled:
+            save_paper_state(account_id, state)
+    return filled
+
+
 def execute_test_paper_order(
     db: Any,
     account_id: int,
@@ -244,14 +421,15 @@ def execute_test_paper_order(
     sym = (symbol or "").upper()
     side_u = (side or "").upper()
     type_u = (order_type or "MARKET").upper()
-    if type_u != "MARKET":
-        raise ValueError("Test paper yalnızca MARKET emir destekler")
+    if type_u not in ("MARKET", "LIMIT"):
+        raise ValueError("Desteklenmeyen emir tipi")
 
     base = sym.replace("USDT", "") if sym.endswith("USDT") else sym
     if not base or base in STABLE_ASSETS:
         raise ValueError("Geçersiz sembol")
 
-    px = float(price) if price and float(price) > 0 else _resolve_price(sym)
+    market_px = _resolve_price(sym)
+    px = float(price) if type_u == "LIMIT" and price and float(price) > 0 else market_px
     if px <= 0:
         raise ValueError("Fiyat geçersiz")
 
@@ -269,10 +447,56 @@ def execute_test_paper_order(
         state = load_paper_state(account_id)
         manual_base: Dict[str, float] = dict(state.get("manual_base") or {})
 
+        if type_u == "LIMIT":
+            qty_in = float(quantity or 0)
+            if qty_in <= 0:
+                raise ValueError("Miktar giriniz")
+            if side_u == "BUY":
+                required_quote = qty_in * px
+                if required_quote > quote_av + 1e-8:
+                    raise ValueError(
+                        f"Yetersiz kullanılabilir USDT (mevcut: {quote_av:.2f}, gerekli: {required_quote:.2f})"
+                    )
+            elif side_u == "SELL":
+                available_base = float(
+                    (_find_asset_row(wallet, base) or {}).get("available") or 0
+                )
+                if qty_in > available_base + 1e-12:
+                    raise ValueError(
+                        f"Yetersiz satılabilir {base} (mevcut: {available_base:.8f})"
+                    )
+            else:
+                raise ValueError("Geçersiz side")
+            marketable = (side_u == "BUY" and market_px <= px) or (
+                side_u == "SELL" and market_px >= px
+            )
+            if not marketable:
+                order_id = int(time.time() * 1000)
+                pending_order = {
+                    "orderId": order_id,
+                    "symbol": sym,
+                    "side": side_u,
+                    "type": "LIMIT",
+                    "price": str(px),
+                    "origQty": str(_quantize_step(qty_in)),
+                    "executedQty": "0",
+                    "cummulativeQuoteQty": "0",
+                    "status": "NEW",
+                    "timeInForce": "GTC",
+                    "time": order_id,
+                    "paper": True,
+                }
+                state.setdefault("pending_orders", []).append(pending_order)
+                save_paper_state(account_id, state)
+                return pending_order
+
         if side_u == "BUY":
             quote_in = float(quote_order_qty or 0)
             if quote_in <= 0 and quantity and float(quantity) > 0:
-                quote_in = float(quantity) * px
+                effective_buy_price = (
+                    min(market_px, px) if type_u == "LIMIT" else px
+                )
+                quote_in = float(quantity) * effective_buy_price
             if quote_in <= 0:
                 raise ValueError("Tutar giriniz")
             if quote_in > quote_av + 1e-8:
@@ -280,7 +504,11 @@ def execute_test_paper_order(
                     f"Yetersiz kullanılabilir USDT (mevcut: {quote_av:.2f}, gerekli: {quote_in:.2f})"
                 )
             fill_resp = build_paper_market_fill(
-                sym, "BUY", quote_qty=quote_in, mid_price=px
+                sym,
+                "BUY",
+                quote_qty=quote_in,
+                mid_price=min(market_px, px) if type_u == "LIMIT" else px,
+                slippage_bps=0 if type_u == "LIMIT" else 5,
             )
             executed_qty = float(fill_resp["executedQty"])
             executed_quote = float(fill_resp["cummulativeQuoteQty"])
@@ -303,7 +531,11 @@ def execute_test_paper_order(
                 )
             sell_qty = _quantize_step(min(qty_in, avail_base))
             fill_resp = build_paper_market_fill(
-                sym, "SELL", base_qty=sell_qty, mid_price=px
+                sym,
+                "SELL",
+                base_qty=sell_qty,
+                mid_price=max(market_px, px) if type_u == "LIMIT" else px,
+                slippage_bps=0 if type_u == "LIMIT" else 5,
             )
             executed_qty = float(fill_resp["executedQty"])
             executed_quote = float(fill_resp["cummulativeQuoteQty"])
@@ -322,7 +554,7 @@ def execute_test_paper_order(
         save_paper_state(account_id, state)
         px = float((fill_resp.get("fills") or [{}])[0].get("price") or px)
 
-    order_id = f"test_paper_{int(time.time() * 1000)}"
+    order_id = int(time.time() * 1000)
     return {
         "orderId": order_id,
         "symbol": sym,

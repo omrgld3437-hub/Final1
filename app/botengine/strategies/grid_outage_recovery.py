@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.botengine.models import BotEngineMode, DcaGridTrailingConfig
+from app.botengine.trade_invariants import OrderType, valid_extreme
 
 logger = logging.getLogger(__name__)
 
@@ -194,6 +195,16 @@ def _recover_sell_grid(
     while len(peaks) <= idx:
         peaks.append(None)
     had_real_peak = peaks[idx] is not None
+    if had_real_peak and not valid_extreme(OrderType.SELL_GRID, trigger, peaks[idx]):
+        _reset_sell_grid_trigger(state, idx)
+        logger.error(
+            "BOT_OUTAGE_INVALID_TRAIL_CANCELLED bot_id=%s side=SELL grid=%s trigger=%.10f extreme=%s",
+            state.get("bot_id"),
+            idx,
+            trigger,
+            peaks[idx],
+        )
+        return
     peak = _f(peaks[idx]) if peaks[idx] is not None else trigger
     peak = max(peak or trigger, trigger, P)
     exec_thr = peak * (1.0 - sell_trail_pct / 100.0)
@@ -301,6 +312,21 @@ def _recover_buy_grid(
     while len(troughs) <= idx:
         troughs.append(None)
     had_real_trough = troughs[idx] is not None
+    if had_real_trough and not valid_extreme(OrderType.BUY_GRID, trigger, troughs[idx]):
+        triggers = state.get("buy_grid_trigger_price") or []
+        if idx < len(triggers):
+            triggers[idx] = None
+        troughs[idx] = None
+        state["buy_grid_trigger_price"] = triggers
+        state["buy_grid_trough_price"] = troughs
+        logger.error(
+            "BOT_OUTAGE_INVALID_TRAIL_CANCELLED bot_id=%s side=BUY grid=%s trigger=%.10f extreme=%s",
+            state.get("bot_id"),
+            idx,
+            trigger,
+            troughs[idx],
+        )
+        return
     trough = _f(troughs[idx]) if troughs[idx] is not None else trigger
     trough = min(trough or trigger, trigger, P)
     exec_thr = trough * (1.0 + buy_trail_pct / 100.0)
@@ -408,9 +434,9 @@ def _recover_waiting_sell_grid(
 
     if not _try_trigger_sell_grid(state, idx, P, trigger, base_balance=base_balance):
         return
-    exec_thr = P * (1.0 - sell_trail_pct / 100.0)
-    if P > exec_thr:
-        favorable.append(idx)
+    # Triggering and completing on the same recovery event bypasses trailing:
+    # P > P*(1-trail) is tautologically true. The first recovered observation
+    # only initializes the peak; a later price event must show the retracement.
     logger.info(
         "BOT_OUTAGE_RECOVERY bot_id=%s grid=sell idx=%s action=TRIGGER_WHILE_OFFLINE price=%.4f trigger=%.4f",
         state.get("bot_id"),
@@ -432,9 +458,8 @@ def _recover_waiting_buy_grid(
 
     if not _try_trigger_buy_grid(state, idx, P, trigger):
         return
-    exec_thr = P * (1.0 + buy_trail_pct / 100.0)
-    if P < exec_thr:
-        favorable.append(idx)
+    # P < P*(1+trail) is always true. Never mark a just-triggered BUY as
+    # favorable on the same event; wait for a subsequent bounce from this low.
     logger.info(
         "BOT_OUTAGE_RECOVERY bot_id=%s grid=buy idx=%s action=TRIGGER_WHILE_OFFLINE price=%.4f trigger=%.4f",
         state.get("bot_id"),
@@ -463,15 +488,6 @@ def _recover_profit_exit(
             P,
             thr,
         )
-    elif old_anchor is not None and anchor > old_anchor and P >= thr:
-        state["_outage_force_profit_sell"] = True
-        logger.info(
-            "BOT_OUTAGE_RECOVERY bot_id=%s mode=TRAIL_PROFIT_SELL action=EXEC_NEW_HIGH price=%.4f thr=%.4f anchor=%.4f",
-            state.get("bot_id"),
-            P,
-            thr,
-            anchor,
-        )
 
 
 def _recover_reentry_buy(
@@ -492,15 +508,6 @@ def _recover_reentry_buy(
             state.get("bot_id"),
             P,
             thr,
-        )
-    elif old_anchor is not None and anchor < old_anchor and P <= thr:
-        state["_outage_force_reentry_buy"] = True
-        logger.info(
-            "BOT_OUTAGE_RECOVERY bot_id=%s mode=TRAIL_REENTRY_BUY action=EXEC_NEW_LOW price=%.4f thr=%.4f anchor=%.4f",
-            state.get("bot_id"),
-            P,
-            thr,
-            anchor,
         )
 
 

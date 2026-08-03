@@ -5,6 +5,14 @@
     'use strict';
 
     var REGIME_LABELS = {
+        R1: 'Güçlü yükseliş trendi',
+        R2: 'Dengeli aralık',
+        R3: 'Zayıf / gürültülü aralık',
+        R4: 'Volatil aralık',
+        R5: 'Yukarı kırılım / momentum',
+        R6: 'Toparlanma / kontrollü geri dönüş',
+        R7: 'Düşüş trendi',
+        R8: 'Crash / sert düşüş',
         LOW_VOL_RANGING: 'Düşük volatilite / yatay',
         HIGH_VOL_RANGING: 'Yüksek volatilite / yatay (chop)',
         TRENDING_UP: 'Yukarı trend',
@@ -105,7 +113,7 @@
         dyn = dyn || {};
         cfg = cfg || {};
         if (dyn.active === true) return true;
-        if (dyn.enabled === true && dyn.safety_gate && dyn.safety_gate.ok === true) return true;
+        if (dyn.enabled === true && (!dyn.safety_gate || dyn.safety_gate.ok !== false)) return true;
         return !!(cfg.dynamic_mode && dyn.enabled !== false && (!dyn.safety_gate || dyn.safety_gate.ok !== false));
     }
 
@@ -182,6 +190,19 @@
         if (v == null || isNaN(Number(v))) return '—';
         if (typeof fmtBotPrice === 'function') return fmtBotPrice(v, [v]);
         return fmtNumLocal(v, 4);
+    }
+
+    function paramRow(label, value, cls) {
+        var safeCls = cls
+            ? String(cls).split(/\s+/).filter(function (part) {
+                return /^[a-z0-9_-]+$/i.test(part);
+            }).join(' ')
+            : '';
+        var displayValue = value !== undefined && value !== '' ? value : '—';
+        return '<div class="param-row' + (safeCls ? ' ' + safeCls : '') + '">' +
+            '<span class="param-label">' + esc(label) + '</span>' +
+            '<span class="param-value">' + esc(displayValue) + '</span>' +
+            '</div>';
     }
 
     function resolveConfigAllocation(cfg, allocOverride) {
@@ -341,6 +362,40 @@
         return html;
     }
 
+    function fmtMultiplier(v) {
+        if (v == null || isNaN(Number(v))) return '—';
+        return '×' + Number(v).toFixed(2);
+    }
+
+    function renderRegimeMultiplierBlock(snap) {
+        snap = snap || {};
+        var meta = snap.multiplier || (snap.dps && snap.dps.multiplier) || {};
+        var scores = meta.direction_scores || {};
+        var confidence = meta.confidence || {};
+        var factors = meta.multipliers || {};
+        var invariant = meta.grid_count_invariant || {};
+        if (!meta.contract_version && !Object.keys(factors).length) return '';
+
+        var html = '<div class="param-block dyn-param-cycle"><div class="param-block-title">Rejim çarpanları</div>';
+        html += paramRow('Yukarı yön kanıtı', scores.up != null ? fmtPct(Number(scores.up) * 100) : '—', 'param-sell');
+        html += paramRow('Aşağı yön kanıtı', scores.down != null ? fmtPct(Number(scores.down) * 100) : '—', 'param-buy');
+        html += paramRow('Uygulama güveni', confidence.effective != null ? fmtPct(Number(confidence.effective) * 100) : '—');
+        html += paramRow('Base / quote çarpanı', fmtMultiplier(factors.base_alloc) + ' / ' + fmtMultiplier(factors.quote_alloc));
+        html += paramRow('Alış / satış mesafe çarpanı', fmtMultiplier(factors.buy_distance) + ' / ' + fmtMultiplier(factors.sell_distance));
+        html += paramRow('Alış / satış trailing çarpanı', fmtMultiplier(factors.buy_trailing) + ' / ' + fmtMultiplier(factors.sell_trailing));
+        if (invariant.buy_initial != null || invariant.sell_initial != null) {
+            html += paramRow(
+                'Grid adedi (alış / satış)',
+                (invariant.buy_applied != null ? invariant.buy_applied : invariant.buy_initial) +
+                ' / ' +
+                (invariant.sell_applied != null ? invariant.sell_applied : invariant.sell_initial) +
+                (invariant.preserved === false ? ' · kontrol gerekli' : ' · sabit')
+            );
+        }
+        html += '</div>';
+        return html;
+    }
+
     /** Compact block for En İyi 5 Bot (Bots tab) parametreler modal. */
     function renderLeaderboardDynamicSection(dyn, symbol) {
         dyn = dyn || {};
@@ -377,6 +432,7 @@
         if (snap.data_fresh === false) html += ' · ⚠ veri eski';
         html += '</p>';
         html += renderPositionBlock(dyn.position, null, symbol, false);
+        html += renderRegimeMultiplierBlock(snap);
         html += renderAppliedParamsBlock(ap, snap);
         html += '</div>';
         return html;
@@ -385,27 +441,45 @@
     /** Full Dinamik tab for bot detay / leaderboard parametreler modal. opts.showBalances: bakiye satırları (leaderboard: false). */
     function renderBotDetailDynamicTab(dyn, state, symbol, cfg, opts) {
         dyn = dyn || {};
+        state = state || {};
         cfg = cfg || {};
         opts = opts || {};
-        if (!dyn.enabled) {
+        if (!dyn.enabled && !cfg.dynamic_mode) {
             return '<p class="param-hint">Bu bot statik parametrelerle çalışıyor.</p>';
         }
 
-        var snap = dyn.snapshot;
+        var snap = resolveDynSnapshot(dyn, state);
         var applied = snap && snap.applied;
         var allocOverride = resolveDynamicAllocation(dyn, applied);
         var html = renderGeneralParamsBlock(cfg, symbol, opts.referencePrice, allocOverride, opts);
 
-        if (dyn.first_cycle_manual) {
-            html += '<p class="param-hint">İlk tur manuel başlangıç değerleriyle çalışıyor; dinamik değerler tur 2 başında görünecek.</p>';
+        if (snap && snap.regime) {
+            var regimeLabel = resolveDynRegimeLabel(dyn, snap) || '—';
+            html += '<div class="param-block dyn-param-cycle"><div class="param-block-title">Dinamik tur parametreleri</div>';
+            html += paramRow('Ana rejim', regimeLabel);
+            html += paramRow('Tur', snap.cycle_id != null ? ('#' + snap.cycle_id) : '—');
+            html += paramRow('Veri durumu', snap.data_fresh === false ? 'Gecikmeli / korumalı' : 'Canlı');
+            html += '</div>';
+        }
+
+        if (dyn.first_cycle_manual && !applied) {
+            var firstRegimeLabel = resolveDynRegimeLabel(dyn, snap);
+            html += '<div class="param-block dyn-param-cycle"><div class="param-block-title">Dinamik tur parametreleri</div>';
+            html += paramRow('Ana rejim', firstRegimeLabel || '—');
+            html += paramRow('Tur', 'İlk tur');
+            html += '</div>';
             return html;
         }
 
         if (!snap || !applied) {
-            html += '<p class="param-hint">Henüz dinamik tur verisi yok.</p>';
+            html += '<div class="param-block dyn-param-cycle"><div class="param-block-title">Dinamik tur parametreleri</div>';
+            html += paramRow('Ana rejim', resolveDynRegimeLabel(dyn, snap) || '—');
+            html += paramRow('Tur', (state.cycle_id != null ? ('#' + state.cycle_id) : '—'));
+            html += '</div>';
             return html;
         }
 
+        html += renderRegimeMultiplierBlock(snap);
         html += renderAppliedParamsBlock(applied, snap);
         if (dyn.emergency) {
             var emg = dyn.emergency;
@@ -529,8 +603,27 @@
         return (typeof snap === 'object' && snap !== null) ? snap : null;
     }
 
+    function resolveDynRegimeLabel(dyn, snap) {
+        dyn = dyn || {};
+        snap = (typeof snap === 'object' && snap !== null) ? snap : (dyn.snapshot || null);
+        var label = (snap && (snap.regime_label || snap.main_regime_label || snap.preview_regime_label))
+            || dyn.preview_regime_label
+            || dyn.main_regime_label;
+        if (label != null && label !== '') return String(label);
+        var raw = (snap && (snap.regime || snap.main_regime || snap.preview_regime))
+            || dyn.preview_regime
+            || dyn.main_regime
+            || dyn.regime
+            || dyn.regime_label;
+        if (!raw && dyn.stance && typeof dyn.stance === 'object') {
+            raw = dyn.stance.regime || dyn.stance.main_regime;
+        }
+        if (raw == null || raw === '') return '';
+        return REGIME_LABELS[raw] || String(raw);
+    }
+
     /**
-     * Grid panel banner HTML — rejim + gösterge satırı veya tur-1 manuel mesajı.
+     * Grid panel banner HTML — rejim + gösterge satırı.
      */
     function buildDynGridBannerHtml(dyn, snap, esc) {
         esc = esc || function (s) { return String(s == null ? '' : s); };
@@ -538,10 +631,11 @@
         dyn = dyn || {};
 
         if (dyn.first_cycle_manual) {
+            var firstRegimeLabel = resolveDynRegimeLabel(dyn, snap);
             return {
-                html: badge + '<span class="dyn-mode-grid-note__line1"><span class="dyn-mode-grid-note__strong">İlk tur</span>'
-                    + '<span class="dyn-mode-grid-note__hint"> · manuel parametreler</span></span>',
-                title: 'İlk tur manuel parametrelerle çalışıyor'
+                html: badge + '<span class="dyn-mode-grid-note__line1"><span class="dyn-mode-grid-note__strong">'
+                    + (firstRegimeLabel ? esc(firstRegimeLabel) : '') + '</span></span>',
+                title: firstRegimeLabel || 'Dinamik mod'
             };
         }
 
@@ -651,6 +745,7 @@
         summarizeDynSnapshotActions: summarizeDynSnapshotActions,
         formatDynRegimeIndicatorLine: formatDynRegimeIndicatorLine,
         resolveDynSnapshot: resolveDynSnapshot,
+        resolveDynRegimeLabel: resolveDynRegimeLabel,
         buildDynGridBannerHtml: buildDynGridBannerHtml,
         bindDynModeLogoTips: bindDynModeLogoTips,
         attrEsc: attrEsc

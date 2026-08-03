@@ -196,6 +196,14 @@ class DcaGridTrailingConfig:
         # parse_bool: string "false"/"0"/"off" gibi değerler doğru şekilde False'a iner
         # (Python'da bool("false") == True olduğundan ham bool() güvenli değil).
         self.dynamic_mode: bool = parse_bool(r.get("dynamic_mode"))
+        # V2 is a separate, default-off feature flag. It can run in shadow mode
+        # without replacing the established dynamic engine.
+        self.dynamic_mode_v2: bool = parse_bool(r.get("dynamic_mode_v2"))
+        self.dynamic_mode_v2_shadow: bool = (
+            parse_bool(r.get("dynamic_mode_v2_shadow"))
+            if "dynamic_mode_v2_shadow" in r
+            else True
+        )
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -228,7 +236,21 @@ class DcaGridTrailingConfig:
             "available_quote_buffer_pct": self.available_quote_buffer_pct,
             "daily_loss_limit_usd": self.daily_loss_limit_usd,
             "max_buy_levels": self.max_buy_levels,
+            "max_base_exposure_frac": self.max_base_exposure_frac,
+            "buy_disabled": self.buy_disabled,
+            "sell_only_mode": self.sell_only_mode,
+            "rebuy_enabled": self.rebuy_enabled,
+            "resell_enabled": self.resell_enabled,
+            "cancel_existing_buy_orders": self.cancel_existing_buy_orders,
+            "cancel_existing_sell_orders": self.cancel_existing_sell_orders,
+            "selected_template_key": self.selected_template_key,
+            "pool_version": self.pool_version,
+            "final_action": self.final_action,
+            "management_mode": self.management_mode,
+            "intent_execution_enabled": self.intent_execution_enabled,
             "dynamic_mode": self.dynamic_mode,
+            "dynamic_mode_v2": self.dynamic_mode_v2,
+            "dynamic_mode_v2_shadow": self.dynamic_mode_v2_shadow,
         }
 
 
@@ -518,6 +540,12 @@ def config_from_ui_payload(payload: Dict[str, Any]) -> DcaGridTrailingConfig:
         "max_slippage_pct": payload.get("max_slippage_pct", 0.5),
         "max_buy_levels": payload.get("max_buy_levels"),
         "dynamic_mode": dynamic_on,
+        "dynamic_mode_v2": parse_bool(payload.get("dynamic_mode_v2")),
+        "dynamic_mode_v2_shadow": (
+            parse_bool(payload.get("dynamic_mode_v2_shadow"))
+            if "dynamic_mode_v2_shadow" in payload
+            else True
+        ),
         "daily_loss_limit_usd": daily_loss,
     }
     return DcaGridTrailingConfig(raw)
@@ -532,6 +560,7 @@ def build_state_skeleton(bot_id: int, account_id: int, symbol: str) -> Dict[str,
         "cycle_id": 1,
         "state_version": 0,
         "reference_price": None,
+        "initial_reference_price": None,
         "initial_allocation_done": False,
         "base_balance": 0.0,
         "quote_balance": 0.0,
@@ -540,9 +569,11 @@ def build_state_skeleton(bot_id: int, account_id: int, symbol: str) -> Dict[str,
         "sell_grid_fired": [],
         "sell_grid_trigger_price": [],
         "sell_grid_peak_price": [],
+        "sell_grid_status": [],
         "buy_grid_fired": [],
         "buy_grid_trigger_price": [],
         "buy_grid_trough_price": [],
+        "buy_grid_status": [],
         "mode": BotEngineMode.IDLE.value,
         "trail_anchor_price": None,
         "trail_activation_price": None,

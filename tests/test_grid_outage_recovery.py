@@ -217,7 +217,7 @@ def test_sell_reanchor_does_not_lower_peak():
     assert st["sell_grid_peak_price"][0] == pytest.approx(102.0)
 
 
-def test_tick_executes_favorable_buy_after_outage():
+def test_tick_does_not_execute_buy_before_bounce_after_outage():
     cfg = _cfg()
     st = _state_with_gap(
         buy_grid_trigger_price=[99.0],
@@ -225,10 +225,11 @@ def test_tick_executes_favorable_buy_after_outage():
         last_tick_at=datetime.now(timezone.utc) - timedelta(seconds=120),
     )
     actions, _ = tick_dca_grid_trailing(st, cfg, 98.1, 1.0, 50.0)
-    assert any(a.get("reason") == "trail_buy_grid" for a in actions)
+    assert not any(a.get("reason") == "trail_buy_grid" for a in actions)
+    assert st["buy_grid_trough_price"][0] == pytest.approx(98.0)
 
 
-def test_profit_exit_force_on_new_high_after_gap():
+def test_profit_exit_new_high_after_gap_updates_peak_without_forcing_sell():
     cfg = _cfg(
         sell_grids=[],
         buy_grids=[{"buy_grid_pct": 1.0, "buy_qty_pct_of_quote": 10.0}],
@@ -242,7 +243,8 @@ def test_profit_exit_force_on_new_high_after_gap():
         buy_grid_fired=[True],
     )
     apply_grid_outage_recovery(st, cfg, 105.0, gap_sec=120.0)
-    assert st.get("_outage_force_profit_sell") is True
+    assert st.get("_outage_force_profit_sell") is False
+    assert st["trail_anchor_price"] == pytest.approx(105.0)
 
 
 def test_flush_outage_recovery_emits_connectivity_stable(monkeypatch):

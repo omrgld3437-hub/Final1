@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from typing import List
 
-from app.services.dynamic_param_score.v6.constants import QTY_TEMPLATES, MAX_GRID_COUNT, MIN_GRID_COUNT
+from app.services.dynamic_param_score.v6.constants import (
+    MAX_GRID_COUNT,
+    MIN_GRID_COUNT,
+    QTY_TEMPLATES,
+    SAFE_BUY_TRIM_TEMPLATES,
+)
 from app.services.dynamic_param_score.v6.domain.types import AdjusterDelta, GridLevel, V6CatalogProfile
 from app.services.dynamic_param_score.v6.v6_quantizer import (
     apply_trailing_step_delta,
@@ -31,7 +36,12 @@ def _shift_grids(grids: List[GridLevel], delta_pct: int, *, is_buy: bool) -> Lis
     return out
 
 
-def _trim_grid_count(grids: List[GridLevel], count_delta: int) -> List[GridLevel]:
+def _trim_grid_count(
+    grids: List[GridLevel],
+    count_delta: int,
+    *,
+    is_buy: bool,
+) -> List[GridLevel]:
     if count_delta >= 0 or not grids:
         return grids
     n = max(MIN_GRID_COUNT, min(MAX_GRID_COUNT, len(grids) + count_delta))
@@ -40,7 +50,15 @@ def _trim_grid_count(grids: List[GridLevel], count_delta: int) -> List[GridLevel
     trimmed = grids[:n]
     tpls = QTY_TEMPLATES.get(n, [])
     if tpls:
-        amounts = tpls[0]
+        # Alım kademesi bütçeyi yakında tüketmemeli. V6'nın ilk iki-kademe
+        # şablonu 60/40 olduğu için sayım azaltıldığında güvenlik politikasını
+        # tersine çeviriyordu. Alımda daima derin kademeye en çok ağırlık veren
+        # geçerli şablonu seç; satış tarafının mevcut önceliğini koru.
+        amounts = (
+            SAFE_BUY_TRIM_TEMPLATES.get(n, tpls[0])
+            if is_buy
+            else tpls[0]
+        )
         return [GridLevel(trimmed[i].distance_pct, amounts[i]) for i in range(n)]
     return trimmed
 
@@ -56,8 +74,16 @@ def apply_delta(profile: V6CatalogProfile, delta: AdjusterDelta) -> V6CatalogPro
             p.buy_grids = []
     p.buy_grids = _shift_grids(p.buy_grids, delta.buy_grid_distance_delta, is_buy=True)
     p.sell_grids = _shift_grids(p.sell_grids, delta.sell_grid_distance_delta, is_buy=False)
-    p.buy_grids = _trim_grid_count(p.buy_grids, delta.buy_grid_count_delta)
-    p.sell_grids = _trim_grid_count(p.sell_grids, delta.sell_grid_count_delta)
+    p.buy_grids = _trim_grid_count(
+        p.buy_grids,
+        delta.buy_grid_count_delta,
+        is_buy=True,
+    )
+    p.sell_grids = _trim_grid_count(
+        p.sell_grids,
+        delta.sell_grid_count_delta,
+        is_buy=False,
+    )
     p.buy_trailing_code = apply_trailing_step_delta(p.buy_trailing_code, delta.buy_trailing_delta_steps)
     p.sell_trailing_code = apply_trailing_step_delta(p.sell_trailing_code, delta.sell_trailing_delta_steps)
     if p.buyback_after_sell_enabled and delta.buyback_trigger_delta:

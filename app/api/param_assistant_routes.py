@@ -32,6 +32,7 @@ from app.services.dynamic_param_score.data_collector import (
     portfolio_from_user_scenario,
 )
 from app.services.dynamic_param_score.consumer_policy import build_param_assistant_context
+from app.services.dynamic_param_score.market_advisor import build_market_advice
 
 logger = logging.getLogger(__name__)
 
@@ -193,6 +194,60 @@ async def calculate(req: OptimizeRequest, current: dict = Depends(require_auth))
             uid, evt, context={"symbol": symbol, "budget": budget}
         )
     return result
+
+
+@router.post("/param-assistant/advice")
+async def advice(req: OptimizeRequest, current: dict = Depends(require_auth)):
+    """DPS V6 market analysis rendered as recommendation-only Turkish advice."""
+    symbol = _normalize_symbol(req.symbol)
+    if not symbol or len(symbol) < 5:
+        raise HTTPException(status_code=400, detail="Geçersiz parite.")
+    try:
+        budget = float(req.budget)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Geçersiz bütçe.")
+    if budget < 25:
+        raise HTTPException(status_code=400, detail="Bütçe en az 25 USDT olmalı.")
+
+    from app.services.user_readable_activity_logger import UserReadableActivityLogger
+
+    uid = current.get("user_id")
+    if uid:
+        UserReadableActivityLogger.write_event(
+            uid,
+            "PARAM_ANALYSIS_STARTED",
+            context={
+                "symbol": symbol,
+                "budget": budget,
+                "mode": "recommendation_only",
+            },
+        )
+    result = await _run_dps(
+        symbol,
+        budget,
+        first_start_buy_only=req.first_start_buy_only,
+        base_balance_usdt=req.base_balance_usdt,
+        quote_balance_usdt=req.quote_balance_usdt,
+        base_alloc_frac=req.base_alloc_frac,
+        dry_run=True,
+    )
+    advice_result = build_market_advice(result)
+    if uid:
+        UserReadableActivityLogger.write_event(
+            uid,
+            "PARAM_ANALYSIS_COMPLETED",
+            context={
+                "symbol": symbol,
+                "budget": budget,
+                "mode": "recommendation_only",
+                "scenario": (
+                    (advice_result.get("recommendation") or {}).get(
+                        "scenario_code"
+                    )
+                ),
+            },
+        )
+    return advice_result
 
 
 @router.post("/param-assistant/optimize")

@@ -1,4 +1,4 @@
-# ayserose — final1
+# ayserose1
 
 Binance Spot bot platformu · DCA · Grid · Trailing · Bot Engine v5
 

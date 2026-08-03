@@ -579,6 +579,34 @@ let financeReportsState = {
     tradesLimit: 100
 };
 
+let _settingsTabSettingsAccountId = null;
+let _settingsTabSettingsPromise = null;
+let _settingsTabSettingsCache = null;
+let _settingsTabSettingsLoadedAt = 0;
+
+function getSettingsTabSettings(accountId, force) {
+    const id = Number(accountId || 0);
+    const now = Date.now();
+    if (!force && _settingsTabSettingsAccountId === id && _settingsTabSettingsCache && (now - _settingsTabSettingsLoadedAt) < 15000) {
+        return Promise.resolve(_settingsTabSettingsCache);
+    }
+    if (!force && _settingsTabSettingsAccountId === id && _settingsTabSettingsPromise) {
+        return _settingsTabSettingsPromise;
+    }
+    _settingsTabSettingsAccountId = id;
+    _settingsTabSettingsPromise = window.apiClient.get(`/api/accounts/${id}/settings`, {
+        owner: 'settings',
+        trigger: 'settings_tab'
+    }).then(function (data) {
+        _settingsTabSettingsCache = data || {};
+        _settingsTabSettingsLoadedAt = Date.now();
+        return _settingsTabSettingsCache;
+    }).finally(function () {
+        _settingsTabSettingsPromise = null;
+    });
+    return _settingsTabSettingsPromise;
+}
+
 // Initialize Reports tab
 function initReportsTab() {
     console.log("[reports] Initializing reports tab (unified view - no sub-tabs)");
@@ -638,10 +666,10 @@ function initSettingsTab() {
     if (passwordInput) passwordInput.value = "";
     if (passwordConfirmInput) passwordConfirmInput.value = "";
     
-    // Load account name (not user name) for Ad Soyad field + user_phone + isolate_from_admin
+    // Load account settings once; this feeds name, phone, isolation and server public IP.
     (async () => {
         try {
-            const data = await window.apiClient.get(`/api/accounts/${State.accountId}/settings`);
+            const data = await getSettingsTabSettings(State.accountId);
             if (data.account_name && usernameInput) {
                 usernameInput.value = data.account_name;
             } else if (State.accountMeta && State.accountMeta.name && usernameInput) {
@@ -664,25 +692,16 @@ function initSettingsTab() {
                     isolateStatus.style.color = data.isolate_from_admin ? "#0ecb81" : "var(--ds-text-secondary)";
                 }
             }
-        } catch (e) {
-            console.warn("[settings] Failed to load account name:", e);
-            if (State.accountMeta && State.accountMeta.name && usernameInput) {
-                usernameInput.value = State.accountMeta.name;
-            }
-        }
-    })();
-    
-    // Sunucu dış IP (otomatik, salt okunur) – GET /settings server_public_ip döndürür
-    (async () => {
-        try {
-            const data = await window.apiClient.get(`/api/accounts/${State.accountId}/settings`);
             if (serverPublicIpEl) {
                 const ip = (data.server_public_ip && typeof data.server_public_ip === "string") ? data.server_public_ip.trim() : "";
                 serverPublicIpEl.value = ip || "—";
                 serverPublicIpEl.placeholder = ip ? "" : "Alınamadı";
             }
         } catch (e) {
-            console.warn("[settings] Failed to load server public IP:", e);
+            console.warn("[settings] Failed to load account settings:", e);
+            if (State.accountMeta && State.accountMeta.name && usernameInput) {
+                usernameInput.value = State.accountMeta.name;
+            }
             if (serverPublicIpEl) { serverPublicIpEl.value = ""; serverPublicIpEl.placeholder = "Alınamadı"; }
         }
     })();

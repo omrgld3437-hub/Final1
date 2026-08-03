@@ -76,34 +76,34 @@ Sunucuya projeyi **ilk kez** kuruyorsanız:
 **Yerel makineden (Geliştirme):**
 ```bash
 # rsync ile tam kopya (veya scp, FTP, Git clone)
-rsync -avz /Users/omeraltin/Desktop/final1/ user@sunucu.com:/var/www/final1/
+rsync -avz /Users/omeraltin/Desktop/ayserose1/ user@sunucu.com:/opt/final1/current/
 ```
 
 **Veya sunucuda Git kullanıyorsanız:**
 ```bash
 cd /var/www
-git clone <repo-url> final1
-cd final1
+git clone <repo-url> ayserose1
+cd ayserose1
 ```
 
 ### 2. .env dosyasını oluşturun
 
 **Sunucuda:**
 ```bash
-cd /var/www/final1
+cd /opt/final1/current
 cp .env.example .env
 nano .env   # veya vim, vi
 ```
 
 **.env içinde düzenleyin:**
 - `BINANCE_MASTER_KEY` – Şifreleme anahtarı (`.env.example` içindeki talimatla oluşturun)
-- `DATABASE_URL` – Örn: `sqlite:////var/www/final1/data/dca.db` veya PostgreSQL bağlantı bilgisi
+- `DATABASE_URL` – Üretimde kalıcı `/var/lib/final1/tradertrailing.db` dosyasını veya PostgreSQL bağlantısını kullanır.
 
 ### 3. Sanal ortam ve bağımlılıklar
 
 **Sunucuda (Linux/Mac):**
 ```bash
-cd /var/www/final1
+cd /opt/final1/current
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
@@ -111,7 +111,7 @@ pip install -r requirements.txt
 
 **Windows sunucuda:**
 ```cmd
-cd C:\inetpub\final1
+cd C:\inetpub\ayserose1
 python -m venv venv
 venv\Scripts\activate
 pip install -r requirements.txt
@@ -121,8 +121,8 @@ pip install -r requirements.txt
 
 SQLite kullanıyorsanız, veritabanı dizini oluşturulabilir:
 ```bash
-mkdir -p /var/www/final1/data
-# DATABASE_URL=sqlite:////var/www/final1/data/dca.db
+mkdir -p /var/lib/final1
+# DATABASE_URL=sqlite:////var/lib/final1/tradertrailing.db
 ```
 
 ### 5. Uygulamayı başlatın
@@ -143,8 +143,8 @@ Kodda değişiklik yaptıktan sonra sunucuyu güncellemek için:
 
 **Yerel makineden (Geliştirme):**
 ```bash
-cd /Users/omeraltin/Desktop/final1
-./deploy/deploy.sh user@sunucu.com:/var/www/final1
+cd /Users/omeraltin/Desktop/ayserose1
+./deploy/deploy.sh user@sunucu.com:/opt/final1/current
 ```
 
 Bu komut:
@@ -155,7 +155,7 @@ Bu komut:
 ### Yöntem 2: Ortam değişkeni ile
 
 ```bash
-export RSYNC_DEST="user@sunucu.com:/var/www/final1"
+export RSYNC_DEST="user@sunucu.com:/opt/final1/current"
 ./deploy/deploy.sh
 ```
 
@@ -164,7 +164,7 @@ export RSYNC_DEST="user@sunucu.com:/var/www/final1"
 ```bash
 rsync -avz --delete \
   --exclude-from=deploy/SABIT_DOSYALAR.txt \
-  /Users/omeraltin/Desktop/final1/ user@sunucu.com:/var/www/final1/
+  /Users/omeraltin/Desktop/ayserose1/ user@sunucu.com:/opt/final1/current/
 ```
 
 ### Deploy sonrası
@@ -172,7 +172,7 @@ rsync -avz --delete \
 Sunucuda uygulama çalışıyorsa, yeniden başlatmanız gerekebilir:
 ```bash
 # Sunucuda
-cd /var/www/final1
+cd /opt/final1/current
 ./restart.command
 ```
 
@@ -194,13 +194,13 @@ cd /var/www/final1
 
 ```bash
 # SSH ile
-user@192.168.1.100:/var/www/final1
-user@myserver.com:/home/user/apps/final1
+user@192.168.1.100:/opt/final1/current
+user@myserver.com:/opt/final1/current
 
 # Farklı port
 ssh -p 2222 user@sunucu.com
 # rsync için:
-rsync -avz -e "ssh -p 2222" ... user@sunucu.com:/var/www/final1/
+rsync -avz -e "ssh -p 2222" ... user@sunucu.com:/opt/final1/current/
 ```
 
 ---
@@ -214,14 +214,14 @@ rsync -avz -e "ssh -p 2222" ... user@sunucu.com:/var/www/final1/
 
 ```bash
 # Git Bash'te
-cd /c/Users/KULLANICI/Desktop/final1
-./deploy/deploy.sh user@sunucu.com:/var/www/final1
+cd /c/Users/KULLANICI/Desktop/ayserose1
+./deploy/deploy.sh user@sunucu.com:/opt/final1/current
 ```
 
 ### deploy.bat (rsync gerekli)
 
 ```cmd
-deploy\deploy.bat user@sunucu.com:/var/www/final1
+deploy\deploy.bat user@sunucu.com:/opt/final1/current
 ```
 
 `rsync` Windows'ta yüklü değilse, [manuel kopyalama](#manuel-kopyalama-ftp-scp-filezilla) bölümüne bakın.
@@ -275,13 +275,13 @@ Sırayla kontrol edin:
 1. **Sunucuda `git pull` yaptınız mı?**  
    Yeniden başlatmak sadece **zaten diskte olan** kodu çalıştırır. Önce repodan güncel kodu almalısınız:
    ```bash
-   cd /var/www/final1   # veya sunucudaki proje yolu
+   cd /opt/final1/current
    git pull origin main
    ```
    Sonra servisi yeniden başlatın.
 
 2. **Doğru dizinde mi çalışıyorsunuz?**  
-   `git pull` yaptığınız klasör ile uygulamanın çalıştığı klasör **aynı** olmalı. Örneğin `~/final1` içinde pull yapıp servisi `/var/www/final1` üzerinden başlattıysanız eski kod çalışır. Servisi hangi dizinden başlatıyorsanız (systemd, `run.sh`, `start.command`), `git pull`’u da o dizinde yapın.
+   `git pull` yaptığınız klasör ile uygulamanın çalıştığı klasör **aynı** olmalı. Bu kurulumda ikisi de `/opt/final1/current` yoludur.
 
 3. **Tarayıcı / proxy önbelleği**  
    Uygulama tüm `/ui/*` ve `/api/debug/build-info` yanıtlarına `Cache-Control: no-store` ekler; commit sonrası değişiklikler anında yansır. Proxy cache kullanıyorsanız bu path’lerde cache kapatın. Eski sekme açıksa **Ctrl+Shift+R** veya **Cmd+Shift+R** ile zorla yenileyin.
@@ -317,9 +317,9 @@ Sırayla kontrol edin:
    - **Hızlı test:** Cloudflare Dashboard → **Caching** → **Configuration** → **Development Mode**’u 3 saat için açın. Siteyi tekrar açın; güncel görünüyorsa sebep Cloudflare cache.
    - **Kalıcı çözüm (seçeneklerden biri):**
      - **Purge:** **Caching** → **Configuration** → **Purge Everything** ile tüm cache’i temizleyin. Her deploy sonrası tekrar purge gerekebilir.
-     - **Bypass:** **Caching** → **Cache Rules** (veya **Page Rules**) ile `tradertrailing.com/*` için **Cache Level: Bypass** kuralı ekleyin; böylece Cloudflare hiç önbelleğe almaz, her istek sunucuya gider (güncel görünüm garanti, CDN hızı bu domain’de olmaz).
-     - **Sadece HTML’i bypass:** Sadece sayfa (HTML) güncel olsun istiyorsanız, `*tradertrailing.com/ui/*.html` veya `*tradertrailing.com/` için “Bypass cache” kuralı yazabilirsiniz; statik asset’ler (JS/CSS) isteğe bağlı cache’te kalabilir.
-   - **SSL:** Cloudflare’da **SSL/TLS** → **Overview** → mode **Full** veya **Full (strict)** olsun; Nginx’te `X-Forwarded-Proto` zaten iletiliyorsa uygulama doğru scheme’i görür.
+     - **Bypass:** **Caching** → **Cache Rules** (veya **Page Rules**) ile `ayserose.com/*` için **Cache Level: Bypass** kuralı ekleyin; böylece Cloudflare hiç önbelleğe almaz, her istek sunucuya gider (güncel görünüm garanti, CDN hızı bu domain’de olmaz).
+     - **Sadece HTML’i bypass:** Sadece sayfa (HTML) güncel olsun istiyorsanız, `*ayserose.com/ui/*.html` veya `*ayserose.com/` için “Bypass cache” kuralı yazabilirsiniz; statik asset’ler (JS/CSS) isteğe bağlı cache’te kalabilir.
+   - **SSL:** Cloudflare’da **SSL/TLS** → **Overview** → mode yalnızca **Full (strict)** olsun. `Flexible`, Nginx’in HTTP → HTTPS yönlendirmesiyle döngü oluşturur. Origin sertifikası alan adını kapsamalı ve Nginx’te `X-Forwarded-Proto` doğru iletilmelidir.
 
 ### "CRASH_LOOP" / Web servisi sürekli çöküyor
 
@@ -340,7 +340,7 @@ Servis kısa sürede tekrar tekrar yeniden başlıyorsa:
 
 - **BOM hatası:** Dosya UTF-8 BOM ile kaydedilmişse ilk satır bozulur. **Çözüm:** Sunucuda `stop.bat`'ı **Notepad** ile açıp "Farklı Kaydet" → **"ANSI"** veya **"UTF-8"** (BOM’suz) seçip kaydedin. Ya da proje kökünde `git pull` yapıp güncel `stop.bat`’ı alın (tercih edilen).
 - **PID 0 / taskkill seli:** Güncel script sadece `PID > 0` olanları kapatır; port 80/443 da eklenmiştir.
-- **tradertrailing.com hâlâ açıksa:** Site port 80/443’ten servis veriyorsa `stop.bat` artık bu portları da kapatıyor. Script’i **Yönetici olarak çalıştır**ın; yine kapanmıyorsa IIS veya başka bir servisin 80’i kullandığını kontrol edin.
+- **Alan adı hâlâ açıksa:** Site port 80/443’ten servis veriyorsa `stop.bat` artık bu portları da kapatıyor. Script’i **Yönetici olarak çalıştır**ın; yine kapanmıyorsa IIS veya başka bir servisin 80’i kullandığını kontrol edin.
 
 ### "Permission denied" hatası
 
@@ -348,7 +348,7 @@ Servis kısa sürede tekrar tekrar yeniden başlıyorsa:
 # SSH anahtarınızı kontrol edin
 ssh user@sunucu.com
 # veya hedef klasör yazma izni
-chmod 755 /var/www/final1
+chmod 755 /opt/final1/current
 ```
 
 ### ".env üzerine yazıldı" endişesi

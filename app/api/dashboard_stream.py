@@ -65,6 +65,7 @@ async def _build_sse_payload(
         _get_snapshot_wallet_cached,
     )
     from app.services.dashboard_snapshot import (
+        fetch_bot_cards_fast,
         fetch_prices,
         fetch_bots_and_account_kpis,
         fetch_finance_pnl,
@@ -77,7 +78,10 @@ async def _build_sse_payload(
     if "prices" in fields:
         tasks.append(fetch_prices())
         names.append("prices")
-    if "bots" in fields or "kpis" in fields:
+    if "bots" in fields and "kpis" not in fields:
+        tasks.append(fetch_bot_cards_fast(account_id))
+        names.append("bot_cards")
+    elif "bots" in fields or "kpis" in fields:
         tasks.append(fetch_bots_and_account_kpis(account_id, db))
         names.append("bots")
     if "kpis" in fields:
@@ -97,7 +101,10 @@ async def _build_sse_payload(
         data["prices"] = raw if isinstance(raw, dict) and "_error" not in raw else {}
 
     bots_raw = by_name.get("bots", {})
-    if "bots" in fields and isinstance(bots_raw, dict) and "_error" not in bots_raw:
+    bot_cards = by_name.get("bot_cards")
+    if "bots" in fields and isinstance(bot_cards, list):
+        data["bots"] = bot_cards
+    elif "bots" in fields and isinstance(bots_raw, dict) and "_error" not in bots_raw:
         data["bots"] = bots_raw.get("bots") or []
 
     if "kpis" in fields:

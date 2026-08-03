@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -95,7 +96,7 @@ def test_create_bot_symbol_input_not_password_autofill_target():
     assert 'data-1p-ignore="true"' in html
     assert 'data-form-type="other"' in html
     assert 'data-protonpass-ignore="true"' in html
-    assert '20260705-pa-apply-exact8' in html
+    assert '20260705-pa-apply-exact9' in html
     assert 'dashboard.css?v=pa-ai-apply4' in html
     assert "function dmCreateModalHardenSymbolAutofill" in js
     assert "function dmCreateModalArmSymbolReadonlyGuard" in js
@@ -158,3 +159,76 @@ def test_bot_detail_cycle_trades_render_is_row_safe():
 def test_dynamic_mode_params_view_exists():
     path = UI_UTILS / "dynamicModeParamsView.js"
     assert path.exists()
+
+
+def test_bot_parametreler_modal_opens_before_dynamic_render():
+    text = (ROOT / "ui" / "bot.html").read_text(encoding="utf-8")
+    dyn_view = (UI_UTILS / "dynamicModeParamsView.js").read_text(encoding="utf-8")
+    dashboard = (ROOT / "ui" / "dashboard.html").read_text(encoding="utf-8")
+    assert "dynamicModeParamsView.js?v=param-dyn-general-alloc6" in text
+    assert "dynamicModeParamsView.js?v=param-dyn-general-alloc6" in dashboard
+    assert "var parametrelerModal = document.getElementById('parametrelerModal');" in text
+    assert "var parametrelerModalClose = document.getElementById('parametrelerModalClose');" in text
+    assert "var parametrelerModalKapat = document.getElementById('parametrelerModalKapat');" in text
+    assert "var paramTabsHost = document.getElementById('paramTabsHost');" in text
+    assert "if (dyn.enabled === true && (!dyn.safety_gate || dyn.safety_gate.ok !== false)) return true;" in text
+    assert "if (dyn.enabled === true && (!dyn.safety_gate || dyn.safety_gate.ok !== false)) return true;" in dyn_view
+    open_idx = text.index("function openParametrelerModal()")
+    show_idx = text.index("parametrelerModal.style.display = 'flex';", open_idx)
+    render_idx = text.index("refreshParamModalView();", open_idx)
+    assert show_idx < render_idx
+    assert "console.warn('parametreler modal render failed'" in text
+    assert "try { fallbackHtml = renderConfig(cfg, symbol, ref); } catch (_) { fallbackHtml = ''; }" in text
+    assert "var normalizedDyn = Object.assign({}, detail.dynamic_mode || {});" in text
+    assert "normalizedDyn.snapshot = detail.state.dynamic_snapshot;" in text
+
+
+def test_dynamic_grid_banner_first_cycle_shows_regime_not_manual_params():
+    dyn_view = (UI_UTILS / "dynamicModeParamsView.js").read_text(encoding="utf-8")
+    assert "function resolveDynRegimeLabel" in dyn_view
+    assert "R3: 'Zayıf / gürültülü aralık'" in dyn_view
+    assert "dyn.preview_regime" in dyn_view
+    assert "dyn.preview_regime_label" in dyn_view
+    assert "var snap = resolveDynSnapshot(dyn, state);" in dyn_view
+    assert "Dinamik tur parametreleri" in dyn_view
+    assert "Ana rejim bekleniyor" not in dyn_view
+    assert "İlk tur</span>" not in dyn_view
+    assert "manuel parametreler</span></span>" not in dyn_view
+
+
+def test_dynamic_first_cycle_preview_regime_comes_from_param_assistant_config():
+    from app.api.bots_engine import _dynamic_preview_regime_from_config
+
+    regime, label = _dynamic_preview_regime_from_config(
+        {
+            "dynamic_mode": True,
+            "param_assistant": {
+                "template_key": "DPLV6_R3-17-065_T258_PB01_ACT",
+                "regime_tag": "R3",
+            },
+        }
+    )
+    assert regime == "R3"
+    assert label == "Piyasa kararsız"
+
+
+def test_dynamic_first_cycle_preview_regime_falls_back_to_decision_log():
+    from app.api.bots_engine import _dynamic_preview_regime_from_decision_row
+
+    regime, label = _dynamic_preview_regime_from_decision_row(
+        {
+            "regime_tag": "R3",
+            "selected_profile_name": "DPLV6_R3-17-065_PB01_ACT",
+            "telemetry_json": json.dumps(
+                {
+                    "scenario_alignment": {
+                        "regime_headline": "R3 · Zayıf / gürültülü aralık",
+                        "regime_label": "Zayıf / gürültülü aralık",
+                    }
+                },
+                ensure_ascii=False,
+            ),
+        }
+    )
+    assert regime == "R3"
+    assert label == "Piyasa kararsız"

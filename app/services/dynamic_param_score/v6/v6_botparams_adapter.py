@@ -159,6 +159,8 @@ def v6_profile_to_bot_params(
         rebuy_trail_pct=rebuy_trail,
         resell_trigger_pct=resell_trigger,
         resell_trail_pct=resell_trail,
+        buy_grid_trail_pct=buy_trail,
+        sell_grid_trail_pct=sell_trail,
     )
 
 

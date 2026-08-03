@@ -397,6 +397,9 @@ class Trade(Base):
     price = Column(Float, nullable=False)
     fee = Column(Float, default=0.0)
     fee_asset = Column(String(10), default="USDT")
+    # Explicit fee pair. ``fee`` remains the legacy USDT-normalized value.
+    fee_amount = Column(Float, nullable=True)
+    fee_usdt = Column(Float, nullable=True)
     slot_id = Column(Integer)  # Grid slot identifier
     reference_price = Column(
         Float, nullable=True
@@ -410,6 +413,15 @@ class Trade(Base):
     cycle_id = Column(
         Integer, nullable=True, default=1
     )  # Tur/round: 1, 2, 3... (profit-exit/reentry sonrası artar)
+    order_type = Column(String(32), nullable=True)
+    cost_basis_type = Column(String(32), nullable=True)
+    cost_basis_price = Column(Float, nullable=True)
+    linked_grid_ids = Column(Text, nullable=True)
+    trigger_price = Column(Float, nullable=True)
+    tracked_extreme_price = Column(Float, nullable=True)
+    completion_price = Column(Float, nullable=True)
+    fill_total = Column(Float, nullable=True)
+    engine_status = Column(String(32), nullable=True)
 
     bot = relationship("Bot", back_populates="trades")
     account = relationship("Account", back_populates="trades")
@@ -592,3 +604,134 @@ class AdminPopupDismissal(Base):
         Integer, ForeignKey("admin_popups.id"), nullable=False, index=True
     )
     dismissed_at = Column(DateTime, default=datetime.utcnow)
+
+
+class WebPushSubscription(Base):
+    """A user-owned browser/PWA Web Push subscription."""
+
+    __tablename__ = "web_push_subscriptions"
+    __table_args__ = (
+        UniqueConstraint("endpoint", name="uq_web_push_subscriptions_endpoint"),
+        Index("ix_web_push_account_active", "account_id", "revoked_at"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False, index=True)
+    endpoint = Column(Text, nullable=False)
+    p256dh = Column(Text, nullable=False)
+    auth = Column(Text, nullable=False)
+    user_agent = Column(String(500), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    last_seen_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    revoked_at = Column(DateTime, nullable=True, index=True)
+
+
+class DynamicFormulaVersion(Base):
+    __tablename__ = "dynamic_formula_versions"
+
+    id = Column(String(64), primary_key=True)
+    version = Column(String(64), nullable=False, unique=True, index=True)
+    status = Column(String(24), nullable=False, index=True)
+    coefficients_json = Column(Text, nullable=False)
+    hard_limits_json = Column(Text, nullable=False)
+    soft_limits_json = Column(Text, nullable=False)
+    source_code_commit = Column(String(64), nullable=True)
+    training_period_start = Column(DateTime, nullable=True)
+    training_period_end = Column(DateTime, nullable=True)
+    validation_metrics_json = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    approved_at = Column(DateTime, nullable=True)
+    activated_at = Column(DateTime, nullable=True)
+    deprecated_at = Column(DateTime, nullable=True)
+
+
+class DynamicAnalysisRun(Base):
+    __tablename__ = "dynamic_analysis_runs"
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_dynamic_analysis_idempotency"),
+        Index("ix_dynamic_analysis_symbol_turn", "symbol", "turn_id"),
+    )
+
+    id = Column(String(64), primary_key=True)
+    decision_id = Column(String(64), nullable=False, unique=True, index=True)
+    idempotency_key = Column(String(128), nullable=False)
+    state_version = Column(Integer, nullable=False)
+    symbol = Column(String(32), nullable=False, index=True)
+    turn_id = Column(Integer, nullable=False)
+    formula_version_id = Column(
+        String(64), ForeignKey("dynamic_formula_versions.id"), nullable=False
+    )
+    started_at = Column(DateTime, nullable=False)
+    completed_at = Column(DateTime, nullable=True)
+    data_quality_score = Column(String(64), nullable=True)
+    market_state_json = Column(Text, nullable=True)
+    reference_parameters_json = Column(Text, nullable=True)
+    previous_parameters_json = Column(Text, nullable=True)
+    candidate_parameters_json = Column(Text, nullable=True)
+    applied_parameters_json = Column(Text, nullable=True)
+    eligible_grid_ids_json = Column(Text, nullable=True)
+    protected_grid_ids_json = Column(Text, nullable=True)
+    decision = Column(String(32), nullable=False)
+    rejection_reasons_json = Column(Text, nullable=True)
+    next_analysis_at = Column(DateTime, nullable=True)
+
+
+class DynamicGridUpdate(Base):
+    __tablename__ = "dynamic_grid_updates"
+
+    id = Column(Integer, primary_key=True)
+    analysis_run_id = Column(
+        String(64), ForeignKey("dynamic_analysis_runs.id"), nullable=False, index=True
+    )
+    grid_id = Column(String(64), nullable=False)
+    side = Column(String(8), nullable=False)
+    previous_trigger_percentage = Column(String(64), nullable=True)
+    new_trigger_percentage = Column(String(64), nullable=True)
+    previous_amount = Column(String(64), nullable=True)
+    new_amount = Column(String(64), nullable=True)
+    previous_status = Column(String(48), nullable=False)
+    final_status = Column(String(48), nullable=False)
+    exchange_order_id_before = Column(String(128), nullable=True)
+    exchange_order_id_after = Column(String(128), nullable=True)
+    update_result = Column(String(48), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class DynamicLearningOutcome(Base):
+    __tablename__ = "dynamic_learning_outcomes"
+
+    id = Column(Integer, primary_key=True)
+    analysis_run_id = Column(
+        String(64), ForeignKey("dynamic_analysis_runs.id"), nullable=False, index=True
+    )
+    grid_id = Column(String(64), nullable=True)
+    decision_context_json = Column(Text, nullable=False)
+    realized_return = Column(String(64), nullable=True)
+    max_adverse_excursion = Column(String(64), nullable=True)
+    max_favorable_excursion = Column(String(64), nullable=True)
+    fees = Column(String(64), nullable=True)
+    slippage = Column(String(64), nullable=True)
+    capital_lock_duration = Column(String(64), nullable=True)
+    fill_duration = Column(String(64), nullable=True)
+    reward = Column(String(64), nullable=True)
+    outcome_completed_at = Column(DateTime, nullable=True)
+
+
+class DynamicCalibrationRun(Base):
+    __tablename__ = "dynamic_calibration_runs"
+
+    id = Column(String(64), primary_key=True)
+    base_formula_version_id = Column(
+        String(64), ForeignKey("dynamic_formula_versions.id"), nullable=False
+    )
+    candidate_formula_version_id = Column(
+        String(64), ForeignKey("dynamic_formula_versions.id"), nullable=False
+    )
+    data_period_start = Column(DateTime, nullable=False)
+    data_period_end = Column(DateTime, nullable=False)
+    sample_count = Column(Integer, nullable=False)
+    validation_results_json = Column(Text, nullable=True)
+    shadow_results_json = Column(Text, nullable=True)
+    decision = Column(String(32), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)

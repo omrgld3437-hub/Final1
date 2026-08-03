@@ -12,6 +12,7 @@
         profitExit: null,
         _loadedKey: null
     };
+    var MAX_TRUSTED_PRICE_FACTOR = 20;
 
     function storageKey(botId, cycleId) {
         return 'gridTrailFloor_' + String(botId || '') + '_' + String(cycleId != null ? cycleId : '0');
@@ -59,6 +60,24 @@
         _env._loadedKey = null;
     }
 
+    function sanitizeStoredPrice(value, trustedValues) {
+        var n = Number(value);
+        if (!Number.isFinite(n) || n <= 0) return null;
+        var trusted = null;
+        (trustedValues || []).some(function (candidate) {
+            var v = Number(candidate);
+            if (!Number.isFinite(v) || v <= 0) return false;
+            trusted = v;
+            return true;
+        });
+        if (trusted == null) return n;
+        var ratio = n / trusted;
+        if (ratio > MAX_TRUSTED_PRICE_FACTOR || ratio < 1 / MAX_TRUSTED_PRICE_FACTOR) {
+            return null;
+        }
+        return n;
+    }
+
     function mergeBuyFloor(cur, base, livePrice, applyLive) {
         var v = (cur != null && !isNaN(Number(cur))) ? Number(cur) : null;
         if (base != null && !isNaN(Number(base)) && Number(base) > 0) {
@@ -86,13 +105,21 @@
         (sellPoints || []).forEach(function (p) {
             if (p.fired || (p.anchor == null && p.trigger_hit_price == null)) return;
             var base = p.anchor != null && !isNaN(Number(p.anchor)) ? Number(p.anchor) : null;
-            var cur = mergeSellCeiling(_env.sell[p.i], base, livePrice, applyLive);
+            var stored = sanitizeStoredPrice(
+                _env.sell[p.i],
+                [base, p.trigger_hit_price, p.trigger_price]
+            );
+            var cur = mergeSellCeiling(stored, base, livePrice, applyLive);
             if (cur != null) _env.sell[p.i] = cur;
         });
         (buyPoints || []).forEach(function (p) {
             if (p.fired || (p.anchor == null && p.trigger_hit_price == null)) return;
             var base = p.anchor != null && !isNaN(Number(p.anchor)) ? Number(p.anchor) : null;
-            var cur = mergeBuyFloor(_env.buy[p.i], base, livePrice, applyLive);
+            var stored = sanitizeStoredPrice(
+                _env.buy[p.i],
+                [base, p.trigger_hit_price, p.trigger_price]
+            );
+            var cur = mergeBuyFloor(stored, base, livePrice, applyLive);
             if (cur != null) _env.buy[p.i] = cur;
         });
         if (botId != null) saveToStorage(botId, cycleId);
@@ -104,9 +131,17 @@
             if (!p.trigger_hit) return;
             if (p.type === 'reentry' && p.dip != null) {
                 var base = Number(p.dip);
+                _env.profitReentry = sanitizeStoredPrice(
+                    _env.profitReentry,
+                    [base, p.trigger_price]
+                );
                 _env.profitReentry = mergeBuyFloor(_env.profitReentry, base, livePrice, applyLive);
             } else if (p.type !== 'reentry' && p.tepe != null) {
                 var baseT = Number(p.tepe);
+                _env.profitExit = sanitizeStoredPrice(
+                    _env.profitExit,
+                    [baseT, p.trigger_price]
+                );
                 _env.profitExit = mergeSellCeiling(_env.profitExit, baseT, livePrice, applyLive);
             }
         });

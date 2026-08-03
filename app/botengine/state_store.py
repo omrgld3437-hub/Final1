@@ -158,10 +158,13 @@ def save_state(
     )
 
     now = datetime.utcnow()
-    db.execute(
+    result = db.execute(
         text("""
             INSERT INTO bot_engine_state (bot_id, account_id, state_json, cycle_id, mode, last_tick_at, last_error_code, retry_at, updated_at)
-            VALUES (:bid, :aid, :js, :cid, :mode, :lt, :err, :retry, :upd)
+            SELECT :bid, :aid, :js, :cid, :mode, :lt, :err, :retry, :upd
+            WHERE EXISTS (
+                SELECT 1 FROM bots WHERE id = :bid AND account_id = :aid
+            )
             ON CONFLICT(bot_id) DO UPDATE SET
                 state_json = :js, cycle_id = :cid, mode = :mode, last_tick_at = :lt,
                 last_error_code = :err, retry_at = :retry, updated_at = :upd
@@ -179,6 +182,13 @@ def save_state(
         },
     )
     db.commit()
+    if not (result.rowcount or 0):
+        logger.info(
+            "BOT_STATE_SAVE_SKIPPED_DELETED bot_id=%s account_id=%s",
+            bot_id,
+            account_id,
+        )
+        return
 
     # Post-save verify: re-read and log
     verify_row = db.execute(
@@ -398,10 +408,13 @@ def append_event(
         meta_js = json.dumps(m, ensure_ascii=False)
     except Exception:
         meta_js = "{}"
-    db.execute(
+    result = db.execute(
         text("""
             INSERT INTO bot_engine_events (bot_id, account_id, ts, event_type, message, meta_json)
-            VALUES (:bid, :aid, :ts, :ty, :msg, :meta)
+            SELECT :bid, :aid, :ts, :ty, :msg, :meta
+            WHERE EXISTS (
+                SELECT 1 FROM bots WHERE id = :bid AND account_id = :aid
+            )
         """),
         {
             "bid": bot_id,
@@ -413,6 +426,14 @@ def append_event(
         },
     )
     db.commit()
+    if not (result.rowcount or 0):
+        logger.info(
+            "BOT_EVENT_SAVE_SKIPPED_DELETED bot_id=%s account_id=%s event_type=%s",
+            bot_id,
+            account_id,
+            event_type,
+        )
+        return
     if os.getenv("RAM_PROBE_ENABLED") == "1" and ty == "ORDER_FILLED":
         try:
             from app.observability.ram_probe import probe_event_store

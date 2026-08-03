@@ -83,3 +83,96 @@ def test_profit_points_avg_cost_grid_only_uses_fill_price():
     assert profit_points[0]["type"] == "reentry"
     assert profit_points[0]["average_cost"] == 2121.7136
     assert profit_points[0]["trigger_price"] == round(2121.7136 * 0.99, 4)
+    assert profit_points[0]["reference_price"] == 2121.7136
+    assert profit_points[0]["trigger_pct_from_reference"] == -1.0
+
+
+def test_profit_point_is_not_created_without_a_completed_grid():
+    state = {
+        "reference_price": 100.0,
+        "initial_allocation_done": True,
+        "initial_alloc_base_qty": 5.0,
+        "initial_alloc_price": 100.0,
+        "base_balance": 5.0,
+        "quote_balance": 500.0,
+        "sell_grid_fired": [False],
+        "buy_grid_fired": [False],
+        "sell_history": [],
+        "buy_history": [],
+    }
+    cfg = {
+        "sell_grids": [{"sell_grid_pct": 1.0, "sell_qty_pct_of_base": 100.0}],
+        "buy_grids": [{"buy_grid_pct": 1.0, "buy_qty_pct_of_quote": 100.0}],
+        "profit_reentry_drop_pct": 1.0,
+        "profit_reentry_rise_pct": 0.3,
+        "profit_exit_rise_pct": 1.0,
+        "profit_exit_drop_pct": 0.3,
+    }
+    _, profit_points, _ = compute_grid_profit_view(state, cfg, price=101.0)
+    assert profit_points == []
+
+
+def test_profit_amount_updates_after_each_completed_grid():
+    cfg = {
+        "sell_grids": [
+            {"sell_grid_pct": 1.0, "sell_qty_pct_of_base": 50.0},
+            {"sell_grid_pct": 2.0, "sell_qty_pct_of_base": 50.0},
+        ],
+        "buy_grids": [],
+        "profit_reentry_drop_pct": 1.0,
+        "profit_reentry_rise_pct": 0.3,
+    }
+    state = {
+        "reference_price": 100.0,
+        "cycle_grid_side": "SELL",
+        "base_balance": 7.0,
+        "quote_balance": 500.0,
+        "sell_grid_fired": [True, False],
+        "buy_grid_fired": [],
+        "sell_history": [
+            {"grid_index": 0, "qty": 2.0, "price": 101.0, "side": "SELL"},
+        ],
+        "buy_history": [],
+    }
+    _, first_profit_points, _ = compute_grid_profit_view(state, cfg, price=100.0)
+    assert first_profit_points[0]["planned_quote_usd"] == 202.0
+
+    state["sell_grid_fired"] = [True, True]
+    state["sell_history"].append(
+        {"grid_index": 1, "qty": 3.0, "price": 102.0, "side": "SELL"}
+    )
+    _, second_profit_points, _ = compute_grid_profit_view(state, cfg, price=100.0)
+    assert second_profit_points[0]["planned_quote_usd"] == 500.0
+
+
+def test_profit_sell_amount_updates_after_each_completed_buy_grid():
+    cfg = {
+        "sell_grids": [],
+        "buy_grids": [
+            {"buy_grid_pct": 1.0, "buy_qty_pct_of_quote": 50.0},
+            {"buy_grid_pct": 2.0, "buy_qty_pct_of_quote": 50.0},
+        ],
+        "profit_exit_rise_pct": 1.0,
+        "profit_exit_drop_pct": 0.3,
+    }
+    state = {
+        "reference_price": 100.0,
+        "cycle_grid_side": "BUY",
+        "base_balance": 10.0,
+        "quote_balance": 100.0,
+        "sell_grid_fired": [],
+        "buy_grid_fired": [True, False],
+        "sell_history": [],
+        "buy_history": [
+            {"grid_index": 0, "qty": 2.0, "price": 99.0, "side": "BUY"},
+        ],
+    }
+    _, first_profit_points, _ = compute_grid_profit_view(state, cfg, price=100.0)
+    assert first_profit_points[0]["planned_base_qty"] == 2.0
+
+    state["buy_grid_fired"] = [True, True]
+    state["buy_history"].append(
+        {"grid_index": 1, "qty": 3.0, "price": 98.0, "side": "BUY"}
+    )
+    _, second_profit_points, _ = compute_grid_profit_view(state, cfg, price=100.0)
+    assert second_profit_points[0]["planned_base_qty"] == 5.0

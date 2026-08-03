@@ -69,31 +69,35 @@ class BinanceAdapter:
             out[asset] = {"free": free, "locked": locked}
         return out
 
-    async def get_symbol_filters(self, symbol: str) -> Dict[str, Any]:
+    async def get_symbol_filters(
+        self, symbol: str, *, force_refresh: bool = False
+    ) -> Dict[str, Any]:
         """LOT_SIZE / PRICE_FILTER / MIN_NOTIONAL — data_hub cache, else exchangeInfo REST."""
         from app.botengine.order_qty import normalize_symbol_filters
 
         symbol = symbol.upper()
-        if symbol in self._filters_cache:
+        if not force_refresh and symbol in self._filters_cache:
             return self._filters_cache[symbol]
         try:
             from app.services.market_data import get_symbol_filters
 
             cached = get_symbol_filters(symbol)
-            if cached:
+            if cached and not force_refresh:
                 out = normalize_symbol_filters(cached)
                 self._filters_cache[symbol] = out
                 return out
         except Exception:
             pass
-        if not self.paper_mode and self.keys:
+        if self.keys or self.paper_mode:
             try:
                 from app.services.binance_spot import get_cached_symbol_filters
 
                 cached_ex = await get_cached_symbol_filters(
                     symbol,
-                    testnet=getattr(self.keys, "testnet", False),
-                    force_refresh=False,
+                    testnet=getattr(self.keys, "testnet", False)
+                    if self.keys
+                    else False,
+                    force_refresh=force_refresh,
                 )
                 if cached_ex:
                     raw = {
@@ -101,13 +105,17 @@ class BinanceAdapter:
                         "min_qty_str": cached_ex.get("min_qty_str"),
                         "tick_size_str": cached_ex.get("tick_size_str"),
                         "min_notional": cached_ex.get("min_notional", DEFAULT_MIN_NOTIONAL_USDT),
+                        "max_qty": cached_ex.get("max_qty"),
+                        "symbol_trading": cached_ex.get("symbol_trading", True),
+                        "base_asset": cached_ex.get("baseAsset"),
+                        "quote_asset": cached_ex.get("quoteAsset"),
                     }
                     out = normalize_symbol_filters(raw)
                     self._filters_cache[symbol] = out
                     return out
             except Exception as e:
                 logger.warning("get_symbol_filters REST fallback %s: %s", symbol, e)
-        out = normalize_symbol_filters({})
+        out = normalize_symbol_filters({"symbol_trading": False})
         self._filters_cache[symbol] = out
         return out
 

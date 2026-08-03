@@ -7,9 +7,49 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
 <!DOCTYPE html>
 <html lang="tr">
 <head>
+    <script>
+    (function () {
+        var params = new URLSearchParams(window.location.search);
+        var versionKey = 'ayserose-ui-version';
+        if (params.get('legacy') === '1') {
+            try { sessionStorage.setItem(versionKey, 'legacy'); } catch (e) {}
+            return;
+        }
+        try {
+            if (params.get('v2') === '1') sessionStorage.removeItem(versionKey);
+            else if (sessionStorage.getItem(versionKey) === 'legacy') return;
+        } catch (e) {}
+        var target = new URL('/ui/assets/v2/dashboard/index.html', window.location.origin);
+        target.search = window.location.search;
+        target.hash = window.location.hash;
+        target.searchParams.delete('legacy');
+        target.searchParams.delete('v2');
+        window.location.replace(target.pathname + target.search + target.hash);
+    })();
+    </script>
     <meta name="robots" content="noindex, follow">
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#101116">
+    <meta name="application-name" content="Ayserose">
+    <meta name="apple-mobile-web-app-title" content="Ayserose">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <script>
+    (function () {
+        var standalone = navigator.standalone === true;
+        try { standalone = standalone || window.matchMedia('(display-mode: standalone)').matches; } catch (e) {}
+        if (standalone && (navigator.maxTouchPoints || 0) > 0) {
+            document.documentElement.classList.add('ayserose-mobile-standalone');
+        }
+    })();
+    </script>
+    <link rel="stylesheet" href="/ui/assets/pwa-safe-area.css?v=1">
+    <link rel="manifest" href="/ui/assets/manifest.webmanifest">
+    <link rel="apple-touch-icon" sizes="180x180" href="/ui/assets/pwa/apple-touch-icon-180.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="/ui/assets/pwa/favicon-32.png">
+    <script src="/ui/assets/core/persistentAuth.js?v=1"></script>
     <style id="tt-scroll-critical">html,html*{scrollbar-width:none;-ms-overflow-style:none}html::-webkit-scrollbar,html *::-webkit-scrollbar{display:none;width:0!important;height:0!important;background:transparent}</style>
     <script>document.documentElement.classList.add('tt-auto-scrollbar');</script>
     <link rel="stylesheet" href="/ui/assets/scroll-auto-hide.css?v=8">
@@ -42,46 +82,19 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
     (function(){
       var r = document.documentElement;
       r.style.visibility = 'hidden';
-      try {
-        // Önce sessionStorage (aynı sekme), yoksa localStorage (grafik sekmesinden geri gelince)
-        var tok = sessionStorage.getItem('token') || localStorage.getItem('token');
-        var usr = sessionStorage.getItem('user') || localStorage.getItem('user');
-        if (!tok || !usr) {
-          // Cookie ile oturum var mı kontrol et (örn. "Dashboard'a dön" tıklanınca storage bazen boş kalabiliyor)
-          var origin = window.location.origin || '';
-          fetch(origin + '/api/auth/whoami', { credentials: 'include', method: 'GET' })
-            .then(function(res) {
-              if (res.ok) {
-                return res.json().then(function(data) {
-                  var user = { id: data.user_id, username: data.username || '', account_id: data.account_id };
-                  try { sessionStorage.setItem('user', JSON.stringify(user)); } catch (_) {}
-                  r.style.visibility = 'visible';
-                });
-              }
-              try { localStorage.removeItem('last_route'); } catch (_) {}
-              location.replace('/ui/login.html');
-            })
-            .catch(function() {
-              try { localStorage.removeItem('last_route'); } catch (_) {}
-              location.replace('/ui/login.html');
-            });
-          return;
-        }
-        if (!sessionStorage.getItem('token')) {
-          sessionStorage.setItem('token', tok);
-          sessionStorage.setItem('user', usr);
-        }
-        r.style.visibility = 'visible';
-      } catch (e) {
-        location.replace('/ui/login.html');
-        return;
-      }
-      // İleri tuşu ile bfcache'den gelindiğinde tekrar şifre iste: login'e yönlendir
-      window.addEventListener('pageshow', function(e) {
-        if (e.persisted) {
-          location.replace('/ui/login.html');
-        }
-      });
+      window.__ayseroseAuthReady = window.AyserosePersistentAuth.restore()
+        .then(function(valid) {
+          if (valid === false) {
+            location.replace('/ui/login.html?session_expired=1');
+            return false;
+          }
+          r.style.visibility = '';
+          return valid;
+        })
+        .catch(function() {
+          r.style.visibility = '';
+          return null;
+        });
     })();
     </script>
     <title>Dashboard - ayserose</title>
@@ -1349,8 +1362,8 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
                         <span class="perf-summary-spark perf-summary-spark-4" aria-hidden="true"></span>
                         <span class="perf-summary-spark perf-summary-spark-5" aria-hidden="true"></span>
                         <span class="perf-summary-spark perf-summary-spark-6" aria-hidden="true"></span>
-                        <button id="dmParamAssistantBtn" class="btn btn-sm btn-secondary perf-summary-btn dm-param-assistant-btn" type="button" title="Parite verilerine göre parametre önerisi">
-                            Parametre Asistanı
+                        <button id="dmParamAssistantBtn" class="btn btn-sm btn-secondary perf-summary-btn dm-param-assistant-btn" type="button" title="Çok yakında" disabled aria-disabled="true">
+                            Parametre Asistanı · Çok yakında
                         </button>
                     </span>
                 </div>
@@ -2147,7 +2160,7 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
     <!-- Core infrastructure (must load first) -->
     <script src="/ui/assets/utils/trTime.js?v=1"></script>
     <script src="/ui/assets/js/maintenanceOverlay.js?v=1"></script>
-    <script src="/ui/assets/core/apiClient.js?v=param-assistant-poll1"></script>
+    <script src="/ui/assets/core/apiClient.js?v=server-flicker-fix1"></script>
     <script src="/ui/assets/core/errorReporter.js?v=csrf-log-error1"></script>
     <script src="/ui/assets/core/intervalRegistry.js?v=refactor1"></script>
     <!-- Stores -->
@@ -2175,12 +2188,12 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
     <!-- [1] Önce: State/DOM bağımsız format/utility fonksiyonları -->
     <script src="/ui/assets/modules/dashboard-format.js?v=1"></script>
     <!-- [2] Ana dashboard: State, assetsState, normalizeAndApplyWallet vb. tanımlar -->
-    <script src="/ui/assets/dashboard.js?v=account-scope1"></script>
+    <script src="/ui/assets/dashboard.js?v=boot-id-nonblocking1"></script>
     <script src="/ui/assets/utils/dashboardAccountScope.js?v=account-scope1"></script>
     <!-- [3] Sonra: State'e runtime erişen modüller (DOMContentLoaded öncesi hazır olurlar) -->
     <script src="/ui/assets/modules/dashboard-appbar.js?v=1"></script>
-    <script src="/ui/assets/modules/dashboard-wallet-state.js?v=wallet-status-stable1"></script>
-    <script src="/ui/assets/utils/dynamicModeParamsView.js?v=param-dyn-general-alloc1"></script>
+    <script src="/ui/assets/modules/dashboard-wallet-state.js?v=wallet-status-rest-fallback2"></script>
+    <script src="/ui/assets/utils/dynamicModeParamsView.js?v=param-dyn-general-alloc6"></script>
     <script src="/ui/assets/modules/dashboard-bot-perf.js?v=grid-qtysum-seed1"></script>
     <script src="/ui/assets/modules/dashboard-leaderboard.js?v=12"></script>
     <script src="/ui/assets/modules/dashboard-tx-history.js?v=1"></script>
@@ -2189,9 +2202,9 @@ CHANGE: Update script version for bot list fix v8 (full debugging)
     <script src="/ui/assets/modules/dashboard-tabs.js?v=4"></script>
     <script src="/ui/assets/modules/user-activity-beacon.js?v=1"></script>
     <script src="/ui/assets/modules/ai-assistant-spec.js?v=20260626pa34"></script>
-    <script src="/ui/assets/modules/dashboard-create-modal.js?v=20260705-pa-apply-exact8"></script>
+    <script src="/ui/assets/modules/dashboard-create-modal.js?v=20260705-pa-apply-exact9"></script>
     <script src="/ui/assets/modules/dashboard-spot-trade.js?v=2"></script>
-    <script src="/ui/assets/modules/dashboard-finance.js?v=account-scope1"></script>
+    <script src="/ui/assets/modules/dashboard-finance.js?v=settings-single-load1"></script>
     <script src="/ui/assets/ticker.js?v=chg-pct1" defer></script>
 </body>
 </html>

@@ -9,10 +9,8 @@ def build_profile_ids(
     profile: V6CatalogProfile,
     adjuster_tags: list[str],
 ) -> tuple[str, str, str]:
-    s = profile.scenario
-    catalog_id = (
-        f"DPLV6_{s.regime_id}-{s.sub_id}-{s.micro_id}_{s.behavior_id}_{s.severity}"
-    )
+    # Persist the operator's net profile key, never a historical generated-shelf id.
+    catalog_id = profile.profile_id
     adj_suffix = "_".join(adjuster_tags[:8]) if adjuster_tags else "NONE"
     final_id = f"{catalog_id}__ADJ_{adj_suffix}_FINAL"
     ba = f"BA{profile.base_allocation_pct:02d}"

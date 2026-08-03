@@ -36,7 +36,7 @@ import logging
 import math
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from app.botengine.models import DcaGridTrailingConfig
 from app.botengine.strategies.dca_grid_trailing import (
@@ -212,6 +212,18 @@ def build_config(
         "basis_mode": p.get("basis_mode", "grid_only"),
         "min_notional_guard": float(p.get("min_notional_guard", 10.0)),
         "max_buy_levels": int(p.get("max_buy_levels", max(1, len(buy_grids)))),
+        "max_base_exposure_frac": float(p.get("max_base_exposure_frac", 1.0)),
+        "max_slippage_pct": float(p.get("max_slippage_pct", 0.5)),
+        "buy_disabled": bool(p.get("buy_disabled", False)),
+        "sell_only_mode": bool(p.get("sell_only_mode", False)),
+        "rebuy_enabled": bool(p.get("rebuy_enabled", True)),
+        "resell_enabled": bool(p.get("resell_enabled", True)),
+        "cancel_existing_buy_orders": bool(
+            p.get("cancel_existing_buy_orders", False)
+        ),
+        "cancel_existing_sell_orders": bool(
+            p.get("cancel_existing_sell_orders", False)
+        ),
         "available_quote_buffer_pct": float(p.get("available_quote_buffer_pct", 0.005)),
         "initial_fee_buffer_pct": float(p.get("initial_fee_buffer_pct", 0.002)),
         "dynamic_mode": False,
@@ -219,11 +231,75 @@ def build_config(
     return DcaGridTrailingConfig(raw)
 
 
-def _subtick_path(o: float, h: float, l: float, c: float) -> List[float]:
-    """Mum içi pesimist fiyat yolu (trailing uç hareketlerini yakalamak için)."""
-    if c >= o:
-        return [o, l, h, c]
-    return [o, h, l, c]
+def _subtick_path(
+    o: float, h: float, l: float, c: float, max_step_pct: float = 0.20
+) -> List[float]:
+    """Mum içi pesimist yol; trailing eşiklerini fiyat boşluğuna dönüştürmez.
+
+    Canlı stratejinin gap/slipaj koruması bir önceki basit ``O-L-H-C`` yolunda,
+    özellikle 4s mumlarda, fiyatın trailing tamamlanma seviyesinin üzerinden
+    tek adımda atlaması nedeniyle fill'i sonsuza dek reddedebiliyordu. Gerçek
+    piyasada bu seviye mum içinde işlem görmüştür. Her bacağı küçük doğrusal
+    adımlara bölmek hem üretim gap korumasını aynen çalıştırır hem de OHLC'nin
+    kanıtladığı eşik geçişini kaybetmez.
+    """
+    anchors = [o, l, h, c] if c >= o else [o, h, l, c]
+    out: List[float] = [float(anchors[0])]
+    max_step = max(0.01, float(max_step_pct or 0.20)) / 100.0
+    for target in anchors[1:]:
+        start = out[-1]
+        target = float(target)
+        if start <= 0 or target <= 0:
+            out.append(target)
+            continue
+        move = abs(target / start - 1.0)
+        # Doğrusal aşağı adımlarda payda küçüldüğü için son adımın yüzdesi ilk
+        # adımdan az miktarda büyük olabilir; bir güvenlik dilimi ekle.
+        parts = max(1, int(math.ceil(move / max_step)) + (1 if move > max_step else 0))
+        out.extend(start + (target - start) * i / parts for i in range(1, parts + 1))
+    return out
+
+
+def _adaptive_subtick_path(
+    o: float,
+    h: float,
+    l: float,
+    c: float,
+    state: Dict[str, Any],
+    max_step_pct: float = 0.20,
+):
+    """Yield dense prices only while a trail is armed.
+
+    This is intentionally a generator: after each yielded anchor the strategy
+    mutates ``state``; the following leg can therefore see that a grid just
+    armed. Idle legs stay O-L-H-C/O-H-L-C (optimizer speed), while the
+    retracement leg that can fill is dense (gap-guard correctness).
+    """
+    anchors = [o, l, h, c] if c >= o else [o, h, l, c]
+    current = float(anchors[0])
+    yield current
+    for target_raw in anchors[1:]:
+        target = float(target_raw)
+        mode = str(state.get("mode") or "IDLE")
+        armed = mode != "IDLE" or any(
+            value is not None
+            for key in ("sell_grid_trigger_price", "buy_grid_trigger_price")
+            for value in (state.get(key) or [])
+        )
+        if not armed or current <= 0 or target <= 0:
+            yield target
+            current = target
+            continue
+        move = abs(target / current - 1.0)
+        max_step = max(0.01, float(max_step_pct or 0.20)) / 100.0
+        parts = max(
+            1,
+            int(math.ceil(move / max_step)) + (1 if move > max_step else 0),
+        )
+        start = current
+        for i in range(1, parts + 1):
+            yield start + (target - start) * i / parts
+        current = target
 
 
 # ---------------------------------------------------------------------------
@@ -240,6 +316,9 @@ def run_backtest(
     taker_extra_bps: float = 0.0,
     intrabar: bool = True,
     record_equity: bool = False,
+    adaptive_intrabar: Optional[bool] = None,
+    before_tick: Optional[Callable[[Dict[str, Any]], None]] = None,
+    audit_hook: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> BacktestResult:
     """
     candles: artan zaman sıralı [{t,o,h,l,c,v}, ...]
@@ -252,6 +331,23 @@ def run_backtest(
         res.ok = False
         res.note = "insufficient_candles"
         return res
+
+    if adaptive_intrabar is None:
+        # Üretim optimizer'ı normalde 15m/1h seri kullanır; eski sentetik
+        # testler ise yüzlerce günlük mumla yüzlerce aday koşturur. Uzun ve
+        # kaba seriyi otomatik sıklaştırmak iş bütçesini katlar. Kısa doğrulama
+        # senaryolarında veya <=1h gerçek seride eşik duyarlılığı açık kalır.
+        sample_gaps = [
+            int(candles[i].get("t") or 0) - int(candles[i - 1].get("t") or 0)
+            for i in range(1, min(len(candles), 40))
+        ]
+        positive_gaps = sorted(x for x in sample_gaps if x > 0)
+        median_gap = (
+            positive_gaps[len(positive_gaps) // 2] if positive_gaps else 0
+        )
+        use_adaptive_intrabar = len(candles) <= 300 or median_gap <= 3_600_000
+    else:
+        use_adaptive_intrabar = bool(adaptive_intrabar)
 
     if "fee_rate" not in params:
         params = {**params, "fee_rate": fee_rate}
@@ -314,6 +410,18 @@ def run_backtest(
     first_open = float(candles[0].get("o") or candles[0].get("c") or 0.0)
     last_close = float(candles[-1].get("c") or 0.0)
 
+    current_ts = 0
+    current_bar_index = -1
+
+    def _audit(event: Dict[str, Any]) -> None:
+        if audit_hook is None:
+            return
+        try:
+            audit_hook(event)
+        except Exception:
+            # Teşhis toplayıcısının hatası ekonomik simülasyonu değiştiremez.
+            logger.exception("backtest audit hook failed")
+
     def _apply(action: Dict[str, Any], price: float) -> None:
         nonlocal base_balance, quote_balance, fills_buy, fills_sell, fees_paid, trades
         nonlocal slip_cost, exposure_cap_hits, downtrend_throttle_hits
@@ -361,6 +469,9 @@ def run_backtest(
                 return
             fee = q * fp * sell_fee
 
+        base_before = base_balance
+        quote_before = quote_balance
+        cycle_before = int(state.get("cycle_id") or 1)
         apply_fill_to_state(
             state,
             side,
@@ -403,6 +514,29 @@ def run_backtest(
             )
             base_balance = state["base_balance"]
             quote_balance = state["quote_balance"]
+            _audit(
+                {
+                    "event": "fill",
+                    "ts": current_ts,
+                    "bar_index": current_bar_index,
+                    "cycle_id": cycle_before,
+                    "side": side,
+                    "reason": reason,
+                    "grid_index": action.get("grid_index"),
+                    "trigger_price": price,
+                    "fill_price": fp,
+                    "quantity": q,
+                    "notional": q * fp,
+                    "fee": fee,
+                    "fee_rate": buy_fee if side == "BUY" else sell_fee,
+                    "fee_included_in_net_pnl": True,
+                    "slippage_cost": abs(fp - price) * q,
+                    "base_before": base_before,
+                    "quote_before": quote_before,
+                    "base_after": base_balance,
+                    "quote_after": quote_balance,
+                }
+            )
             return
 
         # cycle-kapsamlı fill'leri ledger'a yaz (fee-aware trigger mantığı için şart)
@@ -446,16 +580,81 @@ def run_backtest(
         quote_balance = float(state.get("quote_balance") or 0.0)
 
         # cycle kapanışı (execution.py:2526 gate'i)
-        if state.get("_cycle_complete") or reason in _CLOSE_REASONS:
+        cycle_closed = bool(state.get("_cycle_complete") or reason in _CLOSE_REASONS)
+        cycle_direction = None
+        cycle_profit_usdt = 0.0
+        cycle_profit_coin = 0.0
+        inventory_coin_profit = 0.0
+        cash_profit_usdt = 0.0
+        cycle_fee_usdt = 0.0
+        if cycle_closed:
+            ledger_before_reset = dict(state.get("cycle_ledger_current") or {})
+            ledger_reasons = {
+                str(fill.get("reason") or "")
+                for fill in (ledger_before_reset.get("fills") or [])
+                if isinstance(fill, dict)
+            }
+            if reason == "trail_reentry_buy" or "trail_sell_grid" in ledger_reasons:
+                cycle_direction = "UP"
+            elif reason == "trail_profit_sell" or "trail_buy_grid" in ledger_reasons:
+                cycle_direction = "DOWN"
+            else:
+                cycle_direction = "UNKNOWN"
+            inventory_coin_profit = float(
+                ledger_before_reset.get("inventory_coin_adv_qty") or 0.0
+            )
+            cash_profit_usdt = float(
+                ledger_before_reset.get("cash_fifo_pnl_usdt") or 0.0
+            )
+            cycle_fee_usdt = float(
+                ledger_before_reset.get("buy_fee_total_quote") or 0.0
+            ) + float(ledger_before_reset.get("sell_fee_total_quote") or 0.0)
             cycle_reset_after_fill(state, fp, n, m, symbol=symbol)
-            cp = float(state.get("last_cycle_profit_usdt") or 0.0)
-            cycle_pnls.append(cp)
+            cycle_profit_usdt = float(state.get("last_cycle_profit_usdt") or 0.0)
+            cycle_profit_coin = cycle_profit_usdt / fp if fp > 0 else 0.0
+            cycle_pnls.append(cycle_profit_usdt)
             base_balance = float(state.get("base_balance") or 0.0)
             quote_balance = float(state.get("quote_balance") or 0.0)
+        _audit(
+            {
+                "event": "fill",
+                "ts": current_ts,
+                "bar_index": current_bar_index,
+                "cycle_id": cycle_before,
+                "cycle_id_after": int(state.get("cycle_id") or cycle_before),
+                "side": side,
+                "reason": reason,
+                "grid_index": action.get("grid_index"),
+                "trigger_price": price,
+                "fill_price": fp,
+                "quantity": q,
+                "notional": q * fp,
+                "fee": fee,
+                "fee_rate": buy_fee if side == "BUY" else sell_fee,
+                "fee_included_in_net_pnl": True,
+                "slippage_cost": abs(fp - price) * q,
+                "base_before": base_before,
+                "quote_before": quote_before,
+                "base_after": base_balance,
+                "quote_after": quote_balance,
+                "cycle_closed": cycle_closed,
+                "cycle_direction": cycle_direction,
+                "cycle_profit_usdt": cycle_profit_usdt,
+                "cycle_profit_coin": cycle_profit_coin,
+                "cycle_profit_coin_method": (
+                    "cycle_profit_usdt / cycle_close_price" if cycle_closed else None
+                ),
+                "inventory_coin_profit": inventory_coin_profit,
+                "cash_profit_usdt": cash_profit_usdt,
+                "cycle_fee_usdt": cycle_fee_usdt,
+            }
+        )
 
     # ---- ana döngü (strateji logları yalnız bu blok boyunca susturulur) ----
     with _quiet_strategy_logs():
-        for c in candles:
+        for bar_index, c in enumerate(candles):
+            current_bar_index = bar_index
+            current_ts = int(c.get("t") or 0)
             o = float(c.get("o") or 0.0)
             h = float(c.get("h") or 0.0)
             low = float(c.get("l") or 0.0)
@@ -471,10 +670,38 @@ def run_backtest(
                 bar_is_bearish = ref > 0 and (lb[-1] / ref - 1.0) * 100.0 <= _DOWNTREND_RET_THRESHOLD_PCT
             else:
                 bar_is_bearish = False
-            path = _subtick_path(o, h, low, cl) if intrabar else [cl]
+            path = (
+                _adaptive_subtick_path(o, h, low, cl, state)
+                if intrabar and use_adaptive_intrabar
+                else _subtick_path(o, h, low, cl, max_step_pct=10_000.0)
+                if intrabar
+                else [cl]
+            )
             for px in path:
                 if px <= 0:
                     continue
+                if before_tick is not None:
+                    tick_context = {
+                        "ts": current_ts,
+                        "bar_index": current_bar_index,
+                        "candle": c,
+                        "price": px,
+                        "state": state,
+                        "config": config,
+                        "base_balance": base_balance,
+                        "quote_balance": quote_balance,
+                    }
+                    before_tick(tick_context)
+                    if tick_context.get("skip_strategy"):
+                        continue
+                    # Dinamik Parametre Asistanı grid sayısı, ücret ve maruziyet
+                    # sınırını tur başında değiştirebilir. Kapanış/reset kodunun
+                    # da yeni planı kullanması için yerel çalışma değerlerini eşle.
+                    n = len(config.sell_grids)
+                    m = len(config.buy_grids)
+                    buy_fee = config.buy_fee_rate
+                    sell_fee = config.sell_fee_rate
+                    max_exposure_frac = float(config.max_base_exposure_frac or 1.0)
                 total_ticks += 1
                 mode_before = state.get("mode")
                 actions, _ = tick_dca_grid_trailing(
@@ -496,6 +723,20 @@ def run_backtest(
                     max_dd = dd
             if record_equity:
                 res.equity_curve.append(round(eq, 4))
+            _audit(
+                {
+                    "event": "equity",
+                    "ts": current_ts,
+                    "bar_index": current_bar_index,
+                    "cycle_id": int(state.get("cycle_id") or 1),
+                    "close": cl,
+                    "equity": eq,
+                    "base_balance": base_balance,
+                    "quote_balance": quote_balance,
+                    "base_exposure_frac": (base_balance * cl / eq) if eq > 0 else 0.0,
+                    "mode": state.get("mode"),
+                }
+            )
             base_val = base_balance * cl
             if eq > 0:
                 exposure_sum += base_val / eq

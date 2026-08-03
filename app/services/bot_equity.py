@@ -3,11 +3,50 @@ Bot equity (USD): single source for dashboard list + bot detail live snapshot.
 DCA: base_balance * last_price + quote_balance from engine state.
 """
 
+import math
 from typing import Any, Dict, Optional
 
 from sqlalchemy.orm import Session
 
 from app.services.price_hub import price_hub
+
+
+_MAX_REFERENCE_PRICE_RATIO = 20.0
+
+
+def display_safe_bot_price(
+    price: Any,
+    state: Optional[Dict[str, Any]] = None,
+) -> Optional[float]:
+    """Reject non-finite or obviously mis-scaled market prices for bot equity.
+
+    The engine reference is an accounting anchor, not a live quote.  It is still
+    useful as a scale check: a newly received ETH price that is hundreds of
+    times above/below the bot's own reference must not explode the card value.
+    """
+    try:
+        candidate = float(price)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(candidate) or candidate <= 0:
+        return None
+
+    state = state or {}
+    anchors = (
+        state.get("reference_price"),
+        state.get("initial_alloc_price"),
+    )
+    for raw_anchor in anchors:
+        try:
+            anchor = float(raw_anchor)
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(anchor) or anchor <= 0:
+            continue
+        ratio = max(candidate, anchor) / min(candidate, anchor)
+        if ratio >= _MAX_REFERENCE_PRICE_RATIO:
+            return None
+    return candidate
 
 
 def _price_from_datahub(sym_pair: str) -> Optional[float]:
@@ -98,7 +137,10 @@ def compute_bot_equity_usd(
     ia_done = bool(state.get("initial_allocation_done"))
     base_b = float(state.get("base_balance") or 0)
     quote_b = float(state.get("quote_balance") or 0)
-    last_price = get_bot_last_price(sym, state, pnl_data)
+    last_price = display_safe_bot_price(
+        get_bot_last_price(sym, state, pnl_data),
+        state,
+    )
 
     if last_price is not None and last_price > 0 and (base_b != 0 or quote_b != 0):
         return base_b * last_price + quote_b

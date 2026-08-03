@@ -3,7 +3,7 @@
 6 saatlik kapsamlı RAM capture + senaryo koşucu.
 
 Başlat (web+worker capture + senaryo arka plan):
-  cd /Users/omeraltin/Desktop/final1
+  cd /Users/omeraltin/Desktop/ayserose1
   python3 scripts/perf/ram_capture_6h.py --start
 
 Durum:

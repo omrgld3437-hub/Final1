@@ -151,6 +151,43 @@ def _vol_percentile(atr_pct: Optional[float], hist_atrs: List[float]) -> Optiona
     return below / len(hist_atrs) * 100.0
 
 
+def _atr_pct_history(
+    candles: List[dict], *, period: int = 14, first_index: int = 20
+) -> List[float]:
+    """Return the legacy expanding Wilder-ATR% series in O(n), not O(n²).
+
+    The old implementation called ``atr_pct(candles[:i])`` for every prefix.
+    With the live 2,016-candle window that rebuilt roughly two million true
+    ranges twice per V6 decision and made one decision take 15–30 seconds.
+    Wilder ATR is recursive, so the identical valid-candle result can be
+    produced in one pass.
+    """
+    if len(candles) < period:
+        return []
+    trs = dyn_ind.true_ranges(candles)
+    if len(trs) != len(candles) or len(trs) < period:
+        # Malformed rows are not expected from Binance, but retain the precise
+        # legacy semantics for custom callers rather than guessing alignment.
+        return [
+            value
+            for i in range(first_index, len(candles))
+            for value in [dyn_ind.atr_pct(candles[: i + 1], period)]
+            if value is not None and value > 0
+        ]
+    atr_value = sum(trs[:period]) / period
+    out: List[float] = []
+    for i in range(period - 1, len(candles)):
+        if i >= period:
+            atr_value = (atr_value * (period - 1) + trs[i]) / period
+        if i < first_index:
+            continue
+        close = float(candles[i].get("c") or 0.0)
+        value = (atr_value / close * 100.0) if close > 0 else 0.0
+        if value > 0:
+            out.append(value)
+    return out
+
+
 def compute_indicators(
     market: MarketDataBundle,
     portfolio: PortfolioState,
@@ -171,7 +208,12 @@ def compute_indicators(
         _max_gap_ms(list(market.candles_1h or []), 3_600_000),
     )
     if c5:
-        snap.data_freshness_sec = max(0.0, (time.time() * 1000 - c5[-1]["t"]) / 1000.0)
+        # ``market_timestamp`` canlı akışta "şimdi", geçmiş-testinde ise kararın
+        # verildiği simülasyon zamanıdır. Duvar saatini doğrudan kullanmak geçmiş
+        # mumları hatalı biçimde stale sayıp V6'yı NO_DATA/WAIT'e kilitliyordu.
+        # Alanı olmayan eski çağrılarda canlı davranış aynen korunur.
+        as_of_ms = int(market.market_timestamp or time.time() * 1000)
+        snap.data_freshness_sec = max(0.0, (as_of_ms - c5[-1]["t"]) / 1000.0)
     snap.price_valid = market.ticker_price > 0
 
     # Trend
@@ -193,8 +235,7 @@ def compute_indicators(
     snap.realized_vol_24h = _realized_vol(closes_5m, min(288, len(closes_5m) - 1)) if closes_5m else None
     snap.realized_vol_7d = _realized_vol(closes_1h, min(168, len(closes_1h) - 1)) if closes_1h else None
     if snap.atr14_pct_5m and c5:
-        hist = [dyn_ind.atr_pct(c5[: i + 1], 14) or 0 for i in range(20, len(c5))]
-        hist = [h for h in hist if h > 0]
+        hist = _atr_pct_history(c5, period=14, first_index=20)
         snap.volatility_percentile = _vol_percentile(snap.atr14_pct_5m, hist)
     if c5:
         snap.high_low_range_pct = (c5[-1]["h"] - c5[-1]["l"]) / c5[-1]["c"] * 100.0 if c5[-1]["c"] > 0 else None

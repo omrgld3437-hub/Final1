@@ -34,7 +34,9 @@ def get_security_config() -> dict:
         "auth_csrf_double_submit": _bool("AUTH_CSRF_DOUBLE_SUBMIT", "0"),
         "auth_cookie_secure_auto": _bool("AUTH_COOKIE_SECURE_AUTO", "1"),
         "auth_cookie_samesite": _str("AUTH_COOKIE_SAMESITE", "Lax"),
-        "auth_cookie_max_age_sec": _int("AUTH_COOKIE_MAX_AGE_SEC", 604800),
+        "auth_cookie_max_age_sec": _int(
+            "AUTH_COOKIE_MAX_AGE_SEC", 3650 * 24 * 60 * 60
+        ),
         "auth_rate_limit_enabled": _bool("AUTH_RATE_LIMIT_ENABLED", "1"),
         "auth_rate_limit_login_per_ip_5min": _int(
             "AUTH_RATE_LIMIT_LOGIN_PER_IP_5MIN", 20
@@ -126,7 +128,7 @@ def discover_frontend_origins(project_root: Optional[Path] = None) -> List[str]:
     for key in ("PUBLIC_BASE_URL", "FRONTEND_URL", "SITE_URL", "WEB_ORIGIN"):
         candidates.extend(_split_csv(os.environ.get(key, "")))
     for rel in (
-        "deploy/nginx-tradertrailing-server.conf",
+        "deploy/nginx-final1-server.conf",
         "ui/robots.txt",
         "marketing/robots.txt",
         "marketing/vercel.json",

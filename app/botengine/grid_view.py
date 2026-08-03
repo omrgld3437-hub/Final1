@@ -8,6 +8,8 @@ from __future__ import annotations
 import math
 from typing import Any, Dict, List, Optional, Tuple
 
+from app.core.constants import DEFAULT_MIN_NOTIONAL_USDT
+
 
 def _f(v: Any, default: float = 0.0) -> float:
     if v is None:
@@ -257,10 +259,17 @@ def compute_grid_profit_view(
     if not sell_grids and not buy_grids:
         return grid_points, profit_points, meta
 
-    ref = _f(state.get("reference_price"))
+    # Her turun gridleri o tur için sabitlenen reference_price merkezinden
+    # hesaplanır. initial_reference_price yalnız eski state'ler için yedektir.
+    cycle_ref = _f(state.get("reference_price"))
+    initial_ref = _f(state.get("initial_reference_price"))
+    ref = cycle_ref if cycle_ref > 0 else initial_ref
     ref_available = ref > 0
     if ref_available:
         meta["ref_display"] = _round_price(ref)
+        meta["reference_source"] = (
+            "cycle_reference_price" if cycle_ref > 0 else "initial_reference_price"
+        )
     meta["ref_available"] = ref_available
     sell_trail = _f(
         config.get("sell_trigger_trailing_pct")
@@ -400,8 +409,23 @@ def compute_grid_profit_view(
                 "trigger_hit_price": _round_price(th_num),
                 "anchor": _round_price(anchor),
                 "execution_price": _round_price(execution_price),
+                "reference_price": _round_price(ref) if ref_available else None,
+                "trigger_pct": round(pct, 4),
+                "extreme_pct_from_reference": round(
+                    (anchor / ref - 1.0) * 100.0, 4
+                )
+                if ref_available and anchor is not None
+                else None,
+                "execution_pct_from_reference": round(
+                    (execution_price / ref - 1.0) * 100.0, 4
+                )
+                if ref_available and execution_price is not None
+                else None,
                 "active": active,
                 "enabled": sell_grids_enabled or fired,
+                "order_type": "SELL_GRID",
+                "cost_basis_type": "CYCLE_REFERENCE",
+                "cost_basis_price": _round_price(ref) if ref_available else None,
                 "disabled": not sell_grids_enabled and not fired,
                 "status": _grid_point_status(
                     fired=fired,
@@ -460,6 +484,18 @@ def compute_grid_profit_view(
         planned_usd = None
         if cfg_obj is not None:
             planned_usd = _planned_buy_usd_display(state, cfg_obj, j, quote_bal)
+        min_notional = DEFAULT_MIN_NOTIONAL_USDT
+        if cfg_obj is not None:
+            try:
+                min_notional = float(getattr(cfg_obj, "min_notional_guard", DEFAULT_MIN_NOTIONAL_USDT) or DEFAULT_MIN_NOTIONAL_USDT)
+            except (TypeError, ValueError):
+                min_notional = DEFAULT_MIN_NOTIONAL_USDT
+        insufficient_quote = (
+            not fired
+            and quote_bal < min_notional
+            and (planned_usd is None or planned_usd < min_notional)
+        )
+        disabled_buy = (not buy_grids_enabled and not fired) or insufficient_quote
         grid_points.append(
             {
                 "type": "buy",
@@ -469,12 +505,28 @@ def compute_grid_profit_view(
                 "trigger_hit_price": _round_price(th_num),
                 "anchor": _round_price(anchor),
                 "execution_price": _round_price(execution_price),
+                "reference_price": _round_price(ref) if ref_available else None,
+                "trigger_pct": round(-pct, 4),
+                "extreme_pct_from_reference": round(
+                    (anchor / ref - 1.0) * 100.0, 4
+                )
+                if ref_available and anchor is not None
+                else None,
+                "execution_pct_from_reference": round(
+                    (execution_price / ref - 1.0) * 100.0, 4
+                )
+                if ref_available and execution_price is not None
+                else None,
                 "active": active,
-                "enabled": buy_grids_enabled or fired,
-                "disabled": not buy_grids_enabled and not fired,
+                "enabled": (buy_grids_enabled or fired) and not insufficient_quote,
+                "order_type": "BUY_GRID",
+                "cost_basis_type": "CYCLE_REFERENCE",
+                "cost_basis_price": _round_price(ref) if ref_available else None,
+                "disabled": disabled_buy,
+                "disabled_reason": "insufficient_quote" if insufficient_quote else None,
                 "status": _grid_point_status(
                     fired=fired,
-                    disabled=not buy_grids_enabled and not fired,
+                    disabled=disabled_buy,
                     th_num=th_num,
                 ),
                 "qty_pct": round(qty_pct, 1) if qty_pct else None,
@@ -536,6 +588,9 @@ def compute_grid_profit_view(
                 "status": status,
                 "active": True,
                 "enabled": True,
+                "order_type": "PROFIT_REBUY",
+                "cost_basis_type": "WEIGHTED_SELL_PRICE",
+                "cost_basis_price": _round_price(avg_sell_grid),
             }
         )
 
@@ -577,8 +632,45 @@ def compute_grid_profit_view(
                 "status": status,
                 "active": True,
                 "enabled": True,
+                "order_type": "PROFIT_SELL",
+                "cost_basis_type": "WEIGHTED_BUY_COST",
+                "cost_basis_price": _round_price(avg_buy_grid),
             }
         )
+
+    # Normal grid yüzdeleri tur referansına; kâr döngüsü yüzdeleri ise yalnız
+    # gerçekleşmiş gridlerin ağırlıklı ortalama maliyetine göre hesaplanır.
+    for point in [*grid_points, *profit_points]:
+        point_ref = ref
+        if point.get("order_type") in ("PROFIT_SELL", "PROFIT_REBUY"):
+            cost_basis = _f(point.get("cost_basis_price"))
+            if cost_basis <= 0:
+                continue
+            point_ref = cost_basis
+        elif not ref_available:
+            continue
+        if point_ref > 0:
+            point["reference_price"] = _round_price(point_ref)
+            trigger_value = _f(point.get("trigger_price"))
+            extreme_value = _f(
+                point.get("anchor") or point.get("dip") or point.get("tepe")
+            )
+            execution_value = _f(point.get("execution_price"))
+            point["trigger_pct_from_reference"] = (
+                round((trigger_value / point_ref - 1.0) * 100.0, 4)
+                if trigger_value > 0
+                else None
+            )
+            point["extreme_pct_from_reference"] = (
+                round((extreme_value / point_ref - 1.0) * 100.0, 4)
+                if extreme_value > 0
+                else None
+            )
+            point["execution_pct_from_reference"] = (
+                round((execution_value / point_ref - 1.0) * 100.0, 4)
+                if execution_value > 0
+                else None
+            )
 
     if cycle_side is None:
         meta["cycle_side_pending"] = True

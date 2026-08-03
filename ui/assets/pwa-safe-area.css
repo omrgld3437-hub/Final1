@@ -1,0 +1,44 @@
+:root {
+    --ayserose-pwa-safe-top: 0px;
+}
+
+html.ayserose-mobile-standalone {
+    --ayserose-pwa-safe-top: max(env(safe-area-inset-top, 0px), 12px);
+    background: #101116;
+}
+
+html.ayserose-mobile-standalone::before {
+    content: "";
+    position: fixed;
+    inset: 0 0 auto;
+    z-index: 100000;
+    height: var(--ayserose-pwa-safe-top);
+    background: #101116;
+    pointer-events: none;
+}
+
+html.ayserose-mobile-standalone body {
+    box-sizing: border-box;
+    padding-top: var(--ayserose-pwa-safe-top) !important;
+}
+
+html.ayserose-mobile-standalone .page-dashboard .dashboard-appbar,
+html.ayserose-mobile-standalone .page-admin .admin-appbar,
+html.ayserose-mobile-standalone .page-bot .page-bot-appbar {
+    top: var(--ayserose-pwa-safe-top) !important;
+}
+
+html.ayserose-mobile-standalone .zip-nav {
+    top: var(--ayserose-pwa-safe-top) !important;
+}
+
+html.ayserose-mobile-standalone .zip-auth-stage {
+    top: calc(
+        var(--ayserose-pwa-safe-top) +
+        var(--zip-nav-height-px, var(--zip-nav-height))
+    );
+}
+
+html.ayserose-mobile-standalone .login-logout-toast {
+    top: calc(var(--ayserose-pwa-safe-top) + 4.5rem);
+}

@@ -1,0 +1,33 @@
+{
+  "id": "/ui/dashboard.html",
+  "name": "Ayserose",
+  "short_name": "Ayserose",
+  "description": "Ayserose uygulamasi",
+  "lang": "tr",
+  "start_url": "/ui/dashboard.html",
+  "scope": "/ui/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#101116",
+  "theme_color": "#101116",
+  "icons": [
+    {
+      "src": "/ui/assets/pwa/ayserose-plain-v4-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/ui/assets/pwa/ayserose-plain-v4-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/ui/assets/pwa/ayserose-plain-v4-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

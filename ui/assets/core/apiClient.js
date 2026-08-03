@@ -107,44 +107,43 @@ function shouldPersistToken() {
     return !c.auth_cookie_primary;
 }
 
-// Stable auth store: single source of truth; avoid scattered sessionStorage access
+// Stable auth store: sessionStorage for the active page, localStorage for Safari
+// standalone/browser restarts. The HttpOnly cookie remains the server-side source.
 var AUTH_KEYS = ['token', 'user'];
 function getStableAuth() {
     var out = {};
-    try {
-        if (typeof sessionStorage !== 'undefined') {
-            AUTH_KEYS.forEach(function (k) { out[k] = sessionStorage.getItem(k); });
-        }
-    } catch (e) {}
+    AUTH_KEYS.forEach(function (k) { out[k] = getAuthStorage(k); });
     return out;
 }
 function setStableAuth(data) {
-    try {
-        if (typeof sessionStorage !== 'undefined' && data) {
-            AUTH_KEYS.forEach(function (k) {
-                if (k === 'token' && !shouldPersistToken()) return;
-                if (data[k] != null) {
-                    var v = data[k];
-                    sessionStorage.setItem(k, typeof v === 'string' ? v : JSON.stringify(v));
-                }
-            });
+    if (!data) return;
+    AUTH_KEYS.forEach(function (k) {
+        if (k === 'token' && !shouldPersistToken()) return;
+        if (data[k] != null) {
+            var v = data[k];
+            setAuthStorage(k, typeof v === 'string' ? v : JSON.stringify(v));
         }
-    } catch (e) {}
+    });
 }
 function clearStableAuth() {
-    try {
-        if (typeof sessionStorage !== 'undefined') {
-            AUTH_KEYS.forEach(function (k) { sessionStorage.removeItem(k); });
-        }
-    } catch (e) {}
+    AUTH_KEYS.forEach(function (k) {
+        try { if (typeof sessionStorage !== 'undefined') sessionStorage.removeItem(k); } catch (e) {}
+        try { if (typeof localStorage !== 'undefined') localStorage.removeItem(k); } catch (e) {}
+    });
 }
 
-// Oturum tek sekmeye bağlı: token/user sessionStorage'da; çıkışta diğer sekmelere broadcast
+// Explicit logout is broadcast to every open tab.
 const AUTH_BC = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('app-auth') : null;
 function getAuthStorage(key) {
     if (key === 'token' && !shouldPersistToken()) return null;
     try {
-        return typeof sessionStorage !== 'undefined' ? sessionStorage.getItem(key) : null;
+        var sessionValue = typeof sessionStorage !== 'undefined' ? sessionStorage.getItem(key) : null;
+        var persistentValue = typeof localStorage !== 'undefined' ? localStorage.getItem(key) : null;
+        var value = sessionValue || persistentValue;
+        if (value && !sessionValue && typeof sessionStorage !== 'undefined') {
+            sessionStorage.setItem(key, value);
+        }
+        return value;
     } catch (e) {
         return null;
     }
@@ -152,6 +151,9 @@ function getAuthStorage(key) {
 function setAuthStorage(key, value) {
     try {
         if (typeof sessionStorage !== 'undefined') sessionStorage.setItem(key, value);
+    } catch (e) {}
+    try {
+        if (typeof localStorage !== 'undefined') localStorage.setItem(key, value);
     } catch (e) {}
 }
 function clearAuthStorage() {
@@ -238,6 +240,25 @@ const MAX_TRACE_SIZE = 1000;
 
 // Sunucu geri gelince kontrol: 200 gelince toast göster, oturumu temizleme / login'e atma — kullanıcı hesapta kalsın
 var _serverBackCheckerTimer = null;
+var _serverUnreachableCandidate = null;
+var _serverHealthProbeInFlight = false;
+var _lastServerHealthyAt = 0;
+var SERVER_UNREACHABLE_CONFIRM_MS = 3000;
+var SERVER_HEALTH_CONFIRM_FAILS = 2;
+var SERVER_HEALTH_PROBE_INTERVAL_MS = 2500;
+var SERVER_HEALTH_PROBE_TIMEOUT_MS = 4000;
+var SERVER_HEALTH_OK_CACHE_MS = 5000;
+
+function clearServerUnreachableCandidate() {
+    _serverUnreachableCandidate = null;
+}
+
+function stopServerBackChecker() {
+    if (_serverBackCheckerTimer !== null) {
+        clearInterval(_serverBackCheckerTimer);
+        _serverBackCheckerTimer = null;
+    }
+}
 
 function markServerUnreachable() {
     if (typeof window === 'undefined') return;
@@ -250,6 +271,9 @@ function markServerUnreachable() {
 
 function markServerReachable() {
     if (typeof window === 'undefined') return;
+    _lastServerHealthyAt = Date.now();
+    stopServerBackChecker();
+    clearServerUnreachableCandidate();
     if (!window.__TT_SERVER_UNREACHABLE__) return;
     window.__TT_SERVER_UNREACHABLE__ = false;
     hideServerDownToast();
@@ -262,29 +286,84 @@ function isServerUnreachable() {
     return !!(typeof window !== 'undefined' && window.__TT_SERVER_UNREACHABLE__);
 }
 
+function runServerHealthProbe() {
+    if (_serverHealthProbeInFlight) return;
+    _serverHealthProbeInFlight = true;
+    var controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    var timeoutId = controller
+        ? setTimeout(function () { controller.abort(); }, SERVER_HEALTH_PROBE_TIMEOUT_MS)
+        : null;
+    var config = { method: 'GET', cache: 'no-store', credentials: 'include' };
+    if (controller) config.signal = controller.signal;
+
+    fetch(API_BASE_URL + '/api/health', config)
+        .then(function (r) {
+            if (!r.ok) throw new Error('health_http_' + r.status);
+            return r.json();
+        })
+        .then(function (data) {
+            if (!data || data.ok !== true) throw new Error('health_not_ready');
+            var wasUnreachable = window.__TT_SERVER_UNREACHABLE__ === true;
+            markServerReachable();
+            if (wasUnreachable && typeof window.Toast !== 'undefined' && window.Toast.success) {
+                try { window.Toast.success('Sunucu geldi. Bağlantı yenilendi.'); } catch (e) {}
+            }
+        })
+        .catch(function () {
+            var now = Date.now();
+            if (!_serverUnreachableCandidate) {
+                _serverUnreachableCandidate = {
+                    firstAt: now,
+                    requestFails: 0,
+                    healthFails: 0,
+                    message: SERVER_DOWN_TOAST_DEFAULT
+                };
+            }
+            _serverUnreachableCandidate.healthFails += 1;
+            var elapsed = now - _serverUnreachableCandidate.firstAt;
+            if (
+                _serverUnreachableCandidate.healthFails >= SERVER_HEALTH_CONFIRM_FAILS
+                && elapsed >= SERVER_UNREACHABLE_CONFIRM_MS
+            ) {
+                markServerUnreachable();
+                showServerDownToast(_serverUnreachableCandidate.message);
+            }
+        })
+        .finally(function () {
+            if (timeoutId) clearTimeout(timeoutId);
+            _serverHealthProbeInFlight = false;
+        });
+}
+
 function startServerBackChecker(toastMessage) {
     if (typeof window.location === 'undefined' || (window.location.pathname || '').includes('/login')) return;
-    markServerUnreachable();
-    showServerDownToast(toastMessage);
+    var now = Date.now();
+    if (
+        !window.__TT_SERVER_UNREACHABLE__
+        && _lastServerHealthyAt
+        && (now - _lastServerHealthyAt) < SERVER_HEALTH_OK_CACHE_MS
+    ) {
+        return;
+    }
+    if (!_serverUnreachableCandidate) {
+        _serverUnreachableCandidate = {
+            firstAt: now,
+            requestFails: 0,
+            healthFails: 0,
+            message: toastMessage || SERVER_DOWN_TOAST_DEFAULT
+        };
+    }
+    _serverUnreachableCandidate.requestFails += 1;
+    if (toastMessage) _serverUnreachableCandidate.message = toastMessage;
     if (_serverBackCheckerTimer !== null) return;
-    var interval = 2500;
-    _serverBackCheckerTimer = setInterval(function () {
-        fetch(API_BASE_URL + '/api/health', { method: 'GET', cache: 'no-store' })
-            .then(function (r) {
-                if (!r.ok) return;
-                return r.json();
-            })
-            .then(function (data) {
-                if (!data || data.ok !== true) return;
-                clearInterval(_serverBackCheckerTimer);
-                _serverBackCheckerTimer = null;
-                markServerReachable();
-                if (typeof window.Toast !== 'undefined' && window.Toast.success) {
-                    try { window.Toast.success('Sunucu geldi. Bağlantı yenilendi.'); } catch (e) {}
-                }
-            })
-            .catch(function () {});
-    }, interval);
+
+    // Endpoint 5xx/timeout alone does not mean the server is down. Only the
+    // dedicated health endpoint may confirm and announce a real outage.
+    _serverBackCheckerTimer = setInterval(
+        runServerHealthProbe,
+        SERVER_HEALTH_PROBE_INTERVAL_MS
+    );
+    runServerHealthProbe();
 }
 
 /**
@@ -580,6 +659,7 @@ async function apiClient(endpoint, options = {}) {
                 console.log(`[apiClient] ${method} ${endpoint} status=${response.status} latency=${latency}ms`);
             }
 
+            markServerReachable();
             return data;
 
         } catch (error) {
@@ -636,11 +716,11 @@ async function apiClient(endpoint, options = {}) {
             if (error instanceof APIError) {
                 var s = error.status || 0;
                 if (s === 502 || s === 503 || s === 504) {
-                    startServerBackChecker();
+                    // Already registered in the response branch; avoid counting one HTTP failure twice.
                 } else if (s === 0 && String(error.error_code || '').toUpperCase() === 'NETWORK_ERROR') {
                     startServerBackChecker();
                 } else if (s >= 500 && s < 600) {
-                    if (typeof window.showMaintenanceScreen === 'function') window.showMaintenanceScreen();
+                    startServerBackChecker();
                 }
                 throw error;
             }
@@ -678,7 +758,8 @@ apiClient.delete = (endpoint, options = {}) => apiClient(endpoint, { ...options,
 
 /** Auth gate: token yoksa polling/summary başlatma. Login sayfası ve dashboard token kontrolü için kullanılır. */
 apiClient.hasToken = function () {
-    return !!getAuthStorage('token');
+    // Cookie-authenticated Safari launches may not expose the HttpOnly token.
+    return !!getAuthStorage('token') || !!getAuthStorage('user');
 };
 apiClient.clearAuthAndBroadcast = clearAuthAndBroadcast;
 apiClient.redirectToLoginOnce = redirectToLoginOnce;

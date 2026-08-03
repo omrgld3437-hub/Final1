@@ -8,6 +8,7 @@ CHANGE: YENİ - Global Data Hub - Tüm coin fiyatları ve market verilerini merk
 from __future__ import annotations
 from typing import Dict, List, Optional, Any
 import asyncio
+import json
 import logging
 import os
 import time
@@ -97,6 +98,17 @@ class DataHub:
         self.all_symbols: List[str] = []
         self.all_symbols_ts: float = 0
         self.ALL_SYMBOLS_TTL = 600.0
+        self.SHARED_MARKET_SNAPSHOT_MAX_AGE = float(
+            os.getenv("DATAHUB_SHARED_MARKET_MAX_AGE_SEC", "86400")
+        )
+        project_root = os.path.dirname(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        )
+        self._shared_market_snapshot_path = os.getenv(
+            "DATAHUB_SHARED_MARKET_SNAPSHOT",
+            os.path.join(project_root, ".run", "datahub_market_snapshot.json"),
+        )
+        self._shared_market_snapshot_mtime = 0.0
 
         # Rate limit tracking
         self.last_rate_limit_check = 0.0
@@ -305,18 +317,163 @@ class DataHub:
         return result
 
     def get_coin_list(self) -> List[Dict]:
-        """Get cached coin list"""
+        """Get coin list, hydrating from the shared multi-worker snapshot when needed."""
         age = time.time() - self.coin_list_ts
-        if age > self.COIN_LIST_TTL:
+        if not self.coin_list or age > self.COIN_LIST_TTL:
+            self._hydrate_market_lists_from_shared_snapshot()
+            age = time.time() - self.coin_list_ts
+        if not self.coin_list:
+            self._derive_market_lists_from_prices()
+            age = time.time() - self.coin_list_ts
+        if age > self.SHARED_MARKET_SNAPSHOT_MAX_AGE:
             return []
         return self.coin_list.copy()
 
     def get_all_symbols(self) -> List[str]:
-        """All symbols from Binance exchangeInfo (cache 600s)"""
+        """All symbols from Binance exchangeInfo with a shared-cache fallback."""
         age = time.time() - self.all_symbols_ts
-        if age > self.ALL_SYMBOLS_TTL or not self.all_symbols:
+        if not self.all_symbols or age > self.ALL_SYMBOLS_TTL:
+            self._hydrate_market_lists_from_shared_snapshot()
+            age = time.time() - self.all_symbols_ts
+        if not self.all_symbols:
+            self._derive_market_lists_from_prices()
+            age = time.time() - self.all_symbols_ts
+        if not self.all_symbols or age > self.SHARED_MARKET_SNAPSHOT_MAX_AGE:
             return []
         return self.all_symbols.copy()
+
+    def _derive_market_lists_from_prices(self) -> None:
+        """Last-resort market catalogue from the live price cache.
+
+        A non-leader uvicorn worker still warms its price cache, so favorites and
+        search must remain usable even before the shared catalogue is available.
+        """
+        if not self.prices:
+            return
+        now = time.time()
+        if not self.all_symbols:
+            self.all_symbols = sorted(
+                str(symbol).strip().upper()
+                for symbol in self.prices
+                if str(symbol).strip()
+            )
+            self.all_symbols_ts = now
+        if self.coin_list:
+            return
+        coins: List[Dict[str, Any]] = []
+        for symbol, row in self.prices.items():
+            normalized = str(symbol or "").strip().upper()
+            if not normalized.endswith("USDT") or not isinstance(row, dict):
+                continue
+            try:
+                price = float(row.get("price") or 0)
+                volume = float(row.get("volume24h") or 0)
+                change = float(row.get("change24h") or 0)
+            except (TypeError, ValueError):
+                continue
+            coins.append(
+                {
+                    "symbol": normalized,
+                    "price": price,
+                    "change24h": change,
+                    "volume24h": volume,
+                    "quoteVolume24h": volume * price,
+                    "marketCap": 0.0,
+                }
+            )
+        coins.sort(key=lambda item: item.get("quoteVolume24h", 0), reverse=True)
+        if coins:
+            self.coin_list = coins[:200]
+            self.top_100_symbols = [
+                item["symbol"] for item in self.coin_list[:100]
+            ]
+            self.coin_list_ts = now
+
+    def _hydrate_market_lists_from_shared_snapshot(self) -> bool:
+        """Load the leader worker's atomic market snapshot when it is newer."""
+        path = self._shared_market_snapshot_path
+        try:
+            stat = os.stat(path)
+            if stat.st_mtime <= self._shared_market_snapshot_mtime:
+                return False
+            with open(path, "r", encoding="utf-8") as snapshot_file:
+                payload = json.load(snapshot_file)
+            if not isinstance(payload, dict):
+                return False
+            generated_at = float(payload.get("generated_at") or 0)
+            if (
+                generated_at <= 0
+                or time.time() - generated_at
+                > self.SHARED_MARKET_SNAPSHOT_MAX_AGE
+            ):
+                return False
+
+            raw_coins = payload.get("coin_list")
+            coin_list = [
+                dict(item)
+                for item in raw_coins
+                if isinstance(item, dict) and str(item.get("symbol") or "").strip()
+            ] if isinstance(raw_coins, list) else []
+            raw_symbols = payload.get("all_symbols")
+            all_symbols = (
+                sorted(
+                    {
+                        str(symbol).strip().upper()
+                        for symbol in raw_symbols
+                        if str(symbol).strip()
+                    }
+                )
+                if isinstance(raw_symbols, list)
+                else []
+            )
+            coin_ts = float(payload.get("coin_list_ts") or generated_at)
+            symbol_ts = float(payload.get("all_symbols_ts") or generated_at)
+            if coin_list and (not self.coin_list or coin_ts > self.coin_list_ts):
+                self.coin_list = coin_list[:200]
+                self.top_100_symbols = [
+                    item["symbol"] for item in self.coin_list[:100]
+                ]
+                self.coin_list_ts = coin_ts
+            if all_symbols and (
+                not self.all_symbols or symbol_ts > self.all_symbols_ts
+            ):
+                self.all_symbols = all_symbols
+                self.all_symbols_ts = symbol_ts
+            self._shared_market_snapshot_mtime = stat.st_mtime
+            return bool(coin_list or all_symbols)
+        except (OSError, TypeError, ValueError, json.JSONDecodeError):
+            return False
+
+    def _persist_shared_market_snapshot(self) -> bool:
+        """Atomically publish market metadata for all uvicorn workers."""
+        if not self.coin_list or not self.all_symbols:
+            return False
+        path = self._shared_market_snapshot_path
+        temp_path = f"{path}.{os.getpid()}.tmp"
+        payload = {
+            "version": 1,
+            "generated_at": time.time(),
+            "coin_list": self.coin_list[:200],
+            "coin_list_ts": self.coin_list_ts,
+            "all_symbols": self.all_symbols,
+            "all_symbols_ts": self.all_symbols_ts,
+        }
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(temp_path, "w", encoding="utf-8") as snapshot_file:
+                json.dump(payload, snapshot_file, ensure_ascii=True, separators=(",", ":"))
+                snapshot_file.flush()
+                os.fsync(snapshot_file.fileno())
+            os.replace(temp_path, path)
+            self._shared_market_snapshot_mtime = os.stat(path).st_mtime
+            return True
+        except OSError as exc:
+            logger.debug("[DataHub] shared market snapshot write failed: %s", exc)
+            try:
+                os.unlink(temp_path)
+            except OSError:
+                pass
+            return False
 
     def get_account_balance(self, account_id: int) -> Optional[Dict]:
         """Get cached account balance"""
@@ -590,6 +747,7 @@ class DataHub:
         self.coin_list = coins[:200]
         self.top_100_symbols = [c["symbol"] for c in self.coin_list[:100]]
         self.coin_list_ts = time.time()
+        self._persist_shared_market_snapshot()
 
     async def update_coin_list(self):
         """Build coin_list from 24h ticker (USDT, top quote volume)."""
@@ -602,9 +760,7 @@ class DataHub:
             await self.update_ticker_24h()
         except Exception as e:
             logger.debug("[DataHub] update_coin_list error: %s", e)
-            self.coin_list = []
-            self.top_100_symbols = []
-            self.coin_list_ts = time.time()
+            self._hydrate_market_lists_from_shared_snapshot()
 
     async def update_all_symbols(self):
         """TRADING sembol listesi — kompakt exchangeInfo cache (binance_spot)."""
@@ -616,19 +772,17 @@ class DataHub:
             )
             self.all_symbols = sorted(symbols)
             self.all_symbols_ts = time.time()
+            self._persist_shared_market_snapshot()
         except Exception as e:
             logger.debug("[DataHub] update_all_symbols error: %s", e)
-            self.all_symbols = []
-            self.all_symbols_ts = time.time()
+            self._hydrate_market_lists_from_shared_snapshot()
 
     def get_symbols_for_scope(self, scope: str = "usdt") -> List[str]:
         """Symbol list by scope: usdt = *USDT only, all = all TRADING symbols. Uses cached all_symbols."""
-        age = time.time() - self.all_symbols_ts
-        if age > self.ALL_SYMBOLS_TTL or not self.all_symbols:
-            return []
+        symbols = self.get_all_symbols()
         if (scope or "").lower() == "all":
-            return self.all_symbols.copy()
-        return [s for s in self.all_symbols if s.endswith("USDT")]
+            return symbols
+        return [s for s in symbols if s.endswith("USDT")]
 
     def get_symbol_filters_cached(self, symbol: str) -> Optional[Dict[str, Any]]:
         """Sembol filtreleri — binance_spot kompakt cache (senkron okuma)."""
@@ -917,15 +1071,31 @@ class DataHub:
         if self._ws_started:
             return
         try:
-            from app.services.binance_ws import BinanceWSClient
-
-            self._ws_client = BinanceWSClient(
-                on_message=self._on_ws_message, testnet=testnet
+            from app.services.binance_ws import (
+                BinanceWSClient,
+                NodeBinanceWSClient,
+                _node_ws_enabled,
+                node_ws_available,
             )
+
+            if _node_ws_enabled() and node_ws_available():
+                self._ws_client = NodeBinanceWSClient(
+                    on_message=self._on_ws_message, testnet=testnet
+                )
+                ws_impl = "node"
+            else:
+                self._ws_client = BinanceWSClient(
+                    on_message=self._on_ws_message, testnet=testnet
+                )
+                ws_impl = "python"
             self._ws_client.start()
             self._ws_started = True
             self.ws_status = "reconnecting"
-            logger.info("[DataHub] WebSocket client started (testnet=%s)", testnet)
+            logger.info(
+                "[DataHub] WebSocket client started impl=%s (testnet=%s)",
+                ws_impl,
+                testnet,
+            )
         except Exception as e:
             logger.warning(
                 "[DataHub] WebSocket start failed: %s; REST fallback only", e
@@ -948,6 +1118,9 @@ class DataHub:
             return "rest"
         if time.time() - self.last_ws_update_ts < self.WS_STALE_SEC:
             return "connected"
+        now = time.time()
+        if any((now - d.get("ts", 0)) <= self.PRICE_TTL for d in self.prices.values()):
+            return "rest"
         return "reconnecting"
 
     def get_status(self) -> Dict[str, Any]:

@@ -41,7 +41,7 @@ def _should_log_binance_error(key: Tuple[str, ...]) -> bool:
     return True
 
 
-BINANCE_API = "https://api.binance.com"
+BINANCE_API = os.getenv("BINANCE_API_BASE_URL", "https://api.binance.com").rstrip("/")
 BINANCE_TESTNET = "https://testnet.binance.vision"
 
 # Rate-limit retry – keep total path bounded to avoid blocking request handlers
@@ -79,6 +79,18 @@ def _is_ssl_wrong_version_error(exc: BaseException) -> bool:
 
 def _binance_public_node_fallback_enabled() -> bool:
     return _env_flag("BINANCE_PUBLIC_NODE_FALLBACK", True)
+
+
+def _binance_signed_node_fallback_enabled() -> bool:
+    return _env_flag("BINANCE_SIGNED_NODE_FALLBACK", True)
+
+
+def _binance_public_node_primary_enabled() -> bool:
+    return _env_flag("BINANCE_PUBLIC_NODE_PRIMARY", True)
+
+
+def _binance_signed_node_primary_enabled() -> bool:
+    return _env_flag("BINANCE_SIGNED_NODE_PRIMARY", True)
 
 
 def _node_fetch_script_path() -> Path:
@@ -142,6 +154,90 @@ async def _node_public_get_json(
             f"{response.get('status') or '-'} {response.get('error')}"
         )
     return response.get("data")
+
+
+async def _node_signed_request_json(
+    method: str,
+    path: str,
+    keys: Any,
+    params: Optional[Dict[str, Any]],
+) -> Any:
+    if not _binance_signed_node_fallback_enabled():
+        raise DependencyFailure("Binance Node signed fallback disabled")
+    node = shutil.which("node")
+    script = _node_fetch_script_path()
+    if not node or not script.exists():
+        raise DependencyFailure("Binance Node signed fallback unavailable")
+    method_u = method.upper()
+    testnet = getattr(keys, "testnet", False)
+    signed_params = dict(params or {})
+    server_ms = await _get_binance_timestamp(None, testnet)
+    signed_params["timestamp"] = max(0, int(server_ms) - _BINANCE_TS_SAFETY_MS)
+    signed_params["recvWindow"] = 60000
+    payload = json.dumps(
+        {
+            "id": 1,
+            "signed": True,
+            "method": method_u,
+            "base": _node_base_url(testnet),
+            "path": path,
+            "params": signed_params,
+            "apiKey": getattr(keys, "api_key", "") or "",
+            "apiSecret": getattr(keys, "api_secret", "") or "",
+        },
+        separators=(",", ":"),
+    )
+    proc = await asyncio.create_subprocess_exec(
+        node,
+        str(script),
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(
+            proc.communicate((payload + "\n").encode("utf-8")),
+            timeout=_BINANCE_NODE_FALLBACK_TIMEOUT_SEC,
+        )
+    except asyncio.TimeoutError as exc:
+        proc.kill()
+        await proc.wait()
+        raise DependencyFailure("Binance Node signed fallback timeout") from exc
+    if proc.returncode not in (0, None):
+        detail = stderr.decode("utf-8", "replace")[:300]
+        raise DependencyFailure(f"Binance Node signed fallback exited: {detail}")
+    lines = stdout.decode("utf-8", "replace").strip().splitlines()
+    if not lines:
+        detail = stderr.decode("utf-8", "replace")[:300]
+        raise DependencyFailure(f"Binance Node signed fallback empty response: {detail}")
+    try:
+        response = json.loads(lines[-1])
+    except json.JSONDecodeError as exc:
+        raise DependencyFailure("Binance Node signed fallback invalid JSON") from exc
+    data = response.get("data") if response.get("ok") else response.get("error")
+    if not response.get("ok"):
+        status = int(response.get("status") or 0)
+        body = data if isinstance(data, str) else json.dumps(data or {}, ensure_ascii=False)
+        code, msg = _parse_binance_error_body(body)
+        if status == 418:
+            until = _parse_418_banned_until(body)
+            if until is not None:
+                _binance_ip_ban_state["until_ts"] = until
+        if code == -2013:
+            raise BinanceSignedError(-2013, msg, data if isinstance(data, dict) else {})
+        request = httpx.Request(method_u, f"{_node_base_url(testnet)}{path}")
+        response_obj = httpx.Response(status or 502, request=request, content=body.encode("utf-8"))
+        raise httpx.HTTPStatusError(
+            f"Binance Node signed fallback HTTP {status or 502}",
+            request=request,
+            response=response_obj,
+        )
+    if isinstance(data, dict):
+        code = data.get("code", 0)
+        if code not in (0, None):
+            msg = str(data.get("msg") or "")
+            raise BinanceSignedError(int(code), msg, data)
+    return data
 
 
 async def _maybe_node_public_fallback(
@@ -874,6 +970,20 @@ async def _get_binance_timestamp(
             return server_ms
         except Exception as exc:
             last_exc = exc
+            if _is_ssl_wrong_version_error(exc):
+                try:
+                    data = await _node_public_get_json("/api/v3/time", None, testnet)
+                    server_ms = int(data.get("serverTime", 0) or (time.time() * 1000))
+                    _store_binance_time_cache(testnet, server_ms)
+                    logger.warning(
+                        "binance_spot time Python TLS wrong-version; Node fallback succeeded"
+                    )
+                    return server_ms
+                except Exception as fallback_exc:
+                    logger.debug(
+                        "binance_spot time Node fallback failed after TLS error: %s",
+                        fallback_exc,
+                    )
             if attempt < 2:
                 await _asyncio_sleep(0.5 * (attempt + 1))
     stale = _read_binance_time_from_cache(
@@ -1239,6 +1349,43 @@ async def _signed_request_impl(
                 continue
             raise
         except Exception as e:
+            if _is_ssl_wrong_version_error(e):
+                try:
+                    data = await _node_signed_request_json(
+                        method, path, keys, base_params
+                    )
+                    elapsed_ms = (time.perf_counter() - t0_req) * 1000
+                    try:
+                        from app.services.binance_rest_log import record_rest
+                        from app.services.binance_weight import record_weight_used
+
+                        record_rest(
+                            method,
+                            path,
+                            params=base_params,
+                            weight=weight,
+                            latency_ms=elapsed_ms,
+                            outcome="ok",
+                            detail="node_signed_fallback",
+                        )
+                        record_weight_used(
+                            None, getattr(keys, "api_key", None), weight, elapsed_ms
+                        )
+                    except Exception:
+                        pass
+                    logger.warning(
+                        "binance_spot signed path=%s Python TLS wrong-version; Node signed fallback succeeded",
+                        path,
+                    )
+                    return data
+                except Exception as fallback_exc:
+                    if isinstance(fallback_exc, (httpx.HTTPStatusError, BinanceSignedError, BinanceIPBannedError)):
+                        raise
+                    logger.debug(
+                        "binance_spot signed path=%s Node fallback failed after TLS error: %s",
+                        path,
+                        fallback_exc,
+                    )
             last_exc = e
             if attempt < MAX_RETRIES:
                 await _asyncio_sleep(backoff)
@@ -1618,11 +1765,13 @@ def _filters_from_exchange_symbol_entry(s: Dict[str, Any]) -> Dict[str, Any]:
         "step_size_str": "0.00001",
         "min_qty": 0.00001,
         "min_qty_str": "0.00001",
+        "max_qty": None,
         "tick_size": 0.01,
         "tick_size_str": "0.01",
         "min_notional": DEFAULT_MIN_NOTIONAL_USDT,
         "baseAsset": s.get("baseAsset"),
         "quoteAsset": s.get("quoteAsset"),
+        "symbol_trading": (s.get("status") or "") == "TRADING",
     }
     for f in s.get("filters") or []:
         t = f.get("filterType")
@@ -1633,6 +1782,9 @@ def _filters_from_exchange_symbol_entry(s: Dict[str, Any]) -> Dict[str, Any]:
             out["min_qty_str"] = min_raw
             out["step_size"] = float(step_raw)
             out["min_qty"] = float(min_raw)
+            max_raw = f.get("maxQty")
+            if max_raw is not None:
+                out["max_qty"] = float(max_raw)
         elif t == "PRICE_FILTER":
             tick_raw = str(f.get("tickSize") or "0.01")
             out["tick_size_str"] = tick_raw

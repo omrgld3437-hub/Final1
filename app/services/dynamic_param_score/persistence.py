@@ -36,13 +36,8 @@ def _hash_obj(obj: Any) -> str:
 
 def _compact_decision_for_log(decision: DynamicParamDecision) -> Dict[str, Any]:
     """File log payload — omit redundant/heavy telemetry blobs."""
-    tel = dict(decision.telemetry or {})
-    tel.pop("indicators", None)
-    pool = tel.get("param_pool")
-    if isinstance(pool, dict):
-        pool = dict(pool)
-        pool.pop("filtered_out", None)
-        tel["param_pool"] = pool
+    tel = _compact_telemetry(decision.telemetry, keep_indicators=False)
+
     return {
         "decision_id": decision.decision_id,
         "symbol": decision.symbol,
@@ -62,6 +57,22 @@ def _compact_decision_for_log(decision: DynamicParamDecision) -> Dict[str, Any]:
         "telemetry": tel,
         "action_detail": decision.action_detail,
     }
+
+
+def _compact_telemetry(
+    telemetry: Optional[Dict[str, Any]], *, keep_indicators: bool = True
+) -> Dict[str, Any]:
+    """Remove diagnostic fan-out while preserving the persisted decision."""
+    tel = dict(telemetry or {})
+    if not keep_indicators:
+        tel.pop("indicators", None)
+
+    pool = tel.get("param_pool")
+    if isinstance(pool, dict):
+        pool = dict(pool)
+        pool.pop("filtered_out", None)
+        tel["param_pool"] = pool
+    return tel
 
 
 def save_decision_log(
@@ -153,7 +164,9 @@ def save_decision_db(
                     "params_json": json.dumps(
                         decision.params.to_dict() if decision.params else None
                     ),
-                    "telemetry_json": json.dumps(json_safe(decision.telemetry)),
+                    "telemetry_json": json.dumps(
+                        json_safe(_compact_telemetry(decision.telemetry))
+                    ),
                     "safety_gates_json": json.dumps(
                         [g.to_dict() for g in decision.safety_gates]
                     ),

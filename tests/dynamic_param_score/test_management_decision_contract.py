@@ -240,6 +240,30 @@ def test_first_start_auto_buy_only_skips_no_sellable_base_blocking():
     assert "NO_SELLABLE_BASE" not in blocking
 
 
+def test_first_start_explicit_buy_only_off_is_reference_not_startable():
+    from app.services.dynamic_param_score.data_collector import build_bot_context
+
+    p = portfolio(100)
+    engine = DynamicParamScoreEngine()
+    d = engine.calculate_decision(
+        "SOLUSDT",
+        _sol_market(),
+        p,
+        constraints(),
+        build_bot_context(
+            run_source="param_assistant",
+            budget_usdt=100,
+            portfolio=p,
+            first_start_buy_only=False,
+        ),
+    )
+    result = decision_to_param_assistant_result(d, 100, "SOLUSDT")
+
+    assert result["result_type"] == "recommended_grid"
+    assert result["deployable"] is False
+    assert result["can_start_controlled"] is False
+
+
 def test_sell_management_template_rejected_without_sellable_base():
     pinned = {t.template_key: t for t in _pinned_templates()}
     tmpl = pinned["BALANCED_RANGE_60_69_FEE_BAD_SELL_MANAGEMENT"]

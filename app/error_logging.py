@@ -62,15 +62,25 @@ def persist_error(
     Hata kaydını error_logs tablosuna yazar. Returns error_log id or None.
     """
     try:
+        clean_message = str(message or "").strip()
+        if not clean_message and (source or "").strip().lower() == "binance":
+            ctx = context or {}
+            request_path = str(ctx.get("path") or "").strip()
+            request_method = str(ctx.get("method") or "REQUEST").strip().upper()
+            clean_message = (
+                f"Binance {request_method} {request_path} isteği başarısız"
+                if request_path
+                else "Binance isteği başarısız"
+            )
         context_json = json.dumps(context, ensure_ascii=False) if context else None
         if detail and len(detail) > 16000:
             detail = detail[:16000] + "..."
-        if message and len(message) > 8000:
-            message = message[:8000] + "..."
+        if len(clean_message) > 8000:
+            clean_message = clean_message[:8000] + "..."
         row = ErrorLog(
             source=source[:32] if source else "unknown",
             level=level[:16] if level else "error",
-            message=message or "(no message)",
+            message=clean_message or "(no message)",
             detail=detail,
             path=path[:512] if path else None,
             method=method[:16] if method else None,

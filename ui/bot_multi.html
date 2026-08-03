@@ -3,15 +3,43 @@
 <html lang="tr">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#101116">
+    <meta name="application-name" content="Ayserose">
+    <meta name="apple-mobile-web-app-title" content="Ayserose">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <script>
+    (function () {
+        var standalone = navigator.standalone === true;
+        try { standalone = standalone || window.matchMedia('(display-mode: standalone)').matches; } catch (e) {}
+        if (standalone && (navigator.maxTouchPoints || 0) > 0) {
+            document.documentElement.classList.add('ayserose-mobile-standalone');
+        }
+    })();
+    </script>
+    <link rel="stylesheet" href="/ui/assets/pwa-safe-area.css?v=1">
+    <link rel="manifest" href="/ui/assets/manifest.webmanifest">
+    <link rel="apple-touch-icon" sizes="180x180" href="/ui/assets/pwa/apple-touch-icon-180.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="/ui/assets/pwa/favicon-32.png">
+    <script src="/ui/assets/core/persistentAuth.js?v=1"></script>
     <script>
     (function(){
-        var tok = sessionStorage.getItem('token');
-        var usr = sessionStorage.getItem('user');
-        if (!tok || !usr) {
-            location.replace('/ui/login.html');
-            return;
-        }
+        document.documentElement.style.visibility = 'hidden';
+        window.__ayseroseAuthReady = window.AyserosePersistentAuth.restore()
+            .then(function(valid) {
+                if (valid === false) {
+                    location.replace('/ui/login.html?session_expired=1');
+                    return false;
+                }
+                document.documentElement.style.visibility = '';
+                return valid;
+            })
+            .catch(function() {
+                document.documentElement.style.visibility = '';
+                return null;
+            });
     })();
     </script>
     <script>

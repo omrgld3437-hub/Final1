@@ -12,15 +12,21 @@ from app.services.dynamic_param_score.v6.v6_pa_display import contextual_market_
 
 
 def test_r6_market_status_plain():
-    assert market_status_plain("R6") == "Fiyat tepede, geri çekilme riski var"
+    assert market_status_plain("R6") == "Yavaş toparlanma var"
 
 
 def test_r2_market_status_plain():
-    assert market_status_plain("R2") == "Fiyat yatay bölgede, iki yönlü fırsat var"
+    assert market_status_plain("R2") == "Piyasa dengeli"
 
 
 def test_r8_market_status_plain():
-    assert market_status_plain("R8") == "Sert düşüş var, yüksek riskli savunmacı mod"
+    assert market_status_plain("R8") == "Sert düşüş var"
+
+
+def test_all_main_regime_labels_are_plain_and_at_most_four_words():
+    from app.services.dynamic_param_score.regime_display import V6_REGIME_LABELS
+
+    assert all(1 <= len(label.split()) <= 4 for label in V6_REGIME_LABELS.values())
 
 
 def test_risk_tone_plain_maps_controlled_defensive():

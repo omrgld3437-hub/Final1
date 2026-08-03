@@ -2,21 +2,35 @@ import React, { useState, useEffect } from "react";
 import { Shield, Key, Phone, User, Trash2, ShieldCheck, AlertCircle } from "lucide-react";
 import { useDashboard } from "../context/DashboardContext";
 import { apiFetch } from "../lib/api";
+import PushNotificationSettings from "../features/notifications/PushNotificationSettings";
 
 interface SettingsTabProps {
   onLogout: () => void;
 }
 
+interface SettingsSnapshot {
+  ip: string;
+  name: string;
+  phone: string;
+  isIsolated: boolean;
+}
+
+const settingsCache = new Map<number, SettingsSnapshot>();
+
 export default function SettingsTab({ onLogout }: SettingsTabProps) {
   const { accountId } = useDashboard();
   const settingsUrl = `/api/accounts/${accountId}/settings`;
   // Input fields state
-  const [ip, setIp] = useState("185.112.14.92");
+  const cached = settingsCache.get(accountId);
+  const [ip, setIp] = useState(cached?.ip || "—");
   const [apiKey, setApiKey] = useState("");
   const [apiSecret, setApiSecret] = useState("");
-  const [name, setName] = useState("Ömer Altın");
-  const [phone, setPhone] = useState("5321234567");
-  const [isIsolated, setIsIsolated] = useState(false);
+  const [name, setName] = useState(cached?.name || "");
+  const [phone, setPhone] = useState(cached?.phone || "");
+  const [isIsolated, setIsIsolated] = useState(cached?.isIsolated || false);
+  const [actionMessage, setActionMessage] = useState("");
+  const [actionError, setActionError] = useState("");
+  const [activeAction, setActiveAction] = useState("");
   
   // Password change state
   const [pass, setPass] = useState("");
@@ -30,59 +44,82 @@ export default function SettingsTab({ onLogout }: SettingsTabProps) {
   const [deleteError, setDeleteError] = useState("");
 
   useEffect(() => {
-    // Load fresh account settings
+    const saved = settingsCache.get(accountId);
+    if (saved) {
+      setIp(saved.ip);
+      setName(saved.name);
+      setPhone(saved.phone);
+      setIsIsolated(saved.isIsolated);
+      return;
+    }
     apiFetch<Record<string, unknown>>(settingsUrl)
       .then((data) => {
         if (data) {
-          setIp(String(data.server_public_ip || "185.112.14.92"));
-          setName(String(data.account_name || ""));
-          setPhone(String(data.user_phone || ""));
-          setIsIsolated(!!data.isolate_from_admin);
+          const snapshot = {
+            ip: String(data.server_public_ip || "—"),
+            name: String(data.account_name || ""),
+            phone: String(data.user_phone || ""),
+            isIsolated: !!data.isolate_from_admin,
+          };
+          settingsCache.set(accountId, snapshot);
+          setIp(snapshot.ip);
+          setName(snapshot.name);
+          setPhone(snapshot.phone);
+          setIsIsolated(snapshot.isIsolated);
         }
       })
       .catch(console.error);
   }, [accountId, settingsUrl]);
 
-  const handleUpdateAPI = (field: "apiKey" | "apiSecret") => {
+  const handleUpdateAPI = async (field: "apiKey" | "apiSecret") => {
     const value = field === "apiKey" ? apiKey : apiSecret;
     if (!value.trim()) {
-      alert("Hata: Değer boş olamaz.");
+      setActionError("Değer boş olamaz.");
       return;
     }
-
-    apiFetch(settingsUrl, {
-      method: "PATCH",
-      body: JSON.stringify({
-        [field === "apiKey" ? "api_key" : "api_secret"]: value,
-      }),
-    })
-      .then((data: { success?: boolean }) => {
-        if (data?.success) {
-          alert("Binance API bilgisi başarıyla güncellendi.");
-          if (field === "apiKey") setApiKey("");
-          else setApiSecret("");
-        }
-      })
-      .catch(console.error);
+    setActiveAction(field);
+    setActionError("");
+    setActionMessage("");
+    try {
+      const data = await apiFetch<{ ok?: boolean; message?: string }>(settingsUrl, {
+        method: "PATCH",
+        body: JSON.stringify({
+          [field === "apiKey" ? "api_key" : "api_secret"]: value,
+        }),
+      });
+      if (!data?.ok) throw new Error("API bilgisi kaydedilemedi.");
+      setActionMessage(data.message || "Binance API bilgisi güvenli şekilde güncellendi.");
+      if (field === "apiKey") setApiKey("");
+      else setApiSecret("");
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "API bilgisi kaydedilemedi.");
+    } finally {
+      setActiveAction("");
+    }
   };
 
-  const handleUpdatePhone = () => {
+  const handleUpdatePhone = async () => {
     const rawDigits = phone.replace(/\D/g, "");
     if (rawDigits.length < 10) {
-      alert("En az 10 rakamlı geçerli bir telefon numarası giriniz.");
+      setActionError("En az 10 rakamlı geçerli bir telefon numarası giriniz.");
       return;
     }
-
-    apiFetch(settingsUrl, {
-      method: "PATCH",
-      body: JSON.stringify({ user_phone: phone }),
-    })
-      .then((data: { success?: boolean }) => {
-        if (data?.success) {
-          alert("Telefon numaranız güncellendi.");
-        }
-      })
-      .catch(console.error);
+    setActiveAction("phone");
+    setActionError("");
+    setActionMessage("");
+    try {
+      const data = await apiFetch<{ success?: boolean; message?: string }>("/api/auth/update-phone", {
+        method: "POST",
+        body: JSON.stringify({ account_id: accountId, phone }),
+      });
+      if (!data?.success) throw new Error("Telefon numarası güncellenemedi.");
+      settingsCache.set(accountId, { ip, name, phone, isIsolated });
+      setActionMessage(data.message || "Telefon numaranız güncellendi.");
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Telefon numarası güncellenemedi.");
+    } finally {
+      setActiveAction("");
+    }
   };
 
   const validatePasswordStrength = (p: string) => {
@@ -91,11 +128,16 @@ export default function SettingsTab({ onLogout }: SettingsTabProps) {
     if (!/[a-z]/.test(p)) return "Şifre en az 1 küçük harf içermelidir.";
     if (!/[0-9]/.test(p)) return "Şifre en az 1 rakam içermelidir.";
     if (!/[.,!?;:]/.test(p)) return "Şifre en az 1 noktalama işareti (.,!?;:) içermelidir.";
-    if (p.toLowerCase().includes("omer") || p.toLowerCase().includes("altin")) return "Şifre isim/soyad içeremez.";
+    const lowered = p.toLocaleLowerCase("tr-TR");
+    const includesProfileName = name
+      .split(/\s+/)
+      .filter((part) => part.length >= 3)
+      .some((part) => lowered.includes(part.toLocaleLowerCase("tr-TR")));
+    if (includesProfileName) return "Şifre isim/soyad içeremez.";
     return "";
   };
 
-  const handleUpdatePassword = () => {
+  const handleUpdatePassword = async () => {
     setPassError("");
     setPassSuccess("");
 
@@ -115,58 +157,73 @@ export default function SettingsTab({ onLogout }: SettingsTabProps) {
       return;
     }
 
-    // Call update
-    apiFetch(settingsUrl, {
-      method: "PATCH",
-      body: JSON.stringify({ password: pass }),
-    })
-      .then((data: { success?: boolean }) => {
-        if (data?.success) {
-          setPassSuccess("✓ Şifreniz başarıyla güncellendi.");
-          setPass("");
-          setConfirmPass("");
-        }
-      })
-      .catch(err => {
-        setPassError("İşlem gerçekleştirilemedi.");
+    setActiveAction("password");
+    try {
+      const data = await apiFetch<{ success?: boolean; message?: string }>("/api/auth/change-password", {
+        method: "POST",
+        body: JSON.stringify({
+          account_id: accountId,
+          new_password: pass,
+          new_password_confirm: confirmPass,
+        }),
       });
+      if (!data?.success) throw new Error("Şifre güncellenemedi.");
+      setPassSuccess(`✓ ${data.message || "Şifreniz başarıyla güncellendi."}`);
+      setPass("");
+      setConfirmPass("");
+    } catch (error) {
+      setPassError(error instanceof Error ? error.message : "İşlem gerçekleştirilemedi.");
+    } finally {
+      setActiveAction("");
+    }
   };
 
-  const handleToggleIsolate = () => {
+  const handleToggleIsolate = async () => {
     const nextVal = !isIsolated;
-    apiFetch(settingsUrl, {
-      method: "PATCH",
-      body: JSON.stringify({ isolate_from_admin: nextVal }),
-    })
-      .then((data: { success?: boolean }) => {
-        if (data?.success) {
-          setIsIsolated(nextVal);
-          alert(nextVal ? "Yönetici izolasyonu başarıyla aktif hale getirildi." : "Yönetici izolasyonu kaldırıldı.");
-        }
-      })
-      .catch(console.error);
+    setActiveAction("isolate");
+    setActionError("");
+    setActionMessage("");
+    try {
+      const data = await apiFetch<{ ok?: boolean; message?: string }>(settingsUrl, {
+        method: "PATCH",
+        body: JSON.stringify({ isolate_from_admin: nextVal }),
+      });
+      if (!data?.ok) throw new Error("İzolasyon ayarı değiştirilemedi.");
+      setIsIsolated(nextVal);
+      settingsCache.set(accountId, { ip, name, phone, isIsolated: nextVal });
+      setActionMessage(nextVal ? "Yönetici izolasyonu etkinleştirildi." : "Yönetici izolasyonu kaldırıldı.");
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "İzolasyon ayarı değiştirilemedi.");
+    } finally {
+      setActiveAction("");
+    }
   };
 
-  const handleDeleteAccount = () => {
+  const handleDeleteAccount = async () => {
     setDeleteError("");
     if (!deletePass.trim()) {
       setDeleteError("Şifrenizi giriniz.");
       return;
     }
 
-    // Call delete endpoint simulating account deletion
-    apiFetch(settingsUrl, {
-      method: "PATCH",
-      body: JSON.stringify({ has_binance_keys: false }),
-    })
-      .then(() => {
-        alert("Hesabınız ve tüm ilişkili verileriniz kalıcı olarak silindi.");
-        setShowDeleteModal(false);
-        onLogout();
-      })
-      .catch(() => {
-        setDeleteError("Hesap silme işlemi başarısız.");
-      });
+    setActiveAction("delete");
+    try {
+      const data = await apiFetch<{ ok?: boolean; message?: string }>(
+        `/api/accounts/${accountId}/delete`,
+        {
+          method: "POST",
+          body: JSON.stringify({ password: deletePass }),
+          timeoutMs: 20_000,
+        },
+      );
+      if (!data?.ok) throw new Error("Hesap silme işlemi başarısız.");
+      setShowDeleteModal(false);
+      onLogout();
+    } catch (error) {
+      setDeleteError(error instanceof Error ? error.message : "Hesap silme işlemi başarısız.");
+    } finally {
+      setActiveAction("");
+    }
   };
 
   return (
@@ -175,6 +232,18 @@ export default function SettingsTab({ onLogout }: SettingsTabProps) {
         <h3 className="text-lg font-bold text-white mb-2 flex items-center border-b border-neutral-850 pb-3">
           <Shield className="w-5 h-5 text-[#f0b90b] mr-2" /> Güvenli Hesap Ayarları
         </h3>
+        {actionMessage && (
+          <p role="status" className="rounded-xl border border-emerald-400/20 bg-emerald-400/5 px-4 py-3 text-xs text-emerald-200">
+            {actionMessage}
+          </p>
+        )}
+        {actionError && (
+          <p role="alert" className="rounded-xl border border-red-400/20 bg-red-400/5 px-4 py-3 text-xs text-red-200">
+            {actionError}
+          </p>
+        )}
+
+        <PushNotificationSettings accountId={accountId} />
 
         {/* Server IP Info */}
         <div className="space-y-1.5">
@@ -206,6 +275,7 @@ export default function SettingsTab({ onLogout }: SettingsTabProps) {
               />
               <button
                 onClick={() => handleUpdateAPI("apiKey")}
+                disabled={activeAction === "apiKey"}
                 className="px-3 bg-neutral-800 hover:bg-neutral-700 text-white text-xs font-semibold rounded-lg transition"
               >
                 Güncelle
@@ -227,6 +297,7 @@ export default function SettingsTab({ onLogout }: SettingsTabProps) {
               />
               <button
                 onClick={() => handleUpdateAPI("apiSecret")}
+                disabled={activeAction === "apiSecret"}
                 className="px-3 bg-neutral-800 hover:bg-neutral-700 text-white text-xs font-semibold rounded-lg transition"
               >
                 Güncelle
@@ -238,7 +309,7 @@ export default function SettingsTab({ onLogout }: SettingsTabProps) {
         {/* User profile read-only field */}
         <div className="space-y-1.5">
           <label className="text-xs font-semibold text-neutral-400 flex items-center">
-            <User className="w-3.5 h-3.5 mr-1 text-neutral-400" /> Adı Soyadı (Alt hesap sahibi)
+            <User className="w-3.5 h-3.5 mr-1 text-neutral-400" /> Adı Soyadı
           </label>
           <input
             type="text"
@@ -263,6 +334,7 @@ export default function SettingsTab({ onLogout }: SettingsTabProps) {
             />
             <button
               onClick={handleUpdatePhone}
+              disabled={activeAction === "phone"}
               className="px-4 py-2 bg-neutral-800 hover:bg-neutral-700 text-white text-xs font-semibold rounded-lg transition"
             >
               Güncelle
@@ -313,6 +385,7 @@ export default function SettingsTab({ onLogout }: SettingsTabProps) {
 
           <button
             onClick={handleUpdatePassword}
+            disabled={activeAction === "password"}
             className="w-full py-2.5 bg-neutral-800 hover:bg-neutral-700 text-white font-bold rounded-lg text-sm transition"
           >
             Şifreyi Güncelle
@@ -320,15 +393,18 @@ export default function SettingsTab({ onLogout }: SettingsTabProps) {
         </div>
 
         {/* Administrative Isolate Toggle block */}
-        <div className="space-y-2 border-t border-neutral-850 pt-4">
+        <div className="hidden">
           <label className="text-xs font-semibold text-neutral-400 flex items-center">
             <ShieldCheck className="w-4 h-4 mr-1 text-[#f0b90b]" /> Adminden İzole Ol
           </label>
           <p className="text-xs text-neutral-500 leading-normal">
-            Açıkken yönetici hesabınıza erişemez, bakiyelerinizi ve işlemlerinizi asla göremez, sadece siz bilirsiniz.
+            Açıkken V2 yönetim ekranı hesap görünümünü, bakiye ve performans
+            değerlerini gizler. Sunucu yöneticilerinin teknik erişim yetkileri bundan
+            etkilenmez.
           </p>
           <button
             onClick={handleToggleIsolate}
+            disabled={activeAction === "isolate"}
             className={`w-full py-2.5 font-bold rounded-lg text-sm transition ${
               isIsolated 
                 ? "bg-[#f6465d] text-white" 
@@ -342,10 +418,10 @@ export default function SettingsTab({ onLogout }: SettingsTabProps) {
         {/* Danger zone: Account deletion */}
         <div className="space-y-2 border-t border-neutral-850 pt-4 bg-[#f6465d]/5 p-4 rounded-xl border border-[#f6465d]/10">
           <label className="text-xs font-bold text-[#f6465d] flex items-center">
-            <Trash2 className="w-4 h-4 mr-1 shrink-0" /> Tehlikeli Bölge: Kalıcı Hesap Silme
+            <Trash2 className="w-4 h-4 mr-1 shrink-0" /> Kalıcı Hesap Silme
           </label>
           <p className="text-xs text-neutral-400 leading-normal">
-            Hesabınız ve Binance API yetkileriniz kalıcı olarak veritabanından kazınacaktır. Bu işlem kesinlikle geri alınamaz.
+            Hesabınız kalıcı olarak silinecektir. Bu işlem kesinlikle geri alınamaz.
           </p>
           <button
             onClick={() => {
@@ -393,6 +469,7 @@ export default function SettingsTab({ onLogout }: SettingsTabProps) {
               </button>
               <button
                 onClick={handleDeleteAccount}
+                disabled={activeAction === "delete"}
                 className="px-4 py-2 bg-[#f6465d] hover:bg-[#d63a4e] text-white font-bold rounded-lg text-xs transition"
               >
                 Onayla &amp; Sil

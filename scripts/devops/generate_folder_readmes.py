@@ -25,7 +25,7 @@ SKIP_PREFIX = ("ui/assets/coins/", "ui/assets/binance2/", "marketing/.git")
 
 DOCS: dict[str, dict[str, str]] = {
     ".": {
-        "title": "final1 — Proje kökü",
+        "title": "ayserose1 — Proje kökü",
         "purpose": (
             "ayserose platformunun ana dizini. Binance Spot üzerinde DCA, grid ve trailing "
             "botları çalıştıran FastAPI backend, web paneli, manager paneli ve Bot Engine worker "
@@ -296,7 +296,7 @@ DOCS: dict[str, dict[str, str]] = {
         "title": "deploy — Sunucu kurulum",
         "purpose": "Production deploy: rsync, nginx config, sabit/değişken dosya listeleri.",
         "role": "Geliştirme makinesinden sunucuya kod aktarımı; systemd/nginx örnekleri.",
-        "key_files": "DEPLOY.md · deploy.sh · nginx-tradertrailing-server.conf",
+        "key_files": "DEPLOY.md · deploy.sh · nginx-final1-server.conf",
         "related": "ops/deploy.sh · docs/runtime.md",
     },
     "tests": {

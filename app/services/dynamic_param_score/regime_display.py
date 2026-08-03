@@ -5,40 +5,40 @@ from __future__ import annotations
 from typing import Optional
 
 V6_REGIME_LABELS = {
-    "R1": "Güçlü yükseliş trendi",
-    "R2": "Dengeli aralık",
-    "R3": "Zayıf / gürültülü aralık",
-    "R4": "Volatil aralık",
-    "R5": "Toparlanma",
-    "R6": "Toparlanma / zayıf yükseliş",
-    "R7": "Düşüş trendi",
-    "R8": "Crash / sert düşüş",
+    "R1": "Güçlü yükseliş var",
+    "R2": "Piyasa dengeli",
+    "R3": "Piyasa kararsız",
+    "R4": "Sert dalgalanma var",
+    "R5": "Toparlanma başlıyor",
+    "R6": "Yavaş toparlanma var",
+    "R7": "Düşüş eğilimi var",
+    "R8": "Sert düşüş var",
 }
 
 # Ana PA/DM ekranı — teknik kod yok, işlem anlamı
 V6_MARKET_STATUS_PLAIN: dict[str, str] = {
-    "R1": "Fiyat yükseliş trendinde, aktif fırsat var",
-    "R2": "Fiyat yatay bölgede, iki yönlü fırsat var",
-    "R3": "Fiyat gürültülü aralıkta, temkinli grid kullanılıyor",
-    "R4": "Fiyat sert dalgalanıyor, gridler geniş tutuldu",
-    "R5": "Toparlanma başlıyor, kontrollü alım fırsatı var",
-    "R6": "Düşüş sonrası kademeli toparlanma var",
-    "R7": "Düşüş trendi var, savunmacı mod aktif",
-    "R8": "Sert düşüş var, yüksek riskli savunmacı mod",
+    "R1": "Güçlü yükseliş var",
+    "R2": "Piyasa dengeli",
+    "R3": "Piyasa kararsız",
+    "R4": "Sert dalgalanma var",
+    "R5": "Toparlanma başlıyor",
+    "R6": "Yavaş toparlanma var",
+    "R7": "Düşüş eğilimi var",
+    "R8": "Sert düşüş var",
 }
 
 LEGACY_REGIME_PLAIN: dict[str, str] = {
-    "BALANCED_RANGE": "Fiyat yatay bölgede, iki yönlü fırsat var",
-    "RANGE_LOW_VOL": "Fiyat yatay bölgede, iki yönlü fırsat var",
-    "RANGE_HIGH_VOL": "Fiyat sert dalgalanıyor, gridler geniş tutuldu",
-    "HIGH_VOL_UNSTABLE": "Fiyat sert dalgalanıyor, gridler geniş tutuldu",
-    "TRENDING_UP": "Fiyat yükseliş trendinde, aktif fırsat var",
-    "TRENDING_DOWN": "Düşüş trendi var, savunmacı mod aktif",
-    "DUMP_RISK": "Sert düşüş var, yüksek riskli savunmacı mod",
-    "BREAKOUT_RISK": "Kırılım riski var, temkinli grid kullanılıyor",
-    "LOW_LIQUIDITY": "Likidite düşük, temkinli mod",
-    "SPREAD_UNSAFE": "Spread geniş, işlem için uygun değil",
-    "NO_TRADE": "Mevcut koşullarda işlem önerilmiyor",
+    "BALANCED_RANGE": "Piyasa dengeli",
+    "RANGE_LOW_VOL": "Sakin yatay piyasa",
+    "RANGE_HIGH_VOL": "Sert dalgalanma var",
+    "HIGH_VOL_UNSTABLE": "Sert dalgalanma var",
+    "TRENDING_UP": "Güçlü yükseliş var",
+    "TRENDING_DOWN": "Düşüş eğilimi var",
+    "DUMP_RISK": "Sert düşüş var",
+    "BREAKOUT_RISK": "Kırılma ihtimali var",
+    "LOW_LIQUIDITY": "Alım satım zayıf",
+    "SPREAD_UNSAFE": "Fiyat farkı yüksek",
+    "NO_TRADE": "İşlem için uygun değil",
     "NO_DATA": "Veri yetersiz",
 }
 

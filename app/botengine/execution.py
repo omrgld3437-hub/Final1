@@ -45,7 +45,7 @@ from app.botengine.cycle_ledger import (
     cycle_ledger_add_fill,
     get_cycle_type_and_base_delta,
 )
-from app.botengine.fee_utils import parse_fill_commission
+from app.botengine.fee_utils import parse_fill_commission, symbol_base_asset
 from app.botengine.strategies.dca_grid_trailing import (
     apply_fill_to_state,
     cycle_reset_after_fill,
@@ -829,6 +829,33 @@ async def run_actions(
                 symbol = (
                     a.get("symbol") or getattr(config, "symbol", "BTCUSDT")
                 ).upper()
+                cfg_symbol = (getattr(config, "symbol", "") or "").strip().upper()
+                if cfg_symbol and cfg_symbol != "MULTI" and symbol != cfg_symbol:
+                    logger.warning(
+                        "BOT_EXECUTION_SKIP bot_id=%s reason=%s skip_reason=SYMBOL_MISMATCH action_symbol=%s config_symbol=%s",
+                        bot_id,
+                        reason,
+                        symbol,
+                        cfg_symbol,
+                    )
+                    _append_skip(
+                        db,
+                        bot_id,
+                        account_id,
+                        "SYMBOL_MISMATCH",
+                        f"SYMBOL_MISMATCH action_symbol={symbol} config_symbol={cfg_symbol}",
+                        _cycle_meta(
+                            state,
+                            cfg_symbol,
+                            reason=reason,
+                            side=side,
+                            action_symbol=symbol,
+                            config_symbol=cfg_symbol,
+                            grid_index=a.get("grid_index"),
+                        ),
+                        state=state,
+                    )
+                    continue
                 base_asset, quote_asset = _symbol_to_base_quote(symbol)
                 qty = _num(a.get("quantity"))
                 quote_qty_raw = a.get("quote_qty")
@@ -1092,6 +1119,14 @@ async def run_actions(
                                                     and fill_price
                                                 ):
                                                     state["reference_price"] = (
+                                                        fill_price
+                                                    )
+                                                if (
+                                                    state.get("initial_reference_price")
+                                                    is None
+                                                    and fill_price
+                                                ):
+                                                    state["initial_reference_price"] = (
                                                         fill_price
                                                     )
                                                 logger.info(
@@ -2372,6 +2407,8 @@ async def run_actions(
                     grid_index=a.get("grid_index"),
                     reason=reason,
                     execution_price=a.get("execution_price"),
+                    fee_amount=fee_raw,
+                    fee_asset=fee_asset,
                 )
                 # Cycle ledger: record only cycle-scoped fills (single source of truth for cycle PnL)
                 if reason in CYCLE_FILL_REASONS:
@@ -2409,6 +2446,7 @@ async def run_actions(
                     else:
                         state["initial_allocation_done"] = True
                         state["reference_price"] = fill_price
+                        state["initial_reference_price"] = fill_price
                         state["cycle_id"] = 1
                         _ts_open = fill_ts_utc.isoformat()
                         state["cycle_opened_at"] = _ts_open
@@ -2416,10 +2454,28 @@ async def run_actions(
                         state["initial_alloc_price"] = round(float(fill_price), 10)
                         state["initial_alloc_fee_quote"] = round(float(fee), 8)
                         C = _num(getattr(config, "initial_capital_usdt", 0))
-                        state["quote_balance"] = round(
-                            max(0.0, C - cum_quote - fee), 10
+                        _base_asset = symbol_base_asset(symbol)
+                        _fee_in_base = fee_asset == _base_asset and _base_asset
+                        _fee_in_quote = fee_asset in (
+                            "USDT",
+                            "USDC",
+                            "BUSD",
+                            "FDUSD",
                         )
-                        state["base_balance"] = round(float(exec_qty), 10)
+                        _net_base_qty = max(
+                            0.0, float(exec_qty) - (fee_raw if _fee_in_base else 0.0)
+                        )
+                        state["initial_alloc_base_qty"] = round(_net_base_qty, 10)
+                        state["quote_balance"] = round(
+                            max(
+                                0.0,
+                                C
+                                - cum_quote
+                                - (fee_raw if _fee_in_quote else 0.0),
+                            ),
+                            10,
+                        )
+                        state["base_balance"] = round(_net_base_qty, 10)
                         state["grid_reference_quote"] = state["quote_balance"]
                         equity_usdt = round(
                             state["quote_balance"] + state["base_balance"] * fill_price,
@@ -2533,6 +2589,7 @@ async def run_actions(
                 if side == "BUY" and reason == "trail_buy_grid":
                     pending_buy_level_actions += 1
                 # Persist fill before tur kapanışı (CYCLE_END hata verse bile trades tablosunda kalsın)
+                notify_fill = False
                 if db is not None:
                     try:
                         oid_early = res.get("orderId")
@@ -2547,14 +2604,26 @@ async def run_actions(
                             fill_price,
                             fee=fee,
                             fee_asset=fee_asset,
+                            fee_amount=fee_raw,
+                            fee_usdt=fee,
                             slot_id=a.get("grid_index"),
-                            reference_price=ref_early,
+                            reference_price=state.get("initial_reference_price")
+                            or ref_early,
                             order_id=str(oid_early) if oid_early is not None else None,
                             client_order_id=client_order_id,
                             symbol=symbol,
                             cycle_id=cycle_id_for_trade,
+                            order_type=a.get("order_type"),
+                            cost_basis_type=a.get("cost_basis_type"),
+                            cost_basis_price=a.get("cost_basis_price"),
+                            linked_grid_ids=a.get("linked_grid_ids"),
+                            trigger_price=a.get("trigger_price"),
+                            tracked_extreme_price=a.get("trail_anchor_price"),
+                            completion_price=a.get("execution_price"),
+                            engine_status="COMPLETED",
                         )
                         if inserted_early:
+                            notify_fill = True
                             logger.info(
                                 "BOT_TRADE_RECORDED bot_id=%s side=%s qty=%s price=%s fee=%s order_id=%s request_id=-",
                                 bot_id,
@@ -2636,8 +2705,10 @@ async def run_actions(
                     )
                 # Cycle reset MUST run before any load_state: in-memory state has _cycle_complete and updated balances.
                 ref_price_for_ledger = state.get(
+                    "initial_reference_price"
+                ) or state.get(
                     "reference_price"
-                )  # referansı reset'ten önce al (gerçekleşme % doğru kalsın)
+                )  # immutable cycle reference, captured before reset
                 if state.get("_cycle_complete") or reason in (
                     "trail_reentry_buy",
                     "trail_profit_sell",
@@ -2868,6 +2939,27 @@ async def run_actions(
                     cycle_type_snapshot = (
                         "CASH" if reason == "trail_profit_sell" else "INVENTORY"
                     )
+                    dynamic_snapshot = state.get("dynamic_snapshot")
+                    cycle_parameters = None
+                    if isinstance(dynamic_snapshot, dict):
+                        applied = dynamic_snapshot.get("applied")
+                        if isinstance(applied, dict) and applied:
+                            cycle_parameters = applied
+                    if cycle_parameters is None:
+                        frozen = state.get("_dynamic_reference")
+                        if isinstance(frozen, dict) and frozen:
+                            cycle_parameters = frozen
+                    if cycle_parameters is None:
+                        # İlk dinamik turda snapshot henüz yoktur; sabit modda
+                        # ise hiç oluşmaz. Her kapanmış turun parametre kartı
+                        # eksiksiz kalabilsin diye gerçekten çalışan config'i
+                        # kapanış anlık görüntüsüne mutlaka ekle.
+                        try:
+                            rendered_config = config.to_dict()
+                        except (AttributeError, TypeError, ValueError):
+                            rendered_config = None
+                        if isinstance(rendered_config, dict) and rendered_config:
+                            cycle_parameters = rendered_config
                     completed_list.append(
                         {
                             "cycle_id": cycle_id_for_trade,
@@ -2877,10 +2969,20 @@ async def run_actions(
                             "cash_fees_usdt": round(cash_fees, 8),
                             "inventory_coin_adv_qty": round(inv_qty, 12),
                             "inventory_fees_usdt": round(inv_fees, 8),
+                            "matched_qty": round(
+                                float(ledger.get("matched_qty") or 0),
+                                12,
+                            ),
                             "close_price_quote_per_base": round(float(fill_price), 8),
                             "started_at": ledger.get("started_at"),
                             "completed_at": last_fill_ts_iso,
                             "completed_reason": reason,
+                            "cycle_parameters": cycle_parameters,
+                            "dynamic_regime": (
+                                dynamic_snapshot.get("regime")
+                                if isinstance(dynamic_snapshot, dict)
+                                else None
+                            ),
                         }
                     )
                     state["completed_cycle_dual_pnls"] = completed_list[
@@ -3058,14 +3160,26 @@ async def run_actions(
                             fill_price,
                             fee=fee,
                             fee_asset=fee_asset,
+                            fee_amount=fee_raw,
+                            fee_usdt=fee,
                             slot_id=a.get("grid_index"),
-                            reference_price=ref_float,
+                            reference_price=state.get("initial_reference_price")
+                            or ref_float,
                             order_id=str(oid) if oid is not None else None,
                             client_order_id=client_order_id,
                             symbol=symbol,
                             cycle_id=cycle_id_for_trade,
+                            order_type=a.get("order_type"),
+                            cost_basis_type=a.get("cost_basis_type"),
+                            cost_basis_price=a.get("cost_basis_price"),
+                            linked_grid_ids=a.get("linked_grid_ids"),
+                            trigger_price=a.get("trigger_price"),
+                            tracked_extreme_price=a.get("trail_anchor_price"),
+                            completion_price=a.get("execution_price"),
+                            engine_status="COMPLETED",
                         )
                         if inserted:
+                            notify_fill = True
                             logger.info(
                                 "BOT_TRADE_RECORDED bot_id=%s side=%s qty=%s price=%s fee=%s order_id=%s request_id=-",
                                 bot_id,
@@ -3133,30 +3247,80 @@ async def run_actions(
                             await invalidate_account_cache_for_keys(adapter.keys)
                         except Exception:
                             pass
-                trigger_price = _num(a.get("trigger_price"))
-                if trigger_price and trigger_price > 0 and db is not None:
-                    max_slip = float(getattr(config, "max_slippage_pct", 0.5) or 0.5)
-                    slip_pct = abs(fill_price - trigger_price) / trigger_price * 100.0
+                    if notify_fill:
+                        try:
+                            from app.services.web_push_notifications import (
+                                enqueue_trade_notification,
+                            )
+
+                            enqueue_trade_notification(
+                                db,
+                                account_id=account_id,
+                                bot_id=bot_id,
+                                symbol=symbol,
+                                reason=reason,
+                                cycle_id=cycle_id_for_trade,
+                                new_cycle_id=int(state.get("cycle_id") or cycle_id_for_trade),
+                                grid_index=a.get("grid_index"),
+                                event_id=str(res.get("orderId") or client_order_id or key),
+                            )
+                        except Exception as push_error:
+                            logger.warning(
+                                "WEB_PUSH_QUEUE_FAILED bot_id=%s reason=%s err=%s",
+                                bot_id,
+                                reason,
+                                push_error,
+                            )
+                planned_price = _num(
+                    a.get("execution_price") or a.get("trigger_price")
+                )
+                if planned_price and planned_price > 0 and db is not None:
+                    configured_max_slip = getattr(
+                        config,
+                        "max_slippage_pct",
+                        0.5,
+                    )
+                    max_slip = float(
+                        0.5
+                        if configured_max_slip is None
+                        else configured_max_slip
+                    )
+                    side_for_slip = str(a.get("side") or "").upper()
+                    if side_for_slip == "SELL":
+                        slip_pct = max(
+                            0.0,
+                            (planned_price - fill_price) / planned_price * 100.0,
+                        )
+                    elif side_for_slip == "BUY":
+                        slip_pct = max(
+                            0.0,
+                            (fill_price - planned_price) / planned_price * 100.0,
+                        )
+                    else:
+                        slip_pct = (
+                            abs(fill_price - planned_price) / planned_price * 100.0
+                        )
                     if slip_pct > max_slip:
                         append_event(
                             db,
                             bot_id,
                             account_id,
                             "SLIPPAGE_WARN",
-                            f"slip_pct={slip_pct:.2f} max={max_slip} trigger={trigger_price} fill={fill_price}",
+                            f"slip_pct={slip_pct:.2f} max={max_slip} planned={planned_price} fill={fill_price}",
                             {
                                 "slip_pct": slip_pct,
                                 "max_slippage_pct": max_slip,
-                                "trigger_price": trigger_price,
+                                "planned_price": planned_price,
+                                "trigger_price": _num(a.get("trigger_price")),
                                 "fill_price": fill_price,
                                 "reason": reason,
                             },
                         )
                         logger.warning(
-                            "BOT SLIPPAGE_WARN bot_id=%s slip_pct=%.2f trigger=%.2f fill=%.2f",
+                            "BOT SLIPPAGE_WARN bot_id=%s slip_pct=%.2f planned=%.2f fill=%.2f",
                             bot_id,
                             slip_pct,
-                            trigger_price,
+                            planned_price,
                             fill_price,
                         )
             except Exception as e:

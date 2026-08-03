@@ -3,15 +3,43 @@
 <html lang="tr">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#101116">
+    <meta name="application-name" content="Ayserose">
+    <meta name="apple-mobile-web-app-title" content="Ayserose">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <script>
+    (function () {
+        var standalone = navigator.standalone === true;
+        try { standalone = standalone || window.matchMedia('(display-mode: standalone)').matches; } catch (e) {}
+        if (standalone && (navigator.maxTouchPoints || 0) > 0) {
+            document.documentElement.classList.add('ayserose-mobile-standalone');
+        }
+    })();
+    </script>
+    <link rel="stylesheet" href="/ui/assets/pwa-safe-area.css?v=1">
+    <link rel="manifest" href="/ui/assets/manifest.webmanifest">
+    <link rel="apple-touch-icon" sizes="180x180" href="/ui/assets/pwa/apple-touch-icon-180.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="/ui/assets/pwa/favicon-32.png">
+    <script src="/ui/assets/core/persistentAuth.js?v=1"></script>
     <script>
     (function(){
-        var tok = sessionStorage.getItem('token');
-        var usr = sessionStorage.getItem('user');
-        if (!tok || !usr) {
-            location.replace('/ui/login.html');
-            return;
-        }
+        document.documentElement.style.visibility = 'hidden';
+        window.__ayseroseAuthReady = window.AyserosePersistentAuth.restore()
+            .then(function(valid) {
+                if (valid === false) {
+                    location.replace('/ui/login.html?session_expired=1');
+                    return false;
+                }
+                document.documentElement.style.visibility = '';
+                return valid;
+            })
+            .catch(function() {
+                document.documentElement.style.visibility = '';
+                return null;
+            });
     })();
     </script>
     <script>
@@ -1891,19 +1919,19 @@
     <script src="/ui/assets/utils/trTime.js?v=utc-naive1"></script>
     <script src="/ui/assets/utils/coinLogo.js?v=5"></script>
     <script src="/ui/assets/core/apiClient.js?v=refactor1"></script>
-    <script src="/ui/assets/utils/coinPriceFormat.js?v=3"></script>
-    <script src="/ui/assets/utils/gridTrailEnvelope.js?v=2"></script>
+    <script src="/ui/assets/utils/coinPriceFormat.js?v=4"></script>
+    <script src="/ui/assets/utils/gridTrailEnvelope.js?v=3"></script>
     <script src="/ui/assets/utils/engineLogAccess.js?v=2"></script>
     <script src="/ui/assets/utils/engineLogArchive.js?v=1"></script>
     <script src="/ui/assets/utils/botHealthAlerts.js?v=35"></script>
     <script src="/ui/assets/modules/ai-assistant-spec.js?v=20260626pa34"></script>
-    <script src="/ui/assets/modules/bot-error-assistant.js?v=healthy-quiet1"></script>
-    <script src="/ui/assets/utils/dynamicModeParamsView.js?v=param-dyn-general-alloc1"></script>
+    <script src="/ui/assets/modules/bot-error-assistant.js?v=healthy-quiet2"></script>
+    <script src="/ui/assets/utils/dynamicModeParamsView.js?v=param-dyn-general-alloc6"></script>
 <script src="/ui/assets/utils/engineLogFormat.js?v=70"></script>
 <script src="/ui/assets/utils/perfSummaryIntros.js?v=1"></script>
 <script src="/ui/assets/utils/engineLogLive.js?v=37"></script>
     <script src="/ui/assets/core/intervalRegistry.js?v=1"></script>
-    <script src="/ui/assets/botPageAppbar.js?v=1"></script>
+    <script src="/ui/assets/botPageAppbar.js?v=ws-rest-fallback2"></script>
     <script src="/ui/vendor/lightweight-charts.standalone.production.js"></script>
     <script src="/ui/assets/perf_chart_tv.js?v=1"></script>
     <script>
@@ -1996,6 +2024,10 @@
         var STRUCTURE_NAMES = { trailing_dca: 'Trailing DCA Bot' };
         var configGrid = document.getElementById('configGrid');
         var btnParametreler = document.getElementById('btnParametreler');
+        var parametrelerModal = document.getElementById('parametrelerModal');
+        var parametrelerModalClose = document.getElementById('parametrelerModalClose');
+        var parametrelerModalKapat = document.getElementById('parametrelerModalKapat');
+        var paramTabsHost = document.getElementById('paramTabsHost');
         var statePanel = document.getElementById('statePanel');
         var stateGrid = document.getElementById('stateGrid');
         var gridPointsPanel = document.getElementById('gridPointsPanel');
@@ -2034,6 +2066,29 @@
             var s = text == null ? '' : String(text);
             if (el.textContent === s) return false;
             el.textContent = s;
+            return true;
+        }
+
+        function parseBotUiNumber(value) {
+            var parser = window.CoinPriceFormat && window.CoinPriceFormat.parseLocalizedNumber;
+            if (typeof parser === 'function') return parser(value);
+            var n = Number(value);
+            return Number.isFinite(n) ? n : null;
+        }
+
+        function cachedBotPriceIsPlausible(value, cache) {
+            if (!Number.isFinite(value) || value <= 0) return false;
+            var refs = [
+                cache && cache.botRefPrice,
+                lastBotDetail && lastBotDetail.reference_display,
+                lastBotDetail && lastBotDetail.state && lastBotDetail.state.reference_price
+            ];
+            for (var i = 0; i < refs.length; i++) {
+                var ref = Number(refs[i]);
+                if (!Number.isFinite(ref) || ref <= 0) continue;
+                var ratio = value / ref;
+                return ratio >= 0.05 && ratio <= 20;
+            }
             return true;
         }
 
@@ -2109,6 +2164,7 @@
                     botTypeHeaderName: document.getElementById('botTypeHeaderName') ? document.getElementById('botTypeHeaderName').textContent : '',
                     botSymbol: botSymbolEl ? botSymbolEl.textContent : '',
                     botPrice: botPriceEl ? botPriceEl.textContent : '',
+                    botPriceValue: Number.isFinite(Number(lastPriceForBlink)) ? Number(lastPriceForBlink) : null,
                     bot24h: bot24hEl ? bot24hEl.textContent : '',
                     bot24hClass: bot24hEl ? bot24hEl.className : '',
                     statusBadgeHtml: statusBadgeEl ? statusBadgeEl.outerHTML : '',
@@ -2184,8 +2240,8 @@
                 if (lastBotDetail.symbol) {
                     var stateBaseCached = document.getElementById('stateBaseValue');
                     if (stateBaseCached) {
-                        var balCached = parseFloat(String(stateBaseCached.textContent || '').replace(/,/g, '').trim());
-                        if (!isNaN(balCached)) {
+                        var balCached = parseBotUiNumber(stateBaseCached.textContent || '');
+                        if (balCached != null) {
                             stateBaseCached.textContent = formatStateBaseBalance(balCached, lastBotDetail.symbol);
                             stateBaseCached.title = fmtBaseCompact(balCached) + (baseFromSymbol(lastBotDetail.symbol) ? ' ' + baseFromSymbol(lastBotDetail.symbol) : '');
                         }
@@ -2193,12 +2249,15 @@
                     if (perfMetrics && / —/.test(perfMetrics.textContent || '')) _lastPerfRenderFp = '';
                 }
                 if (botPriceEl && o.botPrice) {
-                    var restoredPx = parseFloat(String(o.botPrice).replace(/,/g, '').trim());
-                    if (Number.isFinite(restoredPx) && restoredPx > 0) {
+                    var restoredPx = parseBotUiNumber(
+                        o.botPriceValue != null ? o.botPriceValue : o.botPrice
+                    );
+                    if (restoredPx != null && cachedBotPriceIsPlausible(restoredPx, o)) {
                         lastPriceForBlink = restoredPx;
                         botPriceEl.textContent = fmtBotPrice(restoredPx);
                     } else {
-                        botPriceEl.textContent = o.botPrice;
+                        lastPriceForBlink = null;
+                        botPriceEl.textContent = '—';
                     }
                 }
                 if (bot24hEl && o.bot24h) {
@@ -2450,8 +2509,10 @@
                 }
                 if (lastBotDetail && lastBotDetail.symbol) {
                     if (lastPriceForBlink == null && botPriceEl && botPriceEl.textContent) {
-                        var cachedPx = parseFloat(String(botPriceEl.textContent).replace(/,/g, '').trim());
-                        if (Number.isFinite(cachedPx) && cachedPx > 0) lastPriceForBlink = cachedPx;
+                        var cachedPx = parseBotUiNumber(botPriceEl.textContent);
+                        if (cachedPx != null && cachedBotPriceIsPlausible(cachedPx, null)) {
+                            lastPriceForBlink = cachedPx;
+                        }
                     }
                     if (botPriceEl && lastPriceForBlink != null) {
                         botPriceEl.textContent = fmtBotPrice(lastPriceForBlink);
@@ -2475,8 +2536,8 @@
                 return Number(lastPriceForBlink);
             }
             if (botPriceEl && botPriceEl.textContent) {
-                var p = parseFloat(String(botPriceEl.textContent).replace(/,/g, '').trim());
-                if (Number.isFinite(p) && p > 0) return p;
+                var p = parseBotUiNumber(botPriceEl.textContent);
+                if (p != null && cachedBotPriceIsPlausible(p, null)) return p;
             }
             return null;
         }
@@ -3478,8 +3539,15 @@
                 ? Number(detail.reference_price)
                 : (detail.config && detail.config.reference_price != null && !isNaN(Number(detail.config.reference_price))
                     ? Number(detail.config.reference_price) : null);
+            var normalizedDyn = Object.assign({}, detail.dynamic_mode || {});
+            if ((detail.config || {}).dynamic_mode && normalizedDyn.enabled !== false) {
+                normalizedDyn.enabled = true;
+            }
+            if (!normalizedDyn.snapshot && detail.state && detail.state.dynamic_snapshot) {
+                normalizedDyn.snapshot = detail.state.dynamic_snapshot;
+            }
             return window.DynModeParamsView.renderBotDetailDynamicTab(
-                detail.dynamic_mode || {},
+                normalizedDyn,
                 detail.state || {},
                 detail.symbol || (botSymbolEl && botSymbolEl.textContent) || '',
                 detail.config || {},
@@ -3497,7 +3565,7 @@
         }
 
         function bindParamModalTabHandlers() {
-            var host = document.getElementById('paramTabsHost');
+            var host = paramTabsHost || document.getElementById('paramTabsHost');
             if (!host || host.dataset.bound === '1') return;
             host.dataset.bound = '1';
             host.addEventListener('click', function (e) {
@@ -3511,7 +3579,7 @@
         }
 
         function refreshParamModalView() {
-            var host = document.getElementById('paramTabsHost');
+            var host = paramTabsHost || document.getElementById('paramTabsHost');
             var showDyn = paramModalShowsDynamicTab();
             if (host) {
                 host.innerHTML = showDyn
@@ -4848,7 +4916,7 @@
         function isDynModeUiActive(data) {
             var dyn = (data && data.dynamic_mode) || (lastBotDetail && lastBotDetail.dynamic_mode) || {};
             if (dyn.active === true) return true;
-            if (dyn.enabled === true && dyn.safety_gate && dyn.safety_gate.ok === true) return true;
+            if (dyn.enabled === true && (!dyn.safety_gate || dyn.safety_gate.ok !== false)) return true;
             var cfg = (data && data.config) || (lastBotDetail && lastBotDetail.config) || {};
             return !!(cfg.dynamic_mode && dyn.enabled !== false && (!dyn.safety_gate || dyn.safety_gate.ok !== false));
         }
@@ -5474,7 +5542,7 @@
                 });
                 window._botDetailCycleTrades = trades;
                 if (!trades || !trades.length) {
-                    cycleTradesList.innerHTML = cycleTradesListPlaceholder('Tur ' + (cycleNum || selectedCycleId) + ' için henüz işlem yok.');
+                    cycleTradesList.innerHTML = cycleTradesListPlaceholder('Bu tur için henüz işlem yok.');
                     return;
                 }
                 function isInitialAllocationTradeRow(t) {
@@ -5799,15 +5867,24 @@
                                 mergeSig: mergeSig
                             };
                             renderCycleTradesList(tradesList, cycleId);
-                            renderCycleReport(summary, cycleId);
-                            if (typeof fetchGridPointsLive === 'function') fetchGridPointsLive();
+                            try {
+                                renderCycleReport(summary, cycleId);
+                            } catch (reportErr) {
+                                try { console.warn('cycle report render', reportErr); } catch (_) {}
+                                if (cycleReportEl) cycleReportEl.style.display = 'none';
+                            }
+                            try {
+                                if (typeof fetchGridPointsLive === 'function') fetchGridPointsLive();
+                            } catch (gridErr) {
+                                try { console.warn('cycle trades grid refresh', gridErr); } catch (_) {}
+                            }
                             if (Number(cycleId) === Number(currentCycleFromState)) {
                                 ensureOpenCycleDurationAnchor(cycleId, (summary && summary.started_at) || null);
                                 updateCycleReportDurationLive();
                             }
                         } catch (uiErr) {
                             console.warn('loadCycleTrades render', uiErr);
-                            cycleTradesList.innerHTML = cycleTradesListPlaceholder('İşlemler gösterilemedi.');
+                            cycleTradesList.innerHTML = cycleTradesListPlaceholder('Bu tur için henüz işlem yok.');
                         }
                     })
                     .catch(function(err) {
@@ -7962,19 +8039,33 @@
             var cfg = (lastBotDetail && lastBotDetail.config) || {};
             var symbol = (lastBotDetail && lastBotDetail.symbol) || (botSymbolEl && botSymbolEl.textContent) || '';
             var ref = resolveBotStartReferencePrice();
-            if (botDetailConfigReady(cfg)) {
-                cacheParamModalHtml(cfg, symbol, ref);
-            } else if (configGrid) {
-                _paramModalGenelHtml = '';
-                _paramModalDynHtml = '';
-                configGrid.innerHTML = '<p class="param-hint" style="padding: 1rem;">Parametreler yükleniyor…</p>';
-                var host = document.getElementById('paramTabsHost');
-                if (host) host.innerHTML = '';
-            }
-            _paramModalActiveTab = 'genel';
-            refreshParamModalView();
+            var wasOpen = parametrelerModal.style.display === 'flex';
             parametrelerModal.style.display = 'flex';
-            lockBodyScroll();
+            if (!wasOpen) lockBodyScroll();
+            _paramModalActiveTab = 'genel';
+            try {
+                if (botDetailConfigReady(cfg)) {
+                    cacheParamModalHtml(cfg, symbol, ref);
+                } else if (configGrid) {
+                    _paramModalGenelHtml = '';
+                    _paramModalDynHtml = '';
+                    configGrid.innerHTML = '<p class="param-hint" style="padding: 1rem;">Parametreler yükleniyor…</p>';
+                    var host = paramTabsHost || document.getElementById('paramTabsHost');
+                    if (host) host.innerHTML = '';
+                }
+                refreshParamModalView();
+            } catch (e) {
+                try { console.warn('parametreler modal render failed', e); } catch (_) {}
+                if (paramTabsHost) paramTabsHost.innerHTML = '';
+                if (configGrid) {
+                    var fallbackHtml = _paramModalGenelHtml;
+                    if (!fallbackHtml) {
+                        try { fallbackHtml = renderConfig(cfg, symbol, ref); } catch (_) { fallbackHtml = ''; }
+                    }
+                    configGrid.innerHTML = fallbackHtml
+                        || '<p class="param-hint" style="padding: 1rem;">Parametreler gösterilemedi.</p>';
+                }
+            }
         }
 
         function closeParametrelerModal() {

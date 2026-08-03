@@ -30,3 +30,6 @@ venv/
 node_modules/
 ui/dashboard-react/node_modules/
 ui/dashboard-react/dist/
+data/local_backtest/
+backtest/data/
+backtest/runtime/

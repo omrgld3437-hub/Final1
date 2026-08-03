@@ -11,6 +11,8 @@ import json
 import logging
 import os
 import random
+from pathlib import Path
+import shutil
 import ssl
 import time
 from typing import Any, Callable, Dict, Optional, Tuple
@@ -85,6 +87,9 @@ PING_INTERVAL = 30.0
 PING_TIMEOUT = 20.0
 # Ağ yavaşken handshake 10s'de yetmeyebilir; 20s ile tekrar denemeden önce daha fazla süre ver
 OPEN_HANDSHAKE_TIMEOUT = 20.0
+MAX_CONSECUTIVE_FAILURES = int(
+    os.getenv("BINANCE_WS_MAX_CONSECUTIVE_FAILURES", "8") or 8
+)
 
 
 def _ws_urls(testnet: bool) -> Tuple[str, ...]:
@@ -95,6 +100,40 @@ def _ws_urls(testnet: bool) -> Tuple[str, ...]:
 
 def _ws_url(testnet: bool) -> str:
     return _ws_urls(testnet)[0]
+
+
+def _node_ws_enabled() -> bool:
+    return _env_flag("BINANCE_WS_NODE_BRIDGE", True)
+
+
+def node_ws_available() -> bool:
+    return bool(shutil.which("node") and _node_ws_script_path().exists())
+
+
+def _node_ws_script_path() -> Path:
+    return Path(__file__).resolve().parents[2] / "scripts" / "binance_ws_stream_node.js"
+
+
+def _dispatch_raw_message(
+    on_message: Callable[[Dict[str, Any]], None], raw: str, source: str
+) -> None:
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as e:
+        logger.debug("[%s] Parse error: %s", source, e)
+        return
+    try:
+        if isinstance(data, dict) and "data" in data:
+            # Combined stream: { "stream": "!miniTicker@arr", "data": [ {...}, ... ] }
+            arr = data.get("data")
+            if isinstance(arr, list):
+                on_message({"miniTicker": arr})
+                return
+        if isinstance(data, list):
+            on_message({"miniTicker": data})
+            return
+    except Exception as e:
+        logger.debug("[%s] on_message error: %s", source, e)
 
 
 class BinanceWSClient:
@@ -111,6 +150,7 @@ class BinanceWSClient:
         self._stop = asyncio.Event()
         self._reconnect_delay = RECONNECT_INITIAL
         self._url_index = 0
+        self._consecutive_failures = 0
 
     def start(self) -> None:
         if self._task and not self._task.done():
@@ -140,6 +180,7 @@ class BinanceWSClient:
             except asyncio.CancelledError:
                 break
             except Exception as e:
+                self._consecutive_failures += 1
                 if (
                     "keepalive ping timeout" in str(e).lower()
                     or "no close frame" in str(e).lower()
@@ -190,6 +231,16 @@ class BinanceWSClient:
                     logger.warning("[BinanceWS] Run error: %s", e)
             if self._stop.is_set():
                 break
+            if (
+                MAX_CONSECUTIVE_FAILURES > 0
+                and self._consecutive_failures >= MAX_CONSECUTIVE_FAILURES
+            ):
+                logger.warning(
+                    "[BinanceWS] %s ardışık bağlantı denemesi başarısız oldu; REST fallback sağlıklı olduğu için WS yeniden deneme döngüsü durduruldu.",
+                    self._consecutive_failures,
+                )
+                self._stop.set()
+                break
             delay = self._reconnect_delay + random.uniform(
                 0, RECONNECT_JITTER * self._reconnect_delay
             )
@@ -218,6 +269,7 @@ class BinanceWSClient:
             url,
             **connect_kwargs,
         ) as ws:
+            self._consecutive_failures = 0
             logger.info("[BinanceWS] Connected to %s", url)
             while not self._stop.is_set():
                 try:
@@ -256,20 +308,132 @@ class BinanceWSClient:
                 self._on_raw(raw)
 
     def _on_raw(self, raw: str) -> None:
-        try:
-            data = json.loads(raw)
-        except json.JSONDecodeError as e:
-            logger.debug("[BinanceWS] Parse error: %s", e)
+        _dispatch_raw_message(self.on_message, raw, "BinanceWS")
+
+
+class NodeBinanceWSClient:
+    """Node WebSocket bridge for environments where Python TLS/proxy WS is incompatible."""
+
+    def __init__(
+        self,
+        on_message: Callable[[Dict[str, Any]], None],
+        testnet: bool = False,
+    ):
+        self.on_message = on_message
+        self.testnet = testnet
+        self._task: Optional[asyncio.Task] = None
+        self._stop = asyncio.Event()
+        self._proc: Optional[asyncio.subprocess.Process] = None
+        self._reconnect_delay = RECONNECT_INITIAL
+
+    def start(self) -> None:
+        if self._task and not self._task.done():
             return
+        self._stop.clear()
         try:
-            if isinstance(data, dict) and "data" in data:
-                # Combined stream: { "stream": "!miniTicker@arr", "data": [ {...}, ... ] }
-                arr = data.get("data")
-                if isinstance(arr, list):
-                    self.on_message({"miniTicker": arr})
-                    return
-            if isinstance(data, list):
-                self.on_message({"miniTicker": data})
+            loop = asyncio.get_running_loop()
+            self._task = loop.create_task(self._run())
+            logger.info("[BinanceWS:Node] Started (testnet=%s)", self.testnet)
+        except RuntimeError:
+            logger.warning("[BinanceWS:Node] No event loop; start from async context")
+
+    def stop(self) -> None:
+        self._stop.set()
+        proc = self._proc
+        if proc and proc.returncode is None:
+            try:
+                proc.terminate()
+            except ProcessLookupError:
+                pass
+        if self._task and not self._task.done():
+            self._task.cancel()
+        self._task = None
+        logger.info("[BinanceWS:Node] Stopped")
+
+    async def _run(self) -> None:
+        while not self._stop.is_set():
+            try:
+                await self._connect_and_listen()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.warning("[BinanceWS:Node] Run error: %s", e)
+            if self._stop.is_set():
+                break
+            delay = self._reconnect_delay + random.uniform(
+                0, RECONNECT_JITTER * self._reconnect_delay
+            )
+            self._reconnect_delay = min(RECONNECT_MAX, self._reconnect_delay * 2)
+            logger.info("[BinanceWS:Node] Reconnecting in %.1fs", delay)
+            try:
+                await asyncio.wait_for(self._stop.wait(), timeout=delay)
+            except asyncio.TimeoutError:
+                pass
+
+    async def _connect_and_listen(self) -> None:
+        node = shutil.which("node")
+        script = _node_ws_script_path()
+        if not node or not script.exists():
+            raise RuntimeError("Node WebSocket bridge unavailable")
+        url = _ws_url(self.testnet)
+        proc = await asyncio.create_subprocess_exec(
+            node,
+            str(script),
+            url,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        self._proc = proc
+        stderr_task = asyncio.create_task(self._drain_stderr(proc))
+        try:
+            if proc.stdout is None:
+                raise RuntimeError("Node WebSocket bridge stdout unavailable")
+            while not self._stop.is_set():
+                line = await proc.stdout.readline()
+                if not line:
+                    break
+                try:
+                    event = json.loads(line.decode("utf-8", "replace"))
+                except json.JSONDecodeError:
+                    logger.debug("[BinanceWS:Node] invalid bridge line")
+                    continue
+                typ = event.get("type")
+                if typ == "connected":
+                    self._reconnect_delay = RECONNECT_INITIAL
+                    logger.info("[BinanceWS:Node] Connected to %s", event.get("url") or url)
+                elif typ == "message":
+                    raw = event.get("data")
+                    if isinstance(raw, str):
+                        _dispatch_raw_message(self.on_message, raw, "BinanceWS:Node")
+                elif typ == "error":
+                    logger.warning("[BinanceWS:Node] Bridge error: %s", event.get("error"))
+                elif typ == "closed":
+                    raise RuntimeError(
+                        "Node WebSocket closed code=%s reason=%s"
+                        % (event.get("code"), event.get("reason") or "")
+                    )
+            rc = await proc.wait()
+            if not self._stop.is_set():
+                raise RuntimeError(f"Node WebSocket bridge exited rc={rc}")
+        finally:
+            stderr_task.cancel()
+            if proc.returncode is None:
+                try:
+                    proc.terminate()
+                except ProcessLookupError:
+                    pass
+            self._proc = None
+
+    async def _drain_stderr(self, proc: asyncio.subprocess.Process) -> None:
+        try:
+            if proc.stderr is None:
                 return
-        except Exception as e:
-            logger.debug("[BinanceWS] on_message error: %s", e)
+            while not self._stop.is_set():
+                line = await proc.stderr.readline()
+                if not line:
+                    break
+                msg = line.decode("utf-8", "replace").strip()
+                if msg:
+                    logger.debug("[BinanceWS:Node] stderr: %s", msg[:500])
+        except asyncio.CancelledError:
+            pass

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import os
-import time
 from typing import Optional
 
 from app.services.dynamic_param_score import constants as C
@@ -35,6 +34,8 @@ class DynamicParamScoreEngine:
         portfolio_state: PortfolioState,
         exchange_constraints: ExchangeConstraints,
         bot_context: BotContext,
+        *,
+        persist: bool = True,
     ) -> DynamicParamDecision:
         version = os.getenv("DPS_ENGINE_VERSION", "v6").lower()
         if version == "v5":
@@ -94,18 +95,19 @@ class DynamicParamScoreEngine:
             telemetry=json_safe(tel),
             action_detail=action_detail,
         )
-        try:
-            persist_decision(
-                decision,
-                market_data,
-                portfolio_state,
-                bot_id=bot_context.bot_id,
-                round_id=bot_context.current_round_id,
-                raw_indicators=ind.to_dict(),
-                pre_safety_params=decision.params.to_dict() if decision.params else None,
-            )
-        except Exception as e:
-            logger.warning("DPS persist failed: %s", e)
+        if persist:
+            try:
+                persist_decision(
+                    decision,
+                    market_data,
+                    portfolio_state,
+                    bot_id=bot_context.bot_id,
+                    round_id=bot_context.current_round_id,
+                    raw_indicators=ind.to_dict(),
+                    pre_safety_params=decision.params.to_dict() if decision.params else None,
+                )
+            except Exception as e:
+                logger.warning("DPS persist failed: %s", e)
         return decision
 
     @classmethod

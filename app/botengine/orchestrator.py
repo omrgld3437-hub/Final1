@@ -953,6 +953,149 @@ async def _bot_loop(bot_id: int) -> None:
 
                 try:
                     strategy = get_strategy_safe(raw)
+                    # Dynamic Mode V2 is isolated behind its own feature flag.
+                    # It runs only for initialized spot bots, no faster than the
+                    # UTC scheduler permits. Shadow is the default rollout mode.
+                    _dyn_v2_enabled = False
+                    try:
+                        from app.utils.parse_utils import parse_bool as _parse_bool_v2
+                        from app.botengine.dynamic_v2.runtime import (
+                            get_engine as _get_dyn_v2_engine,
+                            micro_risk_check as _dyn_v2_micro_check,
+                        )
+
+                        _dyn_v2_enabled = _parse_bool_v2(
+                            (raw or {}).get("dynamic_mode_v2")
+                        )
+                        if _dyn_v2_enabled:
+                            _dyn_v2 = _get_dyn_v2_engine(raw or {})
+                            _dyn_v2_runtime = state.setdefault(
+                                "dynamic_v2_runtime", {}
+                            )
+                            _dyn_v2_schedule = _dyn_v2.scheduler.decide(
+                                _dyn_v2_runtime,
+                                start_blocked=bool(
+                                    _dyn_v2_runtime.get("start_blocked")
+                                ),
+                            )
+                            if _dyn_v2_schedule.run_micro_check:
+                                _dyn_v2_micro_check(state)
+                                _dyn_v2_runtime[
+                                    "last_micro_check_at"
+                                ] = datetime.now(timezone.utc).isoformat()
+                            if (
+                                _dyn_v2_schedule.run_full_analysis
+                                and state.get("initial_allocation_done")
+                                and not (
+                                    state.get("_dynamic_v2_kill_switch") or {}
+                                ).get("active")
+                            ):
+                                from app.botengine.intent_ledger import (
+                                    get_sent_intents_for_bot,
+                                )
+
+                                _dyn_v2_filters = await adapter.get_symbol_filters(
+                                    symbol, force_refresh=not paper_mode
+                                )
+                                if not _dyn_v2_filters.get("symbol_trading", True):
+                                    raise RuntimeError(
+                                        "DYN_V2_SYMBOL_NOT_TRADING"
+                                    )
+                                _dyn_v2_intents = [
+                                    intent
+                                    for intent in get_sent_intents_for_bot(
+                                        db, bot_id
+                                    )
+                                    if str(intent.get("symbol") or "").upper()
+                                    == symbol
+                                ]
+                                _dyn_v2_balance_limits = None
+                                if not paper_mode:
+                                    _dyn_v2_balances = (
+                                        await adapter.get_account_balances()
+                                    )
+                                    _dyn_v2_base_asset = str(
+                                        _dyn_v2_filters.get("base_asset") or ""
+                                    ).upper()
+                                    _dyn_v2_quote_asset = str(
+                                        _dyn_v2_filters.get("quote_asset") or ""
+                                    ).upper()
+                                    if (
+                                        not _dyn_v2_base_asset
+                                        or not _dyn_v2_quote_asset
+                                    ):
+                                        raise RuntimeError(
+                                            "DYN_V2_ASSET_METADATA_MISSING"
+                                        )
+                                    _dyn_v2_balance_limits = {
+                                        "free_base": (
+                                            _dyn_v2_balances.get(
+                                                _dyn_v2_base_asset, {}
+                                            ).get("free", 0)
+                                        ),
+                                        "free_quote": (
+                                            _dyn_v2_balances.get(
+                                                _dyn_v2_quote_asset, {}
+                                            ).get("free", 0)
+                                        ),
+                                        "snapshot_id": (
+                                            f"account-{account_id}-"
+                                            f"{int(time.time() * 1000)}"
+                                        ),
+                                    }
+
+                                async def _dyn_v2_pre_apply_check():
+                                    latest = [
+                                        intent
+                                        for intent in get_sent_intents_for_bot(
+                                            db, bot_id
+                                        )
+                                        if str(
+                                            intent.get("symbol") or ""
+                                        ).upper()
+                                        == symbol
+                                    ]
+                                    try:
+                                        open_orders = (
+                                            await adapter.get_open_orders(symbol)
+                                        )
+                                    except Exception:
+                                        return False, [
+                                            "OPEN_ORDER_CHECK_FAILED"
+                                        ]
+                                    reasons = []
+                                    if latest:
+                                        reasons.append("ORDER_IN_FLIGHT")
+                                    if open_orders:
+                                        reasons.append(
+                                            "EXCHANGE_OPEN_ORDER_PRESENT"
+                                        )
+                                    return not reasons, reasons
+
+                                await _dyn_v2.analyze(
+                                    state,
+                                    raw or {},
+                                    exchange_filters=_dyn_v2_filters,
+                                    balance_limits=_dyn_v2_balance_limits,
+                                    unresolved_intents=_dyn_v2_intents,
+                                    pre_apply_check=_dyn_v2_pre_apply_check,
+                                    db=db,
+                                )
+                                # Audit row and the exact parameter snapshot are
+                                # committed together before strategy execution.
+                                save_state(db, bot_id, account_id, state)
+                            _dyn_v2.coordinator.apply_overlay(cfg, state)
+                    except Exception as _dyn_v2_error:
+                        state["_dynamic_v2_kill_switch"] = {
+                            "active": True,
+                            "reasons": ["RUNTIME_EXCEPTION"],
+                            "detail": str(_dyn_v2_error)[:300],
+                        }
+                        logger.exception(
+                            "DYN_V2_RUNTIME_FAILED bot_id=%s err=%s",
+                            bot_id,
+                            _dyn_v2_error,
+                        )
                     # ============================================================
                     # Dynamic Mode hook (gated). Runs ONLY when dynamic_mode=True
                     # and safety prerequisites are met. Manuel mod = no-op.
@@ -966,7 +1109,10 @@ async def _bot_loop(bot_id: int) -> None:
                         _cfg_dict_for_dyn = (
                             cfg.to_dict() if hasattr(cfg, "to_dict") else {}
                         )
-                        if dyn_gate.is_dynamic_mode_active(_cfg_dict_for_dyn):
+                        if (
+                            not _dyn_v2_enabled
+                            and dyn_gate.is_dynamic_mode_active(_cfg_dict_for_dyn)
+                        ):
                             _dyn_snapshot_rebuilt = False
                             if not dyn_cm.dynamic_overlay_allowed(state):
                                 if state.get("dynamic_snapshot"):
@@ -980,12 +1126,10 @@ async def _bot_loop(bot_id: int) -> None:
                             else:
                                 state.pop("_dynamic_first_cycle_manual", None)
                             if dyn_cm.dynamic_overlay_allowed(state) and dyn_cm.need_recompute(state):
-                                # Dynamic suggestions MUST derive from the user's
-                                # MANUAL config every cycle. `cfg` is cached and
-                                # mutated in-place by apply_overlay, so cfg.to_dict()
-                                # carries the PREVIOUS cycle's overlay and would let
-                                # the base drift cycle-over-cycle. Re-derive a clean
-                                # manual base from config_json (never overlaid).
+                                # Rebuild from pristine config_json before resolving
+                                # the immutable dynamic reference. `cfg` is cached
+                                # and mutated by apply_overlay; feeding it back here
+                                # would compound the previous round's multipliers.
                                 try:
                                     _dyn_base = DcaGridTrailingConfig(raw).to_dict()
                                 except Exception:
@@ -1931,6 +2075,15 @@ async def delete_bot_fully(bot_id: int, db: Session) -> None:
     )
     db.execute(
         text("DELETE FROM bot_engine_state WHERE bot_id = :bid"), {"bid": bot_id}
+    )
+    db.execute(
+        text("DELETE FROM bot_perf_chart_state WHERE bot_id = :bid"), {"bid": bot_id}
+    )
+    db.execute(
+        text("DELETE FROM bot_public_metrics WHERE bot_id = :bid"), {"bid": bot_id}
+    )
+    db.execute(
+        text("DELETE FROM order_intents WHERE bot_id = :bid"), {"bid": bot_id}
     )
     db.query(Trade).filter(Trade.bot_id == bot_id).delete(synchronize_session=False)
     db.query(PnlSnapshot).filter(PnlSnapshot.bot_id == bot_id).delete(

@@ -3,9 +3,17 @@
 from __future__ import annotations
 
 from app.services.dynamic_param_score.v6.adjusters.pipeline import run_adjusters
-from app.services.dynamic_param_score.v6.domain.types import V6CatalogProfile, V6InputContract
+from app.services.dynamic_param_score.v6.domain.types import (
+    AdjusterDelta,
+    GridLevel,
+    V6CatalogProfile,
+    V6InputContract,
+)
 from app.services.dynamic_param_score.v6.v6_apply_delta import apply_delta
 from app.services.dynamic_param_score.v6.v6_delta_limiter import cap_total_delta
+from app.services.dynamic_param_score.v6.v6_exchange_validator import (
+    validate_and_trim_grids,
+)
 from app.services.dynamic_param_score.v6.v6_profile_catalog import get_profile
 from app.services.dynamic_param_score.v6.v6_profile_validator import validate_profile
 
@@ -167,3 +175,40 @@ def test_post_sell_buyback_profile_maps_to_bot_params():
     assert bp.rebuy_trigger_pct is not None
     assert bp.resell_enabled is True
     assert bp.pool_version == "v6"
+
+
+def test_buy_grid_trim_keeps_near_weight_small_and_deep_weight_large():
+    profile = _std_profile("PB01")
+    delta = AdjusterDelta(
+        buy_grid_count_delta=2 - len(profile.buy_grids)
+    )
+
+    adjusted = apply_delta(profile, delta)
+    amounts = [grid.amount_pct for grid in adjusted.buy_grids]
+
+    assert len(amounts) == 2
+    assert amounts[0] <= 40
+    assert amounts[1] >= 60
+    assert amounts[0] < amounts[1]
+
+
+def test_exchange_budget_trim_keeps_two_buy_grids_back_weighted():
+    profile = _std_profile("PB01")
+    profile.quote_allocation_pct = 55
+    profile.buy_grids = [
+        GridLevel(-2, 10),
+        GridLevel(-4, 20),
+        GridLevel(-8, 30),
+        GridLevel(-13, 40),
+    ]
+    trimmed, adjusted = validate_and_trim_grids(
+        profile,
+        _base_input(bot_budget_usdt=100.0),
+        side="buy",
+    )
+    amounts = [grid.amount_pct for grid in trimmed]
+
+    assert adjusted is True
+    assert len(amounts) == 2
+    assert amounts[0] <= 40
+    assert amounts[1] >= 60

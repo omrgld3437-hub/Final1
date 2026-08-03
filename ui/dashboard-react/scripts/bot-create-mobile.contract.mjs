@@ -1,0 +1,44 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
+const root = resolve(import.meta.dirname, "..");
+const studio = readFileSync(resolve(root, "src/features/bots/BotCreateStudio.tsx"), "utf8");
+const assistant = readFileSync(resolve(root, "src/features/assistant/ParamAssistantPanel.tsx"), "utf8");
+const botsTab = readFileSync(resolve(root, "src/components/BotsTab.tsx"), "utf8");
+const app = readFileSync(resolve(root, "src/App.tsx"), "utf8");
+
+assert.match(studio, /top-\[env\(safe-area-inset-top\)\]/, "Bot oluşturma modalı iOS üst güvenli alanını korumalı.");
+assert.match(studio, /relative flex h-full/, "Mobil modal kullanılabilir güvenli yüksekliğe sığmalı.");
+assert.match(assistant, /aria-busy=\{loading\}/);
+assert.match(assistant, /LoaderCircle/);
+assert.doesNotMatch(assistant, /parametre ile indikatör/);
+assert.match(assistant, /\/api\/param-assistant\/advice/);
+assert.doesNotMatch(assistant, /\/api\/param-assistant\/calculate/);
+assert.doesNotMatch(assistant, /Bu parametreleri tam olarak uygula/);
+assert.doesNotMatch(assistant, /Analiz güveni/);
+assert.doesNotMatch(assistant, /Coin bazlı piyasa rejimi/);
+assert.doesNotMatch(assistant, /forma otomatik parametre uygulamaz/);
+assert.match(assistant, /Motorun bu coin için hesapladığı somut plan/);
+assert.match(assistant, /Motor neden bu sonuca ulaştı/);
+assert.match(assistant, /Ne zaman yeniden analiz/);
+assert.match(studio, /symbol\.endsWith\("USDT"\)/, "Bot parite önerileri yalnız USDT olmalı.");
+assert.match(studio, /function NumericInput/, "Mobil sayı alanları boş ara değeri koruyan ortak girişi kullanmalı.");
+assert.match(studio, /type="text"\s+inputMode=\{inputMode\}/, "Mobil sayı klavyesi kontrollü metin girişiyle açılmalı.");
+assert.match(studio, /entered === "0" \? "0," : entered/, "Ondalık kutusunda sıfırdan sonra virgül otomatik hazırlanmalı.");
+assert.match(studio, /label="Grid adeti"/, "Grid sayacı anlaşılır adla gösterilmeli.");
+assert.match(studio, /mt-4 hidden grid-cols-4.*sm:grid/, "Dört aşamalı grid bilgi şeridi mobilde gizlenmeli.");
+assert.doesNotMatch(studio, /title="Bakiye koruması"/, "Bakiye koruması özet kartı kaldırılmalı.");
+assert.match(botsTab, /createPortal\(/, "Bot oluşturma penceresi sayfa yüzeyinden ayrılmalı.");
+assert.match(botsTab, /onStudioOpenChange/, "Pencere durumu üst yönlendirmeye bildirilmeli.");
+assert.match(botsTab, /useState<SortDirection>\("desc"\)/, "Botlar ilk açılışta en yüksek performans üstte başlamalı.");
+assert.match(botsTab, /<ArrowUp className="h-5 w-5"/);
+assert.match(botsTab, /<ArrowDown className="h-5 w-5"/);
+assert.doesNotMatch(botsTab, /TrendingUp/);
+assert.match(botsTab, /Botunuz oluşturuluyor\./);
+assert.match(botsTab, /botunuz başarıyla çalıştırıldı\./);
+assert.match(botsTab, /setCreationFeedbackLeaving\(true\)[\s\S]*?3_000/);
+assert.match(app, /inert=\{botStudioOpen \|\| undefined\}/, "Açık pencerede arka plan etkileşimi kapanmalı.");
+assert.match(app, /if \(botStudioOpenRef\.current\) return;/, "Açık pencerede bot detay yönlendirmesi engellenmeli.");
+
+console.log("Bot create mobile safety contract: OK");

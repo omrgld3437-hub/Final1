@@ -13,7 +13,7 @@ Geliştirme makinesinden sunucuya kod aktarımı; systemd/nginx örnekleri.
 
 ## Önemli dosyalar
 
-DEPLOY.md · deploy.sh · nginx-tradertrailing-server.conf
+DEPLOY.md · deploy.sh · nginx-final1-server.conf
 
 ## İçerik özeti
 
@@ -24,7 +24,7 @@ SABIT_DOSYALAR.txt
 deploy.bat
 deploy.sh
 deploy_windows.sh
-nginx-tradertrailing-server.conf
+nginx-final1-server.conf
 show-nginx-config.bat
 ```
 

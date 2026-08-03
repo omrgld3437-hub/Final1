@@ -18,7 +18,7 @@ warnings.filterwarnings("ignore", category=UserWarning, module="urllib3")
 from typing import Optional
 from fastapi import FastAPI, Request, HTTPException, Query, Depends, Body
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pathlib import Path
 import traceback
@@ -27,6 +27,7 @@ import sys
 import logging
 import asyncio
 import time
+import tempfile
 import uuid
 from logging.handlers import RotatingFileHandler
 from dotenv import load_dotenv
@@ -38,8 +39,18 @@ load_dotenv()
 BASE_DIR = Path(__file__).resolve().parents[1]  # Project root
 LOGS_DIR = BASE_DIR / "logs"
 RUN_DIR = BASE_DIR / ".run"
-LOGS_DIR.mkdir(parents=True, exist_ok=True)
+if (RUN_DIR.is_symlink() and not RUN_DIR.exists()) or (
+    RUN_DIR.exists() and not RUN_DIR.is_dir()
+):
+    RUN_DIR = Path(tempfile.gettempdir()) / "final1-local-runtime"
 RUN_DIR.mkdir(parents=True, exist_ok=True)
+if (LOGS_DIR.is_symlink() and not LOGS_DIR.exists()) or (
+    LOGS_DIR.exists() and not LOGS_DIR.is_dir()
+):
+    # Sunucudaki /var/log/final1 bağlantısı yerelde hedefi olmadığı için kırık
+    # görünebilir. Bağlantıyı değiştirmeden yerel çalışma kayıtlarını .run altında tut.
+    LOGS_DIR = RUN_DIR / "logs"
+LOGS_DIR.mkdir(parents=True, exist_ok=True)
 
 # Root logger
 logger = logging.getLogger()
@@ -212,7 +223,7 @@ botengine_logger.addHandler(botengine_console)
 logger.info("Logging configured - console + file: logs/app.log")
 
 from app.api import routes, ws, admin, bots_v2, finance, spot_routes, auth, bots_engine
-from app.api import data_hub_routes, finance_reports, pricing_routes, coin_logo_routes
+from app.api import data_hub_routes, finance_reports, pricing_routes, coin_logo_routes, push_notifications
 from app import server_state as server_state
 
 try:
@@ -459,11 +470,9 @@ async def startup_event():
             logger.debug("[DataHub] Warmup skipped or failed: %s", e)
 
     asyncio.create_task(_datahub_warmup_bg())
-    # WebSocket yalnızca REST leader worker'da — çoklu worker'da çift WS/REST yok
-    if rest_leader:
-        data_hub.start_ws(testnet=False)
-    else:
-        logger.info("[DataHub] WebSocket skipped on non-leader worker (pid=%s)", os.getpid())
+    # Fiyat önbelleği süreç-içidir. Her web worker kendi canlı WS akışını
+    # dinlemeli; yalnız ağır REST yenileme döngüsü tek leader'da kalır.
+    data_hub.start_ws(testnet=False)
     try:
         from app.services.server_public_ip import start_server_public_ip_refresh
 
@@ -838,19 +847,16 @@ async def request_metrics_middleware(request, call_next):
                 query_hint,
             )
 
-    # 404 (route bulunamadı) ve 5xx yanıtlarını error_logs'a yaz; 499 yazma (istemci kesintisi)
-    if status == 404 or status >= 500:
+    # Middleware yalnız gerçek sunucu arızalarını saklar. Yapılandırılmış 4xx
+    # operasyon hataları HTTPException handler tarafından tek kez kaydedilir.
+    should_persist_response_error = status >= 500
+    if should_persist_response_error:
         user_id, account_id, is_admin = None, None, False
         try:
-            auth = (
-                request.headers.get("Authorization")
-                or request.headers.get("authorization")
-                or ""
-            )
-            token = auth[7:].strip() if auth.startswith("Bearer ") else None
-            if token:
-                from app.api.auth import _session_get
+            from app.api.auth import _session_get, get_token_from_request
 
+            token, _token_source = get_token_from_request(request)
+            if token:
                 session = _session_get(token)
                 if session:
                     user_id = session.get("user_id")
@@ -1099,7 +1105,7 @@ _cors_origins = _cors_cfg["allow_origins"]
 if not _cors_origins and _cors_cfg["is_production"]:
     suggested = (
         ",".join(_cors_cfg.get("suggested_origins") or [])
-        or "https://tradertrailing.com,https://www.tradertrailing.com"
+        or "https://ayserose.com,https://www.ayserose.com"
     )
     raise RuntimeError(
         f"Production CORS requires ALLOWED_ORIGINS. Suggested: {suggested}"
@@ -1300,6 +1306,8 @@ ERROR_CODE_DESCRIPTIONS = {
     "INTERNAL_ERROR": "Sunucu iç hatası",
 }
 
+from app.http_error_policy import should_persist_http_exception
+
 
 def _format_http_detail(status: int, detail) -> tuple:
     """
@@ -1384,8 +1392,13 @@ async def http_exception_handler(request: Request, exc: HTTPException):
         if ident is not None:
             context = dict(context) if context else {}
             context["attempted_identifier"] = str(ident)[:128]
-        # Admin test endpoint'e yetkisiz 403 yazma (manager/panelde gürültü olmasın)
-        if status == 403 and path == "/api/admin/error-logs/test":
+        expected_auth_probe = status == 401 and path == "/api/auth/whoami"
+        # Admin test endpoint'e yetkisiz 403 ve normal oturum keşif 401'i yazma.
+        if (
+            (status == 403 and path == "/api/admin/error-logs/test")
+            or expected_auth_probe
+            or not should_persist_http_exception(status, exc.detail)
+        ):
             pass  # skip persist
         else:
             try:
@@ -1424,6 +1437,7 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 # API routes
 # Manager panel (v2) sadece 127.0.0.1:7999'da çalışır (manager_server).
 app.include_router(auth.router, prefix="/api")  # Authentication
+app.include_router(push_notifications.router, prefix="/api")
 app.include_router(data_hub_routes.router, prefix="/api")  # YENİ - Data Hub
 if market_data_routes:
     app.include_router(market_data_routes.router, prefix="/api")  # YENİ - Market Data
@@ -1610,15 +1624,14 @@ async def api_admin_create_test_error(request: Request):
 
 
 def _api_admin_error_logs_auth(request: Request):
-    """Admin token check for error-logs GET. Raises 401/403."""
-    from app.api.auth import _session_get
+    """Admin session check for error-log compatibility routes.
 
-    auth = (
-        request.headers.get("Authorization")
-        or request.headers.get("authorization")
-        or ""
-    )
-    token = auth[7:].strip() if auth.startswith("Bearer ") else None
+    V2 is cookie-first. Legacy compatibility endpoints must therefore accept the
+    same HttpOnly ``auth_token`` cookie as the router-level admin endpoints.
+    """
+    from app.api.auth import _session_get, get_token_from_request
+
+    token, _source = get_token_from_request(request)
     if not token:
         raise HTTPException(
             status_code=401, detail={"message": "Yetkilendirme gerekli"}
@@ -1825,6 +1838,7 @@ async def api_admin_error_logs_count(request: Request):
 
 
 @app.post("/api/admin/error-logs/clear")
+@app.delete("/api/admin/error-logs")
 async def api_admin_error_logs_clear(request: Request):
     """Tüm hata loglarını siler. Admin panelde 'Hataları sıfırla' sonrası sadece yeni hatalar listelenir."""
     from app.db.session import SessionLocal
@@ -2276,8 +2290,25 @@ async def root():
 
 @app.get("/favicon.ico")
 async def favicon():
-    """204 No Content – tarayıcı favicon isteği 404 log spam önlenir."""
-    return Response(status_code=204)
+    """Ayserose browser/PWA favicon."""
+    return FileResponse(
+        UI_DIR / "assets" / "pwa" / "favicon-32.png",
+        media_type="image/png",
+        headers={"Cache-Control": "public, max-age=604800"},
+    )
+
+
+@app.get("/apple-touch-icon.png")
+@app.get("/apple-touch-icon-precomposed.png")
+@app.get("/apple-touch-icon-120x120.png")
+@app.get("/apple-touch-icon-120x120-precomposed.png")
+async def apple_touch_icon():
+    """iOS'un kök dizindeki otomatik ikon isteklerini PWA ikonuna yönlendirir."""
+    return FileResponse(
+        UI_DIR / "assets" / "pwa" / "apple-touch-icon-180.png",
+        media_type="image/png",
+        headers={"Cache-Control": "public, max-age=604800"},
+    )
 
 
 @app.get("/trader-trailing")

@@ -9,7 +9,7 @@ Sunucu kurulum, nginx, dosya listeleri.
 | Dosya | Görev |
 |-------|--------|
 | `DEPLOY.md` | Kurulum rehberi |
-| `nginx-tradertrailing-server.conf` | Nginx |
+| `nginx-final1-server.conf` | Nginx |
 | `deploy.sh` / `deploy.bat` | Deploy script |
 | `SABIT_DOSYALAR.txt` | Sabit dosya listesi |
 | `DEGISKEN_DOSYALAR.txt` | Değişken dosya listesi |
@@ -25,7 +25,7 @@ SABIT_DOSYALAR.txt
 deploy.bat
 deploy.sh
 deploy_windows.sh
-nginx-tradertrailing-server.conf
+nginx-final1-server.conf
 show-nginx-config.bat
 ```
 

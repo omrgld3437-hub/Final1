@@ -18,7 +18,9 @@ from app.services.dynamic_param_score.models import (
     MarketDataBundle,
     PortfolioState,
 )
-from app.services.dynamic_param_score.v6.adjusters.pipeline import run_adjusters
+# Import order initializes the adjusters package before its trace module; this
+# avoids the package's trace/pipeline circular import during cold startup.
+from app.services.dynamic_param_score.v6.adjusters.pipeline import run_adjusters  # noqa: F401
 from app.services.dynamic_param_score.v6.v6_adjuster_trace import append_post_pipeline_trace, run_adjusters_with_trace
 from app.services.dynamic_param_score.v6.constants import ENGINE_VERSION
 from app.services.dynamic_param_score.v6.domain.types import GridLevel, V6FinalProfile, V6InputContract
@@ -30,7 +32,7 @@ from app.services.dynamic_param_score.v6.v6_exchange_validator import exchange_v
 from app.services.dynamic_param_score.v6.v6_indicator_adapter import build_v6_input_contract
 from app.services.dynamic_param_score.v6.v6_input_contract import validate_input_contract
 from app.services.dynamic_param_score.v6.v6_mandatory_buy_guard import enforce_mandatory_deep_buy
-from app.services.dynamic_param_score.v6.v6_profile_catalog import get_profile
+from app.services.dynamic_param_score.v6.net_profile_library import resolve_net_profile
 from app.services.dynamic_param_score.v6.v6_profile_validator import validate_profile
 from app.services.dynamic_param_score.v6.v6_quantizer import profit_code_from_pct, quantize_profile, trailing_code_from_pct
 from app.services.dynamic_param_score.v6.v6_botparams_adapter import (
@@ -512,31 +514,9 @@ class V6Engine:
             scenario.sub_id = str(terminal["sub_id"])
             scenario.micro_id = str(terminal["micro_id"])
             scenario.terminal_id = str(terminal["terminal_id"])
-        terminal_id = scenario.terminal_id
-
-        profile = get_profile(
-            scenario.regime_id,
-            scenario.sub_id,
-            scenario.micro_id,
-            behavior_id,
-            severity,
-            terminal_id=terminal_id,
-        )
-        if profile is None:
-            profile = get_profile(
-                scenario.regime_id, scenario.sub_id, scenario.micro_id, behavior_id, "STD",
-                terminal_id=terminal_id,
-            )
-        if profile is None:
-            from app.services.dynamic_param_score.v6.v6_profile_catalog import get_profile_by_regime_behavior
-            profile = get_profile_by_regime_behavior(scenario.regime_id, behavior_id, severity)
-        if profile is None:
-            from app.services.dynamic_param_score.v6.v6_profile_catalog import get_profile_by_regime_behavior
-            profile = get_profile_by_regime_behavior(scenario.regime_id, behavior_id, "STD")
-        if profile is None:
-            raise LookupError(
-                f"v6_catalog_miss:{scenario.regime_id}-{scenario.sub_id}-{scenario.micro_id}:{behavior_id}:{severity}"
-            )
+        # The former generated shelf/catalog library remains on disk only for
+        # rollback tooling. Live PA/DM resolution never reads or records it.
+        profile = resolve_net_profile(classified, inp, severity)
         logger.info(
             "V6 profile selected id=%s severity=%s",
             profile.profile_id,
@@ -598,6 +578,14 @@ class V6Engine:
             inp,
             reason="FINAL_OUTPUT_BUY_SURFACE",
         )
+        # Explicitly closed sides in the operator library are contractual. Old
+        # opportunity/mandatory-probe helpers may advise, but cannot reopen them.
+        if not profile.normal_buy_enabled:
+            adjusted.normal_buy_enabled = False
+            adjusted.buy_grids = []
+            buy_guard_notes = {"mandatory_deep_buy_skipped": "net_profile_buy_closed"}
+        if not profile.sell_grids:
+            adjusted.sell_grids = []
         if buy_guard_notes:
             opportunity_notes.update(buy_guard_notes)
             if buy_guard_notes.get("mandatory_deep_buy_applied"):
@@ -617,15 +605,13 @@ class V6Engine:
             deployable_hint=opportunity_notes.get("deployable", True) is not False,
             reason_codes=set(opportunity_notes.get("reason_codes") or []),
         )
-        adjusted.scenario.name = classified.label
+        # Keep the operator-authored user copy after technical adjusters run.
+        adjusted.scenario.name = str((adjusted.modules or {}).get("headline") or classified.label)
         adjusted.scenario.severity = scenario.severity
         val_errors = validate_profile(adjusted)
         if val_errors:
             logger.warning("V6 profile validation after opportunity: %s", val_errors)
-        from app.services.dynamic_param_score.v6.v6_opportunity import (
-            assess_operational_validity,
-            is_profile_operational,
-        )
+        from app.services.dynamic_param_score.v6.v6_opportunity import assess_operational_validity
 
         validity = assess_operational_validity(adjusted)
         opportunity_notes["operational_validity"] = validity.to_dict()
@@ -654,12 +640,14 @@ class V6Engine:
             opportunity_notes.get("deployable") is False
             and "CONDITIONAL_PROBE_ONLY" in reason_codes
         )
+        operator_auto_apply = bool((adjusted.modules or {}).get("automatic_apply", True))
         deployable = (
             "price_valid_false" not in errors
             and has_trade_surface
             and not restricted_by_liquidity
             and not conditional_probe_only
             and not order_feasibility_failures
+            and operator_auto_apply
         )
         block_reason = "price_valid_false" if not inp.price_valid else None
         if not has_trade_surface:
@@ -674,6 +662,9 @@ class V6Engine:
         elif order_feasibility_failures:
             deployable = False
             block_reason = block_reason or "order_feasibility_restricted"
+        elif not operator_auto_apply:
+            deployable = False
+            block_reason = block_reason or "operator_profile_auto_apply_disabled"
         elif val_errors and not has_trade_surface:
             deployable = False
             block_reason = block_reason or "profile_validation_failed"
@@ -705,6 +696,10 @@ class V6Engine:
                     "severity": severity,
                     "label": classified.label,
                     "sub_profile_hint": getattr(classified, "sub_profile_hint", "") or "",
+                    "net_profile_key": adjusted.profile_id,
+                    "headline": (adjusted.modules or {}).get("headline"),
+                    "why": (adjusted.modules or {}).get("why"),
+                    "automatic_apply_label": (adjusted.modules or {}).get("automatic_apply_label"),
                 },
                 "budget": budget_scale(adjusted, inp),
                 "validation_errors": val_errors,
@@ -798,6 +793,14 @@ def calculate_decision_v6(
         telemetry={
             "engine_version": ENGINE_VERSION,
             "pool_version": POOL_VERSION_V6,
+            "net_profile": {
+                "key": scenario.get("net_profile_key") or result.profile.profile_id,
+                "headline": scenario.get("headline") or result.profile.scenario.name,
+                "why": scenario.get("why") or (result.profile.modules or {}).get("why"),
+                "automatic_apply_label": scenario.get("automatic_apply_label")
+                or (result.profile.modules or {}).get("automatic_apply_label"),
+                "library_version": "net_profiles_2026_08",
+            },
             "apply_policy": policy,
             "pa_soft_deployable": pa_soft,
             "v6_display": v6_display,

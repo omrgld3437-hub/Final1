@@ -1,0 +1,1 @@
+"""Ayserose yerel backtest uygulaması."""

@@ -619,7 +619,10 @@ function bindCreateBotModal() {
         if (e.target.id === "botStructureBackdrop") closeBotStructureModal();
     });
 
-    document.getElementById("dmParamAssistantBtn")?.addEventListener("click", openParamAssistantModal);
+    document.getElementById("dmParamAssistantBtn")?.addEventListener("click", function (event) {
+        event.preventDefault();
+        return false;
+    });
     document.getElementById("dmParamAssistantCloseBtn")?.addEventListener("click", function () {
         if (dmParamAssistantIsBackendRunActive()) {
             if (!window.confirm('Parametre analizi devam ediyor. Kapatmak istediğine emin misin?')) return;
@@ -6759,7 +6762,9 @@ function applyParamAssistantRecommendation(rec, onDone) {
             symbol: _bk.symbol || (rec.backend && rec.backend.symbol) || null,
             template_key: _pool.selected_template_key || _pool.template_key || null,
             param_score: _bk.param_score != null ? _bk.param_score : null,
-            regime_tag: _bk.regime_tag || null
+            regime_tag: _bk.regime_tag || null,
+            display_regime_label: _bk.display_regime_label || null,
+            market_status_plain: _bk.market_status_plain || null
         };
     } else {
         dmParamAssistantAppliedSource = null;
@@ -7505,6 +7510,8 @@ async function createBot() {
             template_key: dmParamAssistantAppliedSource.template_key || null,
             param_score: dmParamAssistantAppliedSource.param_score != null ? dmParamAssistantAppliedSource.param_score : null,
             regime_tag: dmParamAssistantAppliedSource.regime_tag || null,
+            display_regime_label: dmParamAssistantAppliedSource.display_regime_label || null,
+            market_status_plain: dmParamAssistantAppliedSource.market_status_plain || null,
             symbol: dmParamAssistantAppliedSource.symbol || payload.symbol || null
         };
     }

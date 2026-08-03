@@ -272,15 +272,12 @@ async def get_spot_quick_data(
 
             if is_test_account(account_id, db):
                 from app.services.wallet_display import build_test_account_wallet
-                from app.services.test_spot_paper import spot_balances_from_wallet
+                from app.services.test_spot_paper import (
+                    process_test_paper_limit_orders,
+                    spot_balances_from_wallet,
+                )
                 from app.services.market_data import get_ticker_24h
 
-                wallet = build_test_account_wallet(account_id, db)
-                bot_locked = get_bot_locked_balances_for_account(db, account_id) or {}
-                base_asset, quote_asset = _base_quote_from_symbol(sym)
-                bal = spot_balances_from_wallet(
-                    wallet, base_asset, quote_asset, bot_locked
-                )
                 price = 0.0
                 try:
                     from app.services.data_hub import data_hub
@@ -288,6 +285,26 @@ async def get_spot_quick_data(
                     price = float(data_hub.get_price(sym) or 0)
                 except Exception:
                     price = 0.0
+                filled_limit_orders = process_test_paper_limit_orders(
+                    account_id,
+                    {sym: price} if price > 0 else None,
+                )
+                for filled_order in filled_limit_orders:
+                    _record_spot_order_tx_history(
+                        account_id,
+                        filled_order,
+                        sym,
+                        str(filled_order.get("side") or ""),
+                    )
+                if filled_limit_orders:
+                    await invalidate_wallet_cache(account_id)
+                    await invalidate_open_orders_cache(account_id)
+                wallet = build_test_account_wallet(account_id, db)
+                bot_locked = get_bot_locked_balances_for_account(db, account_id) or {}
+                base_asset, quote_asset = _base_quote_from_symbol(sym)
+                bal = spot_balances_from_wallet(
+                    wallet, base_asset, quote_asset, bot_locked
+                )
                 price_change_24h = 0.0
                 try:
                     t = get_ticker_24h(sym)
@@ -482,12 +499,13 @@ async def place_spot_order(
                 request_id=getattr(request.state, "request_id", None),
                 meta=meta,
             )
-            _record_spot_order_tx_history(
-                request_body.account_id,
-                result if isinstance(result, dict) else {},
-                request_body.symbol,
-                request_body.side,
-            )
+            if str(result.get("status") or "").upper() == "FILLED":
+                _record_spot_order_tx_history(
+                    request_body.account_id,
+                    result if isinstance(result, dict) else {},
+                    request_body.symbol,
+                    request_body.side,
+                )
             from app.services.transaction_history_file_store import get_public_revision
 
             tx_rev = get_public_revision(request_body.account_id)
@@ -716,7 +734,7 @@ async def place_spot_order(
         )
 
 
-BINANCE_PUBLIC = "https://api.binance.com"
+BINANCE_PUBLIC = os.getenv("BINANCE_API_BASE_URL", "https://api.binance.com").rstrip("/")
 
 # Klines cache: (symbol, interval, limit) -> (data, ts). TTL by interval (seconds).
 KLINES_CACHE: dict = {}

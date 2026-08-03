@@ -596,6 +596,17 @@ def ensure_trades_engine_columns(engine):
             ("symbol", "VARCHAR(32)"),
             ("cycle_id", "INTEGER"),
             ("reference_price", "FLOAT"),
+            ("fee_amount", "FLOAT"),
+            ("fee_usdt", "FLOAT"),
+            ("order_type", "VARCHAR(32)"),
+            ("cost_basis_type", "VARCHAR(32)"),
+            ("cost_basis_price", "FLOAT"),
+            ("linked_grid_ids", "TEXT"),
+            ("trigger_price", "FLOAT"),
+            ("tracked_extreme_price", "FLOAT"),
+            ("completion_price", "FLOAT"),
+            ("fill_total", "FLOAT"),
+            ("engine_status", "VARCHAR(32)"),
         ]:
             if col_name in existing:
                 continue
@@ -987,6 +998,37 @@ def cleanup_old_error_logs(engine, retain_days: int = 30) -> int:
         return 0
 
 
+def cleanup_orphaned_bot_runtime_rows(engine) -> int:
+    """Delete runtime-only rows left by a bot deletion race; archives stay intact."""
+    if not _is_sqlite(engine):
+        return 0
+    statements = (
+        "DELETE FROM bot_engine_events WHERE bot_id NOT IN (SELECT id FROM bots)",
+        "DELETE FROM bot_engine_state WHERE bot_id NOT IN (SELECT id FROM bots)",
+        "DELETE FROM bot_virtual_wallet WHERE bot_id NOT IN (SELECT id FROM bots)",
+        "DELETE FROM bot_perf_chart_state WHERE bot_id NOT IN (SELECT id FROM bots)",
+        "DELETE FROM bot_public_metrics WHERE bot_id NOT IN (SELECT id FROM bots)",
+        "DELETE FROM order_intents WHERE bot_id NOT IN (SELECT id FROM bots)",
+        "DELETE FROM symbol_locks WHERE owner_bot_id NOT IN (SELECT id FROM bots)",
+    )
+    deleted = 0
+    try:
+        with engine.connect() as conn:
+            for statement in statements:
+                result = conn.execute(text(statement))
+                deleted += int(result.rowcount or 0)
+            conn.commit()
+        if deleted:
+            logger.info(
+                "schema_guard: cleaned %d orphaned bot runtime rows",
+                deleted,
+            )
+        return deleted
+    except Exception as exc:
+        logger.warning("schema_guard: orphaned bot runtime cleanup failed: %s", exc)
+        return 0
+
+
 def ensure_dynamic_param_decisions_table(engine):
     """Dynamic Param Score decision snapshots."""
     with engine.connect() as conn:
@@ -1083,8 +1125,25 @@ def run_schema_guard(engine):
         ensure_admin_popups_table(engine)
         ensure_bot_public_metrics_table(engine)
         ensure_dynamic_param_decisions_table(engine)
+        ensure_dynamic_mode_v2_tables(engine)
+        cleanup_orphaned_bot_runtime_rows(engine)
     except Exception as e:
         logger.exception("schema_guard failed: %s", e)
+
+
+def ensure_dynamic_mode_v2_tables(engine):
+    """Create the reversible V2 audit/learning schema via SQLAlchemy metadata."""
+    from app.db import models
+
+    tables = (
+        models.DynamicFormulaVersion.__table__,
+        models.DynamicAnalysisRun.__table__,
+        models.DynamicGridUpdate.__table__,
+        models.DynamicLearningOutcome.__table__,
+        models.DynamicCalibrationRun.__table__,
+    )
+    for table in tables:
+        table.create(bind=engine, checkfirst=True)
 
 
 def ensure_bot_public_metrics_table(engine):

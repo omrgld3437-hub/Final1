@@ -1,13 +1,27 @@
-import React, { useState, useEffect, useCallback } from "react";
-import { Bot, WalletState } from "./types";
+import React, {
+  Suspense,
+  lazy,
+  useState,
+  useEffect,
+  useRef,
+} from "react";
 import HomeTab from "./components/HomeTab";
 import TradeTab from "./components/TradeTab";
 import BotsTab from "./components/BotsTab";
 import PortfolioTab from "./components/PortfolioTab";
 import ContactTab from "./components/ContactTab";
 import SettingsTab from "./components/SettingsTab";
+import BotDetailPage from "./features/bots/BotDetailPage";
+import SpotOrderModal from "./features/trade/SpotOrderModal";
+import UserPopup from "./features/notifications/UserPopup";
+import BrandMark from "./components/brand/BrandMark";
 import { useDashboard } from "./context/DashboardContext";
-import { apiFetch } from "./lib/api";
+import {
+  DashboardDataProvider,
+  useDashboardData,
+} from "./core/state/DashboardDataContext";
+import { useTabNavigation } from "./app/useTabNavigation";
+import { dismissMobileAppSplash } from "./app/mobileSplash";
 import {
   LogOut,
   Coins,
@@ -16,189 +30,327 @@ import {
   MessageSquare,
   Settings as SettingsIcon,
   Cpu,
+  UserRound,
+  RefreshCw,
+  CheckCircle2,
+  AlertCircle,
 } from "lucide-react";
 
-const EMPTY_WALLET: WalletState = {
-  total_usd: 0,
-  free_usd: 0,
-  locked_usd: 0,
-  bot_locked_usd: 0,
-  available_usd: 0,
-  keys_configured: false,
-  assets: [],
-};
+const AdminPage = lazy(() => import("./features/admin/AdminPage"));
 
 export default function App() {
-  const { accountId, accountCode, displayName, logout } = useDashboard();
-  const [activeTab, setActiveTab] = useState<
-    "binance" | "trade" | "bots" | "finance" | "contact" | "settings"
-  >("binance");
-  const [bots, setBots] = useState<Bot[]>([]);
-  const [wallet, setWallet] = useState<WalletState>(EMPTY_WALLET);
-  const [prices, setPrices] = useState<Record<string, { price?: number }>>({});
-
-  const [showTradeModal, setShowTradeModal] = useState(false);
-  const [tradeSymbol, setTradeSymbol] = useState("BTCUSDT");
-  const [tradeSide, setTradeSide] = useState<"BUY" | "SELL">("BUY");
-  const [tradeType, setTradeType] = useState<"MARKET" | "LIMIT">("MARKET");
-  const [tradeLimitPrice, setTradeLimitPrice] = useState("");
-  const [tradeQuantity, setTradeQuantity] = useState("");
-  const [tradeTotal, setTradeTotal] = useState("");
-  const [tradeError, setTradeError] = useState("");
-  const [tradeSubmitting, setTradeSubmitting] = useState(false);
-
-  const applySnapshot = useCallback((body: { data?: unknown } | Record<string, unknown>) => {
-    const data = (body as { data?: Record<string, unknown> }).data ?? (body as Record<string, unknown>);
-    if (!data || typeof data !== "object") return;
-    if (data.prices && typeof data.prices === "object") {
-      setPrices(data.prices as Record<string, { price?: number }>);
-    }
-    if (data.wallet && typeof data.wallet === "object") {
-      setWallet({ ...EMPTY_WALLET, ...(data.wallet as WalletState) });
-    }
-    if (Array.isArray(data.bots)) {
-      setBots(data.bots as Bot[]);
-    }
-  }, []);
+  const { accountId, isAdmin } = useDashboard();
+  const search = new URLSearchParams(window.location.search);
+  const isAdminAccountView =
+    isAdmin && (search.has("account_id") || search.has("account_code"));
 
   useEffect(() => {
-    if (!accountId) return;
-    const fetchStatus = () => {
-      apiFetch<{ data?: unknown }>(
-        `/api/dashboard/snapshot?account_id=${accountId}&fields=prices,wallet,bots,kpis`
-      )
-        .then(applySnapshot)
-        .catch(console.error);
-    };
-    fetchStatus();
-    const interval = setInterval(fetchStatus, 1000);
-    return () => clearInterval(interval);
-  }, [accountId, applySnapshot]);
+    if (isAdmin && !isAdminAccountView) dismissMobileAppSplash();
+  }, [isAdmin, isAdminAccountView]);
 
-  const getTradePrice = useCallback(() => {
-    if (tradeType === "LIMIT") {
-      const lp = parseFloat(tradeLimitPrice);
-      if (lp > 0) return lp;
-    }
-    return prices[tradeSymbol]?.price || 1;
-  }, [tradeType, tradeLimitPrice, prices, tradeSymbol]);
+  if (isAdmin && !isAdminAccountView) {
+    return (
+      <Suspense fallback={<TabSkeleton />}>
+        <AdminPage
+          onOpenAccount={(nextAccountId) => {
+            const url = new URL(window.location.href);
+            url.searchParams.set("account_id", String(nextAccountId));
+            url.searchParams.delete("account_code");
+            url.searchParams.delete("bot_id");
+            url.searchParams.delete("tab");
+            window.location.assign(`${url.pathname}${url.search}${url.hash}`);
+          }}
+        />
+      </Suspense>
+    );
+  }
+
+  return (
+    <DashboardDataProvider accountId={accountId}>
+      <AppContent />
+    </DashboardDataProvider>
+  );
+}
+
+function AppContent() {
+  const {
+    accountId,
+    displayName,
+    isAdmin,
+    isFirstLogin,
+    completeFirstLogin,
+    logout,
+  } = useDashboard();
+  const { bots, setBots, wallet, prices, status, lastUpdatedAt, error, refresh } =
+    useDashboardData();
+  const [activeTab, setActiveTab] = useTabNavigation();
+  const [selectedBotId, setSelectedBotId] = useState<number | null>(() => {
+    const raw = new URLSearchParams(window.location.search).get("bot_id");
+    const value = Number(raw);
+    return Number.isInteger(value) && value > 0 ? value : null;
+  });
+  const [botStudioOpen, setBotStudioOpen] = useState(false);
+  const botStudioOpenRef = useRef(false);
+  const [tradeRequest, setTradeRequest] = useState<{
+    symbol: string;
+    side: "BUY" | "SELL";
+  } | null>(null);
+  const [botTemplateDraft, setBotTemplateDraft] = useState<{
+    id: number;
+    params: Record<string, unknown>;
+  } | null>(null);
+  const retainedTabsRef = useRef(
+    new Set(["binance", "trade", "bots", activeTab]),
+  );
+  const pullStartRef = useRef<number | null>(null);
+  const pullDistanceRef = useRef(0);
+  const [pullDistance, setPullDistance] = useState(0);
+  const [pullRefreshing, setPullRefreshing] = useState(false);
+  const [pullOutcome, setPullOutcome] = useState<"idle" | "success" | "error">("idle");
+  retainedTabsRef.current.add(activeTab);
+  botStudioOpenRef.current = botStudioOpen;
 
   useEffect(() => {
-    if (tradeType !== "LIMIT" || !showTradeModal) return;
-    const q = parseFloat(tradeQuantity);
-    if (!q || q <= 0) return;
-    const p = getTradePrice();
-    setTradeTotal((q * p).toFixed(2));
-  }, [tradeLimitPrice, tradeType, showTradeModal, tradeQuantity, getTradePrice]);
+    if (lastUpdatedAt !== null || status === "offline" || Boolean(error)) {
+      dismissMobileAppSplash();
+    }
+  }, [error, lastUpdatedAt, status]);
 
-  const handleApplyLeaderboard = () => {
+  const handleApplyLeaderboard = (params: unknown) => {
+    const normalized =
+      params && typeof params === "object" && !Array.isArray(params)
+        ? (params as Record<string, unknown>)
+        : {};
+    setBotTemplateDraft({ id: Date.now(), params: normalized });
     setActiveTab("bots");
   };
 
+  useEffect(() => {
+    const onPopState = () => {
+      const value = Number(new URLSearchParams(window.location.search).get("bot_id"));
+      if (botStudioOpenRef.current && Number.isInteger(value) && value > 0) {
+        const url = new URL(window.location.href);
+        url.searchParams.delete("bot_id");
+        window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+        setSelectedBotId(null);
+        return;
+      }
+      setSelectedBotId(Number.isInteger(value) && value > 0 ? value : null);
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
+
+  useEffect(() => {
+    if (!("serviceWorker" in navigator)) return;
+    const onServiceWorkerMessage = (event: MessageEvent) => {
+      if (event.data?.type !== "AYSEROSE_OPEN_BOT_DETAIL") return;
+      const botId = Number(event.data?.botId);
+      if (!Number.isInteger(botId) || botId <= 0) return;
+      if (botStudioOpenRef.current) return;
+      setActiveTab("bots");
+      const url = new URL(window.location.href);
+      url.searchParams.set("tab", "bots");
+      url.searchParams.set("bot_id", String(botId));
+      window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+      setSelectedBotId(botId);
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    };
+    navigator.serviceWorker.addEventListener("message", onServiceWorkerMessage);
+    return () => navigator.serviceWorker.removeEventListener("message", onServiceWorkerMessage);
+  }, [setActiveTab]);
+
+  useEffect(() => {
+    const onTouchStart = (event: TouchEvent) => {
+      if (
+        window.innerWidth >= 640 ||
+        window.scrollY > 0 ||
+        document.body.style.overflow === "hidden" ||
+        event.touches.length !== 1
+      ) {
+        pullStartRef.current = null;
+        return;
+      }
+      pullStartRef.current = event.touches[0].clientY;
+    };
+    const onTouchMove = (event: TouchEvent) => {
+      if (pullStartRef.current === null || event.touches.length !== 1) return;
+      const distance = Math.max(0, event.touches[0].clientY - pullStartRef.current);
+      const nextDistance = Math.min(92, distance * 0.48);
+      pullDistanceRef.current = nextDistance;
+      setPullDistance(nextDistance);
+    };
+    const onTouchEnd = () => {
+      const shouldRefresh = pullDistanceRef.current >= 58 && !pullRefreshing;
+      pullStartRef.current = null;
+      if (!shouldRefresh) {
+        pullDistanceRef.current = 0;
+        setPullDistance(0);
+        return;
+      }
+      setPullRefreshing(true);
+      setPullOutcome("idle");
+      setPullDistance(62);
+      const startedAt = Date.now();
+      void refresh()
+        .then(() => setPullOutcome("success"))
+        .catch(() => setPullOutcome("error"))
+        .finally(() => {
+          const minimumVisibleMs = 720;
+          window.setTimeout(() => {
+            pullDistanceRef.current = 0;
+            setPullRefreshing(false);
+            setPullDistance(0);
+            window.setTimeout(() => setPullOutcome("idle"), 550);
+          }, Math.max(0, minimumVisibleMs - (Date.now() - startedAt)));
+        });
+    };
+    window.addEventListener("touchstart", onTouchStart, { passive: true });
+    window.addEventListener("touchmove", onTouchMove, { passive: true });
+    window.addEventListener("touchend", onTouchEnd, { passive: true });
+    window.addEventListener("touchcancel", onTouchEnd, { passive: true });
+    return () => {
+      window.removeEventListener("touchstart", onTouchStart);
+      window.removeEventListener("touchmove", onTouchMove);
+      window.removeEventListener("touchend", onTouchEnd);
+      window.removeEventListener("touchcancel", onTouchEnd);
+    };
+  }, [pullRefreshing, refresh]);
+
+  const openBot = (botId: number) => {
+    if (botStudioOpenRef.current) return;
+    const url = new URL(window.location.href);
+    url.searchParams.set("tab", "bots");
+    url.searchParams.set("bot_id", String(botId));
+    window.history.pushState({}, "", `${url.pathname}${url.search}${url.hash}`);
+    setActiveTab("bots");
+    setSelectedBotId(botId);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const closeBot = () => {
+    const url = new URL(window.location.href);
+    url.searchParams.delete("bot_id");
+    window.history.pushState({}, "", `${url.pathname}${url.search}${url.hash}`);
+    setSelectedBotId(null);
+  };
+
+  const handleBotDeleted = (botId: number) => {
+    setBots((current) =>
+      current.filter((bot) => Number(bot.bot_id ?? bot.id) !== botId),
+    );
+    window.dispatchEvent(
+      new CustomEvent("ayserose:bot-deleted", {
+        detail: { accountId, botId },
+      }),
+    );
+    closeBot();
+    void refresh();
+  };
+
+  const navigateTab = (tab: Parameters<typeof setActiveTab>[0]) => {
+    if (selectedBotId) {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("bot_id");
+      window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+      setSelectedBotId(null);
+    }
+    setActiveTab(tab);
+  };
+
+  const openHomeFromBrand = () => {
+    navigateTab("binance");
+    window.requestAnimationFrame(() => {
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    });
+  };
+
   const handleOpenTradeModal = (symbol: string, side: "BUY" | "SELL" = "BUY") => {
-    setTradeSymbol(symbol);
-    setTradeSide(side);
-    setTradeType("MARKET");
-    setTradeLimitPrice("");
-    setTradeQuantity("");
-    setTradeTotal("");
-    setTradeError("");
-    setShowTradeModal(true);
+    setTradeRequest({ symbol, side });
   };
 
-  const handleExecuteTrade = async () => {
-    const qty = parseFloat(tradeQuantity);
-    const total = parseFloat(tradeTotal);
-    const actualPrice = getTradePrice();
-    const limitPrice = tradeType === "LIMIT" ? parseFloat(tradeLimitPrice) : undefined;
+  useEffect(() => {
+    if (isFirstLogin && wallet.keys_configured) completeFirstLogin();
+  }, [completeFirstLogin, isFirstLogin, wallet.keys_configured]);
 
-    if (tradeType === "MARKET" && tradeSide === "BUY") {
-      if (!total || total <= 0) {
-        setTradeError("Lütfen geçerli bir tutar giriniz.");
-        return;
-      }
-      if (total > wallet.available_usd) {
-        setTradeError("Yetersiz bakiye.");
-        return;
-      }
-    } else if (!qty || qty <= 0) {
-      setTradeError("Lütfen geçerli bir miktar giriniz.");
-      return;
-    }
-
-    if (tradeType === "LIMIT" && (!limitPrice || limitPrice <= 0)) {
-      setTradeError("Limit fiyat giriniz.");
-      return;
-    }
-
-    if (tradeType === "LIMIT" && tradeSide === "BUY") {
-      const computedTotal = qty * actualPrice;
-      if (computedTotal > wallet.available_usd) {
-        setTradeError("Yetersiz bakiye. Limit fiyatına göre tutar kullanılabilir bakiyenizi aşıyor.");
-        return;
-      }
-    }
-
-    setTradeSubmitting(true);
-    setTradeError("");
-    try {
-      const data = await apiFetch<{ success?: boolean; wallet?: WalletState }>("/api/spot/order", {
-        method: "POST",
-        body: JSON.stringify({
-          account_id: accountId,
-          symbol: tradeSymbol,
-          side: tradeSide,
-          type: tradeType,
-          quantity:
-            tradeType === "LIMIT" || tradeSide === "SELL"
-              ? qty
-              : null,
-          quote_order_qty:
-            tradeType === "MARKET" && tradeSide === "BUY" ? total : null,
-          price: tradeType === "LIMIT" ? limitPrice : null,
-        }),
-      });
-      if (data?.wallet) {
-        setWallet({ ...EMPTY_WALLET, ...data.wallet });
-      }
-      setShowTradeModal(false);
-    } catch (e) {
-      setTradeError(e instanceof Error ? e.message : "Emir gönderilemedi.");
-    } finally {
-      setTradeSubmitting(false);
-    }
-  };
-
-  const idLabel = accountCode || String(accountId);
+  const connectionHealthy =
+    status === "live" ||
+    (status === "fallback" && !error && lastUpdatedAt !== null);
+  const connectionLabel = connectionHealthy
+    ? "Bağlantı stabil"
+    : status === "offline" || error
+      ? "Bağlantı sorunu"
+      : "Bağlanıyor";
+  const connectionDotClass = connectionHealthy
+    ? "bg-[#0ecb81] shadow-[0_0_8px_rgba(14,203,129,.8)]"
+    : status === "offline" || error
+      ? "bg-[#f6465d] shadow-[0_0_8px_rgba(246,70,93,.55)]"
+      : "bg-[#f0b90b]";
+  const desktopNavItems = ([
+    ["binance", Coins, "Anasayfa"],
+    ["bots", Cpu, "Botlar"],
+    ["finance", Sliders, "Portföy"],
+    ["contact", MessageSquare, "İletişim"],
+    ["trade", Search, "Trade"],
+  ] as const).filter(
+    ([tab]) => wallet.is_test_account || (tab !== "finance" && tab !== "contact"),
+  );
+  const mobileNavItems = [
+    ["binance", Coins, "Anasayfa"],
+    ["bots", Cpu, "Botlar"],
+    ["trade", Search, "Trade"],
+  ] as const;
 
   return (
     <div className="min-h-screen bg-[#14151a] text-neutral-200 font-sans selection:bg-[#f0b90b] selection:text-neutral-900">
-      <div className="bg-[#1e2026] border-b border-neutral-800/80 sticky top-0 z-30 shadow-md">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex justify-between items-center">
-          <div className="flex items-center space-x-3">
-            <div className="w-9 h-9 rounded-lg bg-[#f0b90b] flex items-center justify-center font-bold text-neutral-900 text-lg shadow-md">
-              TT
-            </div>
-            <div>
-              <span className="font-extrabold text-white text-base tracking-wide flex items-center gap-1.5">
-                <span className="ar-ayse">ayse</span><span className="ar-rose">rose</span>{" "}
-                <span className="text-[10px] text-[#f0b90b] bg-[#f0b90b]/10 border border-[#f0b90b]/25 px-1.5 py-0.5 rounded uppercase font-bold tracking-widest hidden sm:inline">
-                  Bot
-                </span>
-              </span>
-              <p className="text-[10px] text-neutral-400">Ömer Altın Kuruluşu</p>
-            </div>
-          </div>
+      <div className="sticky top-0 z-30 border-b border-white/8 bg-[#1b1c22]/95 pt-[max(0px,calc(env(safe-area-inset-top)-3px))] shadow-[0_12px_36px_rgba(0,0,0,.25)] backdrop-blur-xl">
+        <div className="mx-auto flex h-14 max-w-7xl items-center justify-between gap-2 px-3 sm:h-16 sm:px-6 lg:px-8">
+          <button
+            type="button"
+            onClick={openHomeFromBrand}
+            aria-label="Ana sayfanın en üstüne dön"
+            title="Ana sayfaya dön"
+            className="group -ml-1 rounded-xl p-1 text-left transition hover:bg-white/[0.035] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fuchsia-300/45"
+          >
+            <BrandMark />
+          </button>
 
-          <div className="flex items-center space-x-4">
-            <div className="flex items-center space-x-2 text-right">
-              <span className="text-sm font-bold text-white block">{displayName}</span>
-              <span className="text-[10px] text-neutral-400 block font-mono">ID: {idLabel}</span>
+          <div className="flex min-w-0 items-center gap-1.5 sm:gap-2">
+            <div className="flex min-w-0 items-center gap-1.5 text-right sm:gap-2">
+              <button
+                type="button"
+                onClick={() => void refresh()}
+                className="hidden items-center gap-1.5 rounded-full border border-neutral-700/70 bg-neutral-900/60 px-2.5 py-1 text-[10px] font-bold text-neutral-300 sm:flex"
+                title={lastUpdatedAt ? `Son veri: ${new Date(lastUpdatedAt).toLocaleTimeString("tr-TR")}` : connectionLabel}
+              >
+                <span className={`h-1.5 w-1.5 rounded-full ${connectionDotClass}`} />
+                {connectionLabel}
+              </button>
+              <div className="min-w-0">
+                <span className="block max-w-16 truncate text-[11px] font-bold text-white min-[380px]:max-w-24 sm:max-w-44 sm:text-sm">
+                  {displayName}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => navigateTab(activeTab === "settings" ? "binance" : "settings")}
+                aria-label="Profil ve ayarları aç"
+                aria-current={activeTab === "settings" ? "page" : undefined}
+                title="Ayarlar"
+                className={`grid h-11 w-11 shrink-0 place-items-center rounded-xl border transition ${
+                  activeTab === "settings"
+                    ? "border-fuchsia-300/25 bg-fuchsia-300/10 text-fuchsia-100"
+                    : "border-white/8 bg-white/[0.035] text-neutral-400 hover:border-fuchsia-300/20 hover:text-fuchsia-100"
+                }`}
+              >
+                <UserRound className="h-4 w-4" />
+              </button>
             </div>
             <button
               onClick={logout}
-              className="w-8 h-8 rounded-lg bg-neutral-800 hover:bg-neutral-700/80 border border-neutral-700/60 text-neutral-300 flex items-center justify-center hover:text-white transition"
+              className="grid h-11 w-11 shrink-0 place-items-center rounded-xl border border-white/8 bg-white/[0.035] text-neutral-400 transition hover:border-red-300/20 hover:bg-red-300/[0.06] hover:text-red-200"
               title="Çıkış Yap"
+              aria-label="Güvenli çıkış"
             >
               <LogOut className="w-4 h-4" />
             </button>
@@ -206,22 +358,44 @@ export default function App() {
         </div>
       </div>
 
-      <div className="border-b border-neutral-800 bg-[#16181d]">
+      <div
+        aria-live="polite"
+        className="pointer-events-none fixed left-1/2 z-50 -translate-x-1/2 transition-[top,opacity] duration-200 sm:hidden"
+        style={{
+          top: `calc(env(safe-area-inset-top) + ${Math.max(8, pullDistance - 30)}px)`,
+          opacity: pullDistance > 8 || pullRefreshing || pullOutcome !== "idle" ? 1 : 0,
+        }}
+      >
+        <span className="inline-flex items-center gap-2 rounded-full border border-fuchsia-300/20 bg-[#181920]/95 px-3 py-2 text-[10px] font-black text-fuchsia-100 shadow-2xl backdrop-blur-xl">
+          {pullOutcome === "success" ? (
+            <CheckCircle2 className="h-3.5 w-3.5 text-emerald-300" />
+          ) : pullOutcome === "error" ? (
+            <AlertCircle className="h-3.5 w-3.5 text-red-300" />
+          ) : (
+            <RefreshCw
+              className={`h-3.5 w-3.5 ${pullRefreshing ? "animate-spin" : ""}`}
+              style={{ transform: pullRefreshing ? undefined : `rotate(${pullDistance * 3}deg)` }}
+            />
+          )}
+          {pullOutcome === "success"
+            ? "Veriler güncellendi"
+            : pullOutcome === "error"
+              ? "Yenileme tamamlanamadı"
+              : pullRefreshing
+                ? "Veriler yenileniyor"
+            : pullDistance >= 58
+              ? "Yenilemek için bırak"
+              : "Yenilemek için çek"}
+        </span>
+      </div>
+
+      <div className="hidden border-b border-neutral-800 bg-[#16181d] sm:block">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-start sm:justify-center overflow-x-auto space-x-2 py-3 scrollbar-none">
-            {(
-              [
-                ["binance", Coins, "Anasayfa"],
-                ["trade", Search, "Hızlı İşlem (Trade)"],
-                ["bots", Cpu, "Botlar"],
-                ["finance", Sliders, "Portföy"],
-                ["contact", MessageSquare, "İletişim Panel"],
-                ["settings", SettingsIcon, "Ayarlar"],
-              ] as const
-            ).map(([tab, Icon, label]) => (
+            {desktopNavItems.map(([tab, Icon, label]) => (
               <button
                 key={tab}
-                onClick={() => setActiveTab(tab)}
+                onClick={() => navigateTab(tab)}
                 className={`flex items-center space-x-2 px-4 py-2.5 rounded-lg text-sm font-semibold tracking-wide transition whitespace-nowrap ${
                   activeTab === tab
                     ? "bg-[#f0b90b] text-neutral-950 font-bold shadow-md"
@@ -236,142 +410,176 @@ export default function App() {
         </div>
       </div>
 
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {activeTab === "binance" && (
-          <HomeTab
-            bots={bots}
-            wallet={wallet}
-            prices={prices}
-            setBots={setBots}
-            onOpenTradeModal={handleOpenTradeModal}
-            onApplyLeaderboard={handleApplyLeaderboard}
-            isTestAccount={!!wallet.is_test_account}
-          />
+      <main className="mx-auto max-w-7xl px-3 pb-32 pt-4 sm:px-6 sm:py-8 lg:px-8">
+        {isFirstLogin && !wallet.keys_configured && (
+          <section className="mb-5 flex flex-col gap-3 rounded-2xl border border-fuchsia-300/15 bg-gradient-to-r from-fuchsia-300/10 to-amber-300/5 p-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-sm font-black text-white">İlk kurulumunuzu tamamlayın</p>
+              <p className="mt-1 text-xs leading-5 text-neutral-400">
+                Canlı bakiye ve işlemler için Binance API bilgilerinizi güvenli ayarlardan
+                tanımlayın.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => navigateTab("settings")}
+              className="shrink-0 rounded-xl bg-white px-4 py-2.5 text-xs font-black text-neutral-950"
+            >
+              Güvenli ayarlara git
+            </button>
+          </section>
         )}
-        {activeTab === "trade" && (
-          <TradeTab prices={prices} onOpenTradeModal={handleOpenTradeModal} />
+        {isAdmin && (
+          <button
+            type="button"
+            onClick={() => {
+              const url = new URL(window.location.href);
+              url.searchParams.delete("account_id");
+              url.searchParams.delete("account_code");
+              url.searchParams.delete("bot_id");
+              url.searchParams.delete("tab");
+              window.location.assign(`${url.pathname}${url.search}${url.hash}`);
+            }}
+            className="mb-4 rounded-xl border border-[#f0b90b]/25 bg-[#f0b90b]/10 px-4 py-2 text-xs font-black text-[#f0b90b] hover:bg-[#f0b90b]/15"
+          >
+            ← Yönetim merkezine dön
+          </button>
         )}
-        {activeTab === "bots" && (
-          <BotsTab bots={bots} setBots={setBots} availableUSDT={wallet.available_usd} />
+        {selectedBotId && (
+          <button
+            type="button"
+            onClick={closeBot}
+            className="mb-4 rounded-xl border border-white/10 bg-neutral-900 px-4 py-2 text-xs font-black text-neutral-300 hover:text-white"
+          >
+            ← Bot listesine dön
+          </button>
         )}
-        {activeTab === "finance" && <PortfolioTab />}
-        {activeTab === "contact" && <ContactTab />}
-        {activeTab === "settings" && <SettingsTab onLogout={logout} />}
+        <Suspense fallback={<TabSkeleton />}>
+          {selectedBotId && (
+            <BotDetailPage
+              botId={selectedBotId}
+              accountId={accountId}
+              onDeleted={handleBotDeleted}
+            />
+          )}
+          <div
+            hidden={selectedBotId !== null}
+            aria-hidden={selectedBotId !== null || botStudioOpen || undefined}
+            inert={botStudioOpen || undefined}
+          >
+          <TabSurface active={activeTab === "binance"}>
+            <HomeTab
+              bots={bots}
+              wallet={wallet}
+              prices={prices}
+              onOpenTradeModal={handleOpenTradeModal}
+              onApplyLeaderboard={handleApplyLeaderboard}
+              isTestAccount={!!wallet.is_test_account}
+              onOpenBot={openBot}
+            />
+          </TabSurface>
+          <TabSurface active={activeTab === "trade"}>
+            <TradeTab
+              prices={prices}
+              isActive={activeTab === "trade"}
+              onOpenTradeModal={handleOpenTradeModal}
+            />
+          </TabSurface>
+          <TabSurface active={activeTab === "bots"}>
+            <BotsTab
+              bots={bots}
+              setBots={setBots}
+              availableUSDT={wallet.available_usd}
+              onOpenBot={openBot}
+              onStudioOpenChange={setBotStudioOpen}
+              templateDraft={botTemplateDraft}
+            />
+          </TabSurface>
+          {retainedTabsRef.current.has("finance") && wallet.is_test_account && (
+            <TabSurface active={activeTab === "finance"}><PortfolioTab /></TabSurface>
+          )}
+          {retainedTabsRef.current.has("contact") && wallet.is_test_account && (
+            <TabSurface active={activeTab === "contact"}><ContactTab /></TabSurface>
+          )}
+          {retainedTabsRef.current.has("settings") && (
+            <TabSurface active={activeTab === "settings"}><SettingsTab onLogout={logout} /></TabSurface>
+          )}
+          </div>
+        </Suspense>
       </main>
 
-      {showTradeModal && (
-        <div className="fixed inset-0 bg-black/85 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-neutral-900 border border-neutral-800 rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl relative">
-            <button
-              onClick={() => setShowTradeModal(false)}
-              className="absolute right-4 top-4 text-neutral-400 hover:text-white font-bold"
-            >
-              ✕
-            </button>
-            <h3 className="text-lg font-bold text-white mb-2">
-              Spot Alım / Satım: {tradeSymbol.replace("USDT", "")}
-            </h3>
-            {tradeError && (
-              <p className="text-sm text-[#f6465d] bg-[#f6465d]/10 border border-[#f6465d]/30 rounded-lg px-3 py-2">
-                {tradeError}
-              </p>
-            )}
-            <div className="flex gap-2 bg-[#1e2026] p-1 rounded-xl border border-neutral-800">
-              {(["BUY", "SELL"] as const).map((side) => (
-                <button
-                  key={side}
-                  onClick={() => setTradeSide(side)}
-                  className={`flex-1 py-2 rounded-lg text-xs font-bold transition ${
-                    tradeSide === side
-                      ? side === "BUY"
-                        ? "bg-[#0ecb81] text-neutral-950"
-                        : "bg-[#f6465d] text-neutral-950"
-                      : "text-neutral-400"
-                  }`}
-                >
-                  {side === "BUY" ? "Alış (Buy)" : "Satış (Sell)"}
-                </button>
-              ))}
-            </div>
-            <div className="space-y-4 text-sm text-neutral-300">
-              <div className="grid grid-cols-2 gap-4">
-                {(["MARKET", "LIMIT"] as const).map((type) => (
-                  <button
-                    key={type}
-                    onClick={() => setTradeType(type)}
-                    className={`py-2 rounded-lg text-xs font-bold border transition ${
-                      tradeType === type
-                        ? "border-[#f0b90b] text-[#f0b90b] bg-[#f0b90b]/5"
-                        : "border-neutral-800 text-neutral-400"
-                    }`}
-                  >
-                    {type === "MARKET" ? "Market" : "Limit"}
-                  </button>
-                ))}
-              </div>
-              {tradeType === "LIMIT" && (
-                <div className="space-y-1">
-                  <label className="text-xs text-neutral-400 font-semibold">Tetik Fiyatı (USDT)</label>
-                  <input
-                    type="number"
-                    value={tradeLimitPrice}
-                    onChange={(e) => setTradeLimitPrice(e.target.value)}
-                    className="w-full bg-[#1e2026] text-white border border-neutral-800 rounded-lg p-2.5 text-sm"
-                    placeholder={String(prices[tradeSymbol]?.price || "")}
-                  />
-                </div>
-              )}
-              <div className="space-y-1">
-                <label className="text-xs text-neutral-400 font-semibold">Miktar</label>
-                <input
-                  type="number"
-                  value={tradeQuantity}
-                  onChange={(e) => {
-                    const q = parseFloat(e.target.value) || 0;
-                    const p = getTradePrice();
-                    setTradeQuantity(e.target.value);
-                    setTradeTotal((q * p).toFixed(2));
-                  }}
-                  className="w-full bg-[#1e2026] text-white border border-neutral-800 rounded-lg p-2.5 text-sm"
-                  placeholder="0.00"
-                />
-              </div>
-              <div className="space-y-1">
-                <label className="text-xs text-neutral-400 font-semibold">Toplam Tutar (USDT)</label>
-                <input
-                  type="number"
-                  value={tradeTotal}
-                  onChange={(e) => {
-                    const totalVal = parseFloat(e.target.value) || 0;
-                    const p = getTradePrice();
-                    setTradeTotal(e.target.value);
-                    setTradeQuantity((totalVal / p).toFixed(5));
-                  }}
-                  className="w-full bg-[#1e2026] text-white border border-neutral-800 rounded-lg p-2.5 text-sm"
-                  placeholder="0.00"
-                />
-              </div>
-            </div>
-            <button
-              onClick={handleExecuteTrade}
-              disabled={tradeSubmitting}
-              className={`w-full py-3 rounded-xl font-bold transition text-sm text-neutral-950 disabled:opacity-60 ${
-                tradeSide === "BUY" ? "bg-[#0ecb81] hover:bg-[#0ca86a]" : "bg-[#f6465d] hover:bg-[#d63a4e]"
-              }`}
-            >
-              {tradeSubmitting ? "Gönderiliyor…" : `Onayla & ${tradeSide === "BUY" ? "Al" : "Sat"}`}
-            </button>
-          </div>
-        </div>
+      {tradeRequest && (
+        <Suspense fallback={null}>
+          <SpotOrderModal
+            accountId={accountId}
+            symbol={tradeRequest.symbol}
+            side={tradeRequest.side}
+            onClose={() => setTradeRequest(null)}
+            onSuccess={async () => {
+              setTradeRequest(null);
+              window.dispatchEvent(
+                new CustomEvent("ayserose:spot-order-updated"),
+              );
+              await refresh();
+            }}
+          />
+        </Suspense>
       )}
 
-      <footer className="bg-[#14151a] border-t border-neutral-900 py-12 text-center text-xs text-neutral-500">
-        <div className="max-w-7xl mx-auto px-4 space-y-4">
-          <p className="font-semibold text-neutral-400">
-            <span className="ar-ayse">ayse</span><span className="ar-rose">rose</span> Ömer Altın Kuruluşudur. Tüm Hakları Saklıdır © 2026
+      <UserPopup />
+
+      <footer className="border-t border-neutral-900 bg-[#14151a] pb-32 pt-10 text-center text-neutral-500 sm:py-12">
+        <div className="mx-auto max-w-7xl space-y-4 px-3 sm:px-4">
+          <p className="whitespace-nowrap text-[8px] font-semibold leading-none text-neutral-400 min-[360px]:text-[9px] min-[390px]:text-[10px] sm:text-xs">
+            <span className="font-semibold tracking-[0.04em] text-fuchsia-200 sm:tracking-[0.08em]">ayserose</span>{" "}
+            Ömer Altın kuruluşudur. Tüm hakları saklıdır © 2026
           </p>
         </div>
       </footer>
+
+      <nav
+        aria-label="Mobil ana navigasyon"
+        className="fixed inset-x-3 bottom-[max(.75rem,env(safe-area-inset-bottom))] z-40 grid grid-cols-3 rounded-[1.4rem] border border-fuchsia-300/15 bg-[#17181e]/95 p-1.5 shadow-[0_22px_70px_rgba(0,0,0,.68)] backdrop-blur-xl sm:hidden"
+      >
+        {mobileNavItems.map(([tab, Icon, label]) => (
+          <button
+            type="button"
+            key={tab}
+            onClick={() => navigateTab(tab)}
+            aria-current={activeTab === tab ? "page" : undefined}
+            className={`flex min-h-14 min-w-0 flex-col items-center justify-center gap-1 rounded-2xl px-2 py-2 text-[10px] font-black transition ${
+              activeTab === tab
+                ? "bg-gradient-to-br from-fuchsia-300/20 to-violet-300/10 text-white shadow-[inset_0_1px_0_rgba(255,255,255,.05)]"
+                : "text-neutral-500 active:bg-white/5"
+            }`}
+          >
+            <Icon className={`h-5 w-5 ${activeTab === tab ? "text-fuchsia-200" : ""}`} />
+            <span className="max-w-full truncate">{label}</span>
+          </button>
+        ))}
+      </nav>
+    </div>
+  );
+}
+
+function TabSurface({ active, children }: { active: boolean; children: React.ReactNode }) {
+  return (
+    <div hidden={!active} aria-hidden={!active || undefined}>
+      {children}
+    </div>
+  );
+}
+
+function TabSkeleton() {
+  return (
+    <div className="animate-pulse space-y-5" aria-label="Bölüm yükleniyor">
+      <div className="h-8 w-48 rounded-lg bg-neutral-800" />
+      <div className="grid gap-4 md:grid-cols-3">
+        <div className="h-32 rounded-2xl bg-neutral-900" />
+        <div className="h-32 rounded-2xl bg-neutral-900" />
+        <div className="h-32 rounded-2xl bg-neutral-900" />
+      </div>
+      <div className="h-72 rounded-2xl bg-neutral-900" />
     </div>
   );
 }

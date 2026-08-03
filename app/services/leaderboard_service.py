@@ -354,16 +354,37 @@ def _leaderboard_item_extras(
     if bot_id is not None and account_id is not None:
         try:
             cycle_ids = Ledger.get_cycle_ids(db, bot_id, account_id)
-            cycles_count = max(cycle_ids) if cycle_ids else 0
+            completed_ids = set()
             try:
                 from app.botengine.state_store import load_state
 
                 state = load_state(db, bot_id) or {}
-                cycle_id_ = int(state.get("cycle_id") or 0)
-                if cycle_id_ > cycles_count:
-                    cycles_count = cycle_id_
+                current_cycle_id = int(state.get("cycle_id") or 0)
+                for key in ("completed_cycle_dual_pnls", "cycle_pnls"):
+                    for row in state.get(key) or []:
+                        if not isinstance(row, dict):
+                            continue
+                        cycle_id_ = int(row.get("cycle_id") or 0)
+                        if cycle_id_ > 0:
+                            completed_ids.add(cycle_id_)
+                if not completed_ids and current_cycle_id > 0:
+                    completed_ids.update(
+                        int(cycle_id_)
+                        for cycle_id_ in cycle_ids
+                        if int(cycle_id_) > 0
+                        and int(cycle_id_) < current_cycle_id
+                    )
+                elif not completed_ids:
+                    completed_ids.update(
+                        int(cycle_id_)
+                        for cycle_id_ in cycle_ids
+                        if int(cycle_id_) > 0
+                    )
             except Exception:
-                pass
+                completed_ids.update(
+                    int(cycle_id_) for cycle_id_ in cycle_ids if int(cycle_id_) > 0
+                )
+            cycles_count = len(completed_ids)
         except Exception:
             pass
         try:

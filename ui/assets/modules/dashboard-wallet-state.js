@@ -722,7 +722,7 @@ function updateDatahubWsIndicator() {
         var label = el.querySelector('.datahub-ws-label');
         var s = (data.ws_status || 'rest').toLowerCase();
         if (dot) {
-            dot.style.backgroundColor = s === 'connected' ? '#0ecb81' : (s === 'stale' ? '#f0b90b' : '#f6465d');
+            dot.style.backgroundColor = s === 'connected' ? '#0ecb81' : (s === 'stale' ? '#f0b90b' : (s === 'rest' ? '#8b9bb4' : '#f6465d'));
         }
         var titles = { connected: 'WebSocket bağlı', stale: 'WebSocket gecikmeli', rest: 'REST modu (WS yok)' };
         el.title = (titles[s] || 'WS durumu') + ' • ' + (data.total_symbols || 0) + ' sembol';

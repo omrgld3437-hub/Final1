@@ -3,7 +3,7 @@
 # SABİT dosyalar (.env, *.db, logs, vb.) atlanır - sunucudaki mevcut hali korunur
 #
 # Kullanım:
-#   ./deploy/deploy.sh user@sunucu.com:/var/www/final1
+#   ./deploy/deploy.sh user@sunucu.com:/opt/final1/current
 #   ./deploy/deploy.sh  (RSYNC_DEST ortam değişkeni kullanılır)
 
 set -e

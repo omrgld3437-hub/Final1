@@ -3,6 +3,7 @@ Trade Ledger - Record and Snapshot Management
 """
 
 from datetime import datetime, timezone
+import json
 from typing import List, Dict, Optional, Tuple
 from sqlalchemy.orm import Session
 from app.db.models import Trade
@@ -37,6 +38,16 @@ class Ledger:
         client_order_id: Optional[str] = None,
         symbol: Optional[str] = None,
         cycle_id: Optional[int] = None,
+        fee_amount: Optional[float] = None,
+        fee_usdt: Optional[float] = None,
+        order_type: Optional[str] = None,
+        cost_basis_type: Optional[str] = None,
+        cost_basis_price: Optional[float] = None,
+        linked_grid_ids: Optional[List[int]] = None,
+        trigger_price: Optional[float] = None,
+        tracked_extreme_price: Optional[float] = None,
+        completion_price: Optional[float] = None,
+        engine_status: Optional[str] = None,
     ) -> Tuple[Trade, bool]:
         """
         Record a trade. Idempotent when order_id is provided: if (bot_id, order_id)
@@ -60,12 +71,23 @@ class Ledger:
             price=price,
             fee=fee,
             fee_asset=fee_asset,
+            fee_amount=fee_amount if fee_amount is not None else fee,
+            fee_usdt=fee_usdt if fee_usdt is not None else fee,
             slot_id=slot_id,
             reference_price=reference_price,
             order_id=str(order_id) if order_id is not None else None,
             client_order_id=client_order_id,
             symbol=symbol,
             cycle_id=cycle_id if cycle_id is not None else 1,
+            order_type=order_type,
+            cost_basis_type=cost_basis_type,
+            cost_basis_price=cost_basis_price,
+            linked_grid_ids=json.dumps(linked_grid_ids or []),
+            trigger_price=trigger_price,
+            tracked_extreme_price=tracked_extreme_price,
+            completion_price=completion_price,
+            fill_total=qty * price,
+            engine_status=engine_status,
         )
         db.add(trade)
         db.commit()
@@ -116,6 +138,8 @@ class Ledger:
                 "price": t.price,
                 "fee": t.fee,
                 "fee_asset": t.fee_asset,
+                "fee_amount": getattr(t, "fee_amount", None),
+                "fee_usdt": getattr(t, "fee_usdt", None),
                 "slot_id": t.slot_id,
                 "reference_price": getattr(t, "reference_price", None),
             }

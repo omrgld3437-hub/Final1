@@ -50,7 +50,7 @@ def test_sell_management_only_overlay_shape():
     assert overlay["max_buy_levels"] == 0
 
 
-def test_wait_clears_old_buy_grids():
+def test_wait_pauses_buys_without_changing_grid_count():
     cfg_dict = {
         "symbol": "SOLUSDT",
         "base_alloc_pct": 50,
@@ -65,15 +65,14 @@ def test_wait_clears_old_buy_grids():
         blocking_reasons=["WAIT"],
     )
     applied = _no_trade_overlay(cfg_dict, decision)
-    assert applied["buy_grids"] == [], (
-        "NO_TRADE/WAIT fallback preserved old buy grids; bot could keep buying despite DPS wait."
-    )
-    assert applied.get("max_buy_levels", 0) == 0
-    assert applied["profit_reentry_drop_pct"] == 0.0
-    assert "dps_no_trade" in applied.get("fallbacks", [])
+    assert len(applied["buy_grids"]) == len(cfg_dict["buy_grids"])
+    assert applied.get("max_buy_levels") == len(cfg_dict["buy_grids"])
+    assert applied["buy_disabled"] is True
+    assert applied["cancel_existing_buy_orders"] is True
+    assert "dps_safe_pause_grid_count_preserved" in applied.get("fallbacks", [])
 
 
-def test_no_trade_clears_all_grids():
+def test_no_trade_preserves_ladders_but_blocks_new_buys():
     cfg_dict = {
         "symbol": "SOLUSDT",
         "buy_grids": [{"buy_grid_pct": 1.0, "buy_qty_pct_of_quote": 25}] * 4,
@@ -86,8 +85,10 @@ def test_no_trade_clears_all_grids():
         blocking_reasons=["NO_TRADE"],
     )
     applied = _no_trade_overlay(cfg_dict, decision)
-    assert applied["buy_grids"] == []
-    assert applied["sell_grids"] == []
+    assert len(applied["buy_grids"]) == len(cfg_dict["buy_grids"])
+    assert len(applied["sell_grids"]) == len(cfg_dict["sell_grids"])
+    assert applied["buy_disabled"] is True
+    assert applied["intent_execution_enabled"] is False
 
 
 def test_sell_management_only_dynamic_snapshot_overlay():
@@ -117,4 +118,5 @@ def test_sell_management_only_dynamic_snapshot_overlay():
         blocking_reasons=["bilateral"],
     )
     applied = _no_trade_overlay(cfg_dict, decision)
-    assert applied["buy_grids"] == []
+    assert len(applied["buy_grids"]) == len(cfg_dict["buy_grids"])
+    assert applied["buy_disabled"] is True

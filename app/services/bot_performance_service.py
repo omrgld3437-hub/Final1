@@ -263,6 +263,74 @@ def aggregate_dual_perf_closed_cycles(
     }
 
 
+def estimate_annual_return_pct_12m(
+    completed_cycles: Optional[List[Dict[str, Any]]],
+    initial_capital: float,
+    *,
+    now: Optional[datetime] = None,
+    symbol: Optional[str] = None,
+) -> Optional[float]:
+    """Annualize the bot's average monthly net USDT-equivalent return (max 12 months)."""
+    if initial_capital <= 0:
+        return None
+    now_utc = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    cutoff = now_utc - timedelta(days=365)
+    rows: List[Tuple[datetime, float]] = []
+    for entry in completed_cycles or []:
+        if not isinstance(entry, dict):
+            continue
+        completed_at = _parse_ts_utc(entry.get("completed_at"))
+        if completed_at is None or completed_at < cutoff or completed_at > now_utc:
+            continue
+        pnl_usdt, fees_usdt = _cycle_ledger_amounts(entry, symbol=symbol)
+        rows.append((completed_at, float(pnl_usdt) - float(fees_usdt)))
+    if not rows:
+        return None
+    first = min(row[0] for row in rows)
+    observed_months = max(
+        1,
+        min(
+            12,
+            (now_utc.year - first.year) * 12 + now_utc.month - first.month + 1,
+        ),
+    )
+    average_monthly_usdt = sum(row[1] for row in rows) / observed_months
+    return round(average_monthly_usdt * 12.0 / initial_capital * 100.0, 2)
+
+
+def estimate_live_bot_annual_return_pct_12m(
+    current_equity: float,
+    initial_capital: float,
+    started_at: Any,
+    *,
+    now: Optional[datetime] = None,
+) -> Optional[float]:
+    """Kapanmış tur yokken yalnız botun kendi canlı değişimini yıllıklandır."""
+    if initial_capital <= 0 or current_equity < 0:
+        return None
+    started = _parse_ts_utc(started_at)
+    if started is None:
+        return None
+    now_utc = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    if started > now_utc:
+        return None
+    observed_months = max(
+        1,
+        min(
+            12,
+            (now_utc.year - started.year) * 12
+            + now_utc.month
+            - started.month
+            + 1,
+        ),
+    )
+    net_change_usdt = float(current_equity) - float(initial_capital)
+    return round(
+        net_change_usdt * 12.0 / observed_months / initial_capital * 100.0,
+        2,
+    )
+
+
 def base_from_symbol(symbol: str) -> str:
     s = (symbol or "").upper().strip()
     if s == "MULTI":

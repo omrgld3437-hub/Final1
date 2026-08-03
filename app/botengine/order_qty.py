@@ -71,6 +71,12 @@ def normalize_symbol_filters(raw: Dict[str, Any]) -> Dict[str, Any]:
         "min_qty": float(raw.get("min_qty") or min_str),
         "tick_size": float(raw.get("tick_size") or tick_str),
         "min_notional": float(raw.get("min_notional") or raw.get("minNotional") or DEFAULT_MIN_NOTIONAL_USDT),
+        "max_qty": (
+            float(raw.get("max_qty") or raw.get("maxQty"))
+            if raw.get("max_qty") is not None or raw.get("maxQty") is not None
+            else None
+        ),
+        "symbol_trading": bool(raw.get("symbol_trading", raw.get("status", "TRADING") == "TRADING")),
         "base_asset": raw.get("base_asset") or raw.get("baseAsset"),
         "quote_asset": raw.get("quote_asset") or raw.get("quoteAsset"),
     }

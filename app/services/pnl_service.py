@@ -445,9 +445,6 @@ class PnlService:
                         base_qty -= sell_qty
                         total_cost -= avg_buy * sell_qty
                     quote_qty += qty * price - fee_q
-            if not price_valid and trades:
-                current_price = trades[-1].price
-                price_valid = current_price and float(current_price) > 0
             avg_buy_final = total_cost / base_qty if base_qty > 0 else None
             unrealized = (
                 (float(current_price or 0) - avg_buy_final) * base_qty

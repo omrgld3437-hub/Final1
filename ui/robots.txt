@@ -13,4 +13,4 @@ Disallow: /ui/maintenance.html
 Disallow: /ui/splash.html
 Disallow: /ui/server_manager.html
 
-Sitemap: https://tradertrailing.com/sitemap.xml
+Sitemap: https://ayserose.com/sitemap.xml

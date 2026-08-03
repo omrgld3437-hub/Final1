@@ -6,7 +6,7 @@ REM
 REM Gereksinim: rsync Windows'ta kurulu olmali (Git Bash veya WSL ile)
 REM Alternatif: WinSCP, FileZilla veya manuel kopyala-yapistir
 REM
-REM Kullanim: deploy.bat user@sunucu.com:/var/www/final1
+REM Kullanim: deploy.bat user@sunucu.com:/opt/final1/current
 
 setlocal
 set DEST=%1

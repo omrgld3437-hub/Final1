@@ -2,6 +2,7 @@
 "use strict";
 
 const readline = require("readline");
+const crypto = require("crypto");
 
 const DEFAULT_BASE = "https://api.binance.com";
 
@@ -13,6 +14,33 @@ function buildUrl(path, params, base) {
     }
   }
   return url;
+}
+
+function buildSignedRequest(request) {
+  const method = String(request.method || "GET").toUpperCase();
+  const params = request.params || {};
+  const sorted = Object.keys(params)
+    .sort()
+    .map((key) => `${key}=${params[key]}`)
+    .join("&");
+  const signature = crypto
+    .createHmac("sha256", String(request.apiSecret || ""))
+    .update(sorted)
+    .digest("hex");
+  const finalQuery = `${sorted}&signature=${signature}`;
+  const url = new URL(request.path, request.base || DEFAULT_BASE);
+  const headers = {
+    "accept": "application/json",
+    "X-MBX-APIKEY": String(request.apiKey || ""),
+  };
+  const options = { method, headers };
+  if (method === "POST") {
+    headers["content-type"] = "application/x-www-form-urlencoded";
+    options.body = finalQuery;
+  } else {
+    url.search = finalQuery;
+  }
+  return { url, options };
 }
 
 const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
@@ -27,10 +55,14 @@ rl.on("line", async (line) => {
   }
 
   try {
-    const response = await fetch(buildUrl(request.path, request.params, request.base), {
-      method: "GET",
-      headers: { "accept": "application/json" },
-    });
+    const signed = request.signed === true;
+    const built = signed
+      ? buildSignedRequest(request)
+      : {
+          url: buildUrl(request.path, request.params, request.base),
+          options: { method: "GET", headers: { "accept": "application/json" } },
+        };
+    const response = await fetch(built.url, built.options);
     const text = await response.text();
     let data = text;
     try {

@@ -643,7 +643,7 @@ def _params_to_param_assistant_ui(
         fallback_used=fallback_used,
     )
     v6d_ui = (decision.telemetry or {}).get("v6_display") or {}
-    if str(template_key or "").startswith("DPLV6_") and v6d_ui:
+    if v6d_ui:
         rh = str(v6d_ui.get("regime_headline") or "")
         gp = str(v6d_ui.get("grid_plan_plain") or "")
         if rh and gp:
@@ -839,8 +839,8 @@ def params_to_grid_config(
 
     from app.services.dynamic_param_score.param_generator.grid_distribution import cap_trailing_pct
 
-    if is_v6 and params.resell_trail_pct is not None:
-        sell_trail = max(float(params.resell_trail_pct or 0.0), min_tr)
+    if is_v6 and params.sell_grid_trail_pct is not None:
+        sell_trail = max(float(params.sell_grid_trail_pct or 0.0), min_tr)
     elif params.trailing_enabled:
         sell_trail = max(float(params.trailing_callback_pct or 0.0), min_tr)
     elif params.sell_grid_count > 0:
@@ -855,8 +855,8 @@ def params_to_grid_config(
     )
     if buy_trail_blocked:
         buy_trail = 0.0
-    elif is_v6 and params.rebuy_trail_pct is not None:
-        buy_trail = max(float(params.rebuy_trail_pct or 0.0), min_tr)
+    elif is_v6 and params.buy_grid_trail_pct is not None:
+        buy_trail = max(float(params.buy_grid_trail_pct or 0.0), min_tr)
     elif params.trailing_enabled or params.buy_grid_count > 0:
         buy_trail = max(float(params.trailing_callback_pct or 0.0) * 0.8, min_tr * 0.8)
     else:
@@ -905,8 +905,8 @@ def params_to_grid_config(
         "buy_grids": buy_grids,
         "sell_trigger_trailing_pct": round(sell_trail, 4),
         "buy_trigger_trailing_pct": round(buy_trail, 4),
-        "profit_exit_rise_pct": round(params.take_profit_pct, 4),
-        "profit_exit_drop_pct": round(sell_trail, 4),
+        "profit_exit_rise_pct": round(resell_trigger, 4) if resell_enabled else 0.0,
+        "profit_exit_drop_pct": round(resell_trail_val, 4) if resell_enabled else 0.0,
         "profit_reentry_drop_pct": round(rebuy_trigger, 4) if rebuy_enabled else 0.0,
         "profit_reentry_rise_pct": round(rebuy_trail_val, 4) if rebuy_enabled else 0.0,
         "max_buy_levels": max(params.buy_grid_count, 0),
@@ -1015,6 +1015,7 @@ def decision_to_param_assistant_result(
 
     sub = decision.telemetry.get("sub_scores", {})
     v6d = decision.telemetry.get("v6_display") or {}
+    net_profile = decision.telemetry.get("net_profile") or {}
     is_v6 = bool(v6d) or str(decision.telemetry.get("pool_version") or "").lower() == "v6"
     pool_meta = decision.telemetry.get("param_pool") or {}
     if is_v6 and not pool_meta.get("pool_version"):
@@ -1024,7 +1025,6 @@ def decision_to_param_assistant_result(
     market_sig = decision.telemetry.get("market_signature") or {}
     sel_ctx = pool_meta.get("selection_context") or {}
     route_key = str(sel_ctx.get("route_key") or "")
-    is_v5 = False
     if is_v6:
         scen = v6d.get("scenario_identity") or {}
         effective_risk = str(
@@ -1317,6 +1317,10 @@ def decision_to_param_assistant_result(
         "risk_display_label": (v6d.get("risk_display_label") if is_v6 else None),
         "data_quality_display": (v6d.get("data_quality_label") if is_v6 else None),
         "profile_tile_label": (v6d.get("profile_tile_label") if is_v6 else None),
+        "profile_key": net_profile.get("key") if is_v6 else None,
+        "profile_headline": net_profile.get("headline") if is_v6 else None,
+        "profile_explanation": net_profile.get("why") if is_v6 else None,
+        "automatic_apply_label": net_profile.get("automatic_apply_label") if is_v6 else None,
         "v6_final_profile_id": (
             v6d.get("final_profile_id") if is_v6 else None
         ),

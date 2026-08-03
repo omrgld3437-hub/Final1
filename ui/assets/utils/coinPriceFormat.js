@@ -47,6 +47,33 @@
         return 8;
     }
 
+    function parseLocalizedNumber(value) {
+        if (typeof value === 'number') {
+            return Number.isFinite(value) ? value : null;
+        }
+        if (value == null) return null;
+        var s = String(value)
+            .replace(/\u00a0/g, '')
+            .replace(/\s+/g, '')
+            .replace(/[^0-9,.\-+]/g, '');
+        if (!s || !/[0-9]/.test(s)) return null;
+
+        var comma = s.lastIndexOf(',');
+        var dot = s.lastIndexOf('.');
+        if (comma >= 0 && dot >= 0) {
+            if (comma > dot) {
+                s = s.replace(/\./g, '').replace(/,/g, '.');
+            } else {
+                s = s.replace(/,/g, '');
+            }
+        } else if (comma >= 0) {
+            s = s.replace(/,/g, '.');
+        }
+
+        var n = Number(s);
+        return Number.isFinite(n) ? n : null;
+    }
+
     function positiveHints(priceHints) {
         var out = [];
         (priceHints || []).forEach(function (h) {
@@ -170,6 +197,7 @@
         decimalPlacesFromTickSize: decimalPlacesFromTickSize,
         inferPriceDecimalsFromMagnitude: inferPriceDecimalsFromMagnitude,
         decimalsNeededToDiffer: decimalsNeededToDiffer,
+        parseLocalizedNumber: parseLocalizedNumber,
         minimumDecimalsForPrice: minimumDecimalsForPrice,
         minimumDecimalsFromHints: minimumDecimalsFromHints,
         resolvePriceDecimals: resolvePriceDecimals,

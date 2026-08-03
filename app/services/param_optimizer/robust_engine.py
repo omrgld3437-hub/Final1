@@ -1184,8 +1184,27 @@ def optimize_robust(
     # data. Fan out across workers; deadline-safe; serial fallback inside pmap.
     emit("validate", candidates=len(candidates), candidates_done=0, workers=workers, elapsed=round(time.time() - t_start, 1))
     _val_folds = max(2, int(getattr(tier, "walk_forward_oos_folds", folds) or folds))
+    # Açıkça verilen çok kısa bütçelerde (test/önizleme) tek bir profesyonel
+    # adayın tam 4 yıllık seri + tüm fold'ları işlemesi duvar-saati sınırını
+    # tek başına aşabiliyordu. Normal professional_auto (30 dk–6 saat) aynen
+    # tam seriyle çalışır; yalnız <=30 sn bütçede nedensel son pencere kullanılır.
+    _short_budget_validation = time_budget_sec <= 30
+    if _short_budget_validation:
+        _val_folds = 2
+        _validation_train = train[-min(len(train), 720) :]
+        _validation_oos = oos[-min(len(oos), 360) :] if oos else None
+        _validation_recent = (
+            recent_in[-min(len(recent_in), 360) :] if recent_in else None
+        )
+    else:
+        _validation_train = train
+        _validation_oos = oos
+        _validation_recent = recent_in
     _val_payload = {
-        "train": train, "oos": oos, "recent_in": recent_in, "budget": budget,
+        "train": _validation_train,
+        "oos": _validation_oos,
+        "recent_in": _validation_recent,
+        "budget": budget,
         "symbol": symbol, "fee": fee, "slippage": slippage, "obj_cfg": obj_cfg,
         "folds": _val_folds,
     }
@@ -1233,6 +1252,10 @@ def optimize_robust(
         "engine_version": "robust_v2",
         "search_method": _search_method,
         "structural_candidates_total": int(_structural_count),
+        "short_budget_validation": bool(_short_budget_validation),
+        "validation_train_bars": len(_validation_train),
+        "validation_oos_bars": len(_validation_oos or []),
+        "validation_folds": int(_val_folds),
         "space_candidates_total": int(space_added),
         "per_eval_sec": round(per_eval, 4),
         "workers": int(workers),

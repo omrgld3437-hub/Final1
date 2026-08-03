@@ -208,7 +208,7 @@ class UserStreamClient:
         return (
             "https://testnet.binance.vision"
             if self.testnet
-            else "https://api.binance.com"
+            else os.getenv("BINANCE_API_BASE_URL", "https://api.binance.com").rstrip("/")
         )
 
     def _ws_url(self) -> str:

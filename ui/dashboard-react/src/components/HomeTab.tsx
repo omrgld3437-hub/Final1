@@ -1,541 +1,1838 @@
-import React, { useState, useEffect } from "react";
-import { Bot, WalletAsset, Trade, LeaderboardItem } from "../types";
+import {
+  Activity,
+  ArrowDownRight,
+  ArrowRight,
+  ArrowUpRight,
+  Bot as BotIcon,
+  ChevronLeft,
+  ChevronRight,
+  CircleDollarSign,
+  Clock3,
+  Info,
+  Layers3,
+  Repeat2,
+  ShieldCheck,
+  Sparkles,
+  Star,
+  WalletCards,
+  X,
+  type LucideIcon,
+} from "lucide-react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useDashboard } from "../context/DashboardContext";
 import { apiFetch } from "../lib/api";
-import { 
-  TrendingUp, 
-  TrendingDown, 
-  ArrowUpRight, 
-  ArrowDownLeft, 
-  Play, 
-  Square, 
-  Trash2, 
-  Info, 
-  Star, 
-  ChevronLeft, 
-  ChevronRight,
-  RefreshCw,
-  FolderOpen
-} from "lucide-react";
+import type {
+  Bot,
+  LeaderboardItem,
+  Trade,
+  WalletAsset,
+  WalletState,
+} from "../types";
+import CoinLogo, { splitTradingSymbol } from "./coin/CoinLogo";
+import LiveValue from "./live/LiveValue";
 
 interface HomeTabProps {
   bots: Bot[];
-  wallet: any;
-  prices: any;
-  setBots: React.Dispatch<React.SetStateAction<Bot[]>>;
+  wallet: WalletState;
+  prices: Record<string, { price?: number; change24h?: number; volume24h?: number }>;
   onOpenTradeModal: (symbol: string, side: "BUY" | "SELL") => void;
-  onApplyLeaderboard: (params: any) => void;
+  onApplyLeaderboard: (params: unknown) => void;
   isTestAccount: boolean;
+  onOpenBot?: (botId: number) => void;
+}
+
+type Period = "daily" | "weekly" | "monthly" | "all";
+type TransactionType = "all" | "buysell" | "depositwithdraw";
+type TransactionPagination = {
+  total: number;
+  page: number;
+  perPage: number;
+  totalPages: number;
+};
+
+const PERIOD_LABELS: Record<Period, string> = {
+  daily: "Gün",
+  weekly: "Hafta",
+  monthly: "Ay",
+  all: "Genel",
+};
+
+function finite(value: unknown, fallback = 0): number {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
+}
+
+function displayNumber(value: unknown, digits = 2): string {
+  if (value === null || value === undefined || value === "") return "—";
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return "—";
+  return numeric.toLocaleString("tr-TR", {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: Math.max(digits, 8),
+  });
+}
+
+function money(value: unknown): string {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return "—";
+  return new Intl.NumberFormat("tr-TR", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 2,
+  }).format(numeric);
+}
+
+function formatTime(value: unknown): string {
+  const date = new Date(String(value ?? ""));
+  if (Number.isNaN(date.getTime())) return "—";
+  return new Intl.DateTimeFormat("tr-TR", {
+    dateStyle: "short",
+    timeStyle: "short",
+  }).format(date);
+}
+
+function sideLabel(side: string): string {
+  const normalized = side.toUpperCase();
+  if (normalized === "BUY") return "Alış";
+  if (normalized === "SELL") return "Satış";
+  return side || "Hareket";
+}
+
+type TemplateGrid = {
+  triggerPct: number | null;
+  qtyPct: number | null;
+};
+
+type TemplateStrategy = {
+  basePct: number | null;
+  quotePct: number | null;
+  upTrail: number | null;
+  downTrail: number | null;
+  sellGrids: TemplateGrid[];
+  buyGrids: TemplateGrid[];
+  rebuyTrigger: number | null;
+  rebuyTrail: number | null;
+  resellTrigger: number | null;
+  resellTrail: number | null;
+  referencePrice: number | null;
+  strategyLabel: string;
+};
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function optionalNumber(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function readTemplateGrids(
+  preferred: unknown,
+  legacy: unknown,
+  triggerKeys: string[],
+  qtyKeys: string[],
+): TemplateGrid[] {
+  const rows = Array.isArray(preferred)
+    ? preferred
+    : Array.isArray(legacy)
+      ? legacy
+      : [];
+  return rows.map((value) => {
+    const row = asRecord(value);
+    return {
+      triggerPct: optionalNumber(
+        triggerKeys.map((key) => row[key]).find((candidate) => candidate !== undefined),
+      ),
+      qtyPct: optionalNumber(
+        qtyKeys.map((key) => row[key]).find((candidate) => candidate !== undefined),
+      ),
+    };
+  });
+}
+
+function parseTemplateStrategy(paramsValue: unknown): TemplateStrategy {
+  const params = asRecord(paramsValue);
+  const allocation = asRecord(params.allocation);
+  const up = asRecord(params.up);
+  const down = asRecord(params.down);
+  const profit = asRecord(params.profit);
+  const strategyId = String(params.strategy_id || "dca_grid_trailing");
+  return {
+    basePct: optionalNumber(params.base_alloc_pct ?? allocation.base_pct),
+    quotePct: optionalNumber(params.quote_alloc_pct ?? allocation.quote_pct),
+    upTrail: optionalNumber(
+      up.trail_pct ?? params.sell_trigger_trailing_pct,
+    ),
+    downTrail: optionalNumber(
+      down.trail_pct ?? params.buy_trigger_trailing_pct,
+    ),
+    sellGrids: readTemplateGrids(
+      up.grids,
+      params.sell_grids,
+      ["trigger_pct", "sell_grid_pct"],
+      ["qty_pct", "sell_qty_pct_of_base"],
+    ),
+    buyGrids: readTemplateGrids(
+      down.grids,
+      params.buy_grids,
+      ["trigger_pct", "buy_grid_pct"],
+      ["qty_pct", "buy_qty_pct_of_quote"],
+    ),
+    rebuyTrigger: optionalNumber(
+      profit.rebuy_trigger_pct ?? params.profit_reentry_drop_pct,
+    ),
+    rebuyTrail: optionalNumber(
+      profit.rebuy_trail_pct ?? params.profit_reentry_rise_pct,
+    ),
+    resellTrigger: optionalNumber(
+      profit.resell_trigger_pct ?? params.profit_exit_rise_pct,
+    ),
+    resellTrail: optionalNumber(
+      profit.resell_trail_pct ?? params.profit_exit_drop_pct,
+    ),
+    referencePrice: optionalNumber(params.reference_price),
+    strategyLabel:
+      strategyId === "dca_grid_trailing"
+        ? "Trailing DCA grid"
+        : strategyId.replaceAll("_", " "),
+  };
+}
+
+function templatePrice(value: unknown): string {
+  const numeric = optionalNumber(value);
+  if (numeric === null) return "—";
+  const digits = numeric < 0.01 ? 8 : numeric < 1 ? 6 : 2;
+  return `$${numeric.toLocaleString("tr-TR", {
+    minimumFractionDigits: Math.min(digits, 2),
+    maximumFractionDigits: digits,
+  })}`;
+}
+
+function templatePct(value: number | null): string {
+  return value === null
+    ? "—"
+    : `%${value.toLocaleString("tr-TR", { maximumFractionDigits: 4 })}`;
+}
+
+function elapsedSince(value: string | null | undefined): string {
+  if (!value) return "—";
+  const startedAt = new Date(value).getTime();
+  if (!Number.isFinite(startedAt)) return "—";
+  const seconds = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+  const days = Math.floor(seconds / 86_400);
+  if (days >= 365) {
+    const years = Math.floor(days / 365);
+    const remainingMonths = Math.floor((days % 365) / 30);
+    return `${years} yıl${remainingMonths ? ` ${remainingMonths} ay` : ""}`;
+  }
+  if (days >= 30) {
+    const months = Math.floor(days / 30);
+    const remainingDays = days % 30;
+    return `${months} ay${remainingDays ? ` ${remainingDays} gün` : ""}`;
+  }
+  if (days > 0) return `${days} gün`;
+  const hours = Math.floor(seconds / 3600);
+  if (hours > 0) return `${hours} sa`;
+  return `${Math.max(1, Math.floor(seconds / 60))} dk`;
 }
 
 export default function HomeTab({
   bots,
   wallet,
   prices,
-  setBots,
   onOpenTradeModal,
   onApplyLeaderboard,
   isTestAccount,
+  onOpenBot,
 }: HomeTabProps) {
-  const [selectedPeriod, setSelectedPeriod] = useState<"daily" | "weekly" | "monthly" | "all">("all");
-  const [txPeriod, setTxPeriod] = useState<"daily" | "weekly" | "monthly" | "all">("daily");
-  const [txType, setTxType] = useState<"all" | "buysell" | "depositwithdraw">("buysell");
-  
+  const [selectedPeriod, setSelectedPeriod] = useState<Period>("all");
+  const [txPeriod, setTxPeriod] = useState<Period>("daily");
+  const [txType, setTxType] = useState<TransactionType>("buysell");
+  const [txPage, setTxPage] = useState(1);
+  const [txPagination, setTxPagination] = useState<TransactionPagination>({
+    total: 0,
+    page: 1,
+    perPage: 8,
+    totalPages: 0,
+  });
   const [trades, setTrades] = useState<Trade[]>([]);
-  const [openOrders, setOpenOrders] = useState<any[]>([]);
   const [leaderboard, setLeaderboard] = useState<LeaderboardItem[]>([]);
-  const [selectedLeaderboardItem, setSelectedLeaderboardItem] = useState<LeaderboardItem | null>(null);
-  
-  const [perfPnl, setPerfPnl] = useState(124.50);
-  const [perfFees, setPerfFees] = useState(12.30);
-  
+  const [selectedLeaderboardItem, setSelectedLeaderboardItem] =
+    useState<LeaderboardItem | null>(null);
+  const [perfPnl, setPerfPnl] = useState(0);
+  const [perfFees, setPerfFees] = useState(0);
+  const [dailyWalletPnl, setDailyWalletPnl] = useState(0);
+  const [dailyBotPnl, setDailyBotPnl] = useState(0);
+  const [dataNotice, setDataNotice] = useState("");
+  const [manualRefreshKey, setManualRefreshKey] = useState(0);
   const { accountId } = useDashboard();
 
   useEffect(() => {
+    const onManualRefresh = () => setManualRefreshKey((value) => value + 1);
+    window.addEventListener("ayserose:manual-refresh", onManualRefresh);
+    return () => window.removeEventListener("ayserose:manual-refresh", onManualRefresh);
+  }, []);
+
+  useEffect(() => {
     if (!accountId) return;
+    let cancelled = false;
+    let timer = 0;
     const fetchTrades = () => {
-      apiFetch<{ trades?: Trade[] }>(`/api/finance/trades?account_id=${accountId}&limit=20&offset=0`)
+      if (document.hidden) return;
+      const query = new URLSearchParams({
+        period: txPeriod,
+        type_filter: txType,
+        page: String(txPage),
+        per_page: "8",
+      });
+      apiFetch<{
+        items?: Trade[];
+        total?: number;
+        page?: number;
+        per_page?: number;
+        total_pages?: number;
+      }>(
+        `/api/accounts/${accountId}/transaction-history?${query}`,
+      )
         .then((data) => {
-          if (data?.trades) setTrades(data.trades);
+          if (cancelled) return;
+          const totalPages = Math.max(0, finite(data?.total_pages));
+          const resolvedPage = Math.max(1, finite(data?.page, txPage));
+          setTrades(Array.isArray(data?.items) ? data.items : []);
+          setTxPagination({
+            total: Math.max(0, finite(data?.total)),
+            page: resolvedPage,
+            perPage: Math.max(1, finite(data?.per_page, 8)),
+            totalPages,
+          });
+          if (totalPages > 0 && resolvedPage > totalPages) {
+            setTxPage(totalPages);
+          }
         })
-        .catch(console.error);
+        .catch((error) =>
+          !cancelled &&
+          setDataNotice(
+            error instanceof Error
+              ? error.message
+              : "İşlem geçmişi alınamadı.",
+          ),
+        );
     };
-
     fetchTrades();
-    const interval = setInterval(fetchTrades, 2000);
-    return () => clearInterval(interval);
-  }, [accountId]);
+    timer = window.setInterval(fetchTrades, 30_000);
+    document.addEventListener("visibilitychange", fetchTrades);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", fetchTrades);
+    };
+  }, [accountId, txPage, txPeriod, txType, manualRefreshKey]);
 
   useEffect(() => {
-    apiFetch<{ items?: LeaderboardItem[] }>("/api/leaderboard/global/top?limit=5")
-      .then((data) => {
-        if (data?.items) setLeaderboard(data.items);
-      })
-      .catch(console.error);
-  }, [accountId]);
-
-  // Update simulation performance on period change
-  useEffect(() => {
-    if (selectedPeriod === "daily") {
-      setPerfPnl(42.10);
-      setPerfFees(2.40);
-    } else if (selectedPeriod === "weekly") {
-      setPerfPnl(184.20);
-      setPerfFees(14.80);
-    } else if (selectedPeriod === "monthly") {
-      setPerfPnl(412.50);
-      setPerfFees(45.10);
-    } else {
-      setPerfPnl(824.90);
-      setPerfFees(95.60);
-    }
-  }, [selectedPeriod]);
-
-  // Cancel order in open orders
-  const handleCancelOrder = (orderId: number) => {
-    if (confirm("Bu açık emri iptal etmek istediğinize emin misiniz?")) {
-      setOpenOrders(prev => prev.filter(o => o.order_id !== orderId));
-      alert("Emir başarıyla iptal edildi.");
-    }
-  };
-
-  const handleToggleBot = (botId: number, currentStatus: string) => {
-    const nextStatus = currentStatus === "running" ? "stop" : "start";
-    apiFetch<{ success?: boolean }>(
-      `/api/bots-engine/${botId}/${nextStatus}?account_id=${accountId}`,
-      { method: "POST" }
+    apiFetch<{ items?: LeaderboardItem[] }>(
+      "/api/leaderboard/global/top?limit=5",
     )
+      .then((data) =>
+        setLeaderboard(Array.isArray(data?.items) ? data.items : []),
+      )
+      .catch(() => setLeaderboard([]));
+  }, [accountId, manualRefreshKey]);
+
+  useEffect(() => {
+    if (!accountId) return;
+    apiFetch<{
+      totals?: { pnl_usd?: number; fees_usd?: number };
+      pnl_usd?: number;
+    }>(`/api/accounts/${accountId}/bot-performance?period=${selectedPeriod}`)
       .then((data) => {
-        if (data?.success) {
-          setBots((prev) =>
-            prev.map((b) =>
-              b.id === botId
-                ? {
-                    ...b,
-                    status: nextStatus === "start" ? "running" : "stopped",
-                    display_status: nextStatus === "start" ? "running" : "stopped",
-                  }
-                : b
-            )
-          );
+        setPerfPnl(finite(data?.totals?.pnl_usd ?? data?.pnl_usd));
+        setPerfFees(finite(data?.totals?.fees_usd));
+      })
+      .catch((error) =>
+        setDataNotice(
+          error instanceof Error ? error.message : "Performans alınamadı.",
+        ),
+      );
+  }, [accountId, selectedPeriod, manualRefreshKey]);
+
+  useEffect(() => {
+    if (!accountId) return;
+    apiFetch<{
+      daily_wallet_pnl_usd?: number;
+      daily_bot_pnl_usd?: number;
+      data_status?: string;
+      error?: string;
+    }>(`/api/finance/summary?account_id=${accountId}`)
+      .then((data) => {
+        setDailyWalletPnl(finite(data.daily_wallet_pnl_usd));
+        setDailyBotPnl(finite(data.daily_bot_pnl_usd));
+        if (data.data_status === "error") {
+          setDataNotice(data.error || "Finans özeti güncel değil.");
         }
       })
-      .catch(console.error);
-  };
+      .catch((error) =>
+        setDataNotice(
+          error instanceof Error ? error.message : "Finans özeti alınamadı.",
+        ),
+      );
+  }, [accountId, manualRefreshKey]);
+
+  const runningBots = bots.filter((bot) =>
+    ["running", "starting"].includes(
+      String(bot.display_status || bot.status).toLowerCase(),
+    ),
+  );
+  const botValue = bots.reduce(
+    (total, bot) => total + finite(bot.current_usd),
+    0,
+  );
+  const dailyWalletPct = wallet.total_usd
+    ? (dailyWalletPnl /
+        Math.max(1, wallet.total_usd - dailyWalletPnl)) *
+      100
+    : null;
+  const visibleTrades = trades.filter((trade) => {
+    if (txType === "all") return true;
+    if (txType === "buysell") {
+      return trade.side === "BUY" || trade.side === "SELL";
+    }
+    return trade.side !== "BUY" && trade.side !== "SELL";
+  });
+  const visibleAssets = (wallet.assets || []).filter(
+    (asset) => finite(asset.total_usd) >= 1,
+  );
 
   return (
-    <div className="space-y-6">
-      {/* Unified KPI Strip */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-4 shadow-xl">
-          <div className="text-xs font-semibold text-neutral-400 uppercase tracking-wider mb-1">Toplam Spot Bakiyesi</div>
-          <div className="text-2xl font-bold text-white">${wallet.total_usd?.toLocaleString(undefined, { minimumFractionDigits: 2 })}</div>
-          <span className="text-xs text-[#0ecb81] font-semibold flex items-center mt-2">
-            <ArrowUpRight className="w-3.5 h-3.5 mr-1" /> Canlı Veri • Binance Bağlı
-          </span>
+    <div className="space-y-5 sm:space-y-7">
+      {dataNotice && (
+        <div
+          role="status"
+          className="flex items-start justify-between gap-3 rounded-2xl border border-amber-300/15 bg-amber-300/[0.055] px-4 py-3 text-xs leading-5 text-amber-100"
+        >
+          <span>{dataNotice}</span>
+          <button
+            type="button"
+            onClick={() => setDataNotice("")}
+            className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-amber-200 hover:bg-white/5"
+            aria-label="Bildirimi kapat"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
         </div>
+      )}
 
-        <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-4 shadow-xl">
-          <div className="text-xs font-semibold text-neutral-400 uppercase tracking-wider mb-1">Günlük Değişim</div>
-          <div className="text-2xl font-bold text-[#0ecb81]">+${(wallet.total_usd * 0.0082).toFixed(2)}</div>
-          <span className="text-xs text-neutral-400 mt-2 block">+0.82%</span>
-        </div>
-
-        <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-4 shadow-xl">
-          <div className="text-xs font-semibold text-neutral-400 uppercase tracking-wider mb-1">Kilitli Botlar Bakiyesi</div>
-          <div className="text-2xl font-bold text-[#f0b90b]">${bots.reduce((sum, b) => sum + (b.current_usd || 0), 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}</div>
-          <span className="text-xs text-neutral-400 mt-2 block">{bots.filter(b => b.status === "running").length} Aktif Bot</span>
-        </div>
-
-        <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-4 shadow-xl">
-          <div className="text-xs font-semibold text-neutral-400 uppercase tracking-wider mb-1">Günlük Bot K/Z</div>
-          <div className="text-2xl font-bold text-[#0ecb81]">+$42.10</div>
-          <span className="text-xs text-neutral-400 mt-2 block">+1.15% Ortalama</span>
-        </div>
-      </div>
-
-      {/* Binance Assets Strip */}
-      <div className="bg-neutral-900/60 backdrop-blur rounded-xl border border-neutral-800 p-6 shadow-xl">
-        <h3 className="text-lg font-bold text-neutral-200 mb-4 flex items-center">
-          <FolderOpen className="w-5 h-5 mr-2 text-[#f0b90b]" /> Kullanılabilir &amp; Kilitli Cüzdan Varlıkları
-        </h3>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-6 divide-y sm:divide-y-0 sm:divide-x divide-neutral-800">
-          <div className="flex flex-col items-center justify-center p-3 text-center">
-            <span className="text-xs text-neutral-400 uppercase tracking-wider mb-1">Kullanılabilir varlıklar</span>
-            <div className="text-xl font-bold text-white">${wallet.available_usd?.toLocaleString(undefined, { minimumFractionDigits: 2 })}</div>
-            <span className="text-xs text-neutral-500 mt-1">Serbest bakiye (Bot bütçeleri düşüldü)</span>
-          </div>
-          <div className="flex flex-col items-center justify-center p-3 text-center">
-            <span className="text-xs text-neutral-400 uppercase tracking-wider mb-1">Bot kilitli</span>
-            <div className="text-xl font-bold text-[#f0b90b]">${wallet.bot_locked_usd?.toLocaleString(undefined, { minimumFractionDigits: 2 })}</div>
-            <span className="text-xs text-neutral-500 mt-1">Aktif dca grid bütçelerinde kilitli</span>
-          </div>
-          <div className="flex flex-col items-center justify-center p-3 text-center">
-            <span className="text-xs text-neutral-400 uppercase tracking-wider mb-1">Kilitli varlıklar</span>
-            <div className="text-xl font-bold text-neutral-300">${wallet.locked_usd?.toLocaleString(undefined, { minimumFractionDigits: 2 })}</div>
-            <span className="text-xs text-neutral-500 mt-1">Açık limit emirlerinde bekleyen bakiye</span>
-          </div>
-        </div>
-      </div>
-
-      {/* Grid: Wallet Assets & Running Bots */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Wallet Assets Table */}
-        <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-6 shadow-xl lg:col-span-2">
-          <div className="flex justify-between items-center mb-4">
-            <div>
-              <h3 className="text-lg font-bold text-white">Cüzdan Varlıkları</h3>
-              <span className="text-xs text-neutral-400">1 USDT altı varlıklar gizlidir</span>
-            </div>
-            <span className="text-xs px-2 py-1 bg-neutral-800 text-neutral-300 rounded font-semibold border border-neutral-700">Canlı Değerler</span>
-          </div>
-
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm text-left text-neutral-300">
-              <thead className="bg-[#1e2026] text-xs uppercase text-neutral-400 font-bold border-b border-neutral-800">
-                <tr>
-                  <th className="px-4 py-3">Varlık</th>
-                  <th className="px-4 py-3 text-right">Fiyat</th>
-                  <th className="px-4 py-3 text-right">Toplam</th>
-                  <th className="px-4 py-3 text-right">Kullanılabilir</th>
-                  <th className="px-4 py-3 text-right">Değer (USD)</th>
-                  <th className="px-4 py-3 text-center">Hızlı İşlem</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-neutral-800/60">
-                {wallet.assets?.map((asset: WalletAsset) => {
-                  const pairSymbol = `${asset.asset}USDT`;
-                  const price = prices[pairSymbol]?.price || (asset.asset === "USDT" ? 1.00 : 0.00);
-                  const isUp = prices[pairSymbol]?.change24h >= 0;
-                  
-                  return (
-                    <tr key={asset.asset} className="hover:bg-neutral-800/40 transition">
-                      <td className="px-4 py-3.5 font-bold text-white flex items-center">
-                        <div className="w-8 h-8 rounded-full bg-neutral-800 border border-neutral-700 flex items-center justify-center text-xs text-neutral-300 font-bold mr-3">
-                          {asset.asset.substring(0,2)}
-                        </div>
-                        {asset.asset}
-                      </td>
-                      <td className="px-4 py-3.5 text-right font-mono text-neutral-200">
-                        ${price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}
-                      </td>
-                      <td className="px-4 py-3.5 text-right font-mono text-neutral-300">
-                        {asset.free + asset.locked + asset.bot_locked}
-                      </td>
-                      <td className="px-4 py-3.5 text-right font-mono text-neutral-400">
-                        {asset.free}
-                      </td>
-                      <td className="px-4 py-3.5 text-right font-mono font-bold text-white">
-                        ${asset.total_usd.toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                      </td>
-                      <td className="px-4 py-3.5 text-center">
-                        <div className="inline-flex rounded-lg shadow-sm gap-1 bg-neutral-800 p-0.5 border border-neutral-700">
-                          <button
-                            onClick={() => onOpenTradeModal(pairSymbol, "BUY")}
-                            className="px-2.5 py-1 text-xs font-bold text-[#0ecb81] hover:bg-neutral-700 rounded transition"
-                          >
-                            AL
-                          </button>
-                          <button
-                            onClick={() => onOpenTradeModal(pairSymbol, "SELL")}
-                            className="px-2.5 py-1 text-xs font-bold text-[#f6465d] hover:bg-neutral-700 rounded transition"
-                          >
-                            SAT
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        {/* Existing Bots Sidebar */}
-        <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-6 shadow-xl space-y-4">
-          <div className="flex justify-between items-center border-b border-neutral-800 pb-3">
-            <h3 className="font-bold text-white text-lg">Mevcut Botlar</h3>
-            <span className="text-xs px-2.5 py-1 rounded bg-[#f0b90b]/10 text-[#f0b90b] font-bold border border-[#f0b90b]/20">
-              {bots.filter(b => b.status === "running").length} ON
-            </span>
-          </div>
-
-          <div className="space-y-4 max-h-[380px] overflow-y-auto pr-1">
-            {bots.map((bot) => {
-              const profitColor = bot.total_pnl_usd >= 0 ? "text-[#0ecb81]" : "text-[#f6465d]";
-              return (
-                <div key={bot.id} className="bg-[#1e2026] border border-neutral-800 p-4 rounded-xl flex flex-col justify-between hover:border-neutral-700 transition">
-                  <div className="flex justify-between items-center mb-2">
-                    <span className="font-bold text-white text-sm tracking-wide">{bot.symbol}</span>
-                    <span className={`text-xs px-1.5 py-0.5 rounded font-bold uppercase tracking-wider ${
-                      bot.status === "running" ? "bg-[#0ecb81]/15 text-[#0ecb81]" : "bg-neutral-800 text-neutral-400"
-                    }`}>
-                      {bot.status === "running" ? "Çalışıyor" : "Durdu"}
-                    </span>
-                  </div>
-                  
-                  <div className="grid grid-cols-2 gap-2 text-xs text-neutral-400 my-2">
-                    <div>Bütçe: <strong className="text-white">${bot.budget_usd}</strong></div>
-                    <div>Hacim: <strong className="text-white">${bot.current_usd?.toFixed(2)}</strong></div>
-                    <div>Döngü: <strong className="text-white">#{bot.total_cycles_completed}</strong></div>
-                    <div>Net K/Z: <strong className={`${profitColor} font-bold`}>{bot.total_pnl_pct >= 0 ? '+' : ''}{bot.total_pnl_pct}%</strong></div>
-                  </div>
-
-                  <div className="flex justify-between items-center mt-3 border-t border-neutral-800/80 pt-2 gap-2">
-                    <button
-                      onClick={() => handleToggleBot(bot.id, bot.status)}
-                      className="text-xs px-3 py-1.5 font-bold rounded bg-neutral-800 text-white hover:bg-neutral-700 transition flex items-center gap-1.5"
-                    >
-                      {bot.status === "running" ? (
-                        <>
-                          <Square className="w-3 h-3 text-[#f6465d] fill-[#f6465d]" /> Durdur
-                        </>
-                      ) : (
-                        <>
-                          <Play className="w-3 h-3 text-[#0ecb81] fill-[#0ecb81]" /> Başlat
-                        </>
-                      )}
-                    </button>
-                    <span className="text-xs text-neutral-500 font-mono">ID: {bot.id}</span>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      </div>
-
-      {/* Global Leaderboard & Bot Performance Section */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Global Leaderboard (En İyi 5 Bot) */}
-        <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-6 shadow-xl">
-          <h3 className="text-lg font-bold text-white mb-4 flex items-center">
-            <Star className="w-5 h-5 mr-2 text-[#f0b90b]" /> En İyi Performanslı Şablonlar
-          </h3>
-          <div className="space-y-3">
-            {leaderboard.map((item, index) => {
-              return (
-                <div key={index} className="bg-neutral-800/60 border border-neutral-800 hover:border-neutral-700 rounded-xl p-4 transition flex justify-between items-center">
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-2">
-                      <span className="w-5 h-5 rounded-full bg-[#f0b90b]/15 text-[#f0b90b] font-bold text-xs flex items-center justify-center">
-                        #{index + 1}
-                      </span>
-                      <strong className="text-white text-sm">{item.symbol}</strong>
-                      <span className="text-xs text-[#0ecb81] font-bold">+{item.profit_pct}%</span>
-                    </div>
-                    <p className="text-xs text-neutral-400">Çalışma Oranı: Tr DCA Grid şablonu</p>
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => setSelectedLeaderboardItem(item)}
-                      className="px-2.5 py-1.5 text-xs font-semibold rounded bg-neutral-800 text-neutral-300 hover:bg-neutral-700 transition"
-                    >
-                      İncele
-                    </button>
-                    <button
-                      onClick={() => onApplyLeaderboard(item.params)}
-                      className="px-2.5 py-1.5 text-xs font-bold rounded bg-[#f0b90b] text-neutral-900 hover:bg-[#c9930a] transition"
-                    >
-                      Kopyala
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Bot Performance Summary */}
-        <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-6 shadow-xl flex flex-col justify-between">
+      <section className="home-balance-hero relative overflow-hidden rounded-[1.75rem] border border-fuchsia-300/15 bg-[#191a21] p-5 sm:p-7">
+        <div className="relative z-10 grid gap-6 lg:grid-cols-[1fr_auto] lg:items-end">
           <div>
-            <div className="flex justify-between items-center mb-4">
-              <h3 className="text-lg font-bold text-white">Bot Performansı</h3>
-              <div className="inline-flex rounded-md p-0.5 bg-neutral-800 border border-neutral-700 gap-1">
-                {(["daily", "weekly", "monthly", "all"] as const).map(p => (
-                  <button
-                    key={p}
-                    onClick={() => setSelectedPeriod(p)}
-                    className={`text-xs px-2 py-1 font-semibold rounded capitalized transition ${
-                      selectedPeriod === p ? "bg-[#f0b90b] text-neutral-900 font-bold" : "text-neutral-400 hover:text-white"
-                    }`}
+            <p className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.2em] text-fuchsia-200">
+              <Sparkles className="h-4 w-4" />
+              Portföy merkezi
+            </p>
+            <p className="mt-5 text-xs font-bold text-neutral-500">
+              Toplam spot değeri
+            </p>
+            <h1 className="mt-1 text-4xl font-black tracking-[-0.045em] text-white sm:text-5xl">
+              <LiveValue value={wallet.total_usd}>
+                {money(wallet.total_usd)}
+              </LiveValue>
+            </h1>
+            <div className="mt-4 flex flex-wrap items-center gap-2">
+              <span
+                className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1.5 text-[10px] font-black ${
+                  wallet.keys_configured
+                    ? "border-emerald-300/15 bg-emerald-300/[0.06] text-emerald-200"
+                    : "border-amber-300/15 bg-amber-300/[0.06] text-amber-200"
+                }`}
+              >
+                <ShieldCheck className="h-3.5 w-3.5" />
+                {wallet.keys_configured
+                  ? "Binance canlı verisi"
+                  : "API bağlantısı bekleniyor"}
+              </span>
+              {isTestAccount && (
+                <span className="rounded-full border border-violet-300/15 bg-violet-300/[0.06] px-2.5 py-1.5 text-[10px] font-black text-violet-200">
+                  Test hesabı
+                </span>
+              )}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2 sm:min-w-[360px]">
+            <HeroMetric
+              label="Bugün"
+              value={`${dailyWalletPnl >= 0 ? "+" : "−"}${money(
+                Math.abs(dailyWalletPnl),
+              )}`}
+              tone={dailyWalletPnl >= 0 ? "positive" : "negative"}
+              icon={dailyWalletPnl >= 0 ? ArrowUpRight : ArrowDownRight}
+              liveValue={dailyWalletPnl}
+            />
+            <HeroMetric
+              label="Günlük oran"
+              value={
+                dailyWalletPct === null
+                  ? "Veri bekleniyor"
+                  : `${dailyWalletPct >= 0 ? "+" : ""}${dailyWalletPct.toFixed(2)}%`
+              }
+              tone={
+                dailyWalletPct === null
+                  ? undefined
+                  : dailyWalletPct >= 0
+                    ? "positive"
+                    : "negative"
+              }
+              icon={Activity}
+              liveValue={dailyWalletPct}
+            />
+          </div>
+        </div>
+      </section>
+
+      <section
+        aria-label="Hızlı bakiye özeti"
+        className="flex snap-x snap-mandatory gap-3 overflow-x-auto px-1 pb-1 sm:grid sm:grid-cols-2 sm:px-0 lg:grid-cols-4"
+      >
+        <StatCard
+          icon={WalletCards}
+          label="Kullanılabilir"
+          value={money(wallet.available_usd)}
+          detail="Yeni işlemlere açık bakiye"
+          tone="violet"
+          liveValue={wallet.available_usd}
+        />
+        <StatCard
+          icon={Layers3}
+          label="Botlarda"
+          value={money(botValue || wallet.bot_locked_usd)}
+          detail={`${runningBots.length} aktif bot`}
+          tone="purple"
+          liveValue={botValue || wallet.bot_locked_usd}
+        />
+        <StatCard
+          icon={Clock3}
+          label="Emirlerde kilitli"
+          value={money(wallet.locked_usd)}
+          detail="Açık emirlerde bekliyor"
+          tone="neutral"
+          liveValue={wallet.locked_usd}
+        />
+        <StatCard
+          icon={dailyBotPnl >= 0 ? ArrowUpRight : ArrowDownRight}
+          label="Günlük bot sonucu"
+          value={`${dailyBotPnl >= 0 ? "+" : "−"}${money(
+            Math.abs(dailyBotPnl),
+          )}`}
+          detail="Gerçekleşen tur toplamı"
+          tone={dailyBotPnl >= 0 ? "green" : "red"}
+          liveValue={dailyBotPnl}
+        />
+      </section>
+
+      <section className="overflow-hidden rounded-[1.65rem] border border-white/8 bg-[#191a20]">
+        <SectionHeader
+          icon={WalletCards}
+          eyebrow="Canlı cüzdan"
+          title="Cüzdan varlıkları"
+          detail={`${visibleAssets.length} varlık`}
+          count={money(wallet.total_usd)}
+        />
+        {visibleAssets.length ? (
+          <div
+            aria-label="Cüzdan varlık kartları"
+            className="flex snap-x snap-mandatory scroll-px-5 gap-3 overflow-x-auto px-5 pb-5 sm:px-6"
+          >
+            {visibleAssets.map((asset) => (
+              <AssetCard
+                key={asset.asset}
+                asset={asset}
+                prices={prices}
+                onTrade={onOpenTradeModal}
+              />
+            ))}
+          </div>
+        ) : (
+          <EmptyState
+            icon={WalletCards}
+            title="Cüzdan verisi bekleniyor"
+            detail="Bağlantı kurulduğunda varlıkların burada yatay kartlar halinde görünecek."
+          />
+        )}
+      </section>
+
+      <section className="overflow-hidden rounded-[1.65rem] border border-white/8 bg-[#191a20]">
+        <SectionHeader
+          icon={BotIcon}
+          eyebrow="Otomasyon"
+          title="Mevcut botlar"
+          detail="Her botun canlı değeri ve performansı"
+          count={`${runningBots.length} aktif`}
+          countTone={runningBots.length ? "positive" : "neutral"}
+        />
+        {bots.length ? (
+          <div
+            aria-label="Mevcut bot kartları"
+            className="flex snap-x snap-mandatory scroll-px-5 gap-3 overflow-x-auto px-5 pb-5 sm:px-6"
+          >
+            {bots.map((bot) => (
+              <BotCard key={bot.id} bot={bot} onOpen={onOpenBot} />
+            ))}
+          </div>
+        ) : (
+          <EmptyState
+            icon={BotIcon}
+            title="Henüz bot yok"
+            detail="Botlar bölümünde oluşturduğun stratejiler burada hızlı özet olarak görünür."
+          />
+        )}
+      </section>
+
+      <div className="grid gap-5 lg:grid-cols-2">
+        <section className="rounded-[1.65rem] border border-white/8 bg-[#191a20] p-4 sm:p-5">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-[0.18em] text-fuchsia-200">
+                Strateji sonucu
+              </p>
+              <h2 className="mt-1 text-lg font-black text-white">
+                Bot performansı
+              </h2>
+            </div>
+            <PeriodSelector
+              value={selectedPeriod}
+              onChange={setSelectedPeriod}
+            />
+          </div>
+          <div className="mt-5 grid grid-cols-2 gap-3">
+            <PerformanceCard
+              label="Net K/Z"
+              value={`${perfPnl >= 0 ? "+" : "−"}${money(Math.abs(perfPnl))}`}
+              positive={perfPnl >= 0}
+            />
+            <PerformanceCard
+              label="Toplam komisyon"
+              value={money(perfFees)}
+            />
+          </div>
+          <p className="mt-4 flex items-start gap-2 rounded-xl border border-white/7 bg-black/10 p-3 text-[11px] leading-5 text-neutral-500">
+            <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-fuchsia-200" />
+            Kâr/zarar ve komisyonlar seçili dönemde işlem gören botların tamamlanmış
+            tur verilerinden gelir. Devam eden turlar burada gösterilmez.
+          </p>
+        </section>
+
+        <section className="overflow-hidden rounded-[1.65rem] border border-white/8 bg-[#191a20]">
+          <SectionHeader
+            icon={Star}
+            eyebrow="Topluluk verisi"
+            title="En iyi botlar"
+            detail="İncele veya bot oluşturucuya taşı"
+          />
+          {leaderboard.length ? (
+            <div className="flex snap-x snap-mandatory scroll-px-5 gap-3 overflow-x-auto px-5 pb-5 sm:px-6">
+              {leaderboard.map((item, index) => (
+                <LeaderboardCard
+                  key={`${item.symbol}-${index}`}
+                  item={item}
+                  rank={index + 1}
+                  onInspect={() => setSelectedLeaderboardItem(item)}
+                  onApply={() =>
+                    onApplyLeaderboard({
+                      ...(item.params || {}),
+                      symbol: item.symbol,
+                    })
+                  }
+                />
+              ))}
+            </div>
+          ) : (
+            <EmptyState
+              icon={Star}
+              title="Şablon verisi bekleniyor"
+              detail="Global sonuçlar geldiğinde burada görünecek."
+            />
+          )}
+        </section>
+      </div>
+
+      <section className="overflow-hidden rounded-[1.65rem] border border-white/8 bg-[#191a20]">
+        <div className="border-b border-white/8 p-4 sm:p-5">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-[0.18em] text-fuchsia-200">
+                Hesap hareketleri
+              </p>
+              <h2 className="mt-1 text-lg font-black text-white">
+                İşlem geçmişi
+              </h2>
+              <p className="mt-1 text-xs leading-5 text-neutral-500">
+                Binance emirleri ve cüzdan hareketleri
+              </p>
+            </div>
+            <div className="space-y-2">
+              <PeriodSelector
+                value={txPeriod}
+                onChange={(value) => {
+                  setTxPeriod(value);
+                  setTxPage(1);
+                }}
+              />
+              <div className="flex gap-1 overflow-x-auto rounded-xl border border-white/8 bg-black/15 p-1">
+                {(
+                  [
+                    ["all", "Tümü"],
+                    ["buysell", "Alım / Satım"],
+                    ["depositwithdraw", "Yatırım / çekim"],
+                  ] as Array<[TransactionType, string]>
+                ).map(([value, label]) => (
+                  <FilterButton
+                    key={value}
+                    selected={txType === value}
+                    onClick={() => {
+                      setTxType(value);
+                      setTxPage(1);
+                    }}
                   >
-                    {p === "all" ? "Genel" : p === "daily" ? "Günlük" : p === "weekly" ? "Haftalık" : "Aylık"}
-                  </button>
+                    {label}
+                  </FilterButton>
                 ))}
               </div>
             </div>
-
-            <div className="grid grid-cols-2 gap-4 mt-6">
-              <div className="bg-[#1e2026] p-4 rounded-xl border border-neutral-800 text-center">
-                <span className="text-xs text-neutral-400 block mb-1">Dönem Net K/Z</span>
-                <span className={`text-2xl font-black ${perfPnl >= 0 ? 'text-[#0ecb81]' : 'text-[#f6465d]'}`}>
-                  +${perfPnl.toFixed(2)}
-                </span>
-              </div>
-              <div className="bg-[#1e2026] p-4 rounded-xl border border-neutral-800 text-center">
-                <span className="text-xs text-neutral-400 block mb-1">Dönem Toplam Komisyon</span>
-                <span className="text-2xl font-black text-neutral-300">
-                  ${perfFees.toFixed(2)}
-                </span>
-              </div>
-            </div>
-          </div>
-
-          <div className="text-xs text-neutral-400 mt-6 border-t border-neutral-800/80 pt-4 flex items-center gap-1">
-            <Info className="w-3.5 h-3.5 text-[#f0b90b] shrink-0" />
-            <span>K/Z değerleri ödenen komisyonlardan arındırılmamıştır. Platform işlem detayları Binance API ile eş zamanlı senkronize edilir.</span>
           </div>
         </div>
-      </div>
 
-      {/* Transaction History Panel */}
-      <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-6 shadow-xl">
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6 pb-2 border-b border-neutral-800">
-          <div>
-            <h3 className="text-lg font-bold text-white">İşlem Geçmişi</h3>
-            <span className="text-xs text-neutral-400">Hesaba bağlı gerçekleşen tüm Binance emir süreçleri</span>
-          </div>
-
-          <div className="flex flex-wrap gap-2 text-xs">
-            <div className="flex rounded-md p-0.5 bg-neutral-800 border border-neutral-700 gap-1 mr-2">
-              {(["daily", "weekly", "monthly", "all"] as const).map(p => (
-                <button
-                  key={p}
-                  onClick={() => setTxPeriod(p)}
-                  className={`px-2 py-1 font-semibold rounded capitalized transition ${
-                    txPeriod === p ? "bg-[#f0b90b] text-neutral-900 font-bold" : "text-neutral-400 hover:text-white"
-                  }`}
-                >
-                  {p === "all" ? "Genel" : p === "daily" ? "Günlük" : p === "weekly" ? "Haftalık" : "Aylık"}
-                </button>
+        {visibleTrades.length ? (
+          <>
+            <div className="divide-y divide-white/[0.055] sm:hidden">
+              {visibleTrades.map((trade, index) => (
+                <MobileTradeCard
+                  key={`${trade.order_id}-${index}`}
+                  trade={trade}
+                />
               ))}
             </div>
-
-            <div className="flex rounded-md p-0.5 bg-neutral-800 border border-neutral-700 gap-1">
-              {(["all", "buysell", "depositwithdraw"] as const).map(filter => (
-                <button
-                  key={filter}
-                  onClick={() => setTxType(filter)}
-                  className={`px-2 py-1 font-semibold rounded capitalized transition ${
-                    txType === filter ? "bg-[#f0b90b] text-neutral-900 font-bold" : "text-neutral-400 hover:text-white"
-                  }`}
-                >
-                  {filter === "all" ? "Tümü" : filter === "buysell" ? "Alım/Satım" : "Cüzdan"}
-                </button>
-              ))}
+            <div className="hidden overflow-x-auto sm:block">
+              <table className="min-w-full text-left text-sm text-neutral-300">
+                <thead className="bg-black/15 text-[10px] font-black uppercase tracking-wider text-neutral-600">
+                  <tr>
+                    <th className="px-5 py-3">Tarih</th>
+                    <th className="px-5 py-3">Sembol</th>
+                    <th className="px-5 py-3">Tür</th>
+                    <th className="px-5 py-3 text-right">Miktar</th>
+                    <th className="px-5 py-3 text-right">Fiyat</th>
+                    <th className="px-5 py-3 text-right">Toplam</th>
+                    <th className="px-5 py-3 text-right">Komisyon</th>
+                    <th className="px-5 py-3 text-right">Kaynak</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-white/[0.055]">
+                  {visibleTrades.map((trade, index) => (
+                    <DesktopTradeRow
+                      key={`${trade.order_id}-${index}`}
+                      trade={trade}
+                    />
+                  ))}
+                </tbody>
+              </table>
             </div>
-          </div>
-        </div>
+            <TransactionPaginationBar
+              pagination={txPagination}
+              onPageChange={setTxPage}
+            />
+          </>
+        ) : (
+          <EmptyState
+            icon={Clock3}
+            title="Bu filtrede hareket yok"
+            detail="Dönemi veya işlem türünü değiştirerek tekrar bakabilirsin."
+          />
+        )}
+      </section>
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm text-left text-neutral-300">
-            <thead className="bg-[#1e2026] text-xs uppercase text-neutral-400 border-b border-neutral-800">
-              <tr>
-                <th className="px-4 py-3">Tarih</th>
-                <th className="px-4 py-3">Sembol</th>
-                <th className="px-4 py-3">Tür</th>
-                <th className="px-4 py-3 text-right">Miktar</th>
-                <th className="px-4 py-3 text-right">Fiyat</th>
-                <th className="px-4 py-3 text-right">Toplam (Tutar)</th>
-                <th className="px-4 py-3 text-right">Komisyon</th>
-                <th className="px-4 py-3 text-center">Yönetim</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-neutral-800/60 font-mono">
-              {trades
-                .filter(tx => {
-                  if (txType === "all") return true;
-                  if (txType === "buysell") return tx.side === "BUY" || tx.side === "SELL";
-                  return tx.side !== "BUY" && tx.side !== "SELL"; // mock deposits/withdraws
-                })
-                .map((trade: Trade) => {
-                  return (
-                    <tr key={trade.order_id} className="hover:bg-neutral-800/40 transition">
-                      <td className="px-4 py-3 text-neutral-400 text-xs">
-                        {new Date(trade.time).toLocaleDateString()} {new Date(trade.time).toLocaleTimeString(undefined, {hour: '2-digit', minute:'2-digit'})}
-                      </td>
-                      <td className="px-4 py-3 font-bold text-white font-sans">{trade.symbol}</td>
-                      <td className={`px-4 py-3 text-xs font-bold ${trade.side === "BUY" ? "text-[#0ecb81]" : "text-[#f6465d]"}`}>
-                        {trade.side}
-                      </td>
-                      <td className="px-4 py-3 text-right text-neutral-200">{trade.executed_qty}</td>
-                      <td className="px-4 py-3 text-right text-neutral-300">${trade.avg_price.toLocaleString()}</td>
-                      <td className="px-4 py-3 text-right font-sans font-bold text-white">${trade.quote_qty.toLocaleString()}</td>
-                      <td className="px-4 py-3 text-right text-neutral-400 text-xs">
-                        {trade.commission} {trade.commission_asset} (${trade.commission_usd})
-                      </td>
-                      <td className="px-4 py-3 text-center font-sans">
-                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                          trade.is_bot ? "bg-[#f0b90b]/10 text-[#f0b90b]" : "bg-neutral-800 text-neutral-400"
-                        }`}>
-                          {trade.is_bot ? "Bot" : "Manuel"}
-                        </span>
-                      </td>
-                    </tr>
-                  );
-                })}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* Leaderboard Details Modal */}
       {selectedLeaderboardItem && (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-neutral-900 border border-neutral-800 rounded-2xl max-w-lg w-full p-6 space-y-4 shadow-2xl">
-            <div className="flex justify-between items-center border-b border-neutral-800 pb-3">
-              <h3 className="text-lg font-bold text-white">{selectedLeaderboardItem.symbol} DCA Stratejisi</h3>
-              <button 
-                onClick={() => setSelectedLeaderboardItem(null)}
-                className="text-neutral-400 hover:text-white font-bold"
-              >
-                ✕
-              </button>
-            </div>
-            
-            <div className="space-y-3 text-sm text-neutral-300">
-              <div className="grid grid-cols-2 gap-4">
-                <div className="bg-neutral-800 p-3 rounded-xl">
-                  <span className="text-xs text-neutral-400 block mb-1">Net K/Z Oranı</span>
-                  <strong className="text-lg text-[#0ecb81]">+{selectedLeaderboardItem.profit_pct}%</strong>
-                </div>
-                <div className="bg-neutral-800 p-3 rounded-xl">
-                  <span className="text-xs text-neutral-400 block mb-1">Referans Fiyat</span>
-                  <strong className="text-lg text-white">${selectedLeaderboardItem.reference_price}</strong>
-                </div>
-              </div>
+        <LeaderboardDialog
+          item={selectedLeaderboardItem}
+          onClose={() => setSelectedLeaderboardItem(null)}
+          onApply={() => {
+            onApplyLeaderboard({
+              ...(selectedLeaderboardItem.params || {}),
+              symbol: selectedLeaderboardItem.symbol,
+            });
+            setSelectedLeaderboardItem(null);
+          }}
+        />
+      )}
+    </div>
+  );
+}
 
-              <div>
-                <span className="text-xs text-neutral-400 block mb-1">Kullanılan Parametre Tablosu</span>
-                <pre className="bg-[#1e2026] text-xs text-[#f0b90b] rounded-xl p-4 overflow-x-auto border border-neutral-800">
-                  {JSON.stringify(selectedLeaderboardItem.params, null, 2)}
-                </pre>
-              </div>
-            </div>
+function HeroMetric({
+  label,
+  value,
+  tone,
+  icon: Icon,
+  liveValue,
+}: {
+  label: string;
+  value: string;
+  tone?: "positive" | "negative";
+  icon: LucideIcon;
+  liveValue?: unknown;
+}) {
+  return (
+    <div className="rounded-2xl border border-white/8 bg-black/15 p-3.5 backdrop-blur">
+      <p className="flex items-center gap-1.5 text-[9px] font-black uppercase tracking-wider text-neutral-600">
+        <Icon className="h-3.5 w-3.5" />
+        {label}
+      </p>
+      <p
+        className={`mt-2 truncate text-sm font-black ${
+          tone === "positive"
+            ? "text-emerald-300"
+            : tone === "negative"
+              ? "text-red-300"
+              : "text-white"
+        }`}
+        title={value}
+      >
+        {liveValue !== undefined ? (
+          <LiveValue value={liveValue}>{value}</LiveValue>
+        ) : (
+          value
+        )}
+      </p>
+    </div>
+  );
+}
 
-            <div className="flex justify-end gap-3 pt-3 border-t border-neutral-800">
-              <button
-                onClick={() => setSelectedLeaderboardItem(null)}
-                className="px-4 py-2 text-sm font-semibold rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-300 transition"
-              >
-                Kapat
-              </button>
-              <button
-                onClick={() => {
-                  onApplyLeaderboard(selectedLeaderboardItem.params);
-                  setSelectedLeaderboardItem(null);
-                }}
-                className="px-4 py-2 text-sm font-bold rounded-xl bg-[#f0b90b] text-neutral-900 hover:bg-[#c9930a] transition"
-              >
-                Şablonu Uygula
-              </button>
-            </div>
+function StatCard({
+  icon: Icon,
+  label,
+  value,
+  detail,
+  tone,
+  liveValue,
+}: {
+  icon: LucideIcon;
+  label: string;
+  value: string;
+  detail: string;
+  tone: "violet" | "purple" | "neutral" | "green" | "red";
+  liveValue?: unknown;
+}) {
+  const tones = {
+    violet: "border-violet-300/12 text-violet-200",
+    purple: "border-fuchsia-300/12 text-fuchsia-200",
+    neutral: "border-white/8 text-neutral-400",
+    green: "border-emerald-300/12 text-emerald-300",
+    red: "border-red-300/12 text-red-300",
+  };
+  return (
+    <article
+      className={`min-w-[74vw] snap-start rounded-2xl border bg-[#191a20] p-4 sm:min-w-0 ${tones[tone]}`}
+    >
+      <p className="flex items-center gap-2 text-[10px] font-black uppercase tracking-wider text-neutral-600">
+        <Icon className={`h-4 w-4 ${tones[tone].split(" ")[1]}`} />
+        {label}
+      </p>
+      <p className={`mt-3 text-xl font-black ${tones[tone].split(" ")[1]}`}>
+        {liveValue !== undefined ? (
+          <LiveValue value={liveValue}>{value}</LiveValue>
+        ) : (
+          value
+        )}
+      </p>
+      <p className="mt-1 text-[11px] leading-5 text-neutral-500">{detail}</p>
+    </article>
+  );
+}
+
+function SectionHeader({
+  icon: Icon,
+  eyebrow,
+  title,
+  detail,
+  count,
+  countTone = "neutral",
+}: {
+  icon: LucideIcon;
+  eyebrow: string;
+  title: string;
+  detail: string;
+  count?: string;
+  countTone?: "positive" | "neutral";
+}) {
+  return (
+    <header className="flex items-start justify-between gap-4 p-4 sm:p-5">
+      <div className="flex min-w-0 items-center gap-3">
+        <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl border border-fuchsia-300/12 bg-fuchsia-300/[0.055] text-fuchsia-200">
+          <Icon className="h-4 w-4" />
+        </span>
+        <div className="min-w-0">
+          <p className="text-[9px] font-black uppercase tracking-[0.17em] text-fuchsia-200">
+            {eyebrow}
+          </p>
+          <h2 className="mt-0.5 truncate text-base font-black text-white sm:text-lg">
+            {title}
+          </h2>
+          <p className="mt-1 text-[11px] leading-5 text-neutral-500">{detail}</p>
+        </div>
+      </div>
+      {count && (
+        <span
+          className={`shrink-0 rounded-full border px-2.5 py-1.5 text-[10px] font-black ${
+            countTone === "positive"
+              ? "border-emerald-300/15 bg-emerald-300/[0.055] text-emerald-200"
+              : "border-white/8 bg-white/[0.035] text-neutral-400"
+          }`}
+        >
+          {count}
+        </span>
+      )}
+    </header>
+  );
+}
+
+function AssetCard({
+  asset,
+  prices,
+  onTrade,
+}: {
+  key?: string;
+  asset: WalletAsset;
+  prices: HomeTabProps["prices"];
+  onTrade: HomeTabProps["onOpenTradeModal"];
+}) {
+  const pairSymbol = asset.asset === "USDT" ? "USDTTRY" : `${asset.asset}USDT`;
+  const live = prices[pairSymbol];
+  const price =
+    asset.asset === "USDT"
+      ? 1
+      : finite(live?.price ?? asset.price_usd, Number.NaN);
+  const change = Number(live?.change24h);
+  const hasChange = Number.isFinite(change);
+  const total =
+    finite(asset.total) ||
+    finite(asset.free) + finite(asset.locked) + finite(asset.bot_locked);
+  const available = finite(
+    asset.available,
+    Math.max(0, finite(asset.free) - finite(asset.bot_locked)),
+  );
+  const botLocked = finite(asset.bot_locked);
+  const tradable = Boolean(asset.asset);
+  return (
+    <article className="min-w-[82vw] max-w-[320px] snap-start rounded-2xl border border-white/8 bg-gradient-to-br from-white/[0.045] to-transparent p-4 sm:min-w-[300px]">
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <CoinLogo symbol={asset.asset} size={44} />
+          <div>
+            <p className="text-base font-black text-white">{asset.asset}</p>
+            <p className="mt-0.5 text-[10px] font-bold uppercase tracking-wider text-neutral-600">
+              Spot varlık
+            </p>
           </div>
         </div>
-      )}
+        {hasChange ? (
+          <span
+            className={`rounded-full px-2 py-1 text-[10px] font-black ${
+              change >= 0
+                ? "bg-emerald-300/[0.07] text-emerald-300"
+                : "bg-red-300/[0.07] text-red-300"
+            }`}
+          >
+            <LiveValue value={change} toneBySign>
+              {change >= 0 ? "+" : ""}
+              {change.toFixed(2)}%
+            </LiveValue>
+          </span>
+        ) : null}
+      </div>
+
+      <div className="mt-5 grid grid-cols-2 gap-2">
+        <MiniValue
+          label="USD değeri"
+          value={money(asset.total_usd)}
+          liveValue={asset.total_usd}
+        />
+        <MiniValue
+          label="Canlı fiyat"
+          value={
+            Number.isFinite(price)
+              ? `$${displayNumber(price, price < 1 ? 6 : 2)}`
+              : "—"
+          }
+          liveValue={price}
+        />
+        <MiniValue label="Toplam adet" value={displayNumber(total, 6)} />
+        <MiniValue label="Kullanılabilir" value={displayNumber(available, 6)} />
+        <div className="hidden sm:col-span-2 sm:block">
+          <MiniValue
+            label="Botlarda kilitli"
+            value={displayNumber(botLocked, 6)}
+            valueClass="text-fuchsia-200"
+          />
+        </div>
+      </div>
+
+      <div className="mt-4 grid grid-cols-2 gap-2">
+        <button
+          type="button"
+          disabled={!tradable}
+          onClick={() => onTrade(pairSymbol, "BUY")}
+          className="min-h-11 rounded-xl border border-emerald-300/15 bg-emerald-300/[0.06] text-xs font-black text-emerald-200 transition active:scale-[.98] disabled:cursor-not-allowed disabled:opacity-35"
+        >
+          {tradable ? "AL" : "Nakit"}
+        </button>
+        <button
+          type="button"
+          disabled={!tradable}
+          onClick={() => onTrade(pairSymbol, "SELL")}
+          className="min-h-11 rounded-xl border border-red-300/15 bg-red-300/[0.06] text-xs font-black text-red-200 transition active:scale-[.98] disabled:cursor-not-allowed disabled:opacity-35"
+        >
+          {tradable ? "SAT" : "Varlık"}
+        </button>
+      </div>
+    </article>
+  );
+}
+
+function BotCard({
+  bot,
+  onOpen,
+}: {
+  key?: number;
+  bot: Bot;
+  onOpen?: (botId: number) => void;
+}) {
+  const id = Number(bot.bot_id ?? bot.id);
+  const status = String(bot.display_status || bot.status).toLowerCase();
+  const running = ["running", "starting"].includes(status);
+  const pnl = finite(bot.total_pnl_pct);
+  const pair = splitTradingSymbol(bot.symbol);
+  return (
+    <article className="min-w-[84vw] max-w-[340px] snap-start overflow-hidden rounded-2xl border border-white/8 bg-gradient-to-br from-white/[0.045] to-transparent sm:min-w-[320px]">
+      <div className="flex items-start justify-between gap-3 p-4">
+        <div className="flex min-w-0 items-center gap-3">
+          <CoinLogo symbol={bot.symbol} size={46} />
+          <div className="min-w-0">
+            <p className="truncate text-base font-black text-white">
+              {pair.label}
+            </p>
+            <p className="mt-0.5 text-[10px] font-bold uppercase tracking-wider text-neutral-600">
+              Bot #{id}
+            </p>
+          </div>
+        </div>
+        <span
+          className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-black ${
+            running
+              ? "bg-emerald-300/[0.07] text-emerald-300"
+              : status.includes("error")
+                ? "bg-red-300/[0.07] text-red-300"
+                : "bg-white/5 text-neutral-500"
+          }`}
+        >
+          {status === "starting"
+            ? "Başlatılıyor"
+            : running
+              ? "Çalışıyor"
+              : status.includes("error")
+                ? "Hata"
+                : "Durduruldu"}
+        </span>
+      </div>
+      <div className="mx-3 grid grid-cols-2 gap-px overflow-hidden rounded-xl bg-white/6">
+        <MiniValue
+          label="Bot değeri"
+          value={money(bot.current_usd)}
+          liveValue={bot.current_usd}
+          boxed
+        />
+        <MiniValue
+          label="Başlangıç"
+          value={money(bot.budget_usd)}
+          boxed
+        />
+        <MiniValue
+          label="Aktif tur"
+          value={String(
+            Math.max(
+              1,
+              Math.round(
+                finite(bot.cycle_id, finite(bot.total_cycles_completed) + 1),
+              ),
+            ),
+          )}
+          boxed
+        />
+        <MiniValue
+          label="Performans"
+          value={`${pnl >= 0 ? "+" : ""}${pnl.toFixed(2)}%`}
+          valueClass={pnl >= 0 ? "text-emerald-300" : "text-red-300"}
+          liveValue={pnl}
+          boxed
+        />
+      </div>
+      <button
+        type="button"
+        onClick={() => onOpen?.(id)}
+        className="m-3 flex min-h-12 w-[calc(100%-1.5rem)] items-center justify-between rounded-xl border border-fuchsia-300/12 bg-fuchsia-300/[0.045] px-4 text-xs font-black text-fuchsia-100 transition hover:bg-fuchsia-300/[0.07] active:bg-fuchsia-300/[0.1]"
+      >
+        Bot ayrıntısını aç
+        <ArrowRight className="h-4 w-4" />
+      </button>
+    </article>
+  );
+}
+
+function MiniValue({
+  label,
+  value,
+  valueClass = "",
+  boxed = false,
+  liveValue,
+}: {
+  label: string;
+  value: string;
+  valueClass?: string;
+  boxed?: boolean;
+  liveValue?: unknown;
+}) {
+  return (
+    <div className={boxed ? "bg-[#191a20] p-3.5" : "rounded-xl bg-black/15 p-3"}>
+      <p className="text-[9px] font-black uppercase tracking-wider text-neutral-600">
+        {label}
+      </p>
+      <p
+        className={`mt-1.5 truncate text-xs font-black text-white ${valueClass}`}
+        title={value}
+      >
+        {liveValue !== undefined ? (
+          <LiveValue value={liveValue}>{value}</LiveValue>
+        ) : (
+          value
+        )}
+      </p>
+    </div>
+  );
+}
+
+function PerformanceCard({
+  label,
+  value,
+  positive,
+  className = "",
+}: {
+  label: string;
+  value: string;
+  positive?: boolean;
+  className?: string;
+}) {
+  return (
+    <div className={`rounded-2xl border border-white/8 bg-black/15 p-4 ${className}`}>
+      <p className="text-[10px] font-black uppercase tracking-wider text-neutral-600">
+        {label}
+      </p>
+      <p
+        className={`mt-2 truncate text-xl font-black ${
+          positive === true
+            ? "text-emerald-300"
+            : positive === false
+              ? "text-red-300"
+              : "text-white"
+        }`}
+        title={value}
+      >
+        {value}
+      </p>
+    </div>
+  );
+}
+
+function PeriodSelector({
+  value,
+  onChange,
+}: {
+  value: Period;
+  onChange: (period: Period) => void;
+}) {
+  return (
+    <div className="flex max-w-full gap-1 overflow-x-auto rounded-xl border border-white/8 bg-black/15 p-1">
+      {(Object.keys(PERIOD_LABELS) as Period[]).map((period) => (
+        <FilterButton
+          key={period}
+          selected={value === period}
+          onClick={() => onChange(period)}
+        >
+          {PERIOD_LABELS[period]}
+        </FilterButton>
+      ))}
+    </div>
+  );
+}
+
+function FilterButton({
+  selected,
+  onClick,
+  children,
+}: {
+  key?: string;
+  selected: boolean;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`min-h-9 shrink-0 rounded-lg px-3 text-[10px] font-black transition ${
+        selected
+          ? "bg-fuchsia-300/12 text-fuchsia-100"
+          : "text-neutral-500 hover:bg-white/[0.035] hover:text-neutral-200"
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+function LeaderboardCard({
+  item,
+  rank,
+  onInspect,
+  onApply,
+}: {
+  key?: string;
+  item: LeaderboardItem;
+  rank: number;
+  onInspect: () => void;
+  onApply: () => void;
+}) {
+  const pnl = finite(item.profit_pct);
+  const dynamicEnabled = item.dynamic_mode?.enabled === true;
+  const dynamicActive = item.dynamic_mode?.active === true;
+  return (
+    <article className="min-w-[78vw] max-w-[300px] snap-start rounded-2xl border border-white/8 bg-white/[0.025] p-4 sm:min-w-[260px]">
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <CoinLogo symbol={item.symbol} size={40} />
+          <div>
+            <p className="text-sm font-black text-white">{item.symbol}</p>
+            <p className="mt-1 text-[10px] font-bold text-neutral-600">
+              Trailing DCA
+            </p>
+          </div>
+        </div>
+        <span className="grid h-7 w-7 place-items-center rounded-full bg-fuchsia-300/[0.08] text-[10px] font-black text-fuchsia-200">
+          {rank}
+        </span>
+      </div>
+      <p
+        className={`mt-5 text-2xl font-black ${
+          pnl >= 0 ? "text-emerald-300" : "text-red-300"
+        }`}
+      >
+        {pnl >= 0 ? "+" : ""}
+        {pnl.toFixed(2)}%
+      </p>
+      <div className="mt-4 grid grid-cols-2 gap-2">
+        <MiniValue
+          label="Çalışma süresi"
+          value={elapsedSince(item.running_since_iso)}
+        />
+        <MiniValue
+          label="Tamamlanan tur"
+          value={String(Math.max(0, Math.round(finite(item.cycles_count))))}
+        />
+      </div>
+      <div className="mt-2 flex items-center justify-between rounded-xl border border-white/8 bg-black/15 px-3 py-2">
+        <span className="text-[9px] font-black uppercase tracking-wider text-neutral-600">
+          Dinamik mod
+        </span>
+        <span
+          className={`rounded-full px-2 py-1 text-[9px] font-black ${
+            dynamicActive
+              ? "bg-emerald-300/[0.08] text-emerald-200"
+              : dynamicEnabled
+                ? "bg-amber-300/[0.08] text-amber-200"
+                : "bg-white/5 text-neutral-500"
+          }`}
+        >
+          {dynamicActive ? "Aktif" : dynamicEnabled ? "Açık · bekliyor" : "Kapalı"}
+        </span>
+      </div>
+      <div className="mt-4 grid grid-cols-2 gap-2">
+        <button
+          type="button"
+          onClick={onInspect}
+          className="min-h-10 rounded-xl border border-white/8 bg-white/[0.035] text-[10px] font-black text-neutral-300"
+        >
+          İncele
+        </button>
+        <button
+          type="button"
+          onClick={onApply}
+          className="min-h-10 rounded-xl border border-fuchsia-300/15 bg-fuchsia-300/[0.07] text-[10px] font-black text-fuchsia-100"
+        >
+          Botlara taşı
+        </button>
+      </div>
+    </article>
+  );
+}
+
+function MobileTradeCard({ trade }: { key?: string; trade: Trade }) {
+  const side = String(trade.side || "");
+  const buy = side.toUpperCase() === "BUY";
+  const sell = side.toUpperCase() === "SELL";
+  const quantity = finite(trade.executed_qty ?? trade.qty);
+  const price = finite(trade.avg_price ?? trade.price);
+  const total = finite(trade.quote_qty) || quantity * price;
+  return (
+    <article className="px-4 py-3.5">
+      <div className="flex items-center gap-3">
+        <CoinLogo symbol={trade.symbol} size={34} />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <p className="truncate text-sm font-black text-white">
+              {trade.symbol}
+            </p>
+            <span
+              className={`rounded-full px-2 py-0.5 text-[9px] font-black ${
+                buy
+                  ? "bg-emerald-300/[0.07] text-emerald-300"
+                  : sell
+                    ? "bg-red-300/[0.07] text-red-300"
+                    : "bg-white/5 text-neutral-400"
+              }`}
+            >
+              {sideLabel(side)}
+            </span>
+          </div>
+          <p className="mt-1 truncate text-[10px] font-semibold text-neutral-600">
+            {formatTime(trade.time)} · {trade.is_bot ? "Bot" : "Manuel"}
+          </p>
+        </div>
+        <div className="shrink-0 text-right">
+          <p className="text-[9px] font-black uppercase tracking-wider text-neutral-600">
+            Toplam
+          </p>
+          <p className="mt-0.5 font-mono text-xs font-black text-white">
+            {total > 0 ? money(total) : "—"}
+          </p>
+        </div>
+      </div>
+      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 pl-[46px] text-[10px] text-neutral-500">
+        <span>
+          {quantity > 0 ? displayNumber(quantity, 6) : "—"} adet
+        </span>
+        <span className="text-neutral-700">×</span>
+        <span>{price > 0 ? money(price) : "—"}</span>
+        {finite(trade.commission) > 0 && (
+          <>
+            <span className="text-neutral-700">•</span>
+            <span>
+              Komisyon {displayNumber(trade.commission, 4)}{" "}
+              {trade.commission_asset || ""}
+            </span>
+          </>
+        )}
+      </div>
+    </article>
+  );
+}
+
+function TransactionPaginationBar({
+  pagination,
+  onPageChange,
+}: {
+  pagination: TransactionPagination;
+  onPageChange: (page: number) => void;
+}) {
+  if (pagination.totalPages <= 1) return null;
+  return (
+    <nav
+      aria-label="İşlem geçmişi sayfaları"
+      className="flex items-center justify-between gap-3 border-t border-white/8 px-4 py-3 sm:px-5"
+    >
+      <p className="text-[10px] font-semibold text-neutral-600">
+        {pagination.total} işlem · Bölüm {pagination.page}/
+        {pagination.totalPages}
+      </p>
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          disabled={pagination.page <= 1}
+          onClick={() => onPageChange(pagination.page - 1)}
+          aria-label="Önceki işlem bölümü"
+          className="grid h-9 w-9 place-items-center rounded-xl border border-white/8 bg-white/[0.03] text-neutral-300 transition hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-30"
+        >
+          <ChevronLeft className="h-4 w-4" />
+        </button>
+        <span
+          className="min-w-16 text-center text-[10px] font-black text-neutral-400"
+          aria-live="polite"
+        >
+          {pagination.page} / {pagination.totalPages}
+        </span>
+        <button
+          type="button"
+          disabled={pagination.page >= pagination.totalPages}
+          onClick={() => onPageChange(pagination.page + 1)}
+          aria-label="Sonraki işlem bölümü"
+          className="grid h-9 w-9 place-items-center rounded-xl border border-white/8 bg-white/[0.03] text-neutral-300 transition hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-30"
+        >
+          <ChevronRight className="h-4 w-4" />
+        </button>
+      </div>
+    </nav>
+  );
+}
+
+function DesktopTradeRow({ trade }: { key?: string; trade: Trade }) {
+  const side = String(trade.side || "");
+  const buy = side.toUpperCase() === "BUY";
+  const sell = side.toUpperCase() === "SELL";
+  const commissionUsd =
+    (trade as Trade & { commission_usdt?: number }).commission_usd ??
+    (trade as Trade & { commission_usdt?: number }).commission_usdt;
+  const quantity = finite(trade.executed_qty ?? trade.qty);
+  const price = finite(trade.avg_price ?? trade.price);
+  const total = finite(trade.quote_qty) || quantity * price;
+  return (
+    <tr className="transition hover:bg-white/[0.025]">
+      <td className="whitespace-nowrap px-5 py-3.5 text-xs text-neutral-500">
+        {formatTime(trade.time)}
+      </td>
+      <td className="px-5 py-3.5">
+        <span className="flex items-center gap-2 font-black text-white">
+          <CoinLogo symbol={trade.symbol} size={28} />
+          {trade.symbol}
+        </span>
+      </td>
+      <td
+        className={`px-5 py-3.5 text-xs font-black ${
+          buy
+            ? "text-emerald-300"
+            : sell
+              ? "text-red-300"
+              : "text-neutral-400"
+        }`}
+      >
+        {sideLabel(side)}
+      </td>
+      <td className="px-5 py-3.5 text-right font-mono text-xs text-neutral-300">
+        {quantity > 0 ? displayNumber(quantity, 6) : "—"}
+      </td>
+      <td className="px-5 py-3.5 text-right font-mono text-xs text-neutral-300">
+        {price > 0 ? money(price) : "—"}
+      </td>
+      <td className="px-5 py-3.5 text-right text-xs font-black text-white">
+        {total > 0 ? money(total) : "—"}
+      </td>
+      <td className="px-5 py-3.5 text-right text-xs text-neutral-500">
+        {finite(trade.commission) > 0
+          ? `${displayNumber(trade.commission, 4)} ${trade.commission_asset || ""}${finite(commissionUsd) ? ` · ${money(commissionUsd)}` : ""}`
+          : "—"}
+      </td>
+      <td className="px-5 py-3.5 text-right">
+        <span className="rounded-full bg-white/5 px-2 py-1 text-[9px] font-black text-neutral-500">
+          {trade.is_bot ? "Bot" : "Manuel"}
+        </span>
+      </td>
+    </tr>
+  );
+}
+
+function EmptyState({
+  icon: Icon,
+  title,
+  detail,
+}: {
+  icon: LucideIcon;
+  title: string;
+  detail: string;
+}) {
+  return (
+    <div className="mx-4 mb-5 grid min-h-40 place-items-center rounded-2xl border border-dashed border-white/8 bg-black/10 p-6 text-center sm:mx-5">
+      <div className="max-w-sm">
+        <Icon className="mx-auto h-5 w-5 text-fuchsia-200" />
+        <p className="mt-3 text-sm font-black text-white">{title}</p>
+        <p className="mt-1 text-xs leading-5 text-neutral-500">{detail}</p>
+      </div>
+    </div>
+  );
+}
+
+function LeaderboardDialog({
+  item,
+  onClose,
+  onApply,
+}: {
+  item: LeaderboardItem;
+  onClose: () => void;
+  onApply: () => void;
+}) {
+  const pnl = finite(item.profit_pct);
+  const strategy = parseTemplateStrategy(item.params);
+  const referencePrice =
+    optionalNumber(item.reference_price) ?? strategy.referencePrice;
+  const pair = splitTradingSymbol(item.symbol);
+  const closeButtonRef = useRef<HTMLButtonElement | null>(null);
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow;
+    const previousFocus = document.activeElement as HTMLElement | null;
+    const focusFrame = window.requestAnimationFrame(() => closeButtonRef.current?.focus());
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      window.removeEventListener("keydown", onKeyDown);
+      document.body.style.overflow = previousOverflow;
+      previousFocus?.focus();
+    };
+  }, [onClose]);
+  return (
+    <div
+      className="fixed inset-0 z-50 grid place-items-center bg-black/80 p-3 backdrop-blur-sm"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="leaderboard-dialog-title"
+    >
+      <section className="max-h-[calc(100dvh-1.5rem)] w-full max-w-3xl overflow-y-auto rounded-[1.5rem] border border-fuchsia-300/15 bg-[#191a20] shadow-[0_35px_120px_rgba(0,0,0,.65)]">
+        <header className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-white/8 bg-[#191a20]/95 p-4 backdrop-blur sm:p-5">
+          <div className="flex min-w-0 items-center gap-3">
+            <CoinLogo symbol={item.symbol} size={48} eager />
+            <div className="min-w-0">
+              <p className="text-[9px] font-black uppercase tracking-wider text-fuchsia-200">
+                Şablon ayrıntısı
+              </p>
+              <h2
+                id="leaderboard-dialog-title"
+                className="mt-1 truncate text-base font-black text-white"
+              >
+                {pair.label} strateji planı
+              </h2>
+              <p className="mt-1 text-[10px] font-semibold text-neutral-500">
+                {strategy.strategyLabel} · Bot oluşturucuya hazır strateji
+              </p>
+            </div>
+          </div>
+          <button
+            ref={closeButtonRef}
+            type="button"
+            onClick={onClose}
+            aria-label="Şablon penceresini kapat"
+            className="grid h-10 w-10 shrink-0 place-items-center rounded-xl border border-white/8 text-neutral-400 focus:outline-none focus:ring-2 focus:ring-fuchsia-300/70"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </header>
+        <div className="space-y-4 p-4 sm:p-5">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <PerformanceCard
+              label="Net K/Z"
+              value={`${pnl >= 0 ? "+" : ""}${pnl.toFixed(2)}%`}
+              positive={pnl >= 0}
+            />
+            <PerformanceCard
+              label="Referans fiyat"
+              value={templatePrice(referencePrice)}
+            />
+            <PerformanceCard
+              label="Başlangıç dengesi"
+              value={`${templatePct(strategy.basePct)} coin · ${templatePct(strategy.quotePct)} nakit`}
+            />
+          </div>
+
+          <TemplatePlainSummary symbol={pair.base} strategy={strategy} />
+
+          <TemplateAllocation
+            symbol={pair.base}
+            quote={pair.quote}
+            basePct={strategy.basePct}
+            quotePct={strategy.quotePct}
+          />
+
+          <div className="grid gap-3 lg:grid-cols-2">
+            <TemplateGridPlan
+              side="sell"
+              grids={strategy.sellGrids}
+              trail={strategy.upTrail}
+            />
+            <TemplateGridPlan
+              side="buy"
+              grids={strategy.buyGrids}
+              trail={strategy.downTrail}
+            />
+          </div>
+
+          <TemplateProfitCycle strategy={strategy} />
+
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="min-h-11 rounded-xl border border-white/8 text-xs font-black text-neutral-300"
+            >
+              Kapat
+            </button>
+            <button
+              type="button"
+              onClick={onApply}
+              className="min-h-11 rounded-xl border border-fuchsia-300/15 bg-fuchsia-300/[0.08] text-xs font-black text-fuchsia-100"
+            >
+              Bu değerler ile Bot Başlat
+            </button>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function TemplatePlainSummary({
+  symbol,
+  strategy,
+}: {
+  symbol: string;
+  strategy: TemplateStrategy;
+}) {
+  const sellTriggers = strategy.sellGrids
+    .map((grid) => templatePct(grid.triggerPct))
+    .join(", ");
+  const buyTriggers = strategy.buyGrids
+    .map((grid) => templatePct(grid.triggerPct))
+    .join(", ");
+  return (
+    <section className="rounded-2xl border border-fuchsia-300/12 bg-gradient-to-br from-fuchsia-300/[0.065] to-transparent p-4">
+      <p className="flex items-center gap-2 text-xs font-black text-white">
+        <Info className="h-4 w-4 text-fuchsia-200" />
+        Bu şablon ne yapıyor?
+      </p>
+      <p className="mt-2 text-xs leading-6 text-neutral-400">
+        Başlangıçta sermayenin{" "}
+        <strong className="text-fuchsia-100">
+          {templatePct(strategy.basePct)}
+        </strong>{" "}
+        kadarı {symbol},{" "}
+        <strong className="text-sky-200">
+          {templatePct(strategy.quotePct)}
+        </strong>{" "}
+        kadarı base dağılımı için korunur.
+        {strategy.sellGrids.length > 0 &&
+          ` Fiyat referansın ${sellTriggers} üzerine çıktığında satış seviyeleri izlenir.`}
+        {strategy.buyGrids.length > 0 &&
+          ` Fiyat referansın ${buyTriggers} altına indiğinde alış seviyeleri izlenir.`}{" "}
+        Emir, tetik görüldüğü anda değil; trailing dönüşü doğrulandığında
+        uygulanır.
+      </p>
+    </section>
+  );
+}
+
+function TemplateAllocation({
+  symbol,
+  quote,
+  basePct,
+  quotePct,
+}: {
+  symbol: string;
+  quote: string;
+  basePct: number | null;
+  quotePct: number | null;
+}) {
+  const safeBase = Math.max(0, Math.min(100, basePct ?? 0));
+  return (
+    <section className="rounded-2xl border border-white/8 bg-white/[0.025] p-4">
+      <div className="flex items-center justify-between gap-3">
+        <p className="flex items-center gap-2 text-xs font-black text-white">
+          <WalletCards className="h-4 w-4 text-fuchsia-200" />
+          Başlangıç dağılımı
+        </p>
+        <span className="text-[10px] font-black text-neutral-500">
+          Toplam %{finite(basePct) + finite(quotePct)}
+        </span>
+      </div>
+      <div className="mt-3 flex h-3 overflow-hidden rounded-full bg-white/5">
+        <div
+          className="bg-gradient-to-r from-fuchsia-400 to-violet-400"
+          style={{ width: `${safeBase}%` }}
+        />
+        <div className="flex-1 bg-gradient-to-r from-sky-400 to-cyan-300" />
+      </div>
+      <div className="mt-3 grid grid-cols-2 gap-2">
+        <TemplateSmallValue
+          label={`${symbol} · coin`}
+          value={templatePct(basePct)}
+          tone="violet"
+        />
+        <TemplateSmallValue
+          label={`${quote} · base dağılımı`}
+          value={templatePct(quotePct)}
+          tone="blue"
+        />
+      </div>
+    </section>
+  );
+}
+
+function TemplateGridPlan({
+  side,
+  grids,
+  trail,
+}: {
+  side: "buy" | "sell";
+  grids: TemplateGrid[];
+  trail: number | null;
+}) {
+  const sell = side === "sell";
+  const Icon = sell ? ArrowUpRight : ArrowDownRight;
+  return (
+    <section
+      className={`overflow-hidden rounded-2xl border ${
+        sell
+          ? "border-emerald-300/12 bg-emerald-300/[0.025]"
+          : "border-sky-300/12 bg-sky-300/[0.025]"
+      }`}
+    >
+      <header className="border-b border-white/7 p-4">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p
+              className={`flex items-center gap-2 text-xs font-black ${
+                sell ? "text-emerald-200" : "text-sky-200"
+              }`}
+            >
+              <Icon className="h-4 w-4" />
+              {sell ? "Yukarı Satış Gridleri" : "Aşağı Alış Gridleri"}
+            </p>
+            <p className="mt-1 text-[10px] leading-5 text-neutral-500">
+              {sell
+                ? "Tetik sonrası tepeyi izler, geri dönüşte satış yapar."
+                : "Tetik sonrası dibi izler, toparlanmada alış yapar."}
+            </p>
+          </div>
+          <span
+            className={`shrink-0 rounded-full px-2.5 py-1 text-[9px] font-black ${
+              sell
+                ? "bg-emerald-300/[0.07] text-emerald-200"
+                : "bg-sky-300/[0.07] text-sky-200"
+            }`}
+          >
+            {grids.length} grid · Trailing {templatePct(trail)}
+          </span>
+        </div>
+      </header>
+      <div className="space-y-2 p-3">
+        {grids.length ? (
+          grids.map((grid, index) => (
+            <div
+              key={`${side}-${index}`}
+              className="grid grid-cols-[32px_1fr_auto] items-center gap-3 rounded-xl border border-white/7 bg-black/15 p-2.5"
+            >
+              <span
+                className={`grid h-8 w-8 place-items-center rounded-lg text-[10px] font-black ${
+                  sell
+                    ? "bg-emerald-300/[0.07] text-emerald-200"
+                    : "bg-sky-300/[0.07] text-sky-200"
+                }`}
+              >
+                {index + 1}
+              </span>
+              <div className="min-w-0">
+                <p className="text-[9px] font-black uppercase tracking-wider text-neutral-600">
+                  {sell ? "Yükseliş tetiği" : "Düşüş tetiği"}
+                </p>
+                <p className="mt-1 text-xs font-black text-white">
+                  {templatePct(grid.triggerPct)}
+                </p>
+              </div>
+              <div className="text-right">
+                <p className="text-[9px] font-black uppercase tracking-wider text-neutral-600">
+                  {sell ? "Satış miktarı" : "Alış miktarı"}
+                </p>
+                <p className="mt-1 text-xs font-black text-neutral-200">
+                  {templatePct(grid.qtyPct)}
+                </p>
+              </div>
+            </div>
+          ))
+        ) : (
+          <p className="rounded-xl border border-dashed border-white/8 p-4 text-center text-[10px] text-neutral-600">
+            Bu yönde kademe tanımlanmamış.
+          </p>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function TemplateProfitCycle({ strategy }: { strategy: TemplateStrategy }) {
+  return (
+    <section className="overflow-hidden rounded-2xl border border-amber-300/12 bg-amber-300/[0.025]">
+      <header className="border-b border-white/7 p-4">
+        <p className="flex items-center gap-2 text-xs font-black text-amber-100">
+          <Repeat2 className="h-4 w-4" />
+          Kâr sonrası yeniden giriş döngüsü
+        </p>
+        <p className="mt-1 text-[10px] leading-5 text-neutral-500">
+          Satıştan sonra yeniden alış, alıştan sonra yeniden satış koşulları.
+        </p>
+      </header>
+      <div className="grid grid-cols-2 gap-2 p-3 sm:grid-cols-4">
+        <TemplateSmallValue
+          label="Kâr alışı tetiği"
+          value={templatePct(strategy.rebuyTrigger)}
+          tone="blue"
+        />
+        <TemplateSmallValue
+          label="Dipten dönüş"
+          value={templatePct(strategy.rebuyTrail)}
+          tone="violet"
+        />
+        <TemplateSmallValue
+          label="Yeniden satış tetiği"
+          value={templatePct(strategy.resellTrigger)}
+          tone="green"
+        />
+        <TemplateSmallValue
+          label="Tepeden dönüş"
+          value={templatePct(strategy.resellTrail)}
+          tone="amber"
+        />
+      </div>
+    </section>
+  );
+}
+
+function TemplateSmallValue({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone: "violet" | "blue" | "green" | "amber";
+}) {
+  const tones = {
+    violet: "text-fuchsia-200",
+    blue: "text-sky-200",
+    green: "text-emerald-200",
+    amber: "text-amber-200",
+  };
+  return (
+    <div className="rounded-xl border border-white/7 bg-black/15 p-3">
+      <p className="text-[9px] font-black uppercase tracking-wider text-neutral-600">
+        {label}
+      </p>
+      <p className={`mt-1.5 text-xs font-black ${tones[tone]}`}>{value}</p>
     </div>
   );
 }

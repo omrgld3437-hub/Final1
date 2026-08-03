@@ -91,8 +91,35 @@ def test_pending_sell_grid_uses_calc_trigger():
     sells = [p for p in gp if p["type"] == "sell"]
     assert sells[0]["trigger_price"] == 1020.0  # 1000 × 1.02
     assert sells[1]["trigger_price"] == 1040.0  # 1000 × 1.04
+    assert sells[0]["trigger_pct_from_reference"] == 2.0
+    assert sells[1]["trigger_pct_from_reference"] == 4.0
     assert sells[0]["status"] == "bekliyor"
     assert sells[1]["status"] == "bekliyor"
+
+
+def test_current_cycle_reference_wins_over_initial_bot_reference():
+    state = {
+        "initial_reference_price": 90.0,
+        "reference_price": 100.0,
+        "sell_grid_fired": [False, False],
+        "buy_grid_fired": [False, False],
+        "sell_history": [],
+        "buy_history": [],
+    }
+
+    points, _profit, meta = compute_grid_profit_view(
+        state, _manual_cfg(), price=101.0
+    )
+    sells = [point for point in points if point["type"] == "sell"]
+    buys = [point for point in points if point["type"] == "buy"]
+
+    assert meta["ref_display"] == 100.0
+    assert meta["reference_source"] == "cycle_reference_price"
+    assert sells[0]["trigger_price"] == 102.0
+    assert buys[0]["trigger_price"] == 98.0
+    assert sells[0]["trigger_pct_from_reference"] == 2.0
+    assert buys[0]["trigger_pct_from_reference"] == -2.0
+    assert all(point["reference_price"] == 100.0 for point in points)
 
 
 def test_armed_grid_status_tetiklendi_not_anchor_only():

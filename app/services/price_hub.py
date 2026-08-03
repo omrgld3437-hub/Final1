@@ -27,7 +27,13 @@ class PriceHub:
             pass
 
     def get_price(self, symbol: str) -> Optional[float]:
-        """DataHub'dan oku (trading stale eşiği: BinanceAdapter'da 30s). Burada serve-stale yok."""
+        """DataHub'dan yalnızca güncel fiyatı oku.
+
+        UI ve PnL katmanları bu metodu canlı fiyat olarak kullanır. Bayat bir
+        cache değerini canlıymış gibi döndürmek bot değerini ve performansı
+        sessizce bozar; stale değer yalnızca get_price_with_meta ile teşhis
+        amacıyla görülebilir.
+        """
         try:
             from app.services.data_hub import data_hub
 
@@ -37,10 +43,22 @@ class PriceHub:
             d = data_hub.get_price_with_meta(sym)
             if not d:
                 return None
+            if d.get("is_stale"):
+                return None
             p = d.get("price")
             if p is None or float(p) <= 0:
                 return None
             return float(p)
+        except Exception:
+            return None
+
+    def get_price_with_meta(self, symbol: str) -> Optional[Dict]:
+        """Son cache kaydını fiyat yaşı ve stale bilgisiyle döndür."""
+        try:
+            from app.services.data_hub import data_hub
+
+            sym = (symbol or "").strip().upper()
+            return data_hub.get_price_with_meta(sym) if sym else None
         except Exception:
             return None
 

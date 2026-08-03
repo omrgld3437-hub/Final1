@@ -40,6 +40,7 @@ class TransactionHistoryService:
         type_filter: str = "all",
         source_filter: str = "all",
         page: int = 1,
+        per_page: int = PER_PAGE,
     ) -> Dict[str, Any]:
         """
         Paginated transaction list from encrypted file store.
@@ -67,7 +68,7 @@ class TransactionHistoryService:
                 type_filter=tf,
                 source_filter=source_filter,
                 page=page,
-                per_page=TransactionHistoryService.PER_PAGE,
+                per_page=per_page,
             )
 
         if not ledger_has_buysell(account_id):
@@ -88,7 +89,7 @@ class TransactionHistoryService:
             type_filter=eff_tf,
             source_filter=source_filter,
             page=page,
-            per_page=TransactionHistoryService.PER_PAGE,
+            per_page=per_page,
         )
 
     @staticmethod

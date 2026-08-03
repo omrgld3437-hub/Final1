@@ -11,7 +11,7 @@ from app.botengine.dynamic.cycle_manager import _no_trade_overlay, build_snapsho
 from app.services.dynamic_param_score.models import BotParams, FinalAction
 
 
-from tests.dynamic_param_score.factories import make_bot_params, make_context
+from tests.dynamic_param_score.factories import make_bot_params
 
 
 def _mock_decision(**kw):
@@ -51,7 +51,23 @@ async def test_build_snapshot_calls_dps_engine():
         "max_buy_levels": 2,
     }
 
-    cfg = {"symbol": "SOLUSDT", "initial_capital_usdt": 50, "budget_usdt": 50}
+    cfg = {
+        "symbol": "SOLUSDT",
+        "initial_capital_usdt": 50,
+        "budget_usdt": 50,
+        "base_alloc_pct": 50,
+        "quote_alloc_pct": 50,
+        "buy_grids": [
+            {"buy_grid_pct": 1, "buy_qty_pct_of_quote": 50},
+            {"buy_grid_pct": 2, "buy_qty_pct_of_quote": 50},
+        ],
+        "sell_grids": [
+            {"sell_grid_pct": 1, "sell_qty_pct_of_base": 50},
+            {"sell_grid_pct": 2, "sell_qty_pct_of_base": 50},
+        ],
+        "max_buy_levels": 2,
+        "max_base_exposure_frac": 0.80,
+    }
     state = {"bot_id": 1, "cycle_id": 2, "dynamic_snapshot": {}}
 
     with patch("app.botengine.dynamic.cycle_manager.collect_features") as cf, patch(
@@ -68,13 +84,17 @@ async def test_build_snapshot_calls_dps_engine():
     assert call_ctx[1]["bot_context"].run_source == "dynamic_round_start"
     assert snap["stance"]["source"] == "dynamic_param_score"
     assert snap["dps"]["decision_id"] == "d1"
-    assert snap["applied"]["max_base_exposure_frac"] == 0.56
+    assert len(snap["applied"]["buy_grids"]) == 2
+    assert len(snap["applied"]["sell_grids"]) == 2
+    assert snap["applied"]["max_buy_levels"] == 2
+    assert snap["multiplier"]["grid_count_invariant"]["preserved"] is True
+    mock_engine.decision_to_overlay.assert_not_called()
     assert snap["fallbacks"] == []
 
 
 @pytest.mark.asyncio
 async def test_soft_wait_snapshot_stays_active_not_idle():
-    """Soft WAIT → active manual-base fallback (volatility trading, not idle wait)."""
+    """Soft WAIT keeps the ladder shape but pauses buy execution until retry."""
     decision = _mock_decision(
         final_action=FinalAction.WAIT.value,
         deployable=False,
@@ -100,13 +120,15 @@ async def test_soft_wait_snapshot_stays_active_not_idle():
         cmd.return_value = SimpleNamespace(ticker_price=100.0)
         snap = await build_snapshot(state, cfg, price=100.0)
 
-    assert snap["applied"]["buy_grids"] == cfg["buy_grids"]
-    assert snap["applied"].get("buy_disabled") is False
-    assert "manual_base_active_fallback" in snap["fallbacks"]
+    assert len(snap["applied"]["buy_grids"]) == len(cfg["buy_grids"])
+    assert len(snap["applied"]["sell_grids"]) == len(cfg["sell_grids"])
+    assert snap["applied"].get("buy_disabled") is True
+    assert snap["applied"].get("cancel_existing_buy_orders") is True
+    assert "start_blocked_retry_pending" in snap["fallbacks"]
 
 
 @pytest.mark.asyncio
-async def test_hard_safety_wait_snapshot_clears_buys_and_pending():
+async def test_hard_safety_wait_snapshot_preserves_ladder_and_pauses_buys():
     cfg = {
         "symbol": "SOLUSDT",
         "buy_grids": [{"buy_grid_pct": 1, "buy_qty_pct_of_quote": 25}] * 4,
@@ -136,9 +158,10 @@ async def test_hard_safety_wait_snapshot_clears_buys_and_pending():
         cmd.return_value = SimpleNamespace(ticker_price=100.0)
         snap = await build_snapshot(state, cfg, price=100.0)
 
-    assert snap["applied"]["buy_grids"] == []
-    assert snap["applied"].get("max_buy_levels", 0) == 0
+    assert len(snap["applied"]["buy_grids"]) == len(cfg["buy_grids"])
+    assert snap["applied"].get("max_buy_levels", 0) == len(cfg["buy_grids"])
     assert snap["applied"].get("buy_disabled") is True
+    assert snap["applied"].get("cancel_existing_buy_orders") is True
     assert snap.get("round_pending") is True
     assert state.get("_dynamic_round_pending", {}).get("active") is True
 

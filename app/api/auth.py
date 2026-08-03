@@ -72,7 +72,9 @@ security = HTTPBearer(auto_error=False)
 _sessions: dict[str, dict] = {}
 
 # Shared DB session store (auth_sessions table) for multi-worker locality
-SESSION_TTL_DAYS = int(os.environ.get("SESSION_TTL_DAYS", "7"))
+SESSION_TTL_DAYS = max(
+    1, min(int(os.environ.get("SESSION_TTL_DAYS", "3650")), 3650)
+)
 
 
 # Alias: use central token hashing (never log raw token; use short_session_id for logs)

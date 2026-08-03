@@ -3,17 +3,15 @@
 from __future__ import annotations
 
 import math
-from typing import Iterable, List, Optional, Sequence
+from typing import List, Optional, Sequence
 
 from app.services.dynamic_param_score.v6.constants import (
-    BASE_ALLOC_PCT_STEPS,
     GRID_AMOUNT_STEP_PCT,
     GRID_DISTANCE_STEP_PCT,
     DEFAULT_COST_FLOOR_PCT,
     PROFIT_TRIGGER_CODES,
     PROFIT_PCT_TO_CODE,
     TRAILING_CODES,
-    TRAILING_PCT_TO_CODE,
 )
 from app.services.dynamic_param_score.v6.domain.types import GridLevel, V6CatalogProfile
 
@@ -52,7 +50,7 @@ def trailing_code_from_pct(pct: float) -> str:
 
 
 def trailing_pct_from_code(code: str) -> float:
-    return TRAILING_CODES.get(code, TRAILING_CODES["T2"])
+    return TRAILING_CODES.get(code, 0.8)
 
 
 def profit_code_from_pct(pct: float) -> str:
@@ -63,13 +61,13 @@ def profit_code_from_pct(pct: float) -> str:
 
 
 def profit_pct_from_code(code: str) -> float:
-    return PROFIT_TRIGGER_CODES.get(code, PROFIT_TRIGGER_CODES["K10"])
+    return PROFIT_TRIGGER_CODES.get(code, 5.0)
 
 
 def quantize_profit_trigger_pct(pct: float, *, floor_pct: float = 1.0) -> float:
-    step = 0.5
     lo = max(1.0, float(floor_pct or 1.0))
-    return round(max(lo, min(8.0, round(pct / step) * step)), 1)
+    allowed = [value for value in PROFIT_TRIGGER_CODES.values() if value >= lo]
+    return min(allowed, key=lambda value: abs(value - float(pct))) if allowed else lo
 
 
 def min_profit_pct_for_trailing(trailing_pct: float, *, regime_floor: Optional[float] = None) -> float:
@@ -81,7 +79,7 @@ def min_profit_pct_for_trailing(trailing_pct: float, *, regime_floor: Optional[f
 
 def apply_trailing_step_delta(code: str, delta_steps: int) -> str:
     keys = list(TRAILING_CODES.keys())
-    idx = keys.index(code) if code in keys else 2
+    idx = keys.index(code) if code in keys else keys.index("T080")
     idx = max(0, min(len(keys) - 1, idx + delta_steps))
     return keys[idx]
 
@@ -115,7 +113,6 @@ def quantize_profile(profile: V6CatalogProfile) -> V6CatalogProfile:
         p.buy_grids = []
     p.sell_trailing_code = trailing_code_from_pct(trailing_pct_from_code(p.sell_trailing_code))
     p.buy_trailing_code = trailing_code_from_pct(trailing_pct_from_code(p.buy_trailing_code))
-    sell_trail = trailing_pct_from_code(p.sell_trailing_code)
     buy_trail = trailing_pct_from_code(p.buy_trailing_code)
     if p.buyback_after_sell_enabled:
         bp = profit_pct_from_code(p.buyback_trigger_code)

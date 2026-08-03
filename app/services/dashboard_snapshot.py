@@ -18,6 +18,105 @@ logger = logging.getLogger(__name__)
 SNAPSHOT_TASK_TIMEOUT = 3.0
 
 
+def _fetch_bot_cards_fast_sync(account_id: int) -> list[dict[str, Any]]:
+    """Ana ekran için yalnız DB state + süreç-içi canlı fiyat kullanan hızlı kart özeti."""
+    from app.botengine.state_store import load_states_bulk
+    from app.db.base import SessionLocal
+    from app.db.models import Bot
+    from app.services.bot_equity import display_safe_bot_price
+    from app.services.data_hub import data_hub
+
+    db = SessionLocal()
+    try:
+        bots = db.query(Bot).filter(Bot.account_id == account_id).all()
+        states = load_states_bulk(db, [bot.id for bot in bots])
+        cards: list[dict[str, Any]] = []
+        for bot in bots:
+            state = states.get(bot.id) or {}
+            try:
+                config = json.loads(bot.config_json or "{}")
+            except Exception:
+                config = {}
+            initial_usd = float(
+                config.get("budget_usd")
+                or config.get("bot_budget_quote")
+                or config.get("initial_capital_usdt")
+                or 0
+            )
+            symbol = str(bot.symbol or "").strip().upper()
+            current_usd = 0.0
+            if symbol and symbol != "MULTI":
+                try:
+                    price_meta = data_hub.get_price_with_meta(symbol) or {}
+                    price = display_safe_bot_price(
+                        float(price_meta.get("price") or 0)
+                        if not price_meta.get("is_stale")
+                        else 0.0,
+                        state,
+                    )
+                except Exception:
+                    price = None
+                base_balance = float(state.get("base_balance") or 0)
+                quote_balance = float(state.get("quote_balance") or 0)
+                if price is not None and price > 0 and (base_balance > 0 or quote_balance > 0):
+                    current_usd = base_balance * price + quote_balance
+            if current_usd <= 0:
+                current_usd = float(
+                    state.get("current_usd")
+                    or state.get("equity_usdt")
+                    or state.get("equity_usd")
+                    or state.get("total_usd")
+                    or initial_usd
+                    or 0
+                )
+            pnl_usd = current_usd - initial_usd
+            pnl_pct = (pnl_usd / initial_usd * 100.0) if initial_usd > 0 else 0.0
+            cycle_id = int(state.get("cycle_id") or 1)
+            completed_cycles = max(0, cycle_id - 1)
+            for key in ("completed_cycle_dual_pnls", "cycle_pnls"):
+                rows = state.get(key)
+                if isinstance(rows, list):
+                    completed_cycles = max(completed_cycles, len(rows))
+            allocation_done = bool(state.get("initial_allocation_done"))
+            display_status = str(bot.status or "stopped")
+            if display_status.lower() == "running" and not allocation_done:
+                display_status = "starting"
+            cards.append(
+                {
+                    "bot_id": bot.id,
+                    "id": bot.id,
+                    "bot_code": getattr(bot, "bot_code", None) or str(bot.id),
+                    "symbol": symbol,
+                    "config": config,
+                    "status": bot.status or "stopped",
+                    "display_status": display_status,
+                    "initial_allocation_done": allocation_done,
+                    "cycle_id": cycle_id,
+                    "budget_usd": round(initial_usd, 2),
+                    "initial_usd": round(initial_usd, 2),
+                    "current_usd": round(current_usd, 2),
+                    "total_pnl_usd": round(pnl_usd, 2),
+                    "total_pnl_pct": round(pnl_pct, 2),
+                    "daily_pnl_usd": round(
+                        current_usd - float(state.get("daily_ref_usd") or current_usd),
+                        2,
+                    ),
+                    "total_cycles_completed": completed_cycles,
+                    "last_tick_at": state.get("last_tick_at"),
+                }
+            )
+        return cards
+    finally:
+        db.close()
+
+
+async def fetch_bot_cards_fast(account_id: int) -> list[dict[str, Any]]:
+    """Event loop'u bloke etmeden hızlı ana ekran kartlarını üret."""
+    return await asyncio.get_running_loop().run_in_executor(
+        None, _fetch_bot_cards_fast_sync, int(account_id)
+    )
+
+
 async def fetch_prices() -> Dict[str, Any]:
     """Get all prices from DataHub. Sync call wrapped in thread."""
     try:

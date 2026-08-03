@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.config import get_config
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
@@ -318,6 +319,41 @@ def _wallet_snapshot_warn_age_sec() -> float:
         return float(os.getenv("WALLET_SNAPSHOT_WARN_AGE_SEC", "900"))
 
 
+def _recent_balance_sync_ok(db: Session, account_id: int, within_sec: float = 240.0) -> bool:
+    """True when bot engine recently read real Binance balances for this account."""
+    try:
+        row = db.execute(
+            text(
+                """
+                SELECT ts FROM bot_engine_events
+                WHERE account_id = :aid
+                  AND event_type = 'INFO'
+                  AND meta_json LIKE '%"BALANCE_SYNC_OK"%'
+                ORDER BY ts DESC
+                LIMIT 1
+                """
+            ),
+            {"aid": int(account_id)},
+        ).fetchone()
+        if not row or not row[0]:
+            return False
+        ts = row[0]
+        if isinstance(ts, str):
+            s = ts.strip().replace(" ", "T")
+            if s.endswith("Z"):
+                s = s[:-1] + "+00:00"
+            dt = datetime.fromisoformat(s)
+        else:
+            dt = ts
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        age = (datetime.now(timezone.utc) - dt).total_seconds()
+        return age <= max(30.0, float(within_sec))
+    except Exception as e:
+        logger.debug("health_watch balance_sync_ok account_id=%s: %s", account_id, e)
+        return False
+
+
 def _account_wallet_stale_alert(
     db: Optional[Session], account_id: int
 ) -> Optional[Dict[str, Any]]:
@@ -364,6 +400,8 @@ def _account_wallet_stale_alert(
         except Exception:
             pass
         if age_s is not None and age_s < threshold_s:
+            return None
+        if _recent_balance_sync_ok(db, int(account_id)):
             return None
         tmpl = _HEALTH_MESSAGES["WALLET_SNAPSHOT_STALE"]
         meta = {
@@ -934,6 +972,13 @@ def evaluate_bot_health(
     err_code = (state.get("last_error_code") or "").strip()
     ack_at = int(state.get("health_ack_at") or 0)
     err_since = int(state.get("health_error_since") or 0)
+    suppress_recovered_loop_error = (
+        err_code in _RECOVERABLE_LOOP_ERRORS
+        and status == "running"
+        and tick_age is not None
+        and tick_age < warn_thresh
+        and _recent_balance_sync_ok(db, int(bot.account_id))
+    )
     backoff_until = float(state.get("backoff_until") or 0)
     if backoff_until > now and status == "running":
         tmpl = _HEALTH_MESSAGES.get("CONNECTIVITY_DEGRADED")
@@ -962,7 +1007,7 @@ def evaluate_bot_health(
             )
         )
 
-    if err_code:
+    if err_code and not suppress_recovered_loop_error:
         stale_after_ack = ack_at > 0 and (not err_since or err_since <= ack_at)
         if not stale_after_ack:
             if err_code in _RECOVERABLE_LOOP_ERRORS:

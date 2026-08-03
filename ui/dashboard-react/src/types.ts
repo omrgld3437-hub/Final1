@@ -3,7 +3,13 @@ export interface WalletAsset {
   free: number;
   locked: number;
   bot_locked: number;
-  total_usd: number;
+  available?: number;
+  available_usd?: number | null;
+  bot_locked_usd?: number | null;
+  total?: number;
+  price_usd?: number | null;
+  total_usd: number | null;
+  [key: string]: unknown;
 }
 
 export interface WalletState {
@@ -32,6 +38,11 @@ export interface Bot {
   cycle_id?: number;
   last_trade_at?: string;
   config?: Record<string, unknown>;
+  initial_allocation_done?: boolean;
+  health_alert_level?: string | null;
+  health_alerts?: unknown[];
+  last_tick_at?: string | null;
+  created_at?: string | null;
 }
 
 export interface Trade {
@@ -42,7 +53,9 @@ export interface Trade {
   side: string;
   type?: string;
   executed_qty: number;
+  qty?: number;
   avg_price: number;
+  price?: number;
   quote_qty: number;
   commission: number;
   commission_asset: string;
@@ -55,6 +68,12 @@ export interface LeaderboardItem {
   symbol: string;
   profit_pct: number;
   reference_price?: number;
+  cycles_count?: number;
+  running_since_iso?: string | null;
+  dynamic_mode?: {
+    enabled?: boolean;
+    active?: boolean;
+  } | null;
   params?: Record<string, unknown>;
 }
 

@@ -1,0 +1,12 @@
+[Unit]
+Description=Haftalik guvenli sunucu bakimi
+
+[Timer]
+OnCalendar=Sun *-*-* 04:15:00
+Persistent=true
+RandomizedDelaySec=20m
+AccuracySec=5m
+Unit=sunucu-bakim.service
+
+[Install]
+WantedBy=timers.target

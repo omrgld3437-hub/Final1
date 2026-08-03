@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from typing import List, Tuple
 
-from app.services.dynamic_param_score.v6.constants import QTY_TEMPLATES
+from app.services.dynamic_param_score.v6.constants import (
+    QTY_TEMPLATES,
+    SAFE_BUY_TRIM_TEMPLATES,
+)
 from app.services.dynamic_param_score.v6.domain.types import GridLevel, V6CatalogProfile, V6InputContract
 
 
@@ -48,7 +51,11 @@ def validate_and_trim_grids(
             working = working[:-1]
             tpls = QTY_TEMPLATES.get(len(working), [])
             if tpls:
-                amounts = tpls[0]
+                amounts = (
+                    SAFE_BUY_TRIM_TEMPLATES.get(len(working), tpls[0])
+                    if side == "buy"
+                    else tpls[0]
+                )
                 working = [GridLevel(working[i].distance_pct, amounts[i]) for i in range(len(working))]
             adjusted = True
         else:

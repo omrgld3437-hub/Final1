@@ -217,6 +217,8 @@ class BotParams:
     rebuy_trail_pct: Optional[float] = None
     resell_trigger_pct: Optional[float] = None
     resell_trail_pct: Optional[float] = None
+    buy_grid_trail_pct: Optional[float] = None
+    sell_grid_trail_pct: Optional[float] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

@@ -754,6 +754,11 @@ async def worker_loop():
     from app.botengine.orchestrator import ensure_running_bots, cancel_orchestrator_loop
 
     _run_schema_guard()
+    try:
+        _RUN_DIR.mkdir(parents=True, exist_ok=True)
+        (_RUN_DIR / "worker.pid").write_text(str(os.getpid()), encoding="utf-8")
+    except Exception as e:
+        logger.warning("WORKER_PID_WRITE failed: %s", e)
     logger.info("WORKER_START pid=%s", os.getpid())
 
     use_v5_scheduler = os.getenv("BOT_ENGINE_V5_SCHEDULER", "").strip() == "1"
@@ -833,7 +838,7 @@ async def worker_loop():
         asyncio.create_task(_user_stream_background_task())
 
     heartbeat_interval = 60  # log WORKER_HEARTBEAT every 60s to avoid log spam
-    command_poll_interval = 1.0
+    command_poll_interval = 0.5
     loop_count = 0
     _worker_main_loop_count_file = _RUN_DIR / "worker_main_loop_count"
 

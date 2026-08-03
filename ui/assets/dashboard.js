@@ -3972,11 +3972,17 @@ async function initDashboard() {
     
     initParametrelerModalHandlers();
 
-    var tok = localStorage.getItem('token');
-    var usr = localStorage.getItem('user');
-    if (!tok || !usr) {
+    if (window.__ayseroseAuthReady) {
+        var restoredAuth = await window.__ayseroseAuthReady;
+        if (restoredAuth === false) return;
+    }
+    var tok = sessionStorage.getItem('token') || localStorage.getItem('token');
+    var usr = sessionStorage.getItem('user') || localStorage.getItem('user');
+    if (!usr) {
         try { localStorage.removeItem('last_route'); } catch (e) {}
-        window.location.replace('/ui/login.html');
+        // A temporary network failure must not erase or invalidate the session.
+        if (window.isServerUnreachable && window.isServerUnreachable()) return;
+        window.location.replace('/ui/login.html?session_expired=1');
         return;
     }
     
@@ -4076,30 +4082,25 @@ async function initDashboard() {
     try {
         var r = await fetch('/api/boot-id', { cache: 'no-store' });
         if (!r.ok) {
-            if (r.status === 502 || r.status === 503 || r.status === 504) {
-                document.documentElement.style.visibility = '';
-                if (typeof window.showMaintenanceOverlay === 'function') window.showMaintenanceOverlay('server_down', r.status);
-                return;
-            }
             document.documentElement.style.visibility = '';
-            if (typeof window.showMaintenanceOverlay === 'function') window.showMaintenanceOverlay('server_down', r.status);
-            return;
+            console.warn('[dashboard] boot-id check failed; continuing dashboard boot:', r.status);
         }
-        var b = await r.json();
-        var serverBootId = b && b.boot_id ? String(b.boot_id) : '';
-        var localBootId = (function () { try { return localStorage.getItem('boot_id') || ''; } catch (e) { return ''; } })();
-        if (serverBootId && localBootId && serverBootId !== localBootId) {
-            try { localStorage.setItem('boot_id', serverBootId); } catch (e) {}
-            // Toast kaldırıldı: çoklu worker'da her yenilemede farklı boot_id gelir, kullanıcıya "güncellendi" mesajı göstermiyoruz
-            var ok = await authSanityCheckAfterBootChange();
-            if (!ok) return;
-        } else if (!localBootId && serverBootId) {
-            try { localStorage.setItem('boot_id', serverBootId); } catch (e) {}
+        if (r.ok) {
+            var b = await r.json();
+            var serverBootId = b && b.boot_id ? String(b.boot_id) : '';
+            var localBootId = (function () { try { return localStorage.getItem('boot_id') || ''; } catch (e) { return ''; } })();
+            if (serverBootId && localBootId && serverBootId !== localBootId) {
+                try { localStorage.setItem('boot_id', serverBootId); } catch (e) {}
+                // Toast kaldırıldı: çoklu worker'da her yenilemede farklı boot_id gelir, kullanıcıya "güncellendi" mesajı göstermiyoruz
+                var ok = await authSanityCheckAfterBootChange();
+                if (!ok) return;
+            } else if (!localBootId && serverBootId) {
+                try { localStorage.setItem('boot_id', serverBootId); } catch (e) {}
+            }
         }
     } catch (e) {
         document.documentElement.style.visibility = '';
-        if (typeof window.showMaintenanceOverlay === 'function') window.showMaintenanceOverlay('network_error', 0);
-        return;
+        console.warn('[dashboard] boot-id check skipped; continuing dashboard boot:', e);
     }
     document.documentElement.style.visibility = '';
     
@@ -4652,13 +4653,11 @@ async function initDashboard() {
                     return;
                 }
             } catch (e) {
-                if (e && e.status === 401) {
-                    localStorage.removeItem('user');
-                    localStorage.removeItem('token');
-                    try { localStorage.removeItem('boot_id'); } catch (e) {}
-                    try { localStorage.removeItem('last_route'); } catch (e) {}
+                if (e && e.status === 401 && e.error_code === 'SESSION_NOT_FOUND') {
+                    if (window.apiClient && window.apiClient.redirectToLoginOnce) {
+                        window.apiClient.redirectToLoginOnce(true);
+                    }
                     window.intervalRegistry.stop('auth.health');
-                    window.location.replace('/ui/login.html');
                 }
             }
         }, 60000, 'auth.health');

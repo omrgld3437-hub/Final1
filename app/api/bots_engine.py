@@ -10,6 +10,7 @@ import logging
 import os
 import random
 import threading
+import time
 import uuid
 from pathlib import Path
 from collections import OrderedDict
@@ -196,11 +197,14 @@ BINANCE_PUBLIC = "https://api.binance.com"
 
 
 def _get_price_from_datahub(sym_pair: str) -> Optional[float]:
-    """DataHub cache only. No per-symbol Binance REST."""
+    """DataHub cache only; stale data is never a live-price candidate."""
     try:
         from app.services.data_hub import data_hub
 
-        p = data_hub.get_price(sym_pair.upper())
+        meta = data_hub.get_price_with_meta(sym_pair.upper())
+        if not meta or meta.get("is_stale"):
+            return None
+        p = meta.get("price")
         if p is not None and float(p) > 0:
             return float(p)
     except Exception:
@@ -214,7 +218,11 @@ def _resolve_bot_live_price(
     *,
     pnl_price: Optional[float] = None,
 ) -> float:
-    """Hub → DataHub → PnL → reference_price. Grid UI ile aynı sıra."""
+    """Resolve a genuinely live market price.
+
+    A cycle reference and the last trade are accounting anchors, not market
+    prices. They must never be published as ``current_price``.
+    """
     sym_u = (sym or "").strip().upper()
     live = 0.0
     try:
@@ -227,23 +235,226 @@ def _resolve_bot_live_price(
         hub_p = _get_price_from_datahub(sym_u)
         if hub_p is not None and float(hub_p) > 0:
             live = float(hub_p)
-    if live <= 0 and pnl_price is not None:
-        try:
-            pp = float(pnl_price)
-            if pp > 0:
-                live = pp
-        except (TypeError, ValueError):
-            pass
-    if live <= 0 and state:
-        ref = state.get("reference_price")
-        if ref is not None:
-            try:
-                rp = float(ref)
-                if rp > 0:
-                    live = rp
-            except (TypeError, ValueError):
-                pass
     return live
+
+
+def _bot_price_meta(sym: str) -> Dict[str, Any]:
+    """Return display-safe price metadata without promoting stale values."""
+    sym_u = (sym or "").strip().upper()
+    meta = price_hub.get_price_with_meta(sym_u) if sym_u else None
+    if not meta:
+        return {
+            "price": None,
+            "source": None,
+            "is_stale": True,
+            "age_s": None,
+        }
+    ts = _float_or_none(meta.get("ts"))
+    age_s = max(0.0, time.time() - ts) if ts else None
+    price = _float_or_none(meta.get("price"))
+    stale = bool(meta.get("is_stale")) or price is None
+    return {
+        "price": None if stale else price,
+        "source": "data_hub",
+        "is_stale": stale,
+        "age_s": round(age_s, 1) if age_s is not None else None,
+        "last_known_price": price if stale else None,
+    }
+
+
+def _float_or_none(v: Any) -> Optional[float]:
+    if v is None:
+        return None
+    try:
+        n = float(v)
+    except (TypeError, ValueError):
+        return None
+    return n if n > 0 else None
+
+
+def _price_ratio_too_wide(a: Optional[float], b: Optional[float], limit: float = 20.0) -> bool:
+    if not a or not b or a <= 0 or b <= 0:
+        return False
+    lo = min(float(a), float(b))
+    hi = max(float(a), float(b))
+    return lo > 0 and (hi / lo) >= limit
+
+
+def _state_reference_looks_wrong(
+    ref: Optional[float], anchors: List[float], live_price: Optional[float] = None
+) -> bool:
+    if not ref or ref <= 0:
+        return True
+    checks = [p for p in anchors if p and p > 0]
+    if live_price and live_price > 0:
+        checks.append(float(live_price))
+    if not checks:
+        return False
+    return any(_price_ratio_too_wide(ref, p) for p in checks)
+
+
+def _same_symbol_trade_prices(
+    db: Session,
+    bot_id: int,
+    symbol: str,
+    cycle_id: Optional[int] = None,
+    limit: int = 80,
+) -> List[float]:
+    prices: List[float] = []
+    if not symbol or symbol == "MULTI":
+        return prices
+    try:
+        q = db.query(Trade).filter(Trade.bot_id == bot_id, Trade.symbol == symbol)
+        if cycle_id is not None:
+            q = q.filter(Trade.cycle_id == int(cycle_id))
+        rows = q.order_by(Trade.ts.asc(), Trade.id.asc()).limit(limit).all()
+        for row in rows:
+            p = _float_or_none(getattr(row, "price", None))
+            if p:
+                prices.append(p)
+    except Exception as ex:
+        logger.debug("same_symbol_trade_prices bot_id=%s symbol=%s: %s", bot_id, symbol, ex)
+    return prices
+
+
+def _state_ledger_fill_prices(state: Optional[Dict[str, Any]], symbol: str, cycle_id: int) -> List[float]:
+    out: List[float] = []
+    if not state:
+        return out
+    ledger = state.get("cycle_ledger_current") or {}
+    if isinstance(ledger, dict):
+        led_sym = str(ledger.get("symbol") or symbol).upper()
+        if led_sym == symbol and int(state.get("cycle_id") or 1) == int(cycle_id):
+            for fill in ledger.get("fills") or []:
+                if isinstance(fill, dict):
+                    p = _float_or_none(fill.get("price"))
+                    if p:
+                        out.append(p)
+    for block in state.get("cycle_ledger_fills_archive") or []:
+        if not isinstance(block, dict):
+            continue
+        if int(block.get("cycle_id") or 0) != int(cycle_id):
+            continue
+        if str(block.get("symbol") or symbol).upper() != symbol:
+            continue
+        for fill in block.get("fills") or []:
+            if isinstance(fill, dict):
+                p = _float_or_none(fill.get("price"))
+                if p:
+                    out.append(p)
+    return out
+
+
+def _recompute_grid_trigger_arrays_from_ref(
+    state: Dict[str, Any], raw_config: Dict[str, Any], ref: float
+) -> None:
+    if not state or ref <= 0:
+        return
+    buy_grids = raw_config.get("buy_grids") or raw_config.get("down_grids") or []
+    sell_grids = raw_config.get("sell_grids") or raw_config.get("up_grids") or []
+    if isinstance(buy_grids, list) and buy_grids:
+        state["buy_grid_trigger_price"] = [
+            round(ref * (1.0 - float((g or {}).get("buy_grid_pct") or (g or {}).get("trigger_pct") or 0) / 100.0), 10)
+            for g in buy_grids
+            if isinstance(g, dict)
+        ]
+    if isinstance(sell_grids, list) and sell_grids:
+        state["sell_grid_trigger_price"] = [
+            round(ref * (1.0 + float((g or {}).get("sell_grid_pct") or (g or {}).get("trigger_pct") or 0) / 100.0), 10)
+            for g in sell_grids
+            if isinstance(g, dict)
+        ]
+
+
+def _repair_bot_state_reference_if_needed(
+    db: Session,
+    bot: Bot,
+    state: Optional[Dict[str, Any]],
+    raw_config: Dict[str, Any],
+    live_price: Optional[float],
+) -> bool:
+    if not state:
+        return False
+    symbol = (bot.symbol or "").strip().upper()
+    if not symbol or symbol == "MULTI":
+        return False
+    cycle_id = int(state.get("cycle_id") or 1)
+    anchors = _state_ledger_fill_prices(state, symbol, cycle_id)
+    anchors.extend(_same_symbol_trade_prices(db, bot.id, symbol, cycle_id=cycle_id))
+    anchors = [p for p in anchors if p and p > 0]
+    ref = _float_or_none(state.get("reference_price"))
+    if not _state_reference_looks_wrong(ref, anchors, live_price):
+        return False
+    candidate = anchors[0] if anchors else (_float_or_none(live_price) or None)
+    if not candidate:
+        return False
+    candidate = round(float(candidate), 10)
+    old_ref = ref
+    state["reference_price"] = candidate
+    if _state_reference_looks_wrong(_float_or_none(state.get("initial_alloc_price")), anchors, live_price):
+        state["initial_alloc_price"] = candidate
+    for row in state.get("cycle_open_trades") or []:
+        if not isinstance(row, dict):
+            continue
+        if int(row.get("cycle_id") or 0) != cycle_id:
+            continue
+        rp = _float_or_none(row.get("reference_price") or row.get("price"))
+        if _state_reference_looks_wrong(rp, anchors, live_price):
+            row["reference_price"] = candidate
+            row["price"] = candidate
+            row["reference_repaired"] = True
+        break
+    _recompute_grid_trigger_arrays_from_ref(state, raw_config or {}, candidate)
+    state["reference_repair"] = {
+        "old_reference_price": old_ref,
+        "new_reference_price": candidate,
+        "symbol": symbol,
+        "cycle_id": cycle_id,
+        "source": "same_symbol_trade_or_live_price",
+        "ts": datetime.now(timezone.utc).isoformat(),
+    }
+    persisted = False
+    try:
+        save_state(db, bot.id, bot.account_id, state)
+        persisted = True
+        invalidate_live_snapshot_cache(bot.id)
+    except Exception as ex:
+        logger.warning(
+            "BOT_REFERENCE_REPAIR_SAVE_DEFERRED bot_id=%s symbol=%s err=%s",
+            bot.id,
+            symbol,
+            ex,
+        )
+    try:
+        from app.botengine.state_store import append_event
+
+        if persisted:
+            append_event(
+                db,
+                bot.id,
+                bot.account_id,
+                "INFO",
+                f"Tur referans fiyatı onarıldı · {symbol} {old_ref} → {candidate}",
+                {
+                    "error_code": "REFERENCE_PRICE_REPAIRED",
+                    "old_reference_price": old_ref,
+                    "new_reference_price": candidate,
+                    "symbol": symbol,
+                    "cycle_id": cycle_id,
+                },
+                state=state,
+            )
+    except Exception:
+        pass
+    logger.warning(
+        "BOT_REFERENCE_REPAIRED bot_id=%s symbol=%s cycle_id=%s old_ref=%s new_ref=%s",
+        bot.id,
+        symbol,
+        cycle_id,
+        old_ref,
+        candidate,
+    )
+    return True
 
 
 async def _fetch_prices_parallel(
@@ -1915,6 +2126,7 @@ def _enrich_command_start_events(
 async def bots_list(
     request: Request,
     account_id: int = Query(..., description="Account scope"),
+    fast: bool = Query(False, description="Skip expensive health diagnostics"),
     current: dict = Depends(require_auth),
     db: Session = Depends(get_db),
 ):
@@ -1924,48 +2136,56 @@ async def bots_list(
     rows = (
         db.query(Bot).filter(Bot.account_id == account_id).order_by(Bot.id.desc()).all()
     )
-    from app.botengine.health_watch import (
-        _account_wallet_stale_alert,
-        _expected_tick_interval_sec,
-        _parse_last_tick_ts,
-        evaluate_bot_health_lite,
-    )
     from app.botengine.state_store import load_states_bulk, load_states_list_meta
 
     state_meta = load_states_list_meta(db, [r.id for r in rows])
-    state_full = load_states_bulk(db, [r.id for r in rows])
-    # Account-level connectivity bir kez çözülür; bot başına tekrar sorgulanmaz.
-    try:
-        from app.services.binance_connectivity import active_failure
+    state_full: Dict[int, Dict[str, Any]] = {}
+    account_failure = None
+    account_wallet_alert = None
+    if not fast:
+        from app.botengine.health_watch import _account_wallet_stale_alert
 
-        account_failure = active_failure(account_id)
-    except Exception:
-        account_failure = None
-    account_wallet_alert = (
-        None if account_failure else _account_wallet_stale_alert(db, account_id)
-    )
+        state_full = load_states_bulk(db, [r.id for r in rows])
+        # Account-level connectivity bir kez çözülür; bot başına tekrar sorgulanmaz.
+        try:
+            from app.services.binance_connectivity import active_failure
+
+            account_failure = active_failure(account_id)
+        except Exception:
+            account_failure = None
+        account_wallet_alert = (
+            None if account_failure else _account_wallet_stale_alert(db, account_id)
+        )
     out = []
     for r in rows:
         raw = json.loads(r.config_json or "{}")
         meta = state_meta.get(r.id) or {}
         state = state_full.get(r.id) or {}
-        health_alerts = evaluate_bot_health_lite(
-            r,
-            state,
-            account_failure=account_failure,
-            account_wallet_alert=account_wallet_alert,
-        )
-        last_tick_ts = _parse_last_tick_ts(state)
-        if last_tick_ts is not None:
-            now_ts = int(datetime.now(timezone.utc).timestamp())
-            tick_age = now_ts - last_tick_ts
-            crit_thresh = max(300.0, _expected_tick_interval_sec(r) * 12.0)
-            if tick_age < crit_thresh:
-                health_alerts = [
-                    a
-                    for a in health_alerts
-                    if str((a or {}).get("code") or "").upper() != "LOOP_TASK_MISSING"
-                ]
+        health_alerts = []
+        if not fast:
+            from app.botengine.health_watch import (
+                _expected_tick_interval_sec,
+                _parse_last_tick_ts,
+                evaluate_bot_health_lite,
+            )
+
+            health_alerts = evaluate_bot_health_lite(
+                r,
+                state,
+                account_failure=account_failure,
+                account_wallet_alert=account_wallet_alert,
+            )
+            last_tick_ts = _parse_last_tick_ts(state)
+            if last_tick_ts is not None:
+                now_ts = int(datetime.now(timezone.utc).timestamp())
+                tick_age = now_ts - last_tick_ts
+                crit_thresh = max(300.0, _expected_tick_interval_sec(r) * 12.0)
+                if tick_age < crit_thresh:
+                    health_alerts = [
+                        a
+                        for a in health_alerts
+                        if str((a or {}).get("code") or "").upper() != "LOOP_TASK_MISSING"
+                    ]
         has_crit = any(
             (a.get("level") or "").lower() == "critical" for a in health_alerts
         )
@@ -1989,8 +2209,14 @@ async def bots_list(
                 "status": st,
                 "display_status": display_status,
                 "initial_allocation_done": ia_done,
-                "health_alert_level": health_level,
-                "health_alerts": health_alerts,
+                **(
+                    {
+                        "health_alert_level": health_level,
+                        "health_alerts": health_alerts,
+                    }
+                    if not fast
+                    else {}
+                ),
                 "config": raw,
                 "last_tick_at": meta.get("last_tick_at"),
                 "created_at": r.started_at.isoformat() + "Z"
@@ -2004,6 +2230,38 @@ async def bots_list(
 class BotCreateBody(BaseModel):
     account_id: int
     config_json: Optional[Any] = None
+
+
+async def _ensure_binance_ready_for_bot_create(
+    account_id: int, db: Session, rid: str
+) -> None:
+    """Live bot creation must fail fast when Binance signed account access is down."""
+    from app.services.test_account import is_test_account
+
+    if is_test_account(account_id, db):
+        return
+    from app.services.binance_connectivity import (
+        note_binance_failure,
+        note_binance_success,
+        probe_account_binance,
+    )
+
+    ok, code, msg = await probe_account_binance(account_id, db)
+    if ok:
+        note_binance_success(account_id)
+        return
+    err_code = code or "BINANCE_UNREACHABLE"
+    message = msg or "Binance bağlantısı doğrulanamadı."
+    note_binance_failure(account_id, err_code, message, "bot_create", emit_async=False)
+    status_code = 403 if err_code in {"API_UNAUTHORIZED", "ACCOUNT_KEYS_EMPTY", "ACCOUNT_KEYS_DECRYPT_FAIL", "ACCOUNT_KEYS_MISSING"} else 503
+    raise HTTPException(
+        status_code=status_code,
+        detail=_detail_err(
+            err_code,
+            "Binance bağlantısı doğrulanmadan canlı bot oluşturulamaz: " + message,
+            rid,
+        ),
+    )
 
 
 def create_bot_engine_core(
@@ -2029,6 +2287,11 @@ def create_bot_engine_core(
         "param_assistant_decision",
         "param_assistant_confidence",
         "param_assistant",
+        "regime_tag",
+        "dynamic_preview_regime",
+        "display_regime_label",
+        "selected_template_key",
+        "regime_engine",
     ):
         if key in (config_dict or {}):
             stored_cfg[key] = config_dict[key]
@@ -2129,6 +2392,23 @@ async def bots_create(
                     rid,
                 ),
             )
+    await _ensure_binance_ready_for_bot_create(body.account_id, db, rid)
+    _manual_regime, _manual_regime_label = _dynamic_preview_regime_from_config(raw)
+    if not _manual_regime and not _manual_regime_label:
+        try:
+            raw = {
+                **raw,
+                **(
+                    await _calculate_manual_regime_preview(
+                        raw,
+                        symbol=str(raw.get("symbol") or ""),
+                    )
+                ),
+            }
+        except Exception as preview_exc:
+            # Rejim etiketi tanısaldır; geçici piyasa verisi sorunu güvenli bot
+            # oluşturma işlemini engellememelidir. İlk detay isteği yeniden dener.
+            logger.debug("bot create manual regime preview failed: %s", preview_exc)
     try:
         result = create_bot_engine_core(body.account_id, raw, db)
     except MaxBuyLevelsError as e:
@@ -2173,6 +2453,270 @@ _DYN_GRID_OVERLAY_FIELDS = (
     "profit_reentry_drop_pct",
     "profit_reentry_rise_pct",
 )
+
+
+def _dynamic_regime_label(regime: Optional[str], fallback: Optional[str] = None) -> Optional[str]:
+    label = str(fallback or "").strip() or None
+    regime = str(regime or "").strip().upper() or None
+    if label and regime and label.startswith(f"{regime} · "):
+        label = label.split(" · ", 1)[1].strip() or label
+    if regime:
+        try:
+            from app.services.dynamic_param_score.regime_display import (
+                V6_REGIME_LABELS,
+                LEGACY_REGIME_PLAIN,
+            )
+
+            label = (
+                V6_REGIME_LABELS.get(regime)
+                or LEGACY_REGIME_PLAIN.get(regime)
+                or label
+            )
+        except Exception:
+            pass
+    return label
+
+
+def _dynamic_regime_from_template(template: Any) -> Optional[str]:
+    template = str(template or "").strip()
+    if not template.startswith("DPLV6_"):
+        return None
+    parts = template.split("_")
+    if len(parts) >= 2 and parts[1].startswith("R"):
+        return parts[1].split("-", 1)[0].strip().upper() or None
+    return None
+
+
+def _dynamic_preview_regime_from_config(raw: Dict[str, Any]) -> Tuple[Optional[str], Optional[str]]:
+    """First-cycle Dynamic Mode banner: recover the regime the bot was created with."""
+    raw = raw or {}
+    pa = raw.get("param_assistant") if isinstance(raw.get("param_assistant"), dict) else {}
+    regime = (
+        pa.get("regime_tag")
+        or raw.get("regime_tag")
+        or raw.get("dynamic_preview_regime")
+    )
+    label = (
+        pa.get("display_regime_label")
+        or pa.get("market_status_plain")
+        or raw.get("display_regime_label")
+        or raw.get("market_status_plain")
+    )
+    template = str(
+        pa.get("template_key")
+        or raw.get("selected_template_key")
+        or raw.get("template_key")
+        or ""
+    )
+    if not regime:
+        regime = _dynamic_regime_from_template(template)
+    regime = str(regime or "").strip().upper() or None
+    label = str(label or "").strip() or None
+    label = _dynamic_regime_label(regime, label)
+    return regime, label
+
+
+def _dynamic_nested_str(data: Any, *path: str) -> Optional[str]:
+    cur = data
+    for key in path:
+        if not isinstance(cur, dict):
+            return None
+        cur = cur.get(key)
+    if cur is None:
+        return None
+    val = str(cur).strip()
+    return val or None
+
+
+def _dynamic_preview_regime_from_decision_row(row: Any) -> Tuple[Optional[str], Optional[str]]:
+    """Recover a Dynamic Mode start regime from a persisted DPS decision row."""
+    try:
+        data = dict(row or {})
+    except Exception:
+        data = row or {}
+    get = data.get if hasattr(data, "get") else lambda _k, _d=None: _d
+    selected_profile = get("selected_profile_name")
+    regime = str(get("regime_tag") or "").strip().upper() or _dynamic_regime_from_template(selected_profile)
+    telemetry = {}
+    raw_telemetry = get("telemetry_json")
+    if raw_telemetry:
+        try:
+            parsed = json.loads(raw_telemetry)
+            if isinstance(parsed, dict):
+                telemetry = parsed
+        except Exception:
+            telemetry = {}
+    label = (
+        _dynamic_nested_str(telemetry, "v6_display", "display_regime_technical")
+        or _dynamic_nested_str(telemetry, "scenario_alignment", "regime_label")
+        or _dynamic_nested_str(telemetry, "param_pool", "selection_context", "scenario_identity", "name")
+        or _dynamic_nested_str(telemetry, "market_signature", "scenario", "name")
+        or _dynamic_nested_str(telemetry, "v6_display", "regime_label")
+        or _dynamic_nested_str(telemetry, "scenario_alignment", "regime_headline")
+    )
+    return regime or None, _dynamic_regime_label(regime, label)
+
+
+def _dynamic_started_at_ms(bot: Any) -> Optional[int]:
+    started_at = getattr(bot, "started_at", None)
+    if not started_at:
+        return None
+    try:
+        if isinstance(started_at, str):
+            dt = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
+        elif isinstance(started_at, datetime):
+            dt = started_at
+        else:
+            return None
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return int(dt.timestamp() * 1000)
+    except Exception:
+        return None
+
+
+def _dynamic_preview_regime_from_recent_decision(
+    db: Session, bot: Any
+) -> Tuple[Optional[str], Optional[str]]:
+    """Fallback for existing bots whose config lacks the PA regime metadata."""
+    symbol = str(getattr(bot, "symbol", "") or "").strip().upper()
+    if not symbol:
+        return None, None
+    try:
+        started_ms = _dynamic_started_at_ms(bot)
+        row = None
+        if started_ms:
+            row = db.execute(
+                text(
+                    """
+                    SELECT regime_tag, selected_profile_name, telemetry_json
+                    FROM dynamic_param_decisions
+                    WHERE symbol = :symbol
+                      AND run_source = 'param_assistant'
+                      AND timestamp BETWEEN :min_ts AND :max_ts
+                    ORDER BY
+                      CASE WHEN timestamp <= :started_ts THEN 0 ELSE 1 END,
+                      ABS(timestamp - :started_ts) ASC
+                    LIMIT 1
+                    """
+                ),
+                {
+                    "symbol": symbol,
+                    "started_ts": started_ms,
+                    "min_ts": started_ms - 2 * 60 * 60 * 1000,
+                    "max_ts": started_ms + 15 * 60 * 1000,
+                },
+            ).mappings().first()
+        if row is None:
+            row = db.execute(
+                text(
+                    """
+                    SELECT regime_tag, selected_profile_name, telemetry_json
+                    FROM dynamic_param_decisions
+                    WHERE bot_id = :bot_id
+                      AND symbol = :symbol
+                      AND run_source = 'dynamic_round_start'
+                    ORDER BY timestamp DESC
+                    LIMIT 1
+                    """
+                ),
+                {"bot_id": getattr(bot, "id", None), "symbol": symbol},
+            ).mappings().first()
+        if row is None and not started_ms:
+            row = db.execute(
+                text(
+                    """
+                    SELECT regime_tag, selected_profile_name, telemetry_json
+                    FROM dynamic_param_decisions
+                    WHERE symbol = :symbol
+                      AND run_source = 'param_assistant'
+                    ORDER BY timestamp DESC
+                    LIMIT 1
+                    """
+                ),
+                {"symbol": symbol},
+            ).mappings().first()
+        return _dynamic_preview_regime_from_decision_row(row) if row else (None, None)
+    except Exception as e:
+        logger.debug("dynamic preview decision fallback failed bot_id=%s: %s", getattr(bot, "id", None), e)
+        return None, None
+
+
+async def _calculate_manual_regime_preview(
+    raw: Dict[str, Any],
+    *,
+    symbol: str,
+) -> Dict[str, Any]:
+    """Manuel parametreleri değiştirmeden V6 motoruyla yalnız ana rejimi hesapla."""
+    normalized_symbol = str(symbol or raw.get("symbol") or "").strip().upper()
+    if not normalized_symbol or normalized_symbol == "MULTI":
+        return {}
+    from app.services.dynamic_param_score import get_engine
+    from app.services.dynamic_param_score.consumer_policy import (
+        build_param_assistant_context,
+    )
+    from app.services.dynamic_param_score.data_collector import (
+        collect_market_data,
+        default_exchange_constraints,
+        portfolio_from_user_scenario,
+    )
+
+    cfg = _config_for_grid_view(raw or {})
+    budget = float(
+        cfg.get("initial_capital_usdt")
+        or cfg.get("budget_usd")
+        or cfg.get("bot_budget_usdt")
+        or 0
+    )
+    if budget <= 0:
+        return {}
+    base_pct = float(cfg.get("base_alloc_pct") or 0)
+    quote_pct = float(cfg.get("quote_alloc_pct") or max(0.0, 100.0 - base_pct))
+    market = await asyncio.wait_for(
+        collect_market_data(normalized_symbol),
+        timeout=20,
+    )
+    portfolio = portfolio_from_user_scenario(
+        quote_budget_usdt=budget,
+        price=float(market.ticker_price or 0),
+        base_balance_usdt=budget * base_pct / 100.0,
+        quote_balance_usdt=budget * quote_pct / 100.0,
+        base_alloc_frac=base_pct / 100.0,
+    )
+    constraints = default_exchange_constraints(normalized_symbol)
+    context = build_param_assistant_context(
+        budget_usdt=budget,
+        portfolio=portfolio,
+        allow_live=True,
+        allow_no_trade=True,
+    )
+    loop = asyncio.get_running_loop()
+    decision = await loop.run_in_executor(
+        None,
+        lambda: get_engine().calculate_decision(
+            symbol=normalized_symbol,
+            market_data=market,
+            portfolio_state=portfolio,
+            exchange_constraints=constraints,
+            bot_context=context,
+        ),
+    )
+    regime, label = _dynamic_preview_regime_from_decision_row(
+        {
+            "regime_tag": decision.regime_tag,
+            "selected_profile_name": decision.selected_profile_name,
+            "telemetry_json": json.dumps(decision.telemetry or {}, ensure_ascii=False),
+        }
+    )
+    if not regime and not label:
+        return {}
+    return {
+        "regime_tag": regime,
+        "dynamic_preview_regime": regime,
+        "display_regime_label": label or _dynamic_regime_label(regime),
+        "selected_template_key": decision.selected_profile_name,
+        "regime_engine": "dynamic_param_score_v6",
+    }
 
 
 def _effective_grid_config(
@@ -2234,17 +2778,69 @@ async def bots_detail(
     _heal_cycle_opened_at_state(db, bot, state)
     raw = json.loads(bot.config_json or "{}")
     sym = (bot.symbol or "").strip().upper()
+    _stored_regime, _stored_regime_label = _dynamic_preview_regime_from_config(raw)
+    if not _stored_regime and not _stored_regime_label:
+        _stored_regime, _stored_regime_label = (
+            _dynamic_preview_regime_from_recent_decision(db, bot)
+        )
+        preview_patch: Dict[str, Any] = {}
+        if _stored_regime or _stored_regime_label:
+            preview_patch = {
+                "regime_tag": _stored_regime,
+                "dynamic_preview_regime": _stored_regime,
+                "display_regime_label": _stored_regime_label,
+                "regime_engine": "dynamic_param_score_v6",
+            }
+        else:
+            try:
+                preview_patch = await _calculate_manual_regime_preview(
+                    raw,
+                    symbol=sym,
+                )
+            except Exception as preview_exc:
+                logger.debug(
+                    "manual regime preview failed bot_id=%s: %s",
+                    bot.id,
+                    preview_exc,
+                )
+        if preview_patch:
+            raw = {**raw, **preview_patch}
+            try:
+                bot.config_json = json.dumps(raw, ensure_ascii=False)
+                db.commit()
+            except Exception as persist_exc:
+                db.rollback()
+                logger.debug(
+                    "manual regime preview persist failed bot_id=%s: %s",
+                    bot.id,
+                    persist_exc,
+                )
+
+    # Resolve freshness before PnL so a stale cache/last trade cannot become
+    # current_price and corrupt equity/performance.
+    price_meta = _bot_price_meta(sym)
+    from app.services.bot_equity import display_safe_bot_price
+
+    live_price = float(display_safe_bot_price(price_meta.get("price"), state) or 0)
 
     # PnL + live price for UI (current_price, current_usd, daily_pnl_*, price_24h)
     pnl_data: Dict[str, Any] = {}
     try:
-        pnl_data = PnlService.calculate_bot_pnl(db, bot.id, bot.account_id) or {}
+        pnl_data = PnlService.calculate_bot_pnl(
+            db,
+            bot.id,
+            bot.account_id,
+            current_price=live_price or None,
+            price_is_stale=bool(price_meta.get("is_stale")),
+        ) or {}
     except Exception as e:
         logger.debug("bots_detail pnl failed bot_id=%s: %s", bot.id, e)
     if pnl_data.get("error"):
         pnl_data = {}
-    pnl_price = float(pnl_data.get("current_price") or 0) or None
-    live_price = _resolve_bot_live_price(sym, state, pnl_price=pnl_price)
+    if _repair_bot_state_reference_if_needed(db, bot, state, raw, live_price):
+        live_price = float(
+            display_safe_bot_price(_bot_price_meta(sym).get("price"), state) or 0
+        )
 
     # 24h ticker: paralel başlat, MULTI/TRDCA işlemleriyle birlikte çalışsın
     price_24h_change_pct = None
@@ -2259,14 +2855,15 @@ async def bots_detail(
 
             data_hub.pin_symbols([sym])
             t = get_ticker_24h(sym)
-            if not t.get("available"):
-                await data_hub.ensure_symbol_ticker_24h(sym)
-                t = get_ticker_24h(sym)
             pct = t.get("priceChangePercent")
             if pct is not None:
                 out["pct"] = round(float(pct), 2)
             last_p = t.get("lastPrice")
-            if last_p is not None and float(last_p) > 0:
+            if (
+                not t.get("is_stale")
+                and last_p is not None
+                and float(last_p) > 0
+            ):
                 out["price"] = float(last_p)
         except Exception as e:
             logger.debug("bots_detail 24h ticker failed symbol=%s: %s", sym, e)
@@ -2616,13 +3213,32 @@ async def bots_detail(
             if t24_result.get("pct") is not None:
                 price_24h_change_pct = t24_result["pct"]
             if t24_result.get("price") and float(t24_result["price"]) > 0:
-                live_price = float(t24_result["price"])
-                try:
-                    price_hub.update_price(bot.symbol or "", live_price)
-                except Exception:
-                    pass
+                safe_ticker_price = display_safe_bot_price(
+                    t24_result["price"],
+                    state,
+                )
+                if safe_ticker_price is not None:
+                    live_price = safe_ticker_price
+                    try:
+                        price_hub.update_price(bot.symbol or "", live_price)
+                    except Exception:
+                        pass
         except Exception:
             pass
+
+    # A delete request can commit while the ticker/balance awaits above are in
+    # flight. Re-resolve before touching an expired ORM row.
+    bot = (
+        db.query(Bot)
+        .populate_existing()
+        .filter(Bot.id == bot_id)
+        .first()
+    )
+    if not bot:
+        raise HTTPException(
+            status_code=404,
+            detail=_detail_err("NOT_FOUND", "Bot not found", rid),
+        )
 
     # Tek sembol DCA: ilk yüklemede /live ile aynı değerleri döndür (state + anlık fiyat); bakiye/KZ birkaç saniye yanlış görünmesin
     if (
@@ -2677,6 +3293,9 @@ async def bots_detail(
         "reference_display": reference_display,
         "grid_meta": grid_meta,
         "current_price": live_price if live_price > 0 else None,
+        "price_stale": bool(price_meta.get("is_stale")),
+        "price_age_s": price_meta.get("age_s"),
+        "price_source": price_meta.get("source"),
         "current_usd": round(current_usd, 2) if current_usd else None,
         "base_value_usd": round(base_value_usd, 2)
         if base_value_usd is not None
@@ -2837,7 +3456,19 @@ async def bots_detail(
         _gate_chk = _dyn_gate.check_prerequisites(raw or {})
         _dyn_first_cycle_manual = not _dyn_cm.dynamic_overlay_allowed(state or {})
         _dyn_gate_active = _dyn_gate.is_dynamic_mode_active(raw or {})
-        _dyn_snap = None if _dyn_first_cycle_manual else (state or {}).get("dynamic_snapshot")
+        _dyn_raw_snap = (state or {}).get("dynamic_snapshot")
+        _cfg_preview_regime, _cfg_preview_regime_label = _dynamic_preview_regime_from_config(raw or {})
+        _dyn_preview_regime = (
+            _dyn_raw_snap.get("regime") if isinstance(_dyn_raw_snap, dict) else None
+        ) or _cfg_preview_regime
+        _dyn_preview_regime_label = _cfg_preview_regime_label
+        if not _dyn_preview_regime:
+            _decision_regime, _decision_regime_label = _dynamic_preview_regime_from_recent_decision(db, bot)
+            _dyn_preview_regime = _decision_regime
+            _dyn_preview_regime_label = _decision_regime_label
+        elif not _dyn_preview_regime_label:
+            _dyn_preview_regime_label = _dynamic_regime_label(_dyn_preview_regime)
+        _dyn_snap = None if _dyn_first_cycle_manual else _dyn_raw_snap
         _dyn_emergency = (
             (state or {}).get("_dyn_emergency")
             if _dyn_gate.EMERGENCY_CHECKS_ENABLED and not _dyn_first_cycle_manual
@@ -2860,11 +3491,38 @@ async def bots_detail(
                 _dyn_ref.get("_source") if isinstance(_dyn_ref, dict) else None
             )
             or "initial_config",
+            "schema_version": (
+                int(_dyn_ref.get("_schema_version") or 1)
+                if isinstance(_dyn_ref, dict)
+                else 1
+            ),
+            "grid_counts": {
+                "buy": len(_dyn_ref.get("buy_grids") or [])
+                if isinstance(_dyn_ref, dict)
+                else 0,
+                "sell": len(_dyn_ref.get("sell_grids") or [])
+                if isinstance(_dyn_ref, dict)
+                else 0,
+            },
             "meta": _dyn_ref_meta if isinstance(_dyn_ref_meta, dict) else {},
         }
         result["dynamic_mode"] = {
-            "enabled": parse_bool((raw or {}).get("dynamic_mode")),
-            "active": _dyn_gate_active and not _dyn_first_cycle_manual,
+            "enabled": (
+                parse_bool((raw or {}).get("dynamic_mode"))
+                or parse_bool((raw or {}).get("dynamic_mode_v2"))
+            ),
+            "active": (
+                (
+                    _dyn_gate_active
+                    and not _dyn_first_cycle_manual
+                )
+                or (
+                    parse_bool((raw or {}).get("dynamic_mode_v2"))
+                    and isinstance(
+                        (state or {}).get("dynamic_v2_snapshot"), dict
+                    )
+                )
+            ),
             "first_cycle_manual": _dyn_first_cycle_manual,
             "safety_gate": {
                 "ok": _gate_chk.ok,
@@ -2872,11 +3530,32 @@ async def bots_detail(
                 "injected_defaults": _gate_chk.injected_defaults,
             },
             "snapshot": _dyn_snap if isinstance(_dyn_snap, dict) else None,
+            "preview_regime": _dyn_preview_regime,
+            "preview_regime_label": _dyn_preview_regime_label,
             "stance": _dyn_stance if isinstance(_dyn_stance, dict) else None,
             "cycle_hold": _dyn_hold if isinstance(_dyn_hold, dict) and _dyn_hold.get("active") else None,
             "emergency": _dyn_emergency,
             "reference": _dyn_reference,
+            "engine_version": (
+                "V2"
+                if parse_bool((raw or {}).get("dynamic_mode_v2"))
+                else "LEGACY"
+            ),
+            "v2": (
+                (state or {}).get("dynamic_v2_snapshot")
+                if parse_bool((raw or {}).get("dynamic_mode_v2"))
+                else None
+            ),
         }
+        if parse_bool((raw or {}).get("dynamic_mode_v2")):
+            _v2_snapshot = (state or {}).get("dynamic_v2_snapshot")
+            if isinstance(_v2_snapshot, dict):
+                # Existing UI consumes snapshot.applied/baseline. Expose the V2
+                # package through that stable contract while retaining v2 detail.
+                result["dynamic_mode"]["snapshot"] = {
+                    **_v2_snapshot,
+                    "baseline": dict(raw or {}),
+                }
     except Exception as e:
         logger.debug("bots_detail dynamic_mode block failed bot_id=%s: %s", bot.id, e)
 
@@ -2957,13 +3636,34 @@ def _parse_ts_utc(ts: Any) -> Optional[datetime]:
 def _heal_cycle_opened_at_state(
     db: Session, bot: Any, state: Optional[Dict[str, Any]]
 ) -> None:
-    """Tur süresi: cycle_opened_at eksikse heal et; ledger started_at ile hizala; gerekirse kaydet."""
+    """Eksik tur başlangıcını state, gerçekleşen işlem veya bot oturumundan onar."""
     if not state or not isinstance(state, dict):
         return
     from app.botengine.cycle_ledger import heal_cycle_opened_at, sync_ledger_started_at
 
     before = state.get("cycle_opened_at")
     heal_cycle_opened_at(state)
+    if not state.get("cycle_opened_at") and state.get("initial_allocation_done"):
+        cycle_id = int(state.get("cycle_id") or 1)
+        first_trade = (
+            db.query(Trade)
+            .filter(
+                Trade.bot_id == int(bot.id),
+                Trade.account_id == int(bot.account_id),
+                Trade.cycle_id == cycle_id,
+            )
+            .order_by(Trade.ts.asc(), Trade.id.asc())
+            .first()
+        )
+        opened_at = _parse_ts_utc(first_trade.ts) if first_trade is not None else None
+        if opened_at is None and cycle_id == 1:
+            opened_at = _parse_ts_utc(
+                state.get("bot_run_started_at")
+                or _bot_run_started_at_for_api(bot, state, db)
+                or getattr(bot, "started_at", None)
+            )
+        if opened_at is not None:
+            state["cycle_opened_at"] = opened_at.isoformat()
     ledger = state.get("cycle_ledger_current")
     if isinstance(ledger, dict):
         sync_ledger_started_at(state, ledger)
@@ -3002,6 +3702,14 @@ def _backfill_trades_from_ledger_fills(
         except (TypeError, ValueError):
             fee = 0.0
         try:
+            fee_raw = float(
+                f.get("fee_raw")
+                if f.get("fee_raw") is not None
+                else f.get("fee_amount") or 0
+            )
+        except (TypeError, ValueError):
+            fee_raw = 0.0
+        try:
             Ledger.record_trade(
                 db,
                 bot.id,
@@ -3011,6 +3719,8 @@ def _backfill_trades_from_ledger_fills(
                 float(f.get("price") or 0),
                 fee=fee,
                 fee_asset=(f.get("fee_asset") or "USDT"),
+                fee_amount=fee_raw if fee_raw > 0 else None,
+                fee_usdt=fee,
                 slot_id=f.get("slot_id"),
                 order_id=str(oid),
                 client_order_id=f.get("client_order_id"),
@@ -3438,6 +4148,60 @@ def _enrich_trades_reference_prices(
             t["reference_price"] = ref_r
 
 
+def _sanitize_trades_for_bot_symbol(
+    trades: List[Dict[str, Any]], symbol: str
+) -> List[Dict[str, Any]]:
+    sym = (symbol or "").strip().upper()
+    if not sym or sym == "MULTI":
+        return trades
+    out: List[Dict[str, Any]] = []
+    for t in trades or []:
+        tsym = (t.get("symbol") or "").strip().upper()
+        if tsym and tsym != sym:
+            continue
+        out.append(t)
+    return out
+
+
+def _derive_cycle_reference_from_sane_trades(
+    trades: List[Dict[str, Any]],
+    state: Optional[Dict[str, Any]],
+    cycle_id: int,
+    live_price: Optional[float] = None,
+) -> Optional[float]:
+    anchors: List[float] = []
+    for t in sorted(trades or [], key=lambda x: str(x.get("ts") or "")):
+        p = _float_or_none(t.get("price"))
+        if p:
+            anchors.append(p)
+    if state:
+        anchors.extend(_state_ledger_fill_prices(state, str(state.get("symbol") or ""), int(cycle_id)))
+    if live_price and live_price > 0:
+        anchors.append(float(live_price))
+    anchors = [p for p in anchors if p and p > 0]
+    if not anchors:
+        return None
+    return round(float(anchors[0]), 10)
+
+
+def _repair_trade_reference_prices(
+    trades: List[Dict[str, Any]],
+    state: Optional[Dict[str, Any]],
+    cycle_id: int,
+    live_price: Optional[float] = None,
+) -> None:
+    candidate = _derive_cycle_reference_from_sane_trades(trades, state, cycle_id, live_price)
+    if not candidate:
+        return
+    anchors = [candidate]
+    if live_price and live_price > 0:
+        anchors.append(float(live_price))
+    for t in trades or []:
+        rp = _float_or_none(t.get("reference_price"))
+        if rp is None or _state_reference_looks_wrong(rp, anchors, live_price):
+            t["reference_price"] = candidate
+
+
 def _hydrate_trades_from_cycle_ledger(
     trades: List[Dict[str, Any]],
     state: Optional[Dict[str, Any]],
@@ -3641,7 +4405,8 @@ def _cycle_open_to_trade_dicts(
 def _build_live_snapshot_from_state(
     bot: Bot, state: Optional[Dict[str, Any]], db: Session
 ) -> dict:
-    """Build live snapshot from bot_engine_state + Bot only. No historical DB. Response < 15ms CPU."""
+    """Build the freshest single-bot snapshot; one-time repair may query the first trade."""
+    _heal_cycle_opened_at_state(db, bot, state)
     status = (bot.status or "stopped").lower()
     raw = json.loads(bot.config_json or "{}")
     initial_capital = float(
@@ -3682,29 +4447,12 @@ def _build_live_snapshot_from_state(
         else:
             last_error_code = None
 
-    last_price: Optional[float] = None
-    price_source: Optional[str] = None
     sym = (bot.symbol or "").strip().upper()
-    try:
-        p = price_hub.get_price(sym)
-        if p is not None and float(p) > 0:
-            last_price = float(p)
-            price_source = "price_hub"
-    except Exception:
-        pass
-    if last_price is None and sym:
-        hub_p = _get_price_from_datahub(sym)
-        if hub_p is not None and float(hub_p) > 0:
-            last_price = float(hub_p)
-            price_source = "data_hub"
-    if last_price is None and state:
-        ref = state.get("reference_price")
-        if ref is not None:
-            try:
-                last_price = float(ref)
-                price_source = "reference_price"
-            except (TypeError, ValueError):
-                pass
+    price_meta = _bot_price_meta(sym)
+    from app.services.bot_equity import display_safe_bot_price
+
+    last_price = display_safe_bot_price(price_meta.get("price"), state)
+    price_source = price_meta.get("source")
 
     equity: Optional[float] = 0.0
     equity_unavailable = False
@@ -3751,7 +4499,7 @@ def _build_live_snapshot_from_state(
         if _dr is not None and float(_dr) > 0:
             daily_ref_usd = float(_dr)
 
-    stale = False
+    stale = bool(price_meta.get("is_stale"))
     if last_tick_at is not None:
         now_ts = int(datetime.now(timezone.utc).timestamp())
         if (now_ts - last_tick_at) > 30:
@@ -3777,6 +4525,8 @@ def _build_live_snapshot_from_state(
         "last_tick_at": last_tick_at,
         "last_error_code": last_error_code,
         "price_source": price_source,
+        "price_stale": bool(price_meta.get("is_stale")),
+        "price_age_s": price_meta.get("age_s"),
         "initial_capital": initial_capital,
         "daily_pnl_usd": round(daily_pnl_usd, 2) if daily_pnl_usd is not None else None,
         "daily_pnl_pct": round(daily_pnl_pct, 2) if daily_pnl_pct is not None else None,
@@ -3854,7 +4604,14 @@ async def bots_grid_points(
     sym = (bot.symbol or "").strip().upper()
     is_trdca = strategy_id == "trdca_pro" or sym == "MULTI"
 
-    live_price = _resolve_bot_live_price(sym, state)
+    price_meta = _bot_price_meta(sym)
+    from app.services.bot_equity import display_safe_bot_price
+
+    live_price = float(display_safe_bot_price(price_meta.get("price"), state) or 0)
+    if not is_trdca and _repair_bot_state_reference_if_needed(db, bot, state, raw, live_price):
+        live_price = float(
+            display_safe_bot_price(_resolve_bot_live_price(sym, state), state) or 0
+        )
 
     config_for_grid = _effective_grid_config(raw, state)
     grid_points: List[Dict[str, Any]] = []
@@ -3914,6 +4671,8 @@ async def bots_grid_points(
         "meta": meta,
         "symbol": bot.symbol,
         "current_price": round(live_price, 8) if live_price > 0 else None,
+        "price_stale": bool(price_meta.get("is_stale")),
+        "price_age_s": price_meta.get("age_s"),
         "state": {
             "base_balance": state.get("base_balance"),
             "quote_balance": state.get("quote_balance"),
@@ -3921,6 +4680,8 @@ async def bots_grid_points(
             "buy_history": state.get("buy_history"),
             "mode": state.get("mode"),
             "cycle_id": state.get("cycle_id"),
+            "cycle_grid_side": meta.get("cycle_grid_side")
+            or state.get("cycle_grid_side"),
         },
         "config": config_for_grid,
         "request_id": rid,
@@ -3994,7 +4755,7 @@ async def bots_live(
     current: dict = Depends(require_auth),
     db: Session = Depends(get_db),
 ):
-    """Live snapshot only: status, pnl_pct, equity, last_price, last_tick_at. TTL cache 2s. No historical DB. < 15ms CPU."""
+    """Live snapshot: always read current state; dashboard batch keeps its short cache."""
     rid = _request_id(request)
     resolved_account_id = _resolve_account_id(account_id, account_code, db)
     bot = _resolve_bot(bot_id, resolved_account_id, current, db)
@@ -4003,13 +4764,8 @@ async def bots_live(
             status_code=404, detail=_detail_err("NOT_FOUND", "Bot not found", rid)
         )
 
-    cached = _live_snapshot_get_cached(bot.id)
-    if cached is not None:
-        return cached
-
     state = load_state(db, bot.id)
     data = _build_live_snapshot_from_state(bot, state, db)
-    _live_snapshot_set_cached(bot.id, data)
     return data
 
 
@@ -4877,7 +5633,9 @@ async def bots_start(
             from app.services.data_hub import data_hub
 
             data_hub.pin_symbols([sym])
-            await data_hub.ensure_symbol_price(sym)
+            # Fiyat ısınması komut kuyruğunu bekletmemeli. Worker aynı sembolü
+            # ilk tick'te güvenli biçimde doğrular; web yalnızca önden ısıtır.
+            asyncio.create_task(data_hub.ensure_symbol_price(sym))
         except Exception as e:
             logger.debug("bots_start pin_price bot_id=%s sym=%s: %s", bot.id, sym, e)
     try:
@@ -5031,6 +5789,40 @@ def _delete_convert_error_skippable(e: Exception, is_test_account: bool) -> bool
     )
 
 
+async def _wallet_for_bot_delete(keys, get_wallet):
+    """Deletion may wait through a short Binance account endpoint wobble."""
+    last_error: Optional[Exception] = None
+    for attempt in range(3):
+        try:
+            return await get_wallet(keys, tag=f"bot_delete_convert_{attempt + 1}")
+        except Exception as exc:
+            last_error = exc
+            if attempt >= 2:
+                break
+            await asyncio.sleep(0.4 * (attempt + 1))
+    assert last_error is not None
+    raise last_error
+
+
+async def _wait_for_stop_command(
+    db: Session, command_id: int, timeout_sec: float = 3.0
+) -> str:
+    """Let the worker cancel its in-memory bot loop before runtime rows are removed."""
+    deadline = time.monotonic() + max(0.0, timeout_sec)
+    status = "PENDING"
+    while time.monotonic() < deadline:
+        row = db.execute(
+            text("SELECT status FROM bot_engine_commands WHERE id = :id"),
+            {"id": command_id},
+        ).fetchone()
+        db.commit()
+        status = str(row[0] if row else "MISSING").upper()
+        if status in {"DONE", "ERROR", "MISSING"}:
+            return status
+        await asyncio.sleep(0.15)
+    return status
+
+
 async def _sell_symbol_base_on_delete(
     db: Session, account_id: int, bot_id: int, symbol: str
 ) -> None:
@@ -5072,7 +5864,7 @@ async def _sell_symbol_base_on_delete(
     async with SpotEngine(keys) as engine:
         flt = await engine._get_symbol_filters(sym)
         base_asset = (flt.get("base_asset") or sym.replace("USDT", "")).upper()
-        wallet_data = await get_wallet(keys, tag="bot_delete_convert")
+        wallet_data = await _wallet_for_bot_delete(keys, get_wallet)
         balances = wallet_data.get("balances") or []
         base_qty = 0.0
         for b in balances:
@@ -5144,13 +5936,17 @@ async def bots_delete(
 
     is_test = is_test_account(bot.account_id, db)
     delete_account_id = bot.account_id
+    stop_command_id: Optional[int] = None
+    conversion_completed = False
     if convert_base and is_test:
         logger.info("bots_delete skip convert (test/paper account) bot_id=%s", bot.id)
         convert_base = False
     if convert_base:
         bot.status = "stopped"
         db.commit()
-        _insert_engine_command(db, bot.account_id, bot.id, "STOP", request_id=rid)
+        stop_command_id = _insert_engine_command(
+            db, bot.account_id, bot.id, "STOP", request_id=rid
+        )
         symbol = (bot.symbol or "BTCUSDT").upper().strip()
         raw = json.loads(bot.config_json or "{}")
         quote_asset = (raw.get("quote_asset") or "USDT").strip().upper()
@@ -5209,6 +6005,7 @@ async def bots_delete(
         elif symbol and len(symbol) > 4 and symbol.endswith(("USDT", "FDUSD", "BUSD")):
             try:
                 await _sell_symbol_base_on_delete(db, bot.account_id, bot.id, symbol)
+                conversion_completed = True
             except Exception as e:
                 logger.warning(
                     "bots_delete convert_base_to_quote failed bot_id=%s err=%s",
@@ -5234,7 +6031,13 @@ async def bots_delete(
             await invalidate_open_orders_cache(bot.account_id)
         except Exception:
             pass
-    _insert_engine_command(db, bot.account_id, bot.id, "STOP", request_id=rid)
+    if stop_command_id is None:
+        bot.status = "stopped"
+        db.commit()
+        stop_command_id = _insert_engine_command(
+            db, bot.account_id, bot.id, "STOP", request_id=rid
+        )
+    await _wait_for_stop_command(db, stop_command_id)
     invalidate_live_snapshot_cache(bot.id)
     await delete_bot_fully(bot.id, db)
     try:
@@ -5243,7 +6046,16 @@ async def bots_delete(
         invalidate_dashboard_summary_cache(delete_account_id)
     except Exception:
         pass
-    return {"ok": True, "bot_id": bot_id, "request_id": rid}
+    return {
+        "ok": True,
+        "bot_id": bot_id,
+        "request_id": rid,
+        "message": (
+            "Bot silindi; base varlık quote bakiyeye dönüştürüldü."
+            if conversion_completed
+            else "Bot silindi; mevcut coin bakiyesi cüzdanda korundu."
+        ),
+    }
 
 
 @router.post("/{bot_id}/update-config")
@@ -5346,6 +6158,24 @@ async def bots_health(
             for a in alerts
             if str((a or {}).get("code") or "").upper() != "LOOP_TASK_MISSING"
         ]
+    display_last_error_code = state.get("last_error_code")
+    if display_last_error_code:
+        active_codes = {
+            str((a or {}).get("code") or "").upper()
+            for a in alerts
+            if isinstance(a, dict)
+        }
+        if (
+            str(display_last_error_code).upper()
+            in {
+                "BOT_LOOP_TOPLEVEL_EXCEPTION",
+                "BOT_LOOP_TRDCA_EXCEPTION",
+                "BOT_TICK_EXCEPTION",
+                "RUN_ACTION_EXCEPTION",
+            }
+            and not active_codes
+        ):
+            display_last_error_code = None
     conn_fail = None
     connectivity_ok = True
     try:
@@ -5369,7 +6199,7 @@ async def bots_health(
         "last_tick_at": last_tick,
         "tick_age_s": round(tick_age, 1) if tick_age is not None else None,
         "tick_interval_s": interval_s,
-        "last_error_code": state.get("last_error_code"),
+        "last_error_code": display_last_error_code,
         "health_ack_at": int(state.get("health_ack_at") or 0),
         "engine_log_dismiss_before_id": dismiss_id,
         "connectivity_failure": conn_fail,
@@ -5989,6 +6819,21 @@ def _enrich_trades_grid_detail(
             "extreme_price": round(extreme, 8) if extreme is not None else None,
             "execution_price": round(exec_p, 8) if exec_p is not None else None,
             "reference_price": round(ref_p, 8) if ref_p is not None else None,
+            "extreme_pct_from_reference": round(
+                (float(extreme) / ref_p - 1.0) * 100.0, 4
+            )
+            if extreme is not None and ref_p
+            else None,
+            "completion_pct_from_reference": round(
+                (float(exec_p) / ref_p - 1.0) * 100.0, 4
+            )
+            if exec_p is not None and ref_p
+            else None,
+            "completion_pct_from_extreme": round(
+                (float(exec_p) / float(extreme) - 1.0) * 100.0, 4
+            )
+            if exec_p is not None and extreme
+            else None,
             "average_buy_price": round(avg_buy_p, 8) if avg_buy_p is not None else None,
             "average_buy_quote_usdt": round(float(avg_buy_quote), 2)
             if avg_buy_quote is not None
@@ -6456,6 +7301,20 @@ def _enrich_trades_close_detail(
             "execution_price": round(float(fill_p), 8)
             if fill_p is not None
             else (round(float(trail_exec_p), 8) if trail_exec_p is not None else None),
+            "completion_pct_from_cost": round(
+                (float(exec_p) / float(avg_cost) - 1.0) * 100.0, 4
+            )
+            if exec_p is not None and avg_cost is not None and float(avg_cost) > 0
+            else None,
+            "completion_pct_from_extreme": round(
+                (float(exec_p) / float(tepe if trade_type == "profit_exit" else dip) - 1.0)
+                * 100.0,
+                4,
+            )
+            if exec_p is not None
+            and (tepe if trade_type == "profit_exit" else dip) is not None
+            and float(tepe if trade_type == "profit_exit" else dip) > 0
+            else None,
             "trail_execution_price": round(float(trail_exec_p), 8)
             if trail_exec_p is not None
             else None,
@@ -6504,6 +7363,12 @@ async def bots_trades(
     if state:
         _heal_cycle_opened_at_state(db, bot, state)
     sym = (bot.symbol or "").upper()
+    raw_config_for_repair = json.loads(bot.config_json or "{}")
+    live_price_for_repair = _resolve_bot_live_price(sym, state) if state else None
+    if state:
+        _repair_bot_state_reference_if_needed(
+            db, bot, state, raw_config_for_repair, live_price_for_repair
+        )
     extra: List[Dict[str, Any]] = []
     if cycle_id is not None and ct != "trb" and state:
         cur_cid = int(state.get("cycle_id") or 1)
@@ -6532,10 +7397,12 @@ async def bots_trades(
                 db, bot.id, bot.account_id, limit=limit, cycle_id=cycle_id
             )
             trades = _merge_cycle_trades(trades, extra)
+        trades = _sanitize_trades_for_bot_symbol(trades, sym)
         if state and int(state.get("cycle_id") or 1) == int(cycle_id) and not trades:
             synth = _synthetic_trades_from_state(state, sym, int(cycle_id))
             if synth:
                 trades = _merge_cycle_trades(trades, synth)
+                trades = _sanitize_trades_for_bot_symbol(trades, sym)
     if cycle_id is not None and ct == "trb":
         cycle_summary = {
             "cycle_type": "trb",
@@ -6624,12 +7491,64 @@ async def bots_trades(
             "cycle_type": "Açık tur"
             if is_open_cycle and cycle_entry is None
             else "dca",
+            "is_open": bool(is_open_cycle),
+            "completed": not bool(is_open_cycle),
             "duration_sec": round(duration_sec, 1) if duration_sec else None,
             "trade_count": sum(1 for t in trades if _is_cycle_trades_panel_row(t)),
             "pnl_usdt": round(pnl_f, 2) if pnl_f is not None else None,
         }
         if started_at_iso:
             cycle_summary["started_at"] = started_at_iso
+        if completed_snapshot and completed_snapshot.get("completed_at"):
+            cycle_summary["completed_at"] = completed_snapshot.get("completed_at")
+        if completed_snapshot and isinstance(
+            completed_snapshot.get("cycle_parameters"), dict
+        ):
+            cycle_summary["cycle_parameters"] = completed_snapshot.get(
+                "cycle_parameters"
+            )
+            cycle_summary["dynamic_regime"] = completed_snapshot.get(
+                "dynamic_regime"
+            )
+        elif not is_open_cycle and (
+            int(cycle_id) == 1
+            or not parse_bool(raw_config_for_repair.get("dynamic_mode"))
+        ):
+            # Dinamik mod ilk turda bilinçli olarak devreye girmez; dolayısıyla
+            # eski Tur 1 kayıtlarında snapshot bulunmayabilir. Tur 1'in gerçek
+            # parametreleri botun değişmez başlangıç yapılandırmasıdır. Sabit
+            # modda da bütün turlar aynı yapılandırmayı kullanır.
+            cycle_summary["cycle_parameters"] = raw_config_for_repair
+            cycle_summary["parameter_source"] = (
+                "initial_cycle_config"
+                if int(cycle_id) == 1
+                else "static_bot_config"
+            )
+        elif is_open_cycle and state:
+            dynamic_snapshot = state.get("dynamic_snapshot")
+            current_parameters = None
+            current_regime = None
+            if isinstance(dynamic_snapshot, dict):
+                snapshot_cycle_id = int(
+                    dynamic_snapshot.get("cycle_id") or state.get("cycle_id") or 0
+                )
+                if snapshot_cycle_id == int(cycle_id):
+                    applied = dynamic_snapshot.get("applied")
+                    if isinstance(applied, dict) and applied:
+                        current_parameters = applied
+                    current_regime = dynamic_snapshot.get("regime")
+            if current_parameters is None:
+                frozen = state.get("_dynamic_reference")
+                if isinstance(frozen, dict) and frozen:
+                    current_parameters = frozen
+            if current_parameters is None and isinstance(raw_config_for_repair, dict):
+                # İlk tur ve sabit modda dinamik snapshot henüz oluşmaz. İşlemler
+                # ekranı yine de aktif turun gerçekten kullandığı bot ayarlarını
+                # (özellikle alış/satış grid dizilerini) göstermelidir.
+                current_parameters = raw_config_for_repair
+            if current_parameters:
+                cycle_summary["cycle_parameters"] = current_parameters
+                cycle_summary["dynamic_regime"] = current_regime
         if cycle_entry is not None:
             cycle_summary["cycle_type"] = cycle_entry.get("cycle_type") or "dca"
             cycle_summary["pnl_primary_mode"] = cycle_entry.get("pnl_primary_mode")
@@ -6678,15 +7597,83 @@ async def bots_trades(
                     cycle_summary["cycle_grid_side"] = entry_side
         if completed_snapshot_side and not cycle_summary.get("cycle_grid_side"):
             cycle_summary["cycle_grid_side"] = completed_snapshot_side
+        if not is_open_cycle:
+            result_kind = None
+            result_amount = None
+            result_unit = None
+            result_pct = None
+            source = cycle_entry or completed_snapshot or {}
+            close_reason = str(
+                source.get("close_reason")
+                or source.get("completed_reason")
+                or ""
+            )
+            primary_mode = str(source.get("pnl_primary_mode") or "").lower()
+            if close_reason == "trail_reentry_buy" or primary_mode in (
+                "inventory_coin",
+                "inventory_qty_v1",
+            ):
+                result_kind = "coin"
+                result_amount = _safe_float(source.get("inventory_coin_adv_qty"))
+                matched_qty = _safe_float(source.get("matched_qty"))
+                if result_amount is not None and matched_qty and matched_qty > 0:
+                    result_pct = result_amount / matched_qty * 100.0
+                result_unit = sym
+                for quote_suffix in ("USDT", "USDC", "FDUSD", "BUSD"):
+                    if result_unit.endswith(quote_suffix):
+                        result_unit = result_unit[: -len(quote_suffix)]
+                        break
+            else:
+                result_kind = "quote"
+                result_amount = _safe_float(source.get("pnl_usdt_net"))
+                if result_amount is None:
+                    gross = _safe_float(source.get("cash_pnl_usdt"))
+                    fees = _safe_float(source.get("cash_fees_usdt"))
+                    if gross is not None:
+                        result_amount = gross - (fees or 0.0)
+                result_unit = "USDT"
+                config_initial_for_cycle = float(
+                    raw_config_for_repair.get("initial_capital_usdt")
+                    or raw_config_for_repair.get("budget_usd")
+                    or raw_config_for_repair.get("bot_budget_quote")
+                    or 0
+                )
+                if (
+                    result_amount is not None
+                    and config_initial_for_cycle > 0
+                ):
+                    result_pct = result_amount / config_initial_for_cycle * 100.0
+            cycle_summary["result_kind"] = result_kind
+            cycle_summary["result_amount"] = (
+                round(float(result_amount), 10)
+                if result_amount is not None
+                else None
+            )
+            cycle_summary["result_unit"] = result_unit
+            cycle_summary["result_pct"] = (
+                round(float(result_pct), 4) if result_pct is not None else None
+            )
     if cycle_id is not None and ct != "trb" and trades:
-        cfg_raw = json.loads(bot.config_json or "{}")
+        cfg_raw = raw_config_for_repair
         _tag_cycle_close_trades(trades, state, int(cycle_id))
         _hydrate_trades_from_cycle_ledger(trades, state, int(cycle_id))
+        _repair_trade_reference_prices(
+            trades, state, int(cycle_id), live_price_for_repair
+        )
         _enrich_trades_reference_prices(trades, state, int(cycle_id))
         _tag_cycle_close_trades(trades, state, int(cycle_id))
         _enrich_trades_fee(trades, sym, cfg_raw)
         _enrich_trades_grid_detail(trades, cfg_raw, state, int(cycle_id))
         _enrich_trades_close_detail(trades, cfg_raw, state, int(cycle_id))
+    if cycle_id is not None and cycle_summary is not None:
+        cycle_reference = _resolve_cycle_reference_price(
+            state, int(cycle_id), trades
+        )
+        cycle_summary["reference_price"] = (
+            round(float(cycle_reference), 10)
+            if cycle_reference is not None and float(cycle_reference) > 0
+            else None
+        )
     return {
         "trades": trades,
         "cycle_summary": cycle_summary,
@@ -6748,7 +7735,17 @@ async def bots_performance(
             status_code=404, detail=_detail_err("NOT_FOUND", "Bot not found", rid)
         )
 
-    pnl_data = PnlService.calculate_bot_pnl(db, bot.id, bot.account_id)
+    state_for_pnl = load_state(db, bot.id)
+    sym_perf = (bot.symbol or "").strip().upper()
+    perf_price_meta = _bot_price_meta(sym_perf)
+    live_px_alpha = float(perf_price_meta.get("price") or 0)
+    pnl_data = PnlService.calculate_bot_pnl(
+        db,
+        bot.id,
+        bot.account_id,
+        current_price=live_px_alpha or None,
+        price_is_stale=bool(perf_price_meta.get("is_stale")),
+    )
     if pnl_data.get("error"):
         pnl_data = {
             "total_usd": 0.0,
@@ -6771,12 +7768,6 @@ async def bots_performance(
     )
     start_ts, _ = _performance_period_range(period)
 
-    state_for_pnl = load_state(db, bot.id)
-    sym_perf = (bot.symbol or "").strip().upper()
-    cur_px_perf = float(pnl_data.get("current_price") or 0)
-    live_px_alpha = _resolve_bot_live_price(
-        sym_perf, state_for_pnl, pnl_price=cur_px_perf if cur_px_perf > 0 else None
-    )
     session_alpha: Optional[Dict[str, Any]] = None
     try:
         session_alpha = resolve_session_alpha_performance(
@@ -7216,27 +8207,9 @@ async def bots_performance(
         reference_price = float(pair_series[0]["price"])
     if reference_price is None and state and (state.get("reference_price") or 0) > 0:
         reference_price = float(state["reference_price"])
-    current_price_out = None
-    if pnl_data.get("current_price") and float(pnl_data.get("current_price") or 0) > 0:
-        current_price_out = float(pnl_data["current_price"])
-    elif all_trades:
-        current_price_out = float(all_trades[-1].price)
-    elif (
-        pair_series
-        and len(pair_series) > 0
-        and pair_series[-1].get("price") is not None
-        and float(pair_series[-1]["price"]) > 0
-    ):
-        current_price_out = float(pair_series[-1]["price"])
-    if current_price_out is None and state and (state.get("reference_price") or 0) > 0:
-        current_price_out = float(state["reference_price"])
-    if current_price_out is None or current_price_out <= 0:
-        try:
-            hub_p = price_hub.get_price(bot.symbol or "")
-            if hub_p is not None and float(hub_p) > 0:
-                current_price_out = float(hub_p)
-        except Exception:
-            pass
+    # Current price is market data only. Trades/reference/pair history remain
+    # historical anchors and are never promoted to a live price.
+    current_price_out = live_px_alpha if live_px_alpha > 0 else None
     if (
         reference_price is None
         and current_price_out is not None
@@ -7288,6 +8261,42 @@ async def bots_performance(
         if state_for_pnl
         else (cycles_count or 1)
     )
+    completed_cycles_for_projection = (
+        state_for_pnl.get("completed_cycle_dual_pnls") or []
+        if isinstance(state_for_pnl, dict)
+        else []
+    )
+    from app.services.bot_performance_service import (
+        estimate_annual_return_pct_12m,
+        estimate_live_bot_annual_return_pct_12m,
+    )
+
+    annual_initial_usd = config_initial if config_initial > 0 else initial_usd
+    annual_return_pct_12m = estimate_annual_return_pct_12m(
+        completed_cycles_for_projection,
+        annual_initial_usd,
+        now=now,
+        symbol=sym_perf,
+    )
+    annual_return_source = "bot_12m_average"
+    if annual_return_pct_12m is None:
+        annual_return_pct_12m = estimate_live_bot_annual_return_pct_12m(
+            total_usd,
+            annual_initial_usd,
+            getattr(bot, "started_at", None),
+            now=now,
+        )
+        annual_return_source = "bot_live_since_start"
+    if annual_return_pct_12m is None:
+        # Yalnız bu botun verisi kullanılabilir. Kendi başlangıç verisi dahi
+        # henüz hazır değilse başka bot yerine nötr değer gösterilir.
+        annual_return_pct_12m = 0.0
+        annual_return_source = "bot_data_pending"
+    daily_gain_usd = float(pnl_data.get("daily") or 0.0)
+    monthly_gain_usd = float(pnl_data.get("monthly") or 0.0)
+    stable_initial_usd = (
+        config_initial if config_initial > 0 else initial_usd
+    )
 
     result = {
         "request_id": rid,
@@ -7308,7 +8317,7 @@ async def bots_performance(
         "fees_usd": round(fees_usd, 2),
         "realized": round(realized, 2),
         "total_usd": round(total_usd, 2),
-        "initial_usd": round(initial_usd, 2),
+        "initial_usd": round(stable_initial_usd, 2),
         "balance_start_usd": round(initial_usd, 2),
         "config_budget_usd": config_budget_usd,
         "balance_end_usd": round(total_usd, 2),
@@ -7318,6 +8327,11 @@ async def bots_performance(
         "current_price": round(current_price_out, 8)
         if current_price_out is not None
         else None,
+        "price_stale": bool(perf_price_meta.get("is_stale")),
+        "price_age_s": perf_price_meta.get("age_s"),
+        "data_quality": "stale_snapshot"
+        if perf_price_meta.get("is_stale")
+        else "live",
         "chart_series": chart_series,
         "pair_series": pair_series,
         "cycle_pnl_last": cycle_pnl_last,
@@ -7329,6 +8343,20 @@ async def bots_performance(
         "pnl_calculation_mode": pnl_calculation_mode,
         "realized_pnl_total": round(realized, 2),
         "fees_total": round(fees_usd, 2),
+        "daily_gain_usd": round(daily_gain_usd, 2),
+        "daily_gain_pct": round(
+            daily_gain_usd / stable_initial_usd * 100.0, 2
+        )
+        if stable_initial_usd > 0
+        else None,
+        "monthly_gain_usd": round(monthly_gain_usd, 2),
+        "monthly_gain_pct": round(
+            monthly_gain_usd / stable_initial_usd * 100.0, 2
+        )
+        if stable_initial_usd > 0
+        else None,
+        "estimated_annual_return_pct_12m": annual_return_pct_12m,
+        "estimated_annual_return_source": annual_return_source,
     }
     if dual_perf is not None:
         result["dual_perf"] = dual_perf

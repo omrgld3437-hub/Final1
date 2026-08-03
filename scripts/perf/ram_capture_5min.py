@@ -3,7 +3,7 @@
 5 dakikalık RAM capture oturumu — başlatma talimatı, bekleme ve analiz.
 
 1) Ortam değişkenlerini yazdır ve web+worker'ı yeniden başlat:
-     cd /path/to/final1 && python3 scripts/perf/ram_capture_5min.py --print-env
+     cd /path/to/ayserose1 && python3 scripts/perf/ram_capture_5min.py --print-env
      # veya: ops/ram_capture_guide.command (macOS çift tık)
 
 2) Uygulama çalışırken 5 dk bekle (manifest complete=1 olana kadar):

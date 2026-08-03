@@ -38,6 +38,8 @@ const BASE_PRICES: Record<string, number> = {
   AVAXUSDT: 35.5,
   DOTUSDT: 7.2,
   LINKUSDT: 14.8,
+  ETHBTC: 0.0513,
+  SOLETH: 0.0421,
 };
 
 const tradesList: Record<string, unknown>[] = [
@@ -287,6 +289,13 @@ function getTickerData() {
 
 // ── Routes ───────────────────────────────────────────────────────────────────
 
+app.get("/api/auth/whoami", (_req, res) => {
+  res.json({ user_id: 9988, account_id: 9988, account_code: "QA", name: "Ayserose", surname: "Test", is_admin: false });
+});
+
+app.get("/api/auth/ping", (_req, res) => res.json({ ok: true, kicked: false }));
+app.get("/api/boot-id", (_req, res) => res.json({ boot_id: "mock-dashboard" }));
+
 app.get("/api/dashboard/snapshot", (req, res) => {
   tickActiveBots();
   const prices = getSimulatedPrices();
@@ -321,6 +330,19 @@ app.get("/api/dashboard/snapshot", (req, res) => {
 
 app.get("/api/binance/wallet", (_req, res) => {
   res.json(getCalculatedWallet());
+});
+
+app.post("/api/home/wallet/refresh", (_req, res) => {
+  res.json({
+    ok: true,
+    data: {
+      wallet_live: getCalculatedWallet(),
+      wallet_live_at: new Date().toISOString(),
+      skipped: false,
+      inflight: false,
+      stale: false,
+    },
+  });
 });
 
 app.get("/api/ticker", (_req, res) => {
@@ -445,6 +467,66 @@ app.get("/api/bots-engine", (_req, res) => {
   res.json({ bots: botsList });
 });
 
+app.get("/api/bots-engine/:id", (req, res) => {
+  const bot = botsList.find((item) => Number(item.id) === Number(req.params.id));
+  if (!bot) return res.status(404).json({ detail: "Bot not found" });
+  res.json({
+    ...bot,
+    account_id: 9988,
+    config: {
+      symbol: bot.symbol,
+      dynamic_mode: true,
+      base_alloc_pct: 50,
+      quote_alloc_pct: 50,
+      buy_grids: [{ buy_grid_pct: 5, buy_qty_pct_of_quote: 100 }],
+      sell_grids: [{ sell_grid_pct: 5, sell_qty_pct_of_base: 100 }],
+      buy_trigger_trailing_pct: 1.4,
+      sell_trigger_trailing_pct: 1.4,
+    },
+    state: { cycle_id: bot.cycle_id, reference_price: BASE_PRICES[String(bot.symbol)] || 1 },
+    dynamic_mode: {
+      enabled: true,
+      active: true,
+      snapshot: {
+        cycle_id: bot.cycle_id,
+        regime: "recovery_breakout_overheated",
+        baseline: {
+          base_alloc_pct: 50,
+          quote_alloc_pct: 50,
+          buy_grids: [{ buy_grid_pct: 5, buy_qty_pct_of_quote: 100 }],
+          sell_grids: [{ sell_grid_pct: 5, sell_qty_pct_of_base: 100 }],
+        },
+        applied: {
+          base_alloc_pct: 48,
+          quote_alloc_pct: 52,
+          buy_grids: [{ buy_grid_pct: 5.5, buy_qty_pct_of_quote: 100 }],
+          sell_grids: [{ sell_grid_pct: 4.5, sell_qty_pct_of_base: 100 }],
+        },
+        multiplier: { regime_label: "Toparlanma · Yukarı breakout / aşırı ısınmış momentum" },
+      },
+    },
+    current_price: BASE_PRICES[String(bot.symbol)] || 1,
+    started_at: new Date(Date.now() - 86400000).toISOString(),
+  });
+});
+
+app.get("/api/bots-engine/:id/live", (req, res) => {
+  const bot = botsList.find((item) => Number(item.id) === Number(req.params.id));
+  if (!bot) return res.status(404).json({ detail: "Bot not found" });
+  res.json({
+    status: bot.status,
+    equity: bot.current_usd,
+    last_price: BASE_PRICES[String(bot.symbol)] || 1,
+    cycle_id: bot.cycle_id,
+    initial_allocation_done: bot.initial_allocation_done,
+    last_tick_at: Date.now(),
+  });
+});
+
+app.get("/api/bots-engine/:id/health", (req, res) => {
+  res.json({ ok: true, bot_id: Number(req.params.id), status: "running", alerts: [], tick_interval_s: 1 });
+});
+
 app.post("/api/bots-engine/:id/:action", (req, res) => {
   const bot = botsList.find((b) => b.id === Number(req.params.id));
   if (!bot) return res.status(404).json({ error: "Bot not found" });
@@ -462,8 +544,32 @@ app.get("/api/data/coin-list", (_req, res) => {
   res.json({ coins: coinList });
 });
 
+app.get("/api/data/prices", (req, res) => {
+  const requested = String(req.query.symbols || "")
+    .split(",")
+    .map((symbol) => symbol.trim().toUpperCase())
+    .filter(Boolean);
+  const prices = getSimulatedPrices();
+  const symbols = requested.length ? requested : Object.keys(prices);
+  res.json({
+    prices: Object.fromEntries(symbols.filter((symbol) => prices[symbol]).map((symbol) => [symbol, {
+      ...prices[symbol],
+      volume24h: Number(coinList.find((coin) => coin.symbol === symbol)?.volume || 0),
+    }])),
+  });
+});
+
+let spotFavorites = ["BTCUSDT", "ETHUSDT", "SOLUSDT"];
+
 app.get("/api/accounts/:id/spot-favorites", (_req, res) => {
-  res.json({ symbols: ["BTCUSDT", "ETHUSDT", "SOLUSDT"] });
+  res.json({ symbols: spotFavorites });
+});
+
+app.put("/api/accounts/:id/spot-favorites", (req, res) => {
+  spotFavorites = Array.isArray(req.body?.symbols)
+    ? req.body.symbols.map((symbol: unknown) => String(symbol).trim().toUpperCase())
+    : spotFavorites;
+  res.json({ ok: true, symbols: spotFavorites });
 });
 
 app.get("/api/accounts/:id/settings", (_req, res) => {

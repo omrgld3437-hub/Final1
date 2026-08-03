@@ -966,45 +966,35 @@ async def test_job_create_reuses_only_same_config(monkeypatch, tmp_path):
         jobs._CANCELLED_JOB_IDS.clear()
 
 
-def test_route_rejects_reuse_for_different_config(monkeypatch):
-    """Route: farklı config'li bir analiz sürerken yeni istek → busy_other_config
-    (eski iş mevcut isteğe BAĞLANMAZ); aynı config sürerse reuse edilir."""
+def test_legacy_optimize_route_is_instant_and_config_scoped(monkeypatch):
+    """Legacy /optimize yolu artık kuyruk reuse etmez; her config anında DPS'e
+    gider ve kendi parite/bütçe kapsamını sonuçta korur."""
     from fastapi.testclient import TestClient
     from app.main import app
     from app.api import param_assistant_routes as par
     from app.api import auth as auth_mod
 
-    class _FakeJob:
-        id = "deadbeef"
-        symbol = "BTCUSDT"
-        budget = 300.0
-        tier = "professional_auto"
-        tier_label = "Profesyonel Otomatik Analiz"
-        cores = 4
-        time_budget_sec = 60.0
-        eta_total_sec = 120.0
-        status = "running"
-        config_hash = par.opt_jobs.request_config_hash("BTCUSDT", 300.0, "professional_auto")
+    async def _fake_dps(symbol, budget, **_kwargs):
+        return {"ok": True, "symbol": symbol, "budget": budget, "action": "WAIT"}
 
     app.dependency_overrides[auth_mod.require_auth] = lambda: {"account_id": "acc:t"}
-    monkeypatch.setattr(par.opt_jobs, "get_running_job_for_owner", lambda owner: _FakeJob())
-    monkeypatch.setattr(par.opt_jobs, "running_count", lambda: 1)
+    monkeypatch.setattr(par, "_run_dps", _fake_dps)
     try:
         client = TestClient(app)
-        # farklı sembol → reuse reddi (analysis_level eski "high" gönderse bile
-        # backend tek moda eşler — geriye uyumluluk testi de buna dahil).
         r = client.post("/api/param-assistant/optimize",
                         json={"symbol": "ETHUSDT", "budget": 300.0, "analysis_level": "high"})
         assert r.status_code == 200, r.text
         body = r.json()
-        assert body["busy_other_config"] is True and body["reused"] is False
-        assert body["running"]["symbol"] == "BTCUSDT"
-        # aynı sembol+bütçe (seviye fark etmez, tek mod) → mevcut işe reuse
+        assert body["instant"] is True and body["reused"] is False
+        assert body["result"]["symbol"] == "ETHUSDT"
+        assert body["result_schema_version"] == par.PARAM_ASSISTANT_RESULT_SCHEMA
+
         r2 = client.post("/api/param-assistant/optimize",
                          json={"symbol": "BTCUSDT", "budget": 300.0, "analysis_level": "high"})
         b2 = r2.json()
-        assert b2.get("reused") is True and b2["job_id"] == "deadbeef"
-        assert b2["result_schema_version"] == par.opt_jobs.RESULT_SCHEMA_VERSION
+        assert b2["instant"] is True and b2["reused"] is False
+        assert b2["job_id"] != body["job_id"]
+        assert b2["result"]["symbol"] == "BTCUSDT"
     finally:
         app.dependency_overrides.pop(auth_mod.require_auth, None)
 

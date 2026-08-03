@@ -4,7 +4,7 @@ import path from "path";
 import { defineConfig } from "vite";
 
 export default defineConfig(() => ({
-  base: "/ui/dist/dashboard/",
+  base: "/ui/assets/v2/dashboard/",
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: {
@@ -12,8 +12,19 @@ export default defineConfig(() => ({
     },
   },
   build: {
-    outDir: path.resolve(__dirname, "../dist/dashboard"),
+    outDir: path.resolve(__dirname, "../assets/v2/dashboard"),
     emptyOutDir: true,
+    sourcemap: false,
+    cssCodeSplit: true,
+    target: "es2022",
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          react: ["react", "react-dom"],
+          icons: ["lucide-react"],
+        },
+      },
+    },
   },
   server: {
     port: 5173,
@@ -22,7 +33,7 @@ export default defineConfig(() => ({
         target: process.env.VITE_API_PROXY || "http://127.0.0.1:8000",
         changeOrigin: true,
       },
-      "/ui/assets": {
+      "/ui/assets/pwa": {
         target: process.env.VITE_API_PROXY || "http://127.0.0.1:8000",
         changeOrigin: true,
       },

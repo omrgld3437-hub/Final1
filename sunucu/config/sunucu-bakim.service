@@ -1,0 +1,12 @@
+[Unit]
+Description=Sunucu guvenli disk bakimi
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/sunucu-guvenli-bakim
+Nice=10
+IOSchedulingClass=idle
+NoNewPrivileges=true
+ProtectHome=true
+ProtectSystem=full
+ReadWritePaths=/var/cache/apt /var/cache /var/log/journal

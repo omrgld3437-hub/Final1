@@ -220,6 +220,11 @@ class SpotEngine:
                 from app.services.data_hub import data_hub
 
                 price = data_hub.get_price(symbol)  # float | None, serve-stale for UI
+                if not price or price <= 0:
+                    # The trade modal is a user-initiated path: fill a cold symbol once
+                    # instead of returning a misleading zero-price payload.
+                    await data_hub.ensure_symbol_price(symbol)
+                    price = data_hub.get_price(symbol)
                 if price and price > 0:
                     spot_cache.set_price(symbol, price)
             except Exception as e:
