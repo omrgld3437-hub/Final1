@@ -129,7 +129,7 @@ export default function ParamAssistantPanel({
   budget: number;
   onApply: (config: AssistantConfig, result: AssistantResult) => void;
 }) {
-  const assistantAvailable = false;
+  const assistantAvailable = true;
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<AssistantResult | null>(null);
   const [error, setError] = useState("");
@@ -184,9 +184,6 @@ export default function ParamAssistantPanel({
         <p className="flex items-center gap-2 text-sm font-black text-white">
           <BrainCircuit className="h-4 w-4 text-fuchsia-200" />
           Parametre Asistanı
-          <span className="rounded-full border border-amber-200/20 bg-amber-200/10 px-2 py-1 text-[10px] font-black text-amber-100">
-            Çok yakında
-          </span>
         </p>
         <button
           type="button"
