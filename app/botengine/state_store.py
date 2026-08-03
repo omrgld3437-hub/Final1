@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -60,6 +61,43 @@ def _state_to_json_serializable(obj: Any) -> Any:
         return None
 
 
+# load_state'in okuduğu sürümü save_state'e taşıyan geçici anahtar. Yazmadan
+# önce çıkarılır, DB'ye gitmez.
+LOADED_VERSION_KEY = "_loaded_state_version"
+
+
+def _strict_cas_enabled() -> bool:
+    return os.getenv("BOT_STATE_STRICT_CAS", "").strip() in ("1", "true", "yes")
+
+
+def _version_matches(db: Session, bot_id: int, expected_ver: Any) -> bool:
+    """DB'deki state_version hâlâ beklenen değer mi?
+
+    Satır yoksa (ilk yazma veya bot silinmiş) çakışma sayılmaz; asıl kontrolü
+    save_state'in EXISTS koşullu upsert'i yapar.
+    """
+    try:
+        row = db.execute(
+            text(
+                "SELECT json_extract(state_json, '$.state_version') "
+                "FROM bot_engine_state WHERE bot_id = :bid"
+            ),
+            {"bid": bot_id},
+        ).fetchone()
+    except Exception as e:
+        logger.debug("state_version okunamadı bot_id=%s err=%s", bot_id, e)
+        return True
+    if row is None:
+        return True
+    current = row[0]
+    if current is None:
+        return True
+    try:
+        return int(current) == int(expected_ver)
+    except (TypeError, ValueError):
+        return True
+
+
 def load_state_json_extract(db: Session, bot_id: int, json_path: str) -> Any:
     """Tek JSON alanı — tüm state_json parse etmez (leaderboard vb.)."""
     row = db.execute(
@@ -99,9 +137,12 @@ def load_state(db: Session, bot_id: int) -> Optional[Dict[str, Any]]:
     state["retry_at"] = row[5]
     updated_at = row[6]
 
-    # Ensure state_version exists (for optimistic locking)
+    # state_version yazma sırasında çakışma tespiti için kullanılır (bkz. save_state).
     if "state_version" not in state:
         state["state_version"] = 0
+    # Bu process'in gördüğü sürüm; save_state yazmadan önce DB'deki sürümün
+    # hâlâ bu olup olmadığını kontrol eder.
+    state[LOADED_VERSION_KEY] = state["state_version"]
 
     # Instrument log
     state_ver = state.get("state_version", 0)
@@ -124,12 +165,33 @@ def load_state(db: Session, bot_id: int) -> Optional[Dict[str, Any]]:
 
 def save_state(
     db: Session, bot_id: int, account_id: int, state: Dict[str, Any]
-) -> None:
-    """Upsert state snapshot."""
+) -> bool:
+    """State snapshot'ını yaz. Yazıldıysa True, çakışma/silinmiş bot ise False.
+
+    Çakışma tespiti: state_version bu process state'i okuduğundan beri
+    değiştiyse başka bir yazar (API veya worker) araya girmiştir ve elimizdeki
+    state bayattır. Üzerine yazmak o yazarın ilerlemesini sessizce siler.
+
+    Varsayılan davranış: çakışma BOT_STATE_SAVE_CONFLICT olarak hata seviyesinde
+    loglanır ve yazma yine yapılır (mevcut davranış korunur, görünürlük kazanılır).
+    BOT_STATE_STRICT_CAS=1 ile çakışan yazma reddedilir; bir sonraki tick state'i
+    yeniden okuyup devam eder.
+    """
     from app.botengine.state_trim import trim_bot_state_for_persist
 
     trim_bot_state_for_persist(state)
-    # Increment state_version for optimistic locking
+    expected_ver = state.pop(LOADED_VERSION_KEY, None)
+    if expected_ver is not None and not _version_matches(db, bot_id, expected_ver):
+        logger.error(
+            "BOT_STATE_SAVE_CONFLICT bot_id=%s account_id=%s expected_ver=%s "
+            "(state başka bir yazar tarafından değiştirildi; strict_cas=%s)",
+            bot_id,
+            account_id,
+            expected_ver,
+            _strict_cas_enabled(),
+        )
+        if _strict_cas_enabled():
+            return False
     old_ver = state.get("state_version", 0)
     state["state_version"] = old_ver + 1
 
@@ -188,7 +250,7 @@ def save_state(
             bot_id,
             account_id,
         )
-        return
+        return False
 
     # Post-save verify: re-read and log
     verify_row = db.execute(
@@ -225,6 +287,7 @@ def save_state(
         invalidate_live_snapshot_cache(bot_id)
     except Exception:
         pass
+    return True
 
 
 def load_states_list_meta(db: Session, bot_ids: List[int]) -> Dict[int, Dict[str, Any]]:

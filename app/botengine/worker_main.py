@@ -41,6 +41,13 @@ except Exception:
     pass
 logger = logging.getLogger("app.botengine.worker")
 logger.setLevel(logging.DEBUG)
+# Kök klasördeki HATALAR.log: worker hataları da aynı dosyaya düşer.
+try:
+    from app.observability.hata_log import install as _install_hata_log
+
+    _install_hata_log()
+except Exception:
+    pass
 # httpx her GET'i INFO ile yazmasın (market sync 2 sn'de bir worker.log'u doldurur)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)

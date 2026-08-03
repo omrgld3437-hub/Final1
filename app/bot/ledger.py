@@ -5,8 +5,19 @@ Trade Ledger - Record and Snapshot Management
 from datetime import datetime, timezone
 import json
 from typing import List, Dict, Optional, Tuple
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from app.db.models import Trade
+
+# Komisyonun doğrudan USDT karşılığı sayılabileceği varlıklar. Diğer varlıklarda
+# (BNB, BTC, base asset...) dönüşüm kuru gerekir.
+_USD_EQUIVALENT_ASSETS = frozenset(
+    {"USDT", "BUSD", "USDC", "FDUSD", "TUSD", "USDP", "DAI"}
+)
+
+
+def _is_usd_equivalent(asset: Optional[str]) -> bool:
+    return (asset or "").strip().upper() in _USD_EQUIVALENT_ASSETS
 
 
 class Ledger:
@@ -62,6 +73,12 @@ class Ledger:
             )
             if existing:
                 return (existing, False)
+        if fee_usdt is None:
+            # ``fee`` her zaman ``fee_asset`` biriminde gelir. Komisyon BNB veya
+            # base asset ile ödendiyse bu değer USDT değildir; körlemesine
+            # kopyalamak PnL'i bozar. Dönüşüm kuru bilinmiyorsa alan None kalır
+            # (bilinmiyor), yanlış bir sayı yazılmaz.
+            fee_usdt = fee if _is_usd_equivalent(fee_asset) else None
         trade = Trade(
             bot_id=bot_id,
             account_id=account_id,
@@ -72,7 +89,7 @@ class Ledger:
             fee=fee,
             fee_asset=fee_asset,
             fee_amount=fee_amount if fee_amount is not None else fee,
-            fee_usdt=fee_usdt if fee_usdt is not None else fee,
+            fee_usdt=fee_usdt,
             slot_id=slot_id,
             reference_price=reference_price,
             order_id=str(order_id) if order_id is not None else None,
@@ -90,7 +107,21 @@ class Ledger:
             engine_status=engine_status,
         )
         db.add(trade)
-        db.commit()
+        try:
+            db.commit()
+        except IntegrityError:
+            # uq_trades_bot_order: başka bir worker aynı fill'i araya girip
+            # kaydetti. Yukarıdaki sorgu ile insert arasındaki yarış burada
+            # kapanır; mevcut kayıt döndürülür ve PnL çift sayılmaz.
+            db.rollback()
+            existing = (
+                db.query(Trade)
+                .filter(Trade.bot_id == bot_id, Trade.order_id == str(order_id))
+                .first()
+            )
+            if existing:
+                return (existing, False)
+            raise
         db.refresh(trade)
         return (trade, True)
 

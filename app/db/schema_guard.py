@@ -622,6 +622,66 @@ def ensure_trades_engine_columns(engine):
         conn.commit()
 
 
+def ensure_trades_order_id_unique_index(engine):
+    """trades(bot_id, order_id) üzerinde unique index.
+
+    Ledger idempotency'si "önce sorgula sonra ekle" ile yapılıyordu; iki worker
+    aynı fill'i eşzamanlı işlerse iki kayıt oluşup PnL çift sayılıyordu. Unique
+    index bunu veritabanı seviyesinde imkânsız hale getirir.
+
+    order_id NULL olan satırlar (paper/simülasyon) unique kısıtına takılmaz;
+    SQLite ve Postgres NULL'ları birbirinden farklı sayar.
+
+    Mevcut veride yinelenen kayıt varsa index oluşturulamaz. Bu durumda deploy
+    bloke edilmez ama yinelenenler açıkça loglanır ki elle incelenebilsin.
+    """
+    with engine.connect() as conn:
+        r = conn.execute(
+            text("SELECT name FROM sqlite_master WHERE type='table' AND name='trades'")
+        )
+        if not r.fetchone():
+            conn.commit()
+            return
+        existing_idx = conn.execute(
+            text(
+                "SELECT name FROM sqlite_master WHERE type='index' "
+                "AND name='uq_trades_bot_order'"
+            )
+        ).fetchone()
+        if existing_idx:
+            conn.commit()
+            return
+        dupes = conn.execute(
+            text(
+                "SELECT bot_id, order_id, COUNT(*) AS n FROM trades "
+                "WHERE order_id IS NOT NULL "
+                "GROUP BY bot_id, order_id HAVING n > 1 LIMIT 20"
+            )
+        ).fetchall()
+        if dupes:
+            logger.error(
+                "schema_guard: trades tablosunda yinelenen (bot_id, order_id) kayıtları var, "
+                "unique index oluşturulamadı. PnL çift sayılmış olabilir; elle inceleyin: %s",
+                [(d[0], d[1], d[2]) for d in dupes],
+            )
+            conn.commit()
+            return
+        try:
+            conn.execute(
+                text(
+                    "CREATE UNIQUE INDEX uq_trades_bot_order "
+                    "ON trades (bot_id, order_id)"
+                )
+            )
+            conn.commit()
+            logger.info("schema_guard: created unique index uq_trades_bot_order")
+        except Exception as e:
+            logger.warning(
+                "schema_guard: could not create uq_trades_bot_order: %s", e
+            )
+            conn.rollback()
+
+
 def ensure_symbol_locks_table(engine):
     """Multi-bot: (account_id, symbol) lease lock. One bot per (account, symbol) can send orders at a time."""
     with engine.connect() as conn:
@@ -1112,6 +1172,7 @@ def run_schema_guard(engine):
         ensure_bot_engine_commands_table(engine)
         ensure_bot_perf_chart_state_table(engine)
         ensure_trades_engine_columns(engine)
+        ensure_trades_order_id_unique_index(engine)
         ensure_bots_bot_code(engine)
         ensure_bots_max_buy_levels(engine)
         ensure_symbol_locks_table(engine)

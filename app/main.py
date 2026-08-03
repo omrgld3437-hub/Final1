@@ -220,7 +220,15 @@ botengine_console.setLevel(
 botengine_console.setFormatter(console_formatter)
 botengine_logger.addHandler(botengine_console)
 
-logger.info("Logging configured - console + file: logs/app.log")
+# Kök klasördeki HATALAR.log: son 90 günün tüm hataları, tekrar bastırmalı.
+try:
+    from app.observability.hata_log import install as _install_hata_log
+
+    _install_hata_log()
+except Exception as _hata_log_err:  # log dosyası uygulamayı asla engellemez
+    logger.warning("HATALAR.log kurulamadı: %s", _hata_log_err)
+
+logger.info("Logging configured - console + file: logs/app.log + HATALAR.log")
 
 from app.api import routes, ws, admin, bots_v2, finance, spot_routes, auth, bots_engine
 from app.api import data_hub_routes, finance_reports, pricing_routes, coin_logo_routes, push_notifications

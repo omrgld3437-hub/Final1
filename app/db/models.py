@@ -387,6 +387,12 @@ class Bot(Base):
 
 class Trade(Base):
     __tablename__ = "trades"
+    # Ledger idempotency'si veritabanı seviyesinde: aynı botun aynı borsa emri
+    # iki kez kaydedilemez. order_id NULL olan satırlar (paper/simülasyon) bu
+    # kısıta takılmaz çünkü NULL'lar birbirinden farklı sayılır.
+    __table_args__ = (
+        UniqueConstraint("bot_id", "order_id", name="uq_trades_bot_order"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     bot_id = Column(Integer, ForeignKey("bots.id"), nullable=False, index=True)

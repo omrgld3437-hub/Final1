@@ -12,6 +12,45 @@ from app.db.models import ErrorLog
 logger = logging.getLogger(__name__)
 
 
+def _mirror_to_hata_log(
+    *,
+    level: str,
+    source: str,
+    message: str,
+    detail: Optional[str],
+    path: Optional[str],
+    method: Optional[str],
+    request_id: Optional[str],
+    account_id: Optional[int],
+) -> None:
+    """error_logs'a yazılan hatayı kök klasördeki HATALAR.log'a da yansıt.
+
+    Frontend raporları ve Binance hataları logging üzerinden geçmediği için
+    root handler onları görmez; tek dosyada tüm hataların bulunması bu yansıtmaya
+    bağlı.
+    """
+    try:
+        from app.observability.hata_log import kaydet
+
+        extra = {}
+        if method:
+            extra["method"] = method
+        if request_id:
+            extra["request_id"] = request_id
+        if account_id is not None:
+            extra["account_id"] = account_id
+        kaydet(
+            level or "error",
+            source or "unknown",
+            message,
+            detail=detail,
+            path=path,
+            extra=extra or None,
+        )
+    except Exception:
+        pass
+
+
 def log_error_fire_and_forget(
     source: str,
     message: str,
@@ -95,6 +134,16 @@ def persist_error(
         db.add(row)
         db.commit()
         db.refresh(row)
+        _mirror_to_hata_log(
+            level=level,
+            source=source,
+            message=clean_message,
+            detail=detail,
+            path=path,
+            method=method,
+            request_id=request_id,
+            account_id=account_id,
+        )
         return row.id
     except Exception as e:
         logger.warning("error_logging persist_error failed: %s", e)
