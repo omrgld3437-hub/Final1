@@ -13,15 +13,18 @@ assert.match(studio, /relative flex h-full/, "Mobil modal kullanılabilir güven
 assert.match(assistant, /aria-busy=\{loading\}/);
 assert.match(assistant, /LoaderCircle/);
 assert.doesNotMatch(assistant, /parametre ile indikatör/);
-assert.match(assistant, /\/api\/param-assistant\/advice/);
-assert.doesNotMatch(assistant, /\/api\/param-assistant\/calculate/);
-assert.doesNotMatch(assistant, /Bu parametreleri tam olarak uygula/);
+// V6 net_profile_library: calculate returns sealed 4+4 ui_config; /advice strips it.
+assert.match(assistant, /\/api\/param-assistant\/calculate/);
+assert.doesNotMatch(assistant, /\/api\/param-assistant\/advice/);
+assert.match(assistant, /Forma uygula/);
+assert.match(assistant, /first_start_buy_only:\s*false/);
+assert.match(assistant, /Seçilen profil/);
+assert.match(assistant, /Satış gridleri \(4\)/);
+assert.match(assistant, /Alış gridleri \(4\)/);
+assert.match(assistant, /Kâr döngüsü/);
 assert.doesNotMatch(assistant, /Analiz güveni/);
 assert.doesNotMatch(assistant, /Coin bazlı piyasa rejimi/);
 assert.doesNotMatch(assistant, /forma otomatik parametre uygulamaz/);
-assert.match(assistant, /Motorun bu coin için hesapladığı somut plan/);
-assert.match(assistant, /Motor neden bu sonuca ulaştı/);
-assert.match(assistant, /Ne zaman yeniden analiz/);
 assert.match(studio, /symbol\.endsWith\("USDT"\)/, "Bot parite önerileri yalnız USDT olmalı.");
 assert.match(studio, /function NumericInput/, "Mobil sayı alanları boş ara değeri koruyan ortak girişi kullanmalı.");
 assert.match(studio, /type="text"\s+inputMode=\{inputMode\}/, "Mobil sayı klavyesi kontrollü metin girişiyle açılmalı.");
