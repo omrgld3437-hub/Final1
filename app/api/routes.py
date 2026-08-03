@@ -45,6 +45,7 @@ from app.services.encryption import (
 )
 from app.api.auth import (
     require_auth,
+    require_admin_auth,
     require_account_access,
     get_client_ip,
     verify_password,
@@ -120,12 +121,7 @@ async def api_log_error(
     """Accept frontend error reports and persist to error_logs. Optional Bearer token for user_id/account_id."""
     try:
         # Rate-limit kontrolü
-        client_ip = None
-        if request.client:
-            client_ip = (request.client.host or "")[:50]
-        forwarded = request.headers.get("x-forwarded-for")
-        if forwarded:
-            client_ip = (forwarded.split(",")[0].strip() or client_ip or "")[:50]
+        client_ip = (get_client_ip(request) or "")[:50] or None
         ip_key = client_ip or "unknown"
         if not _check_log_error_rate_limit(ip_key):
             return {"ok": False, "throttled": True}
@@ -327,8 +323,9 @@ async def create_account(
     exchange: str = "BINANCE",
     mode: str = "paper",
     db: Session = Depends(get_db),
+    _admin: dict = Depends(require_admin_auth),
 ):
-    """Create new account (API key/secret kaldırıldı - sonra entegre edilecek)"""
+    """Create new account (API key/secret kaldırıldı - sonra entegre edilecek). Admin-only."""
     # Generate unique account code
     account_code = generate_account_code(db)
 
@@ -354,8 +351,11 @@ async def create_account(
 
 
 @router.get("/accounts")
-async def list_accounts(db: Session = Depends(get_db)):
-    """List all accounts"""
+async def list_accounts(
+    db: Session = Depends(get_db),
+    _admin: dict = Depends(require_admin_auth),
+):
+    """List all accounts. Admin-only (tüm hesapları döndürür)."""
     accounts = db.query(Account).all()
     return [
         {
@@ -451,10 +451,7 @@ async def get_account_settings(
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
     require_account_access(current, account_id)
-    client_ip = request.client.host if request.client else None
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        client_ip = forwarded.split(",")[0].strip()
+    client_ip = get_client_ip(request)
     server_public_ip = await _fetch_server_public_ip()
     user_phone = None
     if account.user_id:
@@ -1086,8 +1083,13 @@ class ChatReopenBody(BaseModel):
 
 
 @router.post("/chat/reopen")
-async def chat_reopen(body: ChatReopenBody = Body(...), db: Session = Depends(get_db)):
+async def chat_reopen(
+    body: ChatReopenBody = Body(...),
+    db: Session = Depends(get_db),
+    current: dict = Depends(require_auth),
+):
     """Reopen chat thread after admin ended it. User 'Yeni sohbet başlat'."""
+    require_account_access(current, body.account_id)
     account = db.query(Account).filter(Account.id == body.account_id).first()
     if not account or not account.user_id:
         raise HTTPException(status_code=404, detail="Hesap bulunamadı")
@@ -1441,39 +1443,6 @@ async def get_bot_pnl(
 
     pnl_data = PnlService.calculate_bot_pnl(db, bot_id, account_id)
     return pnl_data
-
-
-@router.post("/bots")
-async def create_bot(
-    account_id: int,
-    symbol: str,
-    config_json: str = "{}",
-    mode: str = "paper",
-    db: Session = Depends(get_db),
-):
-    """Create new bot"""
-    account = db.query(Account).filter(Account.id == account_id).first()
-    if not account:
-        raise HTTPException(status_code=404, detail="Account not found")
-
-    bot = Bot(
-        account_id=account_id,
-        symbol=symbol,
-        mode=mode,
-        config_json=config_json,
-        status="stopped",
-    )
-    db.add(bot)
-    db.commit()
-    db.refresh(bot)
-
-    return {
-        "id": bot.id,
-        "account_id": bot.account_id,
-        "symbol": bot.symbol,
-        "mode": bot.mode,
-        "status": bot.status,
-    }
 
 
 @router.post("/bots/create")
@@ -4516,8 +4485,10 @@ async def api_binance_open_orders(
     account_id: int = Query(..., description="Account ID"),
     symbol: Optional[str] = Query(None),
     db: Session = Depends(get_db),
+    current: dict = Depends(require_auth),
 ):
     """Binance açık emirler: TTL 2s + in-flight dedupe; 429 → serve stale. Anahtar yoksa 200 + boş liste."""
+    require_account_access(current, account_id)
     import logging
 
     log = logging.getLogger(__name__)
@@ -4683,9 +4654,13 @@ class OrderRequest(BaseModel):
 
 @router.post("/binance/order")
 async def place_binance_order(
-    order: OrderRequest, request: Request, db: Session = Depends(get_db)
+    order: OrderRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current: dict = Depends(require_auth),
 ):
     """Binance spot emir: signed POST /api/v3/order. Worker-only: web returns 403 WORKER_ONLY_OPERATION."""
+    require_account_access(current, order.account_id)
     try:
         from app.core.errors import AppError
         from app.services.binance_assets import get_account_keys
@@ -4738,8 +4713,10 @@ async def cancel_binance_order(
     symbol: str = Query(...),
     order_id: int = Query(...),
     db: Session = Depends(get_db),
+    current: dict = Depends(require_auth),
 ):
-    """Binance emir iptali: DELETE /api/v3/order."""
+    """Binance emir iptali: DELETE /api/v3/order. Auth + hesap sahipliği zorunlu."""
+    require_account_access(current, account_id)
     try:
         from app.services.test_account import is_test_account
 

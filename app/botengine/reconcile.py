@@ -22,6 +22,17 @@ from app.botengine.intent_ledger import (
 # Binance -2013 "Order does not exist" => NOT_FOUND; we mark intent CANCELED so we stop re-querying.
 NOT_FOUND_MARK_CANCELED = True
 
+
+def _is_order_not_found(err: Exception) -> bool:
+    """Binance'in 'emir yok' cevabı mı, yoksa geçici/başka bir hata mı?
+
+    Yalnızca -2013 kesin bir yok cevabıdır. Ağ hatası, 429, 418 veya 401
+    'emir yok' anlamına gelmez; bu ayrım yapılmazsa geçici bir kesinti canlı bir
+    emri CANCELED işaretleyip botun takibini kaybetmesine yol açar.
+    """
+    s = str(err).lower()
+    return "-2013" in s or "order does not exist" in s
+
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
@@ -81,17 +92,23 @@ async def reconcile_account(
         if not symbol:
             continue
         binance_order = None
+        # Emrin gerçekten yok olduğuna ancak Binance kesin cevap verdiyse karar
+        # verilir. Sorgular hata atarsa sonuç belirsizdir ve intent'e dokunulmaz.
+        confirmed_absent = False
         if coid in open_by_coid:
             binance_order = open_by_coid[coid]
         else:
             try:
                 binance_order = await get_order_by_client_order_id(symbol, coid)
             except Exception as e:
+                if _is_order_not_found(e):
+                    confirmed_absent = True
                 logger.debug(
-                    "reconcile get_order_by_client_order_id symbol=%s coid=%s err=%s",
+                    "reconcile get_order_by_client_order_id symbol=%s coid=%s err=%s not_found=%s",
                     symbol,
                     coid,
                     e,
+                    confirmed_absent,
                 )
         if not binance_order:
             try:
@@ -102,6 +119,9 @@ async def reconcile_account(
                     ).strip() == coid:
                         binance_order = o
                         break
+                else:
+                    # Geçmiş emir listesi temiz döndü ve emri içermiyor: kesin yok cevabı.
+                    confirmed_absent = True
             except Exception as e:
                 logger.debug("reconcile get_all_orders symbol=%s err=%s", symbol, e)
         if binance_order:
@@ -155,6 +175,20 @@ async def reconcile_account(
                     coid,
                     status_b,
                 )
+        elif not confirmed_absent:
+            # Sorgular başarısız oldu: emrin durumu bilinmiyor. Intent non-final
+            # bırakılır ve bir sonraki reconcile turunda tekrar denenir. Aksi halde
+            # geçici bir ağ kesintisi canlı bir emri CANCELED işaretler.
+            _reconcile_errors_total += 1
+            result["errors"] += 1
+            logger.warning(
+                "RECONCILE_INCONCLUSIVE account_id=%s intent_id=%s client_order_id=%s "
+                "symbol=%s (Binance sorgusu başarısız; intent değiştirilmedi, tekrar denenecek)",
+                account_id,
+                intent["intent_id"],
+                coid,
+                symbol,
+            )
         elif NOT_FOUND_MARK_CANCELED:
             # Order not on Binance (-2013 / not in open or all) => mark CANCELED to stop re-querying every 45s
             ok = update_intent_from_binance(

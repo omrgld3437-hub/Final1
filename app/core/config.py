@@ -108,6 +108,18 @@ def _split_csv(value: str) -> List[str]:
     return [item.strip() for item in (value or "").split(",") if item.strip()]
 
 
+# Reverse proxy'nin bulunduğu adresler. Yalnızca bu adreslerden gelen isteklerde
+# X-Real-IP / X-Forwarded-For başlıklarına güvenilir; aksi halde istemci başlığı
+# uydurup rate limit, IP whitelist ve audit kaydını atlatabilir.
+_DEFAULT_TRUSTED_PROXIES = ("127.0.0.1", "::1", "localhost")
+
+
+def get_trusted_proxy_ips() -> frozenset:
+    """TRUSTED_PROXY_IPS env'i (CSV); tanımsızsa loopback."""
+    configured = _split_csv(os.environ.get("TRUSTED_PROXY_IPS", ""))
+    return frozenset(configured or _DEFAULT_TRUSTED_PROXIES)
+
+
 def _normalize_origin(origin: str) -> Optional[str]:
     raw = (origin or "").strip().rstrip(";,)")
     raw = raw.rstrip("/")

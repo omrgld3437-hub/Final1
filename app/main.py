@@ -234,10 +234,34 @@ from app.services.data_hub import data_hub
 
 app = FastAPI(title="ayserose", version="1.0.0")
 
+from app.core.client_ip import client_ip_from_request
+
+_LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
+# Reverse proxy bu başlıkları ekler. Nginx arkasında request.client.host her zaman
+# 127.0.0.1 olduğu için tek başına loopback kontrolü dışarıdan atlatılabilir;
+# forwarding başlığı varsa istek yerel değildir.
+_PROXY_HEADERS = ("x-forwarded-for", "x-real-ip", "forwarded", "x-forwarded-host")
+
+
+def is_direct_local_request(request: Request) -> bool:
+    """İstek gerçekten makine üzerinden mi geldi? Proxy'lenmiş istekler yerel sayılmaz."""
+    host = (request.client.host if request.client else "") or ""
+    if host not in _LOOPBACK_HOSTS:
+        return False
+    return not any(request.headers.get(h) for h in _PROXY_HEADERS)
+
+
+def require_direct_local(request: Request) -> None:
+    """Yalnızca makine üstünden (proxy'siz) çağrılabilen teşhis uçları için guard."""
+    if not is_direct_local_request(request):
+        raise HTTPException(
+            status_code=404, detail={"error_code": "NOT_FOUND", "message": "Not found"}
+        )
+
 
 @app.get("/api/debug/build-info")
 async def debug_build_info():
-    """Deploy teşhisi: sunucunun okuduğu UI dizini ve dashboard sürümü. Giriş gerekmez; ilk sırada kayıtlı."""
+    """Deploy teşhisi: dashboard sürümü ve dosya varlığı. Giriş gerekmez; mutlak yol sızdırmaz."""
     import re
 
     ui_dir_path = BASE_DIR / "ui"
@@ -252,10 +276,9 @@ async def debug_build_info():
         except Exception:
             pass
     return {
-        "base_dir": str(BASE_DIR),
-        "ui_dir": str(ui_dir_path),
         "dashboard_html_version": dashboard_version,
         "dashboard_exists": dashboard_path.exists(),
+        "ui_dir_exists": ui_dir_path.exists(),
     }
 
 
@@ -780,12 +803,7 @@ async def request_metrics_middleware(request, call_next):
     start = time.perf_counter()
     path = request.url.path or ""
     method = getattr(request, "method", "GET") or "GET"
-    client_ip = ""
-    if request.client:
-        client_ip = request.client.host or ""
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        client_ip = forwarded.split(",")[0].strip() or client_ip
+    client_ip = client_ip_from_request(request, default="")
     user_agent = request.headers.get("user-agent") or ""
 
     if client_ip:
@@ -1205,12 +1223,7 @@ async def global_exception_handler(request: Request, exc: Exception):
     request_id = getattr(request.state, "request_id", None)
     path = request.url.path if request.url else None
     method = request.method if request.method else None
-    client_ip = ""
-    if request.client:
-        client_ip = request.client.host or ""
-    forwarded = request.headers.get("x-forwarded-for") if request.headers else None
-    if forwarded:
-        client_ip = forwarded.split(",")[0].strip() or client_ip
+    client_ip = client_ip_from_request(request, default="")
     user_agent = (
         (request.headers.get("user-agent") or "")[:512] if request.headers else None
     )
@@ -1360,14 +1373,7 @@ async def http_exception_handler(request: Request, exc: HTTPException):
         path = request.url.path if request.url else None
         method = request.method if request.method else None
         request_id = getattr(request.state, "request_id", None)
-        client_ip = ""
-        if request.client:
-            client_ip = request.client.host or ""
-        if request.headers.get("x-forwarded-for"):
-            client_ip = (
-                request.headers.get("x-forwarded-for").split(",")[0].strip()
-                or client_ip
-            )
+        client_ip = client_ip_from_request(request, default="")
         user_agent = (request.headers.get("user-agent") or "")[:512]
         user_id, account_id, is_admin = None, None, False
         try:
@@ -2043,8 +2049,8 @@ async def api_health_marketdata():
 # Log sayfası (7999) Yeniden Başlat öncesi istek sayacını sıfırlamak için; sadece localhost
 @app.post("/api/debug/reset-request-count")
 async def reset_request_count(request: Request):
-    """Sadece 127.0.0.1'den çağrılabilir; toplam istek sayacını sıfırlar (sistem yeniden başlatıldığında)."""
-    if request.client and request.client.host != "127.0.0.1":
+    """Sadece makine üstünden (proxy'siz) çağrılabilir; toplam istek sayacını sıfırlar."""
+    if not is_direct_local_request(request):
         from fastapi.responses import JSONResponse
 
         return JSONResponse(status_code=403, content={"detail": "Forbidden"})
@@ -2058,8 +2064,9 @@ async def reset_request_count(request: Request):
 
 # Debug metrics (dev only or when DEBUG_METRICS=1; prod'da auth ile korunmalı)
 @app.get("/debug/metrics")
-async def debug_metrics():
-    """Request observability: top endpoints by count/latency, status summary, RPS, Binance calls, cache hit rate."""
+async def debug_metrics(request: Request):
+    """Request observability: top endpoints by count/latency, status summary, RPS, Binance calls, cache hit rate. Yerel-only."""
+    require_direct_local(request)
     if os.getenv("ENV", "").lower() == "prod" and not os.getenv("DEBUG_METRICS"):
         from fastapi.responses import JSONResponse
 
@@ -2083,8 +2090,9 @@ async def debug_metrics():
 
 
 @app.get("/api/debug/rest-load")
-async def debug_rest_load():
-    """Anlık REST pencere özeti + rest.log yolu. DEBUG_METRICS=1 veya dev."""
+async def debug_rest_load(request: Request):
+    """Anlık REST pencere özeti + rest.log yolu. Yerel-only; ayrıca DEBUG_METRICS=1 veya dev."""
+    require_direct_local(request)
     if os.getenv("ENV", "").lower() == "prod" and not os.getenv("DEBUG_METRICS"):
         from fastapi.responses import JSONResponse
 
@@ -2097,8 +2105,9 @@ async def debug_rest_load():
 
 
 @app.get("/api/health/ram")
-async def api_health_ram():
-    """Latest RAM snapshot when RAM_PROBE=1. Returns 404 if probe disabled."""
+async def api_health_ram(request: Request):
+    """Latest RAM snapshot when RAM_PROBE=1. Yerel-only; probe kapalıysa 404."""
+    require_direct_local(request)
     if (
         os.getenv("RAM_PROBE", "").strip() != "1"
         and os.getenv("RAM_PROBE_ENABLED", "").strip() != "1"
@@ -2115,8 +2124,12 @@ async def api_health_ram():
 
 
 @app.get("/api/debug/ram-snapshot")
-async def debug_ram_snapshot():
-    """RAM root cause: tek snapshot + gc.collect sonrası obje sayıları. RAM_PROBE=1 ile anlamlı."""
+async def debug_ram_snapshot(request: Request):
+    """RAM root cause: tek snapshot + gc.collect sonrası obje sayıları. RAM_PROBE=1 ile anlamlı.
+
+    gc.collect() event loop'u bloke ettiği için yalnızca makine üstünden çağrılabilir.
+    """
+    require_direct_local(request)
     if (
         os.getenv("RAM_PROBE", "").strip() != "1"
         and os.getenv("RAM_PROBE_ENABLED", "").strip() != "1"
@@ -2132,8 +2145,9 @@ async def debug_ram_snapshot():
 
 
 @app.get("/api/debug/db-mode")
-async def debug_db_mode():
-    """Return journal_mode, synchronous, role (web|worker). Validates WAL is active."""
+async def debug_db_mode(request: Request):
+    """Return journal_mode, synchronous, role (web|worker). Validates WAL is active. Yerel-only."""
+    require_direct_local(request)
     from sqlalchemy import text
     from app.db.base import engine, DATABASE_URL
 
@@ -2149,8 +2163,9 @@ async def debug_db_mode():
 
 
 @app.get("/api/debug/resource-usage")
-async def debug_resource_usage():
-    """RAM/CPU tüketim teşhisi: DataHub, oturum ve cache boyutları. Yüksek RAM genelde DataHub.prices (binlerce sembol) veya oturum/cache birikiminden kaynaklanır."""
+async def debug_resource_usage(request: Request):
+    """RAM/CPU tüketim teşhisi: DataHub, oturum ve cache boyutları. Yerel-only (iç sayaç sızdırır)."""
+    require_direct_local(request)
     from app.services.data_hub import data_hub
     from app.api import auth as auth_mod
     from app.api.routes import _price_cache

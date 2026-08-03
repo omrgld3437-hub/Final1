@@ -35,6 +35,19 @@ _MAX_ACTIVE_BOTS_PER_ACCOUNT = int(os.getenv("MAX_ACTIVE_BOTS_PER_ACCOUNT", "10"
 _ACTIVE_BOT_STATUSES = ("RUNNING", "PAUSED")
 
 
+def _bot_or_403(bot_id: int, db: Session, current: dict) -> BotV2:
+    """Botu yükle; yoksa 404, çağıranın hesabına ait değilse 403.
+
+    Yetki kaynağı her zaman session'daki hesaptır; bot_id path parametresi
+    tek başına asla erişim vermez.
+    """
+    bot = db.query(BotV2).filter(BotV2.id == bot_id).first()
+    if not bot:
+        raise HTTPException(status_code=404, detail="Bot not found")
+    get_account_or_403(current, bot.account_id, db)
+    return bot
+
+
 def _count_active_bots(db: Session, account_id: int, exclude_bot_id: Optional[int] = None) -> int:
     """Hesabın aktif (çalışan/duraklatılmış) bot sayısı — durdurulanlar sayılmaz."""
     q = db.query(BotV2).filter(
@@ -310,8 +323,13 @@ async def stop_bot_v2(
 
 
 @router.post("/bots/{bot_id}/pause")
-async def pause_bot_v2(bot_id: int, db: Session = Depends(get_db)):
-    """Pause a Bot V2"""
+async def pause_bot_v2(
+    bot_id: int,
+    db: Session = Depends(get_db),
+    current: dict = Depends(require_auth),
+):
+    """Pause a Bot V2. Auth + bot sahipliği zorunlu."""
+    _bot_or_403(bot_id, db, current)
     worker = get_worker()
     await worker.pause_bot(bot_id)
 
@@ -319,8 +337,13 @@ async def pause_bot_v2(bot_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/bots/{bot_id}/resume")
-async def resume_bot_v2(bot_id: int, db: Session = Depends(get_db)):
-    """Resume a Bot V2"""
+async def resume_bot_v2(
+    bot_id: int,
+    db: Session = Depends(get_db),
+    current: dict = Depends(require_auth),
+):
+    """Resume a Bot V2. Auth + bot sahipliği zorunlu."""
+    _bot_or_403(bot_id, db, current)
     worker = get_worker()
     await worker.resume_bot(bot_id)
 
@@ -328,11 +351,13 @@ async def resume_bot_v2(bot_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/bots/{bot_id}")
-async def get_bot_v2(bot_id: int, db: Session = Depends(get_db)):
-    """Get Bot V2 details"""
-    bot = db.query(BotV2).filter(BotV2.id == bot_id).first()
-    if not bot:
-        raise HTTPException(status_code=404, detail="Bot not found")
+async def get_bot_v2(
+    bot_id: int,
+    db: Session = Depends(get_db),
+    current: dict = Depends(require_auth),
+):
+    """Get Bot V2 details. Auth + bot sahipliği zorunlu."""
+    bot = _bot_or_403(bot_id, db, current)
 
     balances = db.query(BotBalanceV2).filter(BotBalanceV2.bot_id == bot_id).first()
     state = db.query(BotStateV2).filter(BotStateV2.bot_id == bot_id).first()
@@ -361,8 +386,13 @@ async def get_bot_v2(bot_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/bots/{bot_id}/grids")
-async def get_bot_grids_v2(bot_id: int, db: Session = Depends(get_db)):
-    """Get Bot V2 grids"""
+async def get_bot_grids_v2(
+    bot_id: int,
+    db: Session = Depends(get_db),
+    current: dict = Depends(require_auth),
+):
+    """Get Bot V2 grids. Auth + bot sahipliği zorunlu."""
+    _bot_or_403(bot_id, db, current)
     grids = (
         db.query(BotGridV2)
         .filter(BotGridV2.bot_id == bot_id)
@@ -389,9 +419,13 @@ async def get_bot_grids_v2(bot_id: int, db: Session = Depends(get_db)):
 
 @router.get("/bots/{bot_id}/trades")
 async def get_bot_trades_v2(
-    bot_id: int, limit: int = 100, db: Session = Depends(get_db)
+    bot_id: int,
+    limit: int = 100,
+    db: Session = Depends(get_db),
+    current: dict = Depends(require_auth),
 ):
-    """Get Bot V2 trades"""
+    """Get Bot V2 trades. Auth + bot sahipliği zorunlu."""
+    _bot_or_403(bot_id, db, current)
     trades = (
         db.query(BotTradeV2)
         .filter(BotTradeV2.bot_id == bot_id)
@@ -416,11 +450,18 @@ async def get_bot_trades_v2(
 
 
 @router.get("/bots")
-async def list_bots_v2(account_id: Optional[int] = None, db: Session = Depends(get_db)):
-    """List Bot V2 instances"""
+async def list_bots_v2(
+    account_id: Optional[int] = None,
+    db: Session = Depends(get_db),
+    current: dict = Depends(require_auth),
+):
+    """List Bot V2 instances. Auth zorunlu; admin dışı çağrılar kendi hesabına kısıtlanır."""
     query = db.query(BotV2)
     if account_id:
+        get_account_or_403(current, account_id, db)
         query = query.filter(BotV2.account_id == account_id)
+    elif not current.get("is_admin"):
+        query = query.filter(BotV2.account_id == current.get("account_id"))
 
     bots = query.all()
     return [

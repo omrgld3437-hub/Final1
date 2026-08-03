@@ -452,6 +452,35 @@ def _should_log_exec_401(bot_id: int) -> bool:
     return True
 
 
+def _log_balance_check_fail(bot_id: int, side: str, err: Exception) -> None:
+    """Bakiye sorgusu başarısız: emir gönderilmedi (fail-closed).
+
+    401 (geçersiz API anahtarı) her tick'te tekrarlanacağı için 10 dakikalık
+    throttle uygulanır; diğer hatalar her seferinde loglanır.
+    """
+    if _is_401_unauthorized(err):
+        if _should_log_exec_401(bot_id):
+            logger.warning(
+                "BOT_EXECUTION_BALANCE_CHECK_FAIL bot_id=%s side=%s err=401 Unauthorized "
+                "(emir gönderilmedi; tekrar 10 dk içinde loglanmayacak)",
+                bot_id,
+                side,
+            )
+        else:
+            logger.debug(
+                "BOT_EXECUTION_BALANCE_CHECK_FAIL bot_id=%s side=%s err=401 (throttled, emir gönderilmedi)",
+                bot_id,
+                side,
+            )
+        return
+    logger.warning(
+        "BOT_EXECUTION_BALANCE_CHECK_FAIL bot_id=%s side=%s err=%s (emir gönderilmedi)",
+        bot_id,
+        side,
+        err,
+    )
+
+
 def _append_skip(
     db: Optional[SQLASession],
     bot_id: int,
@@ -1380,8 +1409,12 @@ async def run_actions(
                                 )
                                 continue
                     except Exception as recon_err:
+                        # Ön-kontrol yapılamadı; emir gönderilmeye devam edilir.
+                        # Çift emir riski yok: her emir newClientOrderId ile gider ve
+                        # Binance aynı client order id'yi -2010 ile reddeder.
                         logger.debug(
-                            "get_order_by_client_order_id failed (proceeding): %s",
+                            "get_order_by_client_order_id failed, submit devam ediyor "
+                            "(çift emir koruması: newClientOrderId): %s",
                             recon_err,
                         )
                 else:
@@ -1854,23 +1887,29 @@ async def run_actions(
                                 )
                             continue
                     except Exception as bal_err:
-                        if _is_401_unauthorized(bal_err):
-                            if not _should_log_exec_401(bot_id):
-                                logger.debug(
-                                    "BOT_EXECUTION_BALANCE_CHECK_FAIL bot_id=%s err=401 (throttled)",
-                                    bot_id,
-                                )
-                            else:
-                                logger.warning(
-                                    "BOT_EXECUTION_BALANCE_CHECK_FAIL bot_id=%s err=401 Unauthorized (tekrar 10 dk içinde loglanmayacak)",
-                                    bot_id,
-                                )
-                        else:
-                            logger.warning(
-                                "BOT_EXECUTION_BALANCE_CHECK_FAIL bot_id=%s err=%s (proceeding)",
+                        # Fail-closed: gerçek bakiye bilinmiyorsa emir gönderilmez.
+                        # Tetikleyici bir sonraki tick'te yeniden değerlendirilir,
+                        # bu yüzden atlamak kayıp değil; körlemesine emir göndermek ise
+                        # bakiyeyi aşan/karşılıksız işlem riski taşır.
+                        _log_balance_check_fail(bot_id, side, bal_err)
+                        if db is not None:
+                            append_event(
+                                db,
                                 bot_id,
-                                bal_err,
+                                account_id,
+                                "SKIP_REASON",
+                                f"BALANCE_CHECK_FAILED side={side} err={bal_err}",
+                                {
+                                    "skip_reason": "BALANCE_CHECK_FAILED",
+                                    "error_code": "BALANCE_CHECK_FAILED",
+                                    "side": side,
+                                    "symbol": symbol,
+                                    "reason": reason,
+                                    "grid_index": a.get("grid_index"),
+                                    "error": str(bal_err)[:300],
+                                },
                             )
+                        continue
                 elif not adapter.paper_mode and side == "SELL":
                     try:
                         balances = await adapter.get_account_balances()
@@ -1918,23 +1957,26 @@ async def run_actions(
                                 )
                             continue
                     except Exception as bal_err:
-                        if _is_401_unauthorized(bal_err):
-                            if not _should_log_exec_401(bot_id):
-                                logger.debug(
-                                    "BOT_EXECUTION_BALANCE_CHECK_FAIL bot_id=%s SELL err=401 (throttled)",
-                                    bot_id,
-                                )
-                            else:
-                                logger.warning(
-                                    "BOT_EXECUTION_BALANCE_CHECK_FAIL bot_id=%s SELL err=401 Unauthorized (tekrar 10 dk içinde loglanmayacak)",
-                                    bot_id,
-                                )
-                        else:
-                            logger.warning(
-                                "BOT_EXECUTION_BALANCE_CHECK_FAIL bot_id=%s SELL err=%s (proceeding)",
+                        # Fail-closed: bkz. BUY dalındaki açıklama.
+                        _log_balance_check_fail(bot_id, side, bal_err)
+                        if db is not None:
+                            append_event(
+                                db,
                                 bot_id,
-                                bal_err,
+                                account_id,
+                                "SKIP_REASON",
+                                f"BALANCE_CHECK_FAILED side={side} err={bal_err}",
+                                {
+                                    "skip_reason": "BALANCE_CHECK_FAILED",
+                                    "error_code": "BALANCE_CHECK_FAILED",
+                                    "side": side,
+                                    "symbol": symbol,
+                                    "reason": reason,
+                                    "grid_index": a.get("grid_index"),
+                                    "error": str(bal_err)[:300],
+                                },
                             )
+                        continue
                     if qty > 0:
                         try:
                             from app.botengine.order_qty import validate_market_sell_qty

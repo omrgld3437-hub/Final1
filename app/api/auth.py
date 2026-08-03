@@ -771,13 +771,20 @@ def validate_password_strength(
 
 
 def get_client_ip(request: Request) -> str:
-    """Get client IP address (supports X-Forwarded-For behind reverse proxy)."""
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    if request.client:
-        return request.client.host
-    return "unknown"
+    """Gerçek istemci IP'si.
+
+    Forwarding başlıkları yalnızca istek güvenilen bir reverse proxy'den (bkz.
+    TRUSTED_PROXY_IPS) geldiğinde okunur. Aksi halde istemci kendi
+    ``X-Forwarded-For`` başlığını uydurarak rate limit / IP whitelist / audit
+    kaydını atlatabilir.
+
+    Nginx ``X-Real-IP``'yi her istekte ``$remote_addr`` ile ezdiği için ona
+    güvenilir; ``X-Forwarded-For`` ise eklemeli olduğundan (``$proxy_add_x_forwarded_for``)
+    gerçek IP **son** eleman olur, ilki değil.
+    """
+    from app.core.client_ip import client_ip_from_request
+
+    return client_ip_from_request(request)
 
 
 def _normalize_phone(s: str) -> str:
@@ -2615,9 +2622,12 @@ class ContactMessageRequest(BaseModel):
 
 @router.post("/auth/contact")
 async def send_contact_message(
-    req: ContactMessageRequest, request: Request, db: Session = Depends(get_db)
+    req: ContactMessageRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current: dict = Depends(require_auth),
 ):
-    """Send contact message to admin (only approved users)"""
+    """Send contact message to admin (only approved users). Auth zorunlu."""
     # Validate message
     if not req.message or len(req.message.strip()) < 1:
         raise HTTPException(status_code=400, detail="Mesaj boş olamaz")
@@ -2654,6 +2664,16 @@ async def send_contact_message(
                 .first()
             )
             if user:
+                # Telefon numarası başka bir kullanıcıya aitse mesaj o kullanıcı
+                # adına kaydedilemez; kimlik yalnızca oturumdan gelir.
+                if not current.get("is_admin") and user.id != current.get("user_id"):
+                    raise HTTPException(
+                        status_code=403,
+                        detail={
+                            "error_code": "FORBIDDEN",
+                            "message": "Başka bir kullanıcı adına mesaj gönderemezsiniz",
+                        },
+                    )
                 if not user.is_approved:
                     raise HTTPException(
                         status_code=403,
@@ -2890,8 +2910,12 @@ async def reply_contact_message(
 
 
 @router.get("/auth/contact-history")
-async def get_contact_history(request: Request, db: Session = Depends(get_db)):
-    """Get contact message history for current user"""
+async def get_contact_history(
+    request: Request,
+    db: Session = Depends(get_db),
+    current: dict = Depends(require_auth),
+):
+    """Get contact message history for current user. Auth + hesap sahipliği zorunlu."""
     # Get account_id from query parameter
     account_id = request.query_params.get("account_id")
     if not account_id:
@@ -2899,8 +2923,10 @@ async def get_contact_history(request: Request, db: Session = Depends(get_db)):
 
     try:
         account_id_int = int(account_id)
-    except:
+    except (TypeError, ValueError):
         raise HTTPException(status_code=400, detail="Geçersiz account_id")
+
+    require_account_access(current, account_id_int)
 
     # Get account and user
     account = db.query(Account).filter(Account.id == account_id_int).first()
