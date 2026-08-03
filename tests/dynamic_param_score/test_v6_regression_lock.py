@@ -134,21 +134,16 @@ def _assert_global_invariants(name: str, result, params, display, notes) -> None
     assert int(display["sell_grid_count"]) == len(profile.sell_grids), name
     assert display["buy_grid_distances_pct"] == [abs(g.distance_pct) for g in profile.buy_grids], name
     assert display["sell_grid_distances_pct"] == [g.distance_pct for g in profile.sell_grids], name
+    # PA needs authored ladders even for Kapalı/reference profiles.
+    assert params.buy_grid_count == len(profile.buy_grids), name
+    assert params.sell_grid_count == len(profile.sell_grids), name
+    assert display["buy_grid_distances_pct"] == params.buy_grid_ladder_pcts, name
+    assert display["sell_grid_distances_pct"] == params.sell_grid_ladder_pcts, name
     reference = bool((profile.modules or {}).get("reference_plan_only"))
+    assert params.buy_disabled is (not profile.normal_buy_enabled or reference), name
     if reference:
-        assert params.buy_grid_count == 0, name
-        assert params.sell_grid_count == 0, name
-        assert params.buy_grid_ladder_pcts == [], name
-        assert params.sell_grid_ladder_pcts == [], name
-    elif profile.normal_buy_enabled:
-        assert int(display["buy_grid_count"]) == params.buy_grid_count, name
-        assert display["buy_grid_distances_pct"] == params.buy_grid_ladder_pcts, name
-        assert display["sell_grid_distances_pct"] == params.sell_grid_ladder_pcts, name
-    else:
-        assert params.buy_grid_count == 0, name
-        assert params.buy_grid_ladder_pcts == [], name
-        assert display["sell_grid_distances_pct"] == params.sell_grid_ladder_pcts, name
-    assert params.buy_disabled is (not profile.normal_buy_enabled), name
+        assert params.rebuy_enabled is False, name
+        assert params.resell_enabled is False, name
 
 
 def test_v6_golden_tlm_parabolic_pump_locked():
@@ -200,8 +195,9 @@ def test_v6_golden_dydx_deep_drawdown_locked():
         (10, 20),
         (15, 10),
     ]
-    assert params.buy_grid_count == 0
-    assert params.sell_grid_count == 0
+    assert params.buy_grid_count == 4
+    assert params.sell_grid_count == 4
+    assert params.buy_disabled is True
     assert result.deployable is False
 
 
@@ -834,9 +830,10 @@ def test_1000cat_r4_low_liq_not_std_display():
     assert result.deployable is False
     assert result.deploy_block_reason == "restricted_by_liquidity"
     assert result.profile.normal_buy_enabled is False
-    assert params.buy_grid_count == 0
-    assert params.sell_grid_count == 0
-    assert display["buy_grid_count"] == 4  # reference plan visible in PA
+    assert params.buy_grid_count == 4
+    assert params.sell_grid_count == 4
+    assert params.buy_disabled is True
+    assert display["buy_grid_count"] == 4
     assert display["sell_grid_count"] == 4
     assert notes["semantic_role"] == "LOW_LIQUIDITY_RESTRICTED"
     blob = _display_blob(display, scenario, notes)
@@ -868,7 +865,8 @@ def test_r8_deep_crash_supports_conditional_probe_metadata():
     # Kapalı reference plan: buys off for live, but 4+4 ladders remain for PA.
     assert result.profile.normal_buy_enabled is False
     assert len(result.profile.buy_grids) == 4
-    assert params.buy_grid_count == 0
+    assert params.buy_grid_count == 4
+    assert params.buy_disabled is True
     probe = notes.get("conditional_probe") or {}
     assert probe.get("enabled") is True
     assert "conditional probe" in _display_blob(display, scenario, notes)
@@ -895,7 +893,8 @@ def test_r8_low_liq_restricted_uses_deeper_grid_and_not_crash_copy():
     assert display["canonical_headline"] == expected_headline
     assert display["regime_headline"] == f"R8 · {PROFILE_COPY[expected_key][0]}"
     assert result.profile.normal_buy_enabled is False
-    assert params.buy_grid_count == 0
+    assert params.buy_grid_count == 4
+    assert params.buy_disabled is True
     blob = _display_blob(display, scenario, notes)
     assert "likidite/spread riski yüksek" in blob or "restricted" in blob
     assert "crash profilinde" not in blob

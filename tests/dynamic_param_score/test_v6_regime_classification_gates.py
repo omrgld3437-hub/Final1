@@ -626,8 +626,9 @@ def test_r8_hard_block_disables_buys_profit_loop_and_deploy():
         assert len(result.profile.sell_grids) == 4
         assert result.profile.buyback_after_sell_enabled is False
         assert result.profile.profit_sell_after_buyback_enabled is False
-        assert params.buy_grid_count == 0
-        assert params.sell_grid_count == 0
+        assert params.buy_grid_count == 4
+        assert params.sell_grid_count == 4
+        assert params.buy_disabled is True
         assert params.rebuy_enabled is False
         assert params.resell_enabled is False
         assert notes.get("semantic_role") == "R8_HARD_BLOCK"

@@ -35,32 +35,11 @@ export interface AssistantConfig {
     resell_enabled?: boolean;
   };
   max_buy_levels?: number;
+  profile_display?: string;
+  display_regime_label?: string;
+  market_status_plain?: string;
+  recommendation_only?: boolean;
   [key: string]: unknown;
-}
-
-interface MarketRecommendation {
-  scenario_code?: string;
-  tone?: "positive" | "neutral" | "caution" | "danger" | "critical";
-  title?: string;
-  summary?: string;
-  action?: string;
-  allocation?: string;
-  sell_grid?: string;
-  buy_grid?: string;
-  reasons?: string[];
-  interpretation?: string;
-  risk_control?: string;
-  invalidation?: string;
-  engine_plan?: {
-    status?: string;
-    allocation?: string;
-    buy_ladder?: string;
-    sell_ladder?: string;
-    trailing?: string;
-    profit_cycle?: string;
-  };
-  market_evidence?: string[];
-  disclaimer?: string;
 }
 
 export interface AssistantResult {
@@ -92,9 +71,15 @@ export interface AssistantResult {
   management_mode?: string;
   mode?: string;
   legacy_parameter_application_disabled?: boolean;
-  recommendation?: MarketRecommendation;
+  apply_policy?: string;
+  apply_policy_label?: string;
+  profile_key?: string;
+  profile_headline?: string;
+  profile_explanation?: string;
+  automatic_apply_label?: string;
   ui_config?: AssistantConfig | null;
   recommendation_config?: AssistantConfig | null;
+  v6_display?: Record<string, unknown>;
   [key: string]: unknown;
 }
 
@@ -102,37 +87,47 @@ function pct(value: unknown): string {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return "—";
   const normalized = numeric <= 1 ? numeric * 100 : numeric;
-  return `%${normalized.toFixed(0)}`;
+  return `%${normalized.toFixed(normalized % 1 === 0 ? 0 : 2)}`;
 }
 
-function toneClasses(tone: MarketRecommendation["tone"]): string {
-  if (tone === "critical") {
-    return "border-red-400/25 bg-red-400/[0.07] text-red-100";
-  }
-  if (tone === "danger") {
-    return "border-orange-300/20 bg-orange-300/[0.06] text-orange-100";
-  }
-  if (tone === "positive") {
-    return "border-emerald-300/20 bg-emerald-300/[0.055] text-emerald-100";
-  }
-  if (tone === "caution") {
-    return "border-amber-300/20 bg-amber-300/[0.055] text-amber-100";
-  }
-  return "border-sky-300/15 bg-sky-300/[0.045] text-sky-100";
+function formatLadder(
+  grids: Array<Record<string, number>> | undefined,
+  side: "buy" | "sell",
+): string {
+  if (!grids?.length) return "—";
+  return grids
+    .map((row) => {
+      const dist = Number(
+        side === "buy"
+          ? row.buy_grid_pct ?? row.trigger_pct ?? row.distance_pct
+          : row.sell_grid_pct ?? row.trigger_pct ?? row.distance_pct,
+      );
+      const amt = Number(
+        side === "buy"
+          ? row.buy_qty_pct_of_quote ?? row.qty_pct ?? row.amount_pct
+          : row.sell_qty_pct_of_base ?? row.qty_pct ?? row.amount_pct,
+      );
+      if (!Number.isFinite(dist) || !Number.isFinite(amt)) return null;
+      const sign = side === "buy" ? "−" : "+";
+      return `${sign}%${Math.abs(dist)} → %${amt}`;
+    })
+    .filter(Boolean)
+    .join("; ");
 }
 
 export default function ParamAssistantPanel({
   symbol,
   budget,
+  onApply,
 }: {
   symbol: string;
   budget: number;
   onApply: (config: AssistantConfig, result: AssistantResult) => void;
 }) {
-  const assistantAvailable = true;
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<AssistantResult | null>(null);
   const [error, setError] = useState("");
+  const [applied, setApplied] = useState(false);
   const scopeKey = useMemo(
     () => `${symbol.trim().toUpperCase()}::${Number(budget).toFixed(8)}`,
     [budget, symbol],
@@ -141,10 +136,10 @@ export default function ParamAssistantPanel({
   useEffect(() => {
     setResult(null);
     setError("");
+    setApplied(false);
   }, [scopeKey]);
 
   const analyze = async () => {
-    if (!assistantAvailable) return;
     if (loading) return;
     if (!symbol.trim() || budget < 25) {
       setError("Analiz için geçerli bir parite ve en az 25 USDT bütçe gerekir.");
@@ -152,20 +147,28 @@ export default function ParamAssistantPanel({
     }
     setLoading(true);
     setError("");
+    setApplied(false);
     try {
-      const response = await apiFetch<AssistantResult>("/api/param-assistant/advice", {
+      // Use V6 calculate (net_profile_library 4+4). Do not use /advice —
+      // that path strips ui_config and returns narrative-only templates.
+      const response = await apiFetch<AssistantResult>("/api/param-assistant/calculate", {
         method: "POST",
         body: JSON.stringify({
           symbol: symbol.trim().toUpperCase(),
           budget,
           analysis_level: "professional_auto",
-          first_start_buy_only: true,
+          // Bilateral library plan for PA display/apply (not first-start buy-only).
+          first_start_buy_only: false,
           dry_run: true,
         }),
         timeoutMs: 90_000,
       });
-      if (!response?.ok || !response.recommendation) {
+      if (!response?.ok) {
         throw new Error("Analiz sonucu doğrulanamadı.");
+      }
+      const config = response.ui_config || response.recommendation_config;
+      if (!config) {
+        throw new Error("Profil parametreleri üretilemedi.");
       }
       setResult(response);
     } catch (cause) {
@@ -175,8 +178,40 @@ export default function ParamAssistantPanel({
     }
   };
 
-  const recommendation = result?.recommendation;
-  const enginePlan = recommendation?.engine_plan;
+  const config = result?.ui_config || result?.recommendation_config || null;
+  const canApply = Boolean(config?.up?.grids?.length || config?.down?.grids?.length);
+  const referenceOnly = Boolean(
+    config?.recommendation_only ||
+      result?.legacy_parameter_application_disabled ||
+      (result?.deployable === false &&
+        String(result?.apply_policy || "").toLowerCase().includes("no_trade")),
+  );
+  const headline =
+    String(
+      result?.profile_headline ||
+        config?.profile_display ||
+        config?.display_regime_label ||
+        result?.display_regime_label ||
+        result?.market_status_plain ||
+        result?.selected_profile ||
+        "—",
+    );
+  const whyText = String(
+    result?.profile_explanation || result?.explain || "",
+  );
+  const basePct = Number(config?.base_alloc_pct);
+  const quotePct = Number(config?.quote_alloc_pct);
+  const sellLadder = formatLadder(config?.up?.grids, "sell");
+  const buyLadder = formatLadder(config?.down?.grids, "buy");
+  const sellTrail = config?.up?.trail_pct;
+  const buyTrail = config?.down?.trail_pct;
+  const profit = config?.profit;
+
+  const handleApply = () => {
+    if (!result || !config || !canApply) return;
+    onApply(config, result);
+    setApplied(true);
+  };
 
   return (
     <section className="rounded-2xl border border-fuchsia-300/15 bg-gradient-to-br from-fuchsia-300/[0.07] to-amber-300/[0.03] p-4">
@@ -184,21 +219,18 @@ export default function ParamAssistantPanel({
         <p className="flex items-center gap-2 text-sm font-black text-white">
           <BrainCircuit className="h-4 w-4 text-fuchsia-200" />
           Parametre Asistanı
+          <span className="rounded-full border border-fuchsia-200/20 bg-fuchsia-200/10 px-2 py-1 text-[10px] font-black text-fuchsia-100">
+            V6 · 4+4
+          </span>
         </p>
         <button
           type="button"
           onClick={() => void analyze()}
-          disabled={!assistantAvailable || loading}
-          aria-disabled={!assistantAvailable}
+          disabled={loading}
           aria-busy={loading}
           className="isolate inline-flex min-h-11 w-full shrink-0 items-center justify-center overflow-hidden whitespace-nowrap rounded-xl border border-fuchsia-200/20 bg-fuchsia-200/10 px-4 py-2.5 text-xs font-black leading-none text-fuchsia-100 transition hover:bg-fuchsia-200/15 disabled:cursor-not-allowed disabled:opacity-55 sm:w-44"
         >
-          {!assistantAvailable ? (
-            <span className="inline-flex items-center justify-center gap-2">
-              <Sparkles className="h-4 w-4 shrink-0" />
-              <span>Çok yakında</span>
-            </span>
-          ) : loading ? (
+          {loading ? (
             <span className="inline-flex items-center justify-center gap-2">
               <LoaderCircle className="h-4 w-4 shrink-0 animate-spin" />
               <span>Analiz ediliyor…</span>
@@ -219,148 +251,97 @@ export default function ParamAssistantPanel({
         </p>
       )}
 
-      {result && recommendation && (
+      {result && config && (
         <div className="mt-4 space-y-3 border-t border-white/8 pt-4">
-          <div className="grid grid-cols-2 gap-2">
-            <InfoTile
-              label="Piyasa"
-              value={result.market_status_plain || recommendation.title || "—"}
-              className="col-span-2 sm:col-span-1"
-            />
-            <InfoTile
-              label="Risk"
-              value={result.risk_display_label || pct(result.risk_score)}
-            />
-          </div>
-
-          <section className={`rounded-2xl border p-4 ${toneClasses(recommendation.tone)}`}>
-            <div className="flex items-start gap-3">
-              <ShieldAlert className="mt-0.5 h-5 w-5 shrink-0" />
-              <div>
-                <p className="text-xs font-black tracking-wide">
-                  {recommendation.title}
-                </p>
-                <p className="mt-2 text-xs leading-5 text-current/85">
-                  {recommendation.summary}
-                </p>
-                <p className="mt-3 rounded-xl bg-black/15 px-3 py-2.5 text-xs font-bold leading-5">
-                  {recommendation.action}
-                </p>
-              </div>
-            </div>
-          </section>
-
-          <section className="rounded-xl border border-white/8 bg-white/[0.025] p-4">
+          <section className="rounded-2xl border border-white/10 bg-black/20 p-4">
             <p className="text-[10px] font-black uppercase tracking-wider text-fuchsia-100">
-              Bu kararı nasıl okumalı?
+              Seçilen profil
             </p>
-            <p className="mt-2 text-xs leading-6 text-neutral-300">
-              {recommendation.interpretation}
+            <p className="mt-2 text-sm font-black leading-6 text-white">{headline}</p>
+            <p className="mt-2 text-[11px] leading-5 text-neutral-400">
+              {result.profile_key || result.selected_profile || result.template_key || "—"}
+              {" · "}
+              {result.automatic_apply_label ||
+                (result.deployable ? "Uygulanabilir" : "Referans / koşullu")}
+              {" · Risk "}
+              {result.risk_display_label || pct(result.risk_score)}
             </p>
           </section>
-
-          <div>
-            <p className="mb-2 text-[10px] font-black uppercase tracking-wider text-neutral-500">
-              Motorun bu coin için hesapladığı somut plan
-            </p>
-            <div className="grid gap-2 lg:grid-cols-3">
-              <AdviceTile
-                icon={CircleDollarSign}
-                title="Coin / nakit oranı"
-                text={recommendation.allocation || enginePlan?.allocation}
-                tone="allocation"
-              />
-              <AdviceTile
-                icon={ArrowUp}
-                title="Satış gridleri"
-                text={enginePlan?.sell_ladder || recommendation.sell_grid}
-                tone="sell"
-              />
-              <AdviceTile
-                icon={ArrowDown}
-                title="Alım gridleri"
-                text={enginePlan?.buy_ladder || recommendation.buy_grid}
-                tone="buy"
-              />
-            </div>
-          </div>
-
-          {(enginePlan?.trailing || enginePlan?.profit_cycle) && (
-            <section className="rounded-xl border border-fuchsia-300/12 bg-fuchsia-300/[0.03] p-4">
-              <p className="text-[10px] font-black uppercase tracking-wider text-fuchsia-100">
-                Trailing ve kâr döngüsü
-              </p>
-              <p className="mt-2 text-[11px] leading-5 text-neutral-300">
-                {enginePlan.status}
-              </p>
-              <p className="mt-1 text-[11px] leading-5 text-neutral-300">
-                {enginePlan.trailing}
-              </p>
-              <p className="mt-1 text-[11px] leading-5 text-neutral-300">
-                {enginePlan.profit_cycle}
-              </p>
-            </section>
-          )}
-
-          {recommendation.market_evidence?.length ? (
-            <section className="rounded-xl border border-white/7 bg-black/15 p-4">
-              <p className="text-[10px] font-black uppercase tracking-wider text-neutral-500">
-                Motor neden bu sonuca ulaştı?
-              </p>
-              <ul className="mt-2 space-y-1.5 text-[11px] leading-5 text-neutral-300">
-                {recommendation.market_evidence.map((evidence, index) => (
-                  <li key={`${evidence}-${index}`}>• {evidence}</li>
-                ))}
-              </ul>
-            </section>
-          ) : null}
 
           <div className="grid gap-2 lg:grid-cols-3">
             <AdviceTile
-              icon={ShieldAlert}
-              title="Risk sınırı"
-              text={recommendation.risk_control}
+              icon={CircleDollarSign}
+              title="Base / Quote"
+              text={
+                Number.isFinite(basePct) && Number.isFinite(quotePct)
+                  ? `%${basePct} base / %${quotePct} quote`
+                  : "—"
+              }
               tone="allocation"
             />
             <AdviceTile
-              icon={Sparkles}
-              title="Ne zaman yeniden analiz?"
-              text={recommendation.invalidation}
+              icon={ArrowUp}
+              title={`Satış gridleri (4) · trail ${pct(sellTrail)}`}
+              text={sellLadder}
               tone="sell"
             />
             <AdviceTile
-              icon={BrainCircuit}
-              title="Ana karar"
-              text={recommendation.action}
+              icon={ArrowDown}
+              title={`Alış gridleri (4) · trail ${pct(buyTrail)}`}
+              text={buyLadder}
               tone="buy"
             />
           </div>
 
-          <p className="text-[10px] leading-5 text-neutral-500">
-            {recommendation.disclaimer}
-          </p>
+          <section className="rounded-xl border border-fuchsia-300/12 bg-fuchsia-300/[0.03] p-4">
+            <p className="text-[10px] font-black uppercase tracking-wider text-fuchsia-100">
+              Kâr döngüsü
+            </p>
+            <p className="mt-2 text-[11px] leading-5 text-neutral-300">
+              Alınan coinlerin kâr satışı:{" "}
+              {profit?.resell_enabled === false || profit?.resell_trigger_pct == null
+                ? "Kapalı"
+                : `+${pct(profit.resell_trigger_pct)} · trailing ${pct(profit.resell_trail_pct)}`}
+            </p>
+            <p className="mt-1 text-[11px] leading-5 text-neutral-300">
+              Satılan coinlerin kâr alışı:{" "}
+              {profit?.rebuy_enabled === false || profit?.rebuy_trigger_pct == null
+                ? "Kapalı"
+                : `−${pct(profit.rebuy_trigger_pct)} · trailing ${pct(profit.rebuy_trail_pct)}`}
+            </p>
+          </section>
+
+          {whyText ? (
+            <section className="rounded-xl border border-white/8 bg-white/[0.025] p-4">
+              <p className="text-[10px] font-black uppercase tracking-wider text-neutral-500">
+                Neden bu profil?
+              </p>
+              <p className="mt-2 text-xs leading-6 text-neutral-300">{whyText}</p>
+            </section>
+          ) : null}
+
+          {referenceOnly ? (
+            <p className="flex gap-2 rounded-xl border border-amber-300/20 bg-amber-300/5 px-3 py-2.5 text-[11px] text-amber-100">
+              <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />
+              Bu profil referans / koşullu plandır. Değerler forma aktarılabilir; otomatik emir güvenliği
+              deploy kapısıyla sınırlıdır.
+            </p>
+          ) : null}
+
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <button
+              type="button"
+              onClick={handleApply}
+              disabled={!canApply}
+              className="inline-flex min-h-11 flex-1 items-center justify-center gap-2 rounded-xl border border-emerald-300/25 bg-emerald-300/15 px-4 py-2.5 text-xs font-black text-emerald-100 transition hover:bg-emerald-300/25 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <Sparkles className="h-4 w-4" />
+              {applied ? "Forma uygulandı" : "Forma uygula"}
+            </button>
+          </div>
         </div>
       )}
     </section>
-  );
-}
-
-function InfoTile({
-  label,
-  value,
-  className = "",
-}: {
-  label: string;
-  value: string;
-  className?: string;
-}) {
-  return (
-    <div className={`rounded-xl border border-white/8 bg-black/15 p-3 ${className}`}>
-      <span className="block text-[10px] font-bold uppercase tracking-wider text-neutral-500">
-        {label}
-      </span>
-      <strong className="mt-1 block text-xs leading-5 text-white">{value}</strong>
-    </div>
   );
 }
 

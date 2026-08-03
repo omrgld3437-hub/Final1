@@ -313,8 +313,9 @@ def test_pb11_always_has_rebuy_and_profit_sell(r8_pb11_fixture: V6InputContract)
     if scenario.get("sub_profile_hint") == "R8_HARD_BLOCK":
         assert decision.deployable is False
         assert decision.blocking_reasons == ["technical_block"]
-        assert decision.params.buy_grid_count == 0
-        assert decision.params.sell_grid_count == 0
+        assert decision.params.buy_grid_count == 4
+        assert decision.params.sell_grid_count == 4
+        assert decision.params.buy_disabled is True
         return
     params = decision.params
     assert params is not None

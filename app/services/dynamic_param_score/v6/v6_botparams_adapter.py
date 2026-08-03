@@ -111,21 +111,25 @@ def v6_profile_to_bot_params(
     catalog_profile_id: str = "",
 ) -> BotParams:
     """Map V6 lattice profile to legacy BotParams (profit loop: sell → buyback → profit sell)."""
-    # Live BotParams: Kapalı / reference-only ladders are display-only.
+    # Keep authored 4+4 ladders in BotParams for PA/ui_config. Kapalı /
+    # reference-only profiles still expose ladders, but live gates stay closed
+    # via buy_disabled + deployable/automatic_apply=false.
     reference_only = bool((profile.modules or {}).get("reference_plan_only")) or not bool(
         (profile.modules or {}).get("automatic_apply", True)
     )
-    buy_n = 0 if reference_only or not profile.normal_buy_enabled else len(profile.buy_grids)
-    sell_n = 0 if reference_only else len(profile.sell_grids)
-    buy_dist = [abs(g.distance_pct) for g in profile.buy_grids] if buy_n else []
-    sell_dist = [g.distance_pct for g in profile.sell_grids] if sell_n else []
-    buy_weights = [g.amount_pct / 100.0 for g in profile.buy_grids] if buy_n else []
-    sell_weights = [g.amount_pct / 100.0 for g in profile.sell_grids] if sell_n else []
+    buy_n = len(profile.buy_grids)
+    sell_n = len(profile.sell_grids)
+    buy_dist = [abs(g.distance_pct) for g in profile.buy_grids]
+    sell_dist = [g.distance_pct for g in profile.sell_grids]
+    buy_weights = [g.amount_pct / 100.0 for g in profile.buy_grids]
+    sell_weights = [g.amount_pct / 100.0 for g in profile.sell_grids]
 
     sell_trail = trailing_pct_from_code(profile.sell_trailing_code)
     buy_trail = trailing_pct_from_code(profile.buy_trailing_code)
-    post_sell_bb = profile.buyback_after_sell_enabled
-    post_bb_profit = profile.profit_sell_after_buyback_enabled and post_sell_bb
+    post_sell_bb = profile.buyback_after_sell_enabled and not reference_only
+    post_bb_profit = (
+        profile.profit_sell_after_buyback_enabled and post_sell_bb and not reference_only
+    )
 
     rebuy_trigger = profit_pct_from_code(profile.buyback_trigger_code) if post_sell_bb else None
     rebuy_trail = trailing_pct_from_code(profile.buyback_trailing_code) if post_sell_bb else None
@@ -134,7 +138,8 @@ def v6_profile_to_bot_params(
 
     base_frac = profile.base_allocation_pct / 100.0
     pid = catalog_profile_id or profile.profile_id
-    sell_only = not profile.normal_buy_enabled and sell_n > 0
+    live_buys = bool(profile.normal_buy_enabled) and not reference_only
+    sell_only = (not live_buys) and sell_n > 0 and not reference_only
     max_exposure_pct = (profile.modules or {}).get("max_total_exposure_pct")
     if max_exposure_pct is not None:
         max_base_exposure_frac = max(base_frac, min(float(max_exposure_pct) / 100.0, 0.95))
@@ -158,11 +163,11 @@ def v6_profile_to_bot_params(
         max_quote_to_spend_per_buy_frac=min(max(buy_weights) if buy_weights else 0.35, 0.45),
         downtrend_buy_throttle=False,
         min_cycle_profit_after_fee_pct=DEFAULT_COST_FLOOR_PCT,
-        emergency_no_buy=profile.scenario.behavior_id == "PB16",
+        emergency_no_buy=profile.scenario.behavior_id == "PB16" or reference_only,
         cancel_existing_buy_orders=False,
         cancel_existing_sell_orders=False,
         reason_code=f"v6_{pid}",
-        buy_disabled=not profile.normal_buy_enabled,
+        buy_disabled=not live_buys,
         sell_only_mode=sell_only,
         rebuy_enabled=post_sell_bb,
         resell_enabled=post_bb_profit,
