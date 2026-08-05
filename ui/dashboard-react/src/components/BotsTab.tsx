@@ -63,9 +63,9 @@ interface DeleteTarget {
 type SortDirection = "desc" | "asc";
 
 interface CreationFeedback {
-  botId: number;
+  botId: number | null;
   symbol: string;
-  phase: "starting" | "success";
+  phase: "creating" | "success";
 }
 
 const INITIAL_FORM: NewBotForm = {
@@ -481,7 +481,8 @@ export default function BotsTab({
   };
 
   useEffect(() => {
-    if (!creationFeedback || creationFeedback.phase !== "starting") return;
+    if (!creationFeedback || creationFeedback.phase !== "creating") return;
+    if (creationFeedback.botId == null) return;
     void refreshBotsFromEngine();
     const timer = window.setInterval(() => {
       if (document.visibilityState === "visible") {
@@ -492,7 +493,8 @@ export default function BotsTab({
   }, [accountId, creationFeedback?.botId, creationFeedback?.phase]);
 
   useEffect(() => {
-    if (!creationFeedback || creationFeedback.phase !== "starting") return;
+    if (!creationFeedback || creationFeedback.phase !== "creating") return;
+    if (creationFeedback.botId == null) return;
     const createdBot = bots.find(
       (bot) => botIdentity(bot) === creationFeedback.botId,
     );
@@ -500,28 +502,16 @@ export default function BotsTab({
     const status = String(
       createdBot.display_status || createdBot.status || "",
     ).toLowerCase();
-    // Start succeeded once the bot is visible in any live engine state.
-    if (!["running", "starting", "waiting"].includes(status)) return;
+    // Only celebrate once the engine is actually running — not create/start pending.
+    if (status !== "running") return;
     setCreationFeedback((current) =>
-      current && current.botId === creationFeedback.botId
+      current &&
+      current.botId === creationFeedback.botId &&
+      current.phase === "creating"
         ? { ...current, phase: "success" }
         : current,
     );
   }, [bots, creationFeedback]);
-
-  useEffect(() => {
-    if (!creationFeedback || creationFeedback.phase !== "starting") return;
-    const timeout = window.setTimeout(() => {
-      setCreationFeedback((current) =>
-        current &&
-        current.botId === creationFeedback.botId &&
-        current.phase === "starting"
-          ? { ...current, phase: "success" }
-          : current,
-      );
-    }, 8_000);
-    return () => window.clearTimeout(timeout);
-  }, [creationFeedback?.botId, creationFeedback?.phase]);
 
   useEffect(() => {
     if (!creationFeedback || creationFeedback.phase !== "success") return;
@@ -823,11 +813,20 @@ export default function BotsTab({
     setWizardError("");
     setActionError("");
     setActionNotice("");
-    setCreationFeedback(null);
     setCreationFeedbackLeaving(false);
+    setCreationFeedback({
+      botId: null,
+      symbol: form.symbol,
+      phase: "creating",
+    });
     try {
       const created = await createEngineBot(accountId, payload);
       createdBotId = created.bot_id;
+      setCreationFeedback({
+        botId: created.bot_id,
+        symbol: created.symbol || form.symbol,
+        phase: "creating",
+      });
       setBots((current) => {
         const [optimisticBot] = mergeEngineBots(
           [
@@ -836,7 +835,7 @@ export default function BotsTab({
               bot_code: created.bot_code,
               account_id: created.account_id,
               symbol: created.symbol,
-              status: "running",
+              status: "starting",
               display_status: "starting",
               initial_allocation_done: false,
               config: payload,
@@ -850,11 +849,6 @@ export default function BotsTab({
         ];
       });
       await startEngineBot(accountId, created.bot_id);
-      setCreationFeedback({
-        botId: created.bot_id,
-        symbol: created.symbol || form.symbol,
-        phase: "starting",
-      });
       setShowCreateStudio(false);
       setCurrentStep(1);
       clearAssistant();
@@ -975,8 +969,8 @@ export default function BotsTab({
             <LoaderCircle className="h-4 w-4 shrink-0 animate-spin text-fuchsia-200" />
           )}
           {creationFeedback.phase === "success"
-            ? `${splitTradingSymbol(creationFeedback.symbol).label} botunuz başarıyla çalıştırıldı.`
-            : "Botunuz oluşturuluyor."}
+            ? "Bot başarıyla çalıştırıldı."
+            : "Bot oluşturuluyor."}
         </div>
       )}
       {actionNotice && (

@@ -85,8 +85,10 @@ assert.match(botsTab, /useState<SortDirection>\("desc"\)/, "Botlar ilk açılı�
 assert.match(botsTab, /<ArrowUp className="h-5 w-5"/);
 assert.match(botsTab, /<ArrowDown className="h-5 w-5"/);
 assert.doesNotMatch(botsTab, /TrendingUp/);
-assert.match(botsTab, /Botunuz oluşturuluyor\./);
-assert.match(botsTab, /botunuz başarıyla çalıştırıldı\./);
+assert.match(botsTab, /Bot oluşturuluyor\./);
+assert.match(botsTab, /Bot başarıyla çalıştırıldı\./);
+assert.match(botsTab, /phase: "creating"/);
+assert.match(botsTab, /status !== "running"/);
 assert.match(botsTab, /setCreationFeedbackLeaving\(true\)[\s\S]*?3_000/);
 assert.match(app, /inert=\{botStudioOpen \|\| undefined\}/, "Açık pencerede arka plan etkileşimi kapanmalı.");
 assert.match(app, /if \(botStudioOpenRef\.current\) return;/, "Açık pencerede bot detay yönlendirmesi engellenmeli.");
