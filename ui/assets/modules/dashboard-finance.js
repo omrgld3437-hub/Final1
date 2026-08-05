@@ -3161,7 +3161,13 @@ function renderFinanceTrades(data) {
         const sideText = isDeposit ? '—' : (order.side === 'BUY' ? 'AL' : 'SAT');
         
         const isBotTrade = order.is_bot === true || (order.bot_id && order.bot_id > 0);
-        const sourceText = isBotTrade ? 'BOT' : 'MANUEL';
+        const platRaw = String(order.platform || '').trim();
+        const platNorm = (platRaw === 'ayserose' || platRaw === 'TradeTrailing' || platRaw === 'TraderTrailing')
+            ? 'Ayserose'
+            : (platRaw === 'binance' ? 'Binance' : platRaw);
+        const sourceText = isBotTrade
+            ? 'BOT'
+            : (platNorm || (order.source_label && order.source_label !== 'Spot' ? order.source_label : 'Binance'));
         const sourceColor = isBotTrade ? '#f0b90b' : 'var(--ds-text-secondary)';
         const fillsInfo = order.fills_count > 1 ? ` (${order.fills_count} fill)` : '';
         

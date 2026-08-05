@@ -59,11 +59,16 @@ function _txIsPaperSpotTx(tx) {
 }
 function _txPlatformLabel(tx) {
     if (!tx) return 'Binance';
-    if (tx.bot_id || tx.source === 'bot') return 'ayserose';
-    if (_txIsPaperSpotTx(tx)) return 'ayserose';
+    if (tx.bot_id || tx.source === 'bot') return 'Ayserose';
+    if (_txIsPaperSpotTx(tx)) return 'Ayserose';
     var p = tx.platform && String(tx.platform);
     // Eski kayıtlardaki marka adlarını yeni markaya normalleştir (geriye dönük uyum).
-    if (p) return (p === 'TradeTrailing' || p === 'TraderTrailing') ? 'ayserose' : p;
+    if (p) {
+        var pl = String(p);
+        if (pl === 'TradeTrailing' || pl === 'TraderTrailing' || pl === 'ayserose' || pl === 'Ayserose') return 'Ayserose';
+        if (pl === 'binance' || pl === 'Binance') return 'Binance';
+        return pl;
+    }
     return 'Binance';
 }
 
@@ -111,14 +116,18 @@ function _renderTxHistoryItemHtml(tx) {
     var totalVal = (tx.type === 'deposit' || tx.type === 'withdraw')
         ? (qtyStr + ' ' + (tx.symbol || ''))
         : (amtRow.notional > 0 ? (typeof fmtUsd === 'function' ? fmtUsd(amtRow.notional) : '$' + amtRow.notional) : '—');
-    var sourceLabel = tx.source_label || (tx.source === 'bot' ? 'Bot' : tx.source === 'spot' ? 'Spot' : '—');
     var platformLabel = _txPlatformLabel(tx);
+    var sourceLabel = tx.source_label || (tx.source === 'bot' ? 'Bot' : platformLabel || '—');
+    if (sourceLabel === 'Spot' || sourceLabel === 'Manuel' || sourceLabel === 'MANUEL') sourceLabel = platformLabel;
     var paperBadge = tx.is_paper ? ' <span style="font-size:0.7rem;padding:1px 5px;border-radius:4px;background:rgba(240,185,11,0.15);color:#f0b90b;font-weight:600;vertical-align:middle;">SİMÜLE</span>' : '';
     var metaRight = (tx.type === 'buy' || tx.type === 'sell') ? ('Miktar ' + qtyStr + ' · Fiyat ' + priceStr) : (qtyStr + (tx.symbol ? ' ' + tx.symbol : ''));
+    var metaSource = (tx.source === 'bot' || tx.is_bot)
+        ? (sourceLabel + ' · ' + platformLabel)
+        : sourceLabel;
     return '<div class="tx-history-item" data-tx="' + _txEncodeAttr(tx) + '" role="button" tabindex="0">' +
         '<div class="tx-history-item-left">' +
         '<div class="tx-history-item-title"><span class="' + typeClass + '">' + typeLabel + '</span>' + paperBadge + ' ' + (tx.symbol || '') + '</div>' +
-        '<div class="tx-history-item-meta">' + timeStr + ' · ' + sourceLabel + ' · ' + platformLabel + (tx.bot_name ? ' · ' + tx.bot_name : '') + '</div>' +
+        '<div class="tx-history-item-meta">' + timeStr + ' · ' + metaSource + '</div>' +
         '</div>' +
         '<div class="tx-history-item-right">' +
         '<div class="tx-history-item-total">' + totalVal + '</div>' +
@@ -168,8 +177,9 @@ function spotOrderResultToTxItem(result, symbol, side) {
         commission: 0,
         commission_asset: 'USDT',
         source: 'spot',
-        source_label: 'Spot',
-        platform: r.paper ? 'ayserose' : 'Binance',
+        source_label: 'Ayserose',
+        platform: 'Ayserose',
+        paper: !!r.paper,
         fills_count: 1
     };
 }
@@ -537,8 +547,11 @@ function openTxDetailModal(tx) {
     patchText('txDetailPrice', price !== '—' ? price : '—');
     patchText('txDetailTotal', totalVal);
     patchText('txDetailCommission', comm);
-    patchText('txDetailSource', tx.source_label || (tx.source === 'bot' ? 'Bot' : tx.source === 'spot' ? 'Spot' : '—'));
-    patchText('txDetailPlatform', _txPlatformLabel(tx));
+    var detailPlatform = _txPlatformLabel(tx);
+    var detailSource = tx.source_label || (tx.source === 'bot' || tx.is_bot ? 'Bot' : detailPlatform);
+    if (detailSource === 'Spot' || detailSource === 'Manuel' || detailSource === 'MANUEL') detailSource = detailPlatform;
+    patchText('txDetailSource', detailSource);
+    patchText('txDetailPlatform', detailPlatform);
     modal.style.display = 'flex';
     modal.setAttribute('aria-hidden', 'false');
 }

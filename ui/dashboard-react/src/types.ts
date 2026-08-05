@@ -61,6 +61,11 @@ export interface Trade {
   commission_asset: string;
   commission_usd: number;
   is_bot: boolean;
+  source?: string;
+  source_label?: string;
+  platform?: string | null;
+  bot_id?: number | null;
+  bot_name?: string | null;
   fills_count?: number;
 }
 

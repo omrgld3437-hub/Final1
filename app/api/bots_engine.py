@@ -5894,10 +5894,25 @@ async def _sell_symbol_base_on_delete(
                 min_notional,
             )
             return
-        await engine.place_order(
+        order_result = await engine.place_order(
             sym, "SELL", "MARKET", quantity=base_qty, allow_web=True
         )
         spot_cache.invalidate_balance(account_id)
+        try:
+            from app.services.transaction_history_file_store import (
+                record_bot_close_convert_fill,
+            )
+
+            record_bot_close_convert_fill(
+                db, account_id, bot_id, sym, order_result or {}
+            )
+        except Exception as tx_ex:
+            logger.warning(
+                "bots_delete convert tx_history bot_id=%s symbol=%s err=%s",
+                bot_id,
+                sym,
+                tx_ex,
+            )
         logger.info(
             "bots_delete convert_base_to_quote bot_id=%s symbol=%s base_qty=%.8f",
             bot_id,

@@ -122,13 +122,19 @@ function mainRegimeCode(value: string): string | null {
 
 function shortMainRegime(value: string): string {
   const raw = value.trim();
+  if (!raw) return "—";
+  // PA / net_profile headlines already carry the user-facing meaning
+  // (e.g. "Sistem Yukarı Eğilimli Sıkışma…"). Prefer them over bare R-code maps.
+  if (!/^\s*R[1-8]\b/i.test(raw) && raw.length > 18) {
+    return raw.length > 72 ? `${raw.slice(0, 69).trim()}…` : raw;
+  }
   const code = mainRegimeCode(raw);
   if (code && MAIN_REGIME_LABELS[code]) return MAIN_REGIME_LABELS[code];
   const lower = raw.toLocaleLowerCase("tr-TR");
   if (lower.includes("sert düş") || lower.includes("crash")) return "Sert düşüş var";
   if (lower.includes("düşüş")) return "Düşüş eğilimi var";
   if (lower.includes("toparlan")) return "Toparlanma başlıyor";
-  if (lower.includes("yükseliş")) return "Güçlü yükseliş var";
+  if (lower.includes("yükseliş") || lower.includes("yukarı")) return "Güçlü yükseliş var";
   if (lower.includes("volatil") || lower.includes("dalgal")) {
     return "Sert dalgalanma var";
   }
@@ -136,7 +142,16 @@ function shortMainRegime(value: string): string {
     return "Piyasa kararsız";
   }
   if (lower.includes("dengeli") || lower.includes("yatay")) return "Piyasa dengeli";
-  return raw.split(/\s+/).slice(0, 4).join(" ") || "—";
+  return raw.split(/\s+/).slice(0, 6).join(" ") || "—";
+}
+
+function explainMainRegimeFromHeadline(value: string, fallbackCode: string): string {
+  const detail = explainMainRegime(fallbackCode || value);
+  const lower = value.toLocaleLowerCase("tr-TR");
+  if (lower.includes("yukarı") || lower.includes("yükseliş") || lower.includes("sıkış")) {
+    return "Ana yön yukarı / sıkışma bağlamında seçilen tur planı. Özet, Parametre Asistanı’nın bu tur için uyguladığı profil başlığıyla uyumludur.";
+  }
+  return detail;
 }
 
 function explainMainRegime(value: string): string {
@@ -1015,7 +1030,7 @@ function StrategyParametersCard({
   const applied = dynamicApplied ? snapshotApplied : baseline;
   const displayCycle = toFiniteNumber(snapshot.cycle_id) ?? cycleId;
   const regimeTitle = shortMainRegime(regime);
-  const regimeDetail = explainMainRegime(regime);
+  const regimeDetail = explainMainRegimeFromHeadline(regime, regime);
 
   return (
     <section className="overflow-hidden rounded-[1.75rem] border border-fuchsia-300/15 bg-[#191a20] shadow-[0_24px_80px_rgba(0,0,0,.2)]">
@@ -1273,8 +1288,30 @@ function GridCommandCenter({
       </header>
 
       <div className="space-y-4 p-4 sm:p-5">
-        {showSell && <GridLane title="Yukarı Satış Gridleri" side="sell" entries={sell} baseAsset={gridPair.base} quoteAsset={gridPair.quote} />}
-        {showBuy && <GridLane title="Aşağı Alış Gridleri" side="buy" entries={buy} baseAsset={gridPair.base} quoteAsset={gridPair.quote} />}
+        {showSell && (
+          <GridLane
+            title="Yukarı Satış Gridleri"
+            side="sell"
+            entries={sell}
+            baseAsset={gridPair.base}
+            quoteAsset={gridPair.quote}
+            sideTrailingPct={readNumber(grid.config || {}, [
+              "sell_trigger_trailing_pct",
+            ])}
+          />
+        )}
+        {showBuy && (
+          <GridLane
+            title="Aşağı Alış Gridleri"
+            side="buy"
+            entries={buy}
+            baseAsset={gridPair.base}
+            quoteAsset={gridPair.quote}
+            sideTrailingPct={readNumber(grid.config || {}, [
+              "buy_trigger_trailing_pct",
+            ])}
+          />
+        )}
         {profit.length > 0 && (
           <GridLane
             title={
@@ -1337,6 +1374,7 @@ function GridLane({
   entries,
   baseAsset,
   quoteAsset,
+  sideTrailingPct = null,
 }: {
   title: string;
   detail?: string;
@@ -1347,6 +1385,7 @@ function GridLane({
   }>;
   baseAsset: string;
   quoteAsset: string;
+  sideTrailingPct?: number | null;
 }) {
   const Icon = side === "buy" ? ArrowDown : side === "sell" ? ArrowUp : Sparkles;
   return (
@@ -1390,6 +1429,7 @@ function GridLane({
               baseAsset={baseAsset}
               quoteAsset={quoteAsset}
               fullWidth={side === "profit" && entries.length === 1}
+              sideTrailingPct={sideTrailingPct}
             />
           ))}
         </div>
@@ -1409,6 +1449,7 @@ function GridPointVisualCard({
   baseAsset,
   quoteAsset,
   fullWidth = false,
+  sideTrailingPct = null,
 }: {
   key?: string;
   point: Record<string, unknown>;
@@ -1417,6 +1458,7 @@ function GridPointVisualCard({
   baseAsset: string;
   quoteAsset: string;
   fullWidth?: boolean;
+  sideTrailingPct?: number | null;
 }) {
   const phase = gridPointPhase(point);
   const hasTriggered =
@@ -1455,11 +1497,12 @@ function GridPointVisualCard({
     "trigger_pct",
     "profit_pct",
   ]);
-  const trailingPct = readNumber(point, [
-    "trailing_pct",
-    "trail_pct",
-    "profit_trailing_pct",
-  ]);
+  const trailingPct =
+    readNumber(point, [
+      "trailing_pct",
+      "trail_pct",
+      "profit_trailing_pct",
+    ]) ?? sideTrailingPct;
   const extremePct = hasTriggered
     ? readNumber(point, ["extreme_pct_from_reference"])
     : null;
@@ -1537,13 +1580,15 @@ function GridPointVisualCard({
               {percent(triggerPct)}
             </span>
           )}
-          {trailingPct !== null && (
-            <span className="rounded-full border border-white/8 bg-black/25 px-2 py-0.5 text-[8px] font-black text-neutral-300">
-              Trail {percent(trailingPct)}
-            </span>
-          )}
         </div>
       </div>
+
+      {trailingPct !== null && (
+        <p className="mt-2 text-[10px] font-medium tracking-wide text-neutral-500">
+          Trailing{" "}
+          <span className="text-neutral-400">%{decimal(Math.abs(trailingPct), 2)}</span>
+        </p>
+      )}
 
       <div className="mt-2.5 grid grid-cols-4 gap-1">
         {[0, 1, 2, 3].map((step) => (
@@ -2415,12 +2460,21 @@ export default function BotDetailPage({
         })),
       ]
     : [];
-  const gridRegime = shortMainRegime(
-    deepText(objectValue(objectValue(detail?.dynamic_mode).snapshot).multiplier, [
+  const dynamicSnapshot = objectValue(objectValue(detail?.dynamic_mode).snapshot);
+  const dynamicDps = objectValue(dynamicSnapshot.dps);
+  const dynamicPaPlan = objectValue(dynamicSnapshot.pa_plan);
+  const dynamicNetProfile = objectValue(
+    objectValue(dynamicDps.telemetry).net_profile,
+  );
+  const gridRegimeRaw =
+    deepText(dynamicPaPlan, ["headline"]) ||
+    deepText(dynamicNetProfile, ["headline", "why"]) ||
+    deepText(dynamicDps, ["profile", "profile_key"]) ||
+    deepText(objectValue(dynamicSnapshot.multiplier), [
       "regime_label",
       "regime",
     ]) ||
-    deepText(objectValue(detail?.dynamic_mode).snapshot, ["regime"]) ||
+    deepText(dynamicSnapshot, ["regime"]) ||
     deepText(detail?.dynamic_mode, [
       "display_regime_label",
       "preview_regime_label",
@@ -2433,8 +2487,8 @@ export default function BotDetailPage({
       "regime_label",
       "regime_tag",
     ]) ||
-    "Manuel ayarlar",
-  );
+    "Manuel ayarlar";
+  const gridRegime = shortMainRegime(gridRegimeRaw);
   const gridDirection = gridDirectionLabel(
     deepText(grid?.meta, ["cycle_grid_side"]) ||
       deepText(grid?.state, ["cycle_grid_side"]) ||

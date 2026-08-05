@@ -253,14 +253,39 @@ def _build_dps_context(
     budget: float,
     *,
     allow_no_trade: bool = True,
+    prev_snap: Optional[Dict[str, Any]] = None,
 ) -> BotContext:
+    bot_id = int(state.get("bot_id") or 0) or None
+    symbol = str(
+        (cfg_dict or {}).get("symbol")
+        or state.get("symbol")
+        or ""
+    ).upper()
+    prev = prev_snap if isinstance(prev_snap, dict) else {}
+    dps = prev.get("dps") if isinstance(prev.get("dps"), dict) else {}
+    tel = dps.get("telemetry") if isinstance(dps.get("telemetry"), dict) else {}
+    scen = tel.get("scenario") if isinstance(tel.get("scenario"), dict) else {}
+    if not scen:
+        scen = (
+            tel.get("scenario_identity")
+            if isinstance(tel.get("scenario_identity"), dict)
+            else {}
+        )
+    prev_regime = str(prev.get("regime") or scen.get("regime_id") or "") or None
+    prev_hint = str(scen.get("sub_profile_hint") or "") or None
+    prev_label = str(scen.get("label") or "") or None
+    sticky_key = f"dm:{bot_id}:{symbol}" if bot_id and symbol else None
     return build_dynamic_round_context(
         budget_usdt=budget,
         cycle_id=cycle_id,
-        bot_id=int(state.get("bot_id") or 0) or None,
+        bot_id=bot_id,
         last_rebalance_round_id=state.get("_dynamic_last_rebalance_turn"),
         allow_live=True,
         allow_no_trade=allow_no_trade,
+        regime_sticky_key=sticky_key,
+        prev_regime_id=prev_regime,
+        prev_sub_profile_hint=prev_hint,
+        prev_regime_label=prev_label,
     )
 
 
@@ -568,7 +593,13 @@ async def build_snapshot(
         portfolio.quote_value_usdt = budget
 
     constraints = default_exchange_constraints(symbol)
-    ctx = _build_dps_context(state, cfg_dict, cycle_id, budget or portfolio.total_equity_usdt)
+    ctx = _build_dps_context(
+        state,
+        cfg_dict,
+        cycle_id,
+        budget or portfolio.total_equity_usdt,
+        prev_snap=prev_snap if isinstance(prev_snap, dict) else None,
+    )
 
     decision = get_dps_engine().calculate_decision(
         symbol=symbol,

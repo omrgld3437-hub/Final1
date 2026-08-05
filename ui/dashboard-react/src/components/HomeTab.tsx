@@ -68,9 +68,34 @@ function displayNumber(value: unknown, digits = 2): string {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return "—";
   return numeric.toLocaleString("tr-TR", {
-    minimumFractionDigits: digits,
-    maximumFractionDigits: Math.max(digits, 8),
+    minimumFractionDigits: 0,
+    maximumFractionDigits: digits,
   });
+}
+
+/** Adet/bakiye: coin’e ve büyüklüğe göre dinamik ondalık (USDT kısa, küçük coinler daha hassas). */
+function assetAmountDigits(asset: string, value: unknown): number {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 2;
+  const absolute = Math.abs(numeric);
+  const symbol = asset.trim().toUpperCase();
+  const quoteLike = /^(USDT|USDC|BUSD|FDUSD|TUSD|USD|TRY|EUR)$/.test(symbol);
+  if (quoteLike) {
+    if (absolute >= 100) return 2;
+    if (absolute >= 1) return 3;
+    return 4;
+  }
+  if (absolute >= 1_000) return 2;
+  if (absolute >= 100) return 3;
+  if (absolute >= 10) return 4;
+  if (absolute >= 1) return 5;
+  if (absolute >= 0.1) return 6;
+  if (absolute >= 0.01) return 7;
+  return 8;
+}
+
+function displayAssetAmount(asset: string, value: unknown): string {
+  return displayNumber(value, assetAmountDigits(asset, value));
 }
 
 function money(value: unknown): string {
@@ -97,6 +122,33 @@ function sideLabel(side: string): string {
   if (normalized === "BUY") return "Alış";
   if (normalized === "SELL") return "Satış";
   return side || "Hareket";
+}
+
+function tradeSourceLabel(trade: Trade): string {
+  const named = String(
+    (trade as Trade & { bot_name?: string | null }).bot_name || "",
+  ).trim();
+  if (trade.is_bot) {
+    return named ? `Bot · ${named}` : "Bot";
+  }
+  const label = String(
+    (trade as Trade & { source_label?: string }).source_label || "",
+  ).trim();
+  if (label && !["manuel", "spot", "manual"].includes(label.toLowerCase())) {
+    return label;
+  }
+  const platform = String(
+    (trade as Trade & { platform?: string | null }).platform || "",
+  ).trim();
+  if (platform) {
+    const p = platform.toLowerCase();
+    if (p === "ayserose" || p === "tradetrailing" || p === "tradertrailing") {
+      return "Ayserose";
+    }
+    if (p === "binance") return "Binance";
+    return platform;
+  }
+  return "Binance";
 }
 
 type TemplateGrid = {
@@ -252,9 +304,11 @@ export default function HomeTab({
   isActive = true,
 }: HomeTabProps) {
   const [selectedPeriod, setSelectedPeriod] = useState<Period>("all");
-  const [txPeriod, setTxPeriod] = useState<Period>("daily");
+  // "daily" hides older live-account fills (often empty); show a useful window by default.
+  const [txPeriod, setTxPeriod] = useState<Period>("monthly");
   const [txType, setTxType] = useState<TransactionType>("buysell");
   const [txPage, setTxPage] = useState(1);
+  const txSyncOnceRef = useRef<Record<number, boolean>>({});
   const [txPagination, setTxPagination] = useState<TransactionPagination>({
     total: 0,
     page: 1,
@@ -283,52 +337,59 @@ export default function HomeTab({
     if (!accountId || !isActive) return;
     let cancelled = false;
     let timer = 0;
-    const fetchTrades = () => {
+    const normalizeItems = (items: Trade[]) =>
+      items.map((trade) => {
+        const side = String(trade.side || trade.type || "").toUpperCase();
+        const normalizedSide =
+          side === "BUY" ||
+          side === "SELL" ||
+          side === "DEPOSIT" ||
+          side === "WITHDRAW"
+            ? side
+            : String(trade.side || "");
+        const source = String(
+          (trade as Trade & { source?: string; bot_id?: number }).source || "",
+        ).toLowerCase();
+        return {
+          ...trade,
+          side: normalizedSide,
+          is_bot:
+            trade.is_bot === true ||
+            source === "bot" ||
+            Number((trade as Trade & { bot_id?: number }).bot_id) > 0,
+          executed_qty: finite(trade.executed_qty ?? trade.qty),
+          avg_price: finite(trade.avg_price ?? trade.price),
+        };
+      });
+    const fetchTrades = (opts?: { forceSync?: boolean }) => {
       if (document.hidden) return;
+      const needsSync =
+        Boolean(opts?.forceSync) || !txSyncOnceRef.current[accountId];
+      if (needsSync) txSyncOnceRef.current[accountId] = true;
       const query = new URLSearchParams({
         period: txPeriod,
         type_filter: txType,
         page: String(txPage),
         per_page: "8",
       });
+      if (needsSync) query.set("sync", "1");
       apiFetch<{
         items?: Trade[];
         total?: number;
         page?: number;
         per_page?: number;
         total_pages?: number;
-      }>(
-        `/api/accounts/${accountId}/transaction-history?${query}`,
-      )
-        .then((data) => {
+      }>(`/api/accounts/${accountId}/transaction-history?${query}`)
+        .then(async (data) => {
           if (cancelled) return;
-          const totalPages = Math.max(0, finite(data?.total_pages));
-          const resolvedPage = Math.max(1, finite(data?.page, txPage));
+          let totalPages = Math.max(0, finite(data?.total_pages));
+          let resolvedPage = Math.max(1, finite(data?.page, txPage));
           const items = Array.isArray(data?.items) ? data.items : [];
-          setTrades(
-            items.map((trade) => {
-              const side = String(trade.side || trade.type || "").toUpperCase();
-              const normalizedSide =
-                side === "BUY" || side === "SELL" || side === "DEPOSIT" || side === "WITHDRAW"
-                  ? side
-                  : String(trade.side || "");
-              const source = String(
-                (trade as Trade & { source?: string; bot_id?: number }).source || "",
-              ).toLowerCase();
-              return {
-                ...trade,
-                side: normalizedSide,
-                is_bot:
-                  trade.is_bot === true ||
-                  source === "bot" ||
-                  Number((trade as Trade & { bot_id?: number }).bot_id) > 0,
-                executed_qty: finite(trade.executed_qty ?? trade.qty),
-                avg_price: finite(trade.avg_price ?? trade.price),
-              };
-            }),
-          );
+          const total = Math.max(0, finite(data?.total));
+
+          setTrades(normalizeItems(items));
           setTxPagination({
-            total: Math.max(0, finite(data?.total)),
+            total,
             page: resolvedPage,
             perPage: Math.max(1, finite(data?.per_page, 8)),
             totalPages,
@@ -346,13 +407,14 @@ export default function HomeTab({
           ),
         );
     };
-    fetchTrades();
-    timer = window.setInterval(fetchTrades, 30_000);
-    document.addEventListener("visibilitychange", fetchTrades);
+    const onVisibility = () => fetchTrades();
+    fetchTrades({ forceSync: Boolean(manualRefreshKey) });
+    timer = window.setInterval(() => fetchTrades(), 30_000);
+    document.addEventListener("visibilitychange", onVisibility);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
-      document.removeEventListener("visibilitychange", fetchTrades);
+      document.removeEventListener("visibilitychange", onVisibility);
     };
   }, [accountId, txPage, txPeriod, txType, manualRefreshKey, isActive]);
 
@@ -993,12 +1055,15 @@ function AssetCard({
           }
           liveValue={price}
         />
-        <MiniValue label="Toplam adet" value={displayNumber(total, 6)} />
-        <MiniValue label="Kullanılabilir" value={displayNumber(available, 6)} />
+        <MiniValue label="Toplam adet" value={displayAssetAmount(asset.asset, total)} />
+        <MiniValue
+          label="Kullanılabilir"
+          value={displayAssetAmount(asset.asset, available)}
+        />
         <div className="hidden sm:col-span-2 sm:block">
           <MiniValue
             label="Botlarda kilitli"
-            value={displayNumber(botLocked, 6)}
+            value={displayAssetAmount(asset.asset, botLocked)}
             valueClass="text-fuchsia-200"
           />
         </div>
@@ -1342,7 +1407,7 @@ function MobileTradeCard({ trade }: { key?: string; trade: Trade }) {
             </span>
           </div>
           <p className="mt-1 truncate text-[10px] font-semibold text-neutral-600">
-            {formatTime(trade.time)} · {trade.is_bot ? "Bot" : "Manuel"}
+            {formatTime(trade.time)} · {tradeSourceLabel(trade)}
           </p>
         </div>
         <div className="shrink-0 text-right">
@@ -1469,7 +1534,7 @@ function DesktopTradeRow({ trade }: { key?: string; trade: Trade }) {
       </td>
       <td className="px-5 py-3.5 text-right">
         <span className="rounded-full bg-white/5 px-2 py-1 text-[9px] font-black text-neutral-500">
-          {trade.is_bot ? "Bot" : "Manuel"}
+          {tradeSourceLabel(trade)}
         </span>
       </td>
     </tr>

@@ -217,6 +217,12 @@ function validateForm(
     if (profitValues.some((value) => !Number.isFinite(value) || value <= 0 || value > 100)) {
       return "Kâr döngüsü eşikleri 0 ile 100 arasında pozitif değerler olmalıdır.";
     }
+    if (form.rebuyTrail >= form.rebuyTrigger) {
+      return "Kâr alış trailing değeri, kâr alış tetiğinden küçük olmalıdır.";
+    }
+    if (form.resellTrail >= form.resellTrigger) {
+      return "Kâr satış trailing değeri, kâr satış tetiğinden küçük olmalıdır.";
+    }
   }
   return "";
 }
@@ -246,6 +252,10 @@ function validateGridSide(
     )
   ) {
     return `${label} grid tetikleri en az %1 olmalı; tetik ve pay değerleri pozitif ve %100'ü aşmamalıdır.`;
+  }
+  const nearestGrid = Math.min(...grids.map((grid) => grid.trigger_pct));
+  if (trail >= nearestGrid) {
+    return `${label} trailing, en yakın grid tetiğinden (%${nearestGrid}) küçük olmalıdır; eşit veya daha büyük olamaz.`;
   }
   if (Math.abs(gridTotal(grids) - 100) > 0.5) {
     return `${label} grid paylarının toplamı %100 olmalıdır.`;
@@ -292,6 +302,18 @@ function objectValue(value: unknown): Record<string, unknown> {
     : {};
 }
 
+function clampTrailBelowNearest(
+  trail: number,
+  grids: GridDraft[],
+  fallback = 0.5,
+): number {
+  if (!grids.length) return Math.max(0.01, trail || fallback);
+  const nearest = Math.min(...grids.map((grid) => grid.trigger_pct));
+  const maxAllowed = Math.max(0.01, nearest - 0.01);
+  const value = Number.isFinite(trail) && trail > 0 ? trail : fallback;
+  return Math.min(value, maxAllowed);
+}
+
 function formFromTemplate(
   params: Record<string, unknown>,
   current: NewBotForm,
@@ -321,6 +343,22 @@ function formFromTemplate(
     : [];
   const upGrids = normalizeGrid(up.grids, sellLegacy.length ? sellLegacy : current.upGrids);
   const downGrids = normalizeGrid(down.grids, buyLegacy.length ? buyLegacy : current.downGrids);
+  const rebuyTrigger = finite(
+    profit.rebuy_trigger_pct ?? params.profit_reentry_drop_pct,
+    current.rebuyTrigger,
+  );
+  const resellTrigger = finite(
+    profit.resell_trigger_pct ?? params.profit_exit_rise_pct,
+    current.resellTrigger,
+  );
+  const rebuyTrailRaw = finite(
+    profit.rebuy_trail_pct ?? params.profit_reentry_rise_pct,
+    current.rebuyTrail,
+  );
+  const resellTrailRaw = finite(
+    profit.resell_trail_pct ?? params.profit_exit_drop_pct,
+    current.resellTrail,
+  );
   return {
     ...current,
     symbol: String(params.symbol || current.symbol).trim().toUpperCase(),
@@ -330,30 +368,26 @@ function formFromTemplate(
       (Object.keys(dynamicMode).length > 0 && dynamicMode.enabled !== false),
     base_pct: finite(params.base_alloc_pct ?? allocation.base_pct, current.base_pct),
     quote_pct: finite(params.quote_alloc_pct ?? allocation.quote_pct, current.quote_pct),
-    upTrail: finite(up.trail_pct ?? params.sell_trigger_trailing_pct, current.upTrail),
+    upTrail: clampTrailBelowNearest(
+      finite(up.trail_pct ?? params.sell_trigger_trailing_pct, current.upTrail),
+      upGrids,
+      current.upTrail,
+    ),
     upGrids,
-    downTrail: finite(down.trail_pct ?? params.buy_trigger_trailing_pct, current.downTrail),
+    downTrail: clampTrailBelowNearest(
+      finite(down.trail_pct ?? params.buy_trigger_trailing_pct, current.downTrail),
+      downGrids,
+      current.downTrail,
+    ),
     downGrids,
     maxBuyLevels: Math.min(
       downGrids.length,
       Math.max(1, finite(params.max_buy_levels, downGrids.length)),
     ),
-    rebuyTrigger: finite(
-      profit.rebuy_trigger_pct ?? params.profit_reentry_drop_pct,
-      current.rebuyTrigger,
-    ),
-    rebuyTrail: finite(
-      profit.rebuy_trail_pct ?? params.profit_reentry_rise_pct,
-      current.rebuyTrail,
-    ),
-    resellTrigger: finite(
-      profit.resell_trigger_pct ?? params.profit_exit_rise_pct,
-      current.resellTrigger,
-    ),
-    resellTrail: finite(
-      profit.resell_trail_pct ?? params.profit_exit_drop_pct,
-      current.resellTrail,
-    ),
+    rebuyTrigger,
+    rebuyTrail: Math.min(rebuyTrailRaw, Math.max(0.01, rebuyTrigger - 0.01)),
+    resellTrigger,
+    resellTrail: Math.min(resellTrailRaw, Math.max(0.01, resellTrigger - 0.01)),
   };
 }
 
@@ -659,30 +693,48 @@ export default function BotsTab({
     setForm((current) => {
       const upGrids = normalizeGrid(config.up?.grids, current.upGrids);
       const downGrids = normalizeGrid(config.down?.grids, current.downGrids);
+      const rebuyTrigger = finite(
+        config.profit?.rebuy_trigger_pct,
+        current.rebuyTrigger,
+      );
+      const resellTrigger = finite(
+        config.profit?.resell_trigger_pct,
+        current.resellTrigger,
+      );
+      const rebuyTrailRaw = finite(
+        config.profit?.rebuy_trail_pct,
+        current.rebuyTrail,
+      );
+      const resellTrailRaw = finite(
+        config.profit?.resell_trail_pct,
+        current.resellTrail,
+      );
       return {
         ...current,
         base_pct: assistantAllocation(config, "base_pct", current.base_pct),
         quote_pct: assistantAllocation(config, "quote_pct", current.quote_pct),
-        upTrail: finite(config.up?.trail_pct, current.upTrail),
+        upTrail: clampTrailBelowNearest(
+          finite(config.up?.trail_pct, current.upTrail),
+          upGrids,
+          current.upTrail,
+        ),
         upGrids,
-        downTrail: finite(config.down?.trail_pct, current.downTrail),
+        downTrail: clampTrailBelowNearest(
+          finite(config.down?.trail_pct, current.downTrail),
+          downGrids,
+          current.downTrail,
+        ),
         downGrids,
         maxBuyLevels: Math.min(
           downGrids.length,
           Math.max(1, finite(config.max_buy_levels, current.maxBuyLevels)),
         ),
-        rebuyTrigger: finite(
-          config.profit?.rebuy_trigger_pct,
-          current.rebuyTrigger,
-        ),
-        rebuyTrail: finite(config.profit?.rebuy_trail_pct, current.rebuyTrail),
-        resellTrigger: finite(
-          config.profit?.resell_trigger_pct,
-          current.resellTrigger,
-        ),
-        resellTrail: finite(
-          config.profit?.resell_trail_pct,
-          current.resellTrail,
+        rebuyTrigger,
+        rebuyTrail: Math.min(rebuyTrailRaw, Math.max(0.01, rebuyTrigger - 0.01)),
+        resellTrigger,
+        resellTrail: Math.min(
+          resellTrailRaw,
+          Math.max(0.01, resellTrigger - 0.01),
         ),
       };
     });

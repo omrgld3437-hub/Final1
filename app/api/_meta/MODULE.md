@@ -9,7 +9,7 @@ FastAPI router’ları — web süreci emir göndermez (worker-only).
 | Dosya | Alan |
 |-------|------|
 | `routes.py` | Dashboard, wallet, summary, bots/create |
-| `bots_engine.py` | `/api/bots-engine` — start/stop/detail, `/live` (3s TTL), `/batch/live` (max 50), `/grid-points`; liste `load_states_list_meta` |
+| `bots_engine.py` | `/api/bots-engine` — start/stop/detail, `/live` (3s TTL), `/batch/live` (max 50), `/grid-points`; liste `load_states_list_meta`; delete `convert_base_to_quote` → `record_bot_close_convert_fill` (işlem geçmişi Bot) |
 | `auth.py` | Login, session, CSRF |
 | `admin.py` | Admin panel |
 | `user_activity_log_routes.py` | Kullanıcı işlem geçmişi beacon + admin log API |

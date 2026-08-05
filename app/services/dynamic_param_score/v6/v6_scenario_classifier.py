@@ -182,7 +182,10 @@ def _directional_momentum(inp: V6InputContract) -> int:
     if rsi5 is not None:
         score += normalize_score(rsi5, 45, 82) * 0.2 - 10
     if inp.roc_5m is not None:
-        score += normalize_score(inp.roc_5m, 0, 4) * 0.2 - 10
+        # Lower 5m weight vs 1h RSI so micro-bars don't dominate momentum score.
+        score += normalize_score(inp.roc_5m, 0, 4) * 0.12 - 6
+    if inp.return_1h_pct is not None:
+        score += normalize_score(inp.return_1h_pct, 0, 3) * 0.15 - 7.5
     ret24 = inp.return_24h_pct or 0
     if ret24 > 4:
         score += 15
@@ -242,12 +245,16 @@ def _overextended(inp: V6InputContract) -> bool:
 
 
 def _raw_act_momentum_confirmed(inp: V6InputContract) -> bool:
+    # Prefer ≥1h confirmation; lone 5m ROC must be stronger to avoid hour-scale flips.
     return (
-        (inp.roc_5m or 0) >= 0.5
-        or (inp.return_1h_pct or 0) >= 0.7
+        (inp.return_1h_pct or 0) >= 1.0
         or (inp.return_4h_pct or 0) >= 1.5
-        or (inp.ema20_slope or 0) >= 0.15
-        or (inp.ema50_slope or 0) >= 0.10
+        or (
+            (inp.roc_5m or 0) >= 0.9
+            and (inp.return_1h_pct or 0) >= 0.4
+        )
+        or (inp.ema20_slope or 0) >= 0.20
+        or (inp.ema50_slope or 0) >= 0.12
     )
 
 
@@ -444,7 +451,10 @@ def _post_breakout_cooldown(inp: V6InputContract) -> bool:
         and (inp.return_24h_pct or 0) > 2
         and (inp.bb_position or 0) < 0.80
         and (inp.z_score or 0) < 1.20
-        and ((inp.higher_highs is not True) or (inp.roc_5m or 0) < 0.5)
+        and (
+            (inp.higher_highs is not True)
+            or ((inp.roc_5m or 0) < 0.2 and (inp.return_1h_pct or 0) < 0.5)
+        )
         and inp.lower_lows is not True
     )
 
@@ -542,13 +552,14 @@ def _strong_uptrend_pullback(inp: V6InputContract) -> bool:
     if (inp.rsi_5m or 50) < 45:
         pullback_votes += 1
     if (
-        (inp.roc_5m or 0) < 0
+        (inp.roc_5m or 0) < -0.2
         and inp.higher_highs is False
         and inp.lower_lows is True
         and pullback_votes >= 3
     ):
         return True
-    return pullback_votes >= 4
+    # Soft single-factor dips need more corroboration than HH/LL structure.
+    return pullback_votes >= 5
 
 
 def _upper_band_boundary(inp: V6InputContract) -> bool:
@@ -589,7 +600,9 @@ def _uptrend_overheat_cooldown(inp: V6InputContract) -> bool:
         _uptrend_compression(inp)
         and (inp.adx_1h or 0) >= 35
         and (inp.rsi_1h or 0) >= 70
+        # Need short-horizon cooling: flat/red 5m alone is not enough if 1h still climbs.
         and (inp.roc_5m or 0) <= 0
+        and (inp.return_1h_pct or 0) <= 0.2
         and (inp.bb_width or 99) <= 1.0
         and (inp.atr_1h_pct or 99) <= 0.9
     )

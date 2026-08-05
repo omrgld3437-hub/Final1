@@ -896,6 +896,7 @@ async def get_transaction_history(
             ensure_tx_history_fresh_from_db,
             get_public_revision,
             is_tx_history_bootstrapped,
+            maybe_refresh_tx_history_from_binance,
         )
 
         current_rev = str(get_public_revision(account_id).get("revision") or "0")
@@ -910,11 +911,23 @@ async def get_transaction_history(
                 await bootstrap_tx_history_from_binance(db, account_id, force=True)
             except Exception as e:
                 logger.warning("transaction-history bootstrap failed: %s", e)
-        elif not rev_match and is_tx_history_bootstrapped(account_id):
-            try:
-                ensure_tx_history_fresh_from_db(db, account_id)
-            except Exception:
-                pass
+        else:
+            if not is_tx_history_bootstrapped(account_id):
+                try:
+                    await bootstrap_tx_history_from_binance(db, account_id, force=False)
+                except Exception as e:
+                    logger.warning("transaction-history first bootstrap failed: %s", e)
+            else:
+                try:
+                    # Stale ledger (days/weeks without Binance pull) → refresh.
+                    await maybe_refresh_tx_history_from_binance(db, account_id)
+                except Exception as e:
+                    logger.warning("transaction-history stale refresh failed: %s", e)
+                if not rev_match:
+                    try:
+                        ensure_tx_history_fresh_from_db(db, account_id)
+                    except Exception:
+                        pass
     except Exception:
         pass
     from app.services.transaction_history_service import TransactionHistoryService

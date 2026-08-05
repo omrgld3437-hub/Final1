@@ -106,6 +106,7 @@ def build_param_assistant_context(
         allow_live=allow_live,
         allow_no_trade=allow_no_trade,
         bot_id=None,
+        regime_sticky_key=None,
     )
 
 
@@ -117,6 +118,10 @@ def build_dynamic_round_context(
     last_rebalance_round_id: Optional[str] = None,
     allow_live: bool = True,
     allow_no_trade: bool = True,
+    regime_sticky_key: Optional[str] = None,
+    prev_regime_id: Optional[str] = None,
+    prev_sub_profile_hint: Optional[str] = None,
+    prev_regime_label: Optional[str] = None,
 ) -> BotContext:
     policy = _DYNAMIC_ROUND
     return BotContext(
@@ -130,6 +135,10 @@ def build_dynamic_round_context(
         allow_live=allow_live,
         allow_no_trade=allow_no_trade,
         bot_id=bot_id,
+        regime_sticky_key=regime_sticky_key,
+        prev_regime_id=prev_regime_id,
+        prev_sub_profile_hint=prev_sub_profile_hint,
+        prev_regime_label=prev_regime_label,
     )
 
 
@@ -151,5 +160,9 @@ def sanitize_context_for_consumer(context: BotContext) -> BotContext:
             allow_live=context.allow_live,
             allow_no_trade=context.allow_no_trade,
             bot_id=context.bot_id,
+            regime_sticky_key=context.regime_sticky_key,
+            prev_regime_id=context.prev_regime_id,
+            prev_sub_profile_hint=context.prev_sub_profile_hint,
+            prev_regime_label=context.prev_regime_label,
         )
     return context

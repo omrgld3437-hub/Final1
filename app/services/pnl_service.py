@@ -458,17 +458,6 @@ class PnlService:
         turkey_today_start_utc()
         month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
-        monthly_snap = (
-            db.query(PnlSnapshot)
-            .filter(
-                PnlSnapshot.bot_id == bot_id,
-                PnlSnapshot.account_id == account_id,
-                PnlSnapshot.ts >= month_start,
-            )
-            .order_by(PnlSnapshot.ts.asc())
-            .first()
-        )
-
         turkey_today_date_str()
         # Stale or invalid price: do NOT update daily_ref or write snapshot (Spec B)
         if price_is_stale or (pnl_mode_used == "virtual_wallet" and not price_valid):
@@ -502,11 +491,36 @@ class PnlService:
             daily = 0.0
             daily_pnl_pct = 0.0
 
-        monthly = (
-            total_usd - monthly_snap.total_usd
-            if monthly_snap
-            else total_usd - initial_capital
-        )
+        # Monthly gain baseline:
+        # - Bot opened this calendar month → same basis as session/total (initial_capital)
+        #   so first-tick / IA fee noise cannot show "aylık +" while "toplam" is still down.
+        # - Older bot → first snapshot at/after month start; if missing, capital fallback.
+        bot_started = getattr(bot, "started_at", None)
+        started_naive = None
+        if bot_started is not None:
+            started_naive = (
+                bot_started.replace(tzinfo=None)
+                if getattr(bot_started, "tzinfo", None)
+                else bot_started
+            )
+        if started_naive is not None and started_naive >= month_start:
+            monthly = float(total_usd) - float(initial_capital or 0.0)
+        else:
+            monthly_snap = (
+                db.query(PnlSnapshot)
+                .filter(
+                    PnlSnapshot.bot_id == bot_id,
+                    PnlSnapshot.account_id == account_id,
+                    PnlSnapshot.ts >= month_start,
+                )
+                .order_by(PnlSnapshot.ts.asc())
+                .first()
+            )
+            monthly = (
+                float(total_usd) - float(monthly_snap.total_usd)
+                if monthly_snap
+                else float(total_usd) - float(initial_capital or 0.0)
+            )
 
         return {
             "total_usd": total_usd,

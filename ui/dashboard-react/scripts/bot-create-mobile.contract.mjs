@@ -73,6 +73,11 @@ assert.doesNotMatch(
 assert.match(botsTab, /İlk botunuzu aşağıdaki butona basarak tasarlayın/);
 assert.doesNotMatch(botsTab, /İlk stratejin için alan hazır/);
 assert.doesNotMatch(botsTab, /Bütçe, grid ve trailing kararlarını görünür tutan bot stüdyosuyla başla/);
+assert.match(
+  botsTab,
+  /trailing, en yakın grid tetiğinden/,
+  "Trailing en yakın grid ile eşit/büyük olamamalı.",
+);
 assert.doesNotMatch(botsTab, /Canlı durum, motor sağlığı ve performans aynı yüzeyde/);
 assert.match(botsTab, /createPortal\(/, "Bot oluşturma penceresi sayfa yüzeyinden ayrılmalı.");
 assert.match(botsTab, /onStudioOpenChange/, "Pencere durumu üst yönlendirmeye bildirilmeli.");

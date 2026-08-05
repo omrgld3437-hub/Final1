@@ -71,7 +71,8 @@ class TradeSyncService:
                 keys, account_id, start_time, limit
             )
 
-            if not trades_data:
+            # None = hard failure; [] = successful fetch with no new rows.
+            if trades_data is None:
                 return {
                     "error": "Failed to fetch trades",
                     "synced_count": 0,
@@ -164,6 +165,7 @@ class TradeSyncService:
                             is_maker=bool(t.is_maker),
                             bot_id=t.bot_id,
                             bot_name=bot_names.get(t.bot_id) if t.bot_id else None,
+                            platform="Ayserose" if t.bot_id else "Binance",
                         )
                 if not is_tx_history_bootstrapped(account_id) or not ledger_has_buysell(
                     account_id
@@ -226,6 +228,23 @@ class TradeSyncService:
                 dict.fromkeys(s for s in bot_raw if s and s.endswith("USDT"))
             )
 
+            # Prioritize symbols already seen in this account's history (e.g. SOLUSDT).
+            hist_symbols: List[str] = []
+            try:
+                hist_rows = (
+                    self.db.query(TradeNormalized.symbol)
+                    .filter(TradeNormalized.account_id == account_id)
+                    .distinct()
+                    .all()
+                )
+                hist_symbols = [
+                    str(r[0] or "").upper().strip()
+                    for r in hist_rows
+                    if r and r[0] and str(r[0]).upper().endswith("USDT")
+                ]
+            except Exception:
+                hist_symbols = []
+
             common_symbols = get_symbols("usdt")
             if not common_symbols:
                 logger.info(
@@ -242,15 +261,20 @@ class TradeSyncService:
 
             # Rate limit: max 40 symbols (myTrades = 10 weight each = 400 weight per sync; 6000/min limit)
             max_symbols = 40
-            extra = [s for s in common_symbols if s not in bot_symbols][
-                : max(0, max_symbols - len(bot_symbols))
+            priority = list(
+                dict.fromkeys(
+                    [s for s in bot_symbols + hist_symbols if s]
+                )
+            )
+            extra = [s for s in common_symbols if s not in priority][
+                : max(0, max_symbols - len(priority))
             ]
-            symbols_to_fetch = list(bot_symbols) + extra
-            if bot_symbols:
+            symbols_to_fetch = (priority + extra)[:max_symbols]
+            if priority:
                 logger.info(
-                    "[TradeSync] Including bot symbols for account %s: %s",
+                    "[TradeSync] Including priority symbols for account %s: %s",
                     account_id,
-                    bot_symbols[:20],
+                    priority[:20],
                 )
 
             params = {"limit": limit}
@@ -318,18 +342,18 @@ class TradeSyncService:
 
         except Exception as e:
             logger.error(f"[TradeSync] Error fetching Binance trades: {e}")
-            return []
+            return None
 
     def _resolve_bot_id_for_order(
         self, account_id: int, order_id: str, symbol: str
     ) -> Optional[int]:
-        """Binance order_id → bot_id (order_intents veya trades; tahmin yok)."""
+        """Binance order_id → bot_id (order_intents / trades / TradeNormalized)."""
         if not order_id:
             return None
         oid = str(order_id).strip()
         try:
             from sqlalchemy import text
-            from app.db.models import Trade
+            from app.db.models import Trade, TradeNormalized
 
             row = self.db.execute(
                 text(
@@ -342,11 +366,26 @@ class TradeSyncService:
                 return int(row[0])
             t = (
                 self.db.query(Trade)
-                .filter(Trade.account_id == account_id, Trade.order_id == oid)
+                .filter(
+                    Trade.account_id == account_id,
+                    Trade.order_id == oid,
+                    Trade.bot_id.isnot(None),
+                )
                 .first()
             )
             if t and t.bot_id:
                 return int(t.bot_id)
+            tn = (
+                self.db.query(TradeNormalized)
+                .filter(
+                    TradeNormalized.account_id == account_id,
+                    TradeNormalized.order_id == oid,
+                    TradeNormalized.bot_id.isnot(None),
+                )
+                .first()
+            )
+            if tn and tn.bot_id:
+                return int(tn.bot_id)
         except Exception as e:
             logger.debug("[TradeSync] bot resolve order_id=%s: %s", oid, e)
         return None

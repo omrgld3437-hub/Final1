@@ -63,6 +63,11 @@ SAFE_BUY_TRIM_TEMPLATES: Dict[int, Tuple[int, ...]] = {
 SEVERITY_MODES = ("DEF", "STD", "ACT")
 REGIME_IDS = tuple(f"R{i}" for i in range(1, 9))
 
+# Soft regime stickiness (see v6_regime_stickiness.py) — dampens 5m-driven
+# R1/R3/R5 family flips without blocking R7/R8 safety escapes.
+REGIME_SOFT_FAMILY_CONFIRM_SEC = 30 * 60
+REGIME_CROSS_SOFT_CONFIRM_SEC = 60 * 60
+
 # Global delta limits (base steps on 5% lattice)
 MAX_BASE_DOWN_STEPS_NORMAL = 2
 MAX_BASE_UP_STEPS_NORMAL = 1

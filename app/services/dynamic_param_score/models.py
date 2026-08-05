@@ -176,6 +176,11 @@ class BotContext:
     allow_live: bool = True
     allow_no_trade: bool = True
     bot_id: Optional[int] = None
+    # Regime stickiness (PA session / DM previous tour)
+    regime_sticky_key: Optional[str] = None
+    prev_regime_id: Optional[str] = None
+    prev_sub_profile_hint: Optional[str] = None
+    prev_regime_label: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

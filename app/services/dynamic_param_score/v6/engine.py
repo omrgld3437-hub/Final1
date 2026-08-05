@@ -46,6 +46,7 @@ from app.services.dynamic_param_score.v6.v6_botparams_adapter import (
 from app.services.dynamic_param_score.v6.v6_pa_display import enrich_v6_display
 from app.services.dynamic_param_score.v6.v6_ui_explainer import build_profile_ids
 from app.services.dynamic_param_score.v6.v6_scenario_classifier import classify_scenario, to_scenario_identity
+from app.services.dynamic_param_score.v6.v6_regime_stickiness import apply_regime_stickiness
 from app.services.dynamic_param_score.v6.v6_scenario_tree import find_terminal_for_classifier
 from app.services.dynamic_param_score.v6.v6_severity_resolver import apply_severity_override, resolve_severity
 from app.services.dynamic_param_score.v6.v6_opportunity import (
@@ -480,15 +481,32 @@ def _add_semantic_contract_notes(
 class V6Engine:
     """Scenario identity + catalog profile + adjuster pipeline."""
 
-    def run(self, inp: V6InputContract) -> V6FinalProfile:
+    def run(
+        self,
+        inp: V6InputContract,
+        *,
+        sticky_key: str | None = None,
+        prev_regime_id: str | None = None,
+        prev_sub_profile_hint: str | None = None,
+        prev_regime_label: str | None = None,
+    ) -> V6FinalProfile:
         errors = validate_input_contract(inp)
         classified = classify_scenario(inp)
+        classified, sticky_meta = apply_regime_stickiness(
+            classified,
+            sticky_key=sticky_key or f"pa:{getattr(inp, 'symbol', '') or 'NA'}",
+            prev_regime_id=prev_regime_id,
+            prev_sub_profile_hint=prev_sub_profile_hint,
+            prev_regime_label=prev_regime_label,
+        )
         behavior_id = resolve_behavior(classified)
         logger.info(
-            "V6 scenario resolved regime=%s behavior=%s label=%s",
+            "V6 scenario resolved regime=%s behavior=%s label=%s sticky_held=%s raw=%s",
             classified.regime_id,
             behavior_id,
             classified.label,
+            sticky_meta.get("held"),
+            sticky_meta.get("raw_regime_id"),
         )
         delta_pre, dq_risk, adjuster_trace = run_adjusters_with_trace(inp)
         logger.info("V6 adjusters applied tags=%s", delta_pre.tags)
@@ -710,6 +728,7 @@ class V6Engine:
             telemetry={
                 "engine_version": ENGINE_VERSION,
                 "adjuster_trace": adjuster_trace,
+                "regime_stickiness": sticky_meta,
                 "scenario": {
                     "regime_id": scenario.regime_id,
                     "sub_id": scenario.sub_id,
@@ -758,7 +777,19 @@ def calculate_decision_v6(
         market=market_data,
         exchange=exchange_constraints,
     )
-    result = V6Engine().run(inp)
+    sticky_key = bot_context.regime_sticky_key
+    if not sticky_key:
+        if bot_context.bot_id:
+            sticky_key = f"dm:{int(bot_context.bot_id)}:{symbol.upper()}"
+        else:
+            sticky_key = f"pa:{symbol.upper()}"
+    result = V6Engine().run(
+        inp,
+        sticky_key=sticky_key,
+        prev_regime_id=bot_context.prev_regime_id,
+        prev_sub_profile_hint=bot_context.prev_sub_profile_hint,
+        prev_regime_label=bot_context.prev_regime_label,
+    )
     scenario = result.telemetry.get("scenario") or {}
     bot_params = v6_final_to_bot_params(result, bot_budget_usdt=budget)
     opp = result.telemetry.get("opportunity_notes") or {}

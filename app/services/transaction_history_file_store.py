@@ -35,6 +35,40 @@ _TX_ROOT = _PROJECT_ROOT / ".run" / "tx_history"
 # Kompakt kayıt indeksleri
 C_TIME, C_DATE, C_TYPE, C_SYM, C_QTY, C_PRICE, C_QUOTE, C_COMM, C_CASSET = range(9)
 C_SRC, C_BID, C_BNAME, C_FILLS, C_OID, C_TID = 9, 10, 11, 12, 13, 14
+C_PLAT = 15  # "A" = Ayserose, "B" = Binance (eski kayıtlarda yok → çıkarım)
+
+
+def _plat_code(platform: Optional[str]) -> Optional[str]:
+    p = (platform or "").strip()
+    if not p:
+        return None
+    if p in ("A", "Ayserose", "ayserose", "TradeTrailing", "TraderTrailing"):
+        return "A"
+    if p in ("B", "Binance", "binance"):
+        return "B"
+    return None
+
+
+def _platform_label(
+    rec: List[Any], *, is_bot: bool, is_paper: bool
+) -> str:
+    """Görünen platform: Ayserose (uygulama) veya Binance (dış kaynak)."""
+    code = None
+    if len(rec) > C_PLAT:
+        code = _plat_code(rec[C_PLAT] if isinstance(rec[C_PLAT], str) else None)
+    if code == "A":
+        return "Ayserose"
+    if code == "B":
+        return "Binance"
+    if is_bot or is_paper:
+        return "Ayserose"
+    return "Binance"
+
+
+def _ensure_plat(rec: List[Any], code: str) -> None:
+    while len(rec) <= C_PLAT:
+        rec.append(None)
+    rec[C_PLAT] = code
 
 _lock_guard = threading.Lock()
 _account_locks: Dict[int, threading.Lock] = {}
@@ -139,11 +173,30 @@ def clear_tx_history_bootstrap(account_id: int) -> None:
 _bootstrap_in_flight: set = set()
 _bootstrap_guard = threading.Lock()
 _db_sync_last_ts: Dict[int, float] = {}
+_binance_refresh_last_ts: Dict[int, float] = {}
 _DB_SYNC_MIN_SEC = 90.0
 _FRESH_DB_MIN_SEC = 90.0
+# Homepage no longer passes sync=1 every poll; refresh Binance when ledger is stale.
+_BINANCE_REFRESH_MIN_SEC = float(os.getenv("TX_HISTORY_BINANCE_REFRESH_MIN_SEC", "900"))
+_BINANCE_STALE_SEC = float(os.getenv("TX_HISTORY_BINANCE_STALE_SEC", "21600"))
 _query_cache: Dict[str, Tuple[float, Dict[str, Any]]] = {}
 _QUERY_CACHE_TTL_SEC = 8.0
 _QUERY_CACHE_MAX = 48
+
+
+def _ledger_latest_age_sec(account_id: int) -> Optional[float]:
+    """Age of newest ledger trade in seconds; None if unknown/empty."""
+    latest = str(get_public_revision(account_id).get("latest_time") or "").strip()
+    if not latest:
+        return None
+    try:
+        raw = latest.replace("Z", "+00:00")
+        dt = datetime.fromisoformat(raw)
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+        return max(0.0, (datetime.utcnow() - dt).total_seconds())
+    except Exception:
+        return None
 
 
 async def bootstrap_tx_history_from_binance(
@@ -197,6 +250,33 @@ async def bootstrap_tx_history_from_binance(
             _bootstrap_in_flight.discard(account_id)
 
 
+async def maybe_refresh_tx_history_from_binance(
+    db: Any,
+    account_id: int,
+    *,
+    force: bool = False,
+) -> Dict[str, Any]:
+    """
+    Live hesap anasayfa: bootstrap sonrası Binance'ten aralıklı yenileme.
+    Ledger boş veya latest_time çok eskiyse myTrades sync + dosya rebuild.
+    """
+    import time as _time
+
+    now = _time.time()
+    if not force:
+        last = _binance_refresh_last_ts.get(account_id, 0.0)
+        if now - last < _BINANCE_REFRESH_MIN_SEC:
+            return {"skipped": "rate_limited"}
+    age = _ledger_latest_age_sec(account_id)
+    has_buysell = ledger_has_buysell(account_id)
+    stale = (not has_buysell) or (age is None) or (age >= _BINANCE_STALE_SEC)
+    if not force and not stale:
+        return {"skipped": "fresh", "age_sec": age}
+    _binance_refresh_last_ts[account_id] = now
+    result = await bootstrap_tx_history_from_binance(db, account_id, force=True)
+    return {"refreshed": True, "age_sec": age, **(result or {})}
+
+
 def get_public_revision(account_id: int) -> Dict[str, Any]:
     """Hafif okuma — şifreli dosya açılmaz."""
     meta = _read_rev_meta(account_id)
@@ -229,10 +309,19 @@ def ensure_tx_history_fresh_from_db(
         {"aid": account_id},
     ).fetchone()
     if not row or not row[0]:
+        try:
+            backfill_bot_attribution_from_db(db, account_id)
+        except Exception:
+            pass
         return
     max_ts = row[0]
     max_iso = _utc_iso(max_ts if isinstance(max_ts, datetime) else datetime.utcnow())
     if latest_file and max_iso <= latest_file:
+        # Still repair Spot→Bot tags on already-synced fills.
+        try:
+            backfill_bot_attribution_from_db(db, account_id)
+        except Exception:
+            pass
         return
 
     q = db.query(Trade).filter(Trade.account_id == account_id)
@@ -268,7 +357,17 @@ def ensure_tx_history_fresh_from_db(
             b = db.query(Bot).filter(Bot.id == t.bot_id).first()
             sym = (b.symbol or "").upper() if b else ""
         oid = str(t.order_id) if t.order_id else None
-        if oid and f"o_{oid}" in existing_orders:
+        key = f"o_{oid}" if oid else None
+        if key and key in existing_orders:
+            # Binance sync often wrote the fill as Spot first; upgrade when bot
+            # engine Trade row carries bot_id (cycle close / trailing exits).
+            if t.bot_id:
+                _tag_ledger_order_as_bot(
+                    account_id,
+                    order_id=oid,
+                    bot_id=int(t.bot_id),
+                    bot_name=bot_names.get(t.bot_id),
+                )
             continue
         quote = float(t.qty or 0) * float(t.price or 0)
         upsert_trade_fill(
@@ -286,6 +385,13 @@ def ensure_tx_history_fresh_from_db(
             is_maker=False,
             bot_id=t.bot_id,
             bot_name=bot_names.get(t.bot_id) if t.bot_id else None,
+            platform="Ayserose" if t.bot_id else "Binance",
+        )
+    try:
+        backfill_bot_attribution_from_db(db, account_id)
+    except Exception as ex:
+        logger.debug(
+            "tx_history bot attribution backfill account_id=%s: %s", account_id, ex
         )
 
 
@@ -302,7 +408,7 @@ def record_spot_manual_trade_fill(
     commission_asset: str = "USDT",
     time: Optional[datetime] = None,
 ) -> None:
-    """Manuel spot emir fill — işlem geçmişi dosyasına anında yaz (bot değil, src=spot)."""
+    """Manuel spot emir fill — Ayserose üzerinden; işlem geçmişine anında yaz."""
     ts = time or datetime.now(timezone.utc)
     oid = str(order_id or "").strip()
     if not oid:
@@ -329,6 +435,116 @@ def record_spot_manual_trade_fill(
         is_maker=False,
         bot_id=None,
         bot_name=None,
+        platform="Ayserose",
+    )
+
+
+def record_bot_close_convert_fill(
+    db: Any,
+    account_id: int,
+    bot_id: int,
+    symbol: str,
+    order_result: Dict[str, Any],
+) -> None:
+    """Bot silme convert_base_to_quote piyasa satışı — Bot + Ayserose olarak yaz."""
+    if not order_result or not account_id or not bot_id:
+        return
+    from app.db.models import Bot
+
+    bot_name = f"Bot #{bot_id}"
+    try:
+        b = db.query(Bot).filter(Bot.id == bot_id).first()
+        if b:
+            cfg = json.loads(b.config_json or "{}")
+            bot_name = (b.name or cfg.get("name") or bot_name)[:32]
+    except Exception:
+        pass
+
+    sym = (symbol or order_result.get("symbol") or "").upper()
+    side = str(order_result.get("side") or "SELL").upper()
+    order_id = str(order_result.get("orderId") or order_result.get("order_id") or "").strip()
+    fills = order_result.get("fills") if isinstance(order_result.get("fills"), list) else []
+    ts = datetime.now(timezone.utc)
+    try:
+        tms = order_result.get("transactTime") or order_result.get("updateTime")
+        if tms:
+            ts = datetime.fromtimestamp(float(tms) / 1000.0, tz=timezone.utc)
+    except Exception:
+        pass
+
+    written = False
+    for f in fills:
+        if not isinstance(f, dict):
+            continue
+        qty = float(f.get("qty") or f.get("quantity") or 0)
+        price = float(f.get("price") or 0)
+        quote = qty * price if qty and price else 0.0
+        tid = str(f.get("tradeId") or f.get("id") or "").strip()
+        if not tid:
+            continue
+        if qty <= 0 and quote <= 0:
+            continue
+        upsert_trade_fill(
+            account_id,
+            trade_id=tid,
+            order_id=order_id or tid,
+            time=ts,
+            side=side,
+            symbol=sym,
+            qty=qty,
+            price=price,
+            quote_qty=quote,
+            commission=float(f.get("commission") or 0),
+            commission_asset=str(f.get("commissionAsset") or "USDT"),
+            is_maker=bool(f.get("isMaker") or f.get("maker") or False),
+            bot_id=bot_id,
+            bot_name=bot_name,
+            platform="Ayserose",
+        )
+        written = True
+
+    if written:
+        return
+
+    executed_qty = float(order_result.get("executedQty") or 0)
+    cum_quote = float(
+        order_result.get("cummulativeQuoteQty")
+        or order_result.get("cumulativeQuoteQty")
+        or 0
+    )
+    price_val = float(order_result.get("price") or 0)
+    if executed_qty > 0 and cum_quote > 0:
+        price_val = cum_quote / executed_qty
+    if executed_qty <= 0 and cum_quote <= 0:
+        return
+    oid = order_id or f"bot_close_{bot_id}_{int(ts.timestamp() * 1000)}"
+    commission = 0.0
+    commission_asset = "USDT"
+    for f in fills:
+        if not isinstance(f, dict):
+            continue
+        try:
+            commission += float(f.get("commission") or 0)
+        except (TypeError, ValueError):
+            pass
+        if f.get("commissionAsset"):
+            commission_asset = str(f.get("commissionAsset"))
+    upsert_trade_fill(
+        account_id,
+        trade_id=oid,
+        order_id=oid,
+        time=ts,
+        side=side,
+        symbol=sym,
+        qty=executed_qty,
+        price=price_val,
+        quote_qty=cum_quote,
+        commission=commission,
+        commission_asset=commission_asset,
+        is_maker=False,
+        bot_id=bot_id,
+        bot_name=bot_name,
+        platform="Ayserose",
     )
 
 
@@ -383,6 +599,7 @@ def record_bot_trade_fill(
         is_maker=False,
         bot_id=bot_id,
         bot_name=bot_name,
+        platform="Ayserose",
     )
 
 
@@ -551,6 +768,7 @@ def _expand_record(key: str, rec: List[Any]) -> Dict[str, Any]:
         _is_test_paper_order_id(oid)
         or _is_test_paper_order_id(rec[C_TID] if len(rec) > C_TID else "")
     )
+    platform = _platform_label(rec, is_bot=is_bot, is_paper=is_paper)
     qty, price, quote = (
         _normalize_buysell_amounts(rec)
         if tc in ("b", "s")
@@ -596,14 +814,20 @@ def _expand_record(key: str, rec: List[Any]) -> Dict[str, Any]:
         "qty": qty,
         "price": price,
         "quote_qty": quote,
+        "executed_qty": qty,
+        "avg_price": price,
         "commission": comm_raw,
         "commission_asset": comm_asset,
         "commission_usdt": round(comm_usdt, 8) if comm_usdt else 0.0,
         "is_maker": False,
         "source": "bot" if is_bot else "spot",
-        "source_label": "Bot" if is_bot else "Spot",
+        "source_label": (
+            f"Bot · {rec[C_BNAME]}"
+            if is_bot and rec[C_BNAME]
+            else ("Bot" if is_bot else platform)
+        ),
         "is_bot": is_bot,
-        "platform": "ayserose" if (is_bot or is_paper) else "Binance",
+        "platform": platform,
         "paper": is_paper,
         "bot_id": bot_id,
         "bot_name": rec[C_BNAME] or None,
@@ -630,6 +854,132 @@ def _index_insert(data: Dict[str, Any], key: str, date_tr: str, time_iso: str) -
                 dkeys.remove(old)
 
 
+def _tag_ledger_order_as_bot(
+    account_id: int,
+    *,
+    order_id: Optional[str],
+    bot_id: int,
+    bot_name: Optional[str] = None,
+) -> bool:
+    """Mark an existing ledger order as bot-sourced (no fill rewrite)."""
+    if not order_id or not bot_id:
+        return False
+    key = f"o_{str(order_id).strip()}"
+    with _account_lock(account_id):
+        data = _load_ledger_unlocked(account_id)
+        rec = (data.get("orders") or {}).get(key)
+        if not rec or rec[C_TYPE] not in ("b", "s"):
+            return False
+        changed = False
+        if rec[C_SRC] != "b" or rec[C_BID] != bot_id:
+            rec[C_SRC] = "b"
+            rec[C_BID] = int(bot_id)
+            changed = True
+        if bot_name and not rec[C_BNAME]:
+            rec[C_BNAME] = str(bot_name)[:32]
+            changed = True
+        prev_plat = rec[C_PLAT] if len(rec) > C_PLAT else None
+        if prev_plat != "A":
+            _ensure_plat(rec, "A")
+            changed = True
+        if changed:
+            _save_ledger_unlocked(account_id, data)
+        return changed
+
+
+def backfill_bot_attribution_from_db(db: Any, account_id: int) -> int:
+    """Upgrade Spot-tagged ledger rows when trades/order_intents know the bot_id."""
+    from sqlalchemy import text
+    from app.db.models import Bot, Trade
+
+    with _account_lock(account_id):
+        data = _load_ledger_unlocked(account_id)
+        orders: Dict[str, List[Any]] = data.get("orders") or {}
+        spot_oids: List[str] = []
+        for rec in orders.values():
+            if not rec or rec[C_TYPE] not in ("b", "s"):
+                continue
+            if rec[C_SRC] == "b" and rec[C_BID]:
+                continue
+            oid = str(rec[C_OID] or "").strip()
+            if oid:
+                spot_oids.append(oid)
+    if not spot_oids:
+        return 0
+
+    spot_oids = spot_oids[:2000]
+    resolved: Dict[str, int] = {}
+
+    for i in range(0, len(spot_oids), 200):
+        chunk = spot_oids[i : i + 200]
+        try:
+            for t in (
+                db.query(Trade)
+                .filter(
+                    Trade.account_id == account_id,
+                    Trade.order_id.in_(chunk),
+                    Trade.bot_id.isnot(None),
+                )
+                .all()
+            ):
+                if t.order_id and t.bot_id:
+                    resolved[str(t.order_id)] = int(t.bot_id)
+        except Exception as ex:
+            logger.debug(
+                "backfill_bot_attribution trades account_id=%s: %s", account_id, ex
+            )
+        try:
+            rows = db.execute(
+                text(
+                    "SELECT binance_order_id, bot_id FROM order_intents "
+                    "WHERE account_id = :aid AND bot_id IS NOT NULL "
+                    "AND binance_order_id IN ({})".format(
+                        ",".join(f":o{j}" for j in range(len(chunk)))
+                    )
+                ),
+                {"aid": account_id, **{f"o{j}": oid for j, oid in enumerate(chunk)}},
+            ).fetchall()
+            for oid, bid in rows:
+                if oid and bid and str(oid) not in resolved:
+                    resolved[str(oid)] = int(bid)
+        except Exception as ex:
+            logger.debug(
+                "backfill_bot_attribution intents account_id=%s: %s", account_id, ex
+            )
+
+    if not resolved:
+        return 0
+
+    bot_names: Dict[int, str] = {}
+    bids = set(resolved.values())
+    try:
+        for b in db.query(Bot).filter(Bot.id.in_(bids)).all():
+            try:
+                cfg = json.loads(b.config_json or "{}")
+                bot_names[b.id] = (b.name or cfg.get("name") or f"Bot #{b.id}")[:32]
+            except Exception:
+                bot_names[b.id] = f"Bot #{b.id}"
+    except Exception:
+        pass
+
+    upgraded = 0
+    for oid, bid in resolved.items():
+        if _tag_ledger_order_as_bot(
+            account_id,
+            order_id=oid,
+            bot_id=bid,
+            bot_name=bot_names.get(bid),
+        ):
+            upgraded += 1
+    if upgraded:
+        logger.info(
+            "tx_history bot attribution upgraded account_id=%s count=%s",
+            account_id,
+            upgraded,
+        )
+    return upgraded
+
+
 def upsert_trade_fill(
     account_id: int,
     *,
@@ -646,6 +996,7 @@ def upsert_trade_fill(
     is_maker: bool,
     bot_id: Optional[int],
     bot_name: Optional[str] = None,
+    platform: Optional[str] = None,
 ) -> None:
     """Tek fill ekle veya aynı emirde birleştir (aynı trade_id tekrar eklenmez)."""
     tid = str(trade_id or "").strip()
@@ -654,6 +1005,9 @@ def upsert_trade_fill(
     date_tr = _ts_to_date_tr(time)
     src = "b" if bot_id else "s"
     tc = _type_char(side)
+    plat = _plat_code(platform)
+    if plat is None:
+        plat = "A" if bot_id else "B"
 
     with _account_lock(account_id):
         data = _load_ledger_unlocked(account_id)
@@ -674,6 +1028,22 @@ def upsert_trade_fill(
             )
             same_asset = (commission_asset or "USDT") == (existing[C_CASSET] or "USDT")
             if same_qty and same_quote and same_comm and same_asset:
+                # Preserve / upgrade platform + bot tags on identical re-sync.
+                touched = False
+                if bot_id and not existing[C_BID]:
+                    existing[C_BID] = bot_id
+                    existing[C_SRC] = "b"
+                    touched = True
+                if bot_name and not existing[C_BNAME]:
+                    existing[C_BNAME] = bot_name
+                    touched = True
+                if plat == "A" or bot_id:
+                    prev = existing[C_PLAT] if len(existing) > C_PLAT else None
+                    if prev != "A":
+                        _ensure_plat(existing, "A")
+                        touched = True
+                if touched:
+                    _save_ledger_unlocked(account_id, data)
                 _mark_trade_seen(data, tid)
                 return
         if existing and tc in ("b", "s"):
@@ -697,6 +1067,10 @@ def upsert_trade_fill(
                 existing[C_SRC] = "b"
             if bot_name and not existing[C_BNAME]:
                 existing[C_BNAME] = bot_name
+            if plat == "A" or bot_id:
+                _ensure_plat(existing, "A")
+            elif len(existing) <= C_PLAT or not existing[C_PLAT]:
+                _ensure_plat(existing, plat)
         else:
             orders[key] = [
                 time_iso,
@@ -714,6 +1088,7 @@ def upsert_trade_fill(
                 1,
                 order_id,
                 tid,
+                plat,
             ]
         _mark_trade_seen(data, tid)
         _index_insert(data, key, date_tr, time_iso)
@@ -933,6 +1308,7 @@ def sync_from_db_if_stale(db: Any, account_id: int, *, max_rows: int = 500) -> i
             is_maker=bool(t.is_maker),
             bot_id=t.bot_id,
             bot_name=bot_names.get(t.bot_id) if t.bot_id else None,
+            platform="Ayserose" if t.bot_id else "Binance",
         )
         count += 1
     _db_sync_last_ts[account_id] = _time.time()
@@ -1101,6 +1477,7 @@ def _replay_trades_normalized_to_ledger(
             is_maker=bool(t.is_maker),
             bot_id=t.bot_id,
             bot_name=bot_names.get(t.bot_id) if t.bot_id else None,
+            platform="Ayserose" if t.bot_id else "Binance",
         )
         count += 1
     return count
