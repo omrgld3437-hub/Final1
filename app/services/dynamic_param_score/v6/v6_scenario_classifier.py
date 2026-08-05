@@ -609,6 +609,7 @@ def _uptrend_overheat_cooldown(inp: V6InputContract) -> bool:
 
 
 def _r2_balanced_range_ok(inp: V6InputContract) -> bool:
+    """Slightly relaxed vs v1 so calm ranges are not all forced into R3."""
     adx = inp.adx_1h
     rsi1 = inp.rsi_1h
     rsi5 = inp.rsi_5m
@@ -616,14 +617,14 @@ def _r2_balanced_range_ok(inp: V6InputContract) -> bool:
     z = inp.z_score
     pve = inp.price_vs_ema200_pct
     return (
-        (adx is None or adx < 23)
-        and (rsi1 is None or 45 <= rsi1 <= 55)
-        and (rsi5 is None or 40 <= rsi5 <= 60)
-        and (bb is None or 0.25 <= bb <= 0.75)
-        and (z is None or -1 <= z <= 1)
-        and (inp.range_stability or 0) > 0.55
-        and (inp.volume_spike is None or inp.volume_spike < 3)
-        and (pve is None or abs(pve) <= 5)
+        (adx is None or adx < 25)
+        and (rsi1 is None or 42 <= rsi1 <= 58)
+        and (rsi5 is None or 38 <= rsi5 <= 62)
+        and (bb is None or 0.22 <= bb <= 0.78)
+        and (z is None or -1.15 <= z <= 1.15)
+        and (inp.range_stability or 0) > 0.45
+        and (inp.volume_spike is None or inp.volume_spike < 3.5)
+        and (pve is None or abs(pve) <= 6)
     )
 
 
@@ -770,8 +771,11 @@ def classify_scenario(inp: V6InputContract) -> ClassifiedScenario:
         else:
             label = "Zayıf / gürültülü aralık"
     elif (inp.return_24h_pct or 0) > 0 and (inp.drawdown_7d_pct or 0) > 5:
-        regime, sub, micro, behavior = "R5", "01", "001", "PB07"
-        label = "Toparlanma"
+        # Recovery posture belongs to R6 (not breakout-family R5).
+        regime, sub, micro, behavior = "R6", "01", "001", "PB06"
+        label = "Kontrollü toparlanma"
+        sub_profile_hint = "R6_RECOVERY_ACT"
+        matched_gates.append("generic_recovery_to_r6")
     elif _upper_band_boundary(inp) and not _strong_uptrend(inp):
         regime, sub, micro, behavior = "R4", "01", "001", "PB02"
         label = "Üst bant / kontrollü volatil aralık"

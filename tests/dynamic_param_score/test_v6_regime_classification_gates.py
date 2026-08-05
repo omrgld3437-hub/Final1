@@ -599,6 +599,12 @@ def test_tlm_parabolic_pump_vetoes_r8_and_uses_micro_profile():
     assert trailing_pct_from_code(profile.profit_sell_trailing_code) == pytest.approx(1.75)
     assert notes.get("params_valid") is True
     assert "PARABOLIC_PUMP" in (notes.get("reason_codes") or []) or notes.get("semantic_role") == "PARABOLIC_OVEREXTENDED"
+    assert bool((profile.modules or {}).get("live_buys_paused")) is True
+    assert result.deployable is False
+    from app.services.dynamic_param_score.v6.v6_botparams_adapter import v6_final_to_bot_params
+
+    params = v6_final_to_bot_params(result, bot_budget_usdt=float(inp.bot_budget_usdt or 0))
+    assert params.buy_disabled is True
 
 
 def test_r8_hard_block_disables_buys_profit_loop_and_deploy():

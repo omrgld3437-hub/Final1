@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from app.services.dynamic_param_score.v6.v6_regime_stickiness import (
+    CROSS_SOFT_CONFIRM_SEC,
     SOFT_FAMILY_CONFIRM_SEC,
     apply_regime_stickiness,
     clear_stickiness_for_tests,
@@ -118,3 +119,31 @@ def test_seed_from_previous_snapshot_prev_regime() -> None:
     )
     assert held.regime_id == "R3"
     assert meta["held"] is True
+
+
+def test_uptrend_to_r6_requires_cross_soft_window() -> None:
+    t0 = 50_000.0
+    apply_regime_stickiness(
+        _sc("R1", hint="R1_STD_PULLBACK", label="pullback"),
+        sticky_key="pa:RECOVERYUSDT",
+        now_ts=t0,
+    )
+    held, meta = apply_regime_stickiness(
+        _sc("R6", hint="R6_RECOVERY_ACT", label="toparlanma"),
+        sticky_key="pa:RECOVERYUSDT",
+        now_ts=t0 + 120.0,
+    )
+    assert held.regime_id == "R1"
+    assert meta["held"] is True
+    assert meta["confirm_sec"] == float(CROSS_SOFT_CONFIRM_SEC)
+    assert meta["confirm_remaining_sec"] > 0
+    assert meta["candidate_regime_id"] == "R6"
+
+    accepted, meta2 = apply_regime_stickiness(
+        _sc("R6", hint="R6_RECOVERY_ACT", label="toparlanma"),
+        sticky_key="pa:RECOVERYUSDT",
+        now_ts=t0 + 120.0 + CROSS_SOFT_CONFIRM_SEC + 5.0,
+    )
+    assert accepted.regime_id == "R6"
+    assert meta2["accepted"] is True
+    assert meta2["confirm_remaining_sec"] == 0.0

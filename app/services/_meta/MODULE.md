@@ -41,7 +41,7 @@ Paylaşılan iş mantığı: Binance, fiyat, PnL, şifreleme, audit.
 | `bot_perf_file_store.py` | Bot performans dosyaları; `reconcile_bot_cycles_file_with_state` (state/arşiv ↔ `bots/{id}.json`) |
 | `ip_blocklist.py` | Manager'ın yazdığı `.run/blocked_ips.json` okuma; web middleware 403 |
 | `leaderboard_service.py` | Global/structure leaderboard; `running_since_iso` = `bot_run_started_at_iso` (bot detay süre ile aynı) |
-| `dynamic_param_score/` | Merkez karar motoru (canlı V6): `engine.py` → `v6/engine.py` → `classify_scenario` → `v6_regime_stickiness` (R1/R3/R5 soft hold 30dk; uptrend→R2/R4 60dk; R7/R8 anında) → `net_profile_library` (35 sabit 4+4 / ~7g / ≤%10 odaklı profil + `PROFILE_COPY`; `seal_net_profile_shape`). İndikatör: `indicators.py` (`roc_5m` n=1, `return_1h_pct` n=12) + `move_scores.py` (pump/dump/fake-breakout 0–100/`None`). Display başlık override yok (`v6_pa_display`). `param_pool/` offline/legacy; canlı seçimde kullanılmaz. |
+| `dynamic_param_score/` | Merkez karar motoru (canlı V6): `engine.py` → `v6/engine.py` → `classify_scenario` → `v6_regime_stickiness` (+ `v6_regime_stickiness_store` memory/file/redis) → `net_profile_library` → `seal_net_profile_shape` → `v6_live_safety` (parabolik referans 4+4 / canlı alış kapalı; R7 koşullu→Kapalı gate). Recovery heuristic → R6. R2 kapısı gevşetildi. Display: `v6_pa_display.regime_stickiness_plain`. `param_pool/` offline/legacy. |
 | `param_optimizer/` | **Offline-only** araştırma/kalibrasyon (MC/backtest); canlı karar akışında kullanılmaz |
 
 ## Dosya envanteri

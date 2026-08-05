@@ -155,7 +155,10 @@ def test_v6_golden_tlm_parabolic_pump_locked():
     assert scenario["regime_id"] != "R8"
     assert profile.profile_id == "R5_PARABOLIC_PUMP"
     assert (profile.base_allocation_pct, profile.quote_allocation_pct) == (20, 80)
+    # Hybrid: 4+4 reference ladders stay; live buys closed after seal safety.
     assert profile.normal_buy_enabled is True
+    assert bool((profile.modules or {}).get("reference_plan_only")) is True
+    assert bool((profile.modules or {}).get("live_buys_paused")) is True
     assert [(abs(g.distance_pct), g.amount_pct) for g in profile.buy_grids] == [
         (7, 20),
         (10, 20),
@@ -170,8 +173,10 @@ def test_v6_golden_tlm_parabolic_pump_locked():
     ]
     assert params.buy_grid_count == 4
     assert params.sell_grid_count == 4
-    assert (params.rebuy_trigger_pct, params.rebuy_trail_pct) == (10.0, 2.0)
-    assert (params.resell_trigger_pct, params.resell_trail_pct) == (3.0, 1.75)
+    assert params.buy_disabled is True
+    assert result.deployable is False
+    assert params.rebuy_enabled is False
+    assert params.resell_enabled is False
 
 
 def test_v6_golden_dydx_deep_drawdown_locked():

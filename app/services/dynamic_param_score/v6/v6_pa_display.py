@@ -539,6 +539,26 @@ def build_v6_stream_lines(display: Dict[str, Any], *, symbol: str = "", param_sc
     return lines
 
 
+def format_regime_stickiness_plain(sticky: Optional[Dict[str, Any]]) -> str:
+    """User-facing explanation when soft stickiness holds a prior regime."""
+    meta = sticky or {}
+    if not meta.get("held"):
+        return ""
+    locked = str(meta.get("locked_regime_id") or "")
+    candidate = str(meta.get("candidate_regime_id") or "")
+    remaining = float(meta.get("confirm_remaining_sec") or 0.0)
+    if remaining <= 0:
+        mins = 0
+    else:
+        mins = max(1, int(round(remaining / 60.0)))
+    if locked and candidate and locked != candidate:
+        return (
+            f"Rejim geçici olarak {locked} tutuluyor; aday {candidate} "
+            f"için yaklaşık {mins} dk daha teyit bekleniyor."
+        )
+    return f"Yumuşak rejim teyidi sürüyor (~{mins} dk)."
+
+
 def enrich_v6_display(
     display: Dict[str, Any],
     *,
@@ -546,6 +566,7 @@ def enrich_v6_display(
     deployable: bool = True,
     deploy_block_reason: Optional[str] = None,
     opportunity_notes: Optional[Dict[str, Any]] = None,
+    regime_stickiness: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Add PA/DM-facing label fields to v6_display telemetry."""
     out = dict(display or {})
@@ -646,6 +667,14 @@ def enrich_v6_display(
     )
     out["profile_tile_label"] = "V6 Profil Kimliği"
     out["fee_display"] = fee_display_v6()
+    sticky = regime_stickiness or out.get("regime_stickiness") or {}
+    out["regime_stickiness"] = sticky
+    sticky_plain = format_regime_stickiness_plain(sticky)
+    out["regime_stickiness_plain"] = sticky_plain
+    if sticky_plain:
+        why = str(out.get("regime_strategy_why") or "")
+        if sticky_plain not in why:
+            out["regime_strategy_why"] = (why + " " + sticky_plain).strip() if why else sticky_plain
     btc_entry = next((e for e in trace if str(e.get("name") or "") == "btc_context"), None)
     if isinstance(btc_entry, dict):
         out["btc_context"] = {

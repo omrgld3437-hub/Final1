@@ -47,6 +47,7 @@ from app.services.dynamic_param_score.v6.v6_pa_display import enrich_v6_display
 from app.services.dynamic_param_score.v6.v6_ui_explainer import build_profile_ids
 from app.services.dynamic_param_score.v6.v6_scenario_classifier import classify_scenario, to_scenario_identity
 from app.services.dynamic_param_score.v6.v6_regime_stickiness import apply_regime_stickiness
+from app.services.dynamic_param_score.v6.v6_live_safety import apply_live_safety_overrides
 from app.services.dynamic_param_score.v6.v6_scenario_tree import find_terminal_for_classifier
 from app.services.dynamic_param_score.v6.v6_severity_resolver import apply_severity_override, resolve_severity
 from app.services.dynamic_param_score.v6.v6_opportunity import (
@@ -492,9 +493,11 @@ class V6Engine:
     ) -> V6FinalProfile:
         errors = validate_input_contract(inp)
         classified = classify_scenario(inp)
+        # Stickiness only when caller supplies a key (PA/DM via calculate_decision_v6).
+        # Bare V6Engine().run(inp) in unit tests stays classification-pure.
         classified, sticky_meta = apply_regime_stickiness(
             classified,
-            sticky_key=sticky_key or f"pa:{getattr(inp, 'symbol', '') or 'NA'}",
+            sticky_key=sticky_key,
             prev_regime_id=prev_regime_id,
             prev_sub_profile_hint=prev_sub_profile_hint,
             prev_regime_label=prev_regime_label,
@@ -626,6 +629,13 @@ class V6Engine:
         if sealed_library:
             # Restore authored ladders after opportunity / host-cap / compact steps.
             adjusted = seal_net_profile_shape(adjusted, profile)
+            # Keep 4+4 for PA reference; force live gates when narrative pauses buys.
+            adjusted, opportunity_notes = apply_live_safety_overrides(
+                adjusted,
+                classified=classified,
+                inp=inp,
+                opportunity_notes=opportunity_notes,
+            )
         if buy_guard_notes:
             opportunity_notes.update(buy_guard_notes)
             if buy_guard_notes.get("mandatory_deep_buy_applied"):
@@ -705,6 +715,9 @@ class V6Engine:
         elif not operator_auto_apply:
             deployable = False
             block_reason = block_reason or "operator_profile_auto_apply_disabled"
+        elif bool((adjusted.modules or {}).get("live_buys_paused")):
+            deployable = False
+            block_reason = block_reason or "live_buys_paused"
         elif val_errors and not has_trade_surface:
             deployable = False
             block_reason = block_reason or "profile_validation_failed"
@@ -814,12 +827,14 @@ def calculate_decision_v6(
     )
     display_base["scenario_identity"] = scen_id
     display_base["classification_trace"] = result.telemetry.get("classification_trace") or {}
+    sticky_meta = result.telemetry.get("regime_stickiness") or {}
     v6_display = enrich_v6_display(
         display_base,
         adjuster_trace=result.telemetry.get("adjuster_trace") or [],
         deployable=result.deployable,
         deploy_block_reason=result.deploy_block_reason,
         opportunity_notes=opp,
+        regime_stickiness=sticky_meta,
     )
     explain = build_v6_opportunity_explain(
         symbol,
@@ -879,6 +894,7 @@ def calculate_decision_v6(
             "apply_policy": policy,
             "pa_soft_deployable": pa_soft,
             "classification_trace": result.telemetry.get("classification_trace") or {},
+            "regime_stickiness": sticky_meta,
             "v6_display": v6_display,
             "v6_final": {
                 "catalog_profile_id": result.catalog_profile_id,

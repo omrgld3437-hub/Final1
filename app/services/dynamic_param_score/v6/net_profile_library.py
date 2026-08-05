@@ -214,7 +214,7 @@ PROFILE_VALUES: Dict[str, tuple] = {
         1.5,
         (5.0, 1.5),
         (7.0, 1.5),
-        "Koşullu",
+        "Açık — koşullu risk",
     ),
     "R4_RESTRICTED_UNSTABLE": (
         20,
@@ -324,7 +324,7 @@ PROFILE_VALUES: Dict[str, tuple] = {
         1.25,
         (3.0, 1.0),
         (7.0, 1.25),
-        "Koşullu",
+        "Açık — koşullu risk",
     ),
     "R7_UNSTABLE_DOWNSIDE": (
         10,
