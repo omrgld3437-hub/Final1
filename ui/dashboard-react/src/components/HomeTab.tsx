@@ -39,6 +39,7 @@ interface HomeTabProps {
   onApplyLeaderboard: (params: unknown) => void;
   isTestAccount: boolean;
   onOpenBot?: (botId: number) => void;
+  isActive?: boolean;
 }
 
 type Period = "daily" | "weekly" | "monthly" | "all";
@@ -248,6 +249,7 @@ export default function HomeTab({
   onApplyLeaderboard,
   isTestAccount,
   onOpenBot,
+  isActive = true,
 }: HomeTabProps) {
   const [selectedPeriod, setSelectedPeriod] = useState<Period>("all");
   const [txPeriod, setTxPeriod] = useState<Period>("daily");
@@ -278,7 +280,7 @@ export default function HomeTab({
   }, []);
 
   useEffect(() => {
-    if (!accountId) return;
+    if (!accountId || !isActive) return;
     let cancelled = false;
     let timer = 0;
     const fetchTrades = () => {
@@ -302,7 +304,29 @@ export default function HomeTab({
           if (cancelled) return;
           const totalPages = Math.max(0, finite(data?.total_pages));
           const resolvedPage = Math.max(1, finite(data?.page, txPage));
-          setTrades(Array.isArray(data?.items) ? data.items : []);
+          const items = Array.isArray(data?.items) ? data.items : [];
+          setTrades(
+            items.map((trade) => {
+              const side = String(trade.side || trade.type || "").toUpperCase();
+              const normalizedSide =
+                side === "BUY" || side === "SELL" || side === "DEPOSIT" || side === "WITHDRAW"
+                  ? side
+                  : String(trade.side || "");
+              const source = String(
+                (trade as Trade & { source?: string; bot_id?: number }).source || "",
+              ).toLowerCase();
+              return {
+                ...trade,
+                side: normalizedSide,
+                is_bot:
+                  trade.is_bot === true ||
+                  source === "bot" ||
+                  Number((trade as Trade & { bot_id?: number }).bot_id) > 0,
+                executed_qty: finite(trade.executed_qty ?? trade.qty),
+                avg_price: finite(trade.avg_price ?? trade.price),
+              };
+            }),
+          );
           setTxPagination({
             total: Math.max(0, finite(data?.total)),
             page: resolvedPage,
@@ -330,9 +354,10 @@ export default function HomeTab({
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", fetchTrades);
     };
-  }, [accountId, txPage, txPeriod, txType, manualRefreshKey]);
+  }, [accountId, txPage, txPeriod, txType, manualRefreshKey, isActive]);
 
   useEffect(() => {
+    if (!isActive) return;
     apiFetch<{ items?: LeaderboardItem[] }>(
       "/api/leaderboard/global/top?limit=5",
     )
@@ -340,10 +365,10 @@ export default function HomeTab({
         setLeaderboard(Array.isArray(data?.items) ? data.items : []),
       )
       .catch(() => setLeaderboard([]));
-  }, [accountId, manualRefreshKey]);
+  }, [accountId, manualRefreshKey, isActive]);
 
   useEffect(() => {
-    if (!accountId) return;
+    if (!accountId || !isActive) return;
     apiFetch<{
       totals?: { pnl_usd?: number; fees_usd?: number };
       pnl_usd?: number;
@@ -357,10 +382,10 @@ export default function HomeTab({
           error instanceof Error ? error.message : "Performans alınamadı.",
         ),
       );
-  }, [accountId, selectedPeriod, manualRefreshKey]);
+  }, [accountId, selectedPeriod, manualRefreshKey, isActive]);
 
   useEffect(() => {
-    if (!accountId) return;
+    if (!accountId || !isActive) return;
     apiFetch<{
       daily_wallet_pnl_usd?: number;
       daily_bot_pnl_usd?: number;
@@ -379,7 +404,7 @@ export default function HomeTab({
           error instanceof Error ? error.message : "Finans özeti alınamadı.",
         ),
       );
-  }, [accountId, manualRefreshKey]);
+  }, [accountId, manualRefreshKey, isActive]);
 
   const runningBots = bots.filter((bot) =>
     ["running", "starting"].includes(
@@ -396,11 +421,12 @@ export default function HomeTab({
       100
     : null;
   const visibleTrades = trades.filter((trade) => {
+    const side = String(trade.side || trade.type || "").toUpperCase();
     if (txType === "all") return true;
     if (txType === "buysell") {
-      return trade.side === "BUY" || trade.side === "SELL";
+      return side === "BUY" || side === "SELL";
     }
-    return trade.side !== "BUY" && trade.side !== "SELL";
+    return side !== "BUY" && side !== "SELL";
   });
   const visibleAssets = (wallet.assets || []).filter(
     (asset) => finite(asset.total_usd) >= 1,
@@ -568,7 +594,6 @@ export default function HomeTab({
           icon={BotIcon}
           eyebrow="Otomasyon"
           title="Mevcut botlar"
-          detail="Her botun canlı değeri ve performansı"
           count={`${runningBots.length} aktif`}
           countTone={runningBots.length ? "positive" : "neutral"}
         />
@@ -861,7 +886,7 @@ function SectionHeader({
   icon: LucideIcon;
   eyebrow: string;
   title: string;
-  detail: string;
+  detail?: string;
   count?: string;
   countTone?: "positive" | "neutral";
 }) {
@@ -878,7 +903,9 @@ function SectionHeader({
           <h2 className="mt-0.5 truncate text-base font-black text-white sm:text-lg">
             {title}
           </h2>
-          <p className="mt-1 text-[11px] leading-5 text-neutral-500">{detail}</p>
+          {detail ? (
+            <p className="mt-1 text-[11px] leading-5 text-neutral-500">{detail}</p>
+          ) : null}
         </div>
       </div>
       {count && (
@@ -1107,11 +1134,13 @@ function MiniValue({
         {label}
       </p>
       <p
-        className={`mt-1.5 truncate text-xs font-black text-white ${valueClass}`}
+        className={`mt-1.5 truncate text-xs font-black ${valueClass || "text-white"}`}
         title={value}
       >
         {liveValue !== undefined ? (
-          <LiveValue value={liveValue}>{value}</LiveValue>
+          <LiveValue value={liveValue} toneBySign={Boolean(valueClass)}>
+            {value}
+          </LiveValue>
         ) : (
           value
         )}

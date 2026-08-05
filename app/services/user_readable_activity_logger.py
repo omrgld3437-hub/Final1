@@ -10,7 +10,6 @@ from __future__ import annotations
 import logging
 import os
 import re
-import tempfile
 import threading
 import unicodedata
 from dataclasses import dataclass
@@ -113,8 +112,16 @@ def system_log_dir() -> Path:
 
 
 def _ensure_dirs() -> None:
-    user_log_dir().mkdir(parents=True, exist_ok=True)
-    system_log_dir().mkdir(parents=True, exist_ok=True)
+    for directory in (user_log_dir(), system_log_dir()):
+        directory.mkdir(parents=True, exist_ok=True)
+        # Production deploy historically left these as root:app 2750 (no group write).
+        # When the process owns the directory, keep group-writable sticky bits.
+        try:
+            mode = directory.stat().st_mode & 0o7777
+            if mode & 0o020 == 0:
+                directory.chmod((mode | 0o2770) & 0o2777)
+        except OSError:
+            pass
 
 
 def _get_file_lock(path: str) -> threading.Lock:
@@ -372,23 +379,15 @@ def _append_line_to_file(job: _WriteJob) -> None:
             job.user_name or "",
             job.user_surname or "",
         )
-        fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
+        # Append-only: avoids mkstemp in a directory that may lack write for the
+        # service user (common after root-owned deploy of Kullanıcı Logları/).
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(line)
         try:
-            existing = ""
-            if path.exists():
-                with open(path, "r", encoding="utf-8") as rf:
-                    existing = rf.read()
-            with os.fdopen(fd, "w", encoding="utf-8") as wf:
-                wf.write(existing)
-                wf.write(line)
-            os.replace(tmp, path)
-        except Exception:
-            try:
-                os.unlink(tmp)
-            except OSError:
-                pass
-            with open(path, "a", encoding="utf-8") as f:
-                f.write(line)
+            if (path.stat().st_mode & 0o020) == 0:
+                path.chmod(0o640)
+        except OSError:
+            pass
 
 
 def _log_write_failure(message: str) -> None:

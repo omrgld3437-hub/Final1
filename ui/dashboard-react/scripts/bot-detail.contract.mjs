@@ -25,8 +25,23 @@ assert.doesNotThrow(() =>
 );
 
 assert.match(source, /Tur süresi/, "Aktif tur süresi özette gösterilmeli.");
+assert.match(source, /Tur sayısı/, "Tur sayısı kutusu özette gösterilmeli.");
 assert.match(source, /label="Referans fiyat"/, "Her seçili turun referans fiyat kartı gösterilmeli.");
 assert.match(source, /function shortMainRegime/);
+assert.match(source, /MAIN_REGIME_DETAILS/);
+assert.match(source, /function heroBalance/);
+assert.match(source, /Bu turun parametreleri/);
+assert.match(source, /BarChart3[\s\S]{0,120}Performans/, "Performans özet sekmesinde başlık olarak kalmalı.");
+assert.doesNotMatch(source, /id:\s*"performance"/);
+assert.doesNotMatch(source, /İşlem başına ortalama/);
+assert.doesNotMatch(source, /Profil · \$\{profileKey\}/);
+assert.doesNotMatch(
+  source,
+  /Dinamik modda her tur başında motor planı yenilenir/,
+);
+assert.match(source, /grid grid-cols-3 gap-1 border-t/, "Bot detay sekmeleri hizalı olmalı.");
+assert.match(source, /price_24h_change_pct/);
+assert.match(source, /trades\.cycle_summary\.is_open !== true/);
 assert.match(source, /R8: "Sert düşüş var"/);
 assert.match(source, /const directionPending = direction\.includes\("İki yön"\)/);
 assert.match(source, /trigger_pct_from_reference/);
@@ -40,7 +55,18 @@ assert.match(source, /trade\.fee_raw/);
 assert.match(source, /selectedCycle === 1 && initialBuyTrade/, "Başlangıç alımı yalnız ilk turda görünmeli.");
 assert.match(source, /Takip tepesi/);
 assert.match(source, /Takip dibi/);
+assert.match(source, /label="Toplam kazanç"/);
+assert.match(
+  source,
+  /balance_end_usd \?\? performance\.total_usd/,
+  "Toplam kazanç tutarı bakiyeden hesaplanmalı.",
+);
 assert.match(source, /label="Günlük kazanç"/);
+assert.match(source, /Trailing ·/);
+assert.match(source, /Kâr alışı/);
+assert.match(source, /Kâr satışı/);
+assert.match(source, /Trail \{percent\(trailingPct\)\}/);
+assert.doesNotMatch(source, /label="Bakiye değişimi"/);
 assert.match(source, /Alpha performansı/);
 assert.match(source, /Komisyon etkisi/);
 assert.match(source, /label="Tahmini yıllık USDT getirisi"/);

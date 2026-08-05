@@ -2,7 +2,6 @@ import {
   Activity,
   AlertTriangle,
   ArrowDown,
-  ArrowRight,
   ArrowUp,
   BarChart3,
   Bot,
@@ -46,7 +45,7 @@ import {
   type BotTrades,
 } from "./detailApi";
 
-type DetailTab = "summary" | "grid" | "activity" | "performance";
+type DetailTab = "summary" | "grid" | "activity";
 type MutationName = "start" | "delete";
 type PerformancePeriod = "all" | "day" | "week" | "month";
 
@@ -69,12 +68,6 @@ const TABS: Array<{
     label: "Turlar ve işlemler",
     shortLabel: "İşlemler",
     icon: CircleDollarSign,
-  },
-  {
-    id: "performance",
-    label: "Performans",
-    shortLabel: "Performans",
-    icon: BarChart3,
   },
 ];
 
@@ -99,9 +92,37 @@ const MAIN_REGIME_LABELS: Record<string, string> = {
   R8: "Sert düşüş var",
 };
 
-function shortMainRegime(value: string): string {
+const MAIN_REGIME_DETAILS: Record<string, string> = {
+  R1: "Trend yukarı ve momentum güçlü. Bu turda satış kademeleri öne çıkar; alışlar daha seçici tutulur.",
+  R2: "Belirgin yön yok; fiyat dengeli bir bantta. Alış ve satış gridleri simetrik ve orta genişlikte çalışır.",
+  R3: "Yön belirsiz, gürültü yüksek. Gridler biraz açılır; sahte kırılımlara karşı daha temkinli plan uygulanır.",
+  R4: "Volatilite yüksek. Seviyeler daha geniş tutulur; sermaye uzak kademelerde beklemeye bırakılmaz.",
+  R5: "Düşüş sonrası toparlanma sinyali var. Yakın alışlar değerlendirilir; satışlar erişilebilir tepelere yerleştirilir.",
+  R6: "Toparlanma daha kontrollü ilerliyor. Dağılım dengelenir; aceleci alış yerine kademeli plan korunur.",
+  R7: "Ana eğilim aşağı. Alışlar derinleştirilir veya koşullu tutulur; satış yönetimi önceliklidir.",
+  R8: "Sert düşüş / riskli rejim. Uygulanabilir plan yoksa yeni tur açılmaz; güvenli rejim gelene kadar beklenir.",
+};
+
+function mainRegimeCode(value: string): string | null {
   const raw = value.trim();
   const code = raw.toUpperCase().match(/\bR[1-8]\b/)?.[0];
+  if (code) return code;
+  const lower = raw.toLocaleLowerCase("tr-TR");
+  if (lower.includes("sert düş") || lower.includes("crash")) return "R8";
+  if (lower.includes("düşüş")) return "R7";
+  if (lower.includes("yavaş topar")) return "R6";
+  if (lower.includes("toparlan") || lower.includes("kırılım") || lower.includes("breakout"))
+    return "R5";
+  if (lower.includes("dalgalan") || lower.includes("volatil")) return "R4";
+  if (lower.includes("kararsız") || lower.includes("gürültü")) return "R3";
+  if (lower.includes("dengeli") || lower.includes("yatay") || lower.includes("sakin")) return "R2";
+  if (lower.includes("yükseliş") || lower.includes("güçlü")) return "R1";
+  return null;
+}
+
+function shortMainRegime(value: string): string {
+  const raw = value.trim();
+  const code = mainRegimeCode(raw);
   if (code && MAIN_REGIME_LABELS[code]) return MAIN_REGIME_LABELS[code];
   const lower = raw.toLocaleLowerCase("tr-TR");
   if (lower.includes("sert düş") || lower.includes("crash")) return "Sert düşüş var";
@@ -115,7 +136,13 @@ function shortMainRegime(value: string): string {
     return "Piyasa kararsız";
   }
   if (lower.includes("dengeli") || lower.includes("yatay")) return "Piyasa dengeli";
-  return raw.split(/\s+/).slice(0, 4).join(" ");
+  return raw.split(/\s+/).slice(0, 4).join(" ") || "—";
+}
+
+function explainMainRegime(value: string): string {
+  const code = mainRegimeCode(value);
+  if (code && MAIN_REGIME_DETAILS[code]) return MAIN_REGIME_DETAILS[code];
+  return "Motor bu tur için piyasa yapısını okudu; aşağıdaki parametreler bu okumaya göre uygulandı.";
 }
 
 function toFiniteNumber(value: unknown): number | null {
@@ -202,11 +229,16 @@ function assetQuantity(value: unknown): string {
         : absolute >= 10
           ? 4
           : absolute >= 1
-            ? 5
+            ? 4
             : absolute >= 0.1
-              ? 6
-              : 8;
-  return decimal(number, digits);
+              ? 5
+              : absolute >= 0.01
+                ? 6
+                : 8;
+  return new Intl.NumberFormat("tr-TR", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: digits,
+  }).format(number);
 }
 
 function quoteAmount(value: unknown): string {
@@ -214,6 +246,21 @@ function quoteAmount(value: unknown): string {
   if (number === null) return "—";
   const absolute = Math.abs(number);
   return decimal(number, absolute >= 10 ? 4 : absolute >= 1 ? 5 : 6);
+}
+
+function heroBalance(value: unknown, asset: string): string {
+  const number = toFiniteNumber(value);
+  if (number === null) return "—";
+  const quoteLike = /^(USDT|USDC|BUSD|FDUSD|TUSD)$/i.test(asset.trim());
+  if (quoteLike) {
+    const absolute = Math.abs(number);
+    const digits = absolute >= 100 ? 2 : absolute >= 1 ? 3 : 4;
+    return new Intl.NumberFormat("tr-TR", {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: digits,
+    }).format(number);
+  }
+  return assetQuantity(number);
 }
 
 function percent(value: unknown): string {
@@ -851,71 +898,35 @@ interface ParameterComparison {
 
 function ParameterValueLine({
   item,
-  dynamicApplied,
 }: {
   key?: string;
   item: ParameterComparison;
-  dynamicApplied: boolean;
 }) {
-  const shownApplied = item.applied ?? item.baseline;
-  const changed =
-    dynamicApplied &&
-    item.baseline !== null &&
-    shownApplied !== null &&
-    Math.abs(item.baseline - shownApplied) > 0.00005;
-  const factor =
-    multiplierLabel(item.multiplier) ||
-    multiplierLabel(ratioMultiplier(shownApplied, item.baseline));
+  const shown = item.applied ?? item.baseline;
   return (
     <div className="rounded-xl border border-white/7 bg-black/15 p-3">
       <p className="text-[9px] font-black uppercase tracking-wider text-neutral-600">
         {item.label}
       </p>
-      <div className="mt-2 flex flex-wrap items-center gap-2">
-        <span className="font-mono text-xs font-black text-neutral-300">
-          {item.baseline === null ? "—" : `%${decimal(item.baseline, 3)}`}
-        </span>
-        {dynamicApplied && (
-          <>
-            <ArrowRight className="h-3.5 w-3.5 shrink-0 text-fuchsia-300" />
-            <span
-              className={`rounded-lg px-2 py-1 font-mono text-xs font-black ${
-                changed
-                  ? "bg-emerald-300/10 text-emerald-200"
-                  : "bg-white/5 text-neutral-300"
-              }`}
-            >
-              {shownApplied === null ? "—" : `%${decimal(shownApplied, 3)}`}
-            </span>
-            {factor && (
-              <span className="rounded-full border border-fuchsia-300/15 bg-fuchsia-300/[0.06] px-2 py-1 text-[9px] font-black text-fuchsia-100">
-                {factor}
-              </span>
-            )}
-          </>
-        )}
-      </div>
+      <p className="mt-2 font-mono text-sm font-black text-white">
+        {shown === null ? "—" : `%${decimal(shown, 3)}`}
+      </p>
     </div>
   );
 }
 
 function DynamicGridComparison({
   side,
-  baseline,
   applied,
-  multipliers,
-  dynamicApplied,
   trailing,
 }: {
   side: "buy" | "sell";
-  baseline: Record<string, unknown>[];
   applied: Record<string, unknown>[];
-  multipliers: Record<string, unknown>;
-  dynamicApplied: boolean;
   trailing: ParameterComparison;
 }) {
-  if (!baseline.length) return null;
+  if (!applied.length) return null;
   const isBuy = side === "buy";
+  const trail = trailing.applied ?? trailing.baseline;
   return (
     <section
       className={`rounded-2xl border p-4 ${
@@ -930,19 +941,15 @@ function DynamicGridComparison({
         </h3>
         <div className="flex min-h-7 items-center justify-end">
           <span className={`inline-flex min-h-7 items-center whitespace-nowrap rounded-full px-2.5 py-1 text-[9px] font-black ${isBuy ? "bg-sky-300/10 text-sky-200" : "bg-emerald-300/10 text-emerald-200"}`}>
-            {isBuy ? "Alış trailing" : "Satış trailing"} · {compactParameterValue(trailing, dynamicApplied)}
+            {isBuy ? "Alış trailing" : "Satış trailing"} ·{" "}
+            {trail === null ? "—" : `%${decimal(trail, 3)}`}
           </span>
         </div>
       </div>
       <div className="mt-3 space-y-2">
-        {baseline.map((baseGrid, index) => {
-          const appliedGrid = applied[index] || baseGrid;
-          const baseTrigger = gridParameterValue(baseGrid, side, "trigger");
-          const nextTrigger = gridParameterValue(appliedGrid, side, "trigger");
-          const baseQuantity = gridParameterValue(baseGrid, side, "quantity");
-          const nextQuantity = gridParameterValue(appliedGrid, side, "quantity");
-          const distanceFactor = multipliers[`${side}_distance`];
-          const quantityFactor = ratioMultiplier(nextQuantity, baseQuantity);
+        {applied.map((gridRow, index) => {
+          const trigger = gridParameterValue(gridRow, side, "trigger");
+          const quantity = gridParameterValue(gridRow, side, "quantity");
           return (
             <div key={`${side}-${index}`} className="rounded-xl border border-white/7 bg-black/15 p-3">
               <p className="text-[9px] font-black uppercase tracking-wider text-neutral-600">
@@ -952,20 +959,16 @@ function DynamicGridComparison({
                 <ParameterValueLine
                   item={{
                     label: "Tetik mesafesi",
-                    baseline: baseTrigger,
-                    applied: nextTrigger,
-                    multiplier: distanceFactor,
+                    baseline: trigger,
+                    applied: trigger,
                   }}
-                  dynamicApplied={dynamicApplied}
                 />
                 <ParameterValueLine
                   item={{
                     label: isBuy ? "Alış miktarı" : "Satış miktarı",
-                    baseline: baseQuantity,
-                    applied: nextQuantity,
-                    multiplier: quantityFactor,
+                    baseline: quantity,
+                    applied: quantity,
                   }}
-                  dynamicApplied={dynamicApplied}
                 />
               </div>
             </div>
@@ -976,22 +979,6 @@ function DynamicGridComparison({
   );
 }
 
-function compactParameterValue(
-  item: ParameterComparison,
-  dynamicApplied: boolean,
-): string {
-  const applied = item.applied ?? item.baseline;
-  if (applied === null) return "—";
-  if (
-    dynamicApplied &&
-    item.baseline !== null &&
-    Math.abs(item.baseline - applied) > 0.00005
-  ) {
-    return `%${decimal(item.baseline, 3)} → %${decimal(applied, 3)}`;
-  }
-  return `%${decimal(applied, 3)}`;
-}
-
 function StrategyParametersCard({
   detail,
   dynamicEnabled,
@@ -999,6 +986,10 @@ function StrategyParametersCard({
   cycleOpenedAt,
   botStartedAt,
   regime,
+  tourCount,
+  performance,
+  liveDailyUsd,
+  liveDailyPct,
 }: {
   detail: BotDetail;
   dynamicEnabled: boolean;
@@ -1006,6 +997,10 @@ function StrategyParametersCard({
   cycleOpenedAt: string | number | null;
   botStartedAt: string | number | null;
   regime: string;
+  tourCount: number;
+  performance: BotPerformance | null;
+  liveDailyUsd?: number | null;
+  liveDailyPct?: number | null;
 }) {
   const dynamic = objectValue(detail.dynamic_mode);
   const snapshot = objectValue(dynamic.snapshot);
@@ -1015,92 +1010,45 @@ function StrategyParametersCard({
   const snapshotApplied = objectValue(snapshot.applied);
   const dynamicApplied =
     dynamicEnabled &&
-    dynamic.active === true &&
     Object.keys(snapshotApplied).length > 0;
+  // Always show the live round plan when dynamic snapshot exists; else form config.
   const applied = dynamicApplied ? snapshotApplied : baseline;
-  const multiplierMeta = objectValue(snapshot.multiplier);
-  const multipliers = objectValue(multiplierMeta.multipliers);
-  const displayCycle =
-    toFiniteNumber(snapshot.cycle_id) ?? cycleId;
-
-  const buyTrailing: ParameterComparison = {
-    label: "Alış trailing",
-    baseline: parameterValue(baseline, ["buy_trigger_trailing_pct"]),
-    applied: parameterValue(applied, ["buy_trigger_trailing_pct"]),
-    multiplier: multipliers.buy_trailing,
-  };
-  const sellTrailing: ParameterComparison = {
-    label: "Satış trailing",
-    baseline: parameterValue(baseline, ["sell_trigger_trailing_pct"]),
-    applied: parameterValue(applied, ["sell_trigger_trailing_pct"]),
-    multiplier: multipliers.sell_trailing,
-  };
-
-  const comparisons: ParameterComparison[] = [
-    {
-      label: "Base dağılımı",
-      baseline: parameterValue(baseline, ["base_alloc_pct", "base_pct"]),
-      applied: parameterValue(applied, ["base_alloc_pct", "base_pct"]),
-      multiplier: multipliers.base_alloc,
-    },
-    {
-      label: "Quote dağılımı",
-      baseline: parameterValue(baseline, ["quote_alloc_pct", "quote_pct"]),
-      applied: parameterValue(applied, ["quote_alloc_pct", "quote_pct"]),
-      multiplier: multipliers.quote_alloc,
-    },
-    {
-      label: "Kâr alışı tetiği",
-      baseline: parameterValue(baseline, ["profit_reentry_drop_pct"]),
-      applied: parameterValue(applied, ["profit_reentry_drop_pct"]),
-      multiplier: multipliers.profit_reentry_trigger,
-    },
-    {
-      label: "Kâr alışı trailing",
-      baseline: parameterValue(baseline, ["profit_reentry_rise_pct"]),
-      applied: parameterValue(applied, ["profit_reentry_rise_pct"]),
-      multiplier: multipliers.profit_reentry_trailing,
-    },
-    {
-      label: "Kâr satışı tetiği",
-      baseline: parameterValue(baseline, ["profit_exit_rise_pct"]),
-      applied: parameterValue(applied, ["profit_exit_rise_pct"]),
-      multiplier: multipliers.profit_exit_trigger,
-    },
-    {
-      label: "Kâr satışı trailing",
-      baseline: parameterValue(baseline, ["profit_exit_drop_pct"]),
-      applied: parameterValue(applied, ["profit_exit_drop_pct"]),
-      multiplier: multipliers.profit_exit_trailing,
-    },
-  ].filter((item) => item.baseline !== null || item.applied !== null);
-
-  const baselineBuy = strategyGridList(baseline, "buy");
-  const baselineSell = strategyGridList(baseline, "sell");
-  const appliedBuy = strategyGridList(applied, "buy");
-  const appliedSell = strategyGridList(applied, "sell");
+  const displayCycle = toFiniteNumber(snapshot.cycle_id) ?? cycleId;
+  const regimeTitle = shortMainRegime(regime);
+  const regimeDetail = explainMainRegime(regime);
 
   return (
     <section className="overflow-hidden rounded-[1.75rem] border border-fuchsia-300/15 bg-[#191a20] shadow-[0_24px_80px_rgba(0,0,0,.2)]">
       <header className="relative overflow-hidden border-b border-white/8 p-5 sm:p-6">
         <div className="pointer-events-none absolute -right-20 -top-24 h-64 w-64 rounded-full bg-fuchsia-400/10 blur-3xl" />
-        <div className="relative flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="relative space-y-4">
           <div>
             <p className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.18em] text-fuchsia-200">
-              <Layers3 className="h-4 w-4" /> Strateji parametreleri
+              <Layers3 className="h-4 w-4" /> Bu turun parametreleri
             </p>
             <h2 className="mt-2 text-xl font-black text-white">
-              {dynamicApplied ? "Başlangıç planı → dinamik tur planı" : "Botun çalışan parametre planı"}
+              {dynamicEnabled
+                ? displayCycle === null
+                  ? "Aktif tur planı bekleniyor"
+                  : `${decimal(displayCycle, 0)}. turda uygulanan plan`
+                : "Botun çalışan parametre planı"}
             </h2>
-            <p className="mt-2 max-w-2xl text-xs leading-5 text-neutral-500">
-              {dynamicApplied
-                ? "Solda oluşturma planı, sağda bu turda Parametre Asistanı motorunun birebir uyguladığı güncel plan bulunur."
-                : dynamicEnabled
-                  ? "Dinamik mod açık. Her tur başında Parametre Asistanı ile aynı motor çalışır; uygulanamaz rejimde tur açılmaz ve 30 dk’da bir yeniden taranır."
-                  : "Bot, oluşturulurken belirlenen sabit dağılım, grid, trailing ve kâr döngüsü değerlerini kullanır."}
-            </p>
+            {!dynamicEnabled && (
+              <p className="mt-2 max-w-2xl text-xs leading-5 text-neutral-500">
+                Bot, oluşturulurken belirlenen dağılım, grid, trailing ve kâr döngüsü değerlerini kullanır.
+              </p>
+            )}
           </div>
-          <div className="grid w-full gap-2 min-[430px]:grid-cols-4 sm:max-w-3xl">
+
+          <section className="rounded-2xl border border-fuchsia-300/18 bg-fuchsia-300/[0.06] p-4 text-center">
+            <p className="text-[10px] font-black uppercase tracking-wider text-fuchsia-100">
+              Ana rejim
+            </p>
+            <p className="mt-2 text-base font-black leading-6 text-white">{regimeTitle}</p>
+            <p className="mx-auto mt-2 max-w-xl text-xs leading-5 text-neutral-300">{regimeDetail}</p>
+          </section>
+
+          <div className="grid gap-2 sm:grid-cols-3">
             <div className={`flex min-h-16 flex-col justify-center rounded-xl border px-3 py-2.5 text-center ${dynamicEnabled ? "border-emerald-300/20 bg-emerald-300/[0.07]" : "border-white/8 bg-white/[0.025]"}`}>
               <span className="text-[9px] font-black uppercase tracking-[0.14em] text-neutral-500">Çalışma modu</span>
               <span className={`mt-1 text-[11px] font-black ${dynamicEnabled ? "text-emerald-200" : "text-neutral-300"}`}>
@@ -1113,58 +1061,97 @@ function StrategyParametersCard({
                 {readableDuration(ageInSeconds(botStartedAt))}
               </span>
             </div>
-            <div className="grid gap-2">
-              <div className="flex min-h-16 flex-col justify-center rounded-xl border border-violet-300/15 bg-violet-300/[0.055] px-3 py-2.5 text-center">
-                <span className="text-[9px] font-black uppercase tracking-[0.14em] text-neutral-500">Aktif tur</span>
-                <span className="mt-1 text-[11px] font-black text-violet-100">
-                  {displayCycle === null ? "Tur bekleniyor" : `${decimal(displayCycle, 0)}. tur`}
-                </span>
-              </div>
-              <div className="flex min-h-16 flex-col justify-center rounded-xl border border-sky-300/15 bg-sky-300/[0.05] px-3 py-2.5 text-center">
-                <span className="text-[9px] font-black uppercase tracking-[0.14em] text-neutral-500">Tur süresi</span>
-                <span className="mt-1 text-[11px] font-black text-sky-100">
-                  {readableDuration(ageInSeconds(cycleOpenedAt))}
-                </span>
-              </div>
-            </div>
-            <div className="flex min-h-16 min-w-0 flex-col justify-center rounded-xl border border-fuchsia-300/15 bg-fuchsia-300/[0.055] px-3 py-2.5 text-center" title={regime}>
-              <span className="text-[9px] font-black uppercase tracking-[0.14em] text-neutral-500">Ana rejim</span>
-              <span className="mt-1 line-clamp-2 text-[10px] font-black leading-4 text-fuchsia-100">{regime}</span>
+            <div className="flex min-h-16 flex-col justify-center rounded-xl border border-sky-300/15 bg-sky-300/[0.05] px-3 py-2.5 text-center">
+              <span className="text-[9px] font-black uppercase tracking-[0.14em] text-neutral-500">Tur süresi</span>
+              <span className="mt-1 text-[11px] font-black text-sky-100">
+                {readableDuration(ageInSeconds(cycleOpenedAt))}
+              </span>
             </div>
           </div>
+
+          <div className="flex min-h-16 flex-col justify-center rounded-xl border border-violet-300/15 bg-violet-300/[0.05] px-3 py-2.5 text-center">
+            <span className="text-[9px] font-black uppercase tracking-[0.14em] text-neutral-500">Tur sayısı</span>
+            <span className="mt-1 text-[11px] font-black text-violet-100">
+              {decimal(tourCount, 0)}
+            </span>
+          </div>
+
+          {performance && (
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+              {performance.price_stale && (
+                <div className="sm:col-span-2 xl:col-span-3 rounded-xl border border-amber-300/15 bg-amber-300/[0.05] px-4 py-3 text-xs text-amber-100">
+                  Canlı fiyat gecikiyor. Bakiye ve performans kartları son güvenilir
+                  snapshot değerini gösteriyor; eski fiyatla yeniden hesaplama yapılmıyor.
+                </div>
+              )}
+              <Metric
+                label="Başlangıç bakiyesi"
+                value={money(performance.initial_usd)}
+              />
+              <Metric
+                label="Güncel bakiye"
+                value={money(performance.balance_end_usd ?? performance.total_usd)}
+                liveValue={performance.balance_end_usd ?? performance.total_usd}
+              />
+              <Metric
+                label="Toplam kazanç"
+                value={`${money(
+                  (toFiniteNumber(performance.balance_end_usd ?? performance.total_usd) ?? 0) -
+                    (toFiniteNumber(performance.initial_usd) ?? 0),
+                )} · ${percent(
+                  (() => {
+                    const start = toFiniteNumber(performance.initial_usd);
+                    const end = toFiniteNumber(
+                      performance.balance_end_usd ?? performance.total_usd,
+                    );
+                    if (start !== null && start > 0 && end !== null) {
+                      return ((end - start) / start) * 100;
+                    }
+                    return performance.balance_change_pct;
+                  })(),
+                )}`}
+                tone={metricTone(
+                  (toFiniteNumber(performance.balance_end_usd ?? performance.total_usd) ?? 0) -
+                    (toFiniteNumber(performance.initial_usd) ?? 0),
+                )}
+                liveValue={`${performance.balance_end_usd ?? performance.total_usd ?? ""}:${performance.initial_usd ?? ""}`}
+              />
+              <Metric
+                label="Günlük kazanç"
+                value={`${money(performance.daily_gain_usd ?? liveDailyUsd ?? detail.daily_pnl_usd)} · ${percent(performance.daily_gain_pct ?? liveDailyPct ?? detail.daily_pnl_pct)}`}
+                tone={metricTone(performance.daily_gain_usd ?? liveDailyUsd ?? detail.daily_pnl_usd)}
+                liveValue={`${performance.daily_gain_usd ?? liveDailyUsd ?? detail.daily_pnl_usd ?? ""}:${performance.daily_gain_pct ?? liveDailyPct ?? detail.daily_pnl_pct ?? ""}`}
+              />
+              <Metric
+                label="Aylık kazanç"
+                value={`${money(performance.monthly_gain_usd)} · ${percent(performance.monthly_gain_pct)}`}
+                tone={metricTone(performance.monthly_gain_usd)}
+                liveValue={`${performance.monthly_gain_usd ?? ""}:${performance.monthly_gain_pct ?? ""}`}
+              />
+              <Metric
+                label="Tahmini yıllık USDT getirisi"
+                value={percent(performance.estimated_annual_return_pct_12m)}
+                tone={metricTone(performance.estimated_annual_return_pct_12m)}
+                liveValue={performance.estimated_annual_return_pct_12m}
+              />
+            </div>
+          )}
         </div>
       </header>
 
       <div className="space-y-4 p-5 sm:p-6">
-        {comparisons.length > 0 && (
-          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-            {comparisons.map((item) => (
-              <ParameterValueLine
-                key={item.label}
-                item={item}
-                dynamicApplied={dynamicApplied}
-              />
-            ))}
-          </div>
-        )}
-        <div className="grid gap-4 lg:grid-cols-2">
-          <DynamicGridComparison
-            side="sell"
-            baseline={baselineSell}
-            applied={appliedSell}
-            multipliers={multipliers}
-            dynamicApplied={dynamicApplied}
-            trailing={sellTrailing}
-          />
-          <DynamicGridComparison
-            side="buy"
-            baseline={baselineBuy}
-            applied={appliedBuy}
-            multipliers={multipliers}
-            dynamicApplied={dynamicApplied}
-            trailing={buyTrailing}
-          />
-        </div>
+        <CycleParametersCard
+          parameters={applied}
+          cycleId={displayCycle}
+          isOpen
+          regime={regime}
+          title="Aktif turun uygulanan parametreleri"
+          subtitle={
+            displayCycle !== null
+              ? `Tur #${decimal(displayCycle, 0)} şu anda bu değerlerle çalışıyor.`
+              : "Botun şu anda uyguladığı parametre planı."
+          }
+        />
       </div>
     </section>
   );
@@ -1205,7 +1192,6 @@ function gridStageText(
 function GridCommandCenter({
   grid,
   entries,
-  regime,
   direction,
 }: {
   grid: BotGridData;
@@ -1213,7 +1199,6 @@ function GridCommandCenter({
     point: Record<string, unknown>;
     fallback: "grid" | "profit";
   }>;
-  regime: string;
   direction: string;
 }) {
   const sell = entries.filter(
@@ -1278,15 +1263,9 @@ function GridCommandCenter({
               tone={stageTone}
             />
             <GridStatusChip
-              icon={Gauge}
-              label="Ana rejim"
-              value={regime}
-              tone="purple"
-            />
-            <GridStatusChip
               icon={Target}
               label="Referans fiyat"
-              value={`${decimal(referencePrice, 8)} ${gridPair.quote}`}
+              value={`${coinPrice(referencePrice)} ${gridPair.quote}`}
               tone="violet"
             />
           </div>
@@ -1401,7 +1380,7 @@ function GridLane({
         </span>
       </header>
       {entries.length ? (
-        <div className="flex snap-x snap-mandatory scroll-px-4 gap-3 overflow-x-auto px-4 pb-4 pt-3 sm:scroll-px-5 sm:px-5">
+        <div className="flex snap-x snap-mandatory scroll-px-3 gap-2 overflow-x-auto px-3 pb-3 pt-2 sm:scroll-px-4 sm:px-4">
           {entries.map(({ point }, index) => (
             <GridPointVisualCard
               key={`${title}-${readText(point, ["i", "index", "grid_index"]) || index}`}
@@ -1476,6 +1455,11 @@ function GridPointVisualCard({
     "trigger_pct",
     "profit_pct",
   ]);
+  const trailingPct = readNumber(point, [
+    "trailing_pct",
+    "trail_pct",
+    "profit_trailing_pct",
+  ]);
   const extremePct = hasTriggered
     ? readNumber(point, ["extreme_pct_from_reference"])
     : null;
@@ -1513,7 +1497,7 @@ function GridPointVisualCard({
             : "border-white/8";
   return (
     <article
-      className={`${fullWidth ? "min-w-full" : "min-w-[calc(100%-0.5rem)] sm:min-w-[320px]"} snap-start rounded-xl border bg-[#17181e] p-4 ${tone}`}
+      className={`${fullWidth ? "min-w-full" : "min-w-[calc(100%-0.25rem)] sm:min-w-[360px]"} snap-start rounded-xl border bg-[#17181e] p-3.5 ${tone}`}
     >
       <div className="flex items-start justify-between gap-2">
         <div>
@@ -1543,18 +1527,25 @@ function GridPointVisualCard({
               : GRID_PHASE_LABELS[phase]}
           </p>
         </div>
-        {phase === "completed" ? (
-          <span className="grid h-7 w-7 place-items-center rounded-full bg-emerald-300/15 text-emerald-200" aria-label="Grid tamamlandı">
-            <CheckCircle2 className="h-4 w-4" />
-          </span>
-        ) : (
-          <span className={`rounded-full px-2 py-1 text-[9px] font-black ${side === "buy" ? "bg-sky-300/[0.07] text-sky-200" : side === "sell" ? "bg-emerald-300/[0.07] text-emerald-200" : "bg-fuchsia-300/[0.07] text-fuchsia-200"}`}>
-            {percent(triggerPct)}
-          </span>
-        )}
+        <div className="flex shrink-0 flex-col items-end gap-1">
+          {phase === "completed" ? (
+            <span className="grid h-7 w-7 place-items-center rounded-full bg-emerald-300/15 text-emerald-200" aria-label="Grid tamamlandı">
+              <CheckCircle2 className="h-4 w-4" />
+            </span>
+          ) : (
+            <span className={`rounded-full px-2 py-1 text-[9px] font-black ${side === "buy" ? "bg-sky-300/[0.07] text-sky-200" : side === "sell" ? "bg-emerald-300/[0.07] text-emerald-200" : "bg-fuchsia-300/[0.07] text-fuchsia-200"}`}>
+              {percent(triggerPct)}
+            </span>
+          )}
+          {trailingPct !== null && (
+            <span className="rounded-full border border-white/8 bg-black/25 px-2 py-0.5 text-[8px] font-black text-neutral-300">
+              Trail {percent(trailingPct)}
+            </span>
+          )}
+        </div>
       </div>
 
-      <div className="mt-3 grid grid-cols-4 gap-1">
+      <div className="mt-2.5 grid grid-cols-4 gap-1">
         {[0, 1, 2, 3].map((step) => (
           <span
             key={step}
@@ -1572,7 +1563,7 @@ function GridPointVisualCard({
           />
         ))}
       </div>
-      <div className="mt-3 grid grid-cols-2 gap-2">
+      <div className="mt-2.5 grid grid-cols-2 gap-1.5">
         <MiniGridValue
           label={`Tetik fiyatı${
             triggerPct !== null ? ` · ${percent(triggerPct)}` : ""
@@ -1623,17 +1614,17 @@ function GridPointVisualCard({
         />
       </div>
       {side === "profit" && phase !== "disabled" && averageCost !== null && (
-        <div className="mt-2 rounded-lg border border-fuchsia-300/10 bg-fuchsia-300/[0.045] p-2.5">
-          <p className="text-[8px] font-black uppercase tracking-wider text-fuchsia-200/70">
+        <div className="mt-1.5 rounded-md border border-fuchsia-300/10 bg-fuchsia-300/[0.045] px-2 py-1.5">
+          <p className="text-[7px] font-black uppercase tracking-wider text-fuchsia-200/70">
             {averageCostLabel}
           </p>
-          <p className="mt-1 font-mono text-[11px] font-black text-fuchsia-100">
+          <p className="mt-0.5 font-mono text-[12px] font-black text-fuchsia-100">
             {coinPrice(averageCost)} {quoteAsset}
           </p>
         </div>
       )}
       {readText(point, ["disabled_reason"]) && (
-        <p className="mt-2 rounded-lg bg-red-300/[0.05] px-2 py-1.5 text-[9px] leading-4 text-red-200">
+        <p className="mt-1.5 rounded-md bg-red-300/[0.05] px-2 py-1.5 text-[9px] leading-4 text-red-200">
           {readText(point, ["disabled_reason"])}
         </p>
       )}
@@ -1650,11 +1641,14 @@ function MiniGridValue({
   value: string;
 }) {
   return (
-    <div className="rounded-lg bg-black/15 p-2">
-      <p className="text-[8px] font-black uppercase tracking-wider text-neutral-600">
+    <div className="rounded-md border border-white/[0.04] bg-black/20 px-2 py-1.5">
+      <p className="text-[7px] font-black uppercase tracking-wider text-neutral-500">
         {label}
       </p>
-      <p className="mt-1 truncate font-mono text-[10px] font-black text-neutral-300">
+      <p
+        className="mt-0.5 truncate font-mono text-[12px] font-black leading-4 text-white"
+        title={value}
+      >
         {value}
       </p>
     </div>
@@ -1663,87 +1657,159 @@ function MiniGridValue({
 
 function CycleParametersCard({
   summary,
+  parameters: parametersProp,
   cycleId,
+  isOpen: isOpenProp,
+  regime: regimeProp,
+  title,
+  subtitle,
 }: {
-  summary: Record<string, unknown>;
-  cycleId?: number;
+  summary?: Record<string, unknown>;
+  parameters?: Record<string, unknown>;
+  cycleId?: number | null;
+  isOpen?: boolean;
+  regime?: string;
+  title?: string;
+  subtitle?: string;
 }) {
-  const parameters = objectValue(summary.cycle_parameters);
+  const parameters = parametersProp
+    ? objectValue(parametersProp)
+    : objectValue(summary?.cycle_parameters);
   const buyGrids = strategyGridList(parameters, "buy");
   const sellGrids = strategyGridList(parameters, "sell");
-  const scalarParameters = [
-    {
-      key: "base_alloc_pct",
-      label: "Base dağılımı",
-      value: parameterValue(parameters, ["base_alloc_pct"]),
-    },
-    {
-      key: "quote_alloc_pct",
-      label: "Quote dağılımı",
-      value: parameterValue(parameters, ["quote_alloc_pct"]),
-    },
-    {
-      key: "sell_trigger_trailing_pct",
-      label: "Satış trailing",
-      value: parameterValue(parameters, ["sell_trigger_trailing_pct"]),
-    },
-    {
-      key: "buy_trigger_trailing_pct",
-      label: "Alış trailing",
-      value: parameterValue(parameters, ["buy_trigger_trailing_pct"]),
-    },
-    {
-      key: "profit_reentry_drop_pct",
-      label: "Kâr alışı tetiği",
-      value: parameterValue(parameters, ["profit_reentry_drop_pct"]),
-    },
-    {
-      key: "profit_reentry_rise_pct",
-      label: "Kâr alışı trailing",
-      value: parameterValue(parameters, ["profit_reentry_rise_pct"]),
-    },
-    {
-      key: "profit_exit_rise_pct",
-      label: "Kâr satışı tetiği",
-      value: parameterValue(parameters, ["profit_exit_rise_pct"]),
-    },
-    {
-      key: "profit_exit_drop_pct",
-      label: "Kâr satışı trailing",
-      value: parameterValue(parameters, ["profit_exit_drop_pct"]),
-    },
-  ].filter((item) => item.value !== null);
-  if (!scalarParameters.length && !buyGrids.length && !sellGrids.length) return null;
-  const isOpen = summary.is_open === true;
-  const regime = readText(summary, ["dynamic_regime"]);
+  const baseAlloc = parameterValue(parameters, ["base_alloc_pct", "base_pct"]);
+  const quoteAlloc = parameterValue(parameters, ["quote_alloc_pct", "quote_pct"]);
+  const sellTrail = parameterValue(parameters, ["sell_trigger_trailing_pct"]);
+  const buyTrail = parameterValue(parameters, ["buy_trigger_trailing_pct"]);
+  const profitBuyTrigger = parameterValue(parameters, ["profit_reentry_drop_pct"]);
+  const profitBuyTrail = parameterValue(parameters, ["profit_reentry_rise_pct"]);
+  const profitSellTrigger = parameterValue(parameters, ["profit_exit_rise_pct"]);
+  const profitSellTrail = parameterValue(parameters, ["profit_exit_drop_pct"]);
+  const hasProfitBuy = profitBuyTrigger !== null || profitBuyTrail !== null;
+  const hasProfitSell = profitSellTrigger !== null || profitSellTrail !== null;
+  if (
+    baseAlloc === null &&
+    quoteAlloc === null &&
+    !buyGrids.length &&
+    !sellGrids.length &&
+    !hasProfitBuy &&
+    !hasProfitSell
+  ) {
+    return null;
+  }
+  const isOpen = isOpenProp ?? summary?.is_open === true;
+  const regime = regimeProp || readText(summary || {}, ["dynamic_regime"]);
+  const formatPctValue = (value: number | null) =>
+    value === null ? "—" : `%${decimal(value, 3)}`;
   const gridGroup = (
     side: "buy" | "sell",
     grids: Record<string, unknown>[],
+    trail: number | null,
   ) => (
-    <div className={`rounded-xl border p-3 ${side === "buy" ? "border-emerald-300/15 bg-emerald-300/[0.025]" : "border-red-300/15 bg-red-300/[0.025]"}`}>
-      <div className="flex items-center justify-between gap-2">
-        <p className={`text-[10px] font-black uppercase tracking-[0.14em] ${side === "buy" ? "text-emerald-200" : "text-red-200"}`}>
+    <div
+      className={`rounded-xl border p-3 ${
+        side === "buy"
+          ? "border-emerald-300/15 bg-emerald-300/[0.025]"
+          : "border-red-300/15 bg-red-300/[0.025]"
+      }`}
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p
+          className={`text-[10px] font-black uppercase tracking-[0.14em] ${
+            side === "buy" ? "text-emerald-200" : "text-red-200"
+          }`}
+        >
           {side === "buy" ? "Aşağı alış gridleri" : "Yukarı satış gridleri"}
         </p>
-        <span className="text-[9px] font-bold text-neutral-600">{grids.length} seviye</span>
+        <div className="flex items-center gap-2">
+          {trail !== null && (
+            <span className="rounded-full border border-white/8 bg-black/20 px-2 py-1 text-[9px] font-black text-white">
+              Trailing · {formatPctValue(trail)}
+            </span>
+          )}
+          <span className="text-[9px] font-bold text-neutral-600">
+            {grids.length} seviye
+          </span>
+        </div>
       </div>
       <div className="mt-2 grid gap-2 sm:grid-cols-2">
         {grids.map((grid, index) => {
           const trigger = gridParameterValue(grid, side, "trigger");
           const quantity = gridParameterValue(grid, side, "quantity");
           return (
-            <div key={`${side}-${index}`} className="rounded-lg border border-white/7 bg-black/15 p-2.5">
-              <p className="text-[9px] font-black text-neutral-300">{index + 1}. grid</p>
-              <div className="mt-1.5 grid grid-cols-2 gap-2 font-mono text-[10px]">
-                <span className="text-neutral-600">Tetik <b className="ml-1 text-white">{trigger === null ? "—" : `${side === "buy" ? "−" : "+"}%${decimal(Math.abs(trigger), 3)}`}</b></span>
-                <span className="text-right text-neutral-600">Pay <b className="ml-1 text-white">{quantity === null ? "—" : `%${decimal(quantity, 2)}`}</b></span>
+            <div
+              key={`${side}-${index}`}
+              className="rounded-lg border border-white/7 bg-black/15 px-2.5 py-2"
+            >
+              <p className="text-[9px] font-black text-neutral-300">
+                {index + 1}. grid
+              </p>
+              <div className="mt-1.5 grid grid-cols-2 gap-2 font-mono text-[11px]">
+                <span className="text-neutral-500">
+                  Tetik{" "}
+                  <b className="ml-1 text-white">
+                    {trigger === null
+                      ? "—"
+                      : `${side === "buy" ? "−" : "+"}%${decimal(Math.abs(trigger), 3)}`}
+                  </b>
+                </span>
+                <span className="text-right text-neutral-500">
+                  Pay{" "}
+                  <b className="ml-1 text-white">
+                    {quantity === null ? "—" : `%${decimal(quantity, 2)}`}
+                  </b>
+                </span>
               </div>
             </div>
           );
         })}
         {!grids.length && (
-          <p className="text-[10px] text-neutral-600">Bu yönde grid tanımlı değil.</p>
+          <p className="text-[10px] text-neutral-600">
+            Bu yönde grid tanımlı değil.
+          </p>
         )}
+      </div>
+    </div>
+  );
+  const profitBox = (
+    kind: "buy" | "sell",
+    trigger: number | null,
+    trail: number | null,
+  ) => (
+    <div
+      className={`rounded-xl border p-3 ${
+        kind === "buy"
+          ? "border-sky-300/15 bg-sky-300/[0.03]"
+          : "border-fuchsia-300/15 bg-fuchsia-300/[0.03]"
+      }`}
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p
+          className={`text-[10px] font-black uppercase tracking-[0.14em] ${
+            kind === "buy" ? "text-sky-200" : "text-fuchsia-200"
+          }`}
+        >
+          {kind === "buy" ? "Kâr alışı" : "Kâr satışı"}
+        </p>
+        {trail !== null && (
+          <span className="rounded-full border border-white/8 bg-black/20 px-2 py-1 text-[9px] font-black text-white">
+            Trailing · {formatPctValue(trail)}
+          </span>
+        )}
+      </div>
+      <div className="mt-2 grid gap-2 sm:grid-cols-2">
+        <div className="rounded-lg border border-white/7 bg-black/15 px-2.5 py-2">
+          <p className="text-[9px] font-black text-neutral-300">Tetik</p>
+          <p className="mt-1 font-mono text-[12px] font-black text-white">
+            {formatPctValue(trigger)}
+          </p>
+        </div>
+        <div className="rounded-lg border border-white/7 bg-black/15 px-2.5 py-2">
+          <p className="text-[9px] font-black text-neutral-300">Trailing</p>
+          <p className="mt-1 font-mono text-[12px] font-black text-white">
+            {formatPctValue(trail)}
+          </p>
+        </div>
       </div>
     </div>
   );
@@ -1752,12 +1818,16 @@ function CycleParametersCard({
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <p className="text-[10px] font-black uppercase tracking-[0.16em] text-fuchsia-200">
-            {isOpen ? "Aktif turun uygulanan parametreleri" : "Bu turda uygulanan parametreler"}
+            {title ||
+              (isOpen
+                ? "Aktif turun uygulanan parametreleri"
+                : "Bu turda uygulanan parametreler")}
           </p>
           <p className="mt-1 text-xs leading-5 text-neutral-500">
-            {isOpen
-              ? `Tur #${cycleId ?? "—"} şu anda bu değerlerle çalışıyor.`
-              : "Dinamik modun bu tur başlarken dondurduğu gerçek değerler."}
+            {subtitle ||
+              (isOpen
+                ? `Tur #${cycleId ?? "—"} şu anda bu değerlerle çalışıyor.`
+                : "Dinamik modun bu tur başlarken dondurduğu gerçek değerler.")}
           </p>
         </div>
         {regime && (
@@ -1766,19 +1836,28 @@ function CycleParametersCard({
           </span>
         )}
       </div>
-      <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-        {scalarParameters.map(({ key, label, value }) => (
-          <MiniGridValue
-            key={key}
-            label={label}
-            value={`%${decimal(value, 3)}`}
-          />
-        ))}
-      </div>
+      {(baseAlloc !== null || quoteAlloc !== null) && (
+        <div className="mt-4 grid gap-2 sm:grid-cols-2">
+          {baseAlloc !== null && (
+            <MiniGridValue label="Base dağılımı" value={formatPctValue(baseAlloc)} />
+          )}
+          {quoteAlloc !== null && (
+            <MiniGridValue label="Quote dağılımı" value={formatPctValue(quoteAlloc)} />
+          )}
+        </div>
+      )}
       <div className="mt-3 grid gap-3 lg:grid-cols-2">
-        {gridGroup("sell", sellGrids)}
-        {gridGroup("buy", buyGrids)}
+        {(sellGrids.length > 0 || sellTrail !== null) &&
+          gridGroup("sell", sellGrids, sellTrail)}
+        {(buyGrids.length > 0 || buyTrail !== null) &&
+          gridGroup("buy", buyGrids, buyTrail)}
       </div>
+      {(hasProfitSell || hasProfitBuy) && (
+        <div className="mt-3 grid gap-3 lg:grid-cols-2">
+          {hasProfitSell && profitBox("sell", profitSellTrigger, profitSellTrail)}
+          {hasProfitBuy && profitBox("buy", profitBuyTrigger, profitBuyTrail)}
+        </div>
+      )}
     </section>
   );
 }
@@ -1976,14 +2055,7 @@ export default function BotDetailPage({
 
   const loadTab = useCallback(
     async (tab: DetailTab, force = false) => {
-      if (tab === "summary") {
-        if (force) {
-          const controller = new AbortController();
-          await loadDetail(controller.signal);
-        }
-        return;
-      }
-      if (!force && loadedTabsRef.current.has(tab)) return;
+      if (!force && loadedTabsRef.current.has(tab) && tab !== "summary") return;
       if (tabRequestsRef.current.has(tab)) return;
 
       const controller = new AbortController();
@@ -1993,7 +2065,18 @@ export default function BotDetailPage({
       setTabErrors((current) => ({ ...current, [tab]: "" }));
 
       try {
-        if (tab === "grid") {
+        if (tab === "summary") {
+          if (force) {
+            await loadDetail(controller.signal);
+          }
+          const performanceResponse = await getBotPerformance(
+            botId,
+            accountId,
+            performancePeriod,
+            controller.signal,
+          );
+          setPerformance(performanceResponse);
+        } else if (tab === "grid") {
           setGrid(await getBotGrid(botId, accountId, controller.signal));
         } else if (tab === "activity") {
           const cycleResponse = await getBotCycles(
@@ -2058,14 +2141,6 @@ export default function BotDetailPage({
             setTrades(tradeResponse);
             setInitialBuyTrade(firstBuy);
           }
-        } else if (tab === "performance") {
-          const performanceResponse = await getBotPerformance(
-            botId,
-            accountId,
-            performancePeriod,
-            controller.signal,
-          );
-          setPerformance(performanceResponse);
         }
         if (!controller.signal.aborted) loadedTabsRef.current.add(tab);
       } catch (error) {
@@ -2090,9 +2165,9 @@ export default function BotDetailPage({
   }, [activeTab, loadTab]);
 
   useEffect(() => {
-    if (activeTab !== "performance") return;
-    loadedTabsRef.current.delete("performance");
-    void loadTab("performance", true);
+    if (activeTab !== "summary") return;
+    loadedTabsRef.current.delete("summary");
+    void loadTab("summary", true);
   }, [performancePeriod]);
 
   useEffect(() => {
@@ -2108,11 +2183,8 @@ export default function BotDetailPage({
   }, [activeTab, deleted, loadTab, pageVisible]);
 
   useEffect(() => {
-    if (activeTab !== "performance" || !pageVisible || deleted) return;
-    const interval = window.setInterval(
-      () => void loadTab("performance", true),
-      1_000,
-    );
+    if (activeTab !== "summary" || !pageVisible || deleted) return;
+    const interval = window.setInterval(() => void loadTab("summary", true), 5_000);
     return () => window.clearInterval(interval);
   }, [activeTab, deleted, loadTab, pageVisible]);
 
@@ -2125,8 +2197,8 @@ export default function BotDetailPage({
     }
     if (lastCycleRef.current === cycleId) return;
     lastCycleRef.current = cycleId;
-    for (const tab of ["grid", "activity", "performance"] as DetailTab[]) {
-      if (loadedTabsRef.current.has(tab)) {
+    for (const tab of ["summary", "grid", "activity"] as DetailTab[]) {
+      if (tab === "summary" || loadedTabsRef.current.has(tab)) {
         loadedTabsRef.current.delete(tab);
         void loadTab(tab, true);
       }
@@ -2288,6 +2360,7 @@ export default function BotDetailPage({
     (isActive && tickAge !== null && tickAge > staleThreshold);
   const pair = splitTradingSymbol(detail?.symbol || "");
   const lastPrice = live?.last_price ?? detail?.current_price;
+  const priceChange24h = toFiniteNumber(detail?.price_24h_change_pct);
   const dualPerformance = objectValue(performance?.dual_perf);
   const cashClosedCycles = Math.max(
     0,
@@ -2309,6 +2382,10 @@ export default function BotDetailPage({
   const completedCycleCount = Object.keys(dualPerformance).length
     ? cashClosedCycles + coinClosedCycles
     : Math.max(0, Math.round(toFiniteNumber(performance?.cycles_count) ?? 0));
+  const activeCycleId = toFiniteNumber(live?.cycle_id);
+  const tourCount =
+    activeCycleId ??
+    Math.max(1, completedCycleCount + (isActive ? 1 : 0));
   const equityUnavailable =
     Boolean(live?.equity_unavailable) || Boolean(detail?.equity_unavailable);
   const configuredDynamic = detail?.config?.dynamic_mode;
@@ -2432,6 +2509,22 @@ export default function BotDetailPage({
                       {coinPrice(lastPrice)} {pair.quote}
                     </LiveValue>
                   </span>
+                  {priceChange24h !== null && (
+                    <span
+                      className={`font-mono text-sm font-black ${
+                        priceChange24h >= 0 ? "text-emerald-300" : "text-red-300"
+                      }`}
+                    >
+                      <LiveValue value={priceChange24h} toneBySign>
+                        {priceChange24h >= 0 ? "+" : ""}
+                        {priceChange24h.toLocaleString("tr-TR", {
+                          maximumFractionDigits: 2,
+                          minimumFractionDigits: 2,
+                        })}
+                        %
+                      </LiveValue>
+                    </span>
+                  )}
                 </div>
                 <p className="mt-2 text-xs font-semibold text-neutral-500">
                   Başlangıç · {dateTimeMinute(detail?.started_at)}
@@ -2458,16 +2551,18 @@ export default function BotDetailPage({
                 },
                 {
                   label: `${pair.base || "Base"} bakiyesi`,
-                  value: assetQuantity(
+                  value: heroBalance(
                     live?.base_balance ?? detail?.state?.base_balance,
+                    pair.base || "BASE",
                   ),
                   liveValue:
                     live?.base_balance ?? detail?.state?.base_balance,
                 },
                 {
                   label: `${pair.quote || "Quote"} bakiyesi`,
-                  value: assetQuantity(
+                  value: heroBalance(
                     live?.quote_balance ?? detail?.state?.quote_balance,
+                    pair.quote || "USDT",
                   ),
                   liveValue:
                     live?.quote_balance ?? detail?.state?.quote_balance,
@@ -2525,7 +2620,7 @@ export default function BotDetailPage({
         <nav
           aria-label="Bot ayrıntı bölümleri"
           role="tablist"
-          className="relative flex gap-1 overflow-x-auto border-t border-white/8 bg-black/10 p-2 sm:px-4"
+          className="relative grid grid-cols-3 gap-1 border-t border-white/8 bg-black/10 p-2 sm:px-4"
         >
           {TABS.map((tab) => {
             const Icon = tab.icon;
@@ -2537,15 +2632,15 @@ export default function BotDetailPage({
                 role="tab"
                 aria-selected={selected}
                 onClick={() => setActiveTab(tab.id)}
-                className={`relative flex shrink-0 items-center gap-2 rounded-xl px-3 py-3 text-xs font-black transition sm:px-4 ${
+                className={`relative flex min-w-0 items-center justify-center gap-2 rounded-xl px-2 py-3 text-xs font-black transition sm:px-4 ${
                   selected
                     ? "bg-fuchsia-300/10 text-fuchsia-100"
                     : "text-neutral-500 hover:bg-white/[0.035] hover:text-neutral-200"
                 }`}
               >
-                <Icon className="h-4 w-4" />
-                <span className="sm:hidden">{tab.shortLabel}</span>
-                <span className="hidden sm:inline">{tab.label}</span>
+                <Icon className="h-4 w-4 shrink-0" />
+                <span className="truncate sm:hidden">{tab.shortLabel}</span>
+                <span className="hidden truncate sm:inline">{tab.label}</span>
               </button>
             );
           })}
@@ -2647,8 +2742,145 @@ export default function BotDetailPage({
               cycleOpenedAt={live?.cycle_opened_at ?? null}
               botStartedAt={detail.started_at ?? null}
               regime={gridRegime}
+              tourCount={tourCount}
+              performance={performance}
+              liveDailyUsd={live?.daily_pnl_usd}
+              liveDailyPct={live?.daily_pnl_pct}
             />
           )}
+
+          <section className="space-y-5">
+            <div className="flex items-end justify-between gap-3">
+              <div>
+                <p className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.18em] text-fuchsia-200">
+                  <BarChart3 className="h-4 w-4" />
+                  Performans
+                </p>
+                <p className="mt-1 text-xs text-neutral-500">
+                  Bakiye, alpha ve komisyon özeti
+                </p>
+              </div>
+            </div>
+
+            {tabLoading === "summary" && !performance ? (
+              <LoadingPanel />
+            ) : performance ? (
+              <>
+                <div className="rounded-2xl border border-white/8 bg-[#1e2026] p-3">
+                  <div className="flex gap-1 overflow-x-auto">
+                    {(
+                      [
+                        ["all", "Tüm dönem"],
+                        ["day", "Gün"],
+                        ["week", "Hafta"],
+                        ["month", "Ay"],
+                      ] as Array<[PerformancePeriod, string]>
+                    ).map(([id, label]) => (
+                      <button
+                        key={id}
+                        type="button"
+                        onClick={() => setPerformancePeriod(id)}
+                        className={`shrink-0 rounded-xl px-3 py-2 text-xs font-black transition ${
+                          performancePeriod === id
+                            ? "bg-fuchsia-300/10 text-fuchsia-100"
+                            : "text-neutral-500 hover:bg-white/[0.035] hover:text-white"
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <section className="rounded-2xl border border-fuchsia-300/12 bg-[#1e2026] p-4 sm:p-5">
+                  <div className="mb-4 flex flex-wrap items-end justify-between gap-2">
+                    <div>
+                      <p className="text-[10px] font-black uppercase tracking-[0.16em] text-fuchsia-200">
+                        Kesinleşen tur kazancı
+                      </p>
+                      <p className="mt-1 text-xs leading-5 text-neutral-500">
+                        Yalnız tamamlanarak kesinleşmiş turların sonuçları
+                      </p>
+                    </div>
+                    <span className="rounded-full border border-white/8 bg-white/[0.035] px-3 py-1.5 text-[10px] font-black text-neutral-300">
+                      Toplam {completedCycleCount} tur tamamlandı
+                    </span>
+                  </div>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <ClosedCycleProfitCard
+                      label="USDT kazancı"
+                      value={cashCycleProfit}
+                      unit="USDT"
+                      completedCycles={cashClosedCycles}
+                    />
+                    <ClosedCycleProfitCard
+                      label={`${pair.base || "Coin"} kazancı`}
+                      value={coinCycleProfit}
+                      unit={pair.base || "Coin"}
+                      completedCycles={coinClosedCycles}
+                    />
+                  </div>
+                </section>
+
+                <section className="rounded-2xl border border-cyan-300/12 bg-[#1e2026] p-4 sm:p-5">
+                  <div>
+                    <p className="text-[10px] font-black uppercase tracking-[0.16em] text-cyan-200">
+                      Alpha performansı
+                    </p>
+                    <h2 className="mt-1 text-lg font-black text-white">
+                      Botun pariteye göre ürettiği ek performans
+                    </h2>
+                    <p className="mt-2 max-w-3xl text-xs leading-5 text-neutral-500">
+                      Alpha, bot bakiyesindeki yüzdesel değişimden aynı dönemdeki coin
+                      fiyat değişiminin çıkarılmasıdır. Pozitif değer botun yalnızca coini
+                      elde tutmaya göre daha iyi, negatif değer daha zayıf kaldığını gösterir.
+                    </p>
+                  </div>
+                  <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                    <Metric
+                      label="Bot bakiye değişimi"
+                      value={percent(performance.balance_change_pct)}
+                      tone={metricTone(performance.balance_change_pct)}
+                    />
+                    <Metric
+                      label={`${pair.base || "Coin"} fiyat değişimi`}
+                      value={percent(performance.price_change_pct)}
+                      tone={metricTone(performance.price_change_pct)}
+                    />
+                    <Metric
+                      label="Net alpha"
+                      value={percent(performance.real_performance_pct)}
+                      tone={metricTone(performance.real_performance_pct)}
+                      liveValue={performance.real_performance_pct}
+                    />
+                  </div>
+                </section>
+
+                <section className="rounded-2xl border border-amber-300/12 bg-[#1e2026] p-4 sm:p-5">
+                  <div>
+                    <p className="text-[10px] font-black uppercase tracking-[0.16em] text-amber-200">
+                      Komisyon etkisi
+                    </p>
+                    <h2 className="mt-1 text-lg font-black text-white">
+                      İşlem maliyetlerinin açık dökümü
+                    </h2>
+                    <p className="mt-2 max-w-3xl text-xs leading-5 text-neutral-500">
+                      Komisyon toplamı seçili dönemdeki gerçekleşen işlemlerden gelir.
+                    </p>
+                  </div>
+                  <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                    <Metric label="Toplam komisyon" value={money(performance.fees_usd)} />
+                    <Metric
+                      label="İşlem sayısı"
+                      value={decimal(performance.trades_count, 0)}
+                    />
+                  </div>
+                </section>
+              </>
+            ) : tabErrors.summary ? null : (
+              <EmptyPanel message="Performans verisi henüz yok." />
+            )}
+          </section>
         </div>
       )}
 
@@ -2660,7 +2892,6 @@ export default function BotDetailPage({
             <GridCommandCenter
               grid={grid}
               entries={allGridPoints}
-              regime={gridRegime}
               direction={gridDirection}
             />
           </div>
@@ -2740,7 +2971,7 @@ export default function BotDetailPage({
             </div>
 
             {trades?.cycle_summary && (
-              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                 <Metric
                   label="Tur"
                   value={
@@ -2792,10 +3023,6 @@ export default function BotDetailPage({
                     )}
                   />
                 )}
-                <Metric
-                  label="Tur süresi"
-                  value={readableDuration(trades.cycle_summary.duration_sec)}
-                />
               </div>
             )}
 
@@ -2830,7 +3057,7 @@ export default function BotDetailPage({
               </section>
             )}
 
-            {trades?.cycle_summary && (
+            {trades?.cycle_summary && trades.cycle_summary.is_open !== true && (
               <CycleParametersCard
                 summary={trades.cycle_summary}
                 cycleId={selectedCycle}
@@ -2838,175 +3065,6 @@ export default function BotDetailPage({
             )}
           </div>
         ))}
-
-      {activeTab === "performance" &&
-        (tabLoading === "performance" && !performance ? (
-          <LoadingPanel />
-        ) : performance ? (
-          <div className="space-y-5">
-            <div className="rounded-2xl border border-white/8 bg-[#1e2026] p-3">
-              <div className="flex gap-1 overflow-x-auto">
-                {([
-                  ["all", "Tüm dönem"],
-                  ["day", "Gün"],
-                  ["week", "Hafta"],
-                  ["month", "Ay"],
-                ] as Array<[PerformancePeriod, string]>).map(([id, label]) => (
-                  <button
-                    key={id}
-                    type="button"
-                    onClick={() => setPerformancePeriod(id)}
-                    className={`shrink-0 rounded-xl px-3 py-2 text-xs font-black transition ${
-                      performancePeriod === id
-                        ? "bg-fuchsia-300/10 text-fuchsia-100"
-                        : "text-neutral-500 hover:bg-white/[0.035] hover:text-white"
-                    }`}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-              {performance.price_stale && (
-                <div className="sm:col-span-2 xl:col-span-3 rounded-xl border border-amber-300/15 bg-amber-300/[0.05] px-4 py-3 text-xs text-amber-100">
-                  Canlı fiyat gecikiyor. Bakiye ve performans kartları son güvenilir
-                  snapshot değerini gösteriyor; eski fiyatla yeniden hesaplama yapılmıyor.
-                </div>
-              )}
-              <Metric
-                label="Başlangıç bakiyesi"
-                value={money(performance.initial_usd)}
-              />
-              <Metric
-                label="Güncel bakiye"
-                value={money(performance.balance_end_usd ?? performance.total_usd)}
-                liveValue={performance.balance_end_usd ?? performance.total_usd}
-              />
-              <Metric
-                label="Bakiye değişimi"
-                value={percent(performance.balance_change_pct)}
-                tone={metricTone(performance.balance_change_pct)}
-                liveValue={performance.balance_change_pct}
-              />
-              <Metric
-                label="Günlük kazanç"
-                value={`${money(performance.daily_gain_usd ?? live?.daily_pnl_usd ?? detail?.daily_pnl_usd)} · ${percent(performance.daily_gain_pct ?? live?.daily_pnl_pct ?? detail?.daily_pnl_pct)}`}
-                tone={metricTone(performance.daily_gain_usd ?? live?.daily_pnl_usd ?? detail?.daily_pnl_usd)}
-                liveValue={`${performance.daily_gain_usd ?? live?.daily_pnl_usd ?? ""}:${performance.daily_gain_pct ?? live?.daily_pnl_pct ?? ""}`}
-              />
-              <Metric
-                label="Aylık kazanç"
-                value={`${money(performance.monthly_gain_usd)} · ${percent(performance.monthly_gain_pct)}`}
-                tone={metricTone(performance.monthly_gain_usd)}
-                liveValue={`${performance.monthly_gain_usd ?? ""}:${performance.monthly_gain_pct ?? ""}`}
-              />
-              <Metric
-                label="Tahmini yıllık USDT getirisi"
-                value={percent(performance.estimated_annual_return_pct_12m)}
-                tone={metricTone(performance.estimated_annual_return_pct_12m)}
-                liveValue={performance.estimated_annual_return_pct_12m}
-              />
-            </div>
-
-            <section className="rounded-2xl border border-fuchsia-300/12 bg-[#1e2026] p-4 sm:p-5">
-              <div className="mb-4 flex flex-wrap items-end justify-between gap-2">
-                <div>
-                  <p className="text-[10px] font-black uppercase tracking-[0.16em] text-fuchsia-200">
-                    Kesinleşen tur kazancı
-                  </p>
-                  <p className="mt-1 text-xs leading-5 text-neutral-500">
-                    Yalnız tamamlanarak kesinleşmiş turların sonuçları
-                  </p>
-                </div>
-                <span className="rounded-full border border-white/8 bg-white/[0.035] px-3 py-1.5 text-[10px] font-black text-neutral-300">
-                  Toplam {completedCycleCount} tur tamamlandı
-                </span>
-              </div>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <ClosedCycleProfitCard
-                  label="USDT kazancı"
-                  value={cashCycleProfit}
-                  unit="USDT"
-                  completedCycles={cashClosedCycles}
-                />
-                <ClosedCycleProfitCard
-                  label={`${pair.base || "Coin"} kazancı`}
-                  value={coinCycleProfit}
-                  unit={pair.base || "Coin"}
-                  completedCycles={coinClosedCycles}
-                />
-              </div>
-            </section>
-
-            <section className="rounded-2xl border border-cyan-300/12 bg-[#1e2026] p-4 sm:p-5">
-              <div>
-                <p className="text-[10px] font-black uppercase tracking-[0.16em] text-cyan-200">
-                  Alpha performansı
-                </p>
-                <h2 className="mt-1 text-lg font-black text-white">
-                  Botun pariteye göre ürettiği ek performans
-                </h2>
-                <p className="mt-2 max-w-3xl text-xs leading-5 text-neutral-500">
-                  Alpha, bot bakiyesindeki yüzdesel değişimden aynı dönemdeki coin
-                  fiyat değişiminin çıkarılmasıdır. Pozitif değer botun yalnızca coini
-                  elde tutmaya göre daha iyi, negatif değer daha zayıf kaldığını gösterir.
-                </p>
-              </div>
-              <div className="mt-4 grid gap-3 sm:grid-cols-3">
-                <Metric
-                  label="Bot bakiye değişimi"
-                  value={percent(performance.balance_change_pct)}
-                  tone={metricTone(performance.balance_change_pct)}
-                />
-                <Metric
-                  label={`${pair.base || "Coin"} fiyat değişimi`}
-                  value={percent(performance.price_change_pct)}
-                  tone={metricTone(performance.price_change_pct)}
-                />
-                <Metric
-                  label="Net alpha"
-                  value={percent(performance.real_performance_pct)}
-                  tone={metricTone(performance.real_performance_pct)}
-                  liveValue={performance.real_performance_pct}
-                />
-              </div>
-            </section>
-
-            <section className="rounded-2xl border border-amber-300/12 bg-[#1e2026] p-4 sm:p-5">
-              <div>
-                <p className="text-[10px] font-black uppercase tracking-[0.16em] text-amber-200">
-                  Komisyon etkisi
-                </p>
-                <h2 className="mt-1 text-lg font-black text-white">
-                  İşlem maliyetlerinin açık dökümü
-                </h2>
-                <p className="mt-2 max-w-3xl text-xs leading-5 text-neutral-500">
-                  Komisyon toplamı seçili dönemdeki gerçekleşen işlemlerden gelir.
-                  Tur sonucu gösterilirken yönüne göre USDT veya coin kazancı kullanılır;
-                  bu bölüm gerçekleşen işlem maliyetlerini açıkça gösterir.
-                </p>
-              </div>
-              <div className="mt-4 grid gap-3 sm:grid-cols-3">
-                <Metric label="Toplam komisyon" value={money(performance.fees_usd)} />
-                <Metric
-                  label="İşlem sayısı"
-                  value={decimal(performance.trades_count, 0)}
-                />
-                <Metric
-                  label="İşlem başına ortalama"
-                  value={money(
-                    performance.trades_count > 0
-                      ? performance.fees_usd / performance.trades_count
-                      : 0,
-                    4,
-                  )}
-                />
-              </div>
-            </section>
-
-          </div>
-        ) : null)}
 
       {showDeleteDialog && (
         <div

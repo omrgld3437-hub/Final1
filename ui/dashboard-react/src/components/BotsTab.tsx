@@ -76,13 +76,13 @@ const INITIAL_FORM: NewBotForm = {
   quote_pct: 50,
   upTrail: 0.5,
   upGrids: [
-    { trigger_pct: 0.5, qty_pct: 50 },
     { trigger_pct: 1, qty_pct: 50 },
+    { trigger_pct: 2, qty_pct: 50 },
   ],
   downTrail: 0.5,
   downGrids: [
-    { trigger_pct: 0.5, qty_pct: 50 },
     { trigger_pct: 1, qty_pct: 50 },
+    { trigger_pct: 2, qty_pct: 50 },
   ],
   maxBuyLevels: 2,
   rebuyTrigger: 1.5,
@@ -119,9 +119,23 @@ function normalizeGrid(
     const raw = item && typeof item === "object"
       ? item as Record<string, unknown>
       : {};
+    const trigger = finite(
+      raw.trigger_pct ??
+        raw.sell_grid_pct ??
+        raw.buy_grid_pct ??
+        raw.distance_pct ??
+        raw.grid_pct,
+      (index + 1) * 1,
+    );
     return {
-      trigger_pct: finite(raw.trigger_pct, (index + 1) * 0.5),
-      qty_pct: finite(raw.qty_pct, 100 / value.length),
+      trigger_pct: Math.max(1, trigger),
+      qty_pct: finite(
+        raw.qty_pct ??
+          raw.sell_qty_pct_of_base ??
+          raw.buy_qty_pct_of_quote ??
+          raw.amount_pct,
+        100 / value.length,
+      ),
     };
   });
 }
@@ -224,14 +238,14 @@ function validateGridSide(
     grids.some(
       (grid) =>
         !Number.isFinite(grid.trigger_pct) ||
-        grid.trigger_pct <= 0 ||
+        grid.trigger_pct < 1 ||
         grid.trigger_pct > 100 ||
         !Number.isFinite(grid.qty_pct) ||
         grid.qty_pct <= 0 ||
         grid.qty_pct > 100,
     )
   ) {
-    return `${label} gridlerindeki tetik ve pay değerleri pozitif ve %100'ü aşmayacak biçimde olmalıdır.`;
+    return `${label} grid tetikleri en az %1 olmalı; tetik ve pay değerleri pozitif ve %100'ü aşmamalıdır.`;
   }
   if (Math.abs(gridTotal(grids) - 100) > 0.5) {
     return `${label} grid paylarının toplamı %100 olmalıdır.`;
@@ -355,6 +369,7 @@ export default function BotsTab({
   const [showCreateStudio, setShowCreateStudio] = useState(false);
   const [currentStep, setCurrentStep] = useState(1);
   const [wizardError, setWizardError] = useState("");
+  const [wizardErrorKey, setWizardErrorKey] = useState(0);
   const [actionError, setActionError] = useState("");
   const [actionNotice, setActionNotice] = useState("");
   const [pendingMutations, setPendingMutations] = useState<Set<string>>(
@@ -447,16 +462,32 @@ export default function BotsTab({
     const createdBot = bots.find(
       (bot) => botIdentity(bot) === creationFeedback.botId,
     );
+    if (!createdBot) return;
     const status = String(
-      createdBot?.display_status || createdBot?.status || "",
+      createdBot.display_status || createdBot.status || "",
     ).toLowerCase();
-    if (status !== "running") return;
+    // Start succeeded once the bot is visible in any live engine state.
+    if (!["running", "starting", "waiting"].includes(status)) return;
     setCreationFeedback((current) =>
       current && current.botId === creationFeedback.botId
         ? { ...current, phase: "success" }
         : current,
     );
   }, [bots, creationFeedback]);
+
+  useEffect(() => {
+    if (!creationFeedback || creationFeedback.phase !== "starting") return;
+    const timeout = window.setTimeout(() => {
+      setCreationFeedback((current) =>
+        current &&
+        current.botId === creationFeedback.botId &&
+        current.phase === "starting"
+          ? { ...current, phase: "success" }
+          : current,
+      );
+    }, 8_000);
+    return () => window.clearTimeout(timeout);
+  }, [creationFeedback?.botId, creationFeedback?.phase]);
 
   useEffect(() => {
     if (!creationFeedback || creationFeedback.phase !== "success") return;
@@ -542,7 +573,7 @@ export default function BotsTab({
       const key = side === "up" ? "upGrids" : "downGrids";
       const previous = current[key];
       const next = Array.from({ length: count }, (_, index) => ({
-        trigger_pct: previous[index]?.trigger_pct ?? (index + 1) * 0.5,
+        trigger_pct: previous[index]?.trigger_pct ?? (index + 1) * 1,
         qty_pct: Number((100 / count).toFixed(4)),
       }));
       return {
@@ -612,6 +643,7 @@ export default function BotsTab({
     const error = validateForm(form, availableUSDT, currentStep);
     if (error) {
       setWizardError(error);
+      setWizardErrorKey((value) => value + 1);
       return;
     }
     setWizardError("");
@@ -724,10 +756,12 @@ export default function BotsTab({
     const validationError = validateForm(form, availableUSDT, 5);
     if (validationError) {
       setWizardError(validationError);
+      setWizardErrorKey((value) => value + 1);
       return;
     }
     if (!serverListReady) {
       setWizardError("Bot listesi sunucudan doğrulanmadan yeni bot oluşturulamaz.");
+      setWizardErrorKey((value) => value + 1);
       return;
     }
     const lockKey = "create";
@@ -782,6 +816,7 @@ export default function BotsTab({
         setWizardError(
           "Oluşturma veya başlatma yanıtı kesinleşmedi. Tekrar denemeden önce sunucu durumunu doğrulayın.",
         );
+        setWizardErrorKey((value) => value + 1);
         return;
       }
       const message = error instanceof Error ? error.message : "Bot oluşturulamadı.";
@@ -790,6 +825,7 @@ export default function BotsTab({
           ? message
           : `Bot oluşturuldu fakat başlatma kuyruğuna alınamadı. Bot durmuş halde korunuyor: ${message}`,
       );
+      setWizardErrorKey((value) => value + 1);
     } finally {
       unlockMutation(lockKey);
     }
@@ -831,10 +867,6 @@ export default function BotsTab({
             <h1 className="mt-3 text-3xl font-black tracking-[-0.035em] text-white sm:text-4xl">
               Botlarını tek bakışta yönet.
             </h1>
-            <p className="mt-3 max-w-2xl text-sm leading-6 text-neutral-400">
-              Canlı durum, motor sağlığı ve performans aynı yüzeyde. Yeni bot
-              stüdyosu backendin gerçek Trailing DCA sözleşmesini eksiksiz uygular.
-            </p>
           </div>
           <button
             type="button"
@@ -951,10 +983,9 @@ export default function BotsTab({
             <span className="mx-auto grid h-16 w-16 place-items-center rounded-2xl border border-fuchsia-300/15 bg-fuchsia-300/[0.06] text-fuchsia-100">
               <BotIcon className="h-7 w-7" />
             </span>
-            <h2 className="mt-5 text-xl font-black text-white">İlk stratejin için alan hazır</h2>
-            <p className="mt-2 text-sm leading-6 text-neutral-500">
-              Bütçe, grid ve trailing kararlarını görünür tutan bot stüdyosuyla başla.
-            </p>
+            <h2 className="mt-5 text-xl font-black text-white">
+              İlk botunuzu aşağıdaki butona basarak tasarlayın
+            </h2>
             <button
               type="button"
               onClick={openStudio}
@@ -1062,6 +1093,7 @@ export default function BotsTab({
           step={currentStep}
           availableUSDT={availableUSDT}
           error={wizardError}
+          errorKey={wizardErrorKey}
           isCreating={pendingMutations.has("create")}
           disabled={createRequiresReview || !serverListReady}
           assistantApplied={Boolean(assistantConfig)}
@@ -1158,9 +1190,11 @@ function MetricTile({
         <Icon className="h-3.5 w-3.5" />
         {label}
       </p>
-      <p className={`mt-2 truncate text-sm font-black text-white ${valueClass}`}>
+      <p className={`mt-2 truncate text-sm font-black ${valueClass || "text-white"}`}>
         {liveValue !== undefined ? (
-          <LiveValue value={liveValue}>{value}</LiveValue>
+          <LiveValue value={liveValue} toneBySign={Boolean(valueClass)}>
+            {value}
+          </LiveValue>
         ) : (
           value
         )}

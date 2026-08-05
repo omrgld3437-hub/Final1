@@ -736,11 +736,11 @@ export default function TradeTab({
               <h2 className="text-sm font-black text-white">
                 {searching ? "Arama sonuçları" : "Favori piyasaların"}
               </h2>
-              <p className="mt-1 text-xs text-neutral-500">
-                {searching
-                  ? `Performans için ilk ${MAX_SEARCH_RESULTS} eşleşme gösterilir.`
-                  : "Yıldızdan çıkardığın parite bu görünümden anında kaldırılır."}
-              </p>
+              {searching && (
+                <p className="mt-1 text-xs text-neutral-500">
+                  Performans için ilk {MAX_SEARCH_RESULTS} eşleşme gösterilir.
+                </p>
+              )}
             </div>
           </div>
           {favoriteError && (

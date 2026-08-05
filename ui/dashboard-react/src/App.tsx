@@ -476,12 +476,13 @@ function AppContent() {
               onApplyLeaderboard={handleApplyLeaderboard}
               isTestAccount={!!wallet.is_test_account}
               onOpenBot={openBot}
+              isActive={activeTab === "binance" && selectedBotId === null}
             />
           </TabSurface>
           <TabSurface active={activeTab === "trade"}>
             <TradeTab
               prices={prices}
-              isActive={activeTab === "trade"}
+              isActive={activeTab === "trade" && selectedBotId === null}
               onOpenTradeModal={handleOpenTradeModal}
             />
           </TabSurface>
@@ -564,7 +565,15 @@ function AppContent() {
 
 function TabSurface({ active, children }: { active: boolean; children: React.ReactNode }) {
   return (
-    <div hidden={!active} aria-hidden={!active || undefined}>
+    <div
+      hidden={!active}
+      aria-hidden={!active || undefined}
+      style={
+        active
+          ? undefined
+          : { contentVisibility: "hidden", containIntrinsicSize: "0 800px" }
+      }
+    >
       {children}
     </div>
   );

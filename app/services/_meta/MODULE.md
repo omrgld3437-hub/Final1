@@ -15,7 +15,7 @@ Paylaşılan iş mantığı: Binance, fiyat, PnL, şifreleme, audit.
 | `market_data.py` | SSOT okuma — fiyat/24h/sembol (Binance REST yok) |
 | `market_data.py` | Cüzdan fiyat map (market_data) |
 | `binance_rest_log.py` | REST yük izleme, `rest.log` 60s özet, throttle; `/api/v3/time` budget/throttle muaf |
-| `binance_ws.py` | WebSocket |
+| `binance_ws.py` | WebSocket; Node bridge satır okuma limiti 16MB (`!miniTicker@arr`) |
 | `data_hub.py` | Fiyat cache; `get_prices_for_ui`; `pin_symbols` (worker running-bot); ham 24h/exchangeInfo RAM yok |
 | `market_data.py` | `resolve_price_fast`, `refresh_worker_symbol_from_web` |
 | `core/security/endpoint_rate_limit.py` | spot/price, transaction-history rate limit |
@@ -28,7 +28,7 @@ Paylaşılan iş mantığı: Binance, fiyat, PnL, şifreleme, audit.
 | `dashboard_snapshot.py` | Snapshot builder |
 | `finance_snapshot.py` | Finans snapshot |
 | `audit.py` | Audit log |
-| `user_readable_activity_logger.py` | Sade Türkçe kullanıcı işlem geçmişi (`Kullanıcı Logları/`) |
+| `user_readable_activity_logger.py` | Sade Türkçe kullanıcı işlem geçmişi (`Kullanıcı Logları/`, append-only; prod `2770`) |
 | `user_activity_translations.py` | Event/teknik sebep → sade Türkçe çeviri |
 | `test_account.py` | Paper test hesabı |
 | `wallet_display.py` | Strip/tablo bot_locked; test paper USDT Toplam = 10k − config bütçesi (equity değil) |

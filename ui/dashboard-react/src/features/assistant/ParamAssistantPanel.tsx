@@ -3,7 +3,6 @@ import {
   AlertTriangle,
   BrainCircuit,
   LoaderCircle,
-  ShieldAlert,
   Sparkles,
 } from "lucide-react";
 import { apiFetch } from "../../lib/api";
@@ -195,12 +194,6 @@ export default function ParamAssistantPanel({
   const sellRows = extractLadder(config?.up?.grids, "sell");
   const buyRows = extractLadder(config?.down?.grids, "buy");
   const canApply = Boolean(sellRows.length || buyRows.length);
-  const referenceOnly = Boolean(
-    config?.recommendation_only ||
-      result?.legacy_parameter_application_disabled ||
-      (result?.deployable === false &&
-        String(result?.apply_policy || "").toLowerCase().includes("no_trade")),
-  );
   const headline = String(
     result?.profile_headline ||
       config?.profile_display ||
@@ -275,12 +268,6 @@ export default function ParamAssistantPanel({
               Seçilen profil
             </p>
             <p className="mt-2 text-sm font-black leading-6 text-white">{headline}</p>
-            <p className="mt-2 text-[11px] leading-5 text-neutral-400">
-              {result.automatic_apply_label ||
-                (result.deployable ? "Uygulanabilir" : "Referans / koşullu")}
-              {" · Risk "}
-              {result.risk_display_label || formatPct(result.risk_score)}
-            </p>
             {whyText ? (
               <p className="mt-3 text-xs leading-6 text-neutral-300">{whyText}</p>
             ) : null}
@@ -398,14 +385,6 @@ export default function ParamAssistantPanel({
               hint="Dipten toparlanınca alış"
             />
           </section>
-
-          {referenceOnly ? (
-            <p className="flex gap-2 rounded-xl border border-amber-300/20 bg-amber-300/5 px-3 py-2.5 text-[11px] text-amber-100">
-              <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />
-              Bu profil referans / koşullu plandır. Değerler forma aktarılabilir; otomatik emir
-              güvenliği deploy kapısıyla sınırlıdır.
-            </p>
-          ) : null}
 
           <button
             type="button"

@@ -37,7 +37,7 @@ export function useTabNavigation(): [AppTab, (tab: AppTab) => void] {
     if (next === "binance") url.searchParams.delete("tab");
     else url.searchParams.set("tab", next);
     window.history.pushState({}, "", `${url.pathname}${url.search}${url.hash}`);
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    window.scrollTo({ top: 0, behavior: "auto" });
   }, []);
 
   return [tab, setTab];

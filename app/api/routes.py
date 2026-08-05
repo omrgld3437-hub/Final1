@@ -765,6 +765,8 @@ def _get_test_account_tx_history(
         q = q.filter(Trade.side == "BUY")
     elif tf in ("sell",):
         q = q.filter(Trade.side == "SELL")
+    elif tf in ("buysell", "all", ""):
+        q = q.filter(Trade.side.in_(["BUY", "SELL"]))
 
     total = q.count()
     offset = (page - 1) * per_page

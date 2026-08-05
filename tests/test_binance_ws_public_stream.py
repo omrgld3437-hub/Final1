@@ -1,3 +1,4 @@
+import asyncio
 import ssl
 
 from app.services import binance_ws
@@ -41,3 +42,21 @@ def test_public_ws_explicit_proxy_wins(monkeypatch):
     monkeypatch.setenv("BINANCE_WS_USE_PROXY", "0")
 
     assert binance_ws._ws_proxy_arg() == "http://127.0.0.1:8080"
+
+
+def test_node_bridge_readline_accepts_large_lines():
+    """miniTicker@arr wrapped JSON exceeds asyncio's default 64KiB readline limit."""
+
+    async def _run() -> bytes:
+        reader = asyncio.StreamReader(limit=64 * 1024)
+        payload = b'{"type":"message","data":"' + (b"x" * (100 * 1024)) + b'"}\n'
+        reader.feed_data(payload)
+        reader.feed_eof()
+        buf = bytearray()
+        return await binance_ws._readline_limited(
+            reader, buf, limit=binance_ws.NODE_BRIDGE_LINE_LIMIT
+        )
+
+    line = asyncio.run(_run())
+    assert line.endswith(b"}\n")
+    assert len(line) > 64 * 1024

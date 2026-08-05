@@ -19,6 +19,10 @@ from typing import Any, Callable, Dict, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
+# Node bridge emits one JSON line per WS frame. !miniTicker@arr payloads often
+# exceed asyncio.StreamReader's default 64KiB readline limit.
+NODE_BRIDGE_LINE_LIMIT = 16 * 1024 * 1024
+
 # DNS/network unreachable: log once per interval to avoid flood when offline
 _LAST_DNS_ERROR_LOG: float = 0.0
 _DNS_ERROR_LOG_INTERVAL: float = 300.0  # seconds
@@ -112,6 +116,34 @@ def node_ws_available() -> bool:
 
 def _node_ws_script_path() -> Path:
     return Path(__file__).resolve().parents[2] / "scripts" / "binance_ws_stream_node.js"
+
+
+async def _readline_limited(
+    stream: asyncio.StreamReader,
+    buf: bytearray,
+    *,
+    limit: int = NODE_BRIDGE_LINE_LIMIT,
+    chunk_size: int = 65536,
+) -> bytes:
+    """Read one newline-delimited line without relying on StreamReader.readline() 64KiB cap."""
+    while True:
+        nl = buf.find(b"\n")
+        if nl >= 0:
+            line = bytes(buf[: nl + 1])
+            del buf[: nl + 1]
+            return line
+        if len(buf) >= limit:
+            raise RuntimeError(
+                f"Node WebSocket bridge line exceeds limit ({limit} bytes)"
+            )
+        chunk = await stream.read(chunk_size)
+        if not chunk:
+            if not buf:
+                return b""
+            line = bytes(buf)
+            buf.clear()
+            return line
+        buf.extend(chunk)
 
 
 def _dispatch_raw_message(
@@ -384,12 +416,22 @@ class NodeBinanceWSClient:
             stderr=asyncio.subprocess.PIPE,
         )
         self._proc = proc
+        # create_subprocess_exec hardcodes StreamReader limit=64KiB; raise it so
+        # large miniTicker@arr frames do not trip LimitOverrunError reconnects.
+        if proc.stdout is not None:
+            try:
+                proc.stdout._limit = NODE_BRIDGE_LINE_LIMIT  # noqa: SLF001
+            except Exception:
+                pass
         stderr_task = asyncio.create_task(self._drain_stderr(proc))
+        line_buf = bytearray()
         try:
             if proc.stdout is None:
                 raise RuntimeError("Node WebSocket bridge stdout unavailable")
             while not self._stop.is_set():
-                line = await proc.stdout.readline()
+                line = await _readline_limited(
+                    proc.stdout, line_buf, limit=NODE_BRIDGE_LINE_LIMIT
+                )
                 if not line:
                     break
                 try:

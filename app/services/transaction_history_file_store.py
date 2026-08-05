@@ -602,6 +602,7 @@ def _expand_record(key: str, rec: List[Any]) -> Dict[str, Any]:
         "is_maker": False,
         "source": "bot" if is_bot else "spot",
         "source_label": "Bot" if is_bot else "Spot",
+        "is_bot": is_bot,
         "platform": "ayserose" if (is_bot or is_paper) else "Binance",
         "paper": is_paper,
         "bot_id": bot_id,

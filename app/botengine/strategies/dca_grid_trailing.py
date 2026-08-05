@@ -863,7 +863,7 @@ def _repair_profit_cost_basis_state(
             "_reentry_linked_grid_ids",
         ):
             state.pop(key, None)
-        logger.error(
+        logger.warning(
             "BOT_INVALID_PROFIT_BASIS_CANCELLED bot_id=%s cycle_id=%s order_type=%s reason=no_completed_grid",
             state.get("bot_id"),
             state.get("cycle_id"),
@@ -871,7 +871,8 @@ def _repair_profit_cost_basis_state(
         )
         return audit
     correct_trigger = float(price_from_reference(average, pct, order_type))
-    tolerance = max(abs(correct_trigger) * 1e-12, 1e-12)
+    # Relative float tolerance: legacy/basis rounding, not exact bit equality.
+    tolerance = max(abs(correct_trigger) * 1e-9, 1e-9)
     if (
         stored_trigger is not None
         and abs(stored_trigger - correct_trigger) <= tolerance
@@ -900,7 +901,7 @@ def _repair_profit_cost_basis_state(
     else:
         state["_reentry_avg_sell"] = average
         state["_reentry_cost_basis_type"] = expected_type.value
-    logger.error(
+    logger.warning(
         "BOT_INVALID_PROFIT_BASIS_CANCELLED bot_id=%s cycle_id=%s order_type=%s old_trigger=%s new_trigger=%.10f",
         state.get("bot_id"),
         state.get("cycle_id"),
@@ -949,11 +950,14 @@ def tick_dca_grid_trailing(
             base_balance,
         )
     elif initial_done and init_base_qty <= 0:
-        logger.critical(
-            "BOT_STRATEGY_IA_INVALID bot_id=%s ia_done=True but initial_alloc_base_qty=%.6f (impossible)",
-            state.get("bot_id", 0),
-            init_base_qty,
-        )
+        # Avoid CRITICAL spam every tick when inventory is already flat.
+        if not state.get("_ia_invalid_logged"):
+            state["_ia_invalid_logged"] = True
+            logger.critical(
+                "BOT_STRATEGY_IA_INVALID bot_id=%s ia_done=True but initial_alloc_base_qty=%.6f (impossible)",
+                state.get("bot_id", 0),
+                init_base_qty,
+            )
     # Self-heal: ia_done True but reference_price None (e.g. state save failed after fill)
     if initial_done and ref_raw is None:
         state["reference_price"] = P

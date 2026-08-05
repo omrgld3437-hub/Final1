@@ -397,6 +397,13 @@ chown "\${APP_USER}:\${APP_USER}" "\${APP_DATA}" "\${APP_DATA}/run" "\${APP_LOG}
 chmod 750 "\${APP_DATA}" "\${APP_DATA}/run" "\${APP_LOG}"
 chown "\${APP_USER}:\${APP_USER}" "\${REMOTE_DIR}/data"
 chmod 750 "\${REMOTE_DIR}/data"
+# User/system readable logs must be writable by the service user (not root-only).
+for _log_dir in "Kullanıcı Logları" "Sistem Logları"; do
+  mkdir -p "\${REMOTE_DIR}/\${_log_dir}"
+  chown -R "\${APP_USER}:\${APP_USER}" "\${REMOTE_DIR}/\${_log_dir}"
+  chmod 2770 "\${REMOTE_DIR}/\${_log_dir}"
+  find "\${REMOTE_DIR}/\${_log_dir}" -type f -exec chmod 640 {} + 2>/dev/null || true
+done
 if [ -d "\${REMOTE_DIR}/ui" ]; then
   chown -R root:"\${APP_USER}" "\${REMOTE_DIR}/ui"
   find "\${REMOTE_DIR}/ui" -type d -exec chmod 750 {} +

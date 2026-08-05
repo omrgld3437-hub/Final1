@@ -53,6 +53,11 @@ chown -R "${APP_USER}:${APP_USER}" "${APP_ROOT}/.trader"
 chmod 750 "${APP_ROOT}/.trader"
 chown -R "${APP_USER}:${APP_USER}" "${APP_DATA}" "${APP_LOG}"
 chmod 750 "${APP_DATA}" "${APP_DATA}/run" "${APP_LOG}"
+for _log_dir in "Kullanıcı Logları" "Sistem Logları"; do
+  mkdir -p "${APP_DIR}/${_log_dir}"
+  chown -R "${APP_USER}:${APP_USER}" "${APP_DIR}/${_log_dir}"
+  chmod 2770 "${APP_DIR}/${_log_dir}"
+done
 
 if [ ! -f "${APP_ENV_FILE}" ]; then
   MASTER_KEY="$(openssl rand -base64 48 | tr -d '\n')"

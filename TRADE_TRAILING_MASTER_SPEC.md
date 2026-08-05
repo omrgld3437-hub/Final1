@@ -1023,7 +1023,7 @@ Teknik `logs/app.log` ve DB `audit_events` / `error_logs` kayıtlarından **ayr�
 
 | Özellik | Değer |
 |---------|--------|
-| Klasör | Proje kökü `Kullanıcı Logları/` |
+| Klasör | Proje kökü `Kullanıcı Logları/` · production’da servis kullanıcısı (`final1app`) yazabilir (`2770`) |
 | Dosya adı | `Ad.Soyad__{userId}.log` · ad/soyad yoksa `user_{userId}.log` |
 | Satır formatı | `GG.AA.YYYY SS:DD:SS — Sayfa/Mod — İşlem — Sonuç` |
 | Saat dilimi | Europe/Istanbul |
@@ -1031,6 +1031,7 @@ Teknik `logs/app.log` ve DB `audit_events` / `error_logs` kayıtlarından **ayr�
 | Çeviri | `app/services/user_activity_translations.py` (teknik kod → sade Türkçe) |
 | Yazma hatası | `Sistem Logları/developer_errors.log` (ana işlem bozulmaz) |
 | Rotasyon | Dosya ≥ 10 MB → `_{YYYY-MM}` soneki ile yeni dosya |
+| Yazım | Append-only (atomik temp rewrite yok; izin hatasında ana işlem bozulmaz) |
 | Frontend beacon | `POST /api/user-activity/beacon` · `ui/assets/modules/user-activity-beacon.js` |
 | Admin API | `GET /api/admin/user-activity-logs` · `GET /api/admin/user-activity-logs/download` |
 
@@ -1270,7 +1271,7 @@ _bot_loop (orchestrator.py)
 | app/services/binance_assets.py | Account keys resolution | get_account_keys | — | Account | — | ACCOUNT_KEYS_EMPTY, ACCOUNT_KEYS_DECRYPT_FAIL |
 | app/services/finance_trade_sync.py | Trade sync (myTrades) | TradeSyncService | — | — | — | ACCOUNT_KEYS_EMPTY/MISSING => INFO, skip sync (ERROR değil) |
 | app/services/binance_metrics.py | Binance call counter | BinanceMetrics.record | — | — | Class attr | — |
-| app/services/binance_ws.py | WebSocket client | — | wss://stream.binance.com | — | — | Reconnect; open_timeout=20s; handshake timeout WARNING 5 dk'da bir |
+| app/services/binance_ws.py | WebSocket client | — | wss://stream.binance.com | — | — | Reconnect; open_timeout=20s; handshake timeout WARNING 5 dk'da bir; Node bridge satır limiti 16MB (`!miniTicker@arr`) |
 | app/services/cache.py | Cache utilities | — | — | — | — | — |
 | app/botengine/risk.py | Lock, idempotency, min notional | acquire_bot_lock, check_idempotency | — | — | — | — |
 | app/botengine/cycle_ledger.py | Cycle PnL ledger | cycle_ledger_add_fill | — | — | — | — |

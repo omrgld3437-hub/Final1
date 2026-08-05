@@ -9,7 +9,6 @@ import {
   ChevronUp,
   CircleDollarSign,
   Gauge,
-  Layers3,
   LoaderCircle,
   Rocket,
   Sparkles,
@@ -59,6 +58,7 @@ interface BotCreateStudioProps {
   step: number;
   availableUSDT: number;
   error: string;
+  errorKey?: number;
   isCreating: boolean;
   disabled: boolean;
   assistantApplied: boolean;
@@ -140,6 +140,7 @@ export default function BotCreateStudio({
   step,
   availableUSDT,
   error,
+  errorKey = 0,
   isCreating,
   disabled,
   assistantApplied,
@@ -154,16 +155,50 @@ export default function BotCreateStudio({
   onSubmit,
 }: BotCreateStudioProps) {
   const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const errorRef = useRef<HTMLDivElement>(null);
+  const scrollAreaRef = useRef<HTMLDivElement>(null);
   const onCloseRef = useRef(onClose);
   const isCreatingRef = useRef(isCreating);
   const pair = splitTradingSymbol(form.symbol);
   const allocationTotal = form.base_pct + form.quote_pct;
   const activeStep = STEPS[step - 1] || STEPS[0];
+  const displayError = (() => {
+    const raw = String(error || "").trim();
+    if (!raw) return "";
+    const marker = "Bot sermayesi kullanılabilir bakiyeyi aşıyor.";
+    if (raw.includes(marker)) {
+      const availableMatch = raw.match(/Kullanılabilir:\s*\$[^.]+\./);
+      return availableMatch
+        ? `${marker} ${availableMatch[0]}`.replace(/\s+/g, " ").trim()
+        : marker;
+    }
+    return raw;
+  })();
 
   useEffect(() => {
     onCloseRef.current = onClose;
     isCreatingRef.current = isCreating;
   }, [isCreating, onClose]);
+
+  useEffect(() => {
+    if (!displayError) return;
+    const node = errorRef.current;
+    const area = scrollAreaRef.current;
+    if (!node) return;
+    const frame = window.requestAnimationFrame(() => {
+      if (area) {
+        const top = Math.max(0, node.offsetTop - 12);
+        area.scrollTo({ top, behavior: "smooth" });
+      }
+      node.scrollIntoView({ behavior: "smooth", block: "center" });
+      try {
+        node.focus({ preventScroll: true });
+      } catch {
+        node.focus();
+      }
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [displayError, step, errorKey]);
 
   useEffect(() => {
     const originalOverflow = document.body.style.overflow;
@@ -197,14 +232,11 @@ export default function BotCreateStudio({
                 <Bot className="h-5 w-5" />
               </span>
               <div className="min-w-0">
-                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-fuchsia-200">
-                  ayserose bot stüdyosu
-                </p>
                 <h2
                   id="bot-studio-title"
                   className="truncate text-lg font-black tracking-tight text-white sm:text-xl"
                 >
-                  Trailing DCA stratejini tasarla
+                  Bot stüdyosu
                 </h2>
               </div>
             </div>
@@ -259,7 +291,7 @@ export default function BotCreateStudio({
           </nav>
         </header>
 
-        <div className="min-h-0 flex-1 overflow-y-auto">
+        <div ref={scrollAreaRef} className="min-h-0 flex-1 overflow-y-auto">
           <div className="p-4 sm:p-6">
             <main className="min-w-0">
               <div className="mb-5">
@@ -271,70 +303,30 @@ export default function BotCreateStudio({
                 </h3>
               </div>
 
-              {error && (
+              {displayError && (
                 <div
+                  ref={errorRef}
                   role="alert"
-                  className="mb-5 rounded-2xl border border-red-400/20 bg-red-400/[0.06] px-4 py-3 text-sm leading-6 text-red-100"
+                  tabIndex={-1}
+                  className="mb-5 scroll-mt-4 rounded-2xl border border-red-400/25 bg-red-400/[0.1] px-4 py-3 text-sm font-semibold leading-6 text-red-100 outline-none"
                 >
-                  {error}
+                  {displayError}
                 </div>
               )}
 
               {assistantApplied && step > 1 && (
-                <section className="mb-5 overflow-hidden rounded-2xl border border-fuchsia-300/15 bg-fuchsia-300/[0.055]">
-                  <div className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
-                    <div>
-                      <p className="flex items-center gap-2 text-xs font-black text-fuchsia-100">
-                        <Sparkles className="h-4 w-4" />
-                        Parametre Asistanı bu forma uygulandı
-                      </p>
-                      <p className="mt-1 text-[11px] leading-5 text-neutral-500">
-                        {assistantResult?.display_regime_label ||
-                          assistantResult?.market_status_plain ||
-                          "Piyasa rejimi değerlendirildi"}
-                        {" · "}
-                        Aşağıdaki tüm grid ve trailing değerleri düzenlenebilir.
-                      </p>
-                    </div>
-                    <span className="shrink-0 rounded-full bg-emerald-300/10 px-2.5 py-1 text-[10px] font-black text-emerald-200">
-                      Karar korundu
-                    </span>
-                  </div>
-                  <details className="border-t border-fuchsia-200/10 bg-black/10">
-                    <summary className="cursor-pointer px-4 py-3 text-[10px] font-black text-fuchsia-100 transition hover:bg-white/[0.025]">
-                      Uygulanan parametrelerin tamamını göster
-                    </summary>
-                    <div className="grid grid-cols-2 gap-2 border-t border-white/7 p-4 sm:grid-cols-4">
-                      <AppliedParameter
-                        label="Dağılım"
-                        value={`%${form.base_pct} / %${form.quote_pct}`}
-                      />
-                      <AppliedParameter
-                        label="Grid"
-                        value={`${form.downGrids.length} alış · ${form.upGrids.length} satış`}
-                      />
-                      <AppliedParameter
-                        label="Trailing"
-                        value={`%${form.downTrail} ↓ · %${form.upTrail} ↑`}
-                      />
-                      <AppliedParameter
-                        label="Kâr alışı"
-                        value={`%${form.rebuyTrigger} · trail %${form.rebuyTrail}`}
-                      />
-                      <AppliedParameter
-                        label="Kâr satışı"
-                        value={`%${form.resellTrigger} · trail %${form.resellTrail}`}
-                      />
-                      <AppliedParameter
-                        label="Piyasa rejimi"
-                        value={
-                          assistantResult?.display_regime_label ||
-                          assistantResult?.market_status_plain ||
-                          "—"
-                        }
-                      />
-                    </div>
-                  </details>
+                <section className="mb-5 rounded-2xl border border-fuchsia-300/15 bg-fuchsia-300/[0.055] p-4">
+                  <p className="flex items-center gap-2 text-xs font-black text-fuchsia-100">
+                    <Sparkles className="h-4 w-4" />
+                    Parametre Asistanı bu forma uygulandı
+                  </p>
+                  <p className="mt-1 text-[11px] leading-5 text-neutral-500">
+                    {assistantResult?.display_regime_label ||
+                      assistantResult?.market_status_plain ||
+                      "Piyasa rejimi değerlendirildi"}
+                    {" · "}
+                    Aşağıdaki tüm grid ve trailing değerleri düzenlenebilir.
+                  </p>
                 </section>
               )}
 
@@ -343,7 +335,6 @@ export default function BotCreateStudio({
                   <section className="grid gap-4 rounded-2xl border border-white/8 bg-white/[0.025] p-4 sm:grid-cols-2 sm:p-5">
                     <Field
                       label="İşlem çifti"
-                      hint="Bir harf yaz; Binance spot çiftleri anında listelenir"
                     >
                       <CoinPairAutocomplete
                         value={form.symbol}
@@ -521,27 +512,6 @@ export default function BotCreateStudio({
                       />
                     </Field>
                   </section>
-                  <div className="grid gap-3 sm:grid-cols-3">
-                    <ReviewBadge
-                      icon={Layers3}
-                      title="Grid mimarisi"
-                      value={`${form.downGrids.length} alış · ${form.upGrids.length} satış`}
-                    />
-                    <ReviewBadge
-                      icon={Gauge}
-                      title="Dinamik mod"
-                      value={
-                        form.dynamic_mode
-                          ? "Açık · motor"
-                          : "Kapalı · sabit"
-                      }
-                    />
-                    <ReviewBadge
-                      icon={Rocket}
-                      title="Başlangıç"
-                      value="Oluştur ve sıraya al"
-                    />
-                  </div>
                 </div>
               )}
             </main>
@@ -890,29 +860,18 @@ function DynamicModeControl({
     >
       <div className="flex flex-col gap-4 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
         <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
-            <p className="flex items-center gap-2 text-sm font-black text-white">
-              <Gauge
-                className={`h-4 w-4 ${
-                  enabled ? "text-emerald-200" : "text-neutral-500"
-                }`}
-              />
-              Dinamik Mod
-            </p>
-            <span
-              className={`rounded-full px-2 py-1 text-[9px] font-black ${
-                enabled
-                  ? "bg-emerald-300/10 text-emerald-200"
-                  : "bg-white/5 text-neutral-500"
+          <p className="flex items-center gap-2 text-sm font-black text-white">
+            <Gauge
+              className={`h-4 w-4 ${
+                enabled ? "text-emerald-200" : "text-neutral-500"
               }`}
-            >
-              {enabled ? "PARAMETRE MOTORU" : "SABİT MOD"}
-            </span>
-          </div>
+            />
+            Dinamik Mod
+          </p>
           <p className="mt-2 max-w-2xl text-xs leading-5 text-neutral-400">
             {enabled
-              ? "Her tur başında Parametre Asistanı ile aynı motor çalışır; çıkan plan tura birebir uygulanır. Uygulanamaz rejimde tur açılmaz, 30 dk’da bir yeniden tarama yapılır."
-              : "Bot her turda burada girdiğiniz dağılım, grid ve trailing değerlerini aynen kullanır."}
+              ? "Dinamik mod açık."
+              : "Bot her turda girdiğiniz sabit parametreleri kullanır."}
           </p>
         </div>
         <button
@@ -1185,39 +1144,3 @@ function AllocationAmount({
   );
 }
 
-function AppliedParameter({
-  label,
-  value,
-}: {
-  label: string;
-  value: string;
-}) {
-  return (
-    <div className="rounded-xl border border-white/7 bg-black/15 p-3">
-      <p className="text-[9px] font-black uppercase tracking-wider text-neutral-600">
-        {label}
-      </p>
-      <p className="mt-1.5 text-[11px] font-black leading-5 text-white">
-        {value}
-      </p>
-    </div>
-  );
-}
-
-function ReviewBadge({
-  icon: Icon,
-  title,
-  value,
-}: {
-  icon: typeof Layers3;
-  title: string;
-  value: string;
-}) {
-  return (
-    <div className="rounded-2xl border border-white/8 bg-white/[0.025] p-4">
-      <Icon className="h-4 w-4 text-fuchsia-200" />
-      <p className="mt-3 text-[10px] font-black uppercase tracking-wider text-neutral-600">{title}</p>
-      <p className="mt-1 text-xs font-black leading-5 text-white">{value}</p>
-    </div>
-  );
-}
